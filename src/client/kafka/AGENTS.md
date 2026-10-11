@@ -42,10 +42,10 @@ broker's minimum. Nothing is hardcoded.
 | API | key | ceiling | why that ceiling |
 |---|---|---|---|
 | ApiVersions | 18 | v3 | falls back to decoding the same bytes at v0 if the broker refuses v3 |
-| Metadata | 3 | v8 | v9 is flexible (tagged fields), v10 replaces topic names with UUIDs |
-| Produce | 0 | v7 | v8 adds per-record errors, v9 is flexible |
-| Fetch | 1 | v11 | v12 is flexible, v13 replaces topic names with UUIDs |
-| OffsetCommit | 8 | v2 | the last version every broker since 0.9 accepts unchanged |
+| Metadata | 3 | v12 | the newest `kafka-protocol` 0.14 knows; v9+ is flexible, v10+ reports topic ids |
+| Produce | 0 | v11 | the newest the crate knows; v9+ is flexible |
+| Fetch | 1 | v16 | v12+ is flexible; v13+ names the topic by id — learned from every Metadata answer (the one at connect included), so a described topic costs no extra round trip, else looked up once; a broker that reports no id is fetched by name at v12 |
+| OffsetCommit | 8 | v9 | v8+ is flexible; a commit outside any group (generation/epoch -1) means the same at every version |
 
 **Not implemented, because the broker does not implement them either**: `ListOffsets`,
 `FindCoordinator`, `JoinGroup`, `SyncGroup`, `Heartbeat`, `LeaveGroup`, `OffsetFetch`, and every
@@ -140,9 +140,10 @@ once the client stopped being two clients.
 
 ## Limitations
 
-1. **Never run against Apache Kafka or Redpanda.** No broker is installed on the development
-   machine. Everything verified here was verified against NetGet's own broker, whose supported
-   surface is a subset of a real one's.
+1. **Run against Apache Kafka 3.9.1** (`tests/client/kafka/real_server_test.rs`), the client
+   is Beta on that evidence. Redpanda and multi-broker clusters are untried. A commit goes to
+   the bootstrap broker as a simple commit; on a cluster whose coordinator for the group is
+   another broker it would be refused (no FindCoordinator).
 2. **No consumer groups, no `ListOffsets`** — see above.
 3. **No SSL/SASL.** Plaintext only.
 4. **No transactions and no idempotent producer.** `producer_id` is -1.
