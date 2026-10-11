@@ -357,7 +357,7 @@ pub struct Frame {
 }
 
 impl Frame {
-    fn is_control(&self) -> bool {
+    fn is_control_frame(&self) -> bool {
         self.opcode >= 0x8
     }
 
@@ -601,7 +601,7 @@ impl<S> DeflateStream<S> {
                 return Ok(());
             };
             self.read.raw.drain(..used);
-            if frame.is_control() {
+            if frame.is_control_frame() {
                 frame.encode(&mut self.ready);
                 continue;
             }
@@ -679,7 +679,7 @@ impl<S> DeflateStream<S> {
                 return Ok(());
             };
             self.write.raw.drain(..used);
-            if frame.is_control() {
+            if frame.is_control_frame() {
                 frame.encode(&mut self.pending);
                 continue;
             }
