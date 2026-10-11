@@ -511,3 +511,83 @@ async fn injected_send_finish_and_cancel_control_parked_server_streams() {
     }
     state.remove_server(id).await.unwrap();
 }
+
+/// grpcurl — grpc-go, a second implementation beside grpcio — drives the two client-sending
+/// shapes through reflection alone: three messages into client-streaming `Collect` (one reply
+/// after half-close, counting them) and two into bidirectional `Chat` (one reply per message,
+/// each derived from it). Every message is decoded by NetGet and reaches the handler.
+#[tokio::test]
+async fn independent_grpcurl_client_streaming_and_bidi() {
+    let state = peer::state().await;
+    let (id, port) = peer::netget_server(&state, vec![peer::semantic_handler()], json!({}))
+        .await
+        .unwrap();
+    let grpcurl = |method: &'static str, input: &'static str| {
+        let address = format!("127.0.0.1:{port}");
+        async move {
+            use tokio::io::AsyncWriteExt;
+            let mut child = tokio::process::Command::new("grpcurl")
+                .args(["-plaintext", "-d", "@", &address, method])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()
+                .expect("grpcurl is mandatory; install grpcurl 1.9.4");
+            let mut stdin = child.stdin.take().unwrap();
+            stdin.write_all(input.as_bytes()).await.unwrap();
+            drop(stdin);
+            let output = tokio::time::timeout(Duration::from_secs(20), child.wait_with_output())
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "grpcurl {method}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            // grpcurl prints each reply as a pretty JSON object; read them back as a stream.
+            serde_json::Deserializer::from_slice(&output.stdout)
+                .into_iter::<serde_json::Value>()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        }
+    };
+    let collected = grpcurl(
+        "streams.Session/Collect",
+        r#"{"name":"a","value":1} {"name":"b","value":2} {"name":"c","value":3,"tags":["x"]}"#,
+    )
+    .await;
+    assert_eq!(
+        collected,
+        vec![json!({"name":"collected","value":5,"counts":{"messages":3}})]
+    );
+    let chat = grpcurl(
+        "streams.Session/Chat",
+        r#"{"name":"ping","value":1} {"name":"pong","value":10}"#,
+    )
+    .await;
+    assert_eq!(
+        chat,
+        vec![
+            json!({"name":"ping","value":2}),
+            json!({"name":"pong","value":11})
+        ]
+    );
+    let logs = state
+        .list_access_logs_for(
+            Some(netget::state::AccessLogOwner::Server(id.as_u32())),
+            None,
+        )
+        .await;
+    let inputs = |method: &str| {
+        logs.iter()
+            .filter(|log| {
+                log.event_type == "grpc_stream_message" && log.request["method"] == method
+            })
+            .count()
+    };
+    assert_eq!(inputs("Collect"), 3);
+    assert_eq!(inputs("Chat"), 2);
+    state.remove_server(id).await.unwrap();
+}
