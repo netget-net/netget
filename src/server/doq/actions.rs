@@ -82,8 +82,7 @@ impl Protocol for DoqProtocol {
         vec![]
     }
     fn get_sync_actions(&self) -> Vec<ActionDefinition> {
-        DnsProtocol::new()
-            .get_sync_actions()
+        DnsProtocol::query_actions()
             .into_iter()
             .filter(|a| a.name != "send_dns_response")
             .collect()

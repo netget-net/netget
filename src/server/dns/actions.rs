@@ -2,7 +2,7 @@
 
 use crate::llm::actions::{
     protocol_trait::{ActionResult, Protocol, Server},
-    ActionDefinition, Parameter,
+    ActionDefinition, Parameter, ParameterDefinition,
 };
 use crate::protocol::log_template::LogTemplate;
 use crate::protocol::EventType;
@@ -31,6 +31,15 @@ use std::sync::LazyLock;
 /// `coap::codec::MAX_PAYLOAD_LEN` is checked in `decode_payload` instead of at `send_to`.
 pub const MAX_CHARACTER_STRING_LEN: usize = 255;
 
+/// Most records one `send_dns_records` answer may carry, across all three sections.
+pub const MAX_ANSWER_RECORDS: usize = 100;
+
+/// Names carried by the [`ActionResult::Custom`] results the zone-transfer actions produce.
+/// The action comes back validated and `mod.rs` builds the transfer from it, because a zone
+/// does not fit the one message an `ActionResult::Output` would carry.
+pub const RESULT_ZONE: &str = "dns_zone";
+pub const RESULT_IXFR: &str = "dns_ixfr";
+
 /// DNS protocol action handler
 pub struct DnsProtocol;
 
@@ -44,6 +53,23 @@ impl DnsProtocol {
     pub fn new() -> Self {
         Self
     }
+
+    /// The actions that answer a query — what DoH, DoT and DoQ forward onto their own query
+    /// events. The zone-transfer actions are left out: those servers have no transfer event.
+    pub fn query_actions() -> Vec<ActionDefinition> {
+        vec![
+            send_dns_a_response_action(),
+            send_dns_aaaa_response_action(),
+            send_dns_cname_response_action(),
+            send_dns_mx_response_action(),
+            send_dns_txt_response_action(),
+            send_dns_nxdomain_action(),
+            send_dns_records_action(),
+            send_dns_refused_action(),
+            send_dns_response_action(),
+            ignore_query_action(),
+        ]
+    }
 }
 
 // Implement Protocol trait (common functionality)
@@ -52,15 +78,37 @@ impl Protocol for DnsProtocol {
         Vec::new() // DNS has no async actions
     }
     fn get_sync_actions(&self) -> Vec<ActionDefinition> {
+        let mut actions = Self::query_actions();
+        actions.push(send_dns_zone_action());
+        actions.push(send_dns_ixfr_action());
+        actions
+    }
+
+    fn get_startup_parameters(&self) -> Vec<ParameterDefinition> {
         vec![
-            send_dns_a_response_action(),
-            send_dns_aaaa_response_action(),
-            send_dns_cname_response_action(),
-            send_dns_mx_response_action(),
-            send_dns_txt_response_action(),
-            send_dns_nxdomain_action(),
-            send_dns_response_action(),
-            ignore_query_action(),
+            ParameterDefinition {
+                name: "dnssec_zone".to_string(),
+                type_hint: "string".to_string(),
+                description: "Sign this zone with DNSSEC, e.g. \"example.com.\". The server \
+                    generates an ECDSA P-256 key at startup, answers the zone's DNSKEY query \
+                    itself, signs every answer under the zone for a client that sets the DO \
+                    bit, proves non-existence with NSEC, and signs zone transfers with a full \
+                    NSEC chain. Omitted, nothing is signed."
+                    .to_string(),
+                required: false,
+                example: json!("example.com."),
+                default: None,
+            },
+            ParameterDefinition {
+                name: "tcp_idle_timeout_secs".to_string(),
+                type_hint: "number".to_string(),
+                description: "Seconds a DNS-over-TCP connection may sit idle between queries \
+                    before the server closes it (RFC 7766 §6.2.3). 1-300."
+                    .to_string(),
+                required: false,
+                example: json!(10),
+                default: Some(json!(super::DEFAULT_TCP_IDLE_TIMEOUT.as_secs())),
+            },
         ]
     }
     fn protocol_name(&self) -> &'static str {
@@ -91,8 +139,17 @@ impl Protocol for DnsProtocol {
             .state(DevelopmentState::Stable)
             .privilege_requirement(PrivilegeRequirement::PrivilegedPort(53))
             .well_known_udp_port(53)
-            .implementation("hickory-proto for parsing and construction; UDP only, no TCP fallback")
-            .llm_control("Response records (A, AAAA, MX, TXT, CNAME, NXDOMAIN)")
+            .implementation(
+                "hickory-proto for parsing and construction; UDP and TCP (RFC 7766) on the same \
+                 port; EDNS0 with the TC bit; AXFR (RFC 5936) and IXFR (RFC 1995) zone \
+                 transfers; DNSSEC signing of one zone (RFC 4033-4035) with a key generated at \
+                 startup, compact NSEC denial in answers and a full NSEC chain in transfers",
+            )
+            .llm_control(
+                "Response records (A, AAAA, MX, TXT, CNAME, NS, PTR, SRV, SOA, NXDOMAIN, \
+                 REFUSED), and whole zones or their changes for a transfer. Keys, signatures, \
+                 NSEC, EDNS and truncation are server-side",
+            )
             .e2e_testing(
                 "STABLE rests on all six conditions, each checked against source and by \
                  running it on 16 September 2026. (1) TWO independent resolvers from different \
@@ -243,13 +300,30 @@ impl Server for DnsProtocol {
         Box<dyn std::future::Future<Output = anyhow::Result<std::net::SocketAddr>> + Send>,
     > {
         Box::pin(async move {
-            use crate::server::dns::DnsServer;
+            use crate::server::dns::{DnsServer, DnsSettings};
+            let params = ctx.startup_params.as_ref();
+            let dnssec_zone = params
+                .map(|p| p.get_optional_string("dnssec_zone"))
+                .transpose()?
+                .flatten();
+            let idle = params
+                .map(|p| p.get_optional_u64("tcp_idle_timeout_secs"))
+                .transpose()?
+                .flatten()
+                .unwrap_or(super::DEFAULT_TCP_IDLE_TIMEOUT.as_secs());
+            if !(1..=300).contains(&idle) {
+                anyhow::bail!("tcp_idle_timeout_secs must be between 1 and 300, got {idle}");
+            }
             DnsServer::spawn_with_llm_actions(
                 ctx.legacy_listen_addr(),
                 ctx.llm_client,
                 ctx.state,
                 ctx.status_tx,
                 ctx.server_id,
+                DnsSettings {
+                    dnssec_zone,
+                    tcp_idle_timeout: std::time::Duration::from_secs(idle),
+                },
             )
             .await
         })
@@ -268,6 +342,24 @@ impl Server for DnsProtocol {
             "send_dns_txt_response" => self.execute_send_dns_txt_response(action),
             "send_dns_nxdomain" => self.execute_send_dns_nxdomain(action),
             "send_dns_response" => self.execute_send_dns_response(action),
+            "send_dns_records" => execute_send_dns_records(&action),
+            "send_dns_refused" => execute_send_dns_refused(&action),
+            "send_dns_zone" => {
+                super::transfer::zone_from_action(&action)?;
+                Ok(ActionResult::Custom {
+                    name: RESULT_ZONE.to_string(),
+                    data: action,
+                })
+            }
+            "send_dns_ixfr" => {
+                // The serial the client holds is read from its query, not from the model, and
+                // nothing checked here depends on it, so 0 validates every field.
+                super::transfer::ixfr_from_action(&action, 0)?;
+                Ok(ActionResult::Custom {
+                    name: RESULT_IXFR.to_string(),
+                    data: action,
+                })
+            }
             "ignore_query" => Ok(ActionResult::NoAction),
             _ => Err(anyhow::anyhow!("Unknown DNS action: {}", action_type)),
         }
@@ -550,6 +642,69 @@ impl DnsProtocol {
 
         Ok(ActionResult::Output(bytes))
     }
+}
+
+/// The RCODE names an answer may carry.
+fn parse_rcode(name: &str) -> Result<ResponseCode> {
+    Ok(match name.to_ascii_uppercase().as_str() {
+        "NOERROR" => ResponseCode::NoError,
+        "NXDOMAIN" => ResponseCode::NXDomain,
+        "REFUSED" => ResponseCode::Refused,
+        "SERVFAIL" => ResponseCode::ServFail,
+        "NOTIMP" => ResponseCode::NotImp,
+        "FORMERR" => ResponseCode::FormErr,
+        other => anyhow::bail!(
+            "'rcode' {other:?} is not one of NOERROR, NXDOMAIN, REFUSED, SERVFAIL, NOTIMP, FORMERR"
+        ),
+    })
+}
+
+/// `send_dns_records`: any number of records in any of the three sections, any RCODE.
+fn execute_send_dns_records(action: &serde_json::Value) -> Result<ActionResult> {
+    let query_id = parse_query_id(action)?;
+    let domain = required_str(action, "domain")?;
+    let query_type = parse_record_type(required_str(action, "query_type")?)?;
+    let rcode = match action.get("rcode").and_then(|v| v.as_str()) {
+        Some(r) => parse_rcode(r)?,
+        None => ResponseCode::NoError,
+    };
+    let (mut message, name) = new_response(query_id, domain, query_type, rcode)?;
+    let mut total = 0;
+    for (section, key) in [(0, "answers"), (1, "authority"), (2, "additional")] {
+        let default_name = (section == 0).then_some(&name);
+        let records = super::records::records_from_json(
+            action.get(key),
+            None,
+            default_name,
+            key,
+            MAX_ANSWER_RECORDS,
+        )?;
+        total += records.len();
+        if total > MAX_ANSWER_RECORDS {
+            anyhow::bail!("the answer holds more than {MAX_ANSWER_RECORDS} records");
+        }
+        for r in records {
+            match section {
+                0 => message.add_answer(r),
+                1 => message.add_name_server(r),
+                _ => message.add_additional(r),
+            };
+        }
+    }
+    finish_response(message)
+}
+
+/// `send_dns_refused`: REFUSED (RCODE 5), the answer for a query or transfer this server will
+/// not serve to this client.
+fn execute_send_dns_refused(action: &serde_json::Value) -> Result<ActionResult> {
+    let query_id = parse_query_id(action)?;
+    let domain = required_str(action, "domain")?;
+    let query_type = match action.get("query_type").and_then(|v| v.as_str()) {
+        Some(qt) => parse_record_type(qt)?,
+        None => RecordType::A,
+    };
+    let (message, _) = new_response(query_id, domain, query_type, ResponseCode::Refused)?;
+    finish_response(message)
 }
 
 fn send_dns_a_response_action() -> ActionDefinition {
@@ -875,6 +1030,246 @@ fn ignore_query_action() -> ActionDefinition {
     }
 }
 
+fn record_shape() -> &'static str {
+    "Each record is an object: {\"name\": \"www.example.com.\", \"type\": \"A\", \"ttl\": 300, \
+     \"ip\": \"192.0.2.1\"}. Fields by type: A/AAAA ip; CNAME/NS/PTR target; MX preference, \
+     exchange; TXT text (a string, or an array of strings of at most 255 octets each); SRV \
+     priority, weight, port, target; SOA mname, rname, serial, refresh, retry, expire, minimum. \
+     ttl defaults to 300. In a zone, a name may be relative to the zone (\"www\") or \"@\" for \
+     the apex."
+}
+
+fn send_dns_records_action() -> ActionDefinition {
+    ActionDefinition {
+        name: "send_dns_records".to_string(),
+        description: format!(
+            "Answer a query with any records: several at once (a round-robin of A records, \
+             all of a name's MX records), types with no dedicated action (NS, SOA, PTR, SRV), \
+             or an authority section (the SOA of a negative answer). An answer record with no \
+             'name' takes the queried domain. 'rcode' defaults to NOERROR; NOERROR with no \
+             answers is the right reply when the name exists but has no record of that type. \
+             At most {MAX_ANSWER_RECORDS} records. {}",
+            record_shape()
+        ),
+        parameters: vec![
+            Parameter {
+                name: "query_id".to_string(),
+                type_hint: "number".to_string(),
+                description: "Echo query_id from the event".to_string(),
+                required: true,
+            },
+            Parameter {
+                name: "domain".to_string(),
+                type_hint: "string".to_string(),
+                description: "The queried domain, from the event".to_string(),
+                required: true,
+            },
+            Parameter {
+                name: "query_type".to_string(),
+                type_hint: "string".to_string(),
+                description: "The queried type, from the event".to_string(),
+                required: true,
+            },
+            Parameter {
+                name: "answers".to_string(),
+                type_hint: "array".to_string(),
+                description: "Answer records".to_string(),
+                required: false,
+            },
+            Parameter {
+                name: "authority".to_string(),
+                type_hint: "array".to_string(),
+                description: "Authority records, e.g. the zone's SOA for a negative answer"
+                    .to_string(),
+                required: false,
+            },
+            Parameter {
+                name: "additional".to_string(),
+                type_hint: "array".to_string(),
+                description: "Additional records, e.g. the A records of an MX target".to_string(),
+                required: false,
+            },
+            Parameter {
+                name: "rcode".to_string(),
+                type_hint: "string".to_string(),
+                description: "NOERROR (default), NXDOMAIN, REFUSED, SERVFAIL, NOTIMP or FORMERR"
+                    .to_string(),
+                required: false,
+            },
+        ],
+        example: json!({
+            "type": "send_dns_records",
+            "query_id": 12345,
+            "domain": "example.com",
+            "query_type": "NS",
+            "answers": [
+                {"type": "NS", "target": "ns1.example.com."},
+                {"type": "NS", "target": "ns2.example.com."}
+            ]
+        }),
+        log_template: Some(
+            LogTemplate::new()
+                .with_info("DNS {query_type} {domain} -> records")
+                .with_debug("DNS send_dns_records {domain} ({output_bytes}B)"),
+        ),
+    }
+}
+
+fn send_dns_refused_action() -> ActionDefinition {
+    ActionDefinition {
+        name: "send_dns_refused".to_string(),
+        description: "Refuse the query (RCODE REFUSED): this server will not answer it for \
+             this client. The answer to a zone transfer your instructions do not allow."
+            .to_string(),
+        parameters: vec![
+            Parameter {
+                name: "query_id".to_string(),
+                type_hint: "number".to_string(),
+                description: "Echo query_id from the event".to_string(),
+                required: true,
+            },
+            Parameter {
+                name: "domain".to_string(),
+                type_hint: "string".to_string(),
+                description: "The queried domain or zone, from the event".to_string(),
+                required: true,
+            },
+            Parameter {
+                name: "query_type".to_string(),
+                type_hint: "string".to_string(),
+                description: "The queried type, from the event (AXFR or IXFR for a transfer)"
+                    .to_string(),
+                required: false,
+            },
+        ],
+        example: json!({
+            "type": "send_dns_refused",
+            "query_id": 12345,
+            "domain": "example.com",
+            "query_type": "AXFR"
+        }),
+        log_template: Some(LogTemplate::new().with_info("DNS {domain} -> REFUSED")),
+    }
+}
+
+fn send_dns_zone_action() -> ActionDefinition {
+    ActionDefinition {
+        name: "send_dns_zone".to_string(),
+        description: format!(
+            "Transfer the whole zone (AXFR). Give the zone's SOA and every other record in it; \
+             the server sends SOA, the records, SOA again, split over as many messages as it \
+             takes, and for a signed zone adds the DNSKEY, every signature and the NSEC chain. \
+             Also a valid answer to IXFR (RFC 1995 allows a full zone in reply). Every record \
+             must be inside the zone; the SOA goes in 'soa', not among the records. {}",
+            record_shape()
+        ),
+        parameters: vec![
+            Parameter {
+                name: "query_id".to_string(),
+                type_hint: "number".to_string(),
+                description: "Echo query_id from the event".to_string(),
+                required: true,
+            },
+            Parameter {
+                name: "zone".to_string(),
+                type_hint: "string".to_string(),
+                description: "The zone's name, from the event".to_string(),
+                required: true,
+            },
+            Parameter {
+                name: "soa".to_string(),
+                type_hint: "object".to_string(),
+                description: "The zone's SOA: mname, rname, serial, refresh, retry, expire, \
+                    minimum"
+                    .to_string(),
+                required: true,
+            },
+            Parameter {
+                name: "records".to_string(),
+                type_hint: "array".to_string(),
+                description: "Every other record in the zone".to_string(),
+                required: true,
+            },
+        ],
+        example: json!({
+            "type": "send_dns_zone",
+            "query_id": 12345,
+            "zone": "example.com.",
+            "soa": {"mname": "ns1.example.com.", "rname": "hostmaster.example.com.",
+                    "serial": 2026101101, "refresh": 3600, "retry": 600,
+                    "expire": 604800, "minimum": 300},
+            "records": [
+                {"name": "@", "type": "NS", "target": "ns1.example.com."},
+                {"name": "ns1", "type": "A", "ip": "192.0.2.53"},
+                {"name": "www", "type": "A", "ip": "192.0.2.80"}
+            ]
+        }),
+        log_template: Some(
+            LogTemplate::new()
+                .with_info("DNS AXFR {zone}")
+                .with_debug("DNS send_dns_zone {zone}"),
+        ),
+    }
+}
+
+fn send_dns_ixfr_action() -> ActionDefinition {
+    ActionDefinition {
+        name: "send_dns_ixfr".to_string(),
+        description: "Answer an IXFR with the changes since the client's serial \
+             (client_serial in the event). Each change names the serial it ends at, the \
+             records it deleted and the records it added, oldest first; the last change's \
+             serial must equal the new SOA's. With no changes, the client is told it is \
+             current. If you cannot list the changes, answer with send_dns_zone instead. Not \
+             for a signed zone: answer its IXFR with send_dns_zone."
+            .to_string(),
+        parameters: vec![
+            Parameter {
+                name: "query_id".to_string(),
+                type_hint: "number".to_string(),
+                description: "Echo query_id from the event".to_string(),
+                required: true,
+            },
+            Parameter {
+                name: "zone".to_string(),
+                type_hint: "string".to_string(),
+                description: "The zone's name, from the event".to_string(),
+                required: true,
+            },
+            Parameter {
+                name: "soa".to_string(),
+                type_hint: "object".to_string(),
+                description: "The zone's current SOA".to_string(),
+                required: true,
+            },
+            Parameter {
+                name: "changes".to_string(),
+                type_hint: "array".to_string(),
+                description: "[{\"serial\": N, \"deleted\": [records], \"added\": [records]}], \
+                    oldest first"
+                    .to_string(),
+                required: false,
+            },
+        ],
+        example: json!({
+            "type": "send_dns_ixfr",
+            "query_id": 12345,
+            "zone": "example.com.",
+            "soa": {"mname": "ns1.example.com.", "rname": "hostmaster.example.com.",
+                    "serial": 2026101102},
+            "changes": [{
+                "serial": 2026101102,
+                "deleted": [{"name": "www", "type": "A", "ip": "192.0.2.80"}],
+                "added": [{"name": "www", "type": "A", "ip": "192.0.2.81"}]
+            }]
+        }),
+        log_template: Some(
+            LogTemplate::new()
+                .with_info("DNS IXFR {zone}")
+                .with_debug("DNS send_dns_ixfr {zone}"),
+        ),
+    }
+}
+
 // ============================================================================
 // DNS Event Type Constants
 // ============================================================================
@@ -908,20 +1303,27 @@ pub static DNS_QUERY_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         Parameter {
             name: "query_type".to_string(),
             type_hint: "string".to_string(),
-            description: "DNS query type (A, AAAA, MX, TXT, CNAME, etc.). Decides the action: A -> send_dns_a_response, AAAA -> send_dns_aaaa_response, MX -> send_dns_mx_response, TXT -> send_dns_txt_response, CNAME -> send_dns_cname_response.".to_string(),
+            description: "DNS query type (A, AAAA, MX, TXT, CNAME, etc.). Decides the action: A -> send_dns_a_response, AAAA -> send_dns_aaaa_response, MX -> send_dns_mx_response, TXT -> send_dns_txt_response, CNAME -> send_dns_cname_response; NS, SOA, PTR, SRV, or several records at once -> send_dns_records.".to_string(),
             required: true,
         },
+        Parameter {
+            name: "transport".to_string(),
+            type_hint: "string".to_string(),
+            description: "\"udp\" or \"tcp\". Informational: an answer too large for the \
+                client's UDP buffer is truncated for you and the client retries over TCP."
+                .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "dnssec_ok".to_string(),
+            type_hint: "boolean".to_string(),
+            description: "The client set the DO bit. Informational: signatures are added for \
+                you when the server signs this zone."
+                .to_string(),
+            required: false,
+        },
     ])
-    .with_actions(vec![
-        send_dns_a_response_action(),
-        send_dns_aaaa_response_action(),
-        send_dns_cname_response_action(),
-        send_dns_mx_response_action(),
-        send_dns_txt_response_action(),
-        send_dns_nxdomain_action(),
-        send_dns_response_action(),
-        ignore_query_action(),
-    ])
+    .with_actions(DnsProtocol::query_actions())
     .with_alternative_example(serde_json::json!({
         "type": "send_dns_nxdomain",
         "query_id": 12345,
@@ -942,7 +1344,84 @@ pub static DNS_QUERY_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     )
 });
 
+/// A zone transfer request: AXFR or IXFR, over TCP (or IXFR over UDP).
+pub static DNS_ZONE_TRANSFER_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    EventType::new(
+        "dns_zone_transfer",
+        "A client asked to transfer a zone: the whole zone (AXFR) or the changes since its \
+         serial (IXFR). Transfer only a zone your instructions give this server, and only to a \
+         client they allow; otherwise refuse with send_dns_refused.",
+        serde_json::json!({
+            "type": "send_dns_zone",
+            "query_id": 12345,
+            "zone": "example.com.",
+            "soa": {"mname": "ns1.example.com.", "rname": "hostmaster.example.com.",
+                    "serial": 2026101101},
+            "records": [{"name": "www", "type": "A", "ip": "192.0.2.80"}]
+        }),
+    )
+    .with_parameters(vec![
+        Parameter {
+            name: "query_id".to_string(),
+            type_hint: "number".to_string(),
+            description: "DNS query ID, to echo".to_string(),
+            required: true,
+        },
+        Parameter {
+            name: "zone".to_string(),
+            type_hint: "string".to_string(),
+            description: "The zone asked for".to_string(),
+            required: true,
+        },
+        Parameter {
+            name: "transfer_type".to_string(),
+            type_hint: "string".to_string(),
+            description: "\"AXFR\" (whole zone) or \"IXFR\" (changes since client_serial)"
+                .to_string(),
+            required: true,
+        },
+        Parameter {
+            name: "client_serial".to_string(),
+            type_hint: "number".to_string(),
+            description: "IXFR only: the SOA serial the client holds".to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "transport".to_string(),
+            type_hint: "string".to_string(),
+            description: "\"tcp\", or \"udp\" for an IXFR; an IXFR answer too large for UDP is \
+                replaced by the new SOA alone, which sends the client to TCP"
+                .to_string(),
+            required: true,
+        },
+        Parameter {
+            name: "signed".to_string(),
+            type_hint: "boolean".to_string(),
+            description: "The server signs this zone; answer an IXFR with send_dns_zone"
+                .to_string(),
+            required: true,
+        },
+    ])
+    .with_actions(vec![
+        send_dns_zone_action(),
+        send_dns_ixfr_action(),
+        send_dns_refused_action(),
+        ignore_query_action(),
+    ])
+    .with_alternative_example(serde_json::json!({
+        "type": "send_dns_refused",
+        "query_id": 12345,
+        "domain": "example.com.",
+        "query_type": "AXFR"
+    }))
+    .with_log_template(
+        LogTemplate::new()
+            .with_info("DNS {transfer_type} {zone} from {client_ip}")
+            .with_debug("DNS {transfer_type} {zone} id={query_id} via {transport}"),
+    )
+});
+
 /// Get DNS event types
 pub fn get_dns_event_types() -> Vec<EventType> {
-    vec![DNS_QUERY_EVENT.clone()]
+    vec![DNS_QUERY_EVENT.clone(), DNS_ZONE_TRANSFER_EVENT.clone()]
 }
