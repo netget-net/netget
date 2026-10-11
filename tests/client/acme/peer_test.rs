@@ -10,8 +10,12 @@ use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn client_works_against_pebble() {
-    let http01 = free_port();
+    // Hold the http-01 port while Pebble and challtestsrv probe for theirs: a port that was
+    // only probed and released can be handed out again, and challtestsrv's DNS once took it.
+    let reserved = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let http01 = reserved.local_addr().unwrap().port();
     let pebble = start_pebble(http01).await.unwrap();
+    drop(reserved);
     let state = state();
     let certs = peer("NETGET_ACME_PEBBLE_CERTS");
     let cid = client_in(
