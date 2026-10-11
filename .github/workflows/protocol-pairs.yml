@@ -7450,7 +7450,8 @@ jobs:
           for filter in \
             snmp:: \
             client/snmp::real_server_test:: \
-            client/snmp::command_channel_test::; do
+            client/snmp::command_channel_test:: \
+            client/snmp::usm_hardening_test::; do
             case "$filter" in
               client/*) target=client; filter=${filter#client/} ;;
               *) target=server ;;
