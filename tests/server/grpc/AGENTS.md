@@ -4,7 +4,12 @@ Experimental expanded unary/streaming/reflection scope. No checks skip missing p
 
 `streaming_test.rs` uses mandatory independently generated grpcio 1.75.1 (C++ transport) and
 grpcurl 1.9.4 (grpc-go) for all three stream forms/gzip and reflection list/describe/invoke
-without a supplied proto. grpcio checks v1alpha; generated tonic v1 checks query and wire
+without a supplied proto. grpcurl drives each streaming shape through reflection alone:
+server-streaming `Watch`, client-streaming `Collect` (three messages, one reply after
+half-close counting them) and bidirectional `Chat` (two messages, one derived reply each), in
+`independent_grpcurl_client_streaming_and_bidi`; the handler must see every message, and
+dropping the per-message event fails it. grpcurl does not negotiate gzip, so compression
+rests on grpcio alone. grpcio checks v1alpha; generated tonic v1 checks query and wire
 bounds. Native requests verify exact 4 MiB/+1 before/after gzip,128/+1 reflection queries,
 64 KiB/+1 reflection messages, opt-out, parked-handler cancellation/server removal, whole
 RPC deadlines including unclosed input,64 global admission and released-slot recovery.
