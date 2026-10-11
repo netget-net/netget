@@ -1,6 +1,8 @@
-//! One-request-per-connection HTTP/1.1 v2 write collector with owned tasks.
+//! One-request-per-connection HTTP/1.1 InfluxDB endpoint with owned tasks: v2 writes, Flux
+//! queries at `/api/v2/query`, InfluxQL at the v1-compatible `/query`, and `/ping`.
 pub mod actions;
 pub mod codec;
+pub mod query;
 use crate::protocol::{Event, SpawnContext};
 use crate::server::{
     accept_bounded::{accept_bounded, ConnectionLimiter, DEFAULT_MAX_CONNECTIONS},
@@ -147,7 +149,7 @@ fn code(status: u16) -> &'static str {
 fn error(status: u16, message: &str) -> Response<Full<Bytes>> {
     response(status, json!({"code":code(status),"message":message}), None)
 }
-fn query_piece(s: &str) -> Result<String> {
+pub(crate) fn query_piece(s: &str) -> Result<String> {
     let b = s.as_bytes();
     let mut at = 0;
     let mut out = Vec::new();
@@ -212,14 +214,57 @@ fn authorized(headers: &hyper::HeaderMap, expected: Option<&str>) -> bool {
     if !["Token", "Bearer"].contains(&scheme) || codec::validate_token(token).is_err() {
         return false;
     }
-    let mut difference = expected.len() ^ token.len();
-    for at in 0..expected.len().max(token.len()) {
+    same_secret(expected, token)
+}
+/// Compare in time independent of where the first difference is.
+fn same_secret(expected: &str, offered: &str) -> bool {
+    let mut difference = expected.len() ^ offered.len();
+    for at in 0..expected.len().max(offered.len()) {
         difference |= usize::from(
             expected.as_bytes().get(at).copied().unwrap_or(0)
-                ^ token.as_bytes().get(at).copied().unwrap_or(0),
+                ^ offered.as_bytes().get(at).copied().unwrap_or(0),
         );
     }
     difference == 0
+}
+/// A query's credential: the `Token`/`Bearer` header, or for InfluxQL the v1 forms InfluxDB 2
+/// accepts in its compatibility API — the token as the `p` parameter, or as the password of
+/// HTTP Basic authentication. The user name is not checked, as InfluxDB 2 does not check it.
+fn query_authorized(
+    headers: &hyper::HeaderMap,
+    request: &query::QueryRequest,
+    expected: Option<&str>,
+) -> bool {
+    let Some(expected) = expected else {
+        return true;
+    };
+    if authorized(headers, Some(expected)) {
+        return true;
+    }
+    if request.language != query::Language::Influxql {
+        return false;
+    }
+    if let Some(p) = &request.v1_password {
+        return same_secret(expected, p);
+    }
+    let values = headers.get_all(AUTHORIZATION).iter().collect::<Vec<_>>();
+    let [value] = values.as_slice() else {
+        return false;
+    };
+    let Some(encoded) = value.to_str().ok().and_then(|v| v.strip_prefix("Basic ")) else {
+        return false;
+    };
+    use base64::Engine as _;
+    let Some(decoded) = base64::engine::general_purpose::STANDARD
+        .decode(encoded.trim())
+        .ok()
+        .and_then(|d| String::from_utf8(d).ok())
+    else {
+        return false;
+    };
+    decoded
+        .split_once(':')
+        .is_some_and(|(_, password)| same_secret(expected, password))
 }
 fn decide(
     decision: actions::Decision,
@@ -308,8 +353,30 @@ async fn handle_request(
             None,
         )
         .await;
-    if parts.uri.path() != "/api/v2/write" {
-        return error(404, "Only the v2 write endpoint is implemented");
+    match parts.uri.path() {
+        "/api/v2/write" => {}
+        "/api/v2/query" => {
+            return handle_query(&parts, &bytes, peer, id, ctx, config, query::Language::Flux).await
+        }
+        "/query" => {
+            return handle_query(
+                &parts,
+                &bytes,
+                peer,
+                id,
+                ctx,
+                config,
+                query::Language::Influxql,
+            )
+            .await
+        }
+        "/ping" => return ping(&parts.method),
+        _ => {
+            return error(
+                404,
+                "Only /api/v2/write, /api/v2/query, /query and /ping are served",
+            )
+        }
     }
     if parts.method != Method::POST {
         let mut r = error(405, "Only POST is supported");
@@ -470,4 +537,233 @@ async fn failed(
         )
         .await;
     error(503, "Write handler failed; no acceptance confirmed")
+}
+
+/// `GET|HEAD /ping`: 204, as InfluxDB answers it, naming what answered.
+fn ping(method: &Method) -> Response<Full<Bytes>> {
+    if method != Method::GET && method != Method::HEAD {
+        let mut r = error(405, "Only GET and HEAD are supported");
+        r.headers_mut()
+            .insert(ALLOW, HeaderValue::from_static("GET, HEAD"));
+        return r;
+    }
+    let mut r = response(204, serde_json::Value::Null, None);
+    r.headers_mut().remove(CONTENT_TYPE);
+    r.headers_mut()
+        .insert("X-Influxdb-Version", HeaderValue::from_static("netget"));
+    r.headers_mut()
+        .insert("X-Influxdb-Build", HeaderValue::from_static("OSS"));
+    r
+}
+/// An error in the dialect's own shape: v2's `{"code","message"}` for Flux, v1's `{"error"}`
+/// for InfluxQL.
+fn query_error(language: query::Language, status: u16, message: &str) -> Response<Full<Bytes>> {
+    match language {
+        query::Language::Flux => error(status, message),
+        query::Language::Influxql => response(status, json!({ "error": message }), None),
+    }
+}
+fn body_response(status: u16, content_type: &'static str, body: Vec<u8>) -> Response<Full<Bytes>> {
+    let mut r = Response::new(Full::new(Bytes::from(body)));
+    *r.status_mut() = StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    r.headers_mut()
+        .insert(CONTENT_TYPE, HeaderValue::from_static(content_type));
+    r
+}
+async fn handle_query(
+    parts: &hyper::http::request::Parts,
+    body: &[u8],
+    peer: SocketAddr,
+    id: ConnectionId,
+    ctx: &SpawnContext,
+    config: &Config,
+    language: query::Language,
+) -> Response<Full<Bytes>> {
+    let allowed = match language {
+        query::Language::Flux => parts.method == Method::POST,
+        query::Language::Influxql => parts.method == Method::POST || parts.method == Method::GET,
+    };
+    if !allowed {
+        let mut r = query_error(
+            language,
+            405,
+            "Method not supported for this query endpoint",
+        );
+        let allow = match language {
+            query::Language::Flux => "POST",
+            query::Language::Influxql => "GET, POST",
+        };
+        r.headers_mut()
+            .insert(ALLOW, HeaderValue::from_static(allow));
+        return r;
+    }
+    if parts
+        .headers
+        .get(CONTENT_ENCODING)
+        .is_some_and(|e| !e.as_bytes().eq_ignore_ascii_case(b"identity"))
+    {
+        return query_error(language, 415, "Compressed query bodies are not accepted");
+    }
+    let content_type = parts
+        .headers
+        .get(CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok());
+    let parsed = match language {
+        query::Language::Flux => query::parse_flux(parts.uri.query(), content_type, body),
+        query::Language::Influxql => query::parse_influxql(parts.uri.query(), content_type, body),
+    };
+    let request = match parsed {
+        Ok(request) => request,
+        Err(e) => {
+            return query_error(
+                language,
+                400,
+                &crate::utils::truncate_for_log(&e.to_string(), 512),
+            )
+        }
+    };
+    if !query_authorized(&parts.headers, &request, config.token.as_deref()) {
+        return query_error(language, 401, "unauthorized access");
+    }
+    let mut data = serde_json::to_value(&request).unwrap_or_else(|_| json!({}));
+    data["authenticated"] = json!(true);
+    data["auth_required"] = json!(config.token.is_some());
+    data["source_addr"] = json!(peer.to_string());
+    let event = Event::new(&actions::INFLUX_QUERY_EVENT, data);
+    let configured = ctx
+        .state
+        .get_event_handler_config(ctx.server_id)
+        .await
+        .is_some_and(|c| c.find_handler("influx_query").is_some());
+    if !configured && !config.llm_fallback {
+        // Nothing here holds data, so without a handler or the model there is no answer — and
+        // an empty result would be an assertion that there is no data, which nobody made.
+        return query_failed(
+            ctx,
+            id,
+            event.data,
+            language,
+            "fail_closed_no_query_handler",
+        )
+        .await;
+    }
+    let answers = match crate::llm::action_helper::call_llm(
+        &ctx.llm_client,
+        &ctx.state,
+        ctx.server_id,
+        Some(id),
+        &event,
+        &actions::InfluxDbProtocol::new(),
+    )
+    .await
+    {
+        Ok(result) if result.failures.is_empty() => result
+            .protocol_results
+            .iter()
+            .filter_map(|r| match r {
+                crate::llm::ActionResult::Custom { name, data }
+                    if name == actions::QUERY_ANSWER =>
+                {
+                    Some(data.clone())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        Ok(_) => {
+            return query_failed(
+                ctx,
+                id,
+                event.data,
+                language,
+                "fail_closed_handler_action_error",
+            )
+            .await
+        }
+        Err(_) => {
+            return query_failed(ctx, id, event.data, language, "fail_closed_handler_error").await
+        }
+    };
+    let answer = match answers.as_slice() {
+        [answer] => answer,
+        [] => return query_failed(ctx, id, event.data, language, "fail_closed_no_answer").await,
+        _ => {
+            return query_failed(
+                ctx,
+                id,
+                event.data,
+                language,
+                "fail_closed_multiple_answers",
+            )
+            .await
+        }
+    };
+    match render_answer(answer, &request) {
+        Ok(response) => response,
+        Err(_) => query_failed(ctx, id, event.data, language, "fail_closed_invalid_answer").await,
+    }
+}
+/// Render the model's answer in the request's dialect.
+fn render_answer(
+    answer: &serde_json::Value,
+    request: &query::QueryRequest,
+) -> Result<Response<Full<Bytes>>> {
+    if answer["mode"] == "error" {
+        let status = u16::try_from(answer["status"].as_u64().context("status")?)?;
+        let message = answer["message"].as_str().context("message")?;
+        return Ok(query_error(request.language, status, message));
+    }
+    let action = &answer["action"];
+    match request.language {
+        query::Language::Flux => {
+            ensure!(
+                action.get("statements").is_none(),
+                "a Flux query is answered with 'tables', not 'statements'"
+            );
+            let tables =
+                query::tables_from_json(action.get("tables").context("tables")?, &mut 0, &mut 0)?;
+            Ok(body_response(
+                200,
+                "text/csv; charset=utf-8",
+                query::render_flux(&tables)?.into_bytes(),
+            ))
+        }
+        query::Language::Influxql => {
+            let results = query::statements_from_json(action)?;
+            ensure!(
+                results.len() == request.statements.len(),
+                "{} answers for {} statements",
+                results.len(),
+                request.statements.len()
+            );
+            Ok(body_response(
+                200,
+                "application/json",
+                query::render_influxql(&results, request.epoch.as_deref())?,
+            ))
+        }
+    }
+}
+async fn query_failed(
+    ctx: &SpawnContext,
+    id: ConnectionId,
+    data: serde_json::Value,
+    language: query::Language,
+    decision: &str,
+) -> Response<Full<Bytes>> {
+    console_error!(ctx.status_tx, "InfluxDB query decision={}", decision);
+    ctx.state
+        .record_access_log(
+            AccessLogOwner::Server(ctx.server_id.as_u32()),
+            "InfluxDB",
+            Some(id.as_u32()),
+            "influx_query_failed",
+            data,
+            vec![json!({ "decision": decision })],
+        )
+        .await;
+    query_error(
+        language,
+        503,
+        "Query handler failed; no answer is available",
+    )
 }

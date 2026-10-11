@@ -546,7 +546,7 @@ jobs:
 
   influxdb-pairs:
     if: inputs.suite != 'p2p-news'
-    name: InfluxDB writes with independent emitter, decoder and real service
+    name: InfluxDB writes and Flux/InfluxQL queries with independent clients, decoder and real service
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
@@ -561,6 +561,9 @@ jobs:
         with:
           go-version: '1.25.x'
           cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - uses: Swatinem/rust-cache@v2
         with:
           key: protocol-pairs-${{ github.job }}
@@ -579,9 +582,10 @@ jobs:
             printf 'NETGET_INFLUX_PYTHON=python3\n'
             printf 'NETGET_INFLUX_RECEIVER=%s/influxdb-peers/influx-decoder-receiver\n' "$RUNNER_TEMP"
             printf 'NETGET_INFLUX_DAEMON=%s/influxdb-peers/influxd-2.9.1\n' "$RUNNER_TEMP"
+            printf 'NETGET_INFLUX_NODE_MODULES=%s/influxdb-peers/node/node_modules\n' "$RUNNER_TEMP"
           } >> "$GITHUB_ENV"
 
-      - name: Both directions, five field types, precisions and service readback
+      - name: Both directions, five field types, precisions, four query clients and service queries
         run: |
           for filter in \
             influxdb:: client/influxdb:: \
