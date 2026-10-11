@@ -54,38 +54,65 @@ multiplexed, so its file list is read with `wire::MuxReader::raw`. It sends no f
 unless `--delete` (or `-m`) is given, and `--delete` is refused: a daemon that stores nothing
 has nothing to delete.
 
-1. The list is sorted into rsync's order, so that indexes match the client's numbering. Then
+1. The list is read within `wire::FlistLimits::UPLOAD`: at most `MAX_UPLOAD_LIST_ENTRIES`
+   (2000, twice the files an upload may deliver) entries, counting the devices and specials
+   that are skipped, and at most `MAX_UPLOAD_LIST_NAME_BYTES` (1 MiB) of names and symlink
+   targets together. Past either, the daemon sends `ERROR: file list refused: …`, closes its
+   side, drains, and ends the connection; the model never sees the list
+   (`decision=refused_file_list`).
+2. The list is sorted into rsync's order, so that indexes match the client's numbering. Then
    **`rsync_upload_request`** goes to the model: `{module, path, files (no contents),
    file_count, total_bytes}`.
-2. The model answers `rsync_accept_upload` (optionally `paths`, to take only some) or
+3. The model answers `rsync_accept_upload` (optionally `paths`, to take only some) or
    `rsync_refuse`. No decision, or a backend failure, refuses the upload (fail closed).
    Decisions are logged `decision=model_accepted|model_refused|fail_closed_*`.
-3. Each file not taken gets its own MSG_ERROR_XFER, `rsync: [receiver] <path>: <reason>`,
+4. Each file not taken gets its own MSG_ERROR_XFER, `rsync: [receiver] <path>: <reason>`,
    which the client prints and turns into exit 23.
-4. Taken files are requested one at a time, whole:
+5. Taken files are requested one at a time, whole:
    - The request is ndx, iflags `ITEM_TRANSFER|ITEM_IS_NEW` and an all-zero checksum header.
    - The client replies with ndx, iflags, the header echoed, literal tokens, 0, and
      MD4(le32(seed) ‖ data).
+   - Data is kept up to the file's **listed** size. Tokens past it are read and dropped, and
+     the file is refused (`more data than its listed size, file discarded`), so a client
+     cannot list files at size 0 and then send a MiB for each.
+   - Every byte of file data received counts toward `MAX_UPLOAD_BYTES` as it arrives. Past
+     it the daemon sends `rsync: [receiver] <path>: over this daemon's upload limit`, closes
+     its side, drains, and ends the connection with no completion event
+     (`decision=refused_over_upload_limit`). More than 1 MiB for one file ends the connection
+     too.
    - A mismatched sum discards the file with an error.
-5. The end of the run: daemon `DONE`, client `DONE`, daemon `DONE DONE`, client `DONE DONE`,
-   a final `DONE`, then close. A receiver sends no stats.
-6. **`rsync_upload_complete`** carries the files taken (contents as utf8 or hex) and those
-   refused. It declares no actions. Nothing is written to disk; the model keeps what matters
-   in memory.
+6. The end of the run: daemon `DONE`, client `DONE`, daemon `DONE DONE`, client `DONE DONE`,
+   a final `DONE`, then close. A receiver sends no stats. This happens after a refusal, a
+   silent model or a backend failure as well, so the client exits with the error rather than
+   a broken connection.
+7. **`rsync_upload_complete`** carries the files taken (contents as utf8 or hex), the
+   directories and symlinks listed, and the files refused. It is raised only when the model
+   accepted the upload: a refused upload delivered nothing and raises no event. It declares no
+   actions. Nothing is written to disk; the model keeps what matters in memory.
 
 An upload names one destination path, and `-H` is refused for it (the list would carry
 device and inode numbers). Bounds: 1 MiB per file (checked against the declared size, and
-again while the tokens arrive), 8 MiB and 1000 files per upload.
+again while the tokens arrive, where the declared size itself is the limit), 8 MiB per upload
+(of declared sizes when choosing what to take, and of data actually received), 1000 files per
+upload, and 2000 entries and 1 MiB of names and targets per upload file list.
 
 **Answers on failure:** a model that does not answer a module listing gives an empty listing.
 A backend failure is `@ERROR: <category>` there, and an MSG_ERROR_XFER carrying the category
 for a request. Nothing internal reaches the wire.
 
+Every MSG_ERROR_XFER/MSG_INFO text goes through `message_text`: control characters removed,
+cut to `MAX_MESSAGE_BYTES` (4000) on a character boundary, since a client-chosen path in a
+refusal can put a multi-byte character across the cut.
+
 ## Bounds
 
 - Lines are at most 4096 bytes; at most 64 arguments and 16 paths.
 - Filter rules total at most 64 KiB; one request carries at most 2^20 block sums.
-- A file list holds at most 100 000 entries, and names are at most 4096 bytes.
+- A file list holds at most 100 000 entries (`wire::FlistLimits::DOWNLOAD`, what the client
+  reads), and names are at most 4096 bytes. An uploading client's list is held to
+  `FlistLimits::UPLOAD` (see Uploads).
+- `max_inbound_bytes` is `MAX_INBOUND_BYTES`, the larger of the 1 MiB per-file bound and the
+  1 MiB upload-list name bound: the largest thing one connection buffers from a client.
 - `idle_timeout_secs` (default 120) applies to every read.
 
 ## Not implemented

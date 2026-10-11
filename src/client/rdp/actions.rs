@@ -15,7 +15,11 @@ use std::sync::LazyLock;
 pub const DEFAULT_WIDTH: u16 = 1024;
 pub const DEFAULT_HEIGHT: u16 = 768;
 pub const MIN_SIDE: u16 = 200;
+/// The largest desktop side this client asks for, and the largest it accepts from the server.
 pub const MAX_SIDE: u16 = 4096;
+/// The `security` setting when none is given: NLA only, so the password is proven through
+/// CredSSP and never sent to a server that has not proven it knows it.
+pub const DEFAULT_SECURITY: &str = "nla";
 /// Most characters one rdp_type sends.
 pub const MAX_TEXT_CHARS: usize = 4096;
 /// Most key combinations one rdp_keys sends.
@@ -371,11 +375,16 @@ impl Protocol for RdpClientProtocol {
         vec![
             s(
                 "username",
-                "Account to log on as (sent inside TLS, or proven through NLA)",
+                "Account to log on as",
                 json!("alice"),
                 None,
             ),
-            s("password", "That account's password", json!("s3cret"), None),
+            s(
+                "password",
+                "That account's password. Under nla (the default) it is proven through CredSSP; only security tls sends the password itself, inside TLS to a server whose certificate is not verified",
+                json!("s3cret"),
+                None,
+            ),
             s(
                 "domain",
                 "Windows domain, if the account has one",
@@ -384,9 +393,9 @@ impl Protocol for RdpClientProtocol {
             ),
             s(
                 "security",
-                "any (offer TLS and NLA, the server picks), tls, or nla",
+                "nla (default: CredSSP/NTLM proves the password without handing it over), tls (the password is sent in the Client Info PDU inside TLS; the server's certificate is not verified, so anyone able to intercept the connection receives it — use only on a trusted network, or with no password to reach a login screen), or any (offer both; while a password is set, a server that selects TLS-only is refused)",
                 json!("nla"),
-                Some(json!("any")),
+                Some(json!(DEFAULT_SECURITY)),
             ),
             s(
                 "width",
@@ -410,7 +419,7 @@ impl Protocol for RdpClientProtocol {
             .implementation("IronRDP (ironrdp-connector 0.10, ironrdp-session 0.11): X.224 negotiation, TLS upgrade (rustls, the server's certificate is not verified, as with mstsc's first-use prompt answered yes), CredSSP/NTLM for NLA, MCS/GCC, licensing, capability exchange and finalization, deactivation-reactivation, and fast-path and slow-path graphics decoded into a framebuffer. Input goes out as fast-path scancode, Unicode and mouse events through ironrdp-input")
             .llm_control("What to type, which keys to press, where to click, and when to look at the screen; the screen comes back as its size, most common colour and a grid of each cell's most common colour")
             .e2e_testing("tests/client/rdp: two independent servers — FreeRDP's shadow server (freerdp-shadow-cli3) sharing an Xvfb display, with NLA against an NTLM SAM file, where the model's clicks and keystrokes are read back from xev on that display and the screen colours are checked against xsetroot; and xrdp 0.9 with TLS, whose login screen colour is checked")
-            .notes("No certificate verification and no Kerberos (NTLM only). No clipboard, audio, drive or other virtual channels. The screen is described by colour, not text. Standard RDP security (RC4) is not offered.")
+            .notes("No certificate verification and no Kerberos (NTLM only). security defaults to nla, so the password is proven through CredSSP; security tls sends it in the Client Info PDU to a server whose certificate is not verified, which an interceptor can read, and security any refuses a server selecting TLS-only while a password is set. A desktop size the server grants above 4096 pixels a side is refused, at connection and at reactivation. No clipboard, audio, drive or other virtual channels. The screen is described by colour, not text. Standard RDP security (RC4) is not offered.")
             .build()
     }
     fn example_prompt(&self) -> &'static str {
@@ -418,7 +427,7 @@ impl Protocol for RdpClientProtocol {
     }
     fn get_startup_examples(&self) -> StartupExamples {
         let llm = json!({"type":"open_client","protocol":"RDP","remote_addr":"127.0.0.1:3389",
-            "startup_params":{"username":"alice","password":"s3cret"},
+            "startup_params":{"username":"alice","password":"s3cret","security":"nla"},
             "instruction":"Once connected, read the screen and report its main colour"});
         let mut static_example = llm.clone();
         static_example["event_handlers"] = json!([

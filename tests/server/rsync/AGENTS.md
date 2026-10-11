@@ -41,6 +41,21 @@ the daemon (`apt-get install rsync`). It fails rather than skips without it.
 Mutation-checked: skipping the sort (indexes then name the wrong files) and a wrong MD4 seed
 both fail.
 
+`upload_bounds_test.rs` uses a hand-written protocol-29 uploading client (no rsync binary)
+so the client can break the rules, with static handlers as the model:
+
+- A file listed at 3 bytes that sends 11 is refused per file and none of its data reaches the
+  model; its neighbour, which keeps to its size, is taken.
+- Ten files listed at size 0 that each send 1 MiB: the ninth crosses `MAX_UPLOAD_BYTES`, the
+  client is told `over this daemon's upload limit`, and no `rsync_upload_complete` is raised.
+- A refused upload finishes the end-of-run exchange and raises no `rsync_upload_complete`.
+- A refusal naming a path whose two-byte character straddles byte 4000 of the message is cut
+  on a character boundary (the old byte `truncate` panicked the connection task);
+  `message_text` is also checked directly for 2-, 3- and 4-byte characters.
+- `file_list_bounded` with `FlistLimits::UPLOAD`: 2000 device entries pass (and are skipped),
+  2001 fail; 1 MiB of names fails; the same lists pass the download bounds. End to end, an
+  oversized list is refused before `rsync_upload_request` is raised.
+
 `wire_test.rs` covers the codec alone:
 
 - The whole-file MD4 against bytes captured from a stock exchange.

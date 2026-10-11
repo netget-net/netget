@@ -28,8 +28,19 @@ pub const MAX_PATHS: usize = 16;
 const WRITE_TIMEOUT: Duration = Duration::from_secs(60);
 /// Largest single file an upload may deliver; a bigger one is refused before it is requested.
 pub const MAX_UPLOAD_FILE_BYTES: u64 = 1024 * 1024;
-/// All the files of one upload together.
+/// All the files of one upload together: the declared sizes of the files taken, and the file
+/// data actually received (counted as it arrives, including data past a file's declared size).
 pub const MAX_UPLOAD_BYTES: u64 = 8 * 1024 * 1024;
+/// The largest message one connection buffers from a client: an uploaded file, or the names
+/// and symlink targets of an upload's file list, whichever bound is higher.
+pub const MAX_INBOUND_BYTES: usize =
+    if MAX_UPLOAD_FILE_BYTES as usize > wire::MAX_UPLOAD_LIST_NAME_BYTES {
+        MAX_UPLOAD_FILE_BYTES as usize
+    } else {
+        wire::MAX_UPLOAD_LIST_NAME_BYTES
+    };
+/// Longest text one multiplexed message carries, in bytes (cut on a character boundary).
+pub const MAX_MESSAGE_BYTES: usize = 4000;
 /// Files one upload may deliver.
 pub const MAX_UPLOAD_FILES: usize = 1000;
 
@@ -195,13 +206,32 @@ impl Out {
         self.raw(&wire::data_frames(bytes)).await
     }
     async fn message(&mut self, code: u8, text: &str) -> Result<()> {
-        let mut t = crate::utils::sanitize::multiline(text);
-        t.truncate(4000);
-        if !t.ends_with('\n') {
-            t.push('\n');
-        }
-        self.raw(&wire::frame(code, t.as_bytes())).await
+        self.raw(&wire::frame(code, message_text(text).as_bytes()))
+            .await
     }
+}
+
+/// The text of a message to the client: control characters removed, cut to at most
+/// `MAX_MESSAGE_BYTES` on a character boundary (a client-chosen path can put a multi-byte
+/// character across the cut), and ending in a newline.
+pub fn message_text(text: &str) -> String {
+    let clean = crate::utils::sanitize::multiline(text);
+    let mut t = crate::utils::truncate::truncate_str(&clean, MAX_MESSAGE_BYTES).to_string();
+    if !t.ends_with('\n') {
+        t.push('\n');
+    }
+    t
+}
+
+/// Close our side after a refusal, then let the client's bytes drain (for at most 5 s) so the
+/// error just sent is not lost to a reset.
+async fn close_and_drain(input: &mut In, out: &mut Out) {
+    let _ = out.wr.shutdown().await;
+    let _ = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut sink = [0u8; 4096];
+        while matches!(input.rd.read(&mut sink).await, Ok(n) if n > 0) {}
+    })
+    .await;
 }
 
 fn now_secs() -> u32 {
@@ -309,13 +339,7 @@ async fn session(
         decision(ctx, id, "request", "refused_options");
         out.message(wire::MSG_ERROR_XFER, &format!("ERROR: {refusal}"))
             .await?;
-        // Close our side, then let the client's bytes drain so the error is not lost to a reset.
-        let _ = out.wr.shutdown().await;
-        let _ = tokio::time::timeout(Duration::from_secs(5), async {
-            let mut sink = [0u8; 4096];
-            while matches!(input.rd.read(&mut sink).await, Ok(n) if n > 0) {}
-        })
-        .await;
+        close_and_drain(&mut input, &mut out).await;
         return Ok(());
     }
     if !req.sender {
@@ -527,8 +551,10 @@ fn upload_path(dest: &str, entry: &str) -> String {
 /// The client's file list comes first; the model decides which files to take; each taken file
 /// is requested whole (an empty checksum header, as for a new file), read as literal tokens and
 /// checked against MD4(seed ‖ data); then the end-of-run exchange the stock receiver makes:
-/// NDX_DONE, the client's echo, two more each way, and a final one. The files are handed to the
-/// model in `rsync_upload_complete`; nothing is written anywhere.
+/// NDX_DONE, the client's echo, two more each way, and a final one. When the model accepted,
+/// the files are handed to it in `rsync_upload_complete`; after a refusal, silence or a backend
+/// failure the exchange still ends cleanly but no completion event is raised. Nothing is
+/// written anywhere.
 #[allow(clippy::too_many_arguments)]
 async fn upload(
     ctx: &SpawnContext,
@@ -542,10 +568,27 @@ async fn upload(
 ) -> Result<()> {
     let dest = req.paths.first().cloned().unwrap_or_default();
     let mut reader = wire::MuxReader::raw(&mut input.rd);
-    let (mut entries, _io_error) = tokio::time::timeout(input.idle, reader.file_list(req))
-        .await
-        .context("the client went quiet sending its file list")??;
+    let listed = tokio::time::timeout(
+        input.idle,
+        reader.file_list_bounded(req, wire::FlistLimits::UPLOAD),
+    )
+    .await;
     input.total += reader.consumed;
+    let (mut entries, _io_error) = match listed {
+        Ok(Ok(list)) => list,
+        Ok(Err(e)) => {
+            // Over a bound, or malformed: the model never sees the list.
+            decision(ctx, id, "upload", "refused_file_list");
+            out.message(
+                wire::MSG_ERROR_XFER,
+                &format!("ERROR: file list refused: {e}"),
+            )
+            .await?;
+            close_and_drain(input, out).await;
+            return Err(e.context("the client's file list"));
+        }
+        Err(_) => bail!("the client went quiet sending its file list"),
+    };
     // Indexes are positions in rsync's order, as the client numbers them too.
     wire::sort(&mut entries);
     entries.dedup_by(|a, b| a.path == b.path);
@@ -575,15 +618,18 @@ async fn upload(
             "path": dest,
             "files": files,
             "file_count": regular.len(),
-            "total_bytes": regular.iter().map(|&i| entries[i].size).sum::<u64>(),
+            // Declared sizes are the client's to choose: added without overflowing.
+            "total_bytes": regular.iter().fold(0u64, |t, &i| t.saturating_add(entries[i].size)),
             "client": client,
         }),
     );
     // Which files to take, and why each other one is not taken.
     let mut take: Vec<usize> = Vec::new();
     let mut refused: Vec<(String, String)> = Vec::new();
+    let mut accepted = false;
     match ask(ctx, id, event).await {
         Ok(Some((name, data))) if name == actions::ACCEPT_UPLOAD => {
+            accepted = true;
             let wanted: Option<std::collections::HashSet<String>> =
                 data.get("paths").and_then(|p| p.as_array()).map(|l| {
                     l.iter()
@@ -657,6 +703,8 @@ async fn upload(
         .map(|e| json!({"path": upload_path(&dest, &e.path), "type": e.kind.name()}))
         .collect();
     let mut failed: Vec<(String, String)> = Vec::new();
+    // File data received so far in this upload, counted as it arrives.
+    let mut received_bytes = 0u64;
     for &i in &take {
         let entry = &entries[i];
         let path = upload_path(&dest, &entry.path);
@@ -682,7 +730,12 @@ async fn upload(
             head == [0, 0, 0, 0],
             "the client echoed checksum header {head:?} for a request without one"
         );
+        // Data is kept up to the file's declared size (which was checked against the bounds
+        // before the file was requested); anything past it is read, dropped, and refuses the
+        // file. Every byte counts toward the upload's MAX_UPLOAD_BYTES as it arrives.
         let mut data = Vec::new();
+        let mut sent = 0u64;
+        let mut over_declared = false;
         loop {
             let token = input.int().await?;
             if token == 0 {
@@ -692,13 +745,42 @@ async fn upload(
                 token > 0,
                 "a block reference in a file sent without a basis"
             );
+            let token = token as u64;
+            sent += token;
+            received_bytes += token;
+            if received_bytes > MAX_UPLOAD_BYTES {
+                decision(ctx, id, "upload", "refused_over_upload_limit");
+                out.message(
+                    wire::MSG_ERROR_XFER,
+                    &format!("rsync: [receiver] {path}: over this daemon's upload limit"),
+                )
+                .await?;
+                close_and_drain(input, out).await;
+                bail!("the upload sent more than {MAX_UPLOAD_BYTES} bytes of file data");
+            }
             ensure!(
-                data.len() as u64 + token as u64 <= MAX_UPLOAD_FILE_BYTES,
+                sent <= MAX_UPLOAD_FILE_BYTES,
                 "{path} grew past {MAX_UPLOAD_FILE_BYTES} bytes while it was sent"
             );
-            data.extend(input.exact(token as usize).await?);
+            if over_declared || data.len() as u64 + token > entry.size {
+                over_declared = true;
+                input.skip(token).await?;
+            } else {
+                data.extend(input.exact(token as usize).await?);
+            }
         }
         let sum = input.exact(16).await?;
+        if over_declared {
+            out.message(
+                wire::MSG_ERROR_XFER,
+                &format!(
+                    "rsync: [receiver] {path}: more data than its listed size, file discarded"
+                ),
+            )
+            .await?;
+            failed.push((path, "more data than its listed size".into()));
+            continue;
+        }
         if sum != wire::file_sum(seed, &data) {
             out.message(
                 wire::MSG_ERROR_XFER,
@@ -740,6 +822,10 @@ async fn upload(
         )
         .await;
 
+    if !accepted {
+        // A refused upload delivered nothing, so there is nothing to complete.
+        return Ok(());
+    }
     let taken = received.iter().filter(|f| f["type"] == "file").count();
     Log::new(Some(&ctx.status_tx)).info(format!(
         "rsync connection {id}: upload to {module}/{dest}, {taken} file(s) taken, {} refused",

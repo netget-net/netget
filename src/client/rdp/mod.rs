@@ -62,10 +62,51 @@ struct Settings {
     username: String,
     password: String,
     domain: Option<String>,
+    /// The `security` parameter as given, or `actions::DEFAULT_SECURITY`.
+    security: String,
     tls: bool,
     nla: bool,
     width: u16,
     height: u16,
+}
+
+/// Which security protocols to offer for a `security` setting, as (TLS, NLA). The default is
+/// NLA alone: under TLS-only security the password travels in the Client Info PDU to whoever
+/// holds a TLS session whose certificate is not verified.
+pub fn security_offer(security: Option<&str>) -> Result<(bool, bool)> {
+    Ok(match security.unwrap_or(actions::DEFAULT_SECURITY) {
+        "any" => (true, true),
+        "tls" => (true, false),
+        "nla" => (false, true),
+        other => bail!("security is nla, tls or any, not {other:?}"),
+    })
+}
+
+/// Whether the session may go on with the security the server selected (`"tls"` or `"nla"`).
+/// TLS-only security sends the password in the Client Info PDU, and the server's certificate is
+/// not verified, so an interceptor can select TLS and read it: that is allowed only when the
+/// operator asked for `security: tls` by name. With `any`, a server selecting TLS-only is
+/// refused while a password is set.
+pub fn check_selected_security(requested: &str, selected: &str, has_password: bool) -> Result<()> {
+    ensure!(
+        selected != "tls" || !has_password || requested == "tls",
+        "the server selected TLS-only security, which would send the password to a server whose \
+         certificate is not verified; set security to tls to allow that"
+    );
+    Ok(())
+}
+
+/// Whether a desktop size the server granted is one this client will allocate a framebuffer
+/// for (width × height × 4 bytes, both chosen by the server): 1 to `actions::MAX_SIDE` pixels a
+/// side.
+pub fn check_granted_size(width: u16, height: u16) -> Result<()> {
+    let side = 1..=actions::MAX_SIDE;
+    ensure!(
+        side.contains(&width) && side.contains(&height),
+        "the server granted a {width}x{height} desktop; this client accepts 1 to {} pixels a side",
+        actions::MAX_SIDE
+    );
+    Ok(())
 }
 
 fn settings(ctx: &ConnectContext) -> Result<Settings> {
@@ -90,16 +131,13 @@ fn settings(ctx: &ConnectContext) -> Result<Settings> {
         );
         Ok(v as u16)
     };
-    let (tls, nla) = match get("security")?.as_deref().unwrap_or("any") {
-        "any" => (true, true),
-        "tls" => (true, false),
-        "nla" => (false, true),
-        other => bail!("security is any, tls or nla, not {other:?}"),
-    };
+    let security = get("security")?.unwrap_or_else(|| actions::DEFAULT_SECURITY.to_string());
+    let (tls, nla) = security_offer(Some(&security))?;
     Ok(Settings {
         username: get("username")?.unwrap_or_default(),
         password: get("password")?.unwrap_or_default(),
         domain: get("domain")?,
+        security,
         tls,
         nla,
         // Even widths: some servers refuse odd ones.
@@ -152,10 +190,13 @@ fn config(s: &Settings) -> ironrdp_connector::Config {
 }
 
 /// TCP, X.224, TLS and the rest of the connection sequence. Returns which security the server
-/// selected.
+/// selected; a selection `check_selected_security` refuses ends the sequence before the
+/// password is sent.
 async fn establish(
     server: SocketAddr,
     host: &str,
+    requested: &str,
+    has_password: bool,
     config: ironrdp_connector::Config,
 ) -> Result<(ConnectionResult, Framed, &'static str)> {
     // In-process callers (tests, an embedding) may not have run main's provider install.
@@ -179,6 +220,7 @@ async fn establish(
         }
         _ => "tls",
     };
+    check_selected_security(requested, security, has_password)?;
     let tcp = framed.into_inner_no_leftover();
     let (tls, cert) = ironrdp_tls::upgrade(tcp, host)
         .await
@@ -228,11 +270,21 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
         .rsplit_once(':')
         .map(|(h, _)| h.trim_matches(['[', ']']).to_string())
         .unwrap_or_default();
-    let (result, framed, security) =
-        tokio::time::timeout(CONNECT_TIMEOUT, establish(server, &host, config(&s)))
-            .await
-            .context("the RDP connection sequence timed out")??;
+    let (result, framed, security) = tokio::time::timeout(
+        CONNECT_TIMEOUT,
+        establish(
+            server,
+            &host,
+            &s.security,
+            !s.password.is_empty(),
+            config(&s),
+        ),
+    )
+    .await
+    .context("the RDP connection sequence timed out")??;
     let size = result.desktop_size;
+    // Refused before any framebuffer is allocated; dropping `framed` closes the connection.
+    check_granted_size(size.width, size.height)?;
     ctx.state
         .update_client_status(ctx.client_id, ClientStatus::Connected)
         .await;
@@ -316,6 +368,7 @@ struct Session {
 }
 
 impl Session {
+    /// The desktop size has been through `check_granted_size`.
     fn new(result: ConnectionResult, framed: Framed) -> Self {
         let size = result.desktop_size;
         let stage = ActiveStageBuilder {
@@ -505,7 +558,8 @@ impl Session {
     }
 
     /// The Deactivation-Reactivation Sequence: capabilities again, then finalization; the
-    /// server may change the desktop size on the way.
+    /// server may change the desktop size on the way, and a size `check_granted_size` refuses
+    /// ends the session.
     async fn reactivate(&mut self) -> Result<()> {
         let mut sequence = self.activation.create();
         let mut buf = ironrdp_pdu::WriteBuf::new();
@@ -517,6 +571,8 @@ impl Session {
                 ..
             } = sequence.connection_activation_state()
             {
+                check_granted_size(desktop_size.width, desktop_size.height)
+                    .context("reactivation")?;
                 self.image =
                     DecodedImage::new(PixelFormat::RgbA32, desktop_size.width, desktop_size.height);
                 self.stage.set_share_id(share_id);

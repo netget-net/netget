@@ -280,9 +280,9 @@ impl Protocol for RsyncProtocol {
             .request_only("rsync carries one request per connection on a strictly sequenced binary stream; a message injected into it would desynchronise the client")
             .implementation("Hand-rolled rsync daemon protocol pinned at 29 (src/server/rsync/wire.rs): @RSYNCD handshake and MOTD, module listing, newline-terminated arguments, the raw checksum seed, multiplexed output, the protocol-29 file list in rsync's f_name_cmp order, whole-file transfers as literal tokens with MD4(seed ‖ data), dry runs, -c list checksums, and the three-NDX_DONE end of run with stats")
             .llm_control("Which modules exist, and the files, directories and symlinks a module holds (with their contents) at each requested path; refusals")
-            .e2e_testing("tests/server/rsync: the stock rsync 3.2.7 client — module listing, --list-only, -a and -r downloads compared byte for byte, a dry run, a symlink, a refusal, and an upload refused as read-only; upload_test.rs: pushes of a tree and of one file with -a, the model taking part of an upload with the rest refused per file, contents compared byte for byte, and uploads refused (the model, --delete, -H, the per-file size bound)")
-            .notes("Uploads are offered to the model, which takes all or some files; their contents reach it in rsync_upload_complete and nothing is written to disk. An upload names one destination; --delete and -H are refused for it. Bounds: 1 MiB per uploaded file, 8 MiB and 1000 files per upload. -z, -R, -U, -N, -s and --files-from are refused rather than half-supported. No authentication (every module is open). Block matching against an existing destination file is not done: every file is sent whole, which is correct, just not minimal.")
-            .max_inbound_bytes(wire::MAX_FILTER_BYTES)
+            .e2e_testing("tests/server/rsync: the stock rsync 3.2.7 client — module listing, --list-only, -a and -r downloads compared byte for byte, a dry run, a symlink, a refusal, and an upload refused as read-only; upload_test.rs: pushes of a tree and of one file with -a, the model taking part of an upload with the rest refused per file, contents compared byte for byte, and uploads refused (the model, --delete, -H, the per-file size bound); upload_bounds_test.rs: a hand-written protocol-29 client sending more than a file's listed size, more file data than an upload may carry, an oversized file list, a refused upload, and a multi-byte path across the message cut")
+            .notes("Uploads are offered to the model, which takes all or some files; their contents reach it in rsync_upload_complete and nothing is written to disk. An upload names one destination; --delete and -H are refused for it. Bounds: 1 MiB per uploaded file and no more than its listed size (a file sending more is refused), 8 MiB of declared sizes and of file data actually received and 1000 files per upload, and an upload's file list at most 2000 entries and 1 MiB of names and symlink targets. A refused upload raises no rsync_upload_complete. -z, -R, -U, -N, -s and --files-from are refused rather than half-supported. No authentication (every module is open). Block matching against an existing destination file is not done: every file is sent whole, which is correct, just not minimal.")
+            .max_inbound_bytes(super::MAX_INBOUND_BYTES)
             .build()
     }
     fn example_prompt(&self) -> &'static str {
@@ -305,8 +305,6 @@ impl Protocol for RsyncProtocol {
         "File Transfer"
     }
 }
-
-use super::wire;
 
 impl Server for RsyncProtocol {
     fn spawn(

@@ -40,6 +40,24 @@ a CI runner.
   corner cells, exactly.
 - The middle cells must be the login box's `#dedede`.
 
+Both real-server tests name `security` explicitly (`nla` for the shadow server, `tls` without
+a username for xrdp), so they do not depend on the default.
+
+## Without a server
+
+`security_test.rs` pins the decisions a hostile server would aim at, through the public
+functions the connection uses:
+
+- `security_offer`: the default offers NLA alone, and the declared parameter default is
+  `actions::DEFAULT_SECURITY`.
+- `check_selected_security`: a server selecting TLS-only is refused while a password is set
+  unless `tls` was asked for by name; with no password it is allowed.
+- `check_granted_size`: 1–4096 a side passes; 4097, 65535×65535 and 0 are refused.
+
+What they cannot show is the refusal on the wire (a server granting 65535×65535, or selecting
+TLS under `any`): neither real server can be made to, and a fake one would have to complete the
+whole IronRDP connection sequence first.
+
 ## Mutation-checked
 
 Discarding the model's actions in `run_turns` fails the shadow test at the click.

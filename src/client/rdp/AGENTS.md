@@ -19,12 +19,28 @@ refused logon or an unreachable server fails client creation instead of reportin
   - A username turns on autologon.
   - Without one, a server such as xrdp shows its own login screen, which the model can fill
     in by typing.
-- `security`: `any` (offer TLS and NLA; the server picks), `tls` or `nla`.
+- `security` (`security_offer`):
+  - `nla`, the **default** (`actions::DEFAULT_SECURITY`): only HYBRID/HYBRID_EX is offered,
+    and IronRDP refuses a server that selects anything else. The password is proven through
+    CredSSP/NTLM, which a party in the middle cannot complete without knowing it.
+  - `tls`: only SSL is offered. With autologon the password is sent **itself**, in the Client
+    Info PDU inside TLS, and the certificate is not verified (below), so anyone who can
+    intercept the connection and present any certificate receives it. Use it on a trusted
+    network, or with no password to reach the server's own login screen (as against xrdp).
+  - `any`: both are offered. While a password is set, a server that selects TLS-only is
+    refused before the TLS upgrade (`check_selected_security`), so the password goes over
+    TLS-only security only when the operator asked for `tls` by name.
 - `width`, `height`: 200–4096; the width is rounded down to even.
 
 The server's certificate is **not verified**: RDP servers almost always present self-signed
-certificates, and IronRDP's upgrade accepts any. CredSSP is NTLM only. `NoKerberos` refuses
-the KDC requests sspi would otherwise make.
+certificates, and IronRDP's upgrade accepts any. That is why `nla` is the default. CredSSP is
+NTLM only. `NoKerberos` refuses the KDC requests sspi would otherwise make.
+
+The desktop size is the **server's** choice (it may grant other than what was asked, and may
+change it at reactivation), and the framebuffer is width × height × 4 bytes. A granted size
+outside 1–`MAX_SIDE` (4096) a side is refused by `check_granted_size` before any framebuffer is
+allocated: after the connection sequence it fails client creation, and at reactivation it ends
+the session with the error as its reason.
 
 ## What the model does
 
@@ -60,7 +76,8 @@ selected, granted size), `rdp_screen`, `rdp_error` (an action that failed), `rdp
 Server frames go through `ActiveStage::process`; response frames are written back.
 
 - **DeactivateAll** runs the deactivation-reactivation sequence through the connection's
-  activation factory. The framebuffer is rebuilt at the new size and the share id updated.
+  activation factory. The new size goes through `check_granted_size`, then the framebuffer is
+  rebuilt at it and the share id updated.
 - **Terminate** ends the session with the server's reason.
 - **Turn bounds:** model turns chain up to `MAX_FOLLOWUP_DEPTH` (8); the turn queue holds 64.
 
@@ -69,6 +86,6 @@ Server frames go through `ActiveStage::process`; response frames are written bac
 - Virtual channels: clipboard, audio, drives, RemoteApp, display control.
 - Standard RDP security (RC4).
 - Kerberos.
-- Certificate verification or pinning.
+- Certificate verification or pinning (hence the `nla` default).
 - Reading text off the screen.
 - Bulk compression is not negotiated.
