@@ -109,7 +109,10 @@ async fn a_topic_alias_from_the_broker_ends_the_connection() {
     );
 
     // CONNACK: flags 0, Success, no properties.
-    broker.write_all(&[0x20, 0x03, 0x00, 0x00, 0x00]).await.unwrap();
+    broker
+        .write_all(&[0x20, 0x03, 0x00, 0x00, 0x00])
+        .await
+        .unwrap();
 
     // Control: an ordinary QoS 1 PUBLISH is acknowledged and the session goes on.
     broker

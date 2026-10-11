@@ -64,7 +64,11 @@ async fn client(state: &AppState, port: u16) -> ClientId {
         ]),
         ..Default::default()
     }
-    .create(state, netget::llm::OllamaClient::new("http://127.0.0.1:1"), tx)
+    .create(
+        state,
+        netget::llm::OllamaClient::new("http://127.0.0.1:1"),
+        tx,
+    )
     .await
     .expect("connect")
 }
@@ -106,7 +110,11 @@ async fn a_response_head_with_no_line_end_is_refused_at_the_head_bound() {
         "{ev}"
     );
     tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(accepted.load(Ordering::SeqCst), 1, "a broken head is not retried");
+    assert_eq!(
+        accepted.load(Ordering::SeqCst),
+        1,
+        "a broken head is not retried"
+    );
 }
 
 #[tokio::test]
@@ -123,7 +131,9 @@ async fn a_chunk_size_line_with_no_line_end_is_refused_at_the_chunk_line_bound()
     assert_eq!(ev["reason"], "error", "{ev}");
     let error = ev["error"].as_str().unwrap_or_default();
     assert!(
-        error.contains(&format!("chunk-size line over {MAX_CHUNK_LINE_BYTES} bytes")),
+        error.contains(&format!(
+            "chunk-size line over {MAX_CHUNK_LINE_BYTES} bytes"
+        )),
         "{ev}"
     );
     assert!(
@@ -131,5 +141,9 @@ async fn a_chunk_size_line_with_no_line_end_is_refused_at_the_chunk_line_bound()
         "broken framing is not reconnected by itself: {ev}"
     );
     tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(accepted.load(Ordering::SeqCst), 1, "broken framing is not retried");
+    assert_eq!(
+        accepted.load(Ordering::SeqCst),
+        1,
+        "broken framing is not retried"
+    );
 }

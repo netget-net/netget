@@ -308,7 +308,12 @@ async fn read_head(r: &mut BufReader<ReadHalf<TcpStream>>) -> Result<Response> {
             read_line_bounded(r, &mut line, MAX_HEAD_BYTES - start, "response head"),
         )
         .await
-        .map_err(|_| anyhow!("response head not complete within {}s", IO_TIMEOUT.as_secs()))?
+        .map_err(|_| {
+            anyhow!(
+                "response head not complete within {}s",
+                IO_TIMEOUT.as_secs()
+            )
+        })?
         .map_err(|e| {
             if line.len() >= MAX_HEAD_BYTES - start {
                 anyhow!("response head over {MAX_HEAD_BYTES} bytes with no end")

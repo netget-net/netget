@@ -80,7 +80,11 @@ pub struct StreamWriter {
 }
 
 impl StreamWriter {
-    fn guard<T>(&mut self, cx: &mut Context<'_>, poll: Poll<std::io::Result<T>>) -> Poll<std::io::Result<T>> {
+    fn guard<T>(
+        &mut self,
+        cx: &mut Context<'_>,
+        poll: Poll<std::io::Result<T>>,
+    ) -> Poll<std::io::Result<T>> {
         match poll {
             Poll::Ready(r) => {
                 self.deadline = None;
@@ -206,11 +210,12 @@ pub async fn broadcast(
             .map(|(id, s)| (*id, s.writer.clone(), s.stall.clone()))
             .collect()
     };
-    let results = futures::future::join_all(targets.into_iter().map(|(id, writer, stall)| async move {
-        let ok = deliver(&writer, bytes).await;
-        (id, ok, stall)
-    }))
-    .await;
+    let results =
+        futures::future::join_all(targets.into_iter().map(|(id, writer, stall)| async move {
+            let ok = deliver(&writer, bytes).await;
+            (id, ok, stall)
+        }))
+        .await;
     let mut delivered = 0;
     for (id, ok, stall) in results {
         if ok {

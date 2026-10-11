@@ -698,11 +698,8 @@ async fn dispatch_packet(
             protocol.set_v5(session.v5);
             // The client asked for enhanced authentication (§4.12), which this broker does not
             // perform. Only an explicit `mqtt_connack` from the handler admits such a client.
-            let wants_enhanced_auth = session.v5
-                && connect
-                    .properties
-                    .text(v5::AUTHENTICATION_METHOD)
-                    .is_some();
+            let wants_enhanced_auth =
+                session.v5 && connect.properties.text(v5::AUTHENTICATION_METHOD).is_some();
             let assigned = connect.client_id.is_empty();
             let effective_id = if assigned {
                 format!("anon-{}", connection_id.as_u32())
@@ -1686,9 +1683,13 @@ pub fn parse_connect(body: &[u8]) -> std::result::Result<ConnectPacket, PacketEr
             will_properties = v5::read_properties(body, &mut pos)
                 .map_err(PacketError::from)
                 .map_err(tag)?;
-            v5::forbid(&will_properties, &[v5::SUBSCRIPTION_IDENTIFIER], "Will Properties")
-                .map_err(PacketError::from)
-                .map_err(tag)?;
+            v5::forbid(
+                &will_properties,
+                &[v5::SUBSCRIPTION_IDENTIFIER],
+                "Will Properties",
+            )
+            .map_err(PacketError::from)
+            .map_err(tag)?;
         }
         let topic = read_string(body, &mut pos).ok_or_else(short).map_err(tag)?;
         let message = read_bytes(body, &mut pos).ok_or_else(short).map_err(tag)?;
