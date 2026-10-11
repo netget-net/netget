@@ -32,13 +32,29 @@ use rasn_smi::v2::{ObjectSyntax as V2ObjectSyntax, SimpleSyntax as V2SimpleSynta
 use rasn_snmp::{v1, v2, v2c};
 use serde_json::Value;
 
+use crate::server::snmp::usm;
+
 /// SNMP client configuration
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct SnmpConfig {
     community: String,
     version: SnmpVersion,
     timeout_ms: u64,
     retries: u32,
+    /// SNMPv3: the user and the engine it has discovered.
+    usm: Option<Arc<usm::Manager>>,
+    context_name: String,
+}
+
+impl std::fmt::Debug for SnmpConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SnmpConfig")
+            .field("version", &self.version)
+            .field("timeout_ms", &self.timeout_ms)
+            .field("retries", &self.retries)
+            .field("v3_user", &self.usm.as_ref().map(|m| m.user.name.clone()))
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for SnmpConfig {
@@ -48,14 +64,17 @@ impl Default for SnmpConfig {
             version: SnmpVersion::V2c,
             timeout_ms: 5000,
             retries: 3,
+            usm: None,
+            context_name: String::new(),
         }
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SnmpVersion {
     V1,
     V2c,
+    V3,
 }
 
 /// Parse startup parameters
@@ -70,8 +89,18 @@ fn parse_startup_params(params: Option<crate::protocol::StartupParams>) -> Resul
             config.version = match version.to_lowercase().as_str() {
                 "v1" | "1" => SnmpVersion::V1,
                 "v2c" | "v2" | "2c" | "2" => SnmpVersion::V2c,
-                _ => SnmpVersion::V2c,
+                "v3" | "3" => SnmpVersion::V3,
+                other => anyhow::bail!("SNMP version {other:?} is not v1, v2c or v3"),
             };
+        }
+        if let Some(user) = params.get_optional_object("v3_user")? {
+            config.usm = Some(Arc::new(usm::Manager::new(usm::User::from_json(
+                &Value::Object(user.clone()),
+            )?)));
+        }
+        if let Some(context) = params.get_optional_string("context_name")? {
+            anyhow::ensure!(context.len() <= 32, "context_name is at most 32 bytes");
+            config.context_name = context;
         }
         if let Some(timeout) = params.get_optional_i64("timeout_ms")? {
             config.timeout_ms =
@@ -82,6 +111,13 @@ fn parse_startup_params(params: Option<crate::protocol::StartupParams>) -> Resul
         }
     }
 
+    match (config.version, config.usm.is_some()) {
+        (SnmpVersion::V3, false) => anyhow::bail!("version v3 needs a v3_user"),
+        (SnmpVersion::V1 | SnmpVersion::V2c, true) => {
+            anyhow::bail!("v3_user is set but version is not v3")
+        }
+        _ => {}
+    }
     Ok(config)
 }
 
@@ -115,10 +151,7 @@ impl SnmpClient {
     ) -> Result<SocketAddr> {
         // Parse configuration
         let config = parse_startup_params(startup_params)?;
-        debug!(
-            "SNMP client config: community={}, version={:?}, timeout={}ms, retries={}",
-            config.community, config.version, config.timeout_ms, config.retries
-        );
+        debug!("SNMP client config: {:?}", config);
 
         // Bind UDP socket to any local port
         let socket = UdpSocket::bind("0.0.0.0:0")
@@ -134,6 +167,19 @@ impl SnmpClient {
         ))?;
 
         let remote_sock_addr: SocketAddr = remote_addr.parse().context("Invalid remote address")?;
+
+        // SNMPv3: learn the agent's engine before anything else, so every request can be
+        // authenticated against it. An agent that never answers discovery cannot be talked to.
+        if let Some(manager) = &config.usm {
+            Self::discover(&socket, manager, &config)
+                .await
+                .with_context(|| format!("SNMPv3 engine discovery with {remote_addr} failed"))?;
+            info!(
+                "SNMP client {} discovered engine {}",
+                client_id,
+                hex::encode(manager.engine_id().unwrap_or_default())
+            );
+        }
 
         info!(
             "SNMP client {} connected to {} (local: {})",
@@ -317,12 +363,65 @@ impl SnmpClient {
         }
     }
 
+    /// RFC 3414 §4: probe with an empty engine and learn it from the report.
+    async fn discover(
+        socket: &UdpSocket,
+        manager: &usm::Manager,
+        config: &SnmpConfig,
+    ) -> Result<()> {
+        let mut buffer = vec![0u8; 65535];
+        for _ in 0..=config.retries {
+            let (msg_id, probe) = manager.discovery()?;
+            socket.send(&probe).await?;
+            let deadline = tokio::time::Instant::now() + Duration::from_millis(config.timeout_ms);
+            while let Ok(Ok(n)) = tokio::time::timeout_at(deadline, socket.recv(&mut buffer)).await
+            {
+                if crate::server::snmp::check_ber_structure(
+                    &buffer[..n],
+                    crate::server::snmp::MAX_BER_DEPTH,
+                )
+                .is_err()
+                {
+                    continue;
+                }
+                if manager.learn(&buffer[..n], msg_id).is_ok() {
+                    return Ok(());
+                }
+            }
+        }
+        Err(anyhow::anyhow!(
+            "no discovery report after {} tries",
+            config.retries + 1
+        ))
+    }
+
+    /// Wrap a v2c-encoded request's PDU in an SNMPv3 message for the configured user.
+    fn to_v3(bytes: &[u8], config: &SnmpConfig) -> Result<Vec<u8>> {
+        let manager = config.usm.as_ref().context("v3 without a user")?;
+        let message: v2c::Message<v2::Pdus> =
+            ber::decode(bytes).map_err(|e| anyhow::anyhow!("request PDU does not decode: {e}"))?;
+        manager.wrap_request(message.data, config.context_name.as_bytes())
+    }
+
     /// Encode the request datagram for one executed action.
     ///
     /// Pure - no I/O - so the LLM path and the command channel put byte-identical
     /// PDUs on the wire. Returns the bytes plus the PDU name used in the response
     /// event.
     fn build_request(
+        name: &str,
+        data: &Value,
+        config: &SnmpConfig,
+    ) -> Result<(Vec<u8>, &'static str)> {
+        let (bytes, kind) = Self::build_community_request(name, data, config)?;
+        if config.version == SnmpVersion::V3 {
+            return Ok((Self::to_v3(&bytes, config)?, kind));
+        }
+        Ok((bytes, kind))
+    }
+
+    /// The v1/v2c datagram; for v3 the v2c one, whose PDU [`Self::to_v3`] re-wraps.
+    fn build_community_request(
         name: &str,
         data: &Value,
         config: &SnmpConfig,
@@ -344,7 +443,7 @@ impl SnmpClient {
                     SnmpVersion::V1 => {
                         Self::build_v1_get_request(&oids, &config.community, request_id)?
                     }
-                    SnmpVersion::V2c => {
+                    SnmpVersion::V2c | SnmpVersion::V3 => {
                         Self::build_v2c_get_request(&oids, &config.community, request_id)?
                     }
                 };
@@ -355,7 +454,7 @@ impl SnmpClient {
                     SnmpVersion::V1 => {
                         Self::build_v1_getnext_request(&oids, &config.community, request_id)?
                     }
-                    SnmpVersion::V2c => {
+                    SnmpVersion::V2c | SnmpVersion::V3 => {
                         Self::build_v2c_getnext_request(&oids, &config.community, request_id)?
                     }
                 };
@@ -363,7 +462,7 @@ impl SnmpClient {
             }
             "snmp_getbulk" => {
                 if matches!(config.version, SnmpVersion::V1) {
-                    return Err(anyhow::anyhow!("GETBULK is only supported in SNMPv2c"));
+                    return Err(anyhow::anyhow!("GETBULK needs SNMPv2c or SNMPv3"));
                 }
                 let non_repeaters =
                     crate::client::wire_values::number::<u32>(&data, "non_repeaters", 0)?;
@@ -387,7 +486,7 @@ impl SnmpClient {
                     SnmpVersion::V1 => {
                         Self::build_v1_set_request(variables, &config.community, request_id)?
                     }
-                    SnmpVersion::V2c => {
+                    SnmpVersion::V2c | SnmpVersion::V3 => {
                         Self::build_v2c_set_request(variables, &config.community, request_id)?
                     }
                 };
@@ -652,15 +751,30 @@ impl SnmpClient {
             ));
         }
 
-        // Try parsing as v2c first
-        let (variables, error_status) =
-            if let Ok(msg) = ber::decode::<v2c::Message<v2::Pdus>>(response_data) {
-                Self::extract_v2c_response(&msg)?
-            } else if let Ok(msg) = ber::decode::<v1::Message<v1::Pdus>>(response_data) {
-                Self::extract_v1_response(&msg)?
-            } else {
-                return Err(anyhow::anyhow!("Failed to parse SNMP response"));
-            };
+        // SNMPv3: nothing in the reply is believed until the USM has checked it.
+        let mut usm_report: Option<Value> = None;
+        let (variables, error_status) = if let Some(manager) = &config.usm {
+            match manager.unwrap_reply(response_data)? {
+                usm::Reply::Pdu(pdus) => Self::extract_v2c_response(&v2c::Message {
+                    version: Integer::Primitive(1),
+                    community: Vec::new().into(),
+                    data: pdus,
+                })?,
+                usm::Reply::Report(kind, count) => {
+                    usm_report = Some(serde_json::json!({"report": kind.name(), "count": count}));
+                    (Vec::new(), 0)
+                }
+            }
+        } else if let Ok(msg) = ber::decode::<v2c::Message<v2::Pdus>>(response_data) {
+            Self::extract_v2c_response(&msg)?
+        } else if let Ok(msg) = ber::decode::<v1::Message<v1::Pdus>>(response_data) {
+            Self::extract_v1_response(&msg)?
+        } else {
+            return Err(anyhow::anyhow!("Failed to parse SNMP response"));
+        };
+        if let Some(report) = &usm_report {
+            info!("SNMP client {} got a USM report: {}", client_id, report);
+        }
 
         debug!(
             "SNMP client {} received response with {} variables, error_status={}",
@@ -671,14 +785,15 @@ impl SnmpClient {
 
         // Call LLM with response
         if let Some(instruction) = app_state.get_instruction_for_client(client_id).await {
-            let event = Event::new(
-                &SNMP_CLIENT_RESPONSE_RECEIVED_EVENT,
-                serde_json::json!({
-                    "request_type": request_type,
-                    "variables": variables,
-                    "error_status": error_status,
-                }),
-            );
+            let mut data = serde_json::json!({
+                "request_type": request_type,
+                "variables": variables,
+                "error_status": error_status,
+            });
+            if let Some(report) = usm_report {
+                data["usm_report"] = report;
+            }
+            let event = Event::new(&SNMP_CLIENT_RESPONSE_RECEIVED_EVENT, data);
 
             let memory = app_state
                 .get_memory_for_client(client_id)
