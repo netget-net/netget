@@ -29,10 +29,10 @@
 //! | API | key | this client asks for at most | why that ceiling |
 //! |---|---|---|---|
 //! | ApiVersions  | 18 | v3 | falls back to decoding at v0 if the broker refuses, per Kafka's own rule |
-//! | Metadata     | 3  | v8 | v9 is flexible, v10 replaces topic names with UUIDs |
-//! | Produce      | 0  | v7 | v8 adds per-record errors, v9 is flexible |
-//! | Fetch        | 1  | v11 | v12 is flexible, v13 replaces topic names with UUIDs |
-//! | OffsetCommit | 8  | v2 | v2 is the last version every broker since 0.9 accepts unchanged |
+//! | Metadata     | 3  | v12 | the newest `kafka-protocol` 0.14 knows; v9+ is flexible, v10+ reports topic ids |
+//! | Produce      | 0  | v11 | the newest `kafka-protocol` 0.14 knows; v9+ is flexible |
+//! | Fetch        | 1  | v16 | v12+ is flexible; v13+ names the topic by the id Metadata reported, and a broker that reports none is fetched by name at v12 |
+//! | OffsetCommit | 8  | v9 | v8+ is flexible; a commit outside any group (generation/epoch -1) means the same at every version |
 //!
 //! The actual version used for each is `min(our ceiling, the broker's max)`, refused
 //! outright if that falls below the broker's minimum.
@@ -102,10 +102,16 @@ const IO_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_RESPONSE_BYTES: i64 = 100 * 1024 * 1024;
 
 const CLIENT_MAX_API_VERSIONS: i16 = 3;
-const CLIENT_MAX_METADATA: i16 = 8;
-const CLIENT_MAX_PRODUCE: i16 = 7;
-const CLIENT_MAX_FETCH: i16 = 11;
-const CLIENT_MAX_OFFSET_COMMIT: i16 = 2;
+const CLIENT_MAX_METADATA: i16 = 12;
+const CLIENT_MAX_PRODUCE: i16 = 11;
+const CLIENT_MAX_FETCH: i16 = 16;
+const CLIENT_MAX_OFFSET_COMMIT: i16 = 9;
+/// The first Fetch version that names its topic by id rather than by name.
+const FETCH_BY_TOPIC_ID: i16 = 13;
+/// The first Metadata version that reports topic ids.
+const METADATA_WITH_TOPIC_IDS: i16 = 10;
+/// Topic ids remembered per connection.
+const MAX_TOPIC_IDS: usize = 1024;
 
 /// How many records of a batch are described to the model, and how much of each value.
 /// Matches the broker's `MAX_EVENT_RECORDS` / `MAX_EVENT_VALUE_BYTES`.
@@ -143,9 +149,54 @@ struct KafkaConn {
     /// action can report a byte count that is genuinely its own rather than a snapshot
     /// racing the poll loop.
     last_request_bytes: usize,
+    /// Topic ids the broker reported, for Fetch v13+. Looked up by name on first use.
+    topic_ids: HashMap<String, uuid::Uuid>,
 }
 
 impl KafkaConn {
+    /// The broker's id for `topic`, asked for with a Metadata request the first time.
+    /// `None` when the broker reports none (Metadata below v10, or a nil id): the caller
+    /// then fetches by name, at most v12.
+    async fn topic_id(&mut self, topic: &str) -> Result<Option<uuid::Uuid>> {
+        if let Some(id) = self.topic_ids.get(topic) {
+            return Ok(Some(*id));
+        }
+        use kafka_protocol::messages::metadata_request::MetadataRequestTopic;
+        let version = self.version_for(ApiKey::Metadata, CLIENT_MAX_METADATA)?;
+        if version < METADATA_WITH_TOPIC_IDS {
+            return Ok(None);
+        }
+        let response: MetadataResponse = self
+            .exchange(
+                ApiKey::Metadata,
+                version,
+                &MetadataRequest::default()
+                    .with_topics(Some(vec![MetadataRequestTopic::default()
+                        .with_name(Some(StrBytes::from_string(topic.to_string()).into()))])),
+            )
+            .await
+            .context("Metadata request for a topic id failed")?;
+        self.remember_topic_ids(&response);
+        Ok(self.topic_ids.get(topic).copied())
+    }
+
+    /// Keep the non-nil ids of the topics a Metadata response described without error.
+    fn remember_topic_ids(&mut self, response: &MetadataResponse) {
+        for t in &response.topics {
+            let Some(name) = t.name.as_ref() else {
+                continue;
+            };
+            if t.error_code != 0 || t.topic_id.is_nil() {
+                continue;
+            }
+            if self.topic_ids.len() >= MAX_TOPIC_IDS && !self.topic_ids.contains_key(name.as_str())
+            {
+                self.topic_ids.clear();
+            }
+            self.topic_ids.insert(name.to_string(), t.topic_id);
+        }
+    }
+
     /// The version to use for `api_key`: `min(our ceiling, the broker's max)`, refused if
     /// that lands below the broker's minimum or the broker does not implement the API at all.
     ///
@@ -366,6 +417,7 @@ impl KafkaClient {
             versions: HashMap::new(),
             client_id: StrBytes::from_string(client_id_str.clone()),
             last_request_bytes: 0,
+            topic_ids: HashMap::new(),
         };
 
         // ---- ApiVersions ------------------------------------------------------------
@@ -607,6 +659,9 @@ impl KafkaClient {
             )
             .await
             .context("Metadata request failed")?;
+        // Every Metadata answer from v10 carries topic ids; remember them, so a Fetch v13+
+        // on a topic already described costs no extra round trip.
+        conn.remember_topic_ids(&response);
 
         Ok(metadata_to_json(&response))
     }
@@ -983,6 +1038,7 @@ impl Session {
                     "error_code": error_code,
                     "error_name": kafka_error_name(error_code),
                     "delivered": delivered,
+                    "api_version": version,
                 }),
             )),
             wrote,
@@ -1000,19 +1056,30 @@ impl Session {
     ) -> Result<(Option<Event>, usize)> {
         use kafka_protocol::messages::fetch_request::{FetchPartition, FetchTopic};
 
+        let mut conn = self.conn.lock().await;
+        let mut version = conn.version_for(ApiKey::Fetch, CLIENT_MAX_FETCH)?;
+        // From v13 a fetch names its topic by the id the broker gave it; without one, fetch
+        // by name at the last version that allows it.
+        let mut fetch_topic = FetchTopic::default();
+        if version >= FETCH_BY_TOPIC_ID {
+            match conn.topic_id(topic).await? {
+                Some(id) => fetch_topic = fetch_topic.with_topic_id(id),
+                None => version = conn.version_for(ApiKey::Fetch, FETCH_BY_TOPIC_ID - 1)?,
+            }
+        }
+        if version < FETCH_BY_TOPIC_ID {
+            fetch_topic = fetch_topic.with_topic(StrBytes::from_string(topic.to_string()).into());
+        }
         let request = FetchRequest::default()
             .with_max_wait_ms(500)
             .with_min_bytes(1)
             .with_max_bytes(max_bytes)
-            .with_topics(vec![FetchTopic::default()
-                .with_topic(StrBytes::from_string(topic.to_string()).into())
-                .with_partitions(vec![FetchPartition::default()
+            .with_topics(vec![fetch_topic.with_partitions(vec![
+                FetchPartition::default()
                     .with_partition(partition)
                     .with_fetch_offset(offset)
-                    .with_partition_max_bytes(max_bytes)])]);
-
-        let mut conn = self.conn.lock().await;
-        let version = conn.version_for(ApiKey::Fetch, CLIENT_MAX_FETCH)?;
+                    .with_partition_max_bytes(max_bytes),
+            ])]);
         let response: FetchResponse = conn.exchange(ApiKey::Fetch, version, &request).await?;
         let wrote = conn.last_request_bytes;
         drop(conn);
@@ -1091,6 +1158,7 @@ impl Session {
                 serde_json::json!({
                     "topic": topic,
                     "partition": partition,
+                    "api_version": version,
                     "high_watermark": partition_data.high_watermark,
                     "next_offset": next_offset,
                     "record_count": records.len(),

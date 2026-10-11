@@ -128,6 +128,14 @@ pub static KAFKA_CLIENT_RECORDS_RECEIVED_EVENT: LazyLock<EventType> = LazyLock::
                 .to_string(),
             required: true,
         },
+        Parameter {
+            name: "api_version".to_string(),
+            type_hint: "number".to_string(),
+            description:
+                "Fetch version the request was sent at (13 and above name the topic by id)"
+                    .to_string(),
+            required: false,
+        },
     ])
     .with_actions(kafka_client_actions())
 });
@@ -178,6 +186,12 @@ pub static KAFKA_CLIENT_MESSAGE_DELIVERED_EVENT: LazyLock<EventType> = LazyLock:
             type_hint: "boolean".to_string(),
             description: "True only when the broker acknowledged the write".to_string(),
             required: true,
+        },
+        Parameter {
+            name: "api_version".to_string(),
+            type_hint: "number".to_string(),
+            description: "Produce version the request was sent at".to_string(),
+            required: false,
         },
     ])
     .with_actions(kafka_client_actions())
@@ -592,28 +606,39 @@ impl Protocol for KafkaClientProtocol {
         };
 
         ProtocolMetadataV2::builder()
-            .state(DevelopmentState::Experimental)
+            // Beta on the client bar: a real third-party broker (Apache Kafka 3.9.1, the
+            // reference implementation, not the crate this client frames with), a test that
+            // fails rather than skips without it, a full session, and the model's answer
+            // asserted from the broker's side (tests/client/kafka/real_server_test.rs).
+            .state(DevelopmentState::Beta)
             .privilege_requirement(PrivilegeRequirement::None)
             .implementation(
                 "Pure-Rust Kafka client over kafka-protocol's code-generated request \
                  encoders and response decoders, reached through the `kafka_protocol` \
-                 re-export the Kafka broker shares. rdkafka/librdkafka is gone.",
+                 re-export the Kafka broker shares. Negotiates up to Metadata v12, Produce v11, \
+                 Fetch v16 (by the topic id Metadata reported; by name at v12 when a broker \
+                 reports none) and OffsetCommit v9. rdkafka/librdkafka is gone.",
             )
             .llm_control(
                 "Produce records, fetch records from an explicit offset, read cluster \
                  metadata, commit offsets",
             )
-            .e2e_testing("NetGet's own Kafka broker, in-process over a real socket")
+            .e2e_testing(
+                "Apache Kafka 3.9.1 (the official release, single-node KRaft, in a temp dir; \
+                 tests/client/kafka/real_server_test.rs): kcat seeds a record, NetGet fetches it \
+                 at Fetch v16, a handler produces a derived record at Produce v11 and commits \
+                 the offset at OffsetCommit v9, and kcat and Kafka's own kafka-consumer-groups.sh \
+                 read both back from the broker. Fails, not skips, without the broker. Also \
+                 NetGet's own broker in-process (tests/client/kafka/e2e_test.rs).",
+            )
             .notes(
-                "Verified against NetGet's Kafka broker (tests/client/kafka/e2e_test.rs): \
-                 ApiVersions negotiation, Metadata, a produce whose decoded key and value \
-                 the broker reports back, a fetch whose records this client decodes, and an \
-                 OffsetCommit. NOT verified against Apache Kafka or Redpanda - no broker is \
-                 installed here. No consumer groups (FindCoordinator/JoinGroup/SyncGroup/ \
-                 Heartbeat are implemented by neither half), so partitions are assigned \
-                 manually and offsets are explicit; no ListOffsets, so there is no \
-                 earliest/latest resolution; no SSL/SASL, no transactions, no compression on \
-                 the produce path (compressed batches are decoded on the fetch path).",
+                "No consumer groups (FindCoordinator/JoinGroup/SyncGroup/Heartbeat are \
+                 implemented by neither half): partitions are assigned manually, offsets are \
+                 explicit, and a commit is sent to the bootstrap broker as a simple commit \
+                 (generation/epoch -1), which a single-broker cluster accepts once its offsets \
+                 topic exists. No ListOffsets, so there is no earliest/latest resolution; no \
+                 SSL/SASL, no transactions, no compression on the produce path (compressed \
+                 batches are decoded on the fetch path).",
             )
             .build()
     }

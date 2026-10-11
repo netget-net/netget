@@ -101,7 +101,7 @@ that field, but only alongside assertions that require bytes to have moved.
 
 ## Not covered
 
-- Any real broker (Apache Kafka, Redpanda). None is installed here.
+- Redpanda, or a multi-broker Kafka cluster.
 - Consumer groups, `ListOffsets`, SSL/SASL, transactions — none of which either half implements.
 - Compressed record batches on the fetch path (the codecs are `kafka-protocol`'s built-ins and
   should work; untested here).
@@ -109,3 +109,16 @@ that field, but only alongside assertions that require bytes to have moved.
 - `list_topics` as an action (the connect-time Metadata request covers the same code path).
 - Version step-down: the ApiVersions v3 → v0 fallback never fires against NetGet's broker,
   which supports v3.
+
+## Against Apache Kafka (`real_server_test.rs`)
+
+The official Apache Kafka 3.9.1 release, unpacked by `tests/server/kafka/install_peers.py`,
+run single-node KRaft through `RealServer` (`kafka-storage.sh format` as the setup command,
+`{port}` the broker listener and `{port1}` the controller). kcat seeds `inbox`; `kcat -L -t
+outbox` makes Kafka create `outbox` (it creates topics on Metadata, never on Produce); Kafka's
+own `kafka-consumer-groups.sh` is run once first so the offsets topic exists. NetGet's client
+polls `inbox` and a script handler answers by producing `netget saw: <value>` to `outbox` and
+committing `inbox` for group `netget-test`. Then kcat consumes `outbox` and
+`kafka-consumer-groups.sh` must show offset 1 — both from the broker's side. The client's
+events show Fetch v16 (by topic id) and Produce v11. Fetching by name at v16 instead fails the
+test (Kafka answers UNKNOWN_TOPIC_ID). About 11 s, most of it JVM start-up.
