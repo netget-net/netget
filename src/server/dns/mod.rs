@@ -27,7 +27,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::mpsc;
+
+use crate::server::accept_bounded::{accept_bounded, ConnectionLimiter};
 
 /// How long a TCP connection may sit idle between queries (RFC 7766 §6.2.3 suggests seconds,
 /// not minutes). The `tcp_idle_timeout_secs` startup parameter overrides it.
@@ -35,6 +37,10 @@ pub const DEFAULT_TCP_IDLE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Open TCP connections at once. One past it is closed on accept, unread.
 pub const MAX_TCP_CONNECTIONS: usize = 64;
+
+/// What a connection past the cap is told: nothing. DNS has no message a server sends
+/// before a query, so it is closed unread and the client retries or moves on.
+pub const CONNECTION_CAP_REFUSAL: &[u8] = b"";
 
 /// The UDP payload size this server advertises in its OPT record: the 2020 DNS flag day's
 /// 1232, which fits an IPv6 minimum MTU without fragmenting.
@@ -235,23 +241,24 @@ impl DnsServer {
         shared: Arc<Shared>,
         idle: Duration,
     ) {
-        let slots = Arc::new(Semaphore::new(MAX_TCP_CONNECTIONS));
+        // The shared cap: past MAX_TCP_CONNECTIONS a connection is closed unread, and a client
+        // retries or moves to another server.
+        let limiter = ConnectionLimiter::new(MAX_TCP_CONNECTIONS);
         loop {
-            let (stream, peer_addr) = match listener.accept().await {
+            let (stream, peer_addr, permit) = match accept_bounded(
+                &listener,
+                &limiter,
+                CONNECTION_CAP_REFUSAL,
+                "DNS",
+                Some(&shared.status_tx),
+            )
+            .await
+            {
                 Ok(r) => r,
                 Err(e) => {
                     Log::new(Some(&shared.status_tx)).error(format!("DNS TCP accept error: {e}"));
                     continue;
                 }
-            };
-            let Ok(permit) = slots.clone().try_acquire_owned() else {
-                // Closed unread: a client past the cap retries or moves to another server.
-                Log::new(Some(&shared.status_tx)).warn(format!(
-                    "DNS refusing a TCP connection from {peer_addr}: {MAX_TCP_CONNECTIONS} \
-                     are open decision=tcp_connection_cap"
-                ));
-                drop(stream);
-                continue;
             };
             let connection_id = Self::register_connection(&shared, peer_addr, local_addr, 0).await;
             let task_shared = shared.clone();
