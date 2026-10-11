@@ -397,12 +397,27 @@ async fn settled_call_count(mock: &MockOllamaServer) -> usize {
 
 /// One protocol, start to stop.
 async fn probe_protocol(name: &str, bound: usize, stack: &'static str, streaming: bool) -> Outcome {
+    // A streaming bound governs what accumulates behind the model, so the model has to let it
+    // accumulate: `wait_for_more` on every read. Answering with nothing let TCP take each read
+    // as a complete exchange and stay open — a legitimate answer on raw TCP — so the probe
+    // passed only when one read happened to be large enough to fail at the mock, which depends
+    // on how the kernel chunks the reads (it failed the PFCP pair job on #196 that way).
+    //
+    // What decides now is still not TCP's own `MAX_QUEUED_BYTES`: the accumulated prompt
+    // passes the mock's 2 MB request limit first, the call fails, and TCP fails closed. That is
+    // a decision every time, which is what this probe asks. The 8 MiB queue bound itself has
+    // no test of its own yet (tests/server/tcp/AGENTS.md, "Queue bound").
+    let answer = if streaming {
+        serde_json::json!([{"type": "wait_for_more"}])
+    } else {
+        serde_json::json!([])
+    };
     let mock = match MockOllamaServer::start(
         MockLlmBuilder::new()
             // Unconstrained, so anything that reaches the model is *recorded* rather than
             // 500-ing into an error path that could be mistaken for silence.
             .on_any()
-            .respond_with_actions(serde_json::json!([]))
+            .respond_with_actions(answer)
             .expect_at_least(0)
             .build(),
     )
