@@ -1,6 +1,7 @@
 //! SNMP agent implementation using rasn-snmp library
 pub mod actions;
 pub mod notify;
+pub mod usm;
 
 use crate::server::connection::ConnectionId;
 use anyhow::Result;
@@ -34,6 +35,20 @@ pub struct ParsedSnmpInfo {
     pub requested_oids: Vec<String>,
 }
 
+/// How an answer is wrapped: in the community message it came in (v1/v2c), or in a USM
+/// message for the user and level it was authenticated at (v3).
+#[derive(Clone)]
+pub enum Framing {
+    Community {
+        version: u8,
+        community: Vec<u8>,
+    },
+    Usm {
+        agent: Arc<usm::Agent>,
+        request: Arc<usm::Request>,
+    },
+}
+
 /// SNMP server that forwards requests to LLM
 /// SNMP `error-status` genErr (RFC 1157 §4.1.1, RFC 3416 §3): "the agent could not produce
 /// this response for reasons not covered by any other status".
@@ -41,6 +56,8 @@ pub struct ParsedSnmpInfo {
 /// Any non-zero error-status makes the Response PDU an error report rather than an answer, so
 /// no manager can read this as a value for the requested OID.
 pub const SNMP_ERROR_GEN_ERR: u8 = 5;
+/// `error-status` tooBig (RFC 3416 §4.2.1): the answer would not fit the manager's msgMaxSize.
+pub const SNMP_ERROR_TOO_BIG: u8 = 1;
 
 /// How deeply a datagram may nest BER constructed values before we refuse to decode it.
 ///
@@ -207,8 +224,16 @@ impl SnmpServer {
         app_state: Arc<AppState>,
         status_tx: mpsc::UnboundedSender<String>,
         server_id: crate::state::ServerId,
+        usm: Option<Arc<usm::Agent>>,
     ) -> Result<SocketAddr> {
         let socket = Arc::new(UdpSocket::bind(listen_addr).await?);
+        if let Some(agent) = &usm {
+            info!(
+                "SNMP agent serves SNMPv3 as engine {} (boots {})",
+                hex::encode(&agent.engine_id),
+                agent.boots
+            );
+        }
         let local_addr = socket.local_addr()?;
         info!("SNMP agent (action-based) listening on {}", local_addr);
 
@@ -256,9 +281,78 @@ impl SnmpServer {
                         let hex_str = hex::encode(&data);
                         console_trace!(status_tx, "SNMP data (hex): {}", hex_str);
 
+                        // SNMPv3: the USM decides first — discovery, unknown users, wrong
+                        // digests and stale clocks are answered with its reports and never
+                        // reach the handler.
+                        let mut v3_request: Option<Arc<usm::Request>> = None;
+                        if check_ber_structure(&data, MAX_BER_DEPTH).is_ok() && usm::is_v3(&data) {
+                            let Some(agent) = &usm else {
+                                warn!(
+                                    "SNMP dropping an SNMPv3 message from {} \
+                                     (decision=dropped_v3_not_configured): no v3_users configured",
+                                    peer_addr
+                                );
+                                let _ = status_tx.send(format!(
+                                    "[WARN] SNMP dropped an SNMPv3 message from {}: no v3_users are configured",
+                                    peer_addr
+                                ));
+                                continue;
+                            };
+                            match agent.receive(&data) {
+                                usm::Inbound::Report(bytes, kind) => {
+                                    info!(
+                                        "SNMP v3 report {} to {} (decision=usm_report)",
+                                        kind.name(),
+                                        peer_addr
+                                    );
+                                    let _ = status_tx.send(format!(
+                                        "[INFO] SNMP v3 {} report to {}",
+                                        kind.name(),
+                                        peer_addr
+                                    ));
+                                    if let Err(e) = socket.send_to(&bytes, peer_addr).await {
+                                        error!("SNMP v3 report to {} failed: {}", peer_addr, e);
+                                    }
+                                    continue;
+                                }
+                                usm::Inbound::Drop(reason) => {
+                                    warn!(
+                                        "SNMP dropping an SNMPv3 message from {} \
+                                         (decision=dropped_v3): {}",
+                                        peer_addr, reason
+                                    );
+                                    let _ = status_tx.send(format!(
+                                        "[WARN] SNMP dropped an SNMPv3 message from {}: {}",
+                                        peer_addr, reason
+                                    ));
+                                    continue;
+                                }
+                                usm::Inbound::Request(request) => {
+                                    if !matches!(
+                                        request.pdu,
+                                        v2::Pdus::GetRequest(_)
+                                            | v2::Pdus::GetNextRequest(_)
+                                            | v2::Pdus::GetBulkRequest(_)
+                                            | v2::Pdus::SetRequest(_)
+                                    ) {
+                                        warn!(
+                                            "SNMP dropping a v3 {} from {} \
+                                             (decision=dropped_v3_notification): SNMPv3 \
+                                             notifications are not served",
+                                            Self::get_v2_pdu_type(&request.pdu),
+                                            peer_addr
+                                        );
+                                        continue;
+                                    }
+                                    v3_request = Some(Arc::from(request));
+                                }
+                            }
+                        }
+
                         // A trap or an inform is a notification, not a request: it has no
                         // variables to answer and goes to the handler as one event.
-                        if check_ber_structure(&data, MAX_BER_DEPTH).is_ok() {
+                        if v3_request.is_none() && check_ber_structure(&data, MAX_BER_DEPTH).is_ok()
+                        {
                             if let Some(received) = notify::parse(&data) {
                                 let llm = llm_client.clone();
                                 let state = app_state.clone();
@@ -279,7 +373,11 @@ impl SnmpServer {
                         }
 
                         // Parse the SNMP message
-                        let parsed = match Self::parse_snmp_message(&data) {
+                        let parsed = match v3_request
+                            .as_ref()
+                            .map(|r| Self::describe_v3(r))
+                            .map_or_else(|| Self::parse_snmp_message(&data), Ok)
+                        {
                             Ok(p) => p,
                             Err(e) => {
                                 // Silent on the wire — there is no request-id to answer, and a
@@ -304,9 +402,17 @@ impl SnmpServer {
                         let status_clone = status_tx.clone();
                         let socket_clone = socket.clone();
                         let protocol_clone = protocol.clone();
-                        let version = parsed.version;
                         let request_id = parsed.request_id;
-                        let community = parsed.community.clone();
+                        let framing = match (&usm, v3_request) {
+                            (Some(agent), Some(request)) => Framing::Usm {
+                                agent: agent.clone(),
+                                request,
+                            },
+                            _ => Framing::Community {
+                                version: parsed.version,
+                                community: parsed.community.clone(),
+                            },
+                        };
                         let requested_oids = parsed.requested_oids.clone();
 
                         // Spawn task to handle request with LLM
@@ -315,7 +421,6 @@ impl SnmpServer {
                         task_owner.spawn_server_task(server_id, async move {
                             // Clone for BER encoding later
                             let requested_oids_clone = requested_oids.clone();
-                            let community_clone = community.clone();
 
                             // Create SNMP request event. request_id and the community
                             // string are echoed into the response automatically - they are
@@ -324,18 +429,23 @@ impl SnmpServer {
                                 &parsed.request_type,
                                 &parsed.requested_oids,
                             );
-                            let event = Event::new(
-                                &SNMP_REQUEST_EVENT,
-                                serde_json::json!({
-                                    "request_type": parsed.request_type,
-                                    "answer_with": answer_with,
-                                    "oids": parsed.requested_oids,
-                                    "community": String::from_utf8_lossy(&parsed.community).to_string(),
-                                    "request_id": parsed.request_id,
-                                    "version": if parsed.version == 0 { "v1" } else { "v2c" },
-                                    "client_ip": peer_addr.ip().to_string()
-                                }),
-                            );
+                            let mut data = serde_json::json!({
+                                "request_type": parsed.request_type,
+                                "answer_with": answer_with,
+                                "oids": parsed.requested_oids,
+                                "community": String::from_utf8_lossy(&parsed.community).to_string(),
+                                "request_id": parsed.request_id,
+                                "version": match parsed.version { 0 => "v1", 3 => "v3", _ => "v2c" },
+                                "client_ip": peer_addr.ip().to_string()
+                            });
+                            if let Framing::Usm { request, .. } = &framing {
+                                data["user"] = serde_json::json!(request.user);
+                                data["security_level"] = serde_json::json!(request.level.name());
+                                data["context_name"] = serde_json::json!(
+                                    String::from_utf8_lossy(&request.context_name)
+                                );
+                            }
+                            let event = Event::new(&SNMP_REQUEST_EVENT, data);
 
                             debug!("SNMP calling LLM for request from {}", peer_addr);
                             let _ = status_clone.send(format!(
@@ -426,9 +536,8 @@ impl SnmpServer {
                                             );
                                             match Self::build_snmp_response(
                                                 &json_str,
-                                                version,
+                                                &framing,
                                                 request_id,
-                                                &community_clone,
                                                 &requested_oids_clone,
                                             ) {
                                                 Ok(snmp_response) => {
@@ -524,9 +633,8 @@ impl SnmpServer {
                                         peer_addr, request_id, decision, e
                                     ));
                                     match Self::build_response_message(
-                                        version,
+                                        &framing,
                                         request_id,
-                                        &community_clone,
                                         SNMP_ERROR_GEN_ERR,
                                         0,
                                         vec![],
@@ -637,6 +745,50 @@ impl SnmpServer {
             }
             Err(e) => error!("SNMP inform acknowledgement to {} failed: {}", peer_addr, e),
         }
+    }
+
+    /// The request summary for an SNMPv3 request the USM has already accepted.
+    fn describe_v3(request: &usm::Request) -> ParsedSnmpInfo {
+        ParsedSnmpInfo {
+            description: format!(
+                "SNMPv3 {} from user {} ({})",
+                Self::get_v2_pdu_type(&request.pdu),
+                request.user,
+                request.level.name()
+            ),
+            request_type: Self::get_v2_pdu_type(&request.pdu),
+            version: 3,
+            request_id: Self::get_v2_request_id(&request.pdu),
+            community: Vec::new(),
+            requested_oids: Self::get_v2_requested_oids(&request.pdu),
+        }
+    }
+
+    /// A Response PDU (tag 0xA2) on its own, for the USM to wrap.
+    fn build_response_pdu(
+        request_id: i32,
+        error_status: u8,
+        error_index: u8,
+        var_binds: Vec<Vec<u8>>,
+    ) -> Vec<u8> {
+        let mut list = vec![0x30];
+        list.extend_from_slice(&Self::encode_length(
+            var_binds.iter().map(|v| v.len()).sum(),
+        ));
+        for v in var_binds {
+            list.extend_from_slice(&v);
+        }
+        let body = [
+            Self::encode_integer(request_id),
+            Self::encode_integer(error_status as i32),
+            Self::encode_integer(error_index as i32),
+            list,
+        ]
+        .concat();
+        let mut pdu = vec![0xA2];
+        pdu.extend_from_slice(&Self::encode_length(body.len()));
+        pdu.extend_from_slice(&body);
+        pdu
     }
 
     /// Parse SNMP message and extract relevant information
@@ -865,9 +1017,8 @@ impl SnmpServer {
     /// Build SNMP response from LLM output using manual BER encoding
     pub fn build_snmp_response(
         llm_response: &str,
-        version: u8,
+        framing: &Framing,
         request_id: i32,
-        community: &[u8],
         requested_oids: &[String],
     ) -> Result<Vec<u8>> {
         let trimmed = llm_response.trim();
@@ -894,9 +1045,8 @@ impl SnmpServer {
                         error_status, error_msg
                     );
                     return Self::build_response_message(
-                        version,
+                        framing,
                         request_id,
-                        community,
                         error_status,
                         error_index,
                         vec![],
@@ -933,9 +1083,7 @@ impl SnmpServer {
                 }
 
                 // Build the complete SNMP response message
-                return Self::build_response_message(
-                    version, request_id, community, 0, 0, var_binds,
-                );
+                return Self::build_response_message(framing, request_id, 0, 0, var_binds);
             } else if let Some(output) = response_data.get("output") {
                 // Standard LlmResponse format - extract output field and process as text
                 if let Some(output_str) = output.as_str() {
@@ -960,14 +1108,7 @@ impl SnmpServer {
                         Self::encode_var_bind(oid, "string", &serde_json::Value::from(output_str))?
                     };
 
-                    return Self::build_response_message(
-                        version,
-                        request_id,
-                        community,
-                        0,
-                        0,
-                        vec![var_bind],
-                    );
+                    return Self::build_response_message(framing, request_id, 0, 0, vec![var_bind]);
                 }
                 // If output is null or not a string, fall through to plain text handling
             }
@@ -996,7 +1137,7 @@ impl SnmpServer {
             Self::encode_var_bind(oid, "string", &serde_json::Value::from(trimmed))?
         };
 
-        Self::build_response_message(version, request_id, community, 0, 0, vec![var_bind])
+        Self::build_response_message(framing, request_id, 0, 0, vec![var_bind])
     }
 
     /// Encode a BER definite length.
@@ -1234,13 +1375,31 @@ impl SnmpServer {
 
     /// Build complete SNMP response message
     fn build_response_message(
-        version: u8,
+        framing: &Framing,
         request_id: i32,
-        community: &[u8],
         error_status: u8,
         error_index: u8,
         var_binds: Vec<Vec<u8>>,
     ) -> Result<Vec<u8>> {
+        let (version, community) = match framing {
+            Framing::Community { version, community } => (*version, community.as_slice()),
+            Framing::Usm { agent, request } => {
+                let pdu =
+                    Self::build_response_pdu(request_id, error_status, error_index, var_binds);
+                let pdus: v2::Pdus = ber::decode(&pdu)
+                    .map_err(|e| anyhow::anyhow!("response PDU does not decode: {e}"))?;
+                let message = agent.respond(request, pdus)?;
+                // RFC 3416 §4.2.1: an answer larger than the manager can take is tooBig, with
+                // no variable bindings.
+                if message.len() as i64 > request.max_size {
+                    let pdu = Self::build_response_pdu(request_id, SNMP_ERROR_TOO_BIG, 0, vec![]);
+                    let pdus: v2::Pdus = ber::decode(&pdu)
+                        .map_err(|e| anyhow::anyhow!("tooBig PDU does not decode: {e}"))?;
+                    return agent.respond(request, pdus);
+                }
+                return Ok(message);
+            }
+        };
         let mut message = Vec::new();
 
         // Encode version
