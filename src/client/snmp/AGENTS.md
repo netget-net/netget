@@ -297,14 +297,21 @@ LLM returns: disconnect (when walk complete)
 
 ## Known Limitations
 
-### 1. No SNMPv3 Support
+### 1. SNMPv3: one USM user per client
 
-- Only SNMPv1 and SNMPv2c supported
-- No encryption (all data plaintext)
-- No authentication beyond community string
-- No user-based security
-
-**Rationale**: v1/v2c cover 90% of SNMP deployments. v3 adds significant complexity.
+`version: "v3"` with `v3_user` (`{name, auth_protocol, auth_password, priv_protocol,
+priv_password}`) and an optional `context_name`. The crypto and the message format are
+`src/server/snmp/usm.rs`'s, shared with the agent (`usm::Manager`). The agent's engine is
+discovered **in `connect()`**, before the command channel or the connected event: an agent that
+never answers discovery fails the start rather than leaving a client that can address nothing.
+Each request is built by the v2c builders and its PDU re-wrapped (`to_v3`), so v2c and v3 put the
+same PDU on the wire. A reply is believed only after its message id matches one of the last 16
+sent, its engine is the discovered one, and — when authenticated — its MAC verifies; a response
+must also come back at the level asked. A USM report reaches the handler as
+`snmp_response_received` with `usm_report: {report, count}` and empty variables; an authenticated
+`NotInTimeWindows` report resynchronises the clock first, so resending works. Passwords live only
+in the localized keys and are redacted from every log by name. Not offered: AES-192/256, v3
+notifications.
 
 ### 2. No Trap/Inform Sending
 
