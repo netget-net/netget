@@ -145,8 +145,8 @@ async fn ldns_and_bind_verify_a_signed_zone_transfer() {
         out.contains("Zone fully signed") || out.contains("fully signed"),
         "dnssec-verify: {out}"
     );
-    // The NSEC chain covers every owner name once: the apex, the six named owners below it
-    // (ns1, www, mail, _sip._tcp, ptr, big) and the 600 fillers.
+    // The NSEC chain covers every owner name once: the apex, the seven named owners below it
+    // (ns1, www, mail, _sip._tcp, ptr, big, huge) and the 600 fillers.
     let nsec = lines.iter().filter(|l| l.contains("\tNSEC\t")).count();
-    assert_eq!(nsec, 1 + 6 + 600, "one NSEC per owner name");
+    assert_eq!(nsec, 1 + 7 + 600, "one NSEC per owner name");
 }

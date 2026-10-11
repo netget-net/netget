@@ -35,8 +35,8 @@ async fn dig_and_kdig_transfer_the_zone_over_tcp() {
             "{tool}: the serial: {:?}",
             rrs[0]
         );
-        // SOA x2, NS, MX, TXT, 3 A, SRV, PTR, the big TXT (one record of eight strings), filler.
-        assert_eq!(rrs.len(), 2 + 9 + FILLER, "{tool}: every record once");
+        // SOA x2, NS, MX, TXT, 3 A, SRV, PTR, the big and huge TXT records, filler.
+        assert_eq!(rrs.len(), 2 + 10 + FILLER, "{tool}: every record once");
         assert!(
             rrs.iter()
                 .any(|r| r[0] == "_sip._tcp.example.com." && r[3] == "SRV" && r[6] == "5060"),

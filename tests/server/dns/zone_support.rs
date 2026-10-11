@@ -6,12 +6,14 @@
 //!
 //! - apex NS, MX and TXT; `ns1`, `www`, `mail` A; `_sip._tcp` SRV; `ptr` PTR;
 //! - `big` TXT: eight 200-octet strings, too large for 512 bytes of UDP;
+//! - `huge` TXT: thirty, too large even for the 4096 bytes a client may ask for;
 //! - `host0`..`host599` A — [`FILLER`] names, so an AXFR needs more than one message.
 //!
 //! Queries are answered with `send_dns_records`: the records at the name and type; NOERROR
 //! with the SOA when the name exists without that type; NXDOMAIN with the SOA when it does not
 //! exist. AXFR of the zone is `send_dns_zone`; IXFR from `SERIAL - 1` is one change (`www`
-//! moves from .80 to .81), from `SERIAL` it is "current", from anything else the full zone.
+//! moves from .80 to .81) — even for a signed zone, where the server must refuse it — from
+//! `SERIAL` it is "current", from anything else the full zone.
 //! A transfer of any other zone is refused.
 
 use netget::cli::management::ServerForm;
@@ -36,7 +38,8 @@ R=[{'name':'@','type':'NS','target':'ns1.example.com.'},
    {'name':'mail','type':'A','ip':'192.0.2.25'},
    {'name':'_sip._tcp','type':'SRV','priority':10,'weight':5,'port':5060,'target':'www.example.com.'},
    {'name':'ptr','type':'PTR','target':'www.example.com.'},
-   {'name':'big','type':'TXT','text':[chr(97+i)*200 for i in range(8)]}]
+   {'name':'big','type':'TXT','text':[chr(97+i)*200 for i in range(8)]},
+   {'name':'huge','type':'TXT','text':[chr(97+i%26)*200 for i in range(30)]}]
 R+=[{'name':'host%d'%i,'type':'A','ip':'10.%d.%d.%d'%(i//65536,(i//256)%256,i%256)} for i in range(600)]
 def fq(n): return Z if n=='@' else n+'.'+Z
 def soa_rec(): d=dict(SOA); d['name']=Z; d['type']='SOA'; return d
@@ -54,7 +57,7 @@ elif t=='dns_zone_transfer':
     zone=e['zone'].lower(); cs=e.get('client_serial')
     if zone!=Z: a=[{'type':'send_dns_refused','query_id':e['query_id'],'domain':e['zone'],'query_type':e['transfer_type']}]
     elif e['transfer_type']=='IXFR' and cs==SERIAL: a=[{'type':'send_dns_ixfr','query_id':e['query_id'],'zone':Z,'soa':SOA,'changes':[]}]
-    elif e['transfer_type']=='IXFR' and cs==SERIAL-1 and not e['signed']:
+    elif e['transfer_type']=='IXFR' and cs==SERIAL-1:
         a=[{'type':'send_dns_ixfr','query_id':e['query_id'],'zone':Z,'soa':SOA,'changes':[{'serial':SERIAL,
            'deleted':[{'name':'www','type':'A','ip':'192.0.2.80'}],'added':[{'name':'www','type':'A','ip':'192.0.2.81'}]}]}]
     else: a=[{'type':'send_dns_zone','query_id':e['query_id'],'zone':Z,'soa':SOA,'records':R}]
