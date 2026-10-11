@@ -132,8 +132,18 @@ async fn redis_cli(port: u16, protocol: &str, commands: &str) -> Vec<String> {
         .lines()
         .map(str::trim_end)
         .filter(|l| !l.trim().is_empty())
+        .filter(|l| !is_latency_line(l))
         .map(str::to_string)
         .collect()
+}
+
+/// redis-cli prints a command's wall time, e.g. `(0.59s)`, on a line of its own whenever the
+/// reply took more than half a second. That is the CLI timing itself, not a reply, and on a
+/// loaded runner it lands between any two of them, so it is dropped before comparing.
+fn is_latency_line(line: &str) -> bool {
+    line.strip_prefix('(')
+        .and_then(|l| l.strip_suffix("s)"))
+        .is_some_and(|n| !n.is_empty() && n.parse::<f64>().is_ok())
 }
 
 #[tokio::test]
