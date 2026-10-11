@@ -28,7 +28,8 @@ version selection, API dispatch, event emission, action handling, and the record
 encode/decode round trip.
 
 **What it does not validate**: the schemas themselves, and behaviour against a real client's
-state machine. Neither librdkafka nor the Java client has been run against this broker.
+state machine — which is what `real_client_test.rs` (kcat) and `flexible_versions_test.rs`
+(the Java client and franz-go) are for.
 
 ## Proof the tests can fail
 
@@ -47,8 +48,8 @@ the round-trip assertion is load-bearing rather than incidentally satisfied.
 3 LLM calls (startup + 2 metadata events). Seven stages on one server:
 
 1. **ApiVersions v3** — asserts `error_code == 0`, the correlation id echoes, and the
-   advertised table contains exactly the implemented ranges: ApiVersions 0–3, Metadata 0–8,
-   Produce 0–8, Fetch 0–11, OffsetCommit 0–7. Also asserts `ListOffsets` is **absent**,
+   advertised table contains exactly the implemented ranges: ApiVersions 0–3, Metadata 0–12,
+   Produce 0–11, Fetch 0–16, OffsetCommit 0–9. Also asserts `ListOffsets` is **absent**,
    because advertising an API with no handler is worse than not advertising it.
 2. **ApiVersions v9** (unsupported) — hand-encodes the header, then asserts the reply
    decodes *at v0* with `error_code == 35` and a non-empty api_keys table. This is Kafka's
@@ -106,12 +107,12 @@ Both tests end with `server.verify_mocks().await?` and `server.stop().await?`.
 
 ## Not covered
 
-- Any real client (librdkafka, Java, kafka-python).
+- Any real client — in this file. See `real_client_test.rs` and `flexible_versions_test.rs`.
 - Compressed record batches (gzip/snappy/lz4/zstd). The decoder path uses `kafka-protocol`'s
   built-in codecs and should work; it is untested here.
 - `acks=0`, where the broker deliberately writes no response.
-- The flexible/tagged-field versions above each ceiling — they are refused by design, and
-  only the ApiVersions refusal path is asserted.
+- OffsetCommit v8+ from a third-party client: Java and franz-go both look up a coordinator
+  first, and FindCoordinator is not implemented.
 - Consumer groups, which are not implemented at all.
 
 ## `connection_task_cleanup_test.rs` — teardown reaps what the connection owned
@@ -182,3 +183,19 @@ Four things about the invocation are load-bearing, and three of them cost a debu
 
 Still unproven here: consumer groups (the APIs do not exist), the Java client, compression,
 transactions, TLS/SASL, and multi-broker metadata.
+
+## Flexible versions (`flexible_versions_test.rs`)
+
+Apache Kafka's Java client (kafka-clients 3.9.1, run from `peer/JavaPeer.java` as a
+single-file source program) and franz-go 1.18.1 (`peer/franz/`, built by `install_peers.py`
+with its `go.sum` pinned) each produce one record and consume one. One python handler plays the
+store; a fetch from offset 0 answers a record whose value is `served at fetch v<N>`, so the
+line each client prints proves it decoded a response encoded at that version. The versions
+are also read from the broker's events: both clients negotiate Metadata v12, Produce v11 and
+Fetch v16, by topic id. A third test sends a Fetch v16 by an id never reported and asserts
+`UNKNOWN_TOPIC_ID` without the handler being asked. Leaving the topic id out of Metadata
+fails both client tests (they fall back below v13). `NETGET_KAFKA_PEERS` is mandatory.
+
+The tshark oracle in `e2e_test.rs` allows expert info containing ` version. Supports v0-`:
+Wireshark 4.2's Kafka dissector says that on any ApiVersions response advertising beyond
+its own table, which is a statement about the dissector, not these bytes.
