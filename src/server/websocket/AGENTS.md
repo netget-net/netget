@@ -11,8 +11,8 @@ binary is absent; it printed `skipping: websocat is not installed` and returned 
 September 2026, which is a silent pass and is what held this at Experimental.
 
 Still unproven, and what a human should check before this goes further: `wss://`,
-permessage-deflate, and any browser.
-**Spec**: RFC 6455. RFC 7692 (permessage-deflate) is **not** implemented.
+and any browser.
+**Spec**: RFC 6455, and RFC 7692 (permessage-deflate) — see "permessage-deflate" below.
 **Feature**: `websocket` · **Privilege**: `None` · **System libraries**: none
 
 ## Why this protocol is a good fit for NetGet
@@ -314,8 +314,38 @@ Checked against **three peers, two of them not this repository's code**:
 ## Not implemented
 
 - **TLS (`wss://`)** — put a TLS terminator in front, or use the `tls` protocol.
-- **permessage-deflate (RFC 7692)** and every other extension. `Sec-WebSocket-Extensions` is
-  ignored rather than negotiated, which is legal (the server simply agrees to none) but means a
-  client asking for compression gets none.
+- **Every extension except permessage-deflate.** Any other `Sec-WebSocket-Extensions` offer is
+  declined (the response simply names none), which RFC 6455 allows.
 - **Autobahn test suite conformance.** Not run. The framing is `tungstenite`'s, which does pass
   it, but that is an inherited claim and not one this protocol has checked.
+
+## permessage-deflate (RFC 7692)
+
+tungstenite 0.21 — and every published version, 0.30 included — has no extension hook and
+refuses any frame with RSV1 set (`ProtocolError::NonZeroReservedBits`). So the extension lives
+**beneath** it: `src/server/websocket/deflate.rs`'s `DeflateStream` wraps the socket, reads
+and writes frames itself and shows tungstenite only uncompressed ones. The rest of this
+protocol — handlers, events, actions — never sees compression.
+
+- **Negotiation** (`deflate::negotiate`) is mechanical, not a model decision: the first offer
+  this server can honour is accepted, with its `server_no_context_takeover`,
+  `client_no_context_takeover` and `*_max_window_bits` (9-15) echoed; an offer with an
+  unknown or repeated parameter, or a window of 8 (zlib cannot make one for raw deflate), is
+  skipped; none acceptable means uncompressed, which is always allowed. The startup parameter
+  `permessage_deflate` (default `true`, `DEFAULT_PERMESSAGE_DEFLATE`) turns it off.
+- **Inbound**: a message whose first frame has RSV1 is collected across its continuations,
+  inflated as one (with `00 00 ff ff` appended, §7.2.2) and handed up re-fragmented at
+  `max_frame_size`, keeping the client's masking key so tungstenite still sees a masked frame.
+  Inflation stops at `max_message_size + 1` bytes of output — the bound is enforced while
+  inflating, so a 1 KB frame cannot allocate a gigabyte — and the connection closes with 1009
+  and `decision=permessage_deflate_refused`.
+- **Outbound**: every data message tungstenite writes is deflated with a sync flush, the tail
+  removed (§7.2.1), and sent as one frame with RSV1.
+- **Backend**: flate2's `zlib-rs` (pure Rust, so no system library), because the default miniz
+  backend cannot use a window smaller than 15 bits and Python websockets asks for 12.
+
+The handshake's leftover bytes go to the deflate layer, not tungstenite: with compression on,
+a pipelined client's first message may be compressed. `websocket_connection_opened` carries
+`permessage_deflate` (the agreed parameters, or null).
+
+Evidence: `tests/server/websocket/deflate_real_client_test.rs` — see the tests' AGENTS.md.

@@ -464,7 +464,7 @@ webrtc = ["dep:webrtc", "dep:tokio-tungstenite", "dep:rustls"]  # WebRTC client 
 # the tree for `webrtc`: framing, masking, fragmentation, ping/pong and the close handshake.
 # Bumping that crate is a webrtc-wide decision, so this feature deliberately does not force one.
 # No system library, hence present in dist / dist-windows (and dist-darwin via dist).
-websocket = ["dep:tokio-tungstenite"]
+websocket = ["dep:tokio-tungstenite", "dep:flate2", "flate2/zlib-rs"]
 sip = []  # SIP uses only UDP, no extra deps (manual protocol implementation)
 rtp = []  # RTP (RFC 3550) media server; G.711 synthesis + packetizer, no system library
 rtsp = ["rtp"]  # RTSP (RFC 2326) control server; reuses the rtp media engine for PLAY

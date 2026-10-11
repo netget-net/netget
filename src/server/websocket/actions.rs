@@ -692,6 +692,18 @@ impl Protocol for WebSocketProtocol {
                 example: json!(600),
                 default: Some(serde_json::json!(super::IDLE_TIMEOUT.as_secs())),
             },
+            ParameterDefinition {
+                name: "permessage_deflate".to_string(),
+                type_hint: "boolean".to_string(),
+                description:
+                    "Accept a client's RFC 7692 permessage-deflate offer, so messages are \
+                     compressed on the wire in both directions (default true). Handlers see \
+                     plain text either way; false makes every connection uncompressed."
+                        .to_string(),
+                required: false,
+                example: json!(true),
+                default: Some(serde_json::json!(super::DEFAULT_PERMESSAGE_DEFLATE)),
+            },
         ]
     }
 
@@ -779,15 +791,22 @@ impl Protocol for WebSocketProtocol {
                  hand-written in the same file recomputes Sec-WebSocket-Accept from §4.2.2, \
                  masks its own frames per §5.3 and parses ours byte by byte, asserting that \
                  the server never masks (§5.1) and that close frames carry a big-endian \
-                 status code (§5.5). Untested: wss://, permessage-deflate, and any browser.",
+                 status code (§5.5). (3) RFC 7692 permessage-deflate against Python \
+                 websockets 15 and Node ws 8 (tests/server/websocket/\
+                 deflate_real_client_test.rs): a relay shows every frame NetGet sent had RSV1 \
+                 set and shrank, ws negotiates a 10-bit window with no context takeover, and a \
+                 compressed frame that inflates past max_message_size is refused while \
+                 inflating (1009). Untested: wss:// and any browser.",
             )
             .notes(
                 "Validated against websocat 1.14.1 and curl 8.20.0 as real independent \
                  clients: handshake, subprotocol negotiation, text frames, a binary frame \
                  round-tripped byte-for-byte through base64, ping/pong and a close handshake \
-                 with a status code. Not implemented: TLS (wss:// — put a TLS terminator in \
-                 front), permessage-deflate (RFC 7692) and any other extension, and \
-                 Sec-WebSocket-Extensions is ignored rather than negotiated. Pong frames from \
+                 with a status code. RFC 7692 permessage-deflate is negotiated (on by default, \
+                 permessage_deflate: false turns it off) beneath tungstenite by \
+                 websocket/deflate.rs, honouring window sizes 9-15 and no-context-takeover; \
+                 handlers see plain text either way. Not implemented: TLS (wss:// — put a TLS \
+                 terminator in front) and every other extension. Pong frames from \
                  the client are logged, not surfaced as an event, so a keepalive pong costs no \
                  model call. Every connection costs two model calls before the first message \
                  (websocket_handshake, then websocket_connection_opened); use script or static \
@@ -1478,6 +1497,15 @@ pub static WEBSOCKET_CONNECTION_OPENED_EVENT: LazyLock<EventType> = LazyLock::ne
             type_hint: "integer".to_string(),
             description: "Remote port of the client".to_string(),
             required: true,
+        },
+        Parameter {
+            name: "permessage_deflate".to_string(),
+            type_hint: "object".to_string(),
+            description: "The RFC 7692 compression parameters agreed with the client, or null \
+                when the connection is uncompressed. Messages reach the handler as plain text \
+                either way."
+                .to_string(),
+            required: false,
         },
     ])
     .with_actions(open_connection_actions())

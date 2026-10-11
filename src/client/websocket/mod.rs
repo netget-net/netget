@@ -25,8 +25,8 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue};
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::MaybeTlsStream;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::client::llm_budget::call_llm_for_client;
@@ -88,6 +88,15 @@ impl Inbound {
 /// 256 unanswered messages is already many minutes of model time.
 const TURN_QUEUE_CAPACITY: usize = 256;
 
+/// Largest message accepted from the server, after inflation when permessage-deflate is on:
+/// tungstenite's own default, which this client used before it dialled its own socket.
+const MAX_INBOUND_MESSAGE_BYTES: usize = 64 << 20;
+/// Largest single frame accepted: tungstenite's own default.
+const MAX_INBOUND_FRAME_BYTES: usize = 16 << 20;
+
+/// Whether the client offers RFC 7692 permessage-deflate (`permessage_deflate`).
+pub const DEFAULT_PERMESSAGE_DEFLATE: bool = true;
+
 /// The queued payload bytes allowed at once, alongside [`TURN_QUEUE_CAPACITY`].
 ///
 /// The count alone is not a memory bound: tungstenite's default message limit is 64 MiB, so
@@ -102,6 +111,7 @@ enum WsTurn {
         remote_addr: String,
         path: String,
         subprotocol: String,
+        permessage_deflate: Option<crate::server::websocket::deflate::DeflateParams>,
     },
     Message(Inbound),
     Closed {
@@ -170,6 +180,13 @@ impl WebSocketClient {
         } = ctx;
 
         // Every parameter read here is declared in `get_startup_parameters()`.
+        let offer_deflate = match startup_params.as_ref() {
+            Some(params) => params
+                .get_optional_bool("permessage_deflate")
+                .map_err(|e| anyhow::anyhow!("WebSocket client parameter error: {e}"))?
+                .unwrap_or(DEFAULT_PERMESSAGE_DEFLATE),
+            None => DEFAULT_PERMESSAGE_DEFLATE,
+        };
         let (path, subprotocols, extra_headers) = match startup_params.as_ref() {
             Some(params) => {
                 let path = params
@@ -261,9 +278,45 @@ impl WebSocketClient {
             );
         }
 
-        let (ws_stream, response) = tokio_tungstenite::connect_async(request)
+        if offer_deflate {
+            request.headers_mut().insert(
+                "sec-websocket-extensions",
+                HeaderValue::from_static(crate::server::websocket::deflate::CLIENT_OFFER),
+            );
+        }
+
+        // The socket is dialled here rather than by `connect_async` so the RFC 7692 layer can
+        // sit beneath tungstenite: it reads the 101 itself and switches to frame mode at the
+        // exact byte the response head ends.
+        let authority = request
+            .uri()
+            .authority()
+            .map(|a| a.to_string())
+            .with_context(|| format!("WebSocket URL has no host: {url}"))?;
+        let dial = if authority.contains(':') {
+            authority
+        } else {
+            format!("{authority}:80")
+        };
+        let tcp = tokio::net::TcpStream::connect(&dial)
             .await
-            .with_context(|| format!("WebSocket handshake failed against {url}"))?;
+            .with_context(|| format!("WebSocket TCP connect to {dial} failed"))?;
+        let local_addr = tcp.local_addr()?;
+        let config = WebSocketConfig {
+            max_message_size: Some(MAX_INBOUND_MESSAGE_BYTES),
+            max_frame_size: Some(MAX_INBOUND_FRAME_BYTES),
+            ..Default::default()
+        };
+        let stream = crate::server::websocket::deflate::DeflateStream::client(
+            tcp,
+            MAX_INBOUND_MESSAGE_BYTES,
+            MAX_INBOUND_FRAME_BYTES,
+        );
+        let (ws_stream, response) =
+            tokio_tungstenite::client_async_with_config(request, stream, Some(config))
+                .await
+                .with_context(|| format!("WebSocket handshake failed against {url}"))?;
+        let permessage_deflate = ws_stream.get_ref().active();
 
         let negotiated = response
             .headers()
@@ -272,14 +325,12 @@ impl WebSocketClient {
             .map(|s| s.trim().to_string())
             .unwrap_or_default();
 
-        let local_addr = match ws_stream.get_ref() {
-            MaybeTlsStream::Plain(tcp) => tcp.local_addr()?,
-            _ => "0.0.0.0:0".parse().expect("literal address parses"),
-        };
-
         info!(
-            "WebSocket client {} connected to {} (subprotocol {:?})",
-            client_id, url, negotiated
+            "WebSocket client {} connected to {} (subprotocol {:?}, permessage-deflate {})",
+            client_id,
+            url,
+            negotiated,
+            permessage_deflate.is_some()
         );
         app_state
             .update_client_status(client_id, ClientStatus::Connected)
@@ -355,6 +406,7 @@ impl WebSocketClient {
             remote_addr: remote_addr.clone(),
             path: path.clone(),
             subprotocol: negotiated.clone(),
+            permessage_deflate,
         });
 
         let turn_abort = app_state
@@ -483,12 +535,14 @@ impl WebSocketClient {
                     remote_addr,
                     path,
                     subprotocol,
+                    permessage_deflate,
                 } => {
                     Self::emit_connected(
                         client_id,
                         remote_addr,
                         path,
                         subprotocol,
+                        permessage_deflate,
                         &llm_client,
                         &app_state,
                         &status_tx,
@@ -535,6 +589,7 @@ impl WebSocketClient {
         remote_addr: String,
         path: String,
         subprotocol: String,
+        permessage_deflate: Option<crate::server::websocket::deflate::DeflateParams>,
         llm_client: &OllamaClient,
         app_state: &Arc<AppState>,
         status_tx: &mpsc::UnboundedSender<String>,
@@ -550,6 +605,7 @@ impl WebSocketClient {
                 "remote_addr": remote_addr,
                 "path": path,
                 "subprotocol": subprotocol,
+                "permessage_deflate": permessage_deflate.map(|p| p.to_json()),
             }),
         );
         let protocol = WebSocketClientProtocol::for_connection(out_tx.clone());
