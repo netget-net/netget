@@ -70,12 +70,13 @@ Both test crates are dev-dependencies only: `coap-lite` 0.13 (MIT OR Apache-2.0)
   decision 6b.
 - **Observe** (RFC 7641, `observe.rs`, decision 8): registration by a GET with Observe 0 that
   the model answers 2.xx, deregistration by Observe 1 on the same token, notifications pushed
-  with `coap_notify` (NON, or CON with retransmission), and removal on a RST or on a CON
-  notification never acknowledged.
+  with `coap_notify` (NON, or CON with retransmission), and removal on a RST, on a CON
+  notification never acknowledged, or after `OBSERVER_MAX_AGE` (24 h) unconfirmed.
 - **Block-wise transfer** (RFC 7959, `blockwise.rs`, decision 9): Block2 for a representation
   over 1024 bytes or whenever the client asks for blocks, every block served from one cached
-  answer with ETag and Size2; Block1 reassembled with 2.31 Continue, refused 4.08 out of order,
-  4.13 with Size1 over `MAX_REPRESENTATION_LEN`, 5.03 when `MAX_UPLOADS` are in progress.
+  answer with ETag and Size2 (at most `TRANSFER_SERVE_FACTOR`× its length); Block1 reassembled
+  with 2.31 Continue, refused 4.08 out of order, 4.13 with Size1 over `MAX_REPRESENTATION_LEN`,
+  5.03 when `MAX_UPLOADS` are in progress.
 
 **Not implemented**: DTLS / CoAPS on 5684, separate (delayed, non-piggybacked) responses,
 retransmission of Confirmable responses, and multicast. `.well-known/core` is not special-cased: the model can serve it, but nothing
@@ -259,11 +260,29 @@ An observation also ends on the message layer:
   `notification_ack_timeout_ms` (default `DEFAULT_NOTIFICATION_ACK_TIMEOUT_MS`, 2000, randomised
   up to 1.5×, doubling) at most `NOTIFICATION_MAX_RETRANSMIT` (4) times, then the observer is
   removed (§4.5), `decision=observer_timeout`. The resend task is registered with the server, so
-  stopping the server stops it.
+  stopping the server stops it. A Confirmable notification waiting for its ACK is held in a
+  pending map that is **not** the 256-entry RST window and is never evicted by age or count: it
+  leaves only when acknowledged, reset, superseded by a newer Confirmable notification to the
+  same observer (only the newest is retransmitted, §4.5.2, so there is at most one per
+  observer), settled by its resend task, or with its observer. A notification that fell out of
+  the RST window is therefore still waited for — when the window doubled as the pending list,
+  falling out of it read as "acknowledged" and an observer that never answered was kept, and
+  notified, forever.
+- **Unconfirmed for `OBSERVER_MAX_AGE` (24 h).** A registration is confirmed when it is made or
+  renewed (the same endpoint and token registering again) and when it acknowledges a Confirmable
+  notification. An observer unconfirmed for half that age gets its next notification as
+  Confirmable whatever `coap_notify` asked — RFC 7641 §4.5's "at least every 24 hours" — so a
+  live client renews itself by acknowledging it and a dead or spoofed one runs out of
+  retransmissions. One still unconfirmed at 24 h is removed, `decision=observer_expired`
+  (checked whenever a notification goes out, a registration is made, or the list is read).
 
-`MAX_OBSERVERS` (64) bounds the registry. A registration past it is *served* — the client asked
-for the representation too — without Observe, which tells it it is not registered rather than
-leaving it waiting for notifications that never come (`decision=observe_cap_reached`).
+A registration is a claim about a UDP source address the server cannot verify, so two caps bound
+it. `MAX_OBSERVERS_PER_IP` (4) per source IP, whatever its ports and tokens
+(`decision=observe_peer_cap_reached`), and `MAX_OBSERVERS` (64) in all
+(`decision=observe_cap_reached`). A registration past either is *served* — the client asked for
+the representation too — without Observe, which tells it it is not registered rather than
+leaving it waiting for notifications that never come. Re-registering a token the endpoint
+already holds replaces it and is never refused.
 
 ### 9. Block-wise: the model answers once, whatever the block count
 
@@ -275,8 +294,15 @@ path, query). Later blocks are served from the cache with no model call
 same answer. A miss — evicted, expired, or a client that starts at block 3 — is not an error: the
 request goes to the model again as RFC 7959 §2.4's stateless server would, and its answer is
 sliced the same way. A block past the end is 4.02. The cache holds `MAX_TRANSFERS` (32) entries
-for `TRANSFER_TTL` (60 s) and evicts the least recently used: eviction costs a model call, never a
-refusal.
+for `TRANSFER_TTL` (60 s) and evicts the oldest: eviction costs a model call, never a refusal.
+
+A cache hit is a reply sent without the model to a source address the server cannot verify —
+one model answer, then ~1 KiB per ~20-byte spoofed request at a victim. Two rules bound that.
+**A hit does not renew the entry**: it lives `TRANSFER_TTL` from when it was cached, however often
+it is hit. **Each entry serves at most `TRANSFER_SERVE_FACTOR` (2) times its payload length**,
+counting the block sent when it was cached (a whole transfer is 1×; 2× leaves room for a client
+that retransmits every block once). The block that would pass the budget evicts the entry and
+goes to the model, so one model call buys at most twice the representation.
 
 **Block1.** Blocks are matched by (peer, path, query, method) — not token, which a client may
 change per block — and appended only at the exact offset the body has reached, which is also what
@@ -287,8 +313,11 @@ echoes the final Block1. Refusals, each a `decision=refused_upload_*` and none r
 4.08 out of order or with no upload in progress, 4.00 for a block whose length is not its size
 while it says more follow, 4.13 with Size1 when Size1 or the body passes
 `MAX_REPRESENTATION_LEN`, 5.03 when `MAX_UPLOADS` (16) are in progress. Unlike a cached
-representation, an upload cannot be evicted without losing blocks already acknowledged, hence the
-refusal.
+representation, an upload cannot be evicted for a different peer without losing blocks already
+acknowledged, hence the refusal. One source IP holds at most `MAX_UPLOADS_PER_IP` (2): a new
+upload from an IP already at that cap evicts that IP's least recently advanced upload
+(`decision=upload_evicted_per_ip`), so one address — or one spoofed address — cannot fill the
+table for everyone.
 
 The tables are `std::sync::Mutex`es in `CoapServerHandle`, none held across an `.await`.
 `blockwise.rs` and `observe.rs` are pure and take `now`, so their rules need no clock to test.
@@ -463,7 +492,7 @@ surface**, not the original evidence stretched over them:
 | 1 | two independent clients | libcoap's `coap-client` and **aiocoap** 0.4 (Python, its own codec and state machines) each observe and receive `coap_notify` pushes, reassemble a 3000-byte Block2 representation byte for byte, and upload 3000 bytes as Block1 — `observe_blockwise_test.rs`, neither able to skip |
 | 2 | pcap oracle | every exchange in `observe_blockwise_bounds_test.rs` — Observe, Block1, Block2, Size1, Size2, ETag, 2.31, 4.08, 4.13, RST — is read by tshark's dissector |
 | 3 | fuzz target | `coap_message.rs` reads Observe, Block1 and Block2 from every decoded message and requires a parsed Block value to survive its own encoder; the corpus seeds a registration, a Block1 PUT, a Block2 GET and the reserved SZX 7 |
-| 4 | every bound tested | `MAX_OBSERVERS`, `MAX_UPLOADS`, `MAX_TRANSFERS`, `MAX_REPRESENTATION_LEN` both directions, Block1 order and size, Block2 past the end, RST removal, `NOTIFICATION_MAX_RETRANSMIT` — `observe_blockwise_bounds_test.rs`; the cache, the upload cap and the registration's Observe option were each removed and the tests failed |
+| 4 | every bound tested | `MAX_OBSERVERS_PER_IP`, `MAX_UPLOADS_PER_IP`, `TRANSFER_SERVE_FACTOR`, `MAX_TRANSFERS`, `MAX_REPRESENTATION_LEN` both directions, Block1 order and size, Block2 past the end, RST removal, `NOTIFICATION_MAX_RETRANSMIT` (also past the `RECENT_NOTIFICATIONS` window) — `observe_blockwise_bounds_test.rs`, on the wire; `MAX_OBSERVERS`, `MAX_UPLOADS`, `OBSERVER_MAX_AGE`, and the TTL a hit does not renew — `observe_blockwise_table_test.rs`, at the table, because loopback has too few source IPs for the shared caps and the clock rules are a minute and a day long; the cache, the upload cap and the registration's Observe option were each removed and the tests failed |
 | 5 | both `AGENTS.md` re-verified | this file and `tests/server/coap/AGENTS.md`, rewritten with the code |
 | 6 | no `#[ignore]`, no skip gate | unchanged |
 

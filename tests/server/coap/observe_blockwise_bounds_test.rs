@@ -10,23 +10,33 @@
 //!
 //! | bound | where | test |
 //! |---|---|---|
-//! | `observe::MAX_OBSERVERS` (64) | registration served without Observe | `the_observer_cap_…` |
-//! | `blockwise::MAX_UPLOADS` (16) | new upload refused 5.03 | `the_upload_table_cap_…` |
+//! | `observe::MAX_OBSERVERS_PER_IP` (4) | registration served without Observe | `one_ip_holds_at_most_…_observations_…` |
+//! | `blockwise::MAX_UPLOADS_PER_IP` (2) | that IP's oldest upload evicted | `one_ip_holds_at_most_…_uploads_…` |
 //! | `codec::MAX_REPRESENTATION_LEN` inbound (64 KiB) | 4.13 + Size1, announced or reached | `an_upload_of_exactly_…` |
 //! | Block1 order | 4.08 | `an_out_of_order_block_…` |
 //! | Block1 size | 4.00 | `a_short_block_that_says_more_…` |
-//! | `blockwise::MAX_TRANSFERS` (32) | least recently used evicted, re-asked | `the_transfer_cache_…` |
+//! | `blockwise::MAX_TRANSFERS` (32) | oldest evicted, re-asked | `the_transfer_cache_…` |
+//! | `blockwise::TRANSFER_SERVE_FACTOR` (2×) | entry evicted, re-asked | `a_cached_representation_serves_…` |
 //! | Block2 past the end | 4.02 | `a_block_past_the_end_…` |
 //! | RST ends an observation | RFC 7641 §3.6 | `a_reset_ends_the_observation` |
 //! | `NOTIFICATION_MAX_RETRANSMIT` (4) | then the observer is removed | `an_unacknowledged_confirmable_…` |
+//! | `observe::RECENT_NOTIFICATIONS` (256) does not end a wait for an ACK | resent, then removed | `a_confirmable_notification_pushed_out_…` |
 //! | non-2.xx notification ends observations | RFC 7641 §4.2 | `an_error_notification_…` |
+//!
+//! The shared caps — `observe::MAX_OBSERVERS` (64) and `blockwise::MAX_UPLOADS` (16) — sit
+//! above the per-IP caps, so reaching them on the wire needs more source IPs than loopback has
+//! on every platform the suite runs on. They are held at the table in
+//! `observe_blockwise_table_test.rs`, with distinct addresses, along with the rules that need
+//! a clock: the Block2 TTL that a hit does not renew, and an observer's 24-hour expiry.
 
 use super::observe_support::{body, Device};
 use crate::helpers::pcap_oracle::PcapOracle;
 use coap_lite::{CoapOption, MessageClass, MessageType, Packet, RequestType};
-use netget::server::coap::blockwise::{Representation, MAX_TRANSFERS, MAX_UPLOADS};
+use netget::server::coap::blockwise::{
+    Representation, MAX_TRANSFERS, MAX_UPLOADS_PER_IP, TRANSFER_SERVE_FACTOR,
+};
 use netget::server::coap::codec::{CODE_CONTENT, CODE_NOT_FOUND, MAX_REPRESENTATION_LEN};
-use netget::server::coap::observe::MAX_OBSERVERS;
+use netget::server::coap::observe::{MAX_OBSERVERS_PER_IP, RECENT_NOTIFICATIONS};
 use netget::server::coap::NOTIFICATION_MAX_RETRANSMIT;
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -153,112 +163,164 @@ fn option(p: &Packet, o: CoapOption) -> Option<Vec<u8>> {
     p.get_option(o).and_then(|l| l.front().cloned())
 }
 
+/// A registration of /temp under `token`, Confirmable, with message id `mid`.
+fn register(mid: u16, token: &[u8]) -> Vec<u8> {
+    request(
+        RequestType::Get,
+        mid,
+        token,
+        "/temp",
+        &[(CoapOption::Observe, vec![])],
+        b"",
+    )
+}
+
 #[tokio::test]
-async fn the_observer_cap_serves_the_next_registration_without_observe() {
+async fn one_ip_holds_at_most_four_observations_across_its_ports() {
+    assert_eq!(
+        MAX_OBSERVERS_PER_IP % 2,
+        0,
+        "split evenly over two sockets below"
+    );
     let device = Device::start(None).await;
-    let mut peer = Peer::new(device.port).await;
-    for i in 0..MAX_OBSERVERS {
-        let token = (i as u32).to_be_bytes();
-        let reply = peer
-            .exchange(request(
-                RequestType::Get,
-                i as u16,
-                &token,
-                "/temp",
-                &[(CoapOption::Observe, vec![])],
-                b"",
-            ))
-            .await;
+    // Two sockets on 127.0.0.1: two endpoints, one IP. The cap is the IP's.
+    let mut a = Peer::new(device.port).await;
+    let mut b = Peer::new(device.port).await;
+    for i in 0..MAX_OBSERVERS_PER_IP {
+        let peer = if i % 2 == 0 { &mut a } else { &mut b };
+        let reply = peer.exchange(register(i as u16, &[i as u8])).await;
         assert_eq!(code(&reply), (2, 5));
         assert!(
             option(&reply, CoapOption::Observe).is_some(),
-            "registration {i} of {MAX_OBSERVERS} is accepted"
+            "registration {i} of {MAX_OBSERVERS_PER_IP} from this IP is accepted"
         );
     }
-    let reply = peer
-        .exchange(request(
-            RequestType::Get,
-            999,
-            b"over",
-            "/temp",
-            &[(CoapOption::Observe, vec![])],
-            b"",
-        ))
-        .await;
+    let reply = a.exchange(register(100, b"over")).await;
     assert_eq!(code(&reply), (2, 5), "still served");
     assert!(
         option(&reply, CoapOption::Observe).is_none(),
-        "one past MAX_OBSERVERS is answered without Observe: not registered"
+        "one past MAX_OBSERVERS_PER_IP is answered without Observe: not registered"
     );
-    assert_eq!(device.handle().await.observers().len(), MAX_OBSERVERS);
+    assert_eq!(
+        device.handle().await.observers().len(),
+        MAX_OBSERVERS_PER_IP
+    );
 
-    // Deregistering with Observe 1 on the same token frees a place.
-    let reply = peer
+    // Re-registering a token this endpoint already holds replaces it (RFC 7641 §4.1): not a
+    // new registration, so the cap does not refuse it.
+    let reply = a.exchange(register(101, &[0])).await;
+    assert!(option(&reply, CoapOption::Observe).is_some());
+    assert_eq!(
+        device.handle().await.observers().len(),
+        MAX_OBSERVERS_PER_IP
+    );
+
+    // Deregistering with Observe 1 frees a place for this IP.
+    let reply = b
         .exchange(request(
             RequestType::Get,
-            1000,
-            &0u32.to_be_bytes(),
+            102,
+            &[1],
             "/temp",
             &[(CoapOption::Observe, vec![1])],
             b"",
         ))
         .await;
     assert!(option(&reply, CoapOption::Observe).is_none());
-    assert_eq!(device.handle().await.observers().len(), MAX_OBSERVERS - 1);
-    peer.assert_wire_clean();
+    assert_eq!(
+        device.handle().await.observers().len(),
+        MAX_OBSERVERS_PER_IP - 1
+    );
+    let reply = a.exchange(register(103, b"over")).await;
+    assert!(
+        option(&reply, CoapOption::Observe).is_some(),
+        "the freed place is taken"
+    );
+    assert_eq!(
+        device.handle().await.observers().len(),
+        MAX_OBSERVERS_PER_IP
+    );
+    let mut wire = a.wire.clone();
+    wire.extend(b.wire.clone());
+    a.wire = wire;
+    a.assert_wire_clean();
 }
 
 #[tokio::test]
-async fn the_upload_table_cap_refuses_the_next_upload_with_5_03() {
+async fn one_ip_holds_at_most_two_uploads_and_a_third_evicts_its_oldest() {
+    assert_eq!(
+        MAX_UPLOADS_PER_IP, 2,
+        "the paths below name two uploads and a third"
+    );
     let device = Device::start(None).await;
-    let mut peer = Peer::new(device.port).await;
+    let mut first = Peer::new(device.port).await;
+    let mut second = Peer::new(device.port).await;
     let chunk = vec![b'u'; 64];
-    for i in 0..MAX_UPLOADS {
-        let reply = peer
-            .exchange(request(
-                RequestType::Put,
-                i as u16,
-                b"u",
-                &format!("/upload/{i}"),
-                &[(CoapOption::Block1, block(0, true, 2))],
-                &chunk,
-            ))
-            .await;
-        assert_eq!(code(&reply), (2, 31), "upload {i} continues");
-        assert_eq!(option(&reply, CoapOption::Block1), Some(block(0, true, 2)));
-    }
-    let reply = peer
-        .exchange(request(
+    let start = |mid: u16, path: &str| {
+        request(
             RequestType::Put,
-            100,
+            mid,
             b"u",
-            "/upload/over",
+            path,
             &[(CoapOption::Block1, block(0, true, 2))],
             &chunk,
-        ))
-        .await;
-    assert_eq!(code(&reply), (5, 3), "one past MAX_UPLOADS");
-    assert_eq!(device.handle().await.uploads_in_progress(), MAX_UPLOADS);
-    assert!(
-        device.requests().await.is_empty(),
-        "no block reached the handler"
+        )
+    };
+    for (mid, path) in [(1, "/upload/0"), (2, "/upload/1")] {
+        let reply = first.exchange(start(mid, path)).await;
+        assert_eq!(code(&reply), (2, 31), "{path} continues");
+    }
+    assert_eq!(device.handle().await.uploads_in_progress(), 2);
+
+    // A third upload from the same IP — another port — is taken, not refused, and the IP's
+    // least recently advanced upload makes room for it.
+    let reply = second.exchange(start(3, "/upload/2")).await;
+    assert_eq!(code(&reply), (2, 31), "the third upload continues");
+    assert_eq!(
+        device.handle().await.uploads_in_progress(),
+        MAX_UPLOADS_PER_IP,
+        "the IP still holds only its cap"
     );
 
-    // The uploads already in the table are unaffected: finishing one reaches the handler.
-    let reply = peer
+    // /upload/0 was the oldest: its next block finds no upload in progress.
+    let reply = first
         .exchange(request(
             RequestType::Put,
-            101,
+            4,
             b"u",
             "/upload/0",
             &[(CoapOption::Block1, block(1, false, 2))],
             b"end",
         ))
         .await;
-    assert_eq!(code(&reply), (2, 4));
-    assert_eq!(reply.payload, b"got 67 bytes in 2 blocks");
-    assert_eq!(option(&reply, CoapOption::Block1), Some(block(1, false, 2)));
-    peer.assert_wire_clean();
+    assert_eq!(code(&reply), (4, 8), "the evicted upload is gone");
+
+    // The other two are intact and finish at the handler.
+    for (mid, path, peer) in [(5, "/upload/1", &mut first), (6, "/upload/2", &mut second)] {
+        let reply = peer
+            .exchange(request(
+                RequestType::Put,
+                mid,
+                b"u",
+                path,
+                &[(CoapOption::Block1, block(1, false, 2))],
+                b"end",
+            ))
+            .await;
+        assert_eq!(code(&reply), (2, 4), "{path}");
+        assert_eq!(reply.payload, b"got 67 bytes in 2 blocks");
+    }
+    let asked: Vec<String> = device
+        .requests()
+        .await
+        .iter()
+        .map(|r| r["path"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(asked, ["/upload/1", "/upload/2"]);
+    let mut wire = first.wire.clone();
+    wire.extend(second.wire.clone());
+    first.wire = wire;
+    first.assert_wire_clean();
 }
 
 #[tokio::test]
@@ -424,7 +486,7 @@ async fn a_short_block_that_says_more_is_4_00() {
 }
 
 #[tokio::test]
-async fn the_transfer_cache_evicts_the_least_recently_used_and_re_asks_for_it() {
+async fn the_transfer_cache_evicts_the_oldest_and_re_asks_for_it() {
     let device = Device::start(None).await;
     let mut peer = Peer::new(device.port).await;
     let ask_block = |mid: u16, path: &str, num: u32| {
@@ -457,6 +519,62 @@ async fn the_transfer_cache_evicts_the_least_recently_used_and_re_asks_for_it() 
     let reply = peer.exchange(ask_block(201, "/big/0", 1)).await;
     assert_eq!(reply.payload, body().as_bytes()[1024..2048]);
     assert_eq!(device.asked("/big/0").await, 2);
+    peer.assert_wire_clean();
+}
+
+#[tokio::test]
+async fn a_cached_representation_serves_at_most_twice_its_length_then_goes_back_to_the_model() {
+    // The cache answers a source address the server cannot verify, without the model. Each
+    // entry may serve TRANSFER_SERVE_FACTOR times its length, counting block 0; the block that
+    // would pass that evicts the entry, and the request is asked again.
+    let device = Device::start(None).await;
+    let mut peer = Peer::new(device.port).await;
+    let ask = |mid: u16, num: u32| {
+        request(
+            RequestType::Get,
+            mid,
+            b"r",
+            "/big",
+            &[(CoapOption::Block2, block(num, false, 6))],
+            b"",
+        )
+    };
+    let budget = body().len() * TRANSFER_SERVE_FACTOR;
+    let reply = peer.exchange(ask(1, 0)).await;
+    assert_eq!(option(&reply, CoapOption::Block2), Some(block(0, true, 6)));
+    let mut served = reply.payload.len();
+    assert_eq!(device.asked("/big").await, 1);
+
+    // Block 1 over and over, as a reflector would ask for it.
+    let mut mid = 2;
+    let mut hits = 0;
+    while served + 1024 <= budget {
+        let reply = peer.exchange(ask(mid, 1)).await;
+        mid += 1;
+        assert_eq!(reply.payload, body().as_bytes()[1024..2048]);
+        served += reply.payload.len();
+        hits += 1;
+        assert_eq!(
+            device.asked("/big").await,
+            1,
+            "hit {hits}: {served} of {budget} bytes, still from the cache"
+        );
+    }
+    assert!(hits >= 2, "the budget allows a whole transfer at least");
+
+    // The next one would pass the budget: the entry is gone and the model is asked.
+    let reply = peer.exchange(ask(mid, 1)).await;
+    assert_eq!(code(&reply), (2, 5));
+    assert_eq!(
+        reply.payload,
+        body().as_bytes()[1024..2048],
+        "still the right block"
+    );
+    assert_eq!(
+        device.asked("/big").await,
+        2,
+        "past {budget} bytes the cache stops answering for the model"
+    );
     peer.assert_wire_clean();
 }
 
@@ -612,6 +730,72 @@ async fn an_unacknowledged_confirmable_notification_is_resent_four_times_then_dr
         "an acknowledged notification is not resent"
     );
     silent.assert_wire_clean();
+}
+
+#[tokio::test]
+async fn a_confirmable_notification_pushed_out_of_the_window_is_still_resent_and_its_observer_removed(
+) {
+    // RECENT_NOTIFICATIONS bounds the message ids kept for matching a RST. A Confirmable
+    // notification still waiting for its ACK must not be forgotten when later notifications
+    // push it out of that window: forgetting it reads as "acknowledged", and an observer that
+    // never answers would be kept, and notified, forever.
+    let device = Device::start(Some(
+        serde_json::json!({"notification_ack_timeout_ms": 100}),
+    ))
+    .await;
+    let mut silent = Peer::new(device.port).await;
+    observe(&mut silent, b"silent").await;
+    let handle = device.handle().await;
+
+    let flood = async {
+        let report = handle
+            .notify(
+                &device.state,
+                "/temp",
+                Representation::new(CODE_CONTENT, b"t=con".to_vec(), Some(0)),
+                true,
+            )
+            .await;
+        assert_eq!(report.sent, 1);
+        for i in 0..RECENT_NOTIFICATIONS + 44 {
+            handle
+                .notify(
+                    &device.state,
+                    "/temp",
+                    Representation::new(CODE_CONTENT, format!("t={i}").into_bytes(), Some(0)),
+                    false,
+                )
+                .await;
+        }
+    };
+    // Read while the flood is sent, so no retransmission is lost to a full receive buffer.
+    let drain = async {
+        let mut confirmable = Vec::new();
+        let mut non = 0usize;
+        while let Some(p) = silent.recv_within(Duration::from_secs(8)).await {
+            match p.header.get_type() {
+                MessageType::Confirmable => confirmable.push(p.header.message_id),
+                _ => non += 1,
+            }
+        }
+        (confirmable, non)
+    };
+    let ((), (confirmable, non)) = tokio::join!(flood, drain);
+    assert!(
+        non > RECENT_NOTIFICATIONS,
+        "the window was overrun: {non} NON"
+    );
+    assert_eq!(
+        confirmable.len(),
+        1 + NOTIFICATION_MAX_RETRANSMIT as usize,
+        "the Confirmable notification was resent after leaving the window: {confirmable:?}"
+    );
+    assert!(confirmable.iter().all(|m| *m == confirmable[0]));
+    assert!(
+        handle.observers().is_empty(),
+        "the observer that never acknowledged was removed"
+    );
+    assert_eq!(handle.pending_notifications(), 0, "nothing left waiting");
 }
 
 #[tokio::test]

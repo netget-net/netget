@@ -9,6 +9,8 @@ mod llm_failure_test;
 #[cfg(all(test, feature = "coap"))]
 mod observe_blockwise_bounds_test;
 #[cfg(all(test, feature = "coap"))]
+mod observe_blockwise_table_test;
+#[cfg(all(test, feature = "coap"))]
 mod observe_blockwise_test;
 #[cfg(all(test, feature = "coap"))]
 mod observe_support;

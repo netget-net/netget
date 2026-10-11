@@ -164,9 +164,11 @@ impl Protocol for CoapProtocol {
                  the model whole; both fail rather than skip when absent. (2) The pcap oracle \
                  reads every datagram of the Observe and block exchanges. (3) The fuzz target \
                  also reads Block1, Block2 and Observe from every decoded message. (4) \
-                 MAX_OBSERVERS, MAX_UPLOADS, MAX_TRANSFERS, MAX_REPRESENTATION_LEN (both \
-                 directions), out-of-order Block1, RST removal and the CON notification \
-                 retransmission limit each have a test. \
+                 MAX_OBSERVERS, MAX_OBSERVERS_PER_IP, OBSERVER_MAX_AGE, MAX_UPLOADS, \
+                 MAX_UPLOADS_PER_IP, MAX_TRANSFERS, TRANSFER_SERVE_FACTOR, the Block2 TTL a \
+                 hit does not renew, MAX_REPRESENTATION_LEN (both directions), out-of-order \
+                 Block1, RST removal and the CON notification retransmission limit (including \
+                 past the RECENT_NOTIFICATIONS window) each have a test. \
                  \
                  UNPROVEN, because none of it is implemented: DTLS/CoAPS on 5684, separate \
                  (non-piggybacked) responses, retransmission of Confirmable responses, \

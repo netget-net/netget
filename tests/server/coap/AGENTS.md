@@ -182,12 +182,27 @@ variants so a broken server fails the test in ten seconds instead of hanging it.
 | `MAX_REPRESENTATION_LEN` (outbound) | 65536 | `codec.rs`, enforced in `actions.rs::decode_payload` | `e2e_test::test_oversize_payload_is_refused_rather_than_silently_dropped` (it was `MAX_PAYLOAD_LEN`, 1024, until Block2 existed) |
 | receive buffer | 2048 | `mod.rs` | implicitly, by the 1153-byte probe arriving intact |
 
-The Observe and Block-wise bounds — `MAX_OBSERVERS`, `MAX_UPLOADS`, `MAX_TRANSFERS`,
-`MAX_REPRESENTATION_LEN` inbound, Block1 order and size, Block2 past the end, RST removal,
-`NOTIFICATION_MAX_RETRANSMIT` — are in `observe_blockwise_bounds_test.rs`, tabulated in its
-header. Three were checked by removal: with the Block2 cache never storing, four tests fail
-(the handler is asked once per block); with the upload cap or the registration's Observe
-option removed, eight do.
+The Observe and Block-wise bounds reachable from one source IP — `MAX_OBSERVERS_PER_IP`,
+`MAX_UPLOADS_PER_IP` (the IP's oldest upload evicted, not the new one refused),
+`TRANSFER_SERVE_FACTOR` (the cache stops answering for the model after twice the
+representation, counted by handler calls), `MAX_TRANSFERS`, `MAX_REPRESENTATION_LEN` inbound,
+Block1 order and size, Block2 past the end, RST removal, `NOTIFICATION_MAX_RETRANSMIT`, and that
+a Confirmable notification pushed out of the `RECENT_NOTIFICATIONS` window by 300 later ones is
+still resent and its silent observer still removed — are in `observe_blockwise_bounds_test.rs`,
+tabulated in its header, each from raw UDP sockets on 127.0.0.1. The per-IP tests use two
+sockets so the cap is shown to be the IP's, not the endpoint's.
+
+The shared caps `MAX_OBSERVERS` and `MAX_UPLOADS` sit above the per-IP caps, and reaching them
+needs 16 and 8 source IPs, which loopback does not offer on macOS. They, and the rules that need
+a clock — `OBSERVER_MAX_AGE` expiry and its renewal by an ACK, the Confirmable notification due
+at half that age, and the Block2 TTL that a hit does not renew — are held directly on the pure
+tables in `observe_blockwise_table_test.rs`, passing `now` rather than waiting.
+
+Three were checked by removal when they were written: with the Block2 cache never storing,
+four tests fail (the handler is asked once per block); with the upload cap or the
+registration's Observe option removed, eight do. The October 2026 hardening tests (per-IP caps,
+serve budget, the pending map) were written without a build available and have not yet been
+checked by removal.
 
 Each has an **at-limit** half as well as an over-limit half, because a guard that refused
 everything would satisfy the over-limit assertion for the wrong reason. Each doc comment

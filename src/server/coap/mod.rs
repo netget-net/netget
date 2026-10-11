@@ -75,9 +75,29 @@ impl CoapServerHandle {
         self.next_message_id.fetch_add(1, Ordering::Relaxed)
     }
 
-    /// Every registration, for the dashboard and for tests.
+    /// Every registration, for the dashboard and for tests. Expired ones are removed first.
     pub fn observers(&self) -> Vec<Observer> {
+        self.expire_observers();
         lock(&self.observers).all()
+    }
+
+    /// Confirmable notifications still waiting for their ACK.
+    pub fn pending_notifications(&self) -> usize {
+        lock(&self.observers).pending_len()
+    }
+
+    /// Remove every registration unconfirmed for `observe::OBSERVER_MAX_AGE`, logging each.
+    fn expire_observers(&self) {
+        let expired = lock(&self.observers).expire(Instant::now());
+        for observer in expired {
+            info!(
+                "CoAP observer {} of {} unconfirmed for {} s; observation removed decision={}",
+                observer.peer,
+                observer.path,
+                observe::OBSERVER_MAX_AGE.as_secs(),
+                Decision::ObserverExpired.as_str()
+            );
+        }
     }
 
     /// Representations cached for Block2 continuations.
@@ -96,6 +116,11 @@ impl CoapServerHandle {
     /// other code goes out *without* Observe and ends it, which is how the RFC says "this
     /// resource is gone". A representation over one block is sent as its first Block2 block
     /// and cached, so the client fetches the rest with ordinary GETs (RFC 7959 §2.6).
+    ///
+    /// `confirmable` is what the caller asked for; an observer unconfirmed for half of
+    /// `observe::OBSERVER_MAX_AGE` gets a Confirmable notification regardless (RFC 7641 §4.5),
+    /// so a live client renews its registration by acknowledging it and a dead or spoofed one
+    /// is removed when the retransmissions run out.
     pub async fn notify(
         &self,
         app_state: &AppState,
@@ -104,10 +129,18 @@ impl CoapServerHandle {
         confirmable: bool,
     ) -> NotifyReport {
         let rep = Arc::new(rep);
+        self.expire_observers();
         let observers = lock(&self.observers).of_path(path);
         let mut report = NotifyReport::default();
         for observer in observers {
             let keeps = codec::code_class(rep.code) == 2;
+            let confirmable = confirmable
+                || (keeps
+                    && lock(&self.observers).needs_confirmation(
+                        observer.peer,
+                        &observer.token,
+                        Instant::now(),
+                    ));
             let mid = self.fresh_message_id();
             let mut message = CoapMessage {
                 mtype: if confirmable {
@@ -137,7 +170,8 @@ impl CoapServerHandle {
 
             {
                 let mut obs = lock(&self.observers);
-                obs.record(observer.peer, mid, &observer.token, confirmable);
+                // Pending only when a retransmission task will wait for it.
+                obs.record(observer.peer, mid, &observer.token, confirmable && keeps);
                 if !keeps {
                     obs.deregister(observer.peer, &observer.token);
                     report.ended += 1;
@@ -157,8 +191,12 @@ impl CoapServerHandle {
             let sent = self
                 .send(&message, observer.peer, observer.connection_id, app_state)
                 .await;
-            if sent && confirmable && keeps {
-                self.retransmit_later(app_state, observer, message).await;
+            if confirmable && keeps {
+                if sent {
+                    self.retransmit_later(app_state, observer, message).await;
+                } else {
+                    lock(&self.observers).settle(observer.peer, mid);
+                }
             }
             report.sent += usize::from(sent);
         }
@@ -177,6 +215,7 @@ impl CoapServerHandle {
             .server_handle::<CoapServerHandle>(self.server_id)
             .await
         else {
+            lock(&self.observers).settle(observer.peer, message.message_id);
             return;
         };
         let state = app_state.clone();
@@ -185,6 +224,9 @@ impl CoapServerHandle {
             .spawn_server_task(self.server_id, async move {
                 for attempt in 0..=NOTIFICATION_MAX_RETRANSMIT {
                     tokio::time::sleep(interval).await;
+                    // Not pending means acknowledged, reset, superseded by a newer
+                    // Confirmable notification, or its observer is gone. Pending entries are
+                    // never evicted, so this is never true merely because time passed.
                     if !lock(&handle.observers).awaiting_ack(observer.peer, message.message_id) {
                         return;
                     }
@@ -202,7 +244,11 @@ impl CoapServerHandle {
                         .await;
                     interval *= 2;
                 }
-                lock(&handle.observers).deregister(observer.peer, &observer.token);
+                {
+                    let mut obs = lock(&handle.observers);
+                    obs.settle(observer.peer, message.message_id);
+                    obs.deregister(observer.peer, &observer.token);
+                }
                 warn!(
                     "CoAP observer {} of {} never acknowledged notification mid {} after {} \
                      retransmissions; observation removed decision={}",
@@ -266,7 +312,9 @@ impl CoapServerHandle {
         message.payload = slice.to_vec();
         let mut transfers = lock(&self.transfers);
         if more {
-            if let Some(evicted) = transfers.insert(key, rep.clone(), Instant::now()) {
+            // A block served from the cache was charged by `Transfers::get`, and inserting the
+            // same representation again leaves its entry as it is.
+            if let Some(evicted) = transfers.insert(key, rep.clone(), slice.len(), Instant::now()) {
                 debug!(
                     "CoAP Block2 cache full; evicted {}{} for {}",
                     evicted.path,
@@ -566,7 +614,11 @@ impl CoapServer {
                 }
                 // An ACK for a Confirmable notification: stop retransmitting it.
                 MessageType::Acknowledgement => {
-                    if lock(&shared.observers).acknowledge(peer_addr, request.message_id) {
+                    if lock(&shared.observers).acknowledge(
+                        peer_addr,
+                        request.message_id,
+                        Instant::now(),
+                    ) {
                         debug!(
                             "CoAP notification mid {} acknowledged by {}",
                             request.message_id, peer_addr
@@ -725,9 +777,12 @@ impl CoapServer {
         }
 
         // A later Block2 block of a representation the model already gave: served from the
-        // cache. A miss falls through to the model, whose answer is sliced the same way.
+        // cache. A miss falls through to the model, whose answer is sliced the same way. So
+        // does a block that would take the entry past its serve budget
+        // (`blockwise::TRANSFER_SERVE_FACTOR`): the cache answers a spoofable address without
+        // the model, so what one answer can be made to send is bounded.
         if let Some(block) = block2.filter(|b| b.num > 0) {
-            let cached = lock(&shared.transfers).get(&resource, Instant::now());
+            let cached = lock(&shared.transfers).get(&resource, block, Instant::now());
             if let Some(rep) = cached {
                 let fresh = shared.fresh_message_id();
                 let mut response = codec::response_to(&request, fresh, rep.code);
@@ -908,8 +963,9 @@ impl CoapServer {
                             block_szx: block2.map(|b| b.szx),
                             connection_id,
                         };
+                        shared.expire_observers();
                         let mut observers = lock(&shared.observers);
-                        match observers.register(observer) {
+                        match observers.register(observer, Instant::now()) {
                             Registered::Added | Registered::Replaced => {
                                 let seq = observers.next_sequence();
                                 drop(observers);
@@ -928,6 +984,15 @@ impl CoapServer {
                                      are registered; served without Observe decision={}",
                                     observe::MAX_OBSERVERS,
                                     Decision::ObserveCapReached.as_str()
+                                );
+                            }
+                            Registered::PeerFull => {
+                                drop(observers);
+                                warn!(
+                                    "CoAP {peer_addr} asked to observe {path}, but its IP holds \
+                                     {} observations; served without Observe decision={}",
+                                    observe::MAX_OBSERVERS_PER_IP,
+                                    Decision::ObservePeerCapReached.as_str()
                                 );
                             }
                         }
@@ -1074,6 +1139,9 @@ enum Decision {
     ObserveDeclined,
     /// `observe::MAX_OBSERVERS` were registered, so a registration was served without Observe.
     ObserveCapReached,
+    /// The peer's IP held `observe::MAX_OBSERVERS_PER_IP` registrations, so a registration
+    /// was served without Observe.
+    ObservePeerCapReached,
     /// A notification went out and the observation stands.
     Notified,
     /// An observation ended: deregistered, or a non-2.xx notification.
@@ -1082,6 +1150,8 @@ enum Decision {
     ObserverReset,
     /// A Confirmable notification was never acknowledged (RFC 7641 §4.5).
     ObserverTimeout,
+    /// A registration went unconfirmed for `observe::OBSERVER_MAX_AGE`.
+    ObserverExpired,
 }
 
 impl Decision {
@@ -1100,10 +1170,12 @@ impl Decision {
             Decision::ObserveRegistered => "observe_registered",
             Decision::ObserveDeclined => "observe_declined",
             Decision::ObserveCapReached => "observe_cap_reached",
+            Decision::ObservePeerCapReached => "observe_peer_cap_reached",
             Decision::Notified => "notified",
             Decision::ObservationEnded => "observation_ended",
             Decision::ObserverReset => "observer_reset",
             Decision::ObserverTimeout => "observer_timeout",
+            Decision::ObserverExpired => "observer_expired",
         }
     }
 

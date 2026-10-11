@@ -8,10 +8,16 @@
 //!   so a 64-block transfer costs one model call rather than sixty-four, and every block comes
 //!   from the same answer (the ETag says so). A miss is not an error: the request goes to the
 //!   model again, as RFC 7959 §2.4's stateless server would do, and its answer is sliced.
+//!   The source address a cached entry is keyed by is spoofable, so a hit is a reply the
+//!   server sends to whoever that address is, without the model: each entry therefore lives
+//!   [`TRANSFER_TTL`] from when it was cached (a hit does not renew it) and serves at most
+//!   [`TRANSFER_SERVE_FACTOR`] times its own length before it is evicted, which bounds what
+//!   one model answer can be made to reflect.
 //! * [`Uploads`] — **Block1**, the request direction. Blocks are appended in order and
 //!   answered 2.31 Continue without the model; the body reaches the model once, whole, with
 //!   the last block. Out of order is 4.08, over [`codec::MAX_REPRESENTATION_LEN`] is 4.13 with
-//!   Size1, and a full table is 5.03.
+//!   Size1, and a full table is 5.03. One source IP holds at most [`MAX_UPLOADS_PER_IP`]
+//!   uploads; a new one past that evicts that IP's least recently advanced upload.
 //!
 //! Both are keyed by the peer's address and the target resource (RFC 7959 §2.4: block-wise
 //! transfers are matched by endpoint and request URI, not by token — a client may use a new
@@ -27,16 +33,28 @@ use crate::utils::clock::Instant;
 use super::codec::{self, BlockValue};
 
 /// Cached Block2 representations a server holds at once. Inserting past this evicts the
-/// least recently used one — a cache, so eviction costs a model call, never a refusal.
+/// oldest one — a cache, so eviction costs a model call, never a refusal.
 pub const MAX_TRANSFERS: usize = 32;
 
+/// Bytes one cached representation may serve, as a multiple of its payload length, counting
+/// the block that was sent when it was cached. A whole transfer is 1×; 2× leaves room for a
+/// client that retransmits every block once. A block that would pass it evicts the entry and
+/// goes to the model instead.
+pub const TRANSFER_SERVE_FACTOR: usize = 2;
+
 /// Block1 uploads in progress at once. A new upload past this is refused 5.03: an upload
-/// cannot be evicted without losing what was already acknowledged with 2.31.
+/// cannot be evicted to make room for a different peer without losing what was already
+/// acknowledged with 2.31.
 pub const MAX_UPLOADS: usize = 16;
 
-/// How long a cached representation or a half-finished upload is kept after it was last
-/// touched. RFC 7252's EXCHANGE_LIFETIME is 247 s; a client that pauses longer than a minute
-/// between two blocks of one transfer is not doing block-wise transfer.
+/// Block1 uploads one source IP holds at once. A new upload from an IP already holding this
+/// many evicts that IP's least recently advanced one, so one address cannot hold the table.
+pub const MAX_UPLOADS_PER_IP: usize = 2;
+
+/// How long a cached representation is kept after it was cached, and a half-finished upload
+/// after its last block. RFC 7252's EXCHANGE_LIFETIME is 247 s; a client that needs longer
+/// than a minute for one transfer is not doing block-wise transfer, and a miss only costs a
+/// model call.
 pub const TRANSFER_TTL: Duration = Duration::from_secs(60);
 
 /// Which resource, at which endpoint.
@@ -96,10 +114,19 @@ pub fn etag_for(payload: &[u8], content_format: Option<u16>) -> Vec<u8> {
     hash.to_be_bytes().to_vec()
 }
 
+#[derive(Debug)]
+struct Cached {
+    /// When the representation was cached. Never renewed by a hit.
+    cached: Instant,
+    rep: Arc<Representation>,
+    /// Payload bytes served from this entry, including the block sent when it was cached.
+    served: usize,
+}
+
 /// The Block2 cache.
 #[derive(Debug)]
 pub struct Transfers {
-    entries: HashMap<ResourceKey, (Instant, Arc<Representation>)>,
+    entries: HashMap<ResourceKey, Cached>,
     cap: usize,
     ttl: Duration,
 }
@@ -130,37 +157,74 @@ impl Transfers {
     fn expire(&mut self, now: Instant) {
         let ttl = self.ttl;
         self.entries
-            .retain(|_, (touched, _)| now.saturating_duration_since(*touched) < ttl);
+            .retain(|_, c| now.saturating_duration_since(c.cached) < ttl);
     }
 
-    /// The cached representation for `key`, refreshing its age.
-    pub fn get(&mut self, key: &ResourceKey, now: Instant) -> Option<Arc<Representation>> {
+    /// The cached representation for `key`, to serve `block` of it. The block's bytes are
+    /// charged to the entry; a block that would take it past [`TRANSFER_SERVE_FACTOR`] times
+    /// the payload length evicts the entry and is a miss. A hit does not renew the entry's
+    /// age. A block past the end is charged nothing and still returns the representation, so
+    /// the caller can answer 4.02.
+    pub fn get(
+        &mut self,
+        key: &ResourceKey,
+        block: BlockValue,
+        now: Instant,
+    ) -> Option<Arc<Representation>> {
         self.expire(now);
-        let (touched, rep) = self.entries.get_mut(key)?;
-        *touched = now;
-        Some(rep.clone())
+        let entry = self.entries.get_mut(key)?;
+        let len = entry.rep.block(block).map_or(0, |(slice, _)| slice.len());
+        let budget = entry
+            .rep
+            .payload
+            .len()
+            .saturating_mul(TRANSFER_SERVE_FACTOR);
+        if entry.served.saturating_add(len) > budget {
+            self.entries.remove(key);
+            return None;
+        }
+        entry.served += len;
+        Some(entry.rep.clone())
     }
 
-    /// Cache `rep` under `key`. Returns the key evicted to make room, if any.
+    /// Cache `rep` under `key`, charged `served` bytes for the block just sent from it. If
+    /// `key` already holds this same representation (a block served from the cache), the
+    /// entry is left as it is: its age and its charge stand. Returns the key evicted to make
+    /// room, if any.
     pub fn insert(
         &mut self,
         key: ResourceKey,
         rep: Arc<Representation>,
+        served: usize,
         now: Instant,
     ) -> Option<ResourceKey> {
         self.expire(now);
+        if self
+            .entries
+            .get(&key)
+            .is_some_and(|c| Arc::ptr_eq(&c.rep, &rep))
+        {
+            return None;
+        }
         let mut evicted = None;
         if !self.entries.contains_key(&key) && self.entries.len() >= self.cap {
             evicted = self
                 .entries
                 .iter()
-                .min_by_key(|(_, (touched, _))| *touched)
+                .min_by_key(|(_, c)| c.cached)
                 .map(|(k, _)| k.clone());
             if let Some(old) = &evicted {
                 self.entries.remove(old);
             }
         }
-        self.entries.insert(key, (now, rep));
+        self.entries.insert(
+            key,
+            Cached {
+                cached: now,
+                rep,
+                served,
+            },
+        );
         evicted
     }
 
@@ -209,21 +273,28 @@ pub enum UploadStep {
 pub struct Uploads {
     entries: HashMap<UploadKey, Upload>,
     cap: usize,
+    per_ip: usize,
     ttl: Duration,
     max_body: usize,
 }
 
 impl Default for Uploads {
     fn default() -> Self {
-        Uploads::new(MAX_UPLOADS, TRANSFER_TTL, codec::MAX_REPRESENTATION_LEN)
+        Uploads::new(
+            MAX_UPLOADS,
+            MAX_UPLOADS_PER_IP,
+            TRANSFER_TTL,
+            codec::MAX_REPRESENTATION_LEN,
+        )
     }
 }
 
 impl Uploads {
-    pub fn new(cap: usize, ttl: Duration, max_body: usize) -> Uploads {
+    pub fn new(cap: usize, per_ip: usize, ttl: Duration, max_body: usize) -> Uploads {
         Uploads {
             entries: HashMap::new(),
             cap: cap.max(1),
+            per_ip: per_ip.max(1),
             ttl,
             max_body,
         }
@@ -303,6 +374,37 @@ impl Uploads {
                     blocks: 1,
                     last: block,
                 };
+            }
+            // One IP at its own cap gives up its least recently advanced upload; only then is
+            // the shared cap checked, so one address cannot be the reason another is refused.
+            let ip = key.resource.peer.ip();
+            loop {
+                let held = self
+                    .entries
+                    .iter()
+                    .filter(|(k, _)| k.resource.peer.ip() == ip);
+                if held.clone().count() < self.per_ip {
+                    break;
+                }
+                let Some(oldest) = held.min_by_key(|(_, u)| u.touched).map(|(k, _)| k.clone())
+                else {
+                    break;
+                };
+                self.entries.remove(&oldest);
+                tracing::info!(
+                    "CoAP Block1 upload {} {}{} from {} evicted: {} uploads from that IP are \
+                     in progress decision=upload_evicted_per_ip",
+                    codec::method_name(oldest.method).unwrap_or("?"),
+                    oldest.resource.path,
+                    oldest
+                        .resource
+                        .query
+                        .as_ref()
+                        .map(|q| format!("?{q}"))
+                        .unwrap_or_default(),
+                    oldest.resource.peer,
+                    self.per_ip
+                );
             }
             if self.entries.len() >= self.cap {
                 return UploadStep::Refuse {
