@@ -6732,7 +6732,8 @@ jobs:
         run: |
           set -euo pipefail
           for filter in \
-            coap::observe_blockwise \
+            coap::observe_blockwise_test \
+            coap::observe_blockwise_bounds_test \
             coap::real_client_test \
             client/coap::blockwise_upload_test \
             client/coap::real_server_test; do
