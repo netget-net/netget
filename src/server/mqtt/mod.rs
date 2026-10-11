@@ -1,8 +1,13 @@
-//! MQTT v3.1.1 broker with LLM-controlled responses
+//! MQTT 3.1.1 and 5.0 broker with LLM-controlled responses
 //!
-//! Wire format is parsed by hand (see `packet` below): MQTT 3.1.1 control packets are
-//! small enough that a dedicated broker crate would not earn its keep, and `rumqttd`
-//! owns its own routing/session model, which is exactly the part the LLM must own here.
+//! Wire format is parsed by hand (see `packet` below): MQTT control packets are small enough
+//! that a dedicated broker crate would not earn its keep, and `rumqttd` owns its own
+//! routing/session model, which is exactly the part the LLM must own here.
+//!
+//! The version is the client's: a CONNECT with protocol level 5 makes the whole connection a
+//! v5 one — properties in every variable header, reason codes in every acknowledgement — and
+//! anything else is answered in 3.1.1 framing. [`v5`] holds the property codec and the reason
+//! code tables; the packet functions below take a `v5` flag rather than being duplicated.
 //!
 //! What the LLM decides:
 //! - whether a CONNECT is accepted, and with which return code (`mqtt_connack`)
@@ -23,6 +28,7 @@
 //! subscriptions are reported to the model in the event and tracked in its memory.
 
 pub mod actions;
+pub mod v5;
 
 use crate::llm::action_helper::call_llm;
 use crate::llm::actions::protocol_trait::ActionResult;
@@ -73,6 +79,13 @@ pub const PKT_UNSUBACK: u8 = 11;
 pub const PKT_PINGREQ: u8 = 12;
 pub const PKT_PINGRESP: u8 = 13;
 pub const PKT_DISCONNECT: u8 = 14;
+/// AUTH (MQTT 5.0 §3.15). Reserved in 3.1.1.
+pub const PKT_AUTH: u8 = 15;
+
+/// Topic aliases a v5 client may use towards this broker, advertised as Topic Alias Maximum
+/// in every v5 CONNACK (§3.2.2.3.8). An alias maps a 16-bit number to a topic name for the
+/// life of the connection, so the table is bounded by this number of entries.
+pub const TOPIC_ALIAS_MAX: u16 = 16;
 
 /// CONNACK return code 3, "Connection Refused, Server unavailable" (3.1.1 §3.2.2.3).
 ///
@@ -100,12 +113,11 @@ const MAX_CONNECTIONS: usize = crate::server::accept_bounded::DEFAULT_MAX_CONNEC
 /// refuses a CONNECT. The bytes are [`build_connack`]`(`[`CONNACK_SERVER_UNAVAILABLE`]`,
 /// false)`, written out here because a `const` cannot call it.
 ///
-/// **It is the 3.1.1 framing, and that is right for this broker rather than a guess about the
-/// peer.** A v5 CONNACK carries an extra property-length field, so the two are not
-/// interchangeable — but this broker only ever emits the 3.1.1 form ([`build_connack`] is the
-/// single CONNACK site and has no version parameter), so a peer that could have completed a
-/// session here is a peer that accepts this framing. Sending the v5 shape instead would
-/// refuse in a dialect the server does not otherwise speak.
+/// **It is the 3.1.1 framing, because the peer's version is not yet known.** A v5 CONNACK
+/// carries an extra property-length field, so the two are not interchangeable, and the
+/// version is read from the CONNECT — which `accept_bounded` writes this before reading. A
+/// v5 client parses these four bytes as reason code 0x03, which is not a success code; it
+/// fails the connect either way, and the close that follows is the refusal.
 ///
 /// 3.1.1 §3.2 requires the server to close the connection after a non-zero CONNACK, which is
 /// exactly what `accept_bounded` does next.
@@ -286,6 +298,31 @@ struct RawPacket {
     body: Vec<u8>,
 }
 
+/// What one connection knows about its own session.
+#[derive(Default)]
+struct Session {
+    /// Set by an accepted CONNECT; a second CONNECT is a protocol violation.
+    client_id: Option<String>,
+    /// The Keep Alive the client declared in its CONNECT, once one has been accepted.
+    keep_alive: Option<u16>,
+    /// The client connected with protocol level 5.
+    v5: bool,
+    /// v5 Topic Aliases the client has defined on this connection (§3.3.2.3.4), bounded by
+    /// [`TOPIC_ALIAS_MAX`].
+    aliases: std::collections::HashMap<u16, String>,
+}
+
+impl Session {
+    /// On a v5 connection, say why it is closing before it closes (§4.13.2: a server that
+    /// detects a malformed packet or a protocol error SHOULD send DISCONNECT with the reason).
+    /// 3.1.1 has no server DISCONNECT, so there the close itself is the whole message.
+    fn refuse(&self, out_tx: &mpsc::UnboundedSender<Vec<u8>>, reason: u8) {
+        if self.v5 {
+            let _ = out_tx.send(build_disconnect_v5(reason, &v5::PropertyWriter::new()));
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn handle_mqtt_connection(
     socket: TcpStream,
@@ -319,6 +356,12 @@ async fn handle_mqtt_connection(
     let writer_write_half = write_half.clone();
     let writer_state = app_state.clone();
     let writer_permit = Arc::clone(&permit);
+    // The Maximum Packet Size a v5 client declared in its CONNECT, 0 when it set none. A
+    // server "MUST NOT send packets exceeding Maximum Packet Size to the Client" and discards
+    // a PUBLISH that would (§3.1.2.11.4), so the one place every outbound packet passes is
+    // where it is enforced.
+    let client_max_packet = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let writer_client_max = client_max_packet.clone();
     let writer_handle = tokio::spawn(async move {
         // The other half of this connection's cap slot. `finish_connection` waits at most 5
         // seconds for this task, so on the path where it gives up and abandons the writer the
@@ -326,6 +369,16 @@ async fn handle_mqtt_connection(
         let _permit = writer_permit;
         while let Some(bytes) = out_rx.recv().await {
             let n = bytes.len();
+            let limit = writer_client_max.load(std::sync::atomic::Ordering::SeqCst) as usize;
+            if limit > 0 && n > limit {
+                Log::new(Some(&writer_status_tx)).warn(format!(
+                    "MQTT dropped a {n}-byte packet (type {}) for connection {connection_id}: \
+                     the client's Maximum Packet Size is {limit} \
+                     decision=dropped_over_client_max_packet_size",
+                    bytes.first().map(|b| b >> 4).unwrap_or(0)
+                ));
+                continue;
+            }
             let mut guard = writer_write_half.lock().await;
             if let Err(e) = guard.write_all(&bytes).await {
                 Log::new(Some(&writer_status_tx)).debug(format!("MQTT write failed: {}", e));
@@ -398,9 +451,7 @@ async fn handle_mqtt_connection(
         status_tx.clone(),
     );
 
-    let mut client_id: Option<String> = None;
-    // The Keep Alive the client declared in its CONNECT, once one has been accepted.
-    let mut keep_alive: Option<u16> = None;
+    let mut session = Session::default();
     let mut buffer: Vec<u8> = Vec::with_capacity(1024);
     let mut chunk = vec![0u8; 4096];
 
@@ -408,7 +459,7 @@ async fn handle_mqtt_connection(
         // Before CONNECT: the connect bound. After it: 1.5x the client's own Keep Alive, or the
         // fallback when it declared 0. The deadline wraps the read and nothing else — packets
         // are dispatched inline below, so a model round-trip is never on this clock.
-        let bound = match keep_alive {
+        let bound = match session.keep_alive {
             None => bounds.connect,
             Some(ka) => session_idle_bound(ka, bounds.idle_without_keep_alive),
         };
@@ -420,7 +471,7 @@ async fn handle_mqtt_connection(
                     connection_id,
                     peer_addr,
                     bound.as_millis(),
-                    match keep_alive {
+                    match session.keep_alive {
                         None => "no CONNECT".to_string(),
                         Some(0) => "keep-alive 0".to_string(),
                         Some(ka) => format!("1.5x keep-alive {}s", ka),
@@ -462,6 +513,7 @@ async fn handle_mqtt_connection(
                         peer_addr, e
                     ));
                     // A malformed packet desynchronises the stream; the spec says close.
+                    session.refuse(&out_tx, e.reason_code());
                     finish_connection(
                         protocol,
                         out_tx,
@@ -469,7 +521,7 @@ async fn handle_mqtt_connection(
                         &app_state,
                         server_id,
                         connection_id,
-                        &client_id,
+                        &session.client_id,
                         &status_tx,
                     )
                     .await;
@@ -487,8 +539,9 @@ async fn handle_mqtt_connection(
 
             let keep_open = dispatch_packet(
                 packet,
-                &mut client_id,
-                &mut keep_alive,
+                &mut session,
+                &client_max_packet,
+                max_packet_size,
                 &llm_client,
                 &app_state,
                 &status_tx,
@@ -507,7 +560,7 @@ async fn handle_mqtt_connection(
                     &app_state,
                     server_id,
                     connection_id,
-                    &client_id,
+                    &session.client_id,
                     &status_tx,
                 )
                 .await;
@@ -522,7 +575,7 @@ async fn handle_mqtt_connection(
     );
     Log::new(Some(&status_tx)).info(format!(
         "MQTT client {} disconnected ({})",
-        client_id.as_deref().unwrap_or("<unidentified>"),
+        session.client_id.as_deref().unwrap_or("<unidentified>"),
         close_reason
     ));
 
@@ -533,7 +586,7 @@ async fn handle_mqtt_connection(
         &app_state,
         server_id,
         connection_id,
-        &client_id,
+        &session.client_id,
         &status_tx,
     )
     .await;
@@ -604,8 +657,9 @@ async fn cleanup(
 #[allow(clippy::too_many_arguments)]
 async fn dispatch_packet(
     packet: RawPacket,
-    client_id: &mut Option<String>,
-    keep_alive: &mut Option<u16>,
+    session: &mut Session,
+    client_max_packet: &std::sync::atomic::AtomicU32,
+    max_packet_size: usize,
     llm_client: &OllamaClient,
     app_state: &Arc<AppState>,
     status_tx: &mpsc::UnboundedSender<String>,
@@ -616,27 +670,60 @@ async fn dispatch_packet(
 ) -> bool {
     match packet.packet_type {
         PKT_CONNECT => {
-            let Some(connect) = parse_connect(&packet.body) else {
-                Log::new(Some(&status_tx))
-                    .warn("MQTT malformed CONNECT from client decision=protocol_error, closing");
-                return false;
+            let connect = match parse_connect(&packet.body) {
+                Ok(c) => c,
+                Err(e) => {
+                    Log::new(Some(&status_tx)).warn(format!(
+                        "MQTT malformed CONNECT from client decision=protocol_error, closing: {e}"
+                    ));
+                    // A v5 client is told why in its own framing (§3.2.2.2: 0x81 Malformed
+                    // Packet / 0x82 Protocol Error); a 3.1.1 CONNACK has no code for it.
+                    if let Some(code) = e.v5_connack_code() {
+                        let _ =
+                            out_tx.send(build_connack_v5(code, false, &v5::PropertyWriter::new()));
+                    }
+                    return false;
+                }
             };
 
-            if client_id.is_some() {
+            if session.client_id.is_some() {
                 // 3.1.0-2: a second CONNECT on one connection is a protocol violation.
                 Log::new(Some(&status_tx))
                     .warn("MQTT duplicate CONNECT decision=protocol_error, closing connection");
+                session.refuse(out_tx, 0x82);
                 return false;
             }
 
-            let effective_id = if connect.client_id.is_empty() {
+            session.v5 = connect.protocol_level == 5;
+            protocol.set_v5(session.v5);
+            // The client asked for enhanced authentication (§4.12), which this broker does not
+            // perform. Only an explicit `mqtt_connack` from the handler admits such a client.
+            let wants_enhanced_auth =
+                session.v5 && connect.properties.text(v5::AUTHENTICATION_METHOD).is_some();
+            let assigned = connect.client_id.is_empty();
+            let effective_id = if assigned {
                 format!("anon-{}", connection_id.as_u32())
             } else {
                 connect.client_id.clone()
             };
-            *client_id = Some(effective_id.clone());
-            *keep_alive = Some(connect.keep_alive);
-            actions::register_client(server_id, &effective_id, out_tx.clone());
+            session.client_id = Some(effective_id.clone());
+            session.keep_alive = Some(connect.keep_alive);
+            if session.v5 {
+                if let Some(limit) = connect.properties.int(v5::MAXIMUM_PACKET_SIZE) {
+                    client_max_packet.store(limit, std::sync::atomic::Ordering::SeqCst);
+                }
+                // What every accepting v5 CONNACK carries without the handler having to say
+                // it: the id this broker assigned when the client sent none (§3.2.2.3.7 makes
+                // that a MUST), the largest packet it will accept, and the aliases it takes.
+                let mut auto = v5::PropertyWriter::new();
+                if assigned {
+                    auto.text(v5::ASSIGNED_CLIENT_IDENTIFIER, &effective_id);
+                }
+                auto.u32(v5::MAXIMUM_PACKET_SIZE, max_packet_size as u32)
+                    .u16(v5::TOPIC_ALIAS_MAXIMUM, TOPIC_ALIAS_MAX);
+                protocol.set_connack_properties(auto);
+            }
+            actions::register_client(server_id, &effective_id, out_tx.clone(), session.v5);
             protocol.set_client_id(&effective_id);
 
             app_state
@@ -644,36 +731,45 @@ async fn dispatch_packet(
                     if let Some(conn) = server.connections.get_mut(&connection_id) {
                         conn.protocol_info = ProtocolConnectionInfo::new(serde_json::json!({
                             "client_id": effective_id,
+                            "protocol_version": version_name(connect.protocol_level),
                         }));
                     }
                 })
                 .await;
 
             info!(
-                "MQTT client '{}' connected (clean_session={}, keep_alive={}s)",
-                effective_id, connect.clean_session, connect.keep_alive
+                "MQTT client '{}' connected (v{}, clean_session={}, keep_alive={}s)",
+                effective_id,
+                version_name(connect.protocol_level),
+                connect.clean_session,
+                connect.keep_alive
             );
             Log::new(Some(&status_tx)).info(format!(
-                "MQTT CONNECT from client '{}' (user={}, clean_session={})",
+                "MQTT CONNECT from client '{}' (MQTT {}, user={}, clean_session={})",
                 effective_id,
+                version_name(connect.protocol_level),
                 connect.username.as_deref().unwrap_or("-"),
                 connect.clean_session
             ));
 
-            let event = Event::new(
-                &MQTT_CONNECT_EVENT,
-                serde_json::json!({
-                    "client_id": effective_id,
-                    "username": connect.username,
-                    "has_password": connect.has_password,
-                    "clean_session": connect.clean_session,
-                    "keep_alive": connect.keep_alive,
-                    "protocol_name": connect.protocol_name,
-                    "protocol_level": connect.protocol_level,
-                    "will_topic": connect.will_topic,
-                    "will_message": connect.will_message,
-                }),
-            );
+            let mut data = serde_json::json!({
+                "client_id": effective_id,
+                "username": connect.username,
+                "has_password": connect.has_password,
+                "clean_session": connect.clean_session,
+                "keep_alive": connect.keep_alive,
+                "protocol_name": connect.protocol_name,
+                "protocol_level": connect.protocol_level,
+                "protocol_version": version_name(connect.protocol_level),
+                "will_topic": connect.will_topic,
+                "will_message": connect.will_message,
+            });
+            if session.v5 {
+                data["properties"] = connect.properties.to_json();
+                data["will_properties"] = connect.will_properties.to_json();
+                data["assigned_client_id"] = serde_json::json!(assigned);
+            }
+            let event = Event::new(&MQTT_CONNECT_EVENT, data);
 
             let outcome = run_llm(
                 llm_client,
@@ -689,7 +785,23 @@ async fn dispatch_packet(
 
             match outcome {
                 LlmOutcome::Closed => false,
-                LlmOutcome::Responded => true,
+                // A refusing CONNACK ends the connection on the server's side too: 3.1.1
+                // §3.2.2.3 and 5.0 §3.2.2.2 both say the server MUST close after one.
+                LlmOutcome::Responded => !protocol.connack_refused(),
+                LlmOutcome::Silent if wants_enhanced_auth => {
+                    // The CONNECT names an Authentication Method and the handler said nothing.
+                    // Accepting would admit a client whose authentication never ran, so silence
+                    // refuses here: 0x8C Bad Authentication Method, and the server closes after
+                    // a refusing CONNACK (§3.2.2.2).
+                    Log::new(Some(&status_tx)).warn(format!(
+                        "MQTT CONNECT from '{}' names an authentication method and the handler \
+                         sent no mqtt_connack decision=fail_closed_auth_method, refusing with \
+                         CONNACK 0x8C",
+                        effective_id
+                    ));
+                    let _ = out_tx.send(build_connack_v5(0x8C, false, &v5::PropertyWriter::new()));
+                    false
+                }
                 LlmOutcome::Silent => {
                     // CONNACK is mandatory (3.2). Accept by default rather than let the
                     // client sit in its connect timeout. Safe only because the handler ran
@@ -699,30 +811,52 @@ async fn dispatch_packet(
                     // where a *permissive* packet follows a `decision=model_silent`. The
                     // session is accepted, credentials and all, because the model said
                     // nothing - which is the OAuth2 shape, narrowed to the case where the
-                    // handler demonstrably ran. The preceding `decision=model_silent` line
-                    // is what makes it auditable; see the fail-open note in
-                    // `src/server/mqtt/CLAUDE.md`.
+                    // handler demonstrably ran and the client asked for no enhanced
+                    // authentication (the arm above refuses that one). The preceding
+                    // `decision=model_silent` line is what makes it auditable; see the
+                    // fail-open note in `src/server/mqtt/AGENTS.md`.
                     Log::new(Some(&status_tx)).warn(format!(
                         "MQTT no mqtt_connack from handler for '{}'; accepting by default \
                          (CONNACK 0 — an accepted session nothing decided)",
                         effective_id
                     ));
-                    let _ = out_tx.send(build_connack(0, false));
+                    let _ = out_tx.send(if session.v5 {
+                        build_connack_v5(0, false, &protocol.connack_properties())
+                    } else {
+                        build_connack(0, false)
+                    });
                     true
                 }
-                LlmOutcome::Failed => {
+                LlmOutcome::Failed(failure) => {
                     // CONNACK return code 3 is "Server unavailable" (3.2.2.3). It refuses the
                     // connection, and 3.2.2.3 requires the server to close afterwards - so a
                     // client cannot proceed to PUBLISH or SUBSCRIBE on the strength of a
                     // backend that never answered. Never code 0 here: that is an accepted
                     // connection, and for a CONNECT carrying credentials it is an
                     // authentication decision made by an outage.
+                    //
+                    // v5 can say which kind of outage: 0x89 Server Busy is the retryable one,
+                    // 0x88 Server Unavailable the other, and a Reason String carries the
+                    // category (never the error itself).
                     Log::new(Some(&status_tx)).warn(format!(
-                        "MQTT refusing CONNECT from '{}' with CONNACK 3 (server unavailable): \
+                        "MQTT refusing CONNECT from '{}' with CONNACK {} (server {}): \
                          backend failed",
-                        effective_id
+                        effective_id,
+                        if session.v5 { "0x88/0x89" } else { "3" },
+                        if failure.is_overloaded() {
+                            "busy"
+                        } else {
+                            "unavailable"
+                        }
                     ));
-                    let _ = out_tx.send(build_connack(CONNACK_SERVER_UNAVAILABLE, false));
+                    let _ = out_tx.send(if session.v5 {
+                        let code = if failure.is_overloaded() { 0x89 } else { 0x88 };
+                        let mut props = v5::PropertyWriter::new();
+                        props.text(v5::REASON_STRING, failure.text());
+                        build_connack_v5(code, false, &props)
+                    } else {
+                        build_connack(CONNACK_SERVER_UNAVAILABLE, false)
+                    });
                     false
                 }
             }
@@ -733,16 +867,61 @@ async fn dispatch_packet(
             if qos > 2 {
                 Log::new(Some(&status_tx))
                     .warn("MQTT PUBLISH with invalid QoS 3 decision=protocol_error, closing");
+                session.refuse(out_tx, 0x81);
                 return false;
             }
-            let Some(publish) = parse_publish(&packet.body, qos) else {
-                Log::new(Some(&status_tx))
-                    .warn("MQTT malformed PUBLISH decision=protocol_error, closing connection");
-                return false;
+            let mut publish = match parse_publish(&packet.body, qos, session.v5) {
+                Ok(p) => p,
+                Err(e) => {
+                    Log::new(Some(&status_tx)).warn(format!(
+                        "MQTT malformed PUBLISH decision=protocol_error, closing connection: {e}"
+                    ));
+                    session.refuse(out_tx, e.reason_code());
+                    return false;
+                }
             };
 
+            // Topic Alias (§3.3.2.3.4): a non-empty topic with an alias defines it, an empty
+            // topic with an alias uses it. The model always sees the topic name.
+            if let Some(alias) = publish.properties.int(v5::TOPIC_ALIAS) {
+                let alias = alias as u16;
+                if alias == 0 || alias > TOPIC_ALIAS_MAX {
+                    Log::new(Some(&status_tx)).warn(format!(
+                        "MQTT PUBLISH with topic alias {alias} outside 1..={TOPIC_ALIAS_MAX} \
+                         decision=protocol_error, closing"
+                    ));
+                    session.refuse(out_tx, 0x94);
+                    return false;
+                }
+                if publish.topic.is_empty() {
+                    match session.aliases.get(&alias) {
+                        Some(topic) => publish.topic = topic.clone(),
+                        None => {
+                            Log::new(Some(&status_tx)).warn(format!(
+                                "MQTT PUBLISH uses topic alias {alias}, which this connection \
+                                 never defined decision=protocol_error, closing"
+                            ));
+                            session.refuse(out_tx, 0x82);
+                            return false;
+                        }
+                    }
+                } else {
+                    session.aliases.insert(alias, publish.topic.clone());
+                }
+            } else if session.v5 && publish.topic.is_empty() {
+                Log::new(Some(&status_tx)).warn(
+                    "MQTT PUBLISH with an empty topic and no topic alias \
+                     decision=protocol_error, closing",
+                );
+                session.refuse(out_tx, 0x82);
+                return false;
+            }
+
             let (payload, payload_is_text) = decode_payload(&publish.payload);
-            let name = client_id.clone().unwrap_or_else(|| "<no CONNECT>".into());
+            let name = session
+                .client_id
+                .clone()
+                .unwrap_or_else(|| "<no CONNECT>".into());
 
             Log::new(Some(&status_tx)).debug(format!(
                 "MQTT PUBLISH from '{}' topic='{}' qos={} retain={} {} bytes",
@@ -753,21 +932,22 @@ async fn dispatch_packet(
                 publish.payload.len()
             ));
 
-            let event = Event::new(
-                &MQTT_PUBLISH_EVENT,
-                serde_json::json!({
-                    "client_id": name,
-                    "topic": publish.topic,
-                    "payload": payload,
-                    "payload_is_text": payload_is_text,
-                    "payload_size": publish.payload.len(),
-                    "qos": qos,
-                    "retain": (packet.flags & 0x01) == 1,
-                    "duplicate": (packet.flags & 0x08) != 0,
-                    "packet_id": publish.packet_id,
-                    "connected_clients": actions::list_clients(server_id),
-                }),
-            );
+            let mut data = serde_json::json!({
+                "client_id": name,
+                "topic": publish.topic,
+                "payload": payload,
+                "payload_is_text": payload_is_text,
+                "payload_size": publish.payload.len(),
+                "qos": qos,
+                "retain": (packet.flags & 0x01) == 1,
+                "duplicate": (packet.flags & 0x08) != 0,
+                "packet_id": publish.packet_id,
+                "connected_clients": actions::list_clients(server_id),
+            });
+            if session.v5 {
+                data["properties"] = publish.properties.to_json();
+            }
+            let event = Event::new(&MQTT_PUBLISH_EVENT, data);
 
             let outcome = run_llm(
                 llm_client,
@@ -790,7 +970,9 @@ async fn dispatch_packet(
                 LlmOutcome::Responded => true,
                 LlmOutcome::Silent => {
                     // QoS 0 needs no acknowledgement; QoS 1/2 do, and the packet
-                    // identifier must be echoed or the client retries forever.
+                    // identifier must be echoed or the client retries forever. The two-byte
+                    // form is a valid v5 acknowledgement too: Reason Code 0x00 and no
+                    // properties may be omitted (§3.4.2.1).
                     match qos {
                         1 => {
                             let _ = out_tx.send(build_ack(PKT_PUBACK, publish.packet_id));
@@ -802,7 +984,7 @@ async fn dispatch_packet(
                     }
                     true
                 }
-                LlmOutcome::Failed => {
+                LlmOutcome::Failed(failure) => {
                     // MQTT 3.1.1 has no failure code in PUBACK or PUBREC - the acknowledgement
                     // is a two-byte packet identifier and nothing else - so there is no way to
                     // say "received but not handled". Sending one anyway would tell the
@@ -811,11 +993,22 @@ async fn dispatch_packet(
                     // error at this point is closing the connection, so that is what happens:
                     // the publisher gets no acknowledgement, keeps the message, and retries
                     // on reconnect exactly as QoS 1/2 promise.
+                    //
+                    // v5 does have failure codes in PUBACK, but a PUBACK of any kind completes
+                    // the exchange and the publisher discards the message - so it is still the
+                    // close, now preceded by a DISCONNECT saying why: 0x89 Server Busy when the
+                    // backend is saturated, 0x80 Unspecified Error otherwise.
                     Log::new(Some(&status_tx)).warn(format!(
                         "MQTT closing connection: backend failed on PUBLISH (qos={}, id={}), \
                          acknowledging it would claim delivery",
                         qos, publish.packet_id
                     ));
+                    if session.v5 {
+                        let mut props = v5::PropertyWriter::new();
+                        props.text(v5::REASON_STRING, failure.text());
+                        let code = if failure.is_overloaded() { 0x89 } else { 0x80 };
+                        let _ = out_tx.send(build_disconnect_v5(code, &props));
+                    }
                     false
                 }
             }
@@ -831,18 +1024,27 @@ async fn dispatch_packet(
         }
 
         PKT_SUBSCRIBE => {
-            let Some(sub) = parse_subscribe(&packet.body) else {
-                Log::new(Some(&status_tx))
-                    .warn("MQTT malformed SUBSCRIBE decision=protocol_error, closing connection");
-                return false;
+            let sub = match parse_subscribe(&packet.body, session.v5) {
+                Ok(s) => s,
+                Err(e) => {
+                    Log::new(Some(&status_tx)).warn(format!(
+                        "MQTT malformed SUBSCRIBE decision=protocol_error, closing connection: {e}"
+                    ));
+                    session.refuse(out_tx, e.reason_code());
+                    return false;
+                }
             };
             if sub.topics.is_empty() {
                 Log::new(Some(&status_tx))
                     .warn("MQTT SUBSCRIBE with no topic filter decision=protocol_error, closing");
+                session.refuse(out_tx, 0x82);
                 return false;
             }
 
-            let name = client_id.clone().unwrap_or_else(|| "<no CONNECT>".into());
+            let name = session
+                .client_id
+                .clone()
+                .unwrap_or_else(|| "<no CONNECT>".into());
             Log::new(Some(&status_tx)).info(format!(
                 "MQTT SUBSCRIBE from '{}': {}",
                 name,
@@ -856,18 +1058,28 @@ async fn dispatch_packet(
             let topics: Vec<serde_json::Value> = sub
                 .topics
                 .iter()
-                .map(|(filter, qos)| serde_json::json!({ "filter": filter, "qos": qos }))
+                .zip(sub.options.iter())
+                .map(|((filter, qos), opts)| {
+                    let mut t = serde_json::json!({ "filter": filter, "qos": qos });
+                    if session.v5 {
+                        t["no_local"] = serde_json::json!(opts.no_local);
+                        t["retain_as_published"] = serde_json::json!(opts.retain_as_published);
+                        t["retain_handling"] = serde_json::json!(opts.retain_handling);
+                    }
+                    t
+                })
                 .collect();
 
-            let event = Event::new(
-                &MQTT_SUBSCRIBE_EVENT,
-                serde_json::json!({
-                    "client_id": name,
-                    "packet_id": sub.packet_id,
-                    "topics": topics,
-                    "answer_with": subscribe_answer_with(sub.packet_id, &sub.topics),
-                }),
-            );
+            let mut data = serde_json::json!({
+                "client_id": name,
+                "packet_id": sub.packet_id,
+                "topics": topics,
+                "answer_with": subscribe_answer_with(sub.packet_id, &sub.topics),
+            });
+            if session.v5 {
+                data["properties"] = sub.properties.to_json();
+            }
+            let event = Event::new(&MQTT_SUBSCRIBE_EVENT, data);
 
             let outcome = run_llm(
                 llm_client,
@@ -891,14 +1103,19 @@ async fn dispatch_packet(
                         "MQTT no mqtt_suback from handler; granting requested QoS to '{}'",
                         name
                     ));
-                    let _ = out_tx.send(build_suback(sub.packet_id, &granted));
+                    let _ = out_tx.send(if session.v5 {
+                        build_suback_v5(sub.packet_id, &granted, &v5::PropertyWriter::new())
+                    } else {
+                        build_suback(sub.packet_id, &granted)
+                    });
                     true
                 }
-                LlmOutcome::Failed => {
+                LlmOutcome::Failed(failure) => {
                     // SUBACK carries a per-filter return code, and 0x80 is Failure (3.9.3).
                     // This is the one place in 3.1.1 where a refusal has a proper wire form,
                     // so use it rather than granting: granting a subscription is an access
-                    // decision, and nothing decided it.
+                    // decision, and nothing decided it. v5's 0x80 is Unspecified Error, and
+                    // its Reason String carries the category.
                     let refused = vec![SUBACK_FAILURE; sub.topics.len()];
                     Log::new(Some(&status_tx)).warn(format!(
                         "MQTT refusing all {} subscription(s) from '{}' with SUBACK 0x80: \
@@ -906,34 +1123,53 @@ async fn dispatch_packet(
                         sub.topics.len(),
                         name
                     ));
-                    let _ = out_tx.send(build_suback(sub.packet_id, &refused));
+                    let _ = out_tx.send(if session.v5 {
+                        let mut props = v5::PropertyWriter::new();
+                        props.text(v5::REASON_STRING, failure.text());
+                        build_suback_v5(sub.packet_id, &refused, &props)
+                    } else {
+                        build_suback(sub.packet_id, &refused)
+                    });
                     true
                 }
             }
         }
 
         PKT_UNSUBSCRIBE => {
-            let Some(unsub) = parse_unsubscribe(&packet.body) else {
-                Log::new(Some(&status_tx))
-                    .warn("MQTT malformed UNSUBSCRIBE decision=protocol_error, closing connection");
-                return false;
+            let unsub = match parse_unsubscribe(&packet.body, session.v5) {
+                Ok(u) => u,
+                Err(e) => {
+                    Log::new(Some(&status_tx)).warn(format!(
+                        "MQTT malformed UNSUBSCRIBE decision=protocol_error, closing connection: \
+                         {e}"
+                    ));
+                    session.refuse(out_tx, e.reason_code());
+                    return false;
+                }
             };
 
-            let name = client_id.clone().unwrap_or_else(|| "<no CONNECT>".into());
+            let name = session
+                .client_id
+                .clone()
+                .unwrap_or_else(|| "<no CONNECT>".into());
             Log::new(Some(&status_tx)).info(format!(
                 "MQTT UNSUBSCRIBE from '{}': {}",
                 name,
                 unsub.topics.join(", ")
             ));
+            // A v5 UNSUBACK carries one reason code per filter (§3.11.3), so the executor has
+            // to know how many this one had.
+            protocol.note_unsubscribe(unsub.packet_id, unsub.topics.len());
 
-            let event = Event::new(
-                &MQTT_UNSUBSCRIBE_EVENT,
-                serde_json::json!({
-                    "client_id": name,
-                    "packet_id": unsub.packet_id,
-                    "topics": unsub.topics,
-                }),
-            );
+            let mut data = serde_json::json!({
+                "client_id": name,
+                "packet_id": unsub.packet_id,
+                "topics": unsub.topics,
+            });
+            if session.v5 {
+                data["properties"] = unsub.properties.to_json();
+            }
+            let event = Event::new(&MQTT_UNSUBSCRIBE_EVENT, data);
 
             let outcome = run_llm(
                 llm_client,
@@ -951,10 +1187,36 @@ async fn dispatch_packet(
                 LlmOutcome::Closed => false,
                 LlmOutcome::Responded => true,
                 LlmOutcome::Silent => {
-                    let _ = out_tx.send(build_ack(PKT_UNSUBACK, unsub.packet_id));
+                    let _ = out_tx.send(if session.v5 {
+                        build_unsuback_v5(
+                            unsub.packet_id,
+                            &vec![0x00; unsub.topics.len()],
+                            &v5::PropertyWriter::new(),
+                        )
+                    } else {
+                        build_ack(PKT_UNSUBACK, unsub.packet_id)
+                    });
                     true
                 }
-                LlmOutcome::Failed => {
+                LlmOutcome::Failed(failure) if session.v5 => {
+                    // v5 UNSUBACK has a failure code per filter, 0x80 Unspecified Error, which
+                    // says the subscription was NOT removed. That is true, so it is the answer
+                    // and the connection stays up.
+                    Log::new(Some(&status_tx)).warn(format!(
+                        "MQTT refusing UNSUBSCRIBE (id={}) from '{}' with UNSUBACK 0x80: \
+                         backend failed",
+                        unsub.packet_id, name
+                    ));
+                    let mut props = v5::PropertyWriter::new();
+                    props.text(v5::REASON_STRING, failure.text());
+                    let _ = out_tx.send(build_unsuback_v5(
+                        unsub.packet_id,
+                        &vec![0x80; unsub.topics.len()],
+                        &props,
+                    ));
+                    true
+                }
+                LlmOutcome::Failed(_) => {
                     // Like PUBACK, UNSUBACK in 3.1.1 is a bare packet identifier with no
                     // failure code, and it means "the subscriptions are gone". Claiming that
                     // when nothing processed the request would leave the client believing it
@@ -977,10 +1239,42 @@ async fn dispatch_packet(
         }
 
         PKT_DISCONNECT => {
+            // v5 DISCONNECT carries a reason code (absent means 0x00, §3.14.2.1) and may carry
+            // a Reason String; both are reported, neither is answered.
+            let (reason, detail) = if session.v5 {
+                let reason = packet.body.first().copied().unwrap_or(0);
+                let mut pos = 1usize;
+                let text = if packet.body.len() > 1 {
+                    v5::read_properties(&packet.body, &mut pos)
+                        .ok()
+                        .and_then(|p| p.text(v5::REASON_STRING).map(str::to_string))
+                } else {
+                    None
+                };
+                (Some(reason), text)
+            } else {
+                (None, None)
+            };
             Log::new(Some(&status_tx)).info(format!(
-                "MQTT client '{}' sent DISCONNECT",
-                client_id.as_deref().unwrap_or("<unidentified>")
+                "MQTT client '{}' sent DISCONNECT{}{}",
+                session.client_id.as_deref().unwrap_or("<unidentified>"),
+                reason
+                    .map(|r| format!(" reason=0x{r:02x}"))
+                    .unwrap_or_default(),
+                detail.map(|d| format!(" ({d})")).unwrap_or_default()
             ));
+            false
+        }
+
+        PKT_AUTH if session.v5 => {
+            // Enhanced authentication (§4.12) is not implemented: a CONNECT naming an
+            // Authentication Method is the handler's to refuse with reason 0x8C. An AUTH that
+            // arrives anyway is a Protocol Error.
+            Log::new(Some(&status_tx)).warn(
+                "MQTT AUTH packet: enhanced authentication is not supported \
+                 decision=protocol_error, closing",
+            );
+            session.refuse(out_tx, 0x82);
             false
         }
 
@@ -990,6 +1284,16 @@ async fn dispatch_packet(
             trace!("MQTT ignoring inbound packet type {}", other);
             true
         }
+    }
+}
+
+/// "3.1.1" / "5.0" / "3.1" for a CONNECT protocol level.
+pub fn version_name(level: u8) -> &'static str {
+    match level {
+        3 => "3.1",
+        4 => "3.1.1",
+        5 => "5.0",
+        _ => "unknown",
     }
 }
 
@@ -1038,8 +1342,9 @@ enum LlmOutcome {
     /// There is no retryable/non-retryable split here because MQTT 3.1.1 has no wire form for
     /// one: CONNACK's only "come back later" code is 3 (server unavailable), SUBACK's only
     /// failure code is 0x80, and PUBACK/UNSUBACK have no code at all. The overload
-    /// distinction is therefore logged rather than encoded.
-    Failed,
+    /// distinction is therefore logged rather than encoded — on a 3.1.1 connection. v5 has
+    /// both (CONNACK 0x88/0x89, DISCONNECT 0x80/0x89), which is what the category is for.
+    Failed(crate::utils::wire_failure::WireFailure),
 }
 
 /// Hand an event to the handler chain and report whether the mandatory reply was
@@ -1148,7 +1453,7 @@ async fn run_llm(
                 "MQTT {} from '{}' ({}) decision={}: {}",
                 event.event_type.id, client, connection_id, decision, e
             ));
-            LlmOutcome::Failed
+            LlmOutcome::Failed(crate::utils::wire_failure::WireFailure::classify(&e))
         }
     }
 }
@@ -1157,18 +1462,79 @@ async fn run_llm(
 // Wire format: decoding
 // ============================================================================
 
+/// Why a packet was refused, and the reason code a v5 client is told (§4.13).
+#[derive(Debug, Clone)]
+pub struct PacketError {
+    /// 0x81 Malformed Packet, 0x82 Protocol Error or 0x95 Packet Too Large.
+    pub reason: u8,
+    pub message: String,
+    /// The packet was a CONNECT that declared protocol level 5, so the refusal can be a v5
+    /// CONNACK.
+    pub v5_connect: bool,
+}
+
+impl PacketError {
+    fn malformed(message: impl Into<String>) -> Self {
+        Self {
+            reason: 0x81,
+            message: message.into(),
+            v5_connect: false,
+        }
+    }
+
+    fn protocol(message: impl Into<String>) -> Self {
+        Self {
+            reason: 0x82,
+            message: message.into(),
+            v5_connect: false,
+        }
+    }
+
+    pub fn reason_code(&self) -> u8 {
+        self.reason
+    }
+
+    /// The CONNACK reason code to refuse a malformed v5 CONNECT with, `None` for 3.1.1.
+    pub fn v5_connack_code(&self) -> Option<u8> {
+        self.v5_connect.then_some(self.reason)
+    }
+}
+
+impl std::fmt::Display for PacketError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl From<v5::PropertyError> for PacketError {
+    fn from(e: v5::PropertyError) -> Self {
+        match e {
+            v5::PropertyError::Malformed(_) => PacketError::malformed(e.to_string()),
+            v5::PropertyError::Duplicate(_) | v5::PropertyError::Protocol(_) => {
+                PacketError::protocol(e.to_string())
+            }
+        }
+    }
+}
+
 /// Pull one complete control packet off the front of `buffer`.
 ///
 /// Returns `Ok(None)` when more bytes are needed. Every index is bounds-checked;
 /// no input can panic this function, and the declared remaining length is validated
 /// against `max_packet_size` before any allocation.
-fn take_packet(buffer: &mut Vec<u8>, max_packet_size: usize) -> Result<Option<RawPacket>> {
+fn take_packet(
+    buffer: &mut Vec<u8>,
+    max_packet_size: usize,
+) -> std::result::Result<Option<RawPacket>, PacketError> {
     let Some(&first) = buffer.first() else {
         return Ok(None);
     };
     let packet_type = first >> 4;
-    if packet_type == 0 || packet_type > 15 {
-        return Err(anyhow::anyhow!("invalid packet type {}", packet_type));
+    if packet_type == 0 {
+        return Err(PacketError::malformed(format!(
+            "invalid packet type {}",
+            packet_type
+        )));
     }
 
     let (remaining, len_bytes) = match decode_remaining_length(&buffer[1..]) {
@@ -1176,18 +1542,21 @@ fn take_packet(buffer: &mut Vec<u8>, max_packet_size: usize) -> Result<Option<Ra
         None => {
             // Either incomplete, or a varint longer than the legal 4 bytes.
             if buffer.len() > 5 {
-                return Err(anyhow::anyhow!("malformed remaining length"));
+                return Err(PacketError::malformed("malformed remaining length"));
             }
             return Ok(None);
         }
     };
 
     if remaining > max_packet_size {
-        return Err(anyhow::anyhow!(
-            "packet of {} bytes exceeds max_packet_size {}",
-            remaining,
-            max_packet_size
-        ));
+        return Err(PacketError {
+            reason: 0x95,
+            message: format!(
+                "packet of {} bytes exceeds max_packet_size {}",
+                remaining, max_packet_size
+            ),
+            v5_connect: false,
+        });
     }
 
     let total = 1 + len_bytes + remaining;
@@ -1256,46 +1625,87 @@ fn decode_payload(bytes: &[u8]) -> (String, bool) {
     }
 }
 
-struct ConnectPacket {
-    protocol_name: String,
-    protocol_level: u8,
-    clean_session: bool,
-    keep_alive: u16,
-    client_id: String,
-    username: Option<String>,
-    has_password: bool,
-    will_topic: Option<String>,
-    will_message: Option<String>,
+/// A decoded CONNECT (3.1.1 §3.1, 5.0 §3.1).
+pub struct ConnectPacket {
+    pub protocol_name: String,
+    pub protocol_level: u8,
+    pub clean_session: bool,
+    pub keep_alive: u16,
+    pub client_id: String,
+    pub username: Option<String>,
+    pub has_password: bool,
+    pub will_topic: Option<String>,
+    pub will_message: Option<String>,
+    /// v5 only; empty on 3.1.1.
+    pub properties: v5::Properties,
+    /// v5 only: the Will Properties that precede the will topic.
+    pub will_properties: v5::Properties,
 }
 
-fn parse_connect(body: &[u8]) -> Option<ConnectPacket> {
+pub fn parse_connect(body: &[u8]) -> std::result::Result<ConnectPacket, PacketError> {
+    let short = || PacketError::malformed("CONNECT is truncated");
     let mut pos = 0usize;
-    let protocol_name = read_string(body, &mut pos)?;
-    let protocol_level = *body.get(pos)?;
+    let protocol_name = read_string(body, &mut pos).ok_or_else(short)?;
+    let protocol_level = *body.get(pos).ok_or_else(short)?;
     pos += 1;
-    let flags = *body.get(pos)?;
+    let v5 = protocol_level == 5;
+    let tag = |mut e: PacketError| {
+        e.v5_connect = v5;
+        e
+    };
+    let flags = *body.get(pos).ok_or_else(short).map_err(tag)?;
     pos += 1;
-    let keep_alive = read_u16_at(body, pos)?;
+    let keep_alive = read_u16_at(body, pos).ok_or_else(short).map_err(tag)?;
     pos += 2;
 
-    let client_id = read_string(body, &mut pos)?;
+    let properties = if v5 {
+        let props = v5::read_properties(body, &mut pos)
+            .map_err(PacketError::from)
+            .map_err(tag)?;
+        v5::forbid(&props, &[v5::SUBSCRIPTION_IDENTIFIER], "CONNECT")
+            .map_err(PacketError::from)
+            .map_err(tag)?;
+        // §3.1.2.11.4: "It is a Protocol Error ... for the value to be set to zero." A limit of
+        // 0 would also leave every packet the broker sends this client unsendable.
+        if props.int(v5::MAXIMUM_PACKET_SIZE) == Some(0) {
+            return Err(tag(PacketError::protocol("maximum packet size 0")));
+        }
+        props
+    } else {
+        v5::Properties::default()
+    };
 
+    let client_id = read_string(body, &mut pos).ok_or_else(short).map_err(tag)?;
+
+    let mut will_properties = v5::Properties::default();
     let (will_topic, will_message) = if flags & 0x04 != 0 {
-        let topic = read_string(body, &mut pos)?;
-        let message = read_bytes(body, &mut pos)?;
+        if v5 {
+            will_properties = v5::read_properties(body, &mut pos)
+                .map_err(PacketError::from)
+                .map_err(tag)?;
+            v5::forbid(
+                &will_properties,
+                &[v5::SUBSCRIPTION_IDENTIFIER],
+                "Will Properties",
+            )
+            .map_err(PacketError::from)
+            .map_err(tag)?;
+        }
+        let topic = read_string(body, &mut pos).ok_or_else(short).map_err(tag)?;
+        let message = read_bytes(body, &mut pos).ok_or_else(short).map_err(tag)?;
         (Some(topic), Some(decode_payload(&message).0))
     } else {
         (None, None)
     };
 
     let username = if flags & 0x80 != 0 {
-        Some(read_string(body, &mut pos)?)
+        Some(read_string(body, &mut pos).ok_or_else(short).map_err(tag)?)
     } else {
         None
     };
     let has_password = flags & 0x40 != 0;
 
-    Some(ConnectPacket {
+    Ok(ConnectPacket {
         protocol_name,
         protocol_level,
         clean_session: flags & 0x02 != 0,
@@ -1305,68 +1715,144 @@ fn parse_connect(body: &[u8]) -> Option<ConnectPacket> {
         has_password,
         will_topic,
         will_message,
+        properties,
+        will_properties,
     })
 }
 
-struct PublishPacket {
-    topic: String,
-    packet_id: u16,
-    payload: Vec<u8>,
+/// A decoded PUBLISH. `topic` is empty when a v5 client used a Topic Alias alone.
+pub struct PublishPacket {
+    pub topic: String,
+    pub packet_id: u16,
+    pub payload: Vec<u8>,
+    pub properties: v5::Properties,
 }
 
-fn parse_publish(body: &[u8], qos: u8) -> Option<PublishPacket> {
+pub fn parse_publish(
+    body: &[u8],
+    qos: u8,
+    v5: bool,
+) -> std::result::Result<PublishPacket, PacketError> {
+    let short = || PacketError::malformed("PUBLISH is truncated");
     let mut pos = 0usize;
-    let topic = read_string(body, &mut pos)?;
+    let topic = read_string(body, &mut pos).ok_or_else(short)?;
     let packet_id = if qos > 0 {
-        let id = read_u16_at(body, pos)?;
+        let id = read_u16_at(body, pos).ok_or_else(short)?;
         pos += 2;
         id
     } else {
         0
     };
-    let payload = body.get(pos..)?.to_vec();
-    Some(PublishPacket {
+    let properties = if v5 {
+        let props = v5::read_properties(body, &mut pos)?;
+        // [MQTT-3.3.4-6]: a PUBLISH from a client MUST NOT carry a Subscription Identifier.
+        v5::forbid(&props, &[v5::SUBSCRIPTION_IDENTIFIER], "a client's PUBLISH")?;
+        props
+    } else {
+        v5::Properties::default()
+    };
+    let payload = body.get(pos..).ok_or_else(short)?.to_vec();
+    Ok(PublishPacket {
         topic,
         packet_id,
         payload,
+        properties,
     })
 }
 
-struct SubscribePacket {
-    packet_id: u16,
-    topics: Vec<(String, u8)>,
+/// v5 Subscription Options (§3.8.3.1). On 3.1.1 only the QoS bits exist and these are false/0.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SubscriptionOptions {
+    pub no_local: bool,
+    pub retain_as_published: bool,
+    pub retain_handling: u8,
 }
 
-fn parse_subscribe(body: &[u8]) -> Option<SubscribePacket> {
+pub struct SubscribePacket {
+    pub packet_id: u16,
+    pub topics: Vec<(String, u8)>,
+    /// One per entry of `topics`.
+    pub options: Vec<SubscriptionOptions>,
+    pub properties: v5::Properties,
+}
+
+pub fn parse_subscribe(body: &[u8], v5: bool) -> std::result::Result<SubscribePacket, PacketError> {
+    let short = || PacketError::malformed("SUBSCRIBE is truncated");
     let mut pos = 0usize;
-    let packet_id = read_u16_at(body, pos)?;
+    let packet_id = read_u16_at(body, pos).ok_or_else(short)?;
     pos += 2;
+    let properties = if v5 {
+        // The one packet a client may put a Subscription Identifier in; `read_properties`
+        // refuses a second one and the value 0 (§3.8.2.1.2) as Protocol Errors.
+        v5::read_properties(body, &mut pos)?
+    } else {
+        v5::Properties::default()
+    };
 
     let mut topics = Vec::new();
+    let mut options = Vec::new();
     while pos < body.len() {
-        let filter = read_string(body, &mut pos)?;
-        let qos = *body.get(pos)? & 0x03;
+        let filter = read_string(body, &mut pos).ok_or_else(short)?;
+        let byte = *body.get(pos).ok_or_else(short)?;
         pos += 1;
+        let qos = byte & 0x03;
+        let mut opts = SubscriptionOptions::default();
+        if v5 {
+            // §3.8.3.1: QoS 3, Retain Handling 3 and the two reserved bits are all
+            // Malformed Packet.
+            if qos == 3 || (byte >> 4) & 0x03 == 3 || byte & 0xC0 != 0 {
+                return Err(PacketError::malformed(format!(
+                    "invalid subscription options byte 0x{byte:02x} for '{filter}'"
+                )));
+            }
+            opts = SubscriptionOptions {
+                no_local: byte & 0x04 != 0,
+                retain_as_published: byte & 0x08 != 0,
+                retain_handling: (byte >> 4) & 0x03,
+            };
+        }
         topics.push((filter, qos));
+        options.push(opts);
     }
-    Some(SubscribePacket { packet_id, topics })
+    Ok(SubscribePacket {
+        packet_id,
+        topics,
+        options,
+        properties,
+    })
 }
 
-struct UnsubscribePacket {
-    packet_id: u16,
-    topics: Vec<String>,
+pub struct UnsubscribePacket {
+    pub packet_id: u16,
+    pub topics: Vec<String>,
+    pub properties: v5::Properties,
 }
 
-fn parse_unsubscribe(body: &[u8]) -> Option<UnsubscribePacket> {
+pub fn parse_unsubscribe(
+    body: &[u8],
+    v5: bool,
+) -> std::result::Result<UnsubscribePacket, PacketError> {
+    let short = || PacketError::malformed("UNSUBSCRIBE is truncated");
     let mut pos = 0usize;
-    let packet_id = read_u16_at(body, pos)?;
+    let packet_id = read_u16_at(body, pos).ok_or_else(short)?;
     pos += 2;
+    let properties = if v5 {
+        let props = v5::read_properties(body, &mut pos)?;
+        v5::forbid(&props, &[v5::SUBSCRIPTION_IDENTIFIER], "UNSUBSCRIBE")?;
+        props
+    } else {
+        v5::Properties::default()
+    };
 
     let mut topics = Vec::new();
     while pos < body.len() {
-        topics.push(read_string(body, &mut pos)?);
+        topics.push(read_string(body, &mut pos).ok_or_else(short)?);
     }
-    Some(UnsubscribePacket { packet_id, topics })
+    Ok(UnsubscribePacket {
+        packet_id,
+        topics,
+        properties,
+    })
 }
 
 // ============================================================================
@@ -1444,4 +1930,125 @@ pub fn build_publish(topic: &str, payload: &str, qos: u8, retain: bool, packet_i
     out.extend_from_slice(&encode_remaining_length(body.len()));
     out.extend_from_slice(&body);
     out
+}
+
+/// Fixed header + remaining length + body.
+fn frame(first_byte: u8, body: &[u8]) -> Vec<u8> {
+    let mut out = vec![first_byte];
+    out.extend_from_slice(&encode_remaining_length(body.len()));
+    out.extend_from_slice(body);
+    out
+}
+
+/// v5 CONNACK (5.0 §3.2): acknowledge flags, reason code, properties.
+pub fn build_connack_v5(reason: u8, session_present: bool, props: &v5::PropertyWriter) -> Vec<u8> {
+    let mut body = vec![u8::from(session_present), reason];
+    body.extend_from_slice(&props.finish());
+    frame(PKT_CONNACK << 4, &body)
+}
+
+/// v5 PUBACK / PUBREC / PUBCOMP (5.0 §3.4–3.7). Reason Code 0x00 with no properties is the
+/// two-byte 3.1.1 form, which §3.4.2.1 allows and every v5 client accepts.
+pub fn build_ack_v5(
+    packet_type: u8,
+    packet_id: u16,
+    reason: u8,
+    props: &v5::PropertyWriter,
+) -> Vec<u8> {
+    if reason == 0 && props.is_empty() {
+        return build_ack(packet_type, packet_id);
+    }
+    let mut body = packet_id.to_be_bytes().to_vec();
+    body.push(reason);
+    body.extend_from_slice(&props.finish());
+    let first = if packet_type == PKT_PUBREL {
+        (packet_type << 4) | 0x02
+    } else {
+        packet_type << 4
+    };
+    frame(first, &body)
+}
+
+/// v5 SUBACK (5.0 §3.9): packet identifier, properties, one reason code per filter.
+pub fn build_suback_v5(packet_id: u16, codes: &[u8], props: &v5::PropertyWriter) -> Vec<u8> {
+    let mut body = packet_id.to_be_bytes().to_vec();
+    body.extend_from_slice(&props.finish());
+    body.extend_from_slice(codes);
+    frame(PKT_SUBACK << 4, &body)
+}
+
+/// v5 UNSUBACK (5.0 §3.11): packet identifier, properties, one reason code per filter. Unlike
+/// 3.1.1's bare identifier, the payload is required.
+pub fn build_unsuback_v5(packet_id: u16, codes: &[u8], props: &v5::PropertyWriter) -> Vec<u8> {
+    let mut body = packet_id.to_be_bytes().to_vec();
+    body.extend_from_slice(&props.finish());
+    body.extend_from_slice(codes);
+    frame(PKT_UNSUBACK << 4, &body)
+}
+
+/// v5 DISCONNECT from the server (5.0 §3.14): reason code and properties.
+pub fn build_disconnect_v5(reason: u8, props: &v5::PropertyWriter) -> Vec<u8> {
+    let mut body = vec![reason];
+    body.extend_from_slice(&props.finish());
+    frame(PKT_DISCONNECT << 4, &body)
+}
+
+/// v5 PUBLISH (5.0 §3.3): the 3.1.1 layout with a property block after the packet identifier.
+pub fn build_publish_v5(
+    topic: &str,
+    payload: &[u8],
+    qos: u8,
+    retain: bool,
+    packet_id: u16,
+    props: &v5::PropertyWriter,
+) -> Vec<u8> {
+    let mut body = Vec::with_capacity(2 + topic.len() + 2 + 8 + payload.len());
+    body.extend_from_slice(&(topic.len() as u16).to_be_bytes());
+    body.extend_from_slice(topic.as_bytes());
+    if qos > 0 {
+        body.extend_from_slice(&packet_id.to_be_bytes());
+    }
+    body.extend_from_slice(&props.finish());
+    body.extend_from_slice(payload);
+    let mut flags = (qos & 0x03) << 1;
+    if retain {
+        flags |= 0x01;
+    }
+    frame((PKT_PUBLISH << 4) | flags, &body)
+}
+
+/// A broker-originated PUBLISH before it is framed: framing depends on the recipient's version,
+/// and one `mqtt_publish` to `"*"` can reach 3.1.1 and v5 clients at once.
+#[derive(Clone, Debug)]
+pub struct OutPublish {
+    pub topic: String,
+    pub payload: String,
+    pub qos: u8,
+    pub retain: bool,
+    pub packet_id: u16,
+    /// v5 properties. A 3.1.1 recipient has no field for them, so they are not sent there.
+    pub properties: v5::PropertyWriter,
+}
+
+impl OutPublish {
+    pub fn encode(&self, v5: bool) -> Vec<u8> {
+        if v5 {
+            build_publish_v5(
+                &self.topic,
+                self.payload.as_bytes(),
+                self.qos,
+                self.retain,
+                self.packet_id,
+                &self.properties,
+            )
+        } else {
+            build_publish(
+                &self.topic,
+                &self.payload,
+                self.qos,
+                self.retain,
+                self.packet_id,
+            )
+        }
+    }
 }

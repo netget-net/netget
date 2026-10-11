@@ -154,6 +154,7 @@ portable-base = [
     "stratum",
     "pulsar",
     "tr069",
+    "sse",
     "wsdiscovery",
     "x11",
     "sflow",
@@ -412,6 +413,7 @@ activitypub = ["dep:rsa", "dep:sha2", "urlencoding"] # ActivityPub instance and 
 stratum = ["dep:sha2"]  # Stratum V1 mining pool and miner (LLM-controlled; shares verified in Rust)
 pulsar = ["dep:prost"]  # Apache Pulsar binary protocol broker and client (LLM-controlled)
 tr069 = ["quick-xml"]  # TR-069 CWMP ACS and CPE (SOAP over HTTP, LLM-controlled)
+sse = []  # Server-sent events (text/event-stream) server and EventSource-style client, hand-rolled HTTP/1.1
 wsdiscovery = ["quick-xml"] # WS-Discovery (SOAP-over-UDP 3702) target service and discovery client, 2005/04 and 2009/01
 x11 = [] # X11 client (X Window System core protocol): windows, properties and events against an X server
 jmap = ["dep:rustls", "dep:tokio-rustls", "dep:rustls-pemfile", "dep:rcgen"] # JMAP (RFC 8620/8621) server and client
@@ -464,7 +466,7 @@ webrtc = ["dep:webrtc", "dep:tokio-tungstenite", "dep:rustls"]  # WebRTC client 
 # the tree for `webrtc`: framing, masking, fragmentation, ping/pong and the close handshake.
 # Bumping that crate is a webrtc-wide decision, so this feature deliberately does not force one.
 # No system library, hence present in dist / dist-windows (and dist-darwin via dist).
-websocket = ["dep:tokio-tungstenite"]
+websocket = ["dep:tokio-tungstenite", "dep:flate2", "flate2/zlib-rs"]
 sip = []  # SIP uses only UDP, no extra deps (manual protocol implementation)
 rtp = []  # RTP (RFC 3550) media server; G.711 synthesis + packetizer, no system library
 rtsp = ["rtp"]  # RTSP (RFC 2326) control server; reuses the rtp media engine for PLAY
@@ -750,6 +752,7 @@ dist-windows = [
     "stratum",
     "pulsar",
     "tr069",
+    "sse",
     "wsdiscovery",
     "x11",
     "sflow",
@@ -986,6 +989,7 @@ all-protocols = [
     "stratum",
     "pulsar",
     "tr069",
+    "sse",
     "wsdiscovery",
     "x11",
     "sflow",
