@@ -95,3 +95,12 @@ Verified by removal both ways: with the pre-split client (connected turn run ins
 before any read loop) the first park fails; with the read loop calling `handle_inbound` inline
 instead of queueing, the second park fails — `left: 0, right: 1` on the live-connection count in
 both cases.
+
+## permessage-deflate: `deflate_real_server_test.rs`
+
+The client against Python websockets 15 and Node ws 8 servers (peers and install as in
+`tests/server/websocket/AGENTS.md`). Python's server defaults impose 12-bit windows; NetGet's
+15 000-byte message repeats at a distance of 5000, so the relay's frame length is itself the
+evidence the window was honoured — compressed (under 15 000 bytes, RSV1 set) but not below half,
+because within 4 KiB the repeats cannot be referenced. Node runs with no context takeover and
+receives two long messages, each compressed from a fresh context. Mutation-checked as above.

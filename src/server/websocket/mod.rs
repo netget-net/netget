@@ -32,6 +32,7 @@
 //! id. Nothing is retained past a disconnect: no message log, no rooms, no subscriptions.
 
 pub mod actions;
+pub mod deflate;
 
 use anyhow::{Context, Result};
 use futures::stream::StreamExt;
@@ -99,6 +100,11 @@ pub const MAX_SIZE_LIMIT: usize = 64 * 1024 * 1024;
 /// watchdog neither pings nor closes while anything is in flight. On expiry the server sends
 /// Close 1001 ("going away", RFC 6455 §7.4.1) and ends the connection.
 pub const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Whether the server accepts a client's RFC 7692 `permessage-deflate` offer. On by default:
+/// browsers offer it on every connection, and accepting is what a WebSocket server does. The
+/// `permessage_deflate` startup parameter turns it off.
+pub const DEFAULT_PERMESSAGE_DEFLATE: bool = true;
 
 /// Concurrent connections this server admits before it starts refusing.
 ///
@@ -373,7 +379,11 @@ pub fn validate_upgrade(head: &RequestHead) -> std::result::Result<String, Upgra
 /// `Sec-WebSocket-Accept` is `base64(SHA-1(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))`,
 /// computed by `tungstenite::handshake::derive_accept_key` — the same crate that then parses
 /// the frames, so there is exactly one implementation of the GUID concatenation in the tree.
-pub fn build_accept_response(key: &str, subprotocol: Option<&str>) -> String {
+pub fn build_accept_response(
+    key: &str,
+    subprotocol: Option<&str>,
+    extensions: Option<&str>,
+) -> String {
     let accept = tokio_tungstenite::tungstenite::handshake::derive_accept_key(key.as_bytes());
     let mut response = String::from("HTTP/1.1 101 Switching Protocols\r\n");
     response.push_str("Upgrade: websocket\r\n");
@@ -381,6 +391,9 @@ pub fn build_accept_response(key: &str, subprotocol: Option<&str>) -> String {
     response.push_str(&format!("Sec-WebSocket-Accept: {accept}\r\n"));
     if let Some(sub) = subprotocol {
         response.push_str(&format!("Sec-WebSocket-Protocol: {sub}\r\n"));
+    }
+    if let Some(ext) = extensions {
+        response.push_str(&format!("Sec-WebSocket-Extensions: {ext}\r\n"));
     }
     response.push_str("\r\n");
     response
@@ -493,6 +506,13 @@ impl WebSocketServer {
     ) -> Result<SocketAddr> {
         // Every parameter read here is declared in `get_startup_parameters()`, and every
         // parameter declared there is read here. Errors are propagated, never unwrapped.
+        let permessage_deflate = match startup_params.as_ref() {
+            Some(params) => params
+                .get_optional_bool("permessage_deflate")
+                .map_err(|e| anyhow::anyhow!("WebSocket startup parameter error: {e}"))?
+                .unwrap_or(DEFAULT_PERMESSAGE_DEFLATE),
+            None => DEFAULT_PERMESSAGE_DEFLATE,
+        };
         let (path_filter, max_message_size, max_frame_size, idle_timeout) =
             match startup_params.as_ref() {
                 Some(params) => {
@@ -593,6 +613,7 @@ impl WebSocketServer {
                                     ws_config,
                                     permit,
                                     idle_timeout,
+                                    permessage_deflate,
                                 )
                                 .await
                                 {
@@ -633,6 +654,7 @@ impl WebSocketServer {
         ws_config: WebSocketConfig,
         permit: Arc<crate::server::accept_bounded::ConnectionPermit>,
         idle_timeout: std::time::Duration,
+        permessage_deflate: bool,
     ) -> Result<()> {
         // ---- 1. read the request head -------------------------------------
         let (head_bytes, leftover) = match tokio::time::timeout(
@@ -787,7 +809,19 @@ impl WebSocketServer {
         };
 
         // ---- 5. write the 101 ----------------------------------------------
-        let response = build_accept_response(&key, subprotocol.as_deref());
+        // RFC 7692 is mechanical, not a decision for the model: accept the first offer this
+        // server can honour, or run uncompressed, which is always allowed.
+        let deflate = if permessage_deflate {
+            deflate::negotiate(head.header_all("sec-websocket-extensions"))
+        } else {
+            None
+        };
+        let response = build_accept_response(
+            &key,
+            subprotocol.as_deref(),
+            deflate.as_ref().map(|(_, value)| value.as_str()),
+        );
+        let deflate = deflate.map(|(params, _)| params);
         trace!("WebSocket 101 response to {}:\n{}", peer_addr, response);
         if let Err(e) = socket.write_all(response.as_bytes()).await {
             debug!("WebSocket failed to write 101 to {}: {}", peer_addr, e);
@@ -807,6 +841,7 @@ impl WebSocketServer {
                     conn.protocol_info = ProtocolConnectionInfo::new(serde_json::json!({
                         "path": path,
                         "subprotocol": subprotocol,
+                        "permessage_deflate": deflate.is_some(),
                         "state": "Open",
                     }));
                 }
@@ -814,23 +849,39 @@ impl WebSocketServer {
             .await;
 
         Log::new(Some(&status_tx)).info(format!(
-            "WebSocket {} open from {} ({}{})",
+            "WebSocket {} open from {} ({}{}{})",
             connection_id,
             peer_addr,
             path,
             subprotocol
                 .as_ref()
                 .map(|s| format!(", subprotocol {s}"))
-                .unwrap_or_default()
+                .unwrap_or_default(),
+            if deflate.is_some() {
+                ", permessage-deflate"
+            } else {
+                ""
+            }
         ));
 
         // ---- 6. hand the upgraded socket to the framing layer ---------------
         // `from_partially_read` rather than `from_raw_socket`: a pipelined client may already
         // have written frames into the same TCP segment as the request head, and those bytes
         // are in `leftover`. Discarding them would silently drop the client's first message.
-        let ws_stream =
-            WebSocketStream::from_partially_read(socket, leftover, Role::Server, Some(ws_config))
-                .await;
+        //
+        // The leftover goes to the deflate layer, not tungstenite: it is frame bytes, and with
+        // the extension on, a compressed first message may already be in it.
+        let max_message = ws_config
+            .max_message_size
+            .unwrap_or(DEFAULT_MAX_MESSAGE_SIZE);
+        let max_frame = ws_config.max_frame_size.unwrap_or(DEFAULT_MAX_FRAME_SIZE);
+        let ws_stream = WebSocketStream::from_partially_read(
+            deflate::DeflateStream::server(socket, deflate, max_message, max_frame, leftover),
+            Vec::new(),
+            Role::Server,
+            Some(ws_config),
+        )
+        .await;
 
         Self::run_connection(
             ws_stream,
@@ -854,6 +905,7 @@ impl WebSocketServer {
             path,
             peer_addr,
             idle_timeout,
+            deflate,
         )
         .await;
 
@@ -991,14 +1043,16 @@ impl WebSocketServer {
     }
 
     /// The post-upgrade loop: writer task, `websocket_connection_opened`, then frames.
+    #[allow(clippy::too_many_arguments)]
     async fn run_connection(
-        ws_stream: WebSocketStream<TcpStream>,
+        ws_stream: WebSocketStream<deflate::DeflateStream<TcpStream>>,
         mut out_rx: mpsc::UnboundedReceiver<WsOut>,
         permit: Arc<crate::server::accept_bounded::ConnectionPermit>,
         ctx: ConnCtx,
         path: String,
         peer_addr: SocketAddr,
         idle_timeout: std::time::Duration,
+        deflate: Option<deflate::DeflateParams>,
     ) {
         let (mut sink, mut stream) = ws_stream.split();
 
@@ -1046,6 +1100,7 @@ impl WebSocketServer {
                 "path": path,
                 "answer_with": actions::OPENED_ANSWER_WITH,
                 "subprotocol": ctx.subprotocol.clone().unwrap_or_default(),
+                "permessage_deflate": deflate.map(|p| p.to_json()),
                 "client_ip": peer_addr.ip().to_string(),
                 "client_port": peer_addr.port(),
             }),
@@ -1173,8 +1228,25 @@ impl WebSocketServer {
                 }
                 Ok(Message::Frame(_)) => {}
                 Err(e) => {
-                    Log::new(Some(&ctx.status_tx))
-                        .debug(format!("WebSocket {} read error: {}", ctx.connection_id, e));
+                    let text = e.to_string();
+                    if text.contains("permessage-deflate") {
+                        // The deflate layer refused the peer's bytes: a message that inflates
+                        // past the limit, or compressed framing RFC 7692 forbids. 1009 is the
+                        // RFC 6455 code for the first; the peer is told before the close.
+                        Log::new(Some(&ctx.status_tx)).warn(format!(
+                            "WebSocket {} closed: {} decision=permessage_deflate_refused",
+                            ctx.connection_id, text
+                        ));
+                        let _ = ctx.out_tx.send(WsOut::Close {
+                            code: 1009,
+                            reason: "message too big".to_string(),
+                        });
+                    } else {
+                        Log::new(Some(&ctx.status_tx)).debug(format!(
+                            "WebSocket {} read error: {}",
+                            ctx.connection_id, text
+                        ));
+                    }
                     break;
                 }
             }

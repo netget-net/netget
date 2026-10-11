@@ -318,7 +318,7 @@ async fn read_http_response(
 #[test]
 fn test_sec_websocket_accept_matches_the_rfc6455_worked_example() {
     let response =
-        ::netget::server::websocket::build_accept_response("dGhlIHNhbXBsZSBub25jZQ==", None);
+        ::netget::server::websocket::build_accept_response("dGhlIHNhbXBsZSBub25jZQ==", None, None);
 
     assert!(
         response.contains("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo="),
@@ -332,6 +332,10 @@ fn test_sec_websocket_accept_matches_the_rfc6455_worked_example() {
         !response.contains("Sec-WebSocket-Protocol"),
         "no subprotocol was chosen, so the header must be absent"
     );
+    assert!(
+        !response.contains("Sec-WebSocket-Extensions"),
+        "no extension was negotiated, so the header must be absent"
+    );
     assert!(response.ends_with("\r\n\r\n"));
 }
 
@@ -340,6 +344,7 @@ fn test_accept_response_echoes_only_a_chosen_subprotocol() {
     let response = ::netget::server::websocket::build_accept_response(
         "dGhlIHNhbXBsZSBub25jZQ==",
         Some("chat"),
+        None,
     );
     assert!(response.contains("Sec-WebSocket-Protocol: chat\r\n"));
 }

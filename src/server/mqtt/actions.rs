@@ -12,8 +12,10 @@ use crate::llm::actions::{
 use crate::protocol::log_template::LogTemplate;
 use crate::protocol::EventType;
 use crate::server::connection::ConnectionId;
+use crate::server::mqtt::v5::{self, PropertyWriter};
 use crate::server::mqtt::{
-    build_ack, build_connack, build_publish, build_suback, PKT_CONNACK, PKT_PUBACK, PKT_PUBLISH,
+    build_ack, build_ack_v5, build_connack, build_connack_v5, build_disconnect_v5, build_suback,
+    build_suback_v5, build_unsuback_v5, OutPublish, PKT_CONNACK, PKT_PUBACK, PKT_PUBLISH,
     PKT_PUBREC, PKT_SUBACK, PKT_UNSUBACK,
 };
 use crate::state::app_state::AppState;
@@ -30,18 +32,24 @@ use tracing::{debug, warn};
 // Live connection directory
 // ============================================================================
 
-/// Senders for the currently connected MQTT clients, keyed by `(server id, client id)`.
+/// Senders for the currently connected MQTT clients, keyed by `(server id, client id)`, each
+/// with whether that client speaks v5 — a PUBLISH is framed per recipient.
 ///
 /// This is a directory of *live sockets*, not storage: nothing is retained after a
 /// client disconnects, and no message, subscription, topic or retained value is ever
 /// held here. It exists so the model can name a recipient for `mqtt_publish`.
-static MQTT_CLIENTS: LazyLock<Mutex<HashMap<(u32, String), mpsc::UnboundedSender<Vec<u8>>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+type Directory = HashMap<(u32, String), (mpsc::UnboundedSender<Vec<u8>>, bool)>;
+static MQTT_CLIENTS: LazyLock<Mutex<Directory>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Record a connected client's writer so actions can address it by client id.
-pub fn register_client(server_id: ServerId, client_id: &str, tx: mpsc::UnboundedSender<Vec<u8>>) {
+pub fn register_client(
+    server_id: ServerId,
+    client_id: &str,
+    tx: mpsc::UnboundedSender<Vec<u8>>,
+    v5: bool,
+) {
     if let Ok(mut map) = MQTT_CLIENTS.lock() {
-        map.insert((server_id.as_u32(), client_id.to_string()), tx);
+        map.insert((server_id.as_u32(), client_id.to_string()), (tx, v5));
     }
 }
 
@@ -66,22 +74,23 @@ pub fn list_clients(server_id: ServerId) -> Vec<String> {
     ids
 }
 
-/// Deliver bytes to one client id, or to every client on the server when
-/// `client_id` is `"*"`. Returns the client ids actually written to.
-fn deliver(server_id: u32, client_id: &str, bytes: &[u8]) -> Vec<String> {
+/// Deliver a PUBLISH to one client id, or to every client on the server when `client_id` is
+/// `"*"`, framed for each recipient's version. Returns `(client id, is v5)` for each client
+/// actually written to.
+fn deliver(server_id: u32, client_id: &str, message: &OutPublish) -> Vec<(String, bool)> {
     let Ok(map) = MQTT_CLIENTS.lock() else {
         return Vec::new();
     };
     let mut delivered = Vec::new();
-    for ((sid, cid), tx) in map.iter() {
+    for ((sid, cid), (tx, v5)) in map.iter() {
         if *sid != server_id {
             continue;
         }
         if client_id != "*" && cid != client_id {
             continue;
         }
-        if tx.send(bytes.to_vec()).is_ok() {
-            delivered.push(cid.clone());
+        if tx.send(message.encode(*v5)).is_ok() {
+            delivered.push((cid.clone(), *v5));
         }
     }
     delivered.sort();
@@ -112,6 +121,17 @@ pub struct MqttProtocol {
     /// cleared: a connection gets exactly one (MQTT 3.1.1 3.2), and a second is a protocol
     /// violation libmosquitto answers by dropping the connection.
     connack_sent: AtomicBool,
+    /// The CONNACK this connection got refused it, so the broker closes after it.
+    connack_refused: AtomicBool,
+    /// The client connected with protocol level 5: acknowledgements carry reason codes and
+    /// properties.
+    v5: AtomicBool,
+    /// Properties every accepting v5 CONNACK carries (assigned client id, maximum packet size,
+    /// topic alias maximum), set by the connection loop before the handler runs.
+    connack_properties: Mutex<PropertyWriter>,
+    /// Filter count of each UNSUBSCRIBE awaiting its UNSUBACK, by packet id: a v5 UNSUBACK
+    /// carries one reason code per filter.
+    pending_unsubscribes: Mutex<HashMap<u16, usize>>,
 }
 
 impl Default for MqttProtocol {
@@ -131,6 +151,10 @@ impl MqttProtocol {
             client_id: RwLock::new(None),
             written_types: AtomicU32::new(0),
             connack_sent: AtomicBool::new(false),
+            connack_refused: AtomicBool::new(false),
+            v5: AtomicBool::new(false),
+            connack_properties: Mutex::new(PropertyWriter::new()),
+            pending_unsubscribes: Mutex::new(HashMap::new()),
         }
     }
 
@@ -149,6 +173,44 @@ impl MqttProtocol {
             client_id: RwLock::new(None),
             written_types: AtomicU32::new(0),
             connack_sent: AtomicBool::new(false),
+            connack_refused: AtomicBool::new(false),
+            v5: AtomicBool::new(false),
+            connack_properties: Mutex::new(PropertyWriter::new()),
+            pending_unsubscribes: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub fn set_v5(&self, v5: bool) {
+        self.v5.store(v5, Ordering::SeqCst);
+    }
+
+    pub fn is_v5(&self) -> bool {
+        self.v5.load(Ordering::SeqCst)
+    }
+
+    pub fn set_connack_properties(&self, props: PropertyWriter) {
+        if let Ok(mut guard) = self.connack_properties.lock() {
+            *guard = props;
+        }
+    }
+
+    pub fn connack_properties(&self) -> PropertyWriter {
+        self.connack_properties
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_default()
+    }
+
+    /// True once this connection was sent a refusing CONNACK.
+    pub fn connack_refused(&self) -> bool {
+        self.connack_refused.load(Ordering::SeqCst)
+    }
+
+    pub fn note_unsubscribe(&self, packet_id: u16, filters: usize) {
+        if let Ok(mut map) = self.pending_unsubscribes.lock() {
+            // Bounded: one entry per packet id in flight, and a client reusing an id replaces
+            // its own entry.
+            map.insert(packet_id, filters);
         }
     }
 
@@ -228,21 +290,74 @@ impl MqttProtocol {
 
     // ---- executors -------------------------------------------------------
 
-    fn execute_connack(&self, action: serde_json::Value) -> Result<ActionResult> {
-        let return_code = action
-            .get("return_code")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-        if return_code > 5 {
-            return Err(anyhow::anyhow!(
-                "return_code {} is not an MQTT 3.1.1 CONNACK code (0=accepted, 1=bad protocol version, 2=client id rejected, 3=server unavailable, 4=bad username/password, 5=not authorized)",
-                return_code
-            ));
+    /// The Reason String and User Properties any v5 acknowledgement may carry.
+    fn ack_properties(action: &serde_json::Value) -> Result<PropertyWriter> {
+        let mut props = PropertyWriter::new();
+        if let Some(text) = action.get("reason_string").and_then(|v| v.as_str()) {
+            if text.len() > usize::from(u16::MAX) {
+                return Err(anyhow::anyhow!("reason_string is longer than 65535 bytes"));
+            }
+            props.text(v5::REASON_STRING, text);
         }
+        for (k, v) in v5::user_properties_from_json(action.get("user_properties"))
+            .map_err(|e| anyhow::anyhow!(e))?
+        {
+            props.pair(&k, &v);
+        }
+        Ok(props)
+    }
+
+    /// An optional `reason_code` checked against one of the v5 tables.
+    fn reason_code(
+        action: &serde_json::Value,
+        key: &str,
+        table: &[(u8, &str)],
+        packet: &str,
+    ) -> Result<Option<u8>> {
+        match action.get(key) {
+            None | Some(serde_json::Value::Null) => Ok(None),
+            Some(v) => {
+                let code = v
+                    .as_u64()
+                    .with_context(|| format!("'{key}' must be an integer reason code"))?;
+                v5::check_reason(code, table, packet)
+                    .map(Some)
+                    .map_err(|e| anyhow::anyhow!(e))
+            }
+        }
+    }
+
+    fn execute_connack(&self, action: serde_json::Value) -> Result<ActionResult> {
+        // Either vocabulary answers either version: a 3.1.1 return code (0-5) or a v5 reason
+        // code. Each is translated to the other's nearest equivalent, and a refusal always
+        // stays a refusal.
+        let v5_code =
+            Self::reason_code(&action, "reason_code", v5::CONNACK_REASON_CODES, "CONNACK")?;
+        let (v311, v5_reason) = match v5_code {
+            Some(code) => (v5::connack_v5_to_v311(code), code),
+            None => {
+                // No default: a CONNACK is an admission decision, and a missing field must not
+                // read as "accepted".
+                let return_code = action
+                    .get("return_code")
+                    .and_then(|v| v.as_u64())
+                    .context(
+                        "Missing 'return_code' (0 accepts; 1-5 refuse) or, for an MQTT 5                          client, 'reason_code'",
+                    )?;
+                if return_code > 5 {
+                    return Err(anyhow::anyhow!(
+                        "return_code {} is not an MQTT 3.1.1 CONNACK code (0=accepted, 1=bad protocol version, 2=client id rejected, 3=server unavailable, 4=bad username/password, 5=not authorized). For an MQTT 5 reason code use reason_code instead",
+                        return_code
+                    ));
+                }
+                (return_code as u8, v5::connack_v311_to_v5(return_code as u8))
+            }
+        };
         let session_present = action
             .get("session_present")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        let mut props = Self::ack_properties(&action)?;
 
         // A connection gets one CONNACK. A model answered one CONNECT with two, and the
         // subscriber dropped the connection as a protocol error before it could subscribe.
@@ -259,43 +374,102 @@ impl MqttProtocol {
             return Ok(ActionResult::NoAction);
         }
 
+        let v5 = self.is_v5();
+        // §3.2.2.1.1: Session Present MUST be 0 on a refusal, in both versions.
+        let session_present = session_present && v311 == 0;
         self.log(format!(
-            "MQTT -> CONNACK rc={} session_present={} to '{}'",
-            return_code,
+            "MQTT -> CONNACK {} session_present={} to '{}'",
+            if v5 {
+                format!(
+                    "reason=0x{v5_reason:02x} ({})",
+                    v5::reason_name(v5_reason, v5::CONNACK_REASON_CODES)
+                )
+            } else {
+                format!("rc={v311}")
+            },
             session_present,
             self.current_client_id().unwrap_or_else(|| "?".into())
         ));
 
-        self.send_to_connection(
-            PKT_CONNACK,
-            build_connack(return_code as u8, session_present),
-        )?;
+        let bytes = if v5 {
+            if v5_reason == 0 {
+                // The broker's own properties first, then whatever the handler added.
+                let mut all = self.connack_properties();
+                all.append(&props);
+                props = all;
+            }
+            build_connack_v5(v5_reason, session_present, &props)
+        } else {
+            build_connack(v311, session_present)
+        };
+        self.send_to_connection(PKT_CONNACK, bytes)?;
         self.connack_sent.store(true, Ordering::SeqCst);
+        if v311 != 0 {
+            self.connack_refused.store(true, Ordering::SeqCst);
+        }
 
         Ok(ActionResult::Custom {
             name: "mqtt_connack".to_string(),
-            data: json!({ "return_code": return_code, "session_present": session_present }),
+            data: json!({
+                "return_code": v311,
+                "reason_code": v5_reason,
+                "protocol_version": if v5 { "5.0" } else { "3.1.1" },
+                "session_present": session_present
+            }),
+        })
+    }
+
+    /// PUBACK and PUBREC share everything but the packet type.
+    fn execute_publish_ack(
+        &self,
+        action: serde_json::Value,
+        packet_type: u8,
+        name: &str,
+    ) -> Result<ActionResult> {
+        let packet_id = Self::require_packet_id(&action)?;
+        let reason =
+            Self::reason_code(&action, "reason_code", v5::PUBACK_REASON_CODES, name)?.unwrap_or(0);
+        let label = if packet_type == PKT_PUBACK {
+            "PUBACK"
+        } else {
+            "PUBREC"
+        };
+        let bytes = if self.is_v5() {
+            build_ack_v5(
+                packet_type,
+                packet_id,
+                reason,
+                &Self::ack_properties(&action)?,
+            )
+        } else {
+            // 3.1.1's acknowledgement is the identifier and nothing else, and it means "taken".
+            // A failure code cannot be said, and sending the bare form instead would say the
+            // opposite of what the handler meant.
+            if reason >= 0x80 {
+                return Err(anyhow::anyhow!(
+                    "this client speaks MQTT 3.1.1, whose {label} has no reason code: \
+                     reason_code {reason} cannot be sent. Acknowledge without it, or refuse \
+                     the message with close_this_connection"
+                ));
+            }
+            build_ack(packet_type, packet_id)
+        };
+        self.log(format!(
+            "MQTT -> {label} id={packet_id} reason=0x{reason:02x}"
+        ));
+        self.send_to_connection(packet_type, bytes)?;
+        Ok(ActionResult::Custom {
+            name: name.to_string(),
+            data: json!({ "packet_id": packet_id, "reason_code": reason }),
         })
     }
 
     fn execute_puback(&self, action: serde_json::Value) -> Result<ActionResult> {
-        let packet_id = Self::require_packet_id(&action)?;
-        self.log(format!("MQTT -> PUBACK id={}", packet_id));
-        self.send_to_connection(PKT_PUBACK, build_ack(PKT_PUBACK, packet_id))?;
-        Ok(ActionResult::Custom {
-            name: "mqtt_puback".to_string(),
-            data: json!({ "packet_id": packet_id }),
-        })
+        self.execute_publish_ack(action, PKT_PUBACK, "mqtt_puback")
     }
 
     fn execute_pubrec(&self, action: serde_json::Value) -> Result<ActionResult> {
-        let packet_id = Self::require_packet_id(&action)?;
-        self.log(format!("MQTT -> PUBREC id={}", packet_id));
-        self.send_to_connection(PKT_PUBREC, build_ack(PKT_PUBREC, packet_id))?;
-        Ok(ActionResult::Custom {
-            name: "mqtt_pubrec".to_string(),
-            data: json!({ "packet_id": packet_id }),
-        })
+        self.execute_publish_ack(action, PKT_PUBREC, "mqtt_pubrec")
     }
 
     fn execute_suback(&self, action: serde_json::Value) -> Result<ActionResult> {
@@ -305,18 +479,16 @@ impl MqttProtocol {
             .and_then(|v| v.as_array())
             .context("Missing 'granted_qos'. Provide one entry per topic filter in the subscribe event: 0, 1 or 2 to grant that QoS, or 128 to refuse the subscription")?;
 
+        let v5 = self.is_v5();
         let mut codes = Vec::with_capacity(granted.len());
         for value in granted {
             let code = value
                 .as_u64()
                 .context("granted_qos entries must be integers (0, 1, 2 or 128)")?;
-            if !matches!(code, 0 | 1 | 2 | 128) {
-                return Err(anyhow::anyhow!(
-                    "granted_qos entry {} is invalid: use 0, 1 or 2 to grant, 128 to refuse",
-                    code
-                ));
-            }
-            codes.push(code as u8);
+            let code = v5::check_reason(code, v5::SUBACK_REASON_CODES, "SUBACK")
+                .map_err(|e| anyhow::anyhow!("granted_qos entry: {e}"))?;
+            // 3.1.1 has one failure code, 0x80; every v5 refusal is that refusal there.
+            codes.push(if !v5 && code >= 0x80 { 0x80 } else { code });
         }
         if codes.is_empty() {
             return Err(anyhow::anyhow!(
@@ -328,7 +500,12 @@ impl MqttProtocol {
             "MQTT -> SUBACK id={} granted={:?}",
             packet_id, codes
         ));
-        self.send_to_connection(PKT_SUBACK, build_suback(packet_id, &codes))?;
+        let bytes = if v5 {
+            build_suback_v5(packet_id, &codes, &Self::ack_properties(&action)?)
+        } else {
+            build_suback(packet_id, &codes)
+        };
+        self.send_to_connection(PKT_SUBACK, bytes)?;
 
         Ok(ActionResult::Custom {
             name: "mqtt_suback".to_string(),
@@ -338,12 +515,152 @@ impl MqttProtocol {
 
     fn execute_unsuback(&self, action: serde_json::Value) -> Result<ActionResult> {
         let packet_id = Self::require_packet_id(&action)?;
-        self.log(format!("MQTT -> UNSUBACK id={}", packet_id));
-        self.send_to_connection(PKT_UNSUBACK, build_ack(PKT_UNSUBACK, packet_id))?;
+        let pending = self
+            .pending_unsubscribes
+            .lock()
+            .ok()
+            .and_then(|mut m| m.remove(&packet_id));
+        let codes: Vec<u8> = match action.get("reason_codes").and_then(|v| v.as_array()) {
+            Some(list) => list
+                .iter()
+                .map(|v| {
+                    let code = v
+                        .as_u64()
+                        .context("reason_codes entries must be integers")?;
+                    v5::check_reason(code, v5::UNSUBACK_REASON_CODES, "UNSUBACK")
+                        .map_err(|e| anyhow::anyhow!(e))
+                })
+                .collect::<Result<_>>()?,
+            None => vec![0x00; pending.unwrap_or(1).max(1)],
+        };
+        if let Some(n) = pending {
+            if codes.len() != n {
+                return Err(anyhow::anyhow!(
+                    "reason_codes has {} entries but the UNSUBSCRIBE named {} topic filter(s); \
+                     give one per filter, in order",
+                    codes.len(),
+                    n
+                ));
+            }
+        }
+        let bytes = if self.is_v5() {
+            build_unsuback_v5(packet_id, &codes, &Self::ack_properties(&action)?)
+        } else {
+            if codes.iter().any(|c| *c >= 0x80) {
+                return Err(anyhow::anyhow!(
+                    "this client speaks MQTT 3.1.1, whose UNSUBACK has no reason code and \
+                     means the subscriptions were removed; a refusal cannot be sent. \
+                     Acknowledge it, or use close_this_connection"
+                ));
+            }
+            build_ack(PKT_UNSUBACK, packet_id)
+        };
+        self.log(format!(
+            "MQTT -> UNSUBACK id={} codes={:?}",
+            packet_id, codes
+        ));
+        self.send_to_connection(PKT_UNSUBACK, bytes)?;
         Ok(ActionResult::Custom {
             name: "mqtt_unsuback".to_string(),
-            data: json!({ "packet_id": packet_id }),
+            data: json!({ "packet_id": packet_id, "reason_codes": codes }),
         })
+    }
+
+    fn execute_close(&self, action: serde_json::Value) -> Result<ActionResult> {
+        // v5 lets the server say why (§3.14); 3.1.1 has no server DISCONNECT, so there the
+        // close is the whole message. The writer drains this before the socket closes.
+        if self.is_v5() && self.out_tx.is_some() {
+            let reason = Self::reason_code(
+                &action,
+                "reason_code",
+                v5::DISCONNECT_REASON_CODES,
+                "DISCONNECT",
+            )?
+            .unwrap_or(0x00);
+            let props = Self::ack_properties(&action)?;
+            self.log(format!(
+                "MQTT -> DISCONNECT reason=0x{reason:02x} ({})",
+                v5::reason_name(reason, v5::DISCONNECT_REASON_CODES)
+            ));
+            self.send_to_connection(
+                crate::server::mqtt::PKT_DISCONNECT,
+                build_disconnect_v5(reason, &props),
+            )?;
+        }
+        Ok(ActionResult::CloseConnection)
+    }
+
+    /// The v5 PUBLISH properties an `mqtt_publish` may set.
+    fn publish_properties(action: &serde_json::Value) -> Result<PropertyWriter> {
+        let mut props = PropertyWriter::new();
+        if let Some(v) = action
+            .get("payload_format_indicator")
+            .and_then(|v| v.as_u64())
+        {
+            if v > 1 {
+                return Err(anyhow::anyhow!(
+                    "payload_format_indicator is 0 (unspecified bytes) or 1 (UTF-8 text)"
+                ));
+            }
+            props.byte(v5::PAYLOAD_FORMAT_INDICATOR, v as u8);
+        }
+        if let Some(v) = action
+            .get("message_expiry_interval")
+            .and_then(|v| v.as_u64())
+        {
+            let v = u32::try_from(v)
+                .map_err(|_| anyhow::anyhow!("message_expiry_interval is at most 4294967295"))?;
+            props.u32(v5::MESSAGE_EXPIRY_INTERVAL, v);
+        }
+        for (key, id) in [
+            ("content_type", v5::CONTENT_TYPE),
+            ("response_topic", v5::RESPONSE_TOPIC),
+        ] {
+            if let Some(v) = action.get(key).and_then(|v| v.as_str()) {
+                if v.len() > usize::from(u16::MAX) {
+                    return Err(anyhow::anyhow!("{key} is longer than 65535 bytes"));
+                }
+                if key == "response_topic" && (v.contains('+') || v.contains('#')) {
+                    return Err(anyhow::anyhow!(
+                        "response_topic is a topic name, so it cannot contain '+' or '#'"
+                    ));
+                }
+                props.text(id, v);
+            }
+        }
+        if let Some(v) = action.get("correlation_data").and_then(|v| v.as_str()) {
+            let bytes = v5::text_to_binary(
+                v,
+                action
+                    .get("correlation_data_encoding")
+                    .and_then(|e| e.as_str()),
+            )
+            .map_err(|e| anyhow::anyhow!("correlation_data: {e}"))?;
+            if bytes.len() > usize::from(u16::MAX) {
+                return Err(anyhow::anyhow!(
+                    "correlation_data is longer than 65535 bytes"
+                ));
+            }
+            props.binary(v5::CORRELATION_DATA, &bytes);
+        }
+        if let Some(v) = action
+            .get("subscription_identifier")
+            .and_then(|v| v.as_u64())
+        {
+            if v == 0 || v > u64::from(v5::VARINT_MAX) {
+                return Err(anyhow::anyhow!(
+                    "subscription_identifier is 1 to 268435455 (copy it from the subscribe \
+                     event's properties)"
+                ));
+            }
+            props.varint(v5::SUBSCRIPTION_IDENTIFIER, v as u32);
+        }
+        for (k, v) in v5::user_properties_from_json(action.get("user_properties"))
+            .map_err(|e| anyhow::anyhow!(e))?
+        {
+            props.pair(&k, &v);
+        }
+        Ok(props)
     }
 
     /// `mqtt_publish` (sync) and `mqtt_publish_to_client` (async) share this body.
@@ -384,14 +701,23 @@ impl MqttProtocol {
                 .unwrap_or(0)
                 .min(u16::MAX as u64) as u16
         };
+        let properties = Self::publish_properties(&action)?;
+        let has_properties = !properties.is_empty();
 
-        let bytes = build_publish(topic, &payload, qos as u8, retain, packet_id);
+        let message = OutPublish {
+            topic: topic.to_string(),
+            payload,
+            qos: qos as u8,
+            retain,
+            packet_id,
+            properties,
+        };
 
         let target = action.get(target_key).and_then(|v| v.as_str());
-        match target {
+        let (delivered, v5_flags): (Vec<Option<String>>, Vec<bool>) = match target {
             Some(client) => {
                 let server_id = self.require_server_id(&action)?;
-                let delivered = deliver(server_id, client, &bytes);
+                let delivered = deliver(server_id, client, &message);
                 if delivered.is_empty() {
                     warn!(
                         "MQTT publish to '{}' on server {} matched no connected client",
@@ -404,20 +730,7 @@ impl MqttProtocol {
                         list_clients(ServerId::new(server_id))
                     ));
                 }
-                self.log(format!(
-                    "MQTT -> PUBLISH topic='{}' qos={} to {:?}",
-                    topic, qos, delivered
-                ));
-                Ok(ActionResult::Custom {
-                    name: "mqtt_publish".to_string(),
-                    data: json!({
-                        "topic": topic,
-                        "qos": qos,
-                        "retain": retain,
-                        "packet_id": packet_id,
-                        "delivered_to": delivered,
-                    }),
-                })
+                delivered.into_iter().map(|(c, v)| (Some(c), v)).unzip()
             }
             None => {
                 if require_target {
@@ -426,25 +739,39 @@ impl MqttProtocol {
                         target_key
                     ));
                 }
-                self.log(format!(
-                    "MQTT -> PUBLISH topic='{}' qos={} to '{}'",
-                    topic,
-                    qos,
-                    self.current_client_id().unwrap_or_else(|| "?".into())
-                ));
-                self.send_to_connection(PKT_PUBLISH, bytes)?;
-                Ok(ActionResult::Custom {
-                    name: "mqtt_publish".to_string(),
-                    data: json!({
-                        "topic": topic,
-                        "qos": qos,
-                        "retain": retain,
-                        "packet_id": packet_id,
-                        "delivered_to": [self.current_client_id()],
-                    }),
-                })
+                let v5 = self.is_v5();
+                self.send_to_connection(PKT_PUBLISH, message.encode(v5))?;
+                (vec![self.current_client_id()], vec![v5])
             }
+        };
+        // A 3.1.1 recipient has no field for v5 properties. Saying so beats a model wondering
+        // why its Response Topic never arrived.
+        let dropped_for: Vec<&Option<String>> = delivered
+            .iter()
+            .zip(v5_flags.iter())
+            .filter(|(_, v5)| has_properties && !**v5)
+            .map(|(c, _)| c)
+            .collect();
+        self.log(format!(
+            "MQTT -> PUBLISH topic='{}' qos={} to {:?}",
+            topic, qos, delivered
+        ));
+        let mut data = json!({
+            "topic": topic,
+            "qos": qos,
+            "retain": retain,
+            "packet_id": packet_id,
+            "delivered_to": delivered,
+        });
+        if !dropped_for.is_empty() {
+            data["properties_not_sent_to"] = json!(dropped_for);
+            data["properties_not_sent_reason"] =
+                json!("these clients speak MQTT 3.1.1, which has no PUBLISH properties");
         }
+        Ok(ActionResult::Custom {
+            name: "mqtt_publish".to_string(),
+            data,
+        })
     }
 
     fn execute_list_clients(&self, action: serde_json::Value) -> Result<ActionResult> {
@@ -541,7 +868,10 @@ impl Protocol for MqttProtocol {
         ProtocolMetadataV2::builder()
             .state(DevelopmentState::Beta)
             .well_known_port(1883)
-            .implementation("Hand-written MQTT 3.1.1 control-packet codec (no broker crate)")
+            .implementation(
+                "Hand-written MQTT 3.1.1 and 5.0 control-packet codec (no broker crate); the \
+                 version is the client's, from its CONNECT",
+            )
             .llm_control(
                 "CONNACK return code, SUBACK granted QoS, PUBACK/PUBREC for QoS>0 publishes, \
                  and broker-originated PUBLISH to any named connected client",
@@ -559,13 +889,27 @@ impl Protocol for MqttProtocol {
                  publishes on a second connection, and the broker-originated PUBLISH is routed \
                  to the subscriber by client id, with mosquitto_sub's own '-v' output -- topic \
                  AND payload, printed only after libmosquitto parsed the packet -- asserted. \
-                 UNPROVEN by either: MQTT v5, TLS/8883, WebSocket transport, QoS 1 and 2 flows \
+                 MQTT 5.0 has its own two: tests/server/mqtt/v5_real_client_test.rs drives \
+                 mosquitto_sub/mosquitto_pub at -V 5 (Content Type, Response Topic, \
+                 Correlation Data, User Property and Message Expiry forwarded and printed by \
+                 libmosquitto; CONNACK and SUBACK 0x87 reported by it) and Eclipse Paho's \
+                 Python client at MQTTv5 (Assigned Client Identifier, mixed SUBACK [1, 0x87] \
+                 with Reason String, binary Correlation Data echoed byte for byte, Topic Alias, \
+                 PUBACK 0x87, UNSUBACK 0x11, server DISCONNECT 0x98) - both fail rather than \
+                 skip; v5_wire_test.rs pins the bytes and runs the pcap oracle over them. \
+                 UNPROVEN: TLS/8883, WebSocket transport, QoS 1 and 2 flows \
                  end to end, retained messages, wildcard filter matching, last-will delivery, \
                  session resume, and keep-alive reaping -- the broker implements no \
                  subscription table, no retained store and no keep-alive timer.",
             )
             .notes(
-                "MQTT 3.1.1 only (no v5, no TLS, no WebSocket). PINGREQ/PINGRESP and \
+                "MQTT 3.1.1 and 5.0 (no TLS, no WebSocket). On a v5 connection every \
+                 acknowledgement takes a reason code and a Reason String / User Properties, \
+                 events carry the decoded properties (binary Correlation Data as text or hex), \
+                 the CONNACK advertises Maximum Packet Size and Topic Alias Maximum 16 and \
+                 assigns an id to a client that sent none, Topic Aliases are resolved, and \
+                 protocol errors end with a DISCONNECT naming the reason. Enhanced \
+                 authentication (AUTH) and session state are not implemented. PINGREQ/PINGRESP and \
                  PUBREL/PUBCOMP are answered by the broker without a model call. There is no \
                  subscription table or retained-message store: the model tracks subscriptions \
                  in its memory and names recipients explicitly in mqtt_publish, so nothing is \
@@ -577,7 +921,7 @@ impl Protocol for MqttProtocol {
     }
 
     fn description(&self) -> &'static str {
-        "MQTT 3.1.1 broker for IoT messaging"
+        "MQTT 3.1.1 and 5.0 broker for IoT messaging"
     }
 
     fn example_prompt(&self) -> &'static str {
@@ -689,7 +1033,7 @@ impl Server for MqttProtocol {
             "mqtt_publish" => self.execute_publish(action, "to_client_id", false),
             "mqtt_publish_to_client" => self.execute_publish(action, "client_id", true),
             "list_mqtt_clients" => self.execute_list_clients(action),
-            "close_this_connection" => Ok(ActionResult::CloseConnection),
+            "close_this_connection" => self.execute_close(action),
             // The dashboard's "disconnect this peer" injects {"type":"close_connection"}.
             // Not offered to the model (close_this_connection is its verb); this arm exists
             // so the generic peer command task half-closes the shared write half on it.
@@ -703,11 +1047,90 @@ impl Server for MqttProtocol {
 // Action definitions
 // ============================================================================
 
+/// `reason_string` and `user_properties`, which every v5 acknowledgement may carry.
+fn ack_property_parameters() -> Vec<Parameter> {
+    vec![
+        Parameter {
+            name: "reason_string".to_string(),
+            type_hint: "string".to_string(),
+            description: "MQTT 5 clients only: human-readable text explaining the reason code,                           shown by the client. Not sent to a 3.1.1 client, which has no field                           for it."
+                .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "user_properties".to_string(),
+            type_hint: "array".to_string(),
+            description: "MQTT 5 clients only: name/value pairs, as [[\"name\", \"value\"], ...] \
+                          or {\"name\": \"value\"}. Not sent to a 3.1.1 client."
+                .to_string(),
+            required: false,
+        },
+    ]
+}
+
+/// The v5 PUBLISH properties `mqtt_publish` and `mqtt_publish_to_client` accept.
+fn publish_property_parameters() -> Vec<Parameter> {
+    let p = |name: &str, type_hint: &str, description: &str| Parameter {
+        name: name.to_string(),
+        type_hint: type_hint.to_string(),
+        description: description.to_string(),
+        required: false,
+    };
+    vec![
+        p(
+            "content_type",
+            "string",
+            "MQTT 5 recipients only: MIME type of the payload, e.g. 'application/json'.",
+        ),
+        p(
+            "response_topic",
+            "string",
+            "MQTT 5 recipients only: topic the recipient should publish its reply to \
+             (request/response). A topic name, no wildcards.",
+        ),
+        p(
+            "correlation_data",
+            "string",
+            "MQTT 5 recipients only: data the replier echoes back so the requester can match \
+             the reply. To answer a request, copy properties.correlation_data from the event.",
+        ),
+        p(
+            "correlation_data_encoding",
+            "string",
+            "\"utf8\" (default) or \"hex\": how correlation_data is written. Copy \
+             properties.correlation_data_encoding from the event when echoing one.",
+        ),
+        p(
+            "message_expiry_interval",
+            "integer",
+            "MQTT 5 recipients only: seconds after which the message should be discarded.",
+        ),
+        p(
+            "payload_format_indicator",
+            "integer",
+            "MQTT 5 recipients only: 1 says the payload is UTF-8 text, 0 that it is bytes.",
+        ),
+        p(
+            "subscription_identifier",
+            "integer",
+            "MQTT 5 recipients only: the identifier the recipient gave the subscription this \
+             message matches (from the subscribe event's properties), so it can route it.",
+        ),
+        p(
+            "user_properties",
+            "array",
+            "MQTT 5 recipients only: application name/value pairs, as \
+             [[\"name\", \"value\"], ...] or {\"name\": \"value\"}.",
+        ),
+    ]
+}
+
 pub fn mqtt_connack_action() -> ActionDefinition {
     ActionDefinition {
         name: "mqtt_connack".to_string(),
         description: "Answer a client's CONNECT. Every MQTT connection needs exactly one CONNACK \
-                      before the client will send anything else."
+                      before the client will send anything else. Give return_code (works for \
+                      both MQTT versions) or, for an MQTT 5 client, reason_code."
             .to_string(),
         parameters: vec![
             Parameter {
@@ -715,9 +1138,22 @@ pub fn mqtt_connack_action() -> ActionDefinition {
                 type_hint: "integer".to_string(),
                 description: "0 = accept the client. Refusals: 1 unacceptable protocol version, \
                               2 client id rejected, 3 server unavailable, 4 bad username or \
-                              password, 5 not authorized. Any refusal closes the connection."
+                              password, 5 not authorized. Any refusal closes the connection. \
+                              An MQTT 5 client receives the matching reason code."
                     .to_string(),
-                required: true,
+                required: false,
+            },
+            Parameter {
+                name: "reason_code".to_string(),
+                type_hint: "integer".to_string(),
+                description: "MQTT 5 reason code instead of return_code: 0 accepts; refusals \
+                              include 133 (0x85) client id not valid, 134 (0x86) bad user name \
+                              or password, 135 (0x87) not authorized, 136 (0x88) server \
+                              unavailable, 137 (0x89) server busy, 138 (0x8A) banned, 140 \
+                              (0x8C) bad authentication method. A 3.1.1 client gets the nearest \
+                              3.1.1 code."
+                    .to_string(),
+                required: false,
             },
             Parameter {
                 name: "session_present".to_string(),
@@ -728,7 +1164,10 @@ pub fn mqtt_connack_action() -> ActionDefinition {
                     .to_string(),
                 required: false,
             },
-        ],
+        ]
+        .into_iter()
+        .chain(ack_property_parameters())
+        .collect(),
         example: json!({"type": "mqtt_connack", "return_code": 0}),
         log_template: Some(
             LogTemplate::new()
@@ -759,11 +1198,17 @@ pub fn mqtt_suback_action() -> ActionDefinition {
                 type_hint: "array".to_string(),
                 description: "One integer per topic filter in the event's topics list, in the \
                               same order: 0, 1 or 2 to grant that maximum QoS, or 128 to refuse \
-                              that single subscription."
+                              that single subscription. An MQTT 5 client can also be told why: \
+                              135 not authorized, 143 topic filter invalid, 151 quota exceeded, \
+                              158 shared subscriptions not supported, 162 wildcards not \
+                              supported (a 3.1.1 client receives 128 for each)."
                     .to_string(),
                 required: true,
             },
-        ],
+        ]
+        .into_iter()
+        .chain(ack_property_parameters())
+        .collect(),
         example: json!({"type": "mqtt_suback", "packet_id": 10, "granted_qos": [0]}),
         log_template: Some(
             LogTemplate::new()
@@ -779,12 +1224,28 @@ pub fn mqtt_puback_action() -> ActionDefinition {
         description: "Acknowledge a QoS 1 PUBLISH. Without it the client republishes the message \
                       forever. Do not send it for a QoS 0 publish."
             .to_string(),
-        parameters: vec![Parameter {
-            name: "packet_id".to_string(),
-            type_hint: "integer".to_string(),
-            description: "Copy packet_id from the mqtt_publish event verbatim.".to_string(),
-            required: true,
-        }],
+        parameters: vec![
+            Parameter {
+                name: "packet_id".to_string(),
+                type_hint: "integer".to_string(),
+                description: "Copy packet_id from the mqtt_publish event verbatim.".to_string(),
+                required: true,
+            },
+            Parameter {
+                name: "reason_code".to_string(),
+                type_hint: "integer".to_string(),
+                description: "MQTT 5 clients only: 0 success (default), 16 (0x10) no matching \
+                              subscribers, or a refusal - 128 unspecified error, 135 not \
+                              authorized, 144 topic name invalid, 151 quota exceeded, 153 \
+                              payload format invalid. A refusal cannot be sent to a 3.1.1 \
+                              client; close_this_connection is the only refusal there."
+                    .to_string(),
+                required: false,
+            },
+        ]
+        .into_iter()
+        .chain(ack_property_parameters())
+        .collect(),
         example: json!({"type": "mqtt_puback", "packet_id": 42}),
         log_template: Some(
             LogTemplate::new()
@@ -800,12 +1261,28 @@ pub fn mqtt_pubrec_action() -> ActionDefinition {
         description: "Acknowledge a QoS 2 PUBLISH (first half of the handshake). The broker \
                       answers the client's following PUBREL with PUBCOMP on its own."
             .to_string(),
-        parameters: vec![Parameter {
-            name: "packet_id".to_string(),
-            type_hint: "integer".to_string(),
-            description: "Copy packet_id from the mqtt_publish event verbatim.".to_string(),
-            required: true,
-        }],
+        parameters: vec![
+            Parameter {
+                name: "packet_id".to_string(),
+                type_hint: "integer".to_string(),
+                description: "Copy packet_id from the mqtt_publish event verbatim.".to_string(),
+                required: true,
+            },
+            Parameter {
+                name: "reason_code".to_string(),
+                type_hint: "integer".to_string(),
+                description: "MQTT 5 clients only: 0 success (default), 16 (0x10) no matching \
+                              subscribers, or a refusal - 128 unspecified error, 135 not \
+                              authorized, 144 topic name invalid, 151 quota exceeded, 153 \
+                              payload format invalid. A refusal cannot be sent to a 3.1.1 \
+                              client; close_this_connection is the only refusal there."
+                    .to_string(),
+                required: false,
+            },
+        ]
+        .into_iter()
+        .chain(ack_property_parameters())
+        .collect(),
         example: json!({"type": "mqtt_pubrec", "packet_id": 42}),
         log_template: Some(
             LogTemplate::new()
@@ -820,12 +1297,27 @@ pub fn mqtt_unsuback_action() -> ActionDefinition {
         name: "mqtt_unsuback".to_string(),
         description: "Answer a client's UNSUBSCRIBE. Required: the client blocks until it arrives."
             .to_string(),
-        parameters: vec![Parameter {
-            name: "packet_id".to_string(),
-            type_hint: "integer".to_string(),
-            description: "Copy packet_id from the mqtt_unsubscribe event verbatim.".to_string(),
-            required: true,
-        }],
+        parameters: vec![
+            Parameter {
+                name: "packet_id".to_string(),
+                type_hint: "integer".to_string(),
+                description: "Copy packet_id from the mqtt_unsubscribe event verbatim.".to_string(),
+                required: true,
+            },
+            Parameter {
+                name: "reason_codes".to_string(),
+                type_hint: "array".to_string(),
+                description: "MQTT 5 clients only: one code per topic filter, in order - 0 \
+                              removed (the default for every filter), 17 (0x11) no such \
+                              subscription existed, 135 not authorized, 143 topic filter \
+                              invalid. A 3.1.1 UNSUBACK has no codes."
+                    .to_string(),
+                required: false,
+            },
+        ]
+        .into_iter()
+        .chain(ack_property_parameters())
+        .collect(),
         example: json!({"type": "mqtt_unsuback", "packet_id": 11}),
         log_template: Some(
             LogTemplate::new()
@@ -895,7 +1387,10 @@ pub fn mqtt_publish_action() -> ActionDefinition {
                     .to_string(),
                 required: false,
             },
-        ],
+        ]
+        .into_iter()
+        .chain(publish_property_parameters())
+        .collect(),
         example: json!({
             "type": "mqtt_publish",
             "to_client_id": "dashboard",
@@ -914,10 +1409,23 @@ pub fn mqtt_publish_action() -> ActionDefinition {
 pub fn close_this_connection_action() -> ActionDefinition {
     ActionDefinition {
         name: "close_this_connection".to_string(),
-        description: "Drop the current MQTT connection without a further packet. MQTT has no \
-                      server-side disconnect message in 3.1.1, so this is how a client is ejected."
+        description: "Drop the current MQTT connection. An MQTT 5 client is first sent a \
+                      DISCONNECT carrying reason_code; MQTT 3.1.1 has no server-side disconnect \
+                      message, so a 3.1.1 client is simply ejected."
             .to_string(),
-        parameters: vec![],
+        parameters: vec![Parameter {
+            name: "reason_code".to_string(),
+            type_hint: "integer".to_string(),
+            description: "MQTT 5 clients only: why the connection ends - 0 normal \
+                          (default), 128 unspecified error, 130 protocol error, 135 not \
+                          authorized, 137 server busy, 139 server shutting down, 142 session \
+                          taken over, 152 administrative action, 156 use another server."
+                .to_string(),
+            required: false,
+        }]
+        .into_iter()
+        .chain(ack_property_parameters())
+        .collect(),
         example: json!({"type": "close_this_connection"}),
         log_template: Some(
             LogTemplate::new()
@@ -979,7 +1487,10 @@ pub fn mqtt_publish_to_client_action() -> ActionDefinition {
                 description: "Identifier 1-65535, required when qos is 1 or 2.".to_string(),
                 required: false,
             },
-        ],
+        ]
+        .into_iter()
+        .chain(publish_property_parameters())
+        .collect(),
         example: json!({
             "type": "mqtt_publish_to_client",
             "server_id": 1,
@@ -1083,9 +1594,43 @@ pub static MQTT_CONNECT_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         Parameter {
             name: "protocol_level".to_string(),
             type_hint: "integer".to_string(),
-            description: "4 for MQTT 3.1.1, 5 for MQTT 5.0 (only 3.1.1 is implemented)."
+            description: "4 for MQTT 3.1.1, 5 for MQTT 5.0. The broker answers in the client's \
+                          version."
                 .to_string(),
             required: true,
+        },
+        Parameter {
+            name: "protocol_version".to_string(),
+            type_hint: "string".to_string(),
+            description: "\"3.1.1\" or \"5.0\", the same as protocol_level in words.".to_string(),
+            required: true,
+        },
+        Parameter {
+            name: "properties".to_string(),
+            type_hint: "object".to_string(),
+            description: "MQTT 5 only: CONNECT properties, e.g. session_expiry_interval, \
+                          receive_maximum, maximum_packet_size, user_properties ([[name, value], \
+                          ...]) and authentication_method. Enhanced authentication is not \
+                          supported: refuse a CONNECT naming an authentication_method with \
+                          reason_code 140."
+                .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "will_properties".to_string(),
+            type_hint: "object".to_string(),
+            description: "MQTT 5 only: properties of the last-will message (will_delay_interval, \
+                          content_type, response_topic, ...)."
+                .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "assigned_client_id".to_string(),
+            type_hint: "boolean".to_string(),
+            description: "MQTT 5 only: true when the client sent an empty client id and the \
+                          broker assigned client_id; the CONNACK tells the client."
+                .to_string(),
+            required: false,
         },
         Parameter {
             name: "will_topic".to_string(),
@@ -1191,6 +1736,17 @@ pub static MQTT_PUBLISH_EVENT: LazyLock<EventType> = LazyLock::new(|| {
                 .to_string(),
             required: true,
         },
+        Parameter {
+            name: "properties".to_string(),
+            type_hint: "object".to_string(),
+            description: "MQTT 5 only: the message's properties - content_type, response_topic \
+                          and correlation_data (+ correlation_data_encoding) for \
+                          request/response, message_expiry_interval, payload_format_indicator, \
+                          user_properties as [[name, value], ...]. A topic alias is already \
+                          resolved into topic. Pass these on to mqtt_publish when forwarding."
+                .to_string(),
+            required: false,
+        },
     ])
     .with_actions(vec![
         MQTT_PUBACK_ACTION.clone(),
@@ -1234,9 +1790,20 @@ pub static MQTT_SUBSCRIBE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             name: "topics".to_string(),
             type_hint: "array".to_string(),
             description: "Requested subscriptions, in order: [{\"filter\": \"home/#\", \
-                          \"qos\": 1}]. granted_qos must have one entry per element."
+                          \"qos\": 1}]. granted_qos must have one entry per element. MQTT 5 \
+                          entries also carry no_local, retain_as_published and retain_handling \
+                          (0 send retained messages, 1 only for a new subscription, 2 never)."
                 .to_string(),
             required: true,
+        },
+        Parameter {
+            name: "properties".to_string(),
+            type_hint: "object".to_string(),
+            description: "MQTT 5 only: subscription_identifiers (echo one as \
+                          subscription_identifier on messages you deliver for this \
+                          subscription) and user_properties."
+                .to_string(),
+            required: false,
         },
         Parameter {
             name: "answer_with".to_string(),
@@ -1285,6 +1852,12 @@ pub static MQTT_UNSUBSCRIBE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             type_hint: "array".to_string(),
             description: "Topic filters being removed, as strings.".to_string(),
             required: true,
+        },
+        Parameter {
+            name: "properties".to_string(),
+            type_hint: "object".to_string(),
+            description: "MQTT 5 only: the UNSUBSCRIBE's user_properties.".to_string(),
+            required: false,
         },
     ])
     .with_actions(vec![
