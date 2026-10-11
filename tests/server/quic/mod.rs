@@ -13,3 +13,6 @@ mod certificate_validation_test;
 
 #[cfg(all(test, feature = "quic"))]
 mod state_contention_test;
+
+#[cfg(all(test, feature = "quic"))]
+mod datagram_test;

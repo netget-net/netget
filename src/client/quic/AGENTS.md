@@ -31,3 +31,14 @@ response with FIN; it is not an interactive append API.
 
 Maturity: Experimental. See `tests/client/quic/AGENTS.md` for independent aioquic
 1.3.0 evidence and setup. The Rust transport is quinn 0.11/rustls.
+
+## DATAGRAM (RFC 9221)
+
+`send_quic_datagram` (data + encoding, at most 1500 bytes and the connection's limit) sends an
+unreliable DATAGRAM frame; the outcome is `Executed` once Quinn queued it, or an error naming
+the peer's limit. Incoming DATAGRAM frames raise `quic_datagram_received` (data, encoding,
+bytes) as a new handler turn at depth 0 — a datagram cannot be correlated with anything sent,
+so the follow-up depth bound does not reach it, and a handler that answers every datagram of
+an echoing peer loops at the speed of its handler. While the 32 handler slots are full, the
+run loop stops reading datagrams and Quinn's 64 KiB buffer drops the oldest.
+`quic_connected` carries `max_datagram_size` (null when the server did not negotiate RFC 9221).

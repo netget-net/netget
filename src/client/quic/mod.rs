@@ -14,7 +14,10 @@ use crate::state::{
     AccessLogOwner, ClientStatus,
 };
 use crate::utils::quic::*;
-use actions::{QuicClientProtocol, QUIC_CONNECTED_EVENT, QUIC_ERROR_EVENT, QUIC_RESPONSE_EVENT};
+use actions::{
+    QuicClientProtocol, QUIC_CONNECTED_EVENT, QUIC_DATAGRAM_EVENT, QUIC_ERROR_EVENT,
+    QUIC_RESPONSE_EVENT,
+};
 use anyhow::{ensure, Context, Result};
 use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
 use serde_json::{json, Value};
@@ -62,7 +65,10 @@ impl QuicClient {
             ctx.clone(),
             Event::new(
                 &QUIC_CONNECTED_EVENT,
-                json!({"remote_addr":ctx.remote_addr}),
+                json!({
+                    "remote_addr": ctx.remote_addr,
+                    "max_datagram_size": connection.0.max_datagram_size(),
+                }),
             ),
             0,
         ));
@@ -85,7 +91,7 @@ impl QuicClient {
                         Ok(actions) if actions.len() <= MAX_STREAMS => {
                             for action in actions {
                                 if depth >= MAX_FOLLOWUP_DEPTH && action["type"] != "disconnect" {
-                                    if action["type"] == "send_quic_data" { Log::new(Some(&ctx.status_tx)).warn("QUIC follow-up limit reached"); }
+                                    if action["type"] == "send_quic_data" || action["type"] == "send_quic_datagram" { Log::new(Some(&ctx.status_tx)).warn("QUIC follow-up limit reached"); }
                                     continue;
                                 }
                                 if enqueue(&ctx,&connection.0,exchange,&mut queries,action,None,depth).await { disconnect = true; break; }
@@ -94,6 +100,20 @@ impl QuicClient {
                         Ok(_) => Log::new(Some(&ctx.status_tx)).warn("QUIC handler returned more than 32 actions"),
                         Err(e) => Log::new(Some(&ctx.status_tx)).warn(format!("QUIC event handler failed: {e}")),
                     }
+                }
+                // An RFC 9221 DATAGRAM: one more handler turn. While the handler set is full,
+                // datagrams wait in Quinn's bounded buffer and the oldest are dropped there.
+                datagram = connection.0.read_datagram(), if handlers.len() < MAX_STREAMS => {
+                    let Ok(datagram) = datagram else { break; };
+                    let (data, encoding) = crate::server::quic::actions::encode_quic_payload(&datagram);
+                    handlers.push(handle_event(
+                        ctx.clone(),
+                        Event::new(
+                            &QUIC_DATAGRAM_EVENT,
+                            json!({"data":data,"encoding":encoding,"bytes":datagram.len()}),
+                        ),
+                        0,
+                    ));
                 }
                 _ = connection.0.closed() => break,
             }
@@ -166,6 +186,27 @@ async fn enqueue(
             Ok(ClientSendOutcome::Executed {
                 detail: "Waiting for more queries".into(),
             })
+        }
+        Ok(ClientActionResult::Custom { name, data })
+            if name == crate::server::quic::actions::DATAGRAM_RESULT =>
+        {
+            match data.as_str().and_then(|h| hex::decode(h).ok()) {
+                Some(bytes) => {
+                    let n = bytes.len();
+                    connection
+                        .send_datagram(bytes::Bytes::from(bytes))
+                        .map(|()| ClientSendOutcome::Executed {
+                            detail: format!("QUIC datagram of {n} bytes sent"),
+                        })
+                        .map_err(|e| {
+                            anyhow::anyhow!(
+                                "QUIC datagram of {n} bytes not sent (peer limit {:?}): {e}",
+                                connection.max_datagram_size()
+                            )
+                        })
+                }
+                None => Err(anyhow::anyhow!("QUIC datagram payload was not hex")),
+            }
         }
         Ok(ClientActionResult::Custom { name, data }) if name == "quic_exchange" => {
             if queries.len() >= MAX_STREAMS {

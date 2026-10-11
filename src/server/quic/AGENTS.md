@@ -38,7 +38,7 @@ Backend errors reset streams with application-local codes: unavailable 0x0102,
 overload 0x0107. These numeric values preserve existing raw peer compatibility;
 they do not imply HTTP/3 semantics. Internal error strings are only logged.
 Cancellation uses application code 3. No request_filter, server-initiated streams,
-unidirectional streams, DATAGRAM, 0-RTT, or HTTP/3 framing is implemented.
+unidirectional streams, 0-RTT, or HTTP/3 framing is implemented.
 
 The server retains its existing Beta rating. Existing Quinn tests cover text and
 binary echo, custom responses, concurrent streams and backend failure. An
@@ -51,3 +51,24 @@ QUIC uses `extract_required_tls_config_from_params`, the mandatory-TLS form of
 the shared certificate extractor. SAN arrays must contain strings; malformed
 entries fail with their index before binding. Certificate lifetime and
 certificate/key pairing use the same checks as the other TLS protocols.
+
+## DATAGRAM (RFC 9221)
+
+`utils::quic::transport` advertises datagram support (Quinn's `max_datagram_frame_size`)
+with a 64 KiB receive and send buffer (`DATAGRAM_BUFFER_BYTES`). A DATAGRAM frame from the
+peer raises `quic_datagram_received` with `data`, `encoding` (utf8 for printable text,
+otherwise hex — the same pair `send_quic_data` uses), `bytes` and `max_datagram_size`, the
+largest payload the peer accepts. Its only action is `send_quic_datagram`, which executes to
+`ActionResult::Custom { name: "quic_datagram", data: <hex> }`; `QuicServer::handle_datagram`
+sends that as a DATAGRAM on the same connection and logs, rather than sends, one over the
+peer's limit. The executor refuses a payload over 1500 bytes outright (`MAX_DATAGRAM_BYTES`).
+
+Each connection runs **one datagram turn at a time**: `read_datagram` is not polled while a
+turn is in flight, so a fast sender's datagrams wait in Quinn's bounded buffer and the oldest
+are dropped there. That is RFC 9221's own semantics for an unreliable frame, and it is the only
+bound a sender cannot outrun. A datagram the backend could not answer is silence, logged with
+`decision=fail_closed_llm_error` / `_overloaded` / `fail_closed_timeout`: answering a datagram
+is optional, so there is no wire refusal to send.
+
+Evidence: `tests/server/quic/datagram_test.rs` — aioquic 1.3.0 and quic-go 0.54 each send a
+text and a binary datagram and receive the handler's answers. See `tests/server/quic/AGENTS.md`.
