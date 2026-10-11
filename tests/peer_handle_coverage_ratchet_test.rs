@@ -36,7 +36,7 @@
 //! nothing notices — this repository has the class recorded several times over. So most
 //! reasons here are a **key with a source marker**, and the test asserts the marker is still
 //! present in that protocol's `mod.rs`. If `openai` stops serving through hyper, its reason
-//! stops being true and the build fails, rather than the file quietly lying. The five entries
+//! stops being true and the build fails, rather than the file quietly lying. The six entries
 //! reviewed by hand carry [`Reason::Reviewed`] and their argument is in the table below, which
 //! is the only kind of entry a reader has to take on trust.
 //!
@@ -164,7 +164,7 @@ impl Reason {
 /// **May only shrink.** Adopting the handle means deleting the line; a line left behind for a
 /// protocol that has one fails the test.
 ///
-/// The five [`Reason::Reviewed`] entries were each read in the September 2026 pass and refused
+/// The six [`Reason::Reviewed`] entries were each read (five in the September 2026 pass, `dns` in October) and refused
 /// for a specific reason, which is recorded here because no marker can carry it:
 ///
 /// * **`dot`** — DNS over TLS frames every message with a two-byte length prefix that the
@@ -172,6 +172,10 @@ impl Reason {
 ///   `peer_support` writing it verbatim would desynchronise the connection permanently. And an
 ///   unsolicited DNS response carries a transaction id no resolver is waiting on, so there is
 ///   nothing useful to send even if the framing were right.
+/// * **`dns`** (October 2026, when DNS gained TCP) — the `dot` argument exactly: the
+///   connection loop writes each message behind its two-byte length, `DnsProtocol`'s `Output`
+///   is a bare message, and an unsolicited answer carries a transaction id no client is
+///   waiting on. A zone transfer is several messages to one query, framed the same way.
 /// * **`llmnr`** — declares `.connectionless()`, so `AppState::cleanup_old_connections` evicts
 ///   its connection rows after ten seconds of silence *by design*. A handle would be registered
 ///   against a row the sweep is about to remove. Its TCP reply is length-prefixed by the
@@ -204,6 +208,7 @@ const NO_PEER_HANDLE_BASELINE: &[(&str, Reason)] = &[
     ("couchdb", Reason::HyperOwnsSocket),
     ("docker", Reason::HyperOwnsSocket),
     ("doh", Reason::HyperOwnsSocket),
+    ("dns", Reason::Reviewed),
     ("dot", Reason::Reviewed),
     ("dynamo", Reason::HyperOwnsSocket),
     ("elasticsearch", Reason::HyperOwnsSocket),

@@ -1288,11 +1288,24 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            bind9-dnsutils knot-dnsutils redis-tools redis-server nginx
+            bind9-dnsutils knot-dnsutils redis-tools redis-server nginx \
+            bind9 bind9-utils ldnsutils
           # Not decoration: these fail the step when a package silently stopped shipping
           # the binary, which is a clearer signal than three test failures later on.
           dig -v
           kdig -V
+          # dns is in CI_FEATURES: server::dns::dnssec_test validates with delv and drill and
+          # verifies a signed zone with ldns-verify-zone and dnssec-verify, and
+          # client::dns::real_server_test runs named unprivileged from a temp dir — which
+          # Ubuntu's AppArmor profile for /usr/sbin/named forbids, so it is unloaded, and the
+          # packaged service is stopped so it holds no port.
+          sudo systemctl stop named || true
+          if [ -f /etc/apparmor.d/usr.sbin.named ]; then
+            sudo apparmor_parser -R /etc/apparmor.d/usr.sbin.named || true
+          fi
+          named -v
+          delv -v
+          command -v drill ldns-verify-zone dnssec-verify
           redis-cli --version
           redis-server --version
           # server::redis::resp3_test's second RESP3 client (redis-py, protocol=3).

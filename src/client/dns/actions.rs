@@ -40,7 +40,9 @@ pub static DNS_CLIENT_ZONE_TRANSFER_EVENT: LazyLock<EventType> = LazyLock::new(|
         Parameter {
             name: "transfer_type".to_string(),
             type_hint: "string".to_string(),
-            description: "AXFR or IXFR".to_string(),
+            description: "\"AXFR\" when the whole zone was asked for, \"IXFR\" when the \
+                changes since a serial were; 'form' says what actually came back"
+                .to_string(),
             required: true,
         },
         Parameter {
@@ -219,7 +221,11 @@ fn zone_transfer_action() -> ActionDefinition {
             },
         ],
         example: json!({"type": "send_dns_zone_transfer", "zone": "example.com."}),
-        log_template: None,
+        log_template: Some(
+            crate::protocol::log_template::LogTemplate::new()
+                .with_info("DNS transfer {zone}")
+                .with_debug("DNS send_dns_zone_transfer {zone} serial={serial}"),
+        ),
     }
 }
 

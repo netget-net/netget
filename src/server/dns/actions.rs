@@ -1090,7 +1090,11 @@ fn send_dns_records_action() -> ActionDefinition {
             Parameter {
                 name: "answers".to_string(),
                 type_hint: "array".to_string(),
-                description: "Answer records".to_string(),
+                description: "The records that answer the question, each an object with \
+                    'type' and its fields; a record without 'name' takes the queried domain. \
+                    Leave empty (with NOERROR) when the name exists but has no record of this \
+                    type"
+                    .to_string(),
                 required: false,
             },
             Parameter {
