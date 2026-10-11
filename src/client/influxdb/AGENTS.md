@@ -1,4 +1,4 @@
-# InfluxDB v2 write emitter
+# InfluxDB v2 write emitter and query client
 
 HTTP-only logical session, one fresh HTTP/1.1 TCP exchange per typed write. Use ordinary
 client event handlers, memory and command injection. Poll the HTTP connection driver inside
@@ -8,8 +8,8 @@ handler and an in-flight exchange. Validate the whole batch before opening a soc
 The token is a startup credential only, never an action field/event/access-log value. Emit
 `Authorization: Token ...`, `/api/v2/write?org=...&bucket=...&precision=...`, text/plain UTF-8,
 and identity/gzip. Require empty 204 success or bounded typed JSON error; expose HTTP status,
-partial-write counts/line and numeric Retry-After without retries. No TLS, redirects, query
-API, durable queue, HTTP-date retry advice or server persistence claims.
+partial-write counts/line and numeric Retry-After without retries. No TLS, redirects,
+durable queue, HTTP-date retry advice or server persistence claims.
 
 Independent receiver uses unmodified InfluxData line-protocol v2.2.1 decoder inside a small
 test HTTP adapter which validates route/query/auth/encoding/response semantics. It is a
@@ -26,3 +26,21 @@ busy is rejected atomically. The logical local address is0.0.0.0:0, because TCP 
 for a write. Standard shared memory refreshes per event; HTTP failures raise typed events
 and keep the logical session open. Malformed/oversized responses or transport errors close
 the session without retries. Disconnect/removal drops the live HTTP driver/socket future.
+
+## Queries (`query.rs`)
+
+`query_influx_flux` (`org`, `query`) posts to `/api/v2/query` asking for the three annotations,
+and `query_influxql` (`query`, `db`, `rp`, `epoch`) issues `GET /query` — on InfluxDB 2 the
+database is a bucket's DBRP mapping, and every bucket has a virtual one. The answer is one
+`influx_query_response` event, and **the model never sees CSV**: `read_flux` splits RFC 4180
+records (quoted commas, doubled quotes, line breaks), reads each block's `#datatype`, `#group`
+and `#default`, converts each cell by its datatype (`long` → integer, `boolean` → boolean, an
+empty cell → the column default or `null`) and groups rows into tables by `result`/`table`.
+InfluxQL's v1 JSON is passed through series by series. A non-2xx answer is `{code, message}`
+from either error shape. A 2xx answer that cannot be read — wrong type, malformed CSV, or a
+Flux failure reported in-band as an `error` table after the status line — is an error event,
+not a closed session.
+
+An event carries at most 1000 rows and 64 tables, with `row_count`, `reported_rows` and
+`truncated` saying what was left out. The answer body is capped at 4 MiB and the exchange at
+30 s. Query and write share the one-request-in-flight rule and the follow-up depth bound.
