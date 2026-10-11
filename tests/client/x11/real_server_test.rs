@@ -68,9 +68,19 @@ pub async fn xvfb(extra: &[&str]) -> (RealServer, u16) {
             .await;
         match started {
             Ok(server) => return (server, display),
+            // How a lost race for the display reads depends on which socket Xvfb lost it on:
+            // the lock file ("already active"), the TCP port ("Address already in use"), or
+            // every listener at once ("Cannot establish any listening sockets", which Xvfb
+            // prefixes with "server already running").
             Err(e)
-                if e.to_string().contains("already active")
-                    || e.to_string().contains("Address already in use") =>
+                if [
+                    "already active",
+                    "Address already in use",
+                    "server already running",
+                    "Cannot establish any listening sockets",
+                ]
+                .iter()
+                .any(|lost| e.to_string().contains(lost)) =>
             {
                 continue
             }
