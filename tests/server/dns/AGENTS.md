@@ -2,7 +2,8 @@
 
 ## Test Overview
 
-**Five files, 13 tests**, and the two that carry the maturity rating are the ones this
+**Nine files, 27 tests** since October 2026 (four files and 14 tests added for TCP, EDNS,
+transfers and DNSSEC; see the second table). Before that it was **five files, 13 tests**, and the two that carry the maturity rating are the ones this
 overview used to omit. It described only `test.rs` — "uses hickory-client (real DNS client)
 for protocol correctness" — which is the circular half of the suite and the reason `dig_test.rs`
 had to be written.
@@ -14,6 +15,20 @@ had to be written.
 | `llm_failure_test.rs` | raw `UdpSocket` + pcap oracle | both fail-closed paths, and that `ignore_query` stays silence |
 | `bounds_test.rs` | raw `UdpSocket` + the executor | every declared bound, each verified by removal; the pcap oracle over a NOERROR answer |
 | `test.rs` | hickory-client | A, TXT, multi-domain, NXDOMAIN — **circular**, see "Client Library" below |
+
+The October 2026 files run the server **in-process with a script handler** (`zone_support.rs`)
+playing an authoritative server for `example.com.` — 611 records with 600 fillers, so an AXFR
+needs two messages — so no model is involved and every count is exact:
+
+| file | what drives it | what it is for |
+|---|---|---|
+| `transfer_test.rs` | `dig` and `kdig` | AXFR (SOA first and last, every record once, two messages), IXFR difference and "current", REFUSED for another zone, TC and the retry over TCP, the OPT record, NS/SOA/SRV/PTR via `send_dns_records`, NXDOMAIN with the SOA |
+| `dnssec_test.rs` | `delv`, `drill`, `ldns-verify-zone`, `dnssec-verify` | validated positive, NXDOMAIN and NODATA answers against a trust anchor built from the served DNSKEY; a signed AXFR verified whole, one NSEC per owner name |
+| `transport_bounds_test.rs` | raw UDP/TCP + pcap oracle | every new bound (the table in its header) |
+| `zone_support.rs` | — | the in-process server, the zone handler, and `dig`/`kdig`/`run` helpers that fail naming the package |
+
+`dnssec-verify` runs with `-z` because the server signs with one key (flags 257) acting as KSK
+and ZSK; without it BIND reports "Missing ZSK" before checking a signature.
 
 ## Test Strategy
 
@@ -42,6 +57,7 @@ had to be written.
 | `llm_failure_test::…_black_hole` | 1 | 2 | **3** |
 | `bounds_test::…_receive_buffer…` | 1 | 1 | **2** |
 | `bounds_test::` (four executor tests) | 0 | 0 | **0** |
+| `transfer_test`, `dnssec_test`, `transport_bounds_test` (14 tests) | 0 | script handler | **0** |
 
 This table used to give a single total of 9 and list five tests. The count drifts every time a
 file is added, which is the argument for a per-test table rather than a number: **derive it**
