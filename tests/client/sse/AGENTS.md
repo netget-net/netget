@@ -11,3 +11,15 @@
   retried (the server's log shows no further request).
 
 Mutation-checked: dropping the model's actions leaves the client connected and fails both.
+
+`framing_bounds_test.rs`, no LLM calls (static handlers disconnect on `sse_stream_ended`), no
+peer to install: a 127.0.0.1 listener in the test never ends a line.
+
+- `HTTP/1.1 200 ` then 1 MiB with no newline: the client stops at `MAX_HEAD_BYTES` and reports
+  `sse_stream_ended {reason: error}` naming the head bound.
+- A chunked event stream whose chunk-size line is 64 KiB of `f`: the client stops at
+  `MAX_CHUNK_LINE_BYTES` and reports `reason: error` naming the chunk-size line, with no
+  `reconnecting_in_ms`.
+
+Both must finish within 15 s, half the client's 30 s I/O deadline, so a bound that only fired
+at the deadline fails them, and both assert the server saw exactly one connection.

@@ -14,24 +14,150 @@ use crate::state::server::{ConnectionState, ConnectionStatus, ProtocolConnection
 use anyhow::Result;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
+use std::future::Future;
 use std::net::SocketAddr;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
+use std::task::{Context, Poll};
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, WriteHalf};
+use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt, WriteHalf};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 
 /// A request head at most.
 pub const MAX_REQUEST_HEAD_BYTES: usize = 16 * 1024;
 /// How long a request head may take to arrive.
 pub const HEAD_TIMEOUT: Duration = Duration::from_secs(10);
 pub const MAX_KEEPALIVE_SECS: u64 = 3600;
+/// How long one write to a connection may make no progress, and how long a broadcast, an
+/// injected event or a keepalive may take to reach one open stream (waiting for its writer
+/// included). A stream that misses it is dropped: removed from the broadcast table, its write
+/// side shut down, its connection ended.
+pub const SUBSCRIBER_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
-type Writer = Arc<Mutex<WriteHalf<TcpStream>>>;
+type Writer = Arc<Mutex<StreamWriter>>;
+
+/// Marks a stream that missed `SUBSCRIBER_WRITE_TIMEOUT`. Every later write to it fails at once,
+/// and its connection task, waiting on `notify`, ends the connection.
+#[derive(Default)]
+struct Stall {
+    tripped: AtomicBool,
+    notify: Notify,
+}
+
+impl Stall {
+    fn trip(&self) {
+        if !self.tripped.swap(true, Ordering::SeqCst) {
+            self.notify.notify_one();
+        }
+    }
+
+    fn is_tripped(&self) -> bool {
+        self.tripped.load(Ordering::SeqCst)
+    }
+}
+
+fn stalled_error() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::TimedOut,
+        format!(
+            "the peer took no bytes for {}s",
+            SUBSCRIBER_WRITE_TIMEOUT.as_secs()
+        ),
+    )
+}
+
+/// A connection's write half that fails a write making no progress for
+/// `SUBSCRIBER_WRITE_TIMEOUT` and trips the connection's `Stall`. Every writer of the
+/// connection goes through it — the request's own answer, broadcasts, keepalives and the
+/// generic peer-command task that writes injected events — so a peer that stops reading holds
+/// none of them longer than that.
+pub struct StreamWriter {
+    inner: WriteHalf<TcpStream>,
+    stall: Arc<Stall>,
+    deadline: Option<Pin<Box<tokio::time::Sleep>>>,
+}
+
+impl StreamWriter {
+    fn guard<T>(&mut self, cx: &mut Context<'_>, poll: Poll<std::io::Result<T>>) -> Poll<std::io::Result<T>> {
+        match poll {
+            Poll::Ready(r) => {
+                self.deadline = None;
+                Poll::Ready(r)
+            }
+            Poll::Pending => {
+                let sleep = self
+                    .deadline
+                    .get_or_insert_with(|| Box::pin(tokio::time::sleep(SUBSCRIBER_WRITE_TIMEOUT)));
+                if sleep.as_mut().poll(cx).is_ready() {
+                    self.deadline = None;
+                    self.stall.trip();
+                    return Poll::Ready(Err(stalled_error()));
+                }
+                Poll::Pending
+            }
+        }
+    }
+}
+
+impl AsyncWrite for StreamWriter {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let this = self.get_mut();
+        if this.stall.is_tripped() {
+            return Poll::Ready(Err(stalled_error()));
+        }
+        let poll = Pin::new(&mut this.inner).poll_write(cx, buf);
+        this.guard(cx, poll)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        if this.stall.is_tripped() {
+            return Poll::Ready(Err(stalled_error()));
+        }
+        let poll = Pin::new(&mut this.inner).poll_flush(cx);
+        this.guard(cx, poll)
+    }
+
+    /// Passes through even on a tripped stream: shutting the write side is how one is ended.
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        let poll = Pin::new(&mut this.inner).poll_shutdown(cx);
+        this.guard(cx, poll)
+    }
+}
 
 struct Subscriber {
     path: String,
     writer: Writer,
+    stall: Arc<Stall>,
+}
+
+/// Writes `bytes` to one stream within `SUBSCRIBER_WRITE_TIMEOUT`, waiting for its writer
+/// included. `false` means the stream missed it or failed; the caller drops it.
+async fn deliver(writer: &Writer, bytes: &[u8]) -> bool {
+    let write = async {
+        let mut w = writer.lock().await;
+        w.write_all(bytes).await?;
+        w.flush().await
+    };
+    matches!(
+        tokio::time::timeout(SUBSCRIBER_WRITE_TIMEOUT, write).await,
+        Ok(Ok(()))
+    )
+}
+
+/// Shuts a dropped stream's write side, bounded like any other write to it.
+async fn shut(writer: &Writer) {
+    let _ = tokio::time::timeout(SUBSCRIBER_WRITE_TIMEOUT, async {
+        writer.lock().await.shutdown().await
+    })
+    .await;
 }
 
 /// Every open stream of every running SSE server, by the server's bound address (unique among
@@ -58,8 +184,11 @@ impl Drop for HubGuard {
     }
 }
 
-/// Send already-encoded event bytes to every open stream of a server (optionally one path).
-/// Returns how many streams took them.
+/// Send already-encoded event bytes to every open stream of a server (optionally one path),
+/// to all of them at once. Returns how many streams took them. A stream that misses
+/// `SUBSCRIBER_WRITE_TIMEOUT` or fails is removed from the table here and its connection
+/// ended, so one peer that stops reading costs a broadcast at most that long and the others
+/// still get it.
 pub async fn broadcast(
     state: &crate::state::app_state::AppState,
     server_id: crate::state::ServerId,
@@ -69,19 +198,27 @@ pub async fn broadcast(
     let Some(addr) = state.get_server(server_id).await.and_then(|s| s.local_addr) else {
         return 0;
     };
-    let writers: Vec<Writer> = {
-        let hub = hub(addr);
+    let hub = hub(addr);
+    let targets: Vec<(u32, Writer, Arc<Stall>)> = {
         let subs = hub.lock().await;
-        subs.values()
-            .filter(|s| path.is_none_or(|p| s.path == p))
-            .map(|s| s.writer.clone())
+        subs.iter()
+            .filter(|(_, s)| path.is_none_or(|p| s.path == p))
+            .map(|(id, s)| (*id, s.writer.clone(), s.stall.clone()))
             .collect()
     };
+    let results = futures::future::join_all(targets.into_iter().map(|(id, writer, stall)| async move {
+        let ok = deliver(&writer, bytes).await;
+        (id, ok, stall)
+    }))
+    .await;
     let mut delivered = 0;
-    for writer in writers {
-        let mut w = writer.lock().await;
-        if w.write_all(bytes).await.is_ok() && w.flush().await.is_ok() {
+    for (id, ok, stall) in results {
+        if ok {
             delivered += 1;
+        } else {
+            hub.lock().await.remove(&id);
+            stall.trip();
+            tracing::warn!("SSE stream {id} dropped: a broadcast did not reach it");
         }
     }
     delivered
@@ -281,7 +418,12 @@ async fn connection(
     keepalive: Duration,
 ) -> Result<()> {
     let (mut reader, writer) = tokio::io::split(socket);
-    let writer: Writer = Arc::new(Mutex::new(writer));
+    let stall = Arc::new(Stall::default());
+    let writer: Writer = Arc::new(Mutex::new(StreamWriter {
+        inner: writer,
+        stall: stall.clone(),
+        deadline: None,
+    }));
     let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];
     let deadline = tokio::time::Instant::now() + HEAD_TIMEOUT;
@@ -427,6 +569,7 @@ async fn connection(
             Subscriber {
                 path: req.path.clone(),
                 writer: writer.clone(),
+                stall: stall.clone(),
             },
         );
         let commands = crate::server::peer_support::register_peer_channel(
@@ -474,10 +617,16 @@ async fn connection(
                     Ok(_) => {}
                 }
             }
+            _ = stall.notify.notified() => {
+                outcome(ctx, id, &req.path, "fail_closed_subscriber_stalled");
+                hub(addr).lock().await.remove(&id.as_u32());
+                shut(&writer).await;
+                return Ok(());
+            }
             _ = tick.tick() => {
-                let mut w = writer.lock().await;
-                if w.write_all(b": keepalive\n\n").await.is_err() || w.flush().await.is_err() {
-                    return Ok(());
+                if !deliver(&writer, b": keepalive\n\n").await {
+                    // Ended by the stall branch on the next turn, like any other missed write.
+                    stall.trip();
                 }
             }
         }

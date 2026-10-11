@@ -16,4 +16,14 @@ answer or another content type is a refusal (`reason: refused`) and is not retri
 client then waits for the handler or an injected action to reconnect or stop. Handler-asked
 reconnects with no event in between stop after 8.
 
+Every framing line is read through a byte limit, so a server that never sends a newline costs
+a bounded buffer: the response head is at most 32 KiB (`MAX_HEAD_BYTES`) and must be complete
+within 30 s (`IO_TIMEOUT`); a chunk-size line and the CRLF after a chunk's data are at most
+1 KiB each (`MAX_CHUNK_LINE_BYTES`). A chunk-size line may take as long as the server is idle
+to begin, then has 30 s to finish; a chunk's CRLF has 30 s from the end of its data. Chunked
+state lives in the body, so a line read interrupted by an injected command resumes. Broken
+framing (an overlong line, a bad size, a missing CRLF, a line deadline) ends the stream with
+`sse_stream_ended {reason: error, error}` and is not reconnected by itself; a transport error
+(a reset) is treated as a close and reconnects like one.
+
 Not implemented: https, redirects, custom request headers or credentials.

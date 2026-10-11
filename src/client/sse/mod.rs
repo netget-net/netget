@@ -10,7 +10,7 @@ use crate::server::sse::wire::Parser;
 use crate::state::client_handles::{ClientCommand, ClientSendOutcome};
 use crate::state::{AccessLogOwner, ClientStatus};
 pub use actions::SseClientProtocol;
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 use serde_json::{json, Value};
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -29,6 +29,9 @@ pub const MAX_RETRY: Duration = Duration::from_secs(60);
 /// A response head at most, and how long it may take.
 pub const MAX_HEAD_BYTES: usize = 32 * 1024;
 pub const IO_TIMEOUT: Duration = Duration::from_secs(30);
+/// A chunk-size line, or the line ending a chunk's data, at most. Once its first byte has
+/// arrived it must be complete within `IO_TIMEOUT`.
+pub const MAX_CHUNK_LINE_BYTES: usize = 1024;
 /// Model-requested reconnects in a row (no event in between) before the chain is stopped.
 pub const MAX_FOLLOWUP_DEPTH: usize = 8;
 
@@ -241,8 +244,24 @@ async fn command(ctx: &ConnectContext, c: ClientCommand) -> Next {
 
 enum Body {
     Length(u64),
-    Chunked { remaining: u64, done: bool },
+    Chunked(Chunked),
     UntilClose,
+}
+
+/// Where a chunked body is. Every field survives a `body_chunk` call that the stream's
+/// `select!` cancels, so the next call resumes where that one stopped.
+#[derive(Default)]
+struct Chunked {
+    /// Data bytes of the current chunk not yet read.
+    remaining: u64,
+    /// The last chunk (size 0) was read.
+    done: bool,
+    /// The current chunk's data was read and the line ending it was not.
+    crlf_due: bool,
+    /// The size or terminator line read so far.
+    line: Vec<u8>,
+    /// When the line being read must be complete.
+    deadline: Option<tokio::time::Instant>,
 }
 
 struct Response {
@@ -251,21 +270,57 @@ struct Response {
     body: Body,
 }
 
+/// Reads into `line` up to and including a `\n`, never holding more than `limit` bytes in it.
+/// Bytes already in `line` count against the limit, so a read the caller abandoned continues.
+/// Returns `false` when the connection closed before the line's first byte.
+async fn read_line_bounded(
+    r: &mut BufReader<ReadHalf<TcpStream>>,
+    line: &mut Vec<u8>,
+    limit: usize,
+    what: &str,
+) -> Result<bool> {
+    let room = limit.saturating_sub(line.len()) as u64;
+    let n = (&mut *r).take(room).read_until(b'\n', line).await?;
+    if line.last() == Some(&b'\n') {
+        return Ok(true);
+    }
+    if line.is_empty() && n == 0 {
+        return Ok(false);
+    }
+    if line.len() >= limit {
+        bail!("{what} over {limit} bytes with no line end");
+    }
+    bail!("the connection closed inside a {what}");
+}
+
 async fn read_head(r: &mut BufReader<ReadHalf<TcpStream>>) -> Result<Response> {
+    let deadline = tokio::time::Instant::now() + IO_TIMEOUT;
     let mut head = Vec::new();
     loop {
+        let start = head.len();
+        ensure!(
+            start < MAX_HEAD_BYTES,
+            "response head over {MAX_HEAD_BYTES} bytes with no end"
+        );
         let mut line = Vec::new();
-        let n = tokio::time::timeout(IO_TIMEOUT, r.read_until(b'\n', &mut line))
-            .await
-            .context("response head deadline")??;
-        if n == 0 {
-            bail!("the connection closed before a response");
+        let complete = tokio::time::timeout_at(
+            deadline,
+            read_line_bounded(r, &mut line, MAX_HEAD_BYTES - start, "response head"),
+        )
+        .await
+        .map_err(|_| anyhow!("response head not complete within {}s", IO_TIMEOUT.as_secs()))?
+        .map_err(|e| {
+            if line.len() >= MAX_HEAD_BYTES - start {
+                anyhow!("response head over {MAX_HEAD_BYTES} bytes with no end")
+            } else {
+                e
+            }
+        })?;
+        if !complete {
+            ensure!(start > 0, "the connection closed before a response");
+            bail!("the connection closed inside the response head");
         }
         head.extend_from_slice(&line);
-        ensure!(
-            head.len() <= MAX_HEAD_BYTES,
-            "response head over {MAX_HEAD_BYTES} bytes"
-        );
         if line == b"\r\n" || line == b"\n" {
             break;
         }
@@ -298,10 +353,7 @@ async fn read_head(r: &mut BufReader<ReadHalf<TcpStream>>) -> Result<Response> {
         }
     }
     let body = if chunked {
-        Body::Chunked {
-            remaining: 0,
-            done: false,
-        }
+        Body::Chunked(Chunked::default())
     } else if let Some(n) = length {
         Body::Length(n)
     } else {
@@ -335,36 +387,82 @@ async fn body_chunk(
             let n = r.read(buf).await?;
             Ok((n > 0).then_some(n))
         }
-        Body::Chunked { remaining, done } => {
-            if *done {
+        Body::Chunked(c) => {
+            if c.done {
                 return Ok(None);
             }
-            if *remaining == 0 {
-                let mut line = String::new();
-                if r.read_line(&mut line).await? == 0 {
-                    return Ok(None);
+            if c.crlf_due {
+                if !chunk_line(r, c, "chunk terminator").await? {
+                    bail!("the connection closed inside a chunk terminator");
                 }
-                let size = line.trim().split(';').next().unwrap_or_default();
-                let size = u64::from_str_radix(size.trim(), 16).context("bad chunk size")?;
-                if size == 0 {
-                    *done = true;
-                    return Ok(None);
-                }
-                *remaining = size;
+                ensure!(
+                    c.line == b"\r\n" || c.line == b"\n",
+                    "chunk data not followed by CRLF"
+                );
+                c.line.clear();
+                c.crlf_due = false;
             }
-            let want = (*remaining).min(buf.len() as u64) as usize;
+            if c.remaining == 0 {
+                // An idle stream waits here between chunks for as long as the server is quiet;
+                // the line's deadline starts with its first byte.
+                if c.line.is_empty() && r.fill_buf().await?.is_empty() {
+                    return Ok(None);
+                }
+                if !chunk_line(r, c, "chunk-size line").await? {
+                    return Ok(None);
+                }
+                let text = std::str::from_utf8(&c.line).context("chunk-size line is not text")?;
+                let size = text.trim().split(';').next().unwrap_or_default().trim();
+                let size = u64::from_str_radix(size, 16).context("bad chunk size")?;
+                c.line.clear();
+                if size == 0 {
+                    c.done = true;
+                    return Ok(None);
+                }
+                c.remaining = size;
+            }
+            let want = c.remaining.min(buf.len() as u64) as usize;
             let n = r.read(&mut buf[..want]).await?;
             if n == 0 {
                 return Ok(None);
             }
-            *remaining -= n as u64;
-            if *remaining == 0 {
-                let mut crlf = String::new();
-                r.read_line(&mut crlf).await?;
+            c.remaining -= n as u64;
+            if c.remaining == 0 {
+                // The data goes to the parser now; its CRLF is read at the next call, and is
+                // due within IO_TIMEOUT from here.
+                c.crlf_due = true;
+                c.deadline = Some(tokio::time::Instant::now() + IO_TIMEOUT);
             }
             Ok(Some(n))
         }
     }
+}
+
+/// One line of a chunked body's framing, bounded by `MAX_CHUNK_LINE_BYTES` and by the line's
+/// deadline (set when its first byte is due or has arrived). Returns `false` at a close before
+/// the line's first byte.
+async fn chunk_line(
+    r: &mut BufReader<ReadHalf<TcpStream>>,
+    c: &mut Chunked,
+    what: &str,
+) -> Result<bool> {
+    let deadline = *c
+        .deadline
+        .get_or_insert_with(|| tokio::time::Instant::now() + IO_TIMEOUT);
+    let complete = tokio::time::timeout_at(
+        deadline,
+        read_line_bounded(r, &mut c.line, MAX_CHUNK_LINE_BYTES, what),
+    )
+    .await
+    .map_err(|_| anyhow!("{what} not complete within {}s", IO_TIMEOUT.as_secs()))??;
+    c.deadline = None;
+    Ok(complete)
+}
+
+/// Whether a body error is the transport failing (a reset, say), which EventSource answers by
+/// reconnecting, rather than the server breaking HTTP framing, which is not retried.
+fn is_transport_error(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<std::io::Error>().is_some()
 }
 
 async fn session(
@@ -469,6 +567,7 @@ async fn session(
             json!({"url": target.url, "last_event_id": parser.last_event_id, "attempt": attempt}),
         );
         let mut next = apply(ctx, ask(ctx, &connected).await);
+        let mut broken = None;
         // Read the stream until it ends or the handler or a command says otherwise.
         while matches!(next, Next::Continue) {
             tokio::select! {
@@ -479,7 +578,12 @@ async fn session(
                 piece = body_chunk(&mut reader, &mut body, &mut buf) => {
                     let n = match piece {
                         Ok(Some(n)) => n,
-                        Ok(None) | Err(_) => break,
+                        Ok(None) => break,
+                        Err(e) if is_transport_error(&e) => break,
+                        Err(e) => {
+                            broken = Some(format!("{e:#}"));
+                            break;
+                        }
                     };
                     for ev in parser.feed(&buf[..n])? {
                         chained = 0;
@@ -513,6 +617,20 @@ async fn session(
                 continue;
             }
             Next::Continue => {}
+        }
+        if let Some(error) = broken {
+            // Broken framing is the server's fault and is not retried by itself.
+            let ev = json!({"reason": "error", "error": error});
+            match wait_or_ask(ctx, ev, &mut external, &mut chained).await {
+                Next::Reconnect(id) => {
+                    if let Some(id) = id {
+                        parser.last_event_id = id;
+                    }
+                    attempt += 1;
+                    continue;
+                }
+                _ => return Ok(()),
+            }
         }
         // The stream closed: EventSource reconnects after the retry delay.
         if reconnects_left == 0 {

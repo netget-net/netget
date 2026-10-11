@@ -29,6 +29,12 @@ arrive before the response head. An idle stream gets `: keepalive` every `keepal
 (default 15). The stream ends when the client closes, a write fails, or `sse_close` half-closes
 it (an EventSource then reconnects with `Last-Event-ID`).
 
+Every write to a stream — the response, a broadcast, an injected event, a keepalive — must make
+progress within `SUBSCRIBER_WRITE_TIMEOUT` (5 s). A subscriber that stops reading misses it,
+is removed from the broadcast table and has its write side shut, so it cannot stall a
+broadcast to the others or the request that issued it
+(`tests/server/sse/stall_test.rs`).
+
 Event fields are validated: `event` and `id` one line, `id` without NUL, data at most 1 MiB;
 each line of `data` becomes its own `data:` line.
 
