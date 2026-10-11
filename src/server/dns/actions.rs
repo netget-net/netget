@@ -185,17 +185,34 @@ impl Protocol for DnsProtocol {
                  but circular on its own, since hickory-client decodes with the same codec \
                  hickory-proto encoded with. It is not part of the evidence above. \
                  \
-                 UNPROVEN, and this is the ceiling on what the two resolvers prove, because \
-                 none of it is implemented: EDNS0 itself (an OPT record in a query is ignored \
-                 and none is added to replies), TCP transport, DNSSEC, zone transfers, \
-                 multi-record answers, and truncation with the TC bit -- an oversize response \
-                 is sent rather than truncated.",
+                 TCP, EDNS0, ZONE TRANSFERS AND DNSSEC, added October 2026, carry the six \
+                 conditions on their own surface. (1) dig and kdig each transfer a 611-record \
+                 zone in two TCP messages (transfer_test.rs), apply an IXFR difference and read \
+                 the single-SOA current answer, see the TC bit and retry over TCP, read the \
+                 OPT record, and decode NS, SOA, SRV and PTR from send_dns_records; delv and \
+                 drill each validate a signed positive answer, and delv a compact-denial \
+                 negative one and a NODATA (dnssec_test.rs), against a trust anchor built from \
+                 the DNSKEY the server serves; ldns-verify-zone and BIND's dnssec-verify each \
+                 verify the whole signed zone received by AXFR, signatures and NSEC chain. \
+                 Every one of those tools fails rather than skips when absent. (2) The pcap \
+                 oracle reads the UDP and TCP exchanges of transport_bounds_test.rs, truncated \
+                 answers, transfers and refusals included. (3) dns_message.rs also reads the OPT \
+                 record and the authority SOA every query now feeds the server, with two new \
+                 seeds. (4) The TCP connection cap, the TCP idle timeout, the 512/EDNS/4096 UDP \
+                 limits, 100 answer records, 10,000 zone records and the transfer message size \
+                 each have a test; the TCP cap, the UDP cap, the answer signatures and the NSEC \
+                 chain were each removed and a test failed. \
+                 \
+                 UNPROVEN, because not implemented: NSEC3, more than one signed zone, a \
+                 separate ZSK and KSK (one key acts as both; dnssec-verify is run with -z), \
+                 delegations in a signed zone (refused), DNS COOKIEs, and TSIG on transfers.",
             )
             .notes(
                 "Stable means the evidence for the implemented surface is complete, NOT that \
-                 RFC 1035 is. Every action the model is offered is now decoded by two \
-                 independent resolvers; what is missing is whole features, each listed in \
-                 e2e_testing and in src/server/dns/CLAUDE.md. \
+                 RFC 1035 is. Every action the model is offered is decoded by two \
+                 independent resolvers; DNSSEC is validated by two validators and two zone \
+                 verifiers. What is missing is listed in e2e_testing and in \
+                 src/server/dns/AGENTS.md. \
                  A query that produces no answer fails closed with SERVFAIL through one exit, \
                  `send_servfail`, tagged decision=fail_closed_llm_error / _llm_overload / \
                  _no_action; `ignore_query` is decision=model_silent and is the only path that \

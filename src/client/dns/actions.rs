@@ -346,10 +346,36 @@ impl Protocol for DnsClientProtocol {
         use crate::protocol::metadata::{DevelopmentState, ProtocolMetadataV2};
 
         ProtocolMetadataV2::builder()
-            .state(DevelopmentState::Experimental)
-            .implementation("hickory-dns (formerly trust-dns) for DNS queries")
-            .llm_control("Full control over DNS queries (type, domain, recursion)")
-            .e2e_testing("Public DNS servers (8.8.8.8, 1.1.1.1) or local DNS")
+            // BETA, October 2026, on all four conditions of the client bar: (1) the peer is
+            // ISC BIND's named, a third-party authoritative server, not NetGet's DNS server;
+            // (2) the test fails, naming bind9, when named or dig is absent; (3) a real
+            // session: a DO query answered with named's RRSIG, an AXFR of the signed zone, and
+            // after an edit and a reload an IXFR difference; (4) the client acts on its
+            // handler's answers, asserted from the server's side — dig reads the same zone and
+            // named logs the AXFR and IXFR it served. Removing the DO bit fails the test.
+            .state(DevelopmentState::Beta)
+            .implementation(
+                "hickory-client over UDP for queries (each message built by hand, so RD and the \
+                 EDNS DO bit reach the wire); a TCP hickory-client per zone transfer",
+            )
+            .llm_control(
+                "Queries (name, type, recursion, DNSSEC) and zone transfers (AXFR, or IXFR from a \
+                 serial)",
+            )
+            .e2e_testing(
+                "tests/client/dns/real_server_test.rs against ISC BIND named (bind9), \
+                 unprivileged on loopback with a zone it signs inline: a DO query reports \
+                 named's RRSIG (type covered, algorithm 13, signer); an AXFR reports the same \
+                 record count dig reads, DNSKEY, NSEC and RRSIG included; after the zone is \
+                 edited and named reloaded, an injected IXFR from the old serial reports the \
+                 incremental form with the deleted record before the added one; named's log \
+                 shows both transfers served. No skip: a missing named or dig fails the test.",
+            )
+            .notes(
+                "The client reports DNSSEC records and the AD bit but does not validate \
+                 signatures itself. A transfer stops past 100,000 records or 60 s, and the \
+                 model is shown the first 200 records with the count. No TSIG.",
+            )
             .build()
     }
     fn description(&self) -> &'static str {
