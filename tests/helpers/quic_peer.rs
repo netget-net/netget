@@ -205,3 +205,111 @@ pub async fn wait_log(state: &AppState, id: ClientId, text: &str) {
     .await
     .unwrap();
 }
+
+/// The two independent RFC 9221 peers: aioquic (Python) and quic-go (Go). They share one
+/// command line (`tests/helpers/quic_datagram_peer.py`), so a test runs against both.
+#[derive(Clone, Copy, Debug)]
+pub enum DatagramPeer {
+    Aioquic,
+    QuicGo,
+}
+pub struct DatagramServer {
+    pub cert: Certificate,
+    pub port: u16,
+    pub child: tokio::process::Child,
+    pub lines: tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+}
+impl DatagramPeer {
+    fn command(self) -> tokio::process::Command {
+        match self {
+            DatagramPeer::Aioquic => {
+                let mut c = tokio::process::Command::new(python());
+                c.arg(format!(
+                    "{}/tests/helpers/quic_datagram_peer.py",
+                    env!("CARGO_MANIFEST_DIR")
+                ));
+                c
+            }
+            DatagramPeer::QuicGo => {
+                let bin = std::env::var("NETGET_QUIC_GO_PEER").unwrap_or_default();
+                assert!(
+                    !bin.is_empty(),
+                    "NETGET_QUIC_GO_PEER is required: go build -o <dir>/quic-go-peer \
+                     ./tests/helpers/quic_go_peer and export its path"
+                );
+                tokio::process::Command::new(bin)
+            }
+        }
+    }
+    /// Connect, send `send` as datagrams, and return the peer's report once `expect` came back.
+    pub async fn client(
+        self,
+        port: u16,
+        cert: &Certificate,
+        send: &[&[u8]],
+        expect: usize,
+    ) -> Value {
+        let send: Vec<String> = send.iter().map(hex::encode).collect();
+        let out = tokio::time::timeout(
+            Duration::from_secs(20),
+            self.command()
+                .args(["client", "--port", &port.to_string(), "--ca"])
+                .arg(cert.cert())
+                .args(["--send", &serde_json::to_string(&send).unwrap()])
+                .args(["--expect", &expect.to_string()])
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("{self:?} client did not finish"))
+        .unwrap_or_else(|e| panic!("{self:?} client could not run: {e}"));
+        assert!(
+            out.status.success(),
+            "{self:?} client failed: {}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice(&out.stdout).unwrap()
+    }
+    /// An echoing datagram server; each received datagram is a `{"datagram": hex}` line.
+    pub async fn server(self) -> DatagramServer {
+        let cert = Certificate::new();
+        let mut child = self
+            .command()
+            .args(["server", "--port", "0", "--cert"])
+            .arg(cert.cert())
+            .arg("--key")
+            .arg(cert.key())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap_or_else(|e| panic!("{self:?} server could not run: {e}"));
+        let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+        let ready = tokio::time::timeout(Duration::from_secs(10), lines.next_line())
+            .await
+            .unwrap_or_else(|_| panic!("{self:?} server never became ready"))
+            .unwrap()
+            .unwrap_or_else(|| panic!("{self:?} server exited"));
+        let ready: Value = serde_json::from_str(&ready).unwrap();
+        let port = ready["port"].as_u64().unwrap() as u16;
+        DatagramServer {
+            cert,
+            port,
+            child,
+            lines,
+        }
+    }
+}
+impl DatagramServer {
+    /// The next datagram the server reported receiving, as bytes.
+    pub async fn next_datagram(&mut self) -> Vec<u8> {
+        let line = tokio::time::timeout(Duration::from_secs(10), self.lines.next_line())
+            .await
+            .expect("the peer server received no datagram")
+            .unwrap()
+            .expect("the peer server exited");
+        let v: Value = serde_json::from_str(&line).unwrap();
+        hex::decode(v["datagram"].as_str().unwrap()).unwrap()
+    }
+}

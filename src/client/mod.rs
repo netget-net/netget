@@ -830,6 +830,8 @@ pub mod rtp;
 pub mod rtsp;
 #[cfg(feature = "smpp")]
 pub mod smpp;
+#[cfg(feature = "sse")]
+pub mod sse;
 #[cfg(feature = "stratum")]
 pub mod stratum;
 #[cfg(feature = "sunrpc")]

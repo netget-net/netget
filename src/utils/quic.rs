@@ -9,6 +9,10 @@ pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 pub const EXCHANGE_TIMEOUT: Duration = Duration::from_secs(30);
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 pub const RAW_ALPN: &[u8] = b"netget-quic";
+/// RFC 9221 DATAGRAM frames buffered per connection before Quinn drops the oldest. A
+/// datagram is unreliable by definition, so a peer that outruns the handler loses
+/// datagrams rather than growing this; 64 KiB holds about fifty full-size ones.
+pub const DATAGRAM_BUFFER_BYTES: usize = 64 * 1024;
 /// Closing on Drop matters when the owning registered task is aborted during removal.
 /// Quinn's driver otherwise retains the endpoint until all connection handles disappear.
 pub struct EndpointGuard(pub quinn::Endpoint);
@@ -104,6 +108,10 @@ pub fn transport(idle: Duration, bidi: u32, uni: u32) -> Arc<quinn::TransportCon
     config.max_idle_timeout(Some(idle.try_into().expect("bounded idle timeout")));
     config.stream_receive_window((MAX_BYTES as u32).into());
     config.receive_window((MAX_BYTES as u32 * MAX_STREAMS as u32).into());
+    // Advertises max_datagram_frame_size (RFC 9221 §3), so a peer may send DATAGRAM frames;
+    // both buffers are bounded.
+    config.datagram_receive_buffer_size(Some(DATAGRAM_BUFFER_BYTES));
+    config.datagram_send_buffer_size(DATAGRAM_BUFFER_BYTES);
     Arc::new(config)
 }
 pub async fn connect(
