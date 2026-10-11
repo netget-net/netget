@@ -2,8 +2,8 @@
 
 ## Test Overview
 
-**Nine files, 27 tests** since October 2026 (four files and 14 tests added for TCP, EDNS,
-transfers and DNSSEC; see the second table). Before that it was **five files, 13 tests**, and the two that carry the maturity rating are the ones this
+**Ten files, 31 tests** since October 2026 (five files and 18 tests added for TCP, EDNS,
+transfers, DNSSEC and their access controls; see the second table). Before that it was **five files, 13 tests**, and the two that carry the maturity rating are the ones this
 overview used to omit. It described only `test.rs` — "uses hickory-client (real DNS client)
 for protocol correctness" — which is the circular half of the suite and the reason `dig_test.rs`
 had to be written.
@@ -25,7 +25,11 @@ needs two messages — so no model is involved and every count is exact:
 | `transfer_test.rs` | `dig` and `kdig` | AXFR (SOA first and last, every record once, two messages), IXFR difference and "current", REFUSED for another zone, TC and the retry over TCP, the OPT record, NS/SOA/SRV/PTR via `send_dns_records`, NXDOMAIN with the SOA |
 | `dnssec_test.rs` | `delv`, `drill`, `ldns-verify-zone`, `dnssec-verify` | validated positive, NXDOMAIN and NODATA answers against a trust anchor built from the served DNSKEY; a signed AXFR verified whole, one NSEC per owner name |
 | `transport_bounds_test.rs` | raw UDP/TCP + pcap oracle | every new bound (the table in its header) |
-| `zone_support.rs` | — | the in-process server, the zone handler, and `dig`/`kdig`/`run` helpers that fail naming the package |
+| `security_test.rs` | raw UDP/TCP | `client_ip`/`client_port` in the `dns_query` and `dns_zone_transfer` event data; `send_dns_zone` over UDP is the SOA alone even for a zone that fits; `MAX_TCP_CONNECTIONS_PER_IP` (the ninth connection from 127.0.0.1 is closed unread); model bytes that do not parse as DNS are SERVFAIL over UDP and TCP, including 70 000 bytes a TCP length prefix cannot say |
+| `zone_support.rs` | — | the in-process server (`DnsDevice::start`, or `start_with_handler` for a handler of the test's own), the zone handler, and `dig`/`kdig`/`run` helpers that fail naming the package |
+
+`transport_bounds_test.rs`'s global-cap test opens all 64 connections from 127.0.0.1, so it
+raises `tcp_connections_per_ip` to 64; the per-address cap is `security_test.rs`'s.
 
 `dnssec-verify` runs with `-z` because the server signs with one key (flags 257) acting as KSK
 and ZSK; without it BIND reports "Missing ZSK" before checking a signature.
@@ -57,7 +61,7 @@ and ZSK; without it BIND reports "Missing ZSK" before checking a signature.
 | `llm_failure_test::…_black_hole` | 1 | 2 | **3** |
 | `bounds_test::…_receive_buffer…` | 1 | 1 | **2** |
 | `bounds_test::` (four executor tests) | 0 | 0 | **0** |
-| `transfer_test`, `dnssec_test`, `transport_bounds_test` (14 tests) | 0 | script handler | **0** |
+| `transfer_test`, `dnssec_test`, `transport_bounds_test`, `security_test` (18 tests) | 0 | script handler | **0** |
 
 This table used to give a single total of 9 and list five tests. The count drifts every time a
 file is added, which is the argument for a per-test table rather than a number: **derive it**

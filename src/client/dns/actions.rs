@@ -14,8 +14,13 @@ use std::sync::LazyLock;
 /// Most records one zone transfer may bring in before it is abandoned.
 pub const MAX_TRANSFER_RECORDS: usize = 100_000;
 
-/// How many of a transfer's records the model is shown; the rest are counted.
+/// How many of a transfer's records the model is shown, and the only ones kept; the rest
+/// are counted.
 pub const MAX_REPORTED_RECORDS: usize = 200;
+
+/// Most bytes of DNS messages one zone transfer may bring in before it is abandoned. A record
+/// can be nearly 64 KiB, so the record count alone does not bound what a server can send.
+pub const MAX_TRANSFER_BYTES: usize = 64 * 1024 * 1024;
 
 /// How long a zone transfer may take.
 pub const TRANSFER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);

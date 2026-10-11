@@ -72,6 +72,11 @@ pub struct DnsDevice {
 
 impl DnsDevice {
     pub async fn start(startup_params: Option<Value>) -> DnsDevice {
+        Self::start_with_handler(startup_params, HANDLER).await
+    }
+
+    /// The same server, every event answered by `handler` (a Python script) instead.
+    pub async fn start_with_handler(startup_params: Option<Value>, handler: &str) -> DnsDevice {
         let state = AppState::new_with_options(false, "http://127.0.0.1:1".into());
         let (tx, _) = mpsc::unbounded_channel();
         let id = ServerForm {
@@ -82,7 +87,7 @@ impl DnsDevice {
             startup_params,
             event_handlers: Some(vec![json!({
                 "event_pattern": "*",
-                "handler": {"type": "script", "language": "python", "code": HANDLER}
+                "handler": {"type": "script", "language": "python", "code": handler}
             })]),
             ..Default::default()
         }

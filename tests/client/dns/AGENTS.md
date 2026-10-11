@@ -9,6 +9,7 @@
 | `real_server_test.rs` | ISC BIND **`named`**, unprivileged on loopback, signing its zone inline; read back with `dig` | 0 (script handler) | the client bar (below): DNSSEC-aware query, AXFR, IXFR |
 | `e2e_test.rs` | NetGet's own DNS server (`open_server`) | mocked | the conversation loop: A, MX, NXDOMAIN, a follow-up query. **Self-served**: it proves the two halves agree, not that the client is right |
 | `command_channel_test.rs` | NetGet's own DNS server | mocked | an injected `send_dns_query` (the dashboard's `[ send ]`) |
+| `transfer_bound_test.rs` | a hand-written hostile TCP server on 127.0.0.1 | 0 | an endless AXFR of ~64 KiB TXT records ends with the `MAX_TRANSFER_BYTES` error (`passed … bytes; abandoned`), not a timeout or the record count |
 
 This file used to describe a suite that queried 8.8.8.8 and 1.1.1.1 and "skipped gracefully"
 offline. Neither had been true for a long time: `e2e_test.rs` starts NetGet's own server, and

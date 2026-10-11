@@ -3,11 +3,13 @@
 //! | bound | value | test |
 //! |---|---|---|
 //! | `MAX_TCP_CONNECTIONS` | 64; the next is closed unread | `the_tcp_connection_cap_…` |
+//! | `MAX_TCP_CONNECTIONS_PER_IP` | 8 from one address | `security_test.rs` |
 //! | `tcp_idle_timeout_secs` | default `DEFAULT_TCP_IDLE_TIMEOUT` (10 s) | `an_idle_tcp_connection_…` |
 //! | `PLAIN_UDP_LIMIT` | 512 without EDNS, then TC | `the_udp_limits_…` |
 //! | the client's EDNS size, capped at `MAX_UDP_RESPONSE` | 4096 | `the_udp_limits_…` |
 //! | AXFR over UDP | NOTIMP, never asked | `axfr_over_udp_…` |
 //! | IXFR over UDP that does not fit | the SOA alone | `an_ixfr_too_large_for_udp_…` |
+//! | `send_dns_zone` over UDP, whatever its size | the SOA alone | `security_test.rs` |
 //! | signed IXFR with changes | SERVFAIL, `fail_closed` | `a_signed_zone_refuses_…` |
 //! | `MAX_ANSWER_RECORDS` | 100 | `the_record_count_bounds_…` |
 //! | `MAX_ZONE_RECORDS` | 10 000 | `the_record_count_bounds_…` |
@@ -265,7 +267,13 @@ async fn a_signed_zone_refuses_an_ixfr_difference_and_serves_current() {
 
 #[tokio::test]
 async fn the_tcp_connection_cap_closes_the_next_connection_unread() {
-    let device = DnsDevice::start(Some(json!({"tcp_idle_timeout_secs": 60}))).await;
+    // Every connection here comes from 127.0.0.1, so the per-address cap is raised to the
+    // global one; `security_test.rs` drives the per-address cap itself.
+    let device = DnsDevice::start(Some(json!({
+        "tcp_idle_timeout_secs": 60,
+        "tcp_connections_per_ip": MAX_TCP_CONNECTIONS,
+    })))
+    .await;
     let mut held = Vec::new();
     for _ in 0..MAX_TCP_CONNECTIONS {
         held.push(

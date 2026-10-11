@@ -13,7 +13,7 @@ use tracing::{debug, error, info, trace};
 
 use crate::client::dns::actions::{
     DNS_CLIENT_CONNECTED_EVENT, DNS_CLIENT_RESPONSE_RECEIVED_EVENT, DNS_CLIENT_ZONE_TRANSFER_EVENT,
-    MAX_REPORTED_RECORDS, MAX_TRANSFER_RECORDS, TRANSFER_TIMEOUT,
+    MAX_REPORTED_RECORDS, MAX_TRANSFER_BYTES, MAX_TRANSFER_RECORDS, TRANSFER_TIMEOUT,
 };
 use crate::client::llm_budget::call_llm_for_client;
 use crate::llm::actions::client_trait::Client;
@@ -637,9 +637,10 @@ impl DnsClient {
 
 impl DnsClient {
     /// AXFR, or IXFR from `serial`, over a TCP connection of its own (the query client is UDP).
-    /// The records are counted and bounded at [`MAX_TRANSFER_RECORDS`]; the first
-    /// [`MAX_REPORTED_RECORDS`] are reported, so a large zone is a count and a sample rather
-    /// than an event the model cannot read.
+    /// The records are counted and bounded at [`MAX_TRANSFER_RECORDS`], the messages' bytes at
+    /// [`MAX_TRANSFER_BYTES`], the whole exchange at [`TRANSFER_TIMEOUT`]. Only the first
+    /// [`MAX_REPORTED_RECORDS`] are kept and reported, so a large zone is a count and a sample
+    /// rather than an event the model cannot read, and memory does not grow with the zone.
     async fn zone_transfer(
         server: SocketAddr,
         zone: &str,
@@ -650,22 +651,29 @@ impl DnsClient {
         let origin = Name::from_utf8(zone).with_context(|| format!("invalid zone {zone:?}"))?;
         let (stream, sender) =
             TcpClientStream::<AsyncIoTokioAsStd<tokio::net::TcpStream>>::new(server);
-        let (mut client, bg) = AsyncClient::new(stream, sender, None)
+        // hickory's own request timeout (5 s by default) would cut a transfer short of
+        // TRANSFER_TIMEOUT, which is the bound this client states.
+        let (mut client, bg) = AsyncClient::with_timeout(stream, sender, TRANSFER_TIMEOUT, None)
             .await
             .with_context(|| {
                 format!("cannot open a TCP connection to {server} for the transfer")
             })?;
-        // The transport driver is a task of its own; registered so stopping the client ends it.
+        // The transport driver is a task of its own; registered so stopping the client ends it,
+        // and aborted when this transfer returns, so an abandoned transfer stops reading.
         let driver = tokio::spawn(async move {
             let _ = bg.await;
         });
+        let _driver_guard = AbortOnDrop(driver.abort_handle());
         app_state.register_client_task(client_id, driver).await;
 
         // IXFR names the serial the client holds in an SOA; the other fields are not read.
         let last_soa = serial.map(|s| SOA::new(origin.clone(), origin.clone(), s, 0, 0, 0, 0));
         let transfer_type = if last_soa.is_some() { "IXFR" } else { "AXFR" };
         let mut responses = client.zone_transfer(origin.clone(), last_soa);
+        // The first MAX_REPORTED_RECORDS records; `record_count` counts every one.
         let mut records: Vec<Record> = Vec::new();
+        let mut record_count = 0usize;
+        let mut bytes_received = 0usize;
         let mut messages = 0usize;
         let mut rcode = ResponseCode::NoError;
         let collect = async {
@@ -673,12 +681,21 @@ impl DnsClient {
                 let response =
                     response.map_err(|e| anyhow::anyhow!("{transfer_type} failed: {e}"))?;
                 messages += 1;
+                bytes_received = bytes_received.saturating_add(response.as_buffer().len());
+                if bytes_received > MAX_TRANSFER_BYTES {
+                    anyhow::bail!(
+                        "{transfer_type} of {zone} passed {MAX_TRANSFER_BYTES} bytes; abandoned"
+                    );
+                }
                 rcode = response.response_code();
                 if rcode != ResponseCode::NoError {
                     break;
                 }
-                records.extend(response.answers().iter().cloned());
-                if records.len() > MAX_TRANSFER_RECORDS {
+                let answers = response.answers();
+                record_count = record_count.saturating_add(answers.len());
+                let room = MAX_REPORTED_RECORDS.saturating_sub(records.len());
+                records.extend(answers.iter().take(room).cloned());
+                if record_count > MAX_TRANSFER_RECORDS {
                     anyhow::bail!(
                         "{transfer_type} of {zone} passed {MAX_TRANSFER_RECORDS} records; abandoned"
                     );
@@ -701,7 +718,7 @@ impl DnsClient {
         });
         // RFC 1995 §4: an incremental answer's second record is an SOA (the old serial); a
         // full one's is not. A single SOA says the client is current.
-        let form = match (transfer_type, records.len()) {
+        let form = match (transfer_type, record_count) {
             (_, 0) => "none",
             ("IXFR", 1) => "current",
             ("IXFR", _) if records.get(1).map(|r| r.record_type()) == Some(RecordType::SOA) => {
@@ -709,22 +726,27 @@ impl DnsClient {
             }
             _ => "full",
         };
-        let reported: Vec<serde_json::Value> = records
-            .iter()
-            .take(MAX_REPORTED_RECORDS)
-            .filter_map(record_json)
-            .collect();
+        let reported: Vec<serde_json::Value> = records.iter().filter_map(record_json).collect();
         Ok(serde_json::json!({
             "zone": origin.to_string(),
             "transfer_type": transfer_type,
             "form": form,
             "response_code": Self::response_code_to_string(rcode),
             "serial": serial_now,
-            "record_count": records.len(),
+            "record_count": record_count,
             "messages": messages,
             "records": reported,
-            "truncated": records.len() > MAX_REPORTED_RECORDS,
+            "truncated": record_count > MAX_REPORTED_RECORDS,
         }))
+    }
+}
+
+/// Aborts a task when dropped.
+struct AbortOnDrop(tokio::task::AbortHandle);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
 

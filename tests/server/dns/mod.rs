@@ -9,6 +9,8 @@ pub mod kdig_test;
 #[cfg(all(test, feature = "dns"))]
 mod llm_failure_test;
 #[cfg(all(test, feature = "dns"))]
+mod security_test;
+#[cfg(all(test, feature = "dns"))]
 mod test;
 #[cfg(feature = "dns")]
 pub mod transfer_test;

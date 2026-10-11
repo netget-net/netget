@@ -22,7 +22,8 @@ use anyhow::{Context, Result};
 use dnssec::ZoneSigner;
 use hickory_proto::op::{Edns, Message as DnsMessage, Query, ResponseCode};
 use hickory_proto::rr::{Name, Record, RecordType};
-use std::net::SocketAddr;
+use std::collections::HashMap;
+use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -37,6 +38,13 @@ pub const DEFAULT_TCP_IDLE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Open TCP connections at once. One past it is closed on accept, unread.
 pub const MAX_TCP_CONNECTIONS: usize = 64;
+
+/// Open TCP connections one client address may hold at once; past it a new one from that
+/// address is closed unread (`decision=fail_closed_per_source_cap`). Without it one host could
+/// hold all [`MAX_TCP_CONNECTIONS`] slots — cheaply, since some messages are answered without
+/// the model. IPv6 is counted per /64, which is what one host is usually given. The
+/// `tcp_connections_per_ip` startup parameter overrides it, within 1..=`MAX_TCP_CONNECTIONS`.
+pub const MAX_TCP_CONNECTIONS_PER_IP: usize = 8;
 
 /// What a connection past the cap is told: nothing. DNS has no message a server sends
 /// before a query, so it is closed unread and the client retries or moves on.
@@ -57,6 +65,72 @@ pub const MAX_UDP_RESPONSE: usize = 4096;
 pub struct DnsSettings {
     pub dnssec_zone: Option<String>,
     pub tcp_idle_timeout: Duration,
+    /// See [`MAX_TCP_CONNECTIONS_PER_IP`].
+    pub tcp_connections_per_ip: usize,
+}
+
+/// Open TCP connections per source address (IPv6 per /64), bounded at `max` each.
+struct PerSourceLimiter {
+    max: usize,
+    open: Arc<std::sync::Mutex<HashMap<IpAddr, usize>>>,
+}
+
+/// One admitted connection's place in its source's count; released when dropped, so it lives
+/// in the connection task.
+struct SourceSlot {
+    key: IpAddr,
+    open: Arc<std::sync::Mutex<HashMap<IpAddr, usize>>>,
+}
+
+impl PerSourceLimiter {
+    fn new(max: usize) -> Self {
+        Self {
+            max: max.max(1),
+            open: Arc::default(),
+        }
+    }
+
+    /// The source's slot, or `None` when it already holds `max` connections.
+    fn try_acquire(&self, ip: IpAddr) -> Option<SourceSlot> {
+        let key = source_key(ip);
+        let mut open = self.open.lock().unwrap_or_else(|e| e.into_inner());
+        let count = open.entry(key).or_insert(0);
+        if *count >= self.max {
+            return None;
+        }
+        *count += 1;
+        Some(SourceSlot {
+            key,
+            open: self.open.clone(),
+        })
+    }
+}
+
+impl Drop for SourceSlot {
+    fn drop(&mut self) {
+        let mut open = self.open.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(count) = open.get_mut(&self.key) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                open.remove(&self.key);
+            }
+        }
+    }
+}
+
+/// What a source is counted as: an IPv4 address (an IPv4-mapped IPv6 address is its IPv4
+/// address), or an IPv6 address's /64.
+fn source_key(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V4(_) => ip,
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => {
+                let s = v6.segments();
+                IpAddr::V6(Ipv6Addr::new(s[0], s[1], s[2], s[3], 0, 0, 0, 0))
+            }
+        },
+    }
 }
 
 /// DNS server that integrates with LLM for query handling
@@ -148,8 +222,9 @@ impl DnsServer {
 
         let tcp_shared = shared.clone();
         let idle = settings.tcp_idle_timeout;
+        let per_source = PerSourceLimiter::new(settings.tcp_connections_per_ip);
         let tcp_handle = tokio::spawn(async move {
-            Self::tcp_loop(listener, local_addr, tcp_shared, idle).await;
+            Self::tcp_loop(listener, local_addr, tcp_shared, idle, per_source).await;
         });
         app_state.register_server_task(server_id, tcp_handle).await;
 
@@ -240,9 +315,10 @@ impl DnsServer {
         local_addr: SocketAddr,
         shared: Arc<Shared>,
         idle: Duration,
+        per_source: PerSourceLimiter,
     ) {
-        // The shared cap: past MAX_TCP_CONNECTIONS a connection is closed unread, and a client
-        // retries or moves to another server.
+        // Two caps: past MAX_TCP_CONNECTIONS in all, or past `per_source.max` from one address,
+        // a connection is closed unread, and a client retries or moves to another server.
         let limiter = ConnectionLimiter::new(MAX_TCP_CONNECTIONS);
         loop {
             let (stream, peer_addr, permit) = match accept_bounded(
@@ -260,12 +336,26 @@ impl DnsServer {
                     continue;
                 }
             };
+            let Some(source_slot) = per_source.try_acquire(peer_addr.ip()) else {
+                Log::new(Some(&shared.status_tx)).warn(format!(
+                    "DNS connection from {peer_addr} refused decision=fail_closed_per_source_cap \
+                     (limit {} concurrent per address)",
+                    per_source.max
+                ));
+                // The global slot goes back at once; the socket is closed unread, as at the
+                // global cap.
+                drop(permit);
+                let mut stream = stream;
+                let _ = stream.shutdown().await;
+                continue;
+            };
             let connection_id = Self::register_connection(&shared, peer_addr, local_addr, 0).await;
             let task_shared = shared.clone();
             shared
                 .app_state
                 .spawn_server_task(shared.server_id, async move {
                     let _permit = permit;
+                    let _source_slot = source_slot;
                     Self::tcp_connection(stream, peer_addr, connection_id, task_shared, idle).await;
                 })
                 .await;
@@ -326,8 +416,20 @@ impl DnsServer {
                 break; // unreadable: nothing on this stream can be trusted to be framed
             }
             for reply in &replies {
+                // Every reply is a message hickory encoded, which stops at 65535 octets; one
+                // that did not fit the two-byte length would be misframed, so it closes the
+                // connection instead.
+                let Ok(reply_len) = u16::try_from(reply.len()) else {
+                    log.error(format!(
+                        "DNS reply of {} bytes to {peer_addr} does not fit a TCP length prefix; \
+                         closing decision=fail_closed_oversize_answer",
+                        reply.len()
+                    ));
+                    let _ = stream.shutdown().await;
+                    return;
+                };
                 let mut framed = Vec::with_capacity(reply.len() + 2);
-                framed.extend_from_slice(&(reply.len() as u16).to_be_bytes());
+                framed.extend_from_slice(&reply_len.to_be_bytes());
                 framed.extend_from_slice(reply);
                 if stream.write_all(&framed).await.is_err() {
                     return;
@@ -452,6 +554,8 @@ impl DnsServer {
                 "query_type": question.query_type().to_string(),
                 "transport": reply.transport.as_str(),
                 "dnssec_ok": reply.dnssec_ok,
+                "client_ip": peer_addr.ip().to_string(),
+                "client_port": peer_addr.port(),
             }),
         );
         // `Some(connection_id)`, not `None`: it is what `call_llm_inner` uses to look up the
@@ -483,9 +587,16 @@ impl DnsServer {
                 ActionResult::NoAction => model_chose_silence = true,
                 ActionResult::Output(bytes) => {
                     let Ok(message) = DnsMessage::from_vec(&bytes) else {
-                        // `send_dns_response` hands over raw bytes; they go out as given.
-                        log.debug(format!("DNS query from {peer_addr} decision=model_answer"));
-                        return vec![bytes];
+                        // Only `send_dns_response`'s hand-assembled bytes can fail here. Bytes
+                        // that are not a DNS message never go out: unparsed, they would skip
+                        // truncation and could be any length at all.
+                        log.error(format!(
+                            "DNS answer to the query from {peer_addr} is not a DNS message \
+                             ({} bytes); answering SERVFAIL \
+                             decision=fail_closed_unparseable_answer",
+                            bytes.len()
+                        ));
+                        return reply.servfail();
                     };
                     log.debug(format!("DNS query from {peer_addr} decision=model_answer"));
                     log.info(format!("DNS response to {peer_addr}"));
@@ -535,6 +646,8 @@ impl DnsServer {
             "transfer_type": kind.to_string(),
             "transport": reply.transport.as_str(),
             "signed": signed,
+            "client_ip": peer_addr.ip().to_string(),
+            "client_port": peer_addr.port(),
         });
         if let Some(serial) = client_serial {
             data["client_serial"] = serde_json::json!(serial);
@@ -569,19 +682,32 @@ impl DnsServer {
                 }
                 ActionResult::Output(bytes) => {
                     // A refusal (or any single-message answer) to the transfer.
-                    let decision = match DnsMessage::from_vec(bytes) {
-                        Ok(m) if m.response_code() == ResponseCode::Refused => "model_reject",
-                        _ => "model_answer",
+                    let Ok(message) = DnsMessage::from_vec(bytes) else {
+                        log.error(format!(
+                            "DNS answer to the {kind} of {zone} from {peer_addr} is not a DNS \
+                             message ({} bytes); answering SERVFAIL \
+                             decision=fail_closed_unparseable_answer",
+                            bytes.len()
+                        ));
+                        return reply.servfail();
+                    };
+                    let decision = if message.response_code() == ResponseCode::Refused {
+                        "model_reject"
+                    } else {
+                        "model_answer"
                     };
                     log.info(format!(
                         "DNS {kind} {zone} from {peer_addr} decision={decision}"
                     ));
-                    return match DnsMessage::from_vec(bytes) {
-                        Ok(m) => reply.finish(m, None, log),
-                        Err(_) => vec![bytes.clone()],
-                    };
+                    return reply.finish(message, None, log);
                 }
                 ActionResult::Custom { name, data } if name == RESULT_ZONE => {
+                    if reply.transport == Transport::Udp {
+                        log.info(format!(
+                            "DNS {kind} {zone} from {peer_addr}: a full zone is never sent over \
+                             UDP; answering with the SOA alone decision=udp_soa_only"
+                        ));
+                    }
                     Self::build_axfr(shared, reply, question, data)
                 }
                 ActionResult::Custom { name, data } if name == RESULT_IXFR => {
@@ -628,8 +754,9 @@ impl DnsServer {
     }
 
     /// The AXFR stream, signed when the zone is: SOA, records (and DNSKEY, NSEC chain and every
-    /// RRSIG for a signed zone), SOA. Over UDP — an IXFR answered with the full zone — a zone
-    /// too large for one datagram becomes the SOA alone, which sends the client to TCP.
+    /// RRSIG for a signed zone), SOA. Over UDP — an IXFR answered with the full zone — the
+    /// answer is the SOA alone whatever the zone's size (RFC 1995 §2's "use TCP"): a UDP
+    /// source address can be forged, so a full zone never goes to one.
     fn build_axfr(
         shared: &Shared,
         reply: &Reply<'_>,
@@ -643,6 +770,9 @@ impl DnsServer {
                 zone.origin,
                 question.name()
             );
+        }
+        if reply.transport == Transport::Udp {
+            return Self::soa_only(reply, question, Some(zone.soa.clone()));
         }
         let mut sequence = transfer::axfr_sequence(&zone);
         if let Some(signer) = shared
@@ -695,6 +825,18 @@ impl DnsServer {
         Self::transfer_messages(reply, question, sequence)
     }
 
+    /// The current SOA alone: RFC 1995 §2's answer to an IXFR over UDP that is not sent there,
+    /// which tells the client to ask again over TCP.
+    fn soa_only(reply: &Reply<'_>, question: &Query, soa: Option<Record>) -> Result<Vec<Vec<u8>>> {
+        let mut only_soa = transfer::response_shell(reply.query, ResponseCode::NoError);
+        only_soa.add_query(question.clone());
+        only_soa.add_answers(soa);
+        if let Some(e) = reply.response_edns() {
+            only_soa.set_edns(e);
+        }
+        Ok(vec![only_soa.to_vec()?])
+    }
+
     fn transfer_messages(
         reply: &Reply<'_>,
         question: &Query,
@@ -707,7 +849,8 @@ impl DnsServer {
             }
         };
         if reply.transport == Transport::Udp {
-            // RFC 1995 §2: an IXFR answer that does not fit UDP is replaced by the current SOA.
+            // RFC 1995 §2: an IXFR difference that does not fit UDP is replaced by the current
+            // SOA.
             let mut whole = transfer::response_shell(reply.query, ResponseCode::NoError);
             whole.add_query(question.clone());
             let soa = sequence.first().cloned();
@@ -717,11 +860,7 @@ impl DnsServer {
             if let Some(bytes) = bytes.filter(|b| b.len() <= reply.udp_limit) {
                 return Ok(vec![bytes]);
             }
-            let mut only_soa = transfer::response_shell(reply.query, ResponseCode::NoError);
-            only_soa.add_query(question.clone());
-            only_soa.add_answers(soa);
-            add_edns(&mut only_soa);
-            return Ok(vec![only_soa.to_vec()?]);
+            return Self::soa_only(reply, question, soa);
         }
         transfer::split_into_messages(
             reply.query,

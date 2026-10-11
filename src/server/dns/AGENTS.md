@@ -157,7 +157,11 @@ loop sends its first message, the TCP loop (`tcp_connection`) frames every messa
 two-byte length (RFC 1035 §4.2.2) and answers queries on a connection in order. TCP binds the
 port UDP got, so `port: 0` yields one port for both. A connection is closed after
 `tcp_idle_timeout_secs` (default `DEFAULT_TCP_IDLE_TIMEOUT`, 10 s) with no query, and past
-`MAX_TCP_CONNECTIONS` (64) a new one is closed unread (`decision=tcp_connection_cap`).
+`MAX_TCP_CONNECTIONS` (64) a new one is closed unread (`decision=fail_closed_connection_cap`).
+One address may hold at most `MAX_TCP_CONNECTIONS_PER_IP` (8, `tcp_connections_per_ip` 1-64)
+of them — IPv6 counted per /64, an IPv4-mapped address as its IPv4 address — and one more from
+it is closed unread too (`decision=fail_closed_per_source_cap`). Without it one host could hold
+every slot, cheaply, since some messages are answered without the model.
 
 **What happens after the model answers** (`Reply::finish`), in order:
 
@@ -173,14 +177,19 @@ port UDP got, so `port: 0` yields one port for both. A connection is closed afte
    header, question and OPT with TC set (`decision=truncated`), and the client retries over TCP.
 
 **Zone transfers** raise `dns_zone_transfer {query_id, zone, transfer_type, client_serial,
-transport, signed}` — the client's serial comes from the SOA in its query's authority
-section, never from the model. AXFR over UDP is NOTIMP without asking (RFC 5936 §4.2). The
+transport, signed, client_ip, client_port}` — the client's serial comes from the SOA in its
+query's authority section, never from the model, and its address is in the event data so the
+instructions' "only to these clients" is a decision the model can make (there is no ACL in the
+server; see Known Limitations). AXFR over UDP is NOTIMP without asking (RFC 5936 §4.2). The
 model answers with `send_dns_zone` (the whole zone; also a legal answer to IXFR),
 `send_dns_ixfr` (changes since the client's serial, or none for "current"), or
 `send_dns_refused`. Neither transfer action builds wire bytes — a zone does not fit one
 message — so the executor validates and hands back the action, and `transfer.rs` builds the
 RFC sequence and cuts it into messages of about `TRANSFER_MESSAGE_BYTES` (16 KiB). Over UDP
-an IXFR answer that does not fit is replaced by the new SOA alone (RFC 1995 §2).
+`send_dns_zone` is **always** answered with the SOA alone (RFC 1995 §2's "ask again over
+TCP", `decision=udp_soa_only`), however small the zone: a UDP source address can be forged,
+so a full zone is never sent to one. A `send_dns_ixfr` difference goes over UDP when it fits,
+and is replaced by the new SOA alone when it does not.
 
 **Signing a zone** (`dnssec.rs`): one ECDSA P-256 key (algorithm 13) generated at startup,
 flags 257, acting as KSK and ZSK — RFC 6781's single-type signing. The server answers the
@@ -209,8 +218,11 @@ Event parameters:
 - `query_type` (string) - Record type (A, AAAA, MX, TXT, CNAME, etc.)
 - `transport` (string) - `udp` or `tcp`, informational
 - `dnssec_ok` (boolean) - the DO bit, informational: signing is the server's
+- `client_ip` (string), `client_port` (number) - where the query came from; over UDP
+  unauthenticated
 
-**`dns_zone_transfer`** - an AXFR or IXFR; see architecture decision 6. Its actions are
+**`dns_zone_transfer`** - an AXFR or IXFR, carrying `client_ip` and `client_port` like
+`dns_query`; see architecture decision 6. Its actions are
 `send_dns_zone`, `send_dns_ixfr`, `send_dns_refused` and `ignore_query` (which, on TCP,
 sends nothing and keeps the connection).
 
@@ -306,7 +318,11 @@ not forwarded to DoH, DoT or DoQ, which take `DnsProtocol::query_actions()`.
 
 Send a complete, hand-assembled DNS response message, hex-encoded. Intended only
 for record types neither a dedicated action nor `send_dns_records` writes (CAA, NAPTR, ...).
-Its bytes go out as given: no EDNS, no signing, no truncation.
+The bytes are parsed and go out re-encoded through the same finish as every other answer
+(OPT for an EDNS query, signing, UDP truncation). Bytes that do not parse as a DNS message are
+never sent: the query is answered SERVFAIL (`decision=fail_closed_unparseable_answer`, ERROR).
+Sent as given they skipped truncation, and over TCP a message past 65535 octets wrapped its
+two-byte length prefix.
 
 - `data` must be valid hex and at least 12 bytes (a DNS header). Invalid hex is
   rejected with an error. There is no plain-text fallback: the earlier behaviour
@@ -378,6 +394,9 @@ with the bound removed — a bound nobody tested is a comment.
 | raw message floor | 12 octets | `execute_send_dns_response` | the executor |
 | TXT character-string | 255 octets | `MAX_CHARACTER_STRING_LEN` | the executor |
 | open TCP connections | 64 | `MAX_TCP_CONNECTIONS` | `transport_bounds_test.rs`: the 65th is closed unread |
+| open TCP connections per address | 8, `tcp_connections_per_ip` 1-64 | `MAX_TCP_CONNECTIONS_PER_IP` | `security_test.rs`: the 9th from 127.0.0.1 is closed unread |
+| full zone over UDP | the SOA alone | `build_axfr` | `security_test.rs`: a zone that fits is still not sent |
+| model-supplied bytes | must parse as DNS, else SERVFAIL | `query`, `transfer` | `security_test.rs`: 12 and 70 012 unparseable bytes, UDP and TCP |
 | TCP idle | 10 s, `tcp_idle_timeout_secs` 1-300 | `DEFAULT_TCP_IDLE_TIMEOUT` | `transport_bounds_test.rs` at 1 s |
 | UDP answer | 512 / EDNS size / at most 4096 | `PLAIN_UDP_LIMIT`, `MAX_UDP_RESPONSE` | `transport_bounds_test.rs` |
 | records in one answer | 100 | `MAX_ANSWER_RECORDS` | the executor |
@@ -411,12 +430,16 @@ contain a complete question section.
 ### 2. Transfers trust whoever asks the model
 
 - There is no TSIG and no ACL in the server: whether a client may transfer a zone is the
-  model's decision (`send_dns_refused`), as everything else is.
+  model's decision (`send_dns_refused`), as everything else is. The event names the client's
+  address (`client_ip`, `client_port`) so the instructions can say who is allowed; over UDP
+  that address is unauthenticated, which is why a full zone never goes over UDP.
 - A signed zone answers IXFR only with the full zone or "current".
 
-### 3. `send_dns_response` bypasses everything
+### 3. `send_dns_response` is checked only for being a DNS message
 
-- Its hand-assembled bytes are sent as given: no OPT, no signatures, no truncation.
+- Its hand-assembled bytes must parse, and are re-encoded, signed and truncated like any other
+  answer; nothing checks that they answer the question asked (the transaction ID and question
+  section are the caller's).
 
 ### 4. No DNS COOKIEs (RFC 7873)
 

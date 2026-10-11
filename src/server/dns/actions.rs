@@ -109,6 +109,17 @@ impl Protocol for DnsProtocol {
                 example: json!(10),
                 default: Some(json!(super::DEFAULT_TCP_IDLE_TIMEOUT.as_secs())),
             },
+            ParameterDefinition {
+                name: "tcp_connections_per_ip".to_string(),
+                type_hint: "number".to_string(),
+                description: "DNS-over-TCP connections one client address may hold open at \
+                    once (IPv6 counted per /64); past it a new connection from that address is \
+                    closed unread. 1-64, the server's cap on all TCP connections."
+                    .to_string(),
+                required: false,
+                example: json!(8),
+                default: Some(json!(super::MAX_TCP_CONNECTIONS_PER_IP)),
+            },
         ]
     }
     fn protocol_name(&self) -> &'static str {
@@ -331,6 +342,17 @@ impl Server for DnsProtocol {
             if !(1..=300).contains(&idle) {
                 anyhow::bail!("tcp_idle_timeout_secs must be between 1 and 300, got {idle}");
             }
+            let per_ip = params
+                .map(|p| p.get_optional_u64("tcp_connections_per_ip"))
+                .transpose()?
+                .flatten()
+                .unwrap_or(super::MAX_TCP_CONNECTIONS_PER_IP as u64);
+            if !(1..=super::MAX_TCP_CONNECTIONS as u64).contains(&per_ip) {
+                anyhow::bail!(
+                    "tcp_connections_per_ip must be between 1 and {}, got {per_ip}",
+                    super::MAX_TCP_CONNECTIONS
+                );
+            }
             DnsServer::spawn_with_llm_actions(
                 ctx.legacy_listen_addr(),
                 ctx.llm_client,
@@ -340,6 +362,7 @@ impl Server for DnsProtocol {
                 DnsSettings {
                     dnssec_zone,
                     tcp_idle_timeout: std::time::Duration::from_secs(idle),
+                    tcp_connections_per_ip: per_ip as usize,
                 },
             )
             .await
@@ -1180,7 +1203,8 @@ fn send_dns_zone_action() -> ActionDefinition {
             "Transfer the whole zone (AXFR). Give the zone's SOA and every other record in it; \
              the server sends SOA, the records, SOA again, split over as many messages as it \
              takes, and for a signed zone adds the DNSKEY, every signature and the NSEC chain. \
-             Also a valid answer to IXFR (RFC 1995 allows a full zone in reply). Every record \
+             Also a valid answer to IXFR (RFC 1995 allows a full zone in reply); over UDP the \
+             server sends the SOA alone instead, and the client asks again over TCP. Every record \
              must be inside the zone; the SOA goes in 'soa', not among the records. {}",
             record_shape()
         ),
@@ -1343,6 +1367,20 @@ pub static DNS_QUERY_EVENT: LazyLock<EventType> = LazyLock::new(|| {
                 .to_string(),
             required: false,
         },
+        Parameter {
+            name: "client_ip".to_string(),
+            type_hint: "string".to_string(),
+            description: "The address the query came from. Over UDP it is unauthenticated: \
+                anyone can put another host's address on a datagram."
+                .to_string(),
+            required: true,
+        },
+        Parameter {
+            name: "client_port".to_string(),
+            type_hint: "number".to_string(),
+            description: "The source port the query came from".to_string(),
+            required: true,
+        },
     ])
     .with_actions(DnsProtocol::query_actions())
     .with_alternative_example(serde_json::json!({
@@ -1371,7 +1409,9 @@ pub static DNS_ZONE_TRANSFER_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         "dns_zone_transfer",
         "A client asked to transfer a zone: the whole zone (AXFR) or the changes since its \
          serial (IXFR). Transfer only a zone your instructions give this server, and only to a \
-         client they allow; otherwise refuse with send_dns_refused.",
+         client_ip they allow; otherwise refuse with send_dns_refused. Over UDP the client's \
+         address can be forged, so send_dns_zone there is answered with the SOA alone and the \
+         client must ask again over TCP.",
         serde_json::json!({
             "type": "send_dns_zone",
             "query_id": 12345,
@@ -1410,8 +1450,9 @@ pub static DNS_ZONE_TRANSFER_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         Parameter {
             name: "transport".to_string(),
             type_hint: "string".to_string(),
-            description: "\"tcp\", or \"udp\" for an IXFR; an IXFR answer too large for UDP is \
-                replaced by the new SOA alone, which sends the client to TCP"
+            description: "\"tcp\", or \"udp\" for an IXFR. Over UDP send_dns_zone is always \
+                answered with the SOA alone, and a send_dns_ixfr difference too large for UDP \
+                is too; either sends the client to TCP"
                 .to_string(),
             required: true,
         },
@@ -1420,6 +1461,20 @@ pub static DNS_ZONE_TRANSFER_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             type_hint: "boolean".to_string(),
             description: "The server signs this zone; answer an IXFR with send_dns_zone"
                 .to_string(),
+            required: true,
+        },
+        Parameter {
+            name: "client_ip".to_string(),
+            type_hint: "string".to_string(),
+            description: "The address asking for the transfer; decide by it whether this \
+                client may have the zone. Over UDP it is unauthenticated."
+                .to_string(),
+            required: true,
+        },
+        Parameter {
+            name: "client_port".to_string(),
+            type_hint: "number".to_string(),
+            description: "The source port the transfer request came from".to_string(),
             required: true,
         },
     ])
