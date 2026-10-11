@@ -24,6 +24,8 @@ use serde_json::{json, Value};
 use std::{net::SocketAddr, time::Duration};
 
 const MAX_FOLLOWUP_DEPTH: u8 = 4;
+/// Marks a handler turn a received DATAGRAM started, in the depth byte it carries.
+const FROM_DATAGRAM: u8 = 0x80;
 type HandlerFuture = BoxFuture<'static, (u8, Result<Vec<Value>>)>;
 type QueryFuture = BoxFuture<'static, (u8, Event)>;
 
@@ -73,10 +75,16 @@ impl QuicClient {
             0,
         ));
         let mut disconnect = false;
+        // Consecutive datagrams sent in answer to a received datagram. An echoing peer and a
+        // model that answers every datagram would otherwise trade them for as long as the LLM
+        // budget lasts; past MAX_FOLLOWUP_DEPTH such answers are dropped until the operator or
+        // a non-datagram event sends something.
+        let mut datagram_replies: u8 = 0;
         while !disconnect {
             tokio::select! {
                 command = commands.recv() => {
                     let Some(command) = command else { break; };
+                    datagram_replies = 0;
                     disconnect = enqueue(&ctx,&connection.0,exchange,&mut queries,command.action.clone(),Some(command),0).await;
                 }
                 Some((depth,event)) = queries.next(), if !queries.is_empty() => {
@@ -86,10 +94,22 @@ impl QuicClient {
                         handlers.push(handle_event(ctx.clone(),event,depth));
                     } else { Log::new(Some(&ctx.status_tx)).warn("QUIC response handler limit reached"); }
                 }
-                Some((depth,result)) = handlers.next(), if !handlers.is_empty() => {
+                Some((tagged,result)) = handlers.next(), if !handlers.is_empty() => {
+                    let from_datagram = tagged & FROM_DATAGRAM != 0;
+                    let depth = tagged & !FROM_DATAGRAM;
                     match result {
                         Ok(actions) if actions.len() <= MAX_STREAMS => {
                             for action in actions {
+                                if action["type"] == "send_quic_datagram" {
+                                    if !from_datagram {
+                                        datagram_replies = 0;
+                                    } else if datagram_replies >= MAX_FOLLOWUP_DEPTH {
+                                        Log::new(Some(&ctx.status_tx)).warn("QUIC datagram reply limit reached");
+                                        continue;
+                                    } else {
+                                        datagram_replies += 1;
+                                    }
+                                }
                                 if depth >= MAX_FOLLOWUP_DEPTH && action["type"] != "disconnect" {
                                     if action["type"] == "send_quic_data" || action["type"] == "send_quic_datagram" { Log::new(Some(&ctx.status_tx)).warn("QUIC follow-up limit reached"); }
                                     continue;
@@ -112,7 +132,7 @@ impl QuicClient {
                             &QUIC_DATAGRAM_EVENT,
                             json!({"data":data,"encoding":encoding,"bytes":datagram.len()}),
                         ),
-                        0,
+                        FROM_DATAGRAM,
                     ));
                 }
                 _ = connection.0.closed() => break,
