@@ -17,9 +17,8 @@ use std::sync::LazyLock;
 /// Event type constant for DoH queries
 /// Reuses DNS action definitions since DoH delegates to DnsProtocol
 pub static DOH_QUERY_EVENT: LazyLock<EventType> = LazyLock::new(|| {
-    // Get DNS actions from DnsProtocol
-    let dns_protocol = DnsProtocol::new();
-    let dns_actions = dns_protocol.get_sync_actions();
+    // The DNS actions that answer a query (not the zone-transfer ones: no transfer event here)
+    let dns_actions = DnsProtocol::query_actions();
 
     EventType::new(
         "doh_query",
@@ -103,7 +102,7 @@ impl Protocol for DohProtocol {
         self.dns_protocol.get_async_actions(state)
     }
     fn get_sync_actions(&self) -> Vec<ActionDefinition> {
-        self.dns_protocol.get_sync_actions()
+        DnsProtocol::query_actions()
     }
     fn protocol_name(&self) -> &'static str {
         "DoH"
