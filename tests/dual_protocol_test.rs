@@ -208,6 +208,7 @@ fn normalized_duals_map() {
     assert_eq!(client_protocol_for_server("RTP"), Some("RTP"));
     assert_eq!(client_protocol_for_server("RTSP"), Some("RTSP"));
     assert_eq!(client_protocol_for_server("HLS"), Some("HLS"));
+    assert_eq!(client_protocol_for_server("RDP"), Some("RDP"));
 }
 
 /// Server-only protocols must return None — a false positive here would make
@@ -216,7 +217,6 @@ fn normalized_duals_map() {
 fn server_only_protocols_have_no_dual() {
     for server in [
         "Bitcoin P2P", // The Bitcoin client is Core RPC over HTTP.
-        "RDP",
         "TFTP",
         "SVN",
         "Mercurial",
