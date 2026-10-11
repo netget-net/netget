@@ -1,10 +1,16 @@
-//! MQTT client implementation
+//! MQTT client implementation, over rumqttc's 3.1.1 and 5.0 stacks.
+//!
+//! `protocol_version` picks the stack at connect time. Everything above the transport — the
+//! turn queue, the model calls, the injected-command loop — is shared: [`Broker`] is the one
+//! handle actions are applied through, [`Transport`] the one event loop polled, and
+//! [`Message`] the one shape a received PUBLISH reaches the model in. Only the two enums know
+//! there are two rumqttc APIs.
 pub mod actions;
 
 pub use actions::MqttClientProtocol;
 
 use anyhow::{Context, Result};
-use rumqttc::{AsyncClient, Event, EventLoop, MqttOptions, Packet, Publish, QoS};
+use rumqttc::{AsyncClient, Event, EventLoop, MqttOptions, Packet, QoS};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -78,22 +84,46 @@ impl MqttClient {
             .flatten()
             .unwrap_or(true);
 
-        // Configure MQTT options
-        let mut mqttoptions = MqttOptions::new(&mqtt_client_id, &host, port);
-        mqttoptions.set_keep_alive(Duration::from_secs(keep_alive));
-        mqttoptions.set_clean_session(clean_session);
-
-        if let (Some(user), Some(pass)) = (username, password) {
-            mqttoptions.set_credentials(user, pass);
-        }
+        let version = startup_params
+            .as_ref()
+            .map(|p| p.get_optional_string("protocol_version"))
+            .transpose()?
+            .flatten()
+            .unwrap_or_else(|| DEFAULT_PROTOCOL_VERSION.to_string());
+        let v5 = match version.trim() {
+            "3.1.1" | "4" | "311" => false,
+            "5" | "5.0" | "v5" => true,
+            other => anyhow::bail!("protocol_version must be \"3.1.1\" or \"5.0\", not {other:?}"),
+        };
 
         info!(
-            "MQTT client {} connecting to {}:{} with client_id={}",
-            client_id, host, port, mqtt_client_id
+            "MQTT client {} connecting to {}:{} with client_id={} (MQTT {})",
+            client_id,
+            host,
+            port,
+            mqtt_client_id,
+            if v5 { "5.0" } else { "3.1.1" }
         );
 
-        // Create MQTT client
-        let (mqtt_client, eventloop) = AsyncClient::new(mqttoptions, 10);
+        let (mqtt_client, eventloop) = if v5 {
+            let mut options = rumqttc::v5::MqttOptions::new(&mqtt_client_id, &host, port);
+            options.set_keep_alive(Duration::from_secs(keep_alive));
+            options.set_clean_start(clean_session);
+            if let (Some(user), Some(pass)) = (username, password) {
+                options.set_credentials(user, pass);
+            }
+            let (c, e) = rumqttc::v5::AsyncClient::new(options, 10);
+            (Broker::V5(c), Transport::V5(Box::new(e)))
+        } else {
+            let mut options = MqttOptions::new(&mqtt_client_id, &host, port);
+            options.set_keep_alive(Duration::from_secs(keep_alive));
+            options.set_clean_session(clean_session);
+            if let (Some(user), Some(pass)) = (username, password) {
+                options.set_credentials(user, pass);
+            }
+            let (c, e) = AsyncClient::new(options, 10);
+            (Broker::V4(c), Transport::V4(Box::new(e)))
+        };
 
         // For returning the local address, we need to extract it from the eventloop
         // rumqttc doesn't expose local_addr directly, so we'll construct a fake SocketAddr
@@ -184,12 +214,342 @@ impl MqttClient {
 /// minutes of model time; a backlog past that is not going to be caught up with.
 const TURN_QUEUE_CAPACITY: usize = 256;
 
+/// `protocol_version` when the caller names none.
+pub const DEFAULT_PROTOCOL_VERSION: &str = "3.1.1";
+
 /// One thing the model is asked about, in arrival order.
 enum TurnEvent {
-    /// The first CONNACK: the client's chance to subscribe or publish first.
-    Connected,
+    /// The first CONNACK: the client's chance to subscribe or publish first. On v5 it carries
+    /// what the CONNACK said (reason code and properties).
+    Connected(Option<serde_json::Value>),
     /// A PUBLISH delivered by the broker.
-    Message(Publish),
+    Message(Message),
+}
+
+/// A PUBLISH from the broker, in either version.
+struct Message {
+    topic: String,
+    payload: Vec<u8>,
+    qos: u8,
+    retain: bool,
+    /// v5 only: the message's properties as the model sees them.
+    properties: Option<serde_json::Value>,
+}
+
+/// The request side of a connection: what actions are applied through.
+#[derive(Clone)]
+enum Broker {
+    V4(AsyncClient),
+    V5(rumqttc::v5::AsyncClient),
+}
+
+/// Subscription options the model may set. Only v5 has anything beyond QoS.
+#[derive(Clone, Copy, Default)]
+struct SubscribeOptions {
+    no_local: bool,
+    retain_as_published: bool,
+    retain_handling: u8,
+}
+
+impl Broker {
+    fn is_v5(&self) -> bool {
+        matches!(self, Broker::V5(_))
+    }
+
+    async fn subscribe(&self, topic: &str, qos: u8, opts: SubscribeOptions) -> Result<()> {
+        match self {
+            Broker::V4(c) => c.subscribe(topic, qos_from_u64(u64::from(qos))).await?,
+            Broker::V5(c) => {
+                use rumqttc::v5::mqttbytes::v5::{Filter, RetainForwardRule};
+                let mut filter = Filter::new(topic, v5_qos(qos));
+                filter.nolocal = opts.no_local;
+                filter.preserve_retain = opts.retain_as_published;
+                filter.retain_forward_rule = match opts.retain_handling {
+                    1 => RetainForwardRule::OnNewSubscribe,
+                    2 => RetainForwardRule::Never,
+                    _ => RetainForwardRule::OnEverySubscribe,
+                };
+                c.subscribe_many(vec![filter]).await?
+            }
+        }
+        Ok(())
+    }
+
+    async fn publish(
+        &self,
+        topic: &str,
+        qos: u8,
+        retain: bool,
+        payload: Vec<u8>,
+        properties: Option<&serde_json::Value>,
+    ) -> Result<()> {
+        match self {
+            Broker::V4(c) => {
+                c.publish(topic, qos_from_u64(u64::from(qos)), retain, payload)
+                    .await?
+            }
+            Broker::V5(c) => match properties {
+                Some(p) => {
+                    c.publish_with_properties(
+                        topic,
+                        v5_qos(qos),
+                        retain,
+                        payload,
+                        publish_properties(p)?,
+                    )
+                    .await?
+                }
+                None => c.publish(topic, v5_qos(qos), retain, payload).await?,
+            },
+        }
+        Ok(())
+    }
+
+    async fn unsubscribe(&self, topic: &str) -> Result<()> {
+        match self {
+            Broker::V4(c) => c.unsubscribe(topic).await?,
+            Broker::V5(c) => c.unsubscribe(topic).await?,
+        }
+        Ok(())
+    }
+
+    async fn disconnect(&self) -> Result<()> {
+        match self {
+            Broker::V4(c) => c.disconnect().await?,
+            Broker::V5(c) => c.disconnect().await?,
+        }
+        Ok(())
+    }
+}
+
+fn v5_qos(qos: u8) -> rumqttc::v5::mqttbytes::QoS {
+    use rumqttc::v5::mqttbytes::QoS as Q;
+    match qos {
+        1 => Q::AtLeastOnce,
+        2 => Q::ExactlyOnce,
+        _ => Q::AtMostOnce,
+    }
+}
+
+/// The model's `properties` object (validated by the action executor) as rumqttc's.
+fn publish_properties(
+    p: &serde_json::Value,
+) -> Result<rumqttc::v5::mqttbytes::v5::PublishProperties> {
+    use crate::server::mqtt::v5 as props;
+    let text = |k: &str| p.get(k).and_then(|v| v.as_str()).map(str::to_string);
+    let correlation_data = match text("correlation_data") {
+        Some(c) => Some(
+            props::text_to_binary(
+                &c,
+                p.get("correlation_data_encoding").and_then(|e| e.as_str()),
+            )
+            .map_err(|e| anyhow::anyhow!("correlation_data: {e}"))?
+            .into(),
+        ),
+        None => None,
+    };
+    Ok(rumqttc::v5::mqttbytes::v5::PublishProperties {
+        payload_format_indicator: p
+            .get("payload_format_indicator")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u8),
+        message_expiry_interval: p
+            .get("message_expiry_interval")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32),
+        topic_alias: None,
+        response_topic: text("response_topic"),
+        correlation_data,
+        user_properties: props::user_properties_from_json(p.get("user_properties"))
+            .map_err(|e| anyhow::anyhow!(e))?,
+        subscription_identifiers: Vec::new(),
+        content_type: text("content_type"),
+    })
+}
+
+/// What the transport saw, in either version.
+enum Notice {
+    ConnAck(Option<serde_json::Value>),
+    Publish(Message),
+    /// The broker closed the session; on v5 its DISCONNECT may say why.
+    Disconnect(Option<String>),
+    Other,
+}
+
+/// The event-loop side of a connection.
+enum Transport {
+    V4(Box<EventLoop>),
+    V5(Box<rumqttc::v5::EventLoop>),
+}
+
+impl Transport {
+    async fn next(&mut self) -> std::result::Result<Notice, String> {
+        match self {
+            Transport::V4(e) => match e.poll().await.map_err(|e| e.to_string())? {
+                Event::Incoming(Packet::ConnAck(_)) => Ok(Notice::ConnAck(None)),
+                Event::Incoming(Packet::Publish(p)) => Ok(Notice::Publish(Message {
+                    topic: p.topic.clone(),
+                    payload: p.payload.to_vec(),
+                    qos: p.qos as u8,
+                    retain: p.retain,
+                    properties: None,
+                })),
+                Event::Incoming(Packet::Disconnect) => Ok(Notice::Disconnect(None)),
+                other => {
+                    trace!("MQTT event: {:?}", other);
+                    Ok(Notice::Other)
+                }
+            },
+            Transport::V5(e) => {
+                use rumqttc::v5::mqttbytes::v5::Packet as P5;
+                use rumqttc::v5::Event as E5;
+                match e.poll().await.map_err(|e| e.to_string())? {
+                    E5::Incoming(P5::ConnAck(ack)) => {
+                        let mut info = serde_json::json!({
+                            "reason_code": connack_code(&ack.code),
+                            "session_present": ack.session_present,
+                        });
+                        if let Some(p) = &ack.properties {
+                            info["properties"] = connack_properties_json(p);
+                        }
+                        Ok(Notice::ConnAck(Some(info)))
+                    }
+                    E5::Incoming(P5::Publish(p)) => Ok(Notice::Publish(Message {
+                        topic: String::from_utf8_lossy(&p.topic).into_owned(),
+                        payload: p.payload.to_vec(),
+                        qos: p.qos as u8,
+                        retain: p.retain,
+                        properties: Some(
+                            p.properties
+                                .as_ref()
+                                .map(publish_properties_json)
+                                .unwrap_or_else(|| serde_json::json!({})),
+                        ),
+                    })),
+                    E5::Incoming(P5::Disconnect(d)) => Ok(Notice::Disconnect(Some(format!(
+                        "reason 0x{:02x}{}",
+                        d.reason_code as u8,
+                        d.properties
+                            .as_ref()
+                            .and_then(|p| p.reason_string.as_ref())
+                            .map(|r| format!(" ({r})"))
+                            .unwrap_or_default()
+                    )))),
+                    other => {
+                        trace!("MQTT v5 event: {:?}", other);
+                        Ok(Notice::Other)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A v5 CONNACK reason as its wire value (§3.2.2.2).
+fn connack_code(code: &rumqttc::v5::mqttbytes::v5::ConnectReturnCode) -> u8 {
+    use rumqttc::v5::mqttbytes::v5::ConnectReturnCode as C;
+    match code {
+        C::Success => 0x00,
+        C::RefusedProtocolVersion | C::UnsupportedProtocolVersion => 0x84,
+        C::BadClientId | C::ClientIdentifierNotValid => 0x85,
+        C::ServiceUnavailable | C::ServerUnavailable => 0x88,
+        C::UnspecifiedError => 0x80,
+        C::MalformedPacket => 0x81,
+        C::ProtocolError => 0x82,
+        C::ImplementationSpecificError => 0x83,
+        C::BadUserNamePassword => 0x86,
+        C::NotAuthorized => 0x87,
+        C::ServerBusy => 0x89,
+        C::Banned => 0x8A,
+        C::BadAuthenticationMethod => 0x8C,
+        C::TopicNameInvalid => 0x90,
+        C::PacketTooLarge => 0x95,
+        C::QuotaExceeded => 0x97,
+        C::PayloadFormatInvalid => 0x99,
+        C::RetainNotSupported => 0x9A,
+        C::QoSNotSupported => 0x9B,
+        C::UseAnotherServer => 0x9C,
+        C::ServerMoved => 0x9D,
+        C::ConnectionRateExceeded => 0x9F,
+    }
+}
+
+fn pairs_json(pairs: &[(String, String)]) -> serde_json::Value {
+    serde_json::Value::Array(
+        pairs
+            .iter()
+            .map(|(k, v)| serde_json::json!([k, v]))
+            .collect(),
+    )
+}
+
+/// CONNACK properties under the server's own snake_case names.
+fn connack_properties_json(p: &rumqttc::v5::mqttbytes::v5::ConnAckProperties) -> serde_json::Value {
+    let mut out = serde_json::Map::new();
+    let mut put = |k: &str, v: serde_json::Value| {
+        if !v.is_null() {
+            out.insert(k.to_string(), v);
+        }
+    };
+    put(
+        "session_expiry_interval",
+        serde_json::json!(p.session_expiry_interval),
+    );
+    put("receive_maximum", serde_json::json!(p.receive_max));
+    put("maximum_qos", serde_json::json!(p.max_qos));
+    put("retain_available", serde_json::json!(p.retain_available));
+    put("maximum_packet_size", serde_json::json!(p.max_packet_size));
+    put(
+        "assigned_client_identifier",
+        serde_json::json!(p.assigned_client_identifier),
+    );
+    put("topic_alias_maximum", serde_json::json!(p.topic_alias_max));
+    put("reason_string", serde_json::json!(p.reason_string));
+    put("server_keep_alive", serde_json::json!(p.server_keep_alive));
+    put(
+        "response_information",
+        serde_json::json!(p.response_information),
+    );
+    put("server_reference", serde_json::json!(p.server_reference));
+    if !p.user_properties.is_empty() {
+        put("user_properties", pairs_json(&p.user_properties));
+    }
+    serde_json::Value::Object(out)
+}
+
+/// PUBLISH properties under the server's own snake_case names, binary as text or hex.
+fn publish_properties_json(p: &rumqttc::v5::mqttbytes::v5::PublishProperties) -> serde_json::Value {
+    let mut out = serde_json::Map::new();
+    if let Some(v) = p.payload_format_indicator {
+        out.insert("payload_format_indicator".into(), serde_json::json!(v));
+    }
+    if let Some(v) = p.message_expiry_interval {
+        out.insert("message_expiry_interval".into(), serde_json::json!(v));
+    }
+    if let Some(v) = &p.content_type {
+        out.insert("content_type".into(), serde_json::json!(v));
+    }
+    if let Some(v) = &p.response_topic {
+        out.insert("response_topic".into(), serde_json::json!(v));
+    }
+    if let Some(v) = &p.correlation_data {
+        let (text, encoding) = crate::server::mqtt::v5::binary_to_text(v);
+        out.insert("correlation_data".into(), serde_json::json!(text));
+        out.insert(
+            "correlation_data_encoding".into(),
+            serde_json::json!(encoding),
+        );
+    }
+    if !p.subscription_identifiers.is_empty() {
+        out.insert(
+            "subscription_identifiers".into(),
+            serde_json::json!(p.subscription_identifiers),
+        );
+    }
+    if !p.user_properties.is_empty() {
+        out.insert("user_properties".into(), pairs_json(&p.user_properties));
+    }
+    serde_json::Value::Object(out)
 }
 
 /// Own the rumqttc event loop for the life of the connection.
@@ -200,7 +560,7 @@ enum TurnEvent {
 /// turn queue. Status (Connected / Disconnected / Error) is set here, so it stays true while a
 /// turn is parked.
 async fn poll_transport(
-    mut eventloop: EventLoop,
+    mut eventloop: Transport,
     app_state: Arc<AppState>,
     status_tx: mpsc::UnboundedSender<String>,
     client_id: ClientId,
@@ -211,12 +571,10 @@ async fn poll_transport(
     let mut connected = false;
 
     loop {
-        match eventloop.poll().await {
+        match eventloop.next().await {
             Ok(notification) => {
-                trace!("MQTT client {} event: {:?}", client_id, notification);
-
                 match notification {
-                    Event::Incoming(Packet::ConnAck(_)) => {
+                    Notice::ConnAck(info) => {
                         if !connected {
                             connected = true;
                             info!("MQTT client {} connected to broker", client_id);
@@ -226,10 +584,10 @@ async fn poll_transport(
                             let _ = status_tx
                                 .send(format!("[CLIENT] MQTT client {} connected", client_id));
                             let _ = status_tx.send("__UPDATE_UI__".to_string());
-                            enqueue_turn(&turn_tx, TurnEvent::Connected, client_id);
+                            enqueue_turn(&turn_tx, TurnEvent::Connected(info), client_id);
                         }
                     }
-                    Event::Incoming(Packet::Publish(publish)) => {
+                    Notice::Publish(publish) => {
                         debug!(
                             "MQTT client {} received message on topic '{}': {} bytes",
                             client_id,
@@ -238,24 +596,22 @@ async fn poll_transport(
                         );
                         enqueue_turn(&turn_tx, TurnEvent::Message(publish), client_id);
                     }
-                    Event::Incoming(Packet::SubAck(suback)) => {
-                        debug!(
-                            "MQTT client {} subscription acknowledged: {:?}",
-                            client_id, suback
-                        );
-                    }
-                    Event::Incoming(Packet::Disconnect) => {
-                        info!("MQTT client {} disconnected by broker", client_id);
+                    Notice::Disconnect(why) => {
+                        let why = why.map(|w| format!(" ({w})")).unwrap_or_default();
+                        info!("MQTT client {} disconnected by broker{}", client_id, why);
                         app_state
                             .update_client_status(client_id, ClientStatus::Disconnected)
                             .await;
-                        let _ = status_tx
-                            .send(format!("[CLIENT] MQTT client {} disconnected", client_id));
+                        let _ = status_tx.send(format!(
+                            "[CLIENT] MQTT client {} disconnected by broker{}",
+                            client_id, why
+                        ));
                         let _ = status_tx.send("__UPDATE_UI__".to_string());
                         break;
                     }
-                    // PINGREQ / PINGRESP and every outgoing packet are traced above.
-                    _ => {}
+                    // PINGREQ / PINGRESP, acknowledgements and outgoing packets are traced by
+                    // `Transport::next`.
+                    Notice::Other => {}
                 }
             }
             Err(e) => {
@@ -305,7 +661,7 @@ fn enqueue_turn(turn_tx: &mpsc::Sender<TurnEvent>, event: TurnEvent, client_id: 
                 client_id, publish.topic, TURN_QUEUE_CAPACITY
             );
         }
-        Err(mpsc::error::TrySendError::Full(TurnEvent::Connected)) => {
+        Err(mpsc::error::TrySendError::Full(TurnEvent::Connected(_))) => {
             warn!(
                 "MQTT client {} dropped its connected event decision=turn_queue_full",
                 client_id
@@ -320,7 +676,7 @@ fn enqueue_turn(turn_tx: &mpsc::Sender<TurnEvent>, event: TurnEvent, client_id: 
 #[allow(clippy::too_many_arguments)]
 async fn run_model_turns(
     mut turn_rx: mpsc::Receiver<TurnEvent>,
-    mqtt_client: AsyncClient,
+    mqtt_client: Broker,
     llm_client: OllamaClient,
     app_state: Arc<AppState>,
     status_tx: mpsc::UnboundedSender<String>,
@@ -330,8 +686,9 @@ async fn run_model_turns(
 ) {
     while let Some(turn) = turn_rx.recv().await {
         match turn {
-            TurnEvent::Connected => {
+            TurnEvent::Connected(info) => {
                 handle_connected(
+                    info,
                     &mqtt_client,
                     &llm_client,
                     &app_state,
@@ -359,8 +716,10 @@ async fn run_model_turns(
 }
 
 /// Ask the model what to do now that the broker accepted the CONNECT.
+#[allow(clippy::too_many_arguments)]
 async fn handle_connected(
-    mqtt_client: &AsyncClient,
+    connack: Option<serde_json::Value>,
+    mqtt_client: &Broker,
     llm_client: &OllamaClient,
     app_state: &Arc<AppState>,
     status_tx: &mpsc::UnboundedSender<String>,
@@ -372,13 +731,18 @@ async fn handle_connected(
         return;
     };
     let protocol = Arc::new(MqttClientProtocol::new());
-    let event = ProtocolEvent::new(
-        &MQTT_CLIENT_CONNECTED_EVENT,
-        serde_json::json!({
-            "remote_addr": "connected",
-            "client_id": mqtt_client_id,
-        }),
-    );
+    let mut data = serde_json::json!({
+        "remote_addr": "connected",
+        "client_id": mqtt_client_id,
+        "protocol_version": if mqtt_client.is_v5() { "5.0" } else { "3.1.1" },
+    });
+    // v5 CONNACK: its reason code and properties (an assigned client id among them).
+    if let Some(serde_json::Value::Object(ack)) = connack {
+        for (k, v) in ack {
+            data[k] = v;
+        }
+    }
+    let event = ProtocolEvent::new(&MQTT_CLIENT_CONNECTED_EVENT, data);
 
     let memory = app_state
         .get_memory_for_client(client_id)
@@ -417,8 +781,8 @@ async fn handle_connected(
 /// Handle incoming MQTT message
 #[allow(clippy::too_many_arguments)]
 async fn handle_incoming_message(
-    publish: &Publish,
-    mqtt_client: &AsyncClient,
+    publish: &Message,
+    mqtt_client: &Broker,
     llm_client: &OllamaClient,
     app_state: &Arc<AppState>,
     status_tx: &mpsc::UnboundedSender<String>,
@@ -427,21 +791,22 @@ async fn handle_incoming_message(
 ) {
     let topic = publish.topic.clone();
     let payload = String::from_utf8_lossy(&publish.payload).to_string();
-    let qos = publish.qos as u8;
+    let qos = publish.qos;
     let retain = publish.retain;
 
     // Call LLM with message received event
     if let Some(instruction) = app_state.get_instruction_for_client(client_id).await {
         let protocol = Arc::new(MqttClientProtocol::new());
-        let event = ProtocolEvent::new(
-            &MQTT_MESSAGE_RECEIVED_EVENT,
-            serde_json::json!({
-                "topic": topic,
-                "payload": payload,
-                "qos": qos,
-                "retain": retain,
-            }),
-        );
+        let mut data = serde_json::json!({
+            "topic": topic,
+            "payload": payload,
+            "qos": qos,
+            "retain": retain,
+        });
+        if let Some(properties) = &publish.properties {
+            data["properties"] = properties.clone();
+        }
+        let event = ProtocolEvent::new(&MQTT_MESSAGE_RECEIVED_EVENT, data);
 
         let memory = app_state
             .get_memory_for_client(client_id)
@@ -498,7 +863,7 @@ enum MqttApplied {
 /// LLM-produced one.
 async fn apply_action(
     action_result: ClientActionResult,
-    mqtt_client: &AsyncClient,
+    mqtt_client: &Broker,
     client_id: ClientId,
     disconnecting: &Arc<AtomicBool>,
 ) -> Result<MqttApplied> {
@@ -510,13 +875,21 @@ async fn apply_action(
                     .and_then(|v| v.as_array())
                     .context("mqtt_subscribe result has no 'topics' array")?;
                 let qos = data.get("qos").and_then(|v| v.as_u64()).unwrap_or(0);
-                let qos_level = qos_from_u64(qos);
+                let flag = |k: &str| data.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
+                let opts = SubscribeOptions {
+                    no_local: flag("no_local"),
+                    retain_as_published: flag("retain_as_published"),
+                    retain_handling: data
+                        .get("retain_handling")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as u8,
+                };
 
                 let mut subscribed: Vec<String> = Vec::new();
                 for topic in topics {
                     if let Some(topic_str) = topic.as_str() {
                         mqtt_client
-                            .subscribe(topic_str, qos_level)
+                            .subscribe(topic_str, qos as u8, opts)
                             .await
                             .with_context(|| format!("subscribe to '{topic_str}' failed"))?;
                         info!(
@@ -552,8 +925,21 @@ async fn apply_action(
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
 
+                let properties = data.get("properties").filter(|p| !p.is_null());
+                if properties.is_some() && !mqtt_client.is_v5() {
+                    anyhow::bail!(
+                        "PUBLISH properties need MQTT 5; this client connected with 3.1.1 \
+                         (start it with protocol_version \"5.0\")"
+                    );
+                }
                 mqtt_client
-                    .publish(topic, qos_from_u64(qos), retain, payload.as_bytes())
+                    .publish(
+                        topic,
+                        qos as u8,
+                        retain,
+                        payload.as_bytes().to_vec(),
+                        properties,
+                    )
                     .await
                     .with_context(|| format!("publish to '{topic}' failed"))?;
                 info!(
@@ -640,7 +1026,7 @@ fn qos_from_u64(qos: u64) -> QoS {
 /// Handle LLM action results
 async fn handle_llm_actions(
     result: ClientLlmResult,
-    mqtt_client: &AsyncClient,
+    mqtt_client: &Broker,
     app_state: &Arc<AppState>,
     client_id: ClientId,
     protocol: &Arc<MqttClientProtocol>,
@@ -685,7 +1071,7 @@ async fn handle_llm_actions(
 /// through the same [`apply_action`] the LLM path uses.
 async fn command_loop(
     mut command_rx: mpsc::Receiver<crate::state::client_handles::ClientCommand>,
-    mqtt_client: AsyncClient,
+    mqtt_client: Broker,
     client_id: ClientId,
     app_state: Arc<AppState>,
     status_tx: mpsc::UnboundedSender<String>,
