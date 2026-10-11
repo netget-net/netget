@@ -134,15 +134,6 @@ pub(crate) fn peer(var: &str) -> String {
     std::env::var(var).unwrap_or_else(|_| panic!("{var} must be set from tests/server/acme/install_peers.py (lego 4.35.2, Pebble 2.10.1, certbot 5.8.0); this evidence never skips"))
 }
 
-/// A free loopback port.
-pub(crate) fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
-
 /// A test CA and a `localhost` server certificate it signed, written into `dir`, for the CA's
 /// HTTPS listener: (CA certificate the peers trust, server chain, server key).
 pub(crate) fn tls_files(dir: &std::path::Path) -> (String, String, String) {
