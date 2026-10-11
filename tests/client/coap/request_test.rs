@@ -39,7 +39,11 @@ fn a_request_becomes_path_segments_query_items_and_a_content_format() {
 fn what_cannot_be_sent_is_refused() {
     for bad in [
         json!({"type": "coap_put", "path": "/x"}),
-        json!({"type": "coap_put", "path": "/x", "payload": "p".repeat(1025)}),
+        json!({
+            "type": "coap_put",
+            "path": "/x",
+            "payload": "p".repeat(netget::server::coap::codec::MAX_REPRESENTATION_LEN + 1)
+        }),
         json!({"type": "coap_get", "path": format!("/{}", "s".repeat(256))}),
         json!({"type": "coap_get", "path": "/x", "query": format!("q={}", "v".repeat(254))}),
         json!({"type": "coap_get", "path": "/x", "accept": "application/unknown"}),
@@ -48,4 +52,11 @@ fn what_cannot_be_sent_is_refused() {
     ] {
         assert!(request_from_action(&bad).is_err(), "{bad} must be refused");
     }
+    // Exactly the limit is an upload, in Block1 blocks.
+    assert!(request_from_action(&json!({
+        "type": "coap_put",
+        "path": "/x",
+        "payload": "p".repeat(netget::server::coap::codec::MAX_REPRESENTATION_LEN)
+    }))
+    .is_ok());
 }

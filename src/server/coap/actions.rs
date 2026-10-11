@@ -9,7 +9,7 @@
 
 use crate::llm::actions::{
     protocol_trait::{ActionResult, Protocol, Server},
-    ActionDefinition, Parameter,
+    ActionDefinition, Parameter, ParameterDefinition,
 };
 use crate::protocol::log_template::LogTemplate;
 use crate::protocol::EventType;
@@ -24,6 +24,7 @@ use super::codec;
 pub const RESULT_RESPONSE: &str = "coap_response";
 pub const RESULT_RESET: &str = "coap_reset";
 pub const RESULT_IGNORE: &str = "coap_ignore";
+pub const RESULT_NOTIFIED: &str = "coap_notified";
 
 /// CoAP server protocol handler.
 #[derive(Default)]
@@ -37,9 +38,9 @@ impl CoapProtocol {
 
 impl Protocol for CoapProtocol {
     fn get_async_actions(&self, _state: &AppState) -> Vec<ActionDefinition> {
-        // A plain CoAP server only answers requests. Unsolicited notifications belong to
-        // Observe (RFC 7641), which is not implemented — see src/server/coap/CLAUDE.md.
-        vec![]
+        // The one thing a CoAP server says unasked: a notification to the observers of a
+        // resource whose state changed (RFC 7641).
+        vec![coap_notify_action()]
     }
 
     fn get_sync_actions(&self) -> Vec<ActionDefinition> {
@@ -47,7 +48,23 @@ impl Protocol for CoapProtocol {
             send_coap_response_action(),
             send_coap_reset_action(),
             ignore_coap_request_action(),
+            coap_notify_action(),
         ]
+    }
+
+    fn get_startup_parameters(&self) -> Vec<ParameterDefinition> {
+        vec![ParameterDefinition {
+            name: "notification_ack_timeout_ms".to_string(),
+            type_hint: "number".to_string(),
+            description: "Milliseconds to wait for the ACK of a Confirmable notification \
+                 (coap_notify with confirmable: true) before resending it, doubling each \
+                 time. After 4 unanswered resends the observer is presumed gone and its \
+                 observation is removed (RFC 7641 §4.5). RFC 7252's ACK_TIMEOUT; 100-60000."
+                .to_string(),
+            required: false,
+            example: json!(2000),
+            default: Some(json!(super::DEFAULT_NOTIFICATION_ACK_TIMEOUT_MS)),
+        }]
     }
 
     fn protocol_name(&self) -> &'static str {
@@ -104,11 +121,16 @@ impl Protocol for CoapProtocol {
             .implementation(
                 "Hand-rolled RFC 7252 codec (src/server/coap/codec.rs): 4-byte header, \
                  CON/NON/ACK/RST, tokens, option delta/length with both extension forms, \
-                 payload marker, GET/POST/PUT/DELETE",
+                 payload marker, GET/POST/PUT/DELETE. Observe (RFC 7641, observe.rs): \
+                 registration, deregistration, NON or CON notifications, RST and \
+                 unacknowledged-CON removal. Block-wise (RFC 7959, blockwise.rs): Block2 \
+                 served from one cached answer with ETag and Size2, Block1 reassembled with \
+                 2.31 Continue, 4.08 and 4.13+Size1",
             )
             .llm_control(
-                "Resource representations, media type and response code. Message type, \
-                 message id and token echo are server-side",
+                "Resource representations, media type and response code, whether a resource \
+                 is observable, and when its observers are notified. Message type, message id, \
+                 token echo, block slicing and reassembly are server-side",
             )
             .e2e_testing(
                 "STABLE rests on all six conditions, each checked against source and by \
@@ -133,22 +155,32 @@ impl Protocol for CoapProtocol {
                  CLAUDE.md files were re-read against source in that pass; the corrections are \
                  in them. (6) No #[ignore] and no skip gate anywhere in tests/server/coap/. \
                  \
-                 UNPROVEN, and this is the ceiling on what the clients above prove, because \
-                 none of it is implemented: Observe (RFC 7641), Block-wise transfer \
-                 (RFC 7959), DTLS/CoAPS on 5684, separate (non-piggybacked) responses, \
-                 retransmission of Confirmable responses, message deduplication (there is no \
-                 cache, so a retransmitted CON produces a second handler call) and multicast. \
-                 All three peers drive the same one-datagram request/response shape, because \
-                 it is the only shape this server has.",
+                 OBSERVE AND BLOCK-WISE, added October 2026, carry the same six conditions on \
+                 their own surface (observe_blockwise_test.rs, observe_blockwise_bounds_test.rs): \
+                 (1) libcoap's coap-client and aiocoap 0.4 (Python, its own codec) each \
+                 register an observation and receive notifications NetGet pushed with \
+                 coap_notify, fetch a 3000-byte representation as Block2 blocks and reassemble \
+                 it byte for byte, and upload a 3000-byte body as Block1 blocks that reaches \
+                 the model whole; both fail rather than skip when absent. (2) The pcap oracle \
+                 reads every datagram of the Observe and block exchanges. (3) The fuzz target \
+                 also reads Block1, Block2 and Observe from every decoded message. (4) \
+                 MAX_OBSERVERS, MAX_UPLOADS, MAX_TRANSFERS, MAX_REPRESENTATION_LEN (both \
+                 directions), out-of-order Block1, RST removal and the CON notification \
+                 retransmission limit each have a test. \
+                 \
+                 UNPROVEN, because none of it is implemented: DTLS/CoAPS on 5684, separate \
+                 (non-piggybacked) responses, retransmission of Confirmable responses, \
+                 message deduplication (there is no cache, so a retransmitted CON produces a \
+                 second handler call) and multicast.",
             )
             .notes(
                 "Stable means the evidence for the implemented surface is complete, NOT that \
                  RFC 7252 is. What is implemented: the 4-byte header, CON/NON/ACK/RST, tokens, \
                  option delta/length with both extension forms, the payload marker, \
                  GET/POST/PUT/DELETE, piggybacked responses, the ping->RST reply, RST for a \
-                 malformed CON, and 4.13 for a datagram over MAX_MESSAGE_LEN. An IoT client \
-                 that needs Observe or Block-wise cannot use this server, and no test here \
-                 says otherwise. \
+                 malformed CON, 4.13 for a datagram over MAX_MESSAGE_LEN, Observe \
+                 (RFC 7641) and Block-wise transfer in both directions (RFC 7959). Not \
+                 implemented: separate responses, deduplication, DTLS, multicast. \
                  Two things a future reader should re-check rather than inherit: the fuzz \
                  target (fuzz/ is its own workspace, NO CI job builds it, and this target was \
                  found uncompilable-since-September in the pass that set this rating), and \
@@ -244,6 +276,19 @@ impl Server for CoapProtocol {
         Box<dyn std::future::Future<Output = anyhow::Result<std::net::SocketAddr>> + Send>,
     > {
         Box::pin(async move {
+            let ack_timeout_ms = ctx
+                .startup_params
+                .as_ref()
+                .map(|p| p.get_optional_u64("notification_ack_timeout_ms"))
+                .transpose()?
+                .flatten()
+                .unwrap_or(super::DEFAULT_NOTIFICATION_ACK_TIMEOUT_MS);
+            if !(100..=60_000).contains(&ack_timeout_ms) {
+                anyhow::bail!(
+                    "notification_ack_timeout_ms must be between 100 and 60000, got \
+                     {ack_timeout_ms}"
+                );
+            }
             let listen_addr = ctx.legacy_listen_addr();
             super::CoapServer::spawn_with_llm_actions(
                 listen_addr,
@@ -251,6 +296,7 @@ impl Server for CoapProtocol {
                 ctx.state,
                 ctx.status_tx,
                 ctx.server_id,
+                std::time::Duration::from_millis(ack_timeout_ms),
             )
             .await
         })
@@ -264,80 +310,15 @@ impl Server for CoapProtocol {
 
         match action_type {
             "send_coap_response" => {
-                let code_value = action
-                    .get("code")
-                    .context("send_coap_response requires a 'code', e.g. \"2.05\" or \"4.04\"")?;
-
-                let code = if let Some(s) = code_value.as_str() {
-                    codec::parse_code_string(s).ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "send_coap_response 'code' {s:?} is not a CoAP response code. Write \
-                             it as class.detail, e.g. \"2.05\" (Content), \"2.04\" (Changed), \
-                             \"4.04\" (Not Found), \"5.03\" (Service Unavailable)."
-                        )
-                    })?
-                } else {
-                    anyhow::bail!(
-                        "send_coap_response 'code' must be a string such as \"2.05\", got \
-                         {code_value}"
-                    );
-                };
-
-                let class = codec::code_class(code);
-                if !(2..=5).contains(&class) || class == 3 {
-                    anyhow::bail!(
-                        "send_coap_response 'code' {} is not a response code: class must be 2 \
-                         (success), 4 (client error) or 5 (server error). Class 0 is a request \
-                         method, and 1/3/6/7 are reserved.",
-                        codec::code_to_string(code)
-                    );
-                }
-
+                let code = response_code(&action, "send_coap_response")?;
                 let payload = decode_payload(&action)?;
+                let content_format = content_format(&action, &payload, "send_coap_response")?;
 
-                // Content-Format: explicit wins; otherwise text/plain when there is a
-                // payload at all, so a client is never handed bytes with no media type. An
-                // empty string is "no media type", which is what a model writes for a 4.04
-                // with no body; it reads as absent rather than as an unknown media type.
-                let content_format = match action.get("content_format") {
-                    Some(serde_json::Value::String(s)) if s.trim().is_empty() => {
-                        if payload.is_empty() {
-                            None
-                        } else {
-                            Some(0)
-                        }
-                    }
-                    Some(serde_json::Value::String(s)) => {
-                        Some(codec::content_format_id(s).ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "send_coap_response 'content_format' {s:?} is not a CoAP media \
-                                 type. Use \"text/plain\", \"application/json\", \
-                                 \"application/cbor\", \"application/xml\", \
-                                 \"application/octet-stream\" or \
-                                 \"application/link-format\", or the numeric identifier."
-                            )
-                        })?)
-                    }
-                    Some(serde_json::Value::Number(n)) => {
-                        let id = n.as_u64().unwrap_or(u64::MAX);
-                        if id > u16::MAX as u64 {
-                            anyhow::bail!(
-                                "send_coap_response 'content_format' {id} is not a valid \
-                                 Content-Format identifier"
-                            );
-                        }
-                        Some(id as u16)
-                    }
-                    Some(serde_json::Value::Null) | None => {
-                        if payload.is_empty() {
-                            None
-                        } else {
-                            Some(0) // text/plain;charset=utf-8
-                        }
-                    }
+                let observable = match action.get("observable") {
+                    None | Some(serde_json::Value::Null) => true,
+                    Some(serde_json::Value::Bool(b)) => *b,
                     Some(other) => anyhow::bail!(
-                        "send_coap_response 'content_format' must be a media type string or a \
-                         numeric identifier, got {other}"
+                        "send_coap_response 'observable' must be true or false, got {other}"
                     ),
                 };
 
@@ -347,8 +328,18 @@ impl Server for CoapProtocol {
                         "code": code,
                         "payload_hex": hex::encode(&payload),
                         "content_format": content_format,
+                        "observable": observable,
                     }),
                 })
+            }
+            "coap_notify" => {
+                // Validated here so a malformed one names its real problem, but it can only
+                // run against the live server's observers.
+                notification_from_action(&action)?;
+                anyhow::bail!(
+                    "coap_notify needs the running CoAP server's observers and must be \
+                     dispatched through execute_action_with_state"
+                )
             }
             "send_coap_reset" => Ok(ActionResult::Custom {
                 name: RESULT_RESET.to_string(),
@@ -361,6 +352,133 @@ impl Server for CoapProtocol {
             _ => Err(anyhow::anyhow!("Unknown CoAP action: {action_type}")),
         }
     }
+
+    fn execute_action_with_state<'a>(
+        &'a self,
+        action: serde_json::Value,
+        state: AppState,
+        server_id: Option<crate::state::ServerId>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ActionResult>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            if action.get("type").and_then(|v| v.as_str()) != Some("coap_notify") {
+                return self.execute_action(action);
+            }
+            let (path, rep, confirmable) = notification_from_action(&action)?;
+            let server_id =
+                server_id.context("coap_notify needs a running CoAP server in context")?;
+            let handle = state
+                .server_handle::<super::CoapServerHandle>(server_id)
+                .await
+                .context("coap_notify: this server is not a running CoAP server")?;
+            let report = handle.notify(&state, &path, rep, confirmable).await;
+            Ok(ActionResult::Custom {
+                name: RESULT_NOTIFIED.to_string(),
+                data: json!({
+                    "path": path,
+                    "observers_notified": report.sent,
+                    "observations_ended": report.ended,
+                }),
+            })
+        })
+    }
+}
+
+/// The `code` field: a CoAP response code written `class.detail`, class 2, 4 or 5.
+fn response_code(action: &serde_json::Value, verb: &str) -> Result<u8> {
+    let code_value = action
+        .get("code")
+        .with_context(|| format!("{verb} requires a 'code', e.g. \"2.05\" or \"4.04\""))?;
+
+    let code = if let Some(s) = code_value.as_str() {
+        codec::parse_code_string(s).ok_or_else(|| {
+            anyhow::anyhow!(
+                "{verb} 'code' {s:?} is not a CoAP response code. Write it as class.detail, \
+                 e.g. \"2.05\" (Content), \"2.04\" (Changed), \"4.04\" (Not Found), \"5.03\" \
+                 (Service Unavailable)."
+            )
+        })?
+    } else {
+        anyhow::bail!("{verb} 'code' must be a string such as \"2.05\", got {code_value}");
+    };
+
+    let class = codec::code_class(code);
+    if !(2..=5).contains(&class) || class == 3 {
+        anyhow::bail!(
+            "{verb} 'code' {} is not a response code: class must be 2 (success), 4 (client \
+             error) or 5 (server error). Class 0 is a request method, and 1/3/6/7 are reserved.",
+            codec::code_to_string(code)
+        );
+    }
+    Ok(code)
+}
+
+/// The `content_format` field. Explicit wins; otherwise text/plain when there is a payload at
+/// all, so a client is never handed bytes with no media type. An empty string is "no media
+/// type", which is what a model writes for a 4.04 with no body; it reads as absent rather
+/// than as an unknown media type.
+fn content_format(action: &serde_json::Value, payload: &[u8], verb: &str) -> Result<Option<u16>> {
+    let default = if payload.is_empty() { None } else { Some(0) };
+    Ok(match action.get("content_format") {
+        Some(serde_json::Value::String(s)) if s.trim().is_empty() => default,
+        Some(serde_json::Value::String(s)) => {
+            Some(codec::content_format_id(s).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{verb} 'content_format' {s:?} is not a CoAP media type. Use \"text/plain\", \
+                 \"application/json\", \"application/cbor\", \"application/xml\", \
+                 \"application/octet-stream\" or \"application/link-format\", or the numeric \
+                 identifier."
+                )
+            })?)
+        }
+        Some(serde_json::Value::Number(n)) => {
+            let id = n.as_u64().unwrap_or(u64::MAX);
+            if id > u16::MAX as u64 {
+                anyhow::bail!(
+                    "{verb} 'content_format' {id} is not a valid Content-Format identifier"
+                );
+            }
+            Some(id as u16)
+        }
+        Some(serde_json::Value::Null) | None => default, // text/plain;charset=utf-8
+        Some(other) => anyhow::bail!(
+            "{verb} 'content_format' must be a media type string or a numeric identifier, got \
+             {other}"
+        ),
+    })
+}
+
+/// A `coap_notify` action, read into the path, the representation and the message type.
+fn notification_from_action(
+    action: &serde_json::Value,
+) -> Result<(String, super::blockwise::Representation, bool)> {
+    let path = action
+        .get("path")
+        .and_then(|v| v.as_str())
+        .context("coap_notify requires a 'path', the observed resource, e.g. \"/temperature\"")?;
+    let path = if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{path}")
+    };
+    let code = match action.get("code") {
+        None | Some(serde_json::Value::Null) => codec::CODE_CONTENT,
+        Some(_) => response_code(action, "coap_notify")?,
+    };
+    let payload = decode_payload(action)?;
+    let content_format = content_format(action, &payload, "coap_notify")?;
+    let confirmable = match action.get("confirmable") {
+        None | Some(serde_json::Value::Null) => false,
+        Some(serde_json::Value::Bool(b)) => *b,
+        Some(other) => {
+            anyhow::bail!("coap_notify 'confirmable' must be true or false, got {other}")
+        }
+    };
+    Ok((
+        path,
+        super::blockwise::Representation::new(code, payload, content_format),
+        confirmable,
+    ))
 }
 
 /// Turn the action's `payload` into the exact bytes to put on the wire, honouring the
@@ -375,8 +493,7 @@ fn decode_payload(action: &serde_json::Value) -> Result<Vec<u8>> {
         None | Some(serde_json::Value::Null) => return Ok(Vec::new()),
         Some(serde_json::Value::String(s)) => s.clone(),
         Some(other) => anyhow::bail!(
-            "send_coap_response 'payload' must be a string (use \"encoding\": \"hex\" for \
-             binary), got {other}"
+            "'payload' must be a string (use \"encoding\": \"hex\" for binary), got {other}"
         ),
     };
 
@@ -387,16 +504,14 @@ fn decode_payload(action: &serde_json::Value) -> Result<Vec<u8>> {
 
     let bytes = decode_with_encoding(&payload, encoding)?;
 
-    if bytes.len() > codec::MAX_PAYLOAD_LEN {
+    if bytes.len() > codec::MAX_REPRESENTATION_LEN {
         anyhow::bail!(
-            "send_coap_response 'payload' is {} bytes, over the {}-byte limit. CoAP has no \
-             fragmentation of its own and this server does not implement Block-wise transfer \
-             (RFC 7959), so a representation has to fit one datagram: RFC 7252 §4.6 puts the \
-             safe maximum at {} bytes when the path MTU is unknown. Return a smaller \
-             representation - a summary, fewer records, or a link to the detail - rather than \
-             a response no constrained client can receive.",
+            "'payload' is {} bytes, over the {}-byte limit. A representation over {} bytes is \
+             sent in Block-wise transfer blocks (RFC 7959), but every block is served from one \
+             held copy, so the whole has a ceiling. Return a smaller representation - a \
+             summary, fewer records, or a link to the detail.",
             bytes.len(),
-            codec::MAX_PAYLOAD_LEN,
+            codec::MAX_REPRESENTATION_LEN,
             codec::MAX_PAYLOAD_LEN
         );
     }
@@ -455,7 +570,10 @@ fn send_coap_response_action() -> ActionDefinition {
              device and keep it consistent across requests with set_memory. The example's \
              payload is a placeholder for the shape, never data. The message type of the reply \
              (ACK for a CON request, NON for a NON request), the message id and the token echo \
-             are handled for you."
+             are handled for you, and so is Block-wise transfer: a payload over 1024 bytes \
+             (up to 64 KiB) is sent in blocks without you seeing the continuations. When the \
+             request's 'observe' is \"register\", a 2.xx answer registers the client as an \
+             observer of the path; push later states with coap_notify."
             .to_string(),
         parameters: vec![
             Parameter {
@@ -495,6 +613,16 @@ fn send_coap_response_action() -> ActionDefinition {
                      \"application/cbor\", \"application/xml\", \"application/octet-stream\", \
                      \"application/link-format\", or the numeric CoAP identifier. Defaults to \
                      text/plain when a payload is present and this is omitted."
+                    .to_string(),
+                required: false,
+            },
+            Parameter {
+                name: "observable".to_string(),
+                type_hint: "boolean".to_string(),
+                description: "Only matters when the request's 'observe' is \"register\". \
+                     Omitted or true, a 2.xx answer registers the client and it will receive \
+                     your coap_notify updates for this path. false serves the representation \
+                     once and tells the client the resource is not observable."
                     .to_string(),
                 required: false,
             },
@@ -547,6 +675,80 @@ fn ignore_coap_request_action() -> ActionDefinition {
         log_template: Some(LogTemplate::new().with_debug("CoAP request deliberately unanswered")),
     }
 }
+
+fn coap_notify_action() -> ActionDefinition {
+    ActionDefinition {
+        name: "coap_notify".to_string(),
+        description: "Push a resource's new state to every client observing it (RFC 7641). Use \
+             it when the state your instructions describe changes - a reading moves, a PUT \
+             changes a value others observe - including while answering another request. \
+             Clients register by GETting the path with Observe; a path nobody observes \
+             notifies nobody, which is not an error. A 2.xx code (the default 2.05) keeps \
+             the observations; any 4.xx or 5.xx ends them, which is how you say the resource \
+             is gone. A payload over 1024 bytes goes out as its first block and the client \
+             fetches the rest."
+            .to_string(),
+        parameters: vec![
+            Parameter {
+                name: "path".to_string(),
+                type_hint: "string".to_string(),
+                description: "The observed resource, e.g. \"/temperature\".".to_string(),
+                required: true,
+            },
+            Parameter {
+                name: "payload".to_string(),
+                type_hint: "string".to_string(),
+                description: "The resource's new representation, read according to \
+                     'encoding' exactly as in send_coap_response."
+                    .to_string(),
+                required: false,
+            },
+            Parameter {
+                name: "encoding".to_string(),
+                type_hint: "string".to_string(),
+                description: "\"utf8\" (default) or \"hex\", as in send_coap_response.".to_string(),
+                required: false,
+            },
+            Parameter {
+                name: "content_format".to_string(),
+                type_hint: "string".to_string(),
+                description: "Media type of 'payload', as in send_coap_response.".to_string(),
+                required: false,
+            },
+            Parameter {
+                name: "code".to_string(),
+                type_hint: "string".to_string(),
+                description: "Response code of the notification. Default \"2.05\"; a 4.xx \
+                     or 5.xx ends every observation of the path."
+                    .to_string(),
+                required: false,
+            },
+            Parameter {
+                name: "confirmable".to_string(),
+                type_hint: "boolean".to_string(),
+                description: "true sends a Confirmable notification the client must \
+                     acknowledge; one that is never acknowledged ends the observation. Default \
+                     false (Non-confirmable)."
+                    .to_string(),
+                required: false,
+            },
+        ],
+        example: json!({
+            "type": "coap_notify",
+            "path": "/temperature",
+            "payload": "<the resource's new representation>",
+            "content_format": "text/plain"
+        }),
+        log_template: Some(
+            LogTemplate::new()
+                .with_info("-> notify {path}")
+                .with_debug("CoAP notify {path} ({output_bytes}B)")
+                .with_trace("CoAP notify {path}: {preview(payload,200)}"),
+        ),
+    }
+}
+
+pub static COAP_NOTIFY_ACTION: LazyLock<ActionDefinition> = LazyLock::new(coap_notify_action);
 
 pub static SEND_COAP_RESPONSE_ACTION: LazyLock<ActionDefinition> =
     LazyLock::new(send_coap_response_action);
@@ -642,8 +844,33 @@ pub static COAP_REQUEST_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             type_hint: "string".to_string(),
             description:
                 "Request body, for POST and PUT. Read it according to 'payload_encoding'. \
-                 Absent when the request carried no body."
+                 Absent when the request carried no body. A body the client sent in Block1 \
+                 blocks arrives here whole."
                     .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "payload_size".to_string(),
+            type_hint: "integer".to_string(),
+            description: "Length of the request body in bytes, when there is one.".to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "blocks".to_string(),
+            type_hint: "integer".to_string(),
+            description: "How many Block1 blocks the body arrived in. Absent when it came in \
+                 one message. Informational: the reassembly is done."
+                .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "observe".to_string(),
+            type_hint: "string".to_string(),
+            description: "\"register\" when the client asks to observe this GET's resource: a \
+                 2.xx answer registers it, and it will receive every coap_notify for the \
+                 path. \"deregister\" when it asks to stop: it is already removed, answer the \
+                 GET as usual. Absent for an ordinary request."
+                .to_string(),
             required: false,
         },
         Parameter {
@@ -670,6 +897,7 @@ pub static COAP_REQUEST_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         SEND_COAP_RESPONSE_ACTION.clone(),
         SEND_COAP_RESET_ACTION.clone(),
         IGNORE_COAP_REQUEST_ACTION.clone(),
+        COAP_NOTIFY_ACTION.clone(),
     ])
     .with_alternative_example(json!({
         "type": "send_coap_response",

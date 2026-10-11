@@ -8,9 +8,10 @@ Block2 continuations and Observe bookkeeping all happen in Rust.
 
 Encoding and decoding are `src/server/coap/codec.rs` (`CoapMessage::encode` / `decode`, the
 option constants, `content_format_id` / `content_format_name`, `MAX_MESSAGE_LEN`,
-`MAX_PAYLOAD_LEN`). The server implements neither Observe nor Block-wise, so the three extra
-option numbers (`OPT_OBSERVE` 6, `OPT_BLOCK2` 23, `OPT_SIZE2` 28) and the Block2 value layout
-(`NUM << 4 | M << 3 | SZX`) live in this module rather than widening a Stable server's codec.
+`MAX_REPRESENTATION_LEN`, `BlockValue`). The option numbers and the Block value layout lived in
+this module while the server implemented neither Observe nor Block-wise; since October 2026 the
+server does, and they are the codec's, re-exported here (`OPT_OBSERVE`, `OPT_BLOCK1`,
+`OPT_BLOCK2`, `OPT_SIZE1`, `OPT_SIZE2`).
 The peer that makes the evidence count is libcoap, a C implementation — not this codec and not
 the `coap` / `coap-lite` crates, which are dev-dependencies used as independent peers in the
 *server's* tests.
@@ -19,7 +20,7 @@ the `coap` / `coap-lite` crates, which are dev-dependencies used as independent 
 
 | task | owns | never waits on |
 |---|---|---|
-| transport | the connected UDP socket, every exchange: message ids, tokens, retransmission timers, Block2 reassembly, observations | the model |
+| transport | the connected UDP socket, every exchange: message ids, tokens, retransmission timers, Block1 uploads, Block2 reassembly, observations | the model |
 | turns | the model calls, one queued event at a time | the socket |
 | commands | injected actions (`[ send ]`, MCP `send_to_client`) | the model |
 
@@ -62,7 +63,18 @@ A response with Block2 M=1 is continued by the transport with the next block num
 server's block size, on the same token, without Observe (§2.6). Blocks must arrive in order
 (`bad_block` otherwise) and the body is capped at `MAX_BODY` (64 KiB, `body_too_large`
 otherwise). The model sees **one** `coap_response` with the whole body and `blocks: N`.
-Block1 is not implemented: a request payload over 1024 bytes is refused before the wire.
+
+
+## Block1 (RFC 7959 §2.3)
+
+A request body over `block_size` (startup parameter, default `DEFAULT_BLOCK_SIZE` 1024, a power
+of two from 16) goes out as Block1 blocks; block 0 carries Size1 with the whole length. Each 2.31
+Continue whose Block1 echoes the block on the wire sends the next one; a smaller SZX in that echo
+is adopted, and the next block is numbered from the bytes already acknowledged at the new size.
+The answer to the last block — or any non-2.31 part way, such as 4.13 or 4.08 — ends the upload
+and reaches the model as one `coap_response` with `blocks_sent`. A 2.31 echoing a different
+block number, or asking for more after the last block, is `coap_error {kind: bad_block}`. The
+body is capped at `MAX_REPRESENTATION_LEN` (64 KiB), refused before the wire.
 
 ## Events
 
@@ -79,7 +91,7 @@ as hex, `location_path`, `observe`, `size2`).
 `coap_post` / `coap_put` `{path, query?, payload, content_format?, confirmable?}` (a string is
 sent as text/plain, an object or array as JSON), `coap_observe_cancel {path}`, `disconnect`.
 Refused before the wire: a Uri-Path segment or Uri-Query item over 255 bytes, a payload over
-1024 bytes, an unknown media type, a non-boolean `confirmable`.
+64 KiB, an unknown media type, a non-boolean `confirmable`.
 
 ## Bounds
 
@@ -90,6 +102,8 @@ Refused before the wire: a Uri-Path segment or Uri-Query item over 255 bytes, a 
 | reassembled body | 64 KiB (`MAX_BODY`) | `transport_test::a_block2_transfer_that_never_ends_is_cut_off` |
 | block order | the expected number only | `transport_test::an_out_of_order_block_is_refused` |
 | open exchanges | 32 (`MAX_EXCHANGES`), observations included | `transport_test::requests_past_the_exchange_cap_are_refused` |
+| request body | 64 KiB (`MAX_REPRESENTATION_LEN`), refused before the wire | `request_test::what_cannot_be_sent_is_refused` (at the limit and one over), `real_server_test::injected_coap_put_reaches_libcoap` |
+| Block1 block size | `block_size`, power of two 16-1024; a server's smaller SZX adopted | `blockwise_upload_test::the_client_continues_at_the_smaller_block_size_…` |
 | events waiting for the model | 256, `decision=turn_queue_full` past that | — |
 
 CoAP has no nesting, so there is no depth to bound.
@@ -101,8 +115,9 @@ CoAP has no nesting, so there is no depth to bound.
 
 ## Limitations
 
-No DTLS (`coaps`), no CoAP over TCP or WebSocket, no Block1, no multicast, no reordering check on
-notification sequence numbers (they are reported, not compared).
+No DTLS (`coaps`), no CoAP over TCP or WebSocket, no multicast, no reordering check on
+notification sequence numbers (they are reported, not compared). A notification over one block
+is reported `truncated: true` rather than fetched.
 
 ## Maturity: Beta
 

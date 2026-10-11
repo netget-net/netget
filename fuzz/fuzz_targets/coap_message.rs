@@ -2,14 +2,15 @@
 //! UDP socket. Hand-rolled on purpose, so there is no third-party decoder underneath it.
 //!
 //! The option walker is the interesting part: CoAP option deltas and lengths use 13/14
-//! extension encodings, and the accumulated delta is what turns into an option number. This
+//! extension encodings, and the accumulated delta is what turns into an option number. The
+//! Observe, Block1 and Block2 values (RFC 7641, RFC 7959) are read from every message too. This
 //! target also round-trips whatever decodes, because `encode` is the direction `m3ua` proved
 //! can carry a bound the decoder has and the encoder does not.
 
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use netget::server::coap::codec::CoapMessage;
+use netget::server::coap::codec::{BlockValue, CoapMessage};
 
 fuzz_target!(|data: &[u8]| {
     let Ok(msg) = CoapMessage::decode(data) else {
@@ -22,6 +23,22 @@ fuzz_target!(|data: &[u8]| {
     let _ = msg.uri_query();
     let _ = msg.is_empty_message();
     let _ = msg.is_request();
+
+    // The Observe and Block-wise options the server reads before deciding anything: every
+    // admitted request with Block1 reaches the reassembly table, and every Block2 the cache.
+    // A Block value that parses must re-encode to one that parses back to itself — the server
+    // echoes Block1 in its 2.31 and a value that changed on the way would desynchronise the
+    // client's upload.
+    let _ = msg.observe();
+    for block in [msg.block1(), msg.block2()].into_iter().flatten().flatten() {
+        let _ = block.size();
+        let _ = block.offset();
+        assert_eq!(
+            BlockValue::parse(&block.encode()),
+            Some(block),
+            "a Block value did not survive its own encoder"
+        );
+    }
 
     // Re-encoding an accepted message must itself decode. A message that decodes but whose
     // encoding does not is a desync the server would emit onto the wire.

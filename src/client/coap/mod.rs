@@ -5,15 +5,15 @@
 //! * **transport** owns the UDP socket and every exchange in flight: message ids and tokens,
 //!   Confirmable retransmission (RFC 7252 §4.2, exponential back-off, bounded attempts), empty
 //!   ACKs for separate responses and Confirmable notifications, RST for a token it does not know,
-//!   Block2 reassembly (RFC 7959) and Observe registrations (RFC 7641). It never waits on the
-//!   model.
+//!   Block1 uploads and Block2 reassembly (RFC 7959) and Observe registrations (RFC 7641). It
+//!   never waits on the model.
 //! * **turns** asks the model about each response, notification or error, in order, and hands
 //!   its actions back to the transport. The chain request → response → model → request passes
 //!   through that queue, so it needs no recursion.
 //! * **commands** runs injected actions (`[ send ]`, MCP `send_to_client`) down the same path.
 //!
-//! Encoding and decoding are the server's own codec (`src/server/coap/codec.rs`). The option
-//! numbers and the Block2 value layout the server does not use live here.
+//! Encoding and decoding are the server's own codec (`src/server/coap/codec.rs`), option
+//! numbers and the Block1/Block2 value layout included.
 
 pub mod actions;
 
@@ -41,20 +41,15 @@ use crate::llm::actions::protocol_trait::Protocol;
 use crate::llm::ollama_client::OllamaClient;
 use crate::protocol::Event;
 use crate::server::coap::codec::{
-    code_class, code_to_string, content_format_name, CoapMessage, MessageType, CODE_DELETE,
-    CODE_EMPTY, CODE_GET, CODE_POST, CODE_PUT, MAX_MESSAGE_LEN, OPT_ACCEPT, OPT_CONTENT_FORMAT,
-    OPT_ETAG, OPT_LOCATION_PATH, OPT_MAX_AGE, OPT_URI_PATH, OPT_URI_QUERY,
+    code_class, code_to_string, content_format_name, szx_size, uint_option, BlockValue,
+    CoapMessage, MessageType, CODE_CONTINUE, CODE_DELETE, CODE_EMPTY, CODE_GET, CODE_POST,
+    CODE_PUT, MAX_MESSAGE_LEN, OPT_ACCEPT, OPT_CONTENT_FORMAT, OPT_ETAG, OPT_LOCATION_PATH,
+    OPT_MAX_AGE, OPT_URI_PATH, OPT_URI_QUERY,
 };
+pub use crate::server::coap::codec::{OPT_BLOCK1, OPT_BLOCK2, OPT_OBSERVE, OPT_SIZE1, OPT_SIZE2};
 use crate::state::app_state::AppState;
 use crate::state::client_handles::{ClientCommand, ClientSendOutcome};
 use crate::state::{AccessLogOwner, ClientId, ClientStatus};
-
-/// Observe (RFC 7641 §2).
-pub const OPT_OBSERVE: u16 = 6;
-/// Block2 (RFC 7959 §2.1).
-pub const OPT_BLOCK2: u16 = 23;
-/// Size2 (RFC 7959 §4).
-pub const OPT_SIZE2: u16 = 28;
 
 /// Largest body a Block2 transfer may reassemble to. A server that keeps saying "more" past
 /// this is reported as `coap_error {kind: body_too_large}` and the exchange is dropped.
@@ -74,11 +69,13 @@ const RECENT_MIDS: usize = 64;
 const TURN_QUEUE_CAPACITY: usize = 256;
 const OUTBOUND_CAPACITY: usize = 64;
 
-/// RFC 7252 §4.8 transmission parameters, from the startup parameters.
+/// RFC 7252 §4.8 transmission parameters and the Block1 size, from the startup parameters.
 #[derive(Debug, Clone, Copy)]
 pub struct Reliability {
     pub ack_timeout: Duration,
     pub max_retransmit: u32,
+    /// Block1 size exponent: a body over `2^(szx + 4)` bytes is uploaded in blocks.
+    pub block_szx: u8,
 }
 
 enum Outbound {
@@ -116,6 +113,11 @@ struct Exchange {
     next_block: u32,
     /// The observation was confirmed by a response carrying Observe.
     observing: bool,
+    /// A Block1 upload in progress: the block on the wire. `None` once the last block's
+    /// response arrived, or for a body that fits one message.
+    upload: Option<BlockValue>,
+    /// Block1 blocks put on the wire for this request.
+    blocks_sent: u32,
 }
 
 pub struct CoapClient;
@@ -211,24 +213,47 @@ impl CoapClient {
     }
 }
 
-/// A CoAP unsigned integer option value: big-endian, leading zero octets dropped.
-fn uint_option(value: u32) -> Vec<u8> {
-    let bytes = value.to_be_bytes();
-    let first = bytes.iter().position(|b| *b != 0).unwrap_or(4);
-    bytes[first..].to_vec()
+/// A Block2 value as `(num, more, szx)` (RFC 7959 §2.2).
+fn parse_block(value: &[u8]) -> Option<(u32, bool, u8)> {
+    BlockValue::parse(value).map(|b| (b.num, b.more, b.szx))
 }
 
-/// A Block2 value: `NUM << 4 | M << 3 | SZX` (RFC 7959 §2.2).
-fn parse_block(value: &[u8]) -> Option<(u32, bool, u8)> {
-    if value.len() > 3 {
+/// Which part of a request a message carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Part {
+    /// The whole request in one message.
+    Whole,
+    /// One Block1 block of the body (RFC 7959 §2.3).
+    Block1(BlockValue),
+    /// A Block2 continuation: ask for block `num` at `szx` (RFC 7959 §2.4).
+    Block2(u32, u8),
+}
+
+/// The first Block1 block of `request`, when its body does not fit one block of `szx`.
+fn first_block(request: &CoapRequest, szx: u8) -> Option<BlockValue> {
+    (request.payload.len() > szx_size(szx)).then_some(BlockValue {
+        num: 0,
+        more: true,
+        szx,
+    })
+}
+
+/// The Block1 block after `sent`, at the size the server asked for in its 2.31 (`echo`).
+/// RFC 7959 §2.3: the server may lower SZX, and the client then continues at the smaller size
+/// from where the bytes it has had acknowledged end. `None` when the body is done.
+fn next_block(body_len: usize, sent: BlockValue, echo: Option<BlockValue>) -> Option<BlockValue> {
+    let szx = echo.map_or(sent.szx, |e| e.szx.min(sent.szx));
+    let acknowledged = sent.offset() + sent.size();
+    if acknowledged >= body_len {
         return None;
     }
-    let v = value.iter().fold(0u32, |acc, b| (acc << 8) | u32::from(*b));
-    let szx = u8::try_from(v & 0x07).ok()?;
-    if szx == 7 {
-        return None; // reserved (BERT is CoAP over TCP only)
-    }
-    Some((v >> 4, v & 0x08 != 0, szx))
+    let size = szx_size(szx);
+    let num = u32::try_from(acknowledged / size).ok()?;
+    Some(BlockValue {
+        num,
+        more: acknowledged + size < body_len,
+        szx,
+    })
 }
 
 fn method_code(method: &str) -> u8 {
@@ -240,16 +265,16 @@ fn method_code(method: &str) -> u8 {
     }
 }
 
-/// The message that carries `request`, or its Block2 continuation `block`.
+/// The message that carries `request`, one Block1 block of it, or its Block2 continuation.
 fn request_message(
     request: &CoapRequest,
     message_id: u16,
     token: &[u8],
-    block: Option<(u32, u8)>,
+    part: Part,
 ) -> CoapMessage {
     let mut options: Vec<(u16, Vec<u8>)> = Vec::new();
     // RFC 7959 §2.6: a continuation of an Observe registration does not repeat Observe.
-    if block.is_none() {
+    if !matches!(part, Part::Block2(..)) {
         match request.observe {
             ObserveAction::Register => options.push((OPT_OBSERVE, Vec::new())),
             ObserveAction::Cancel => options.push((OPT_OBSERVE, vec![1])),
@@ -268,9 +293,31 @@ fn request_message(
     if let Some(accept) = request.accept {
         options.push((OPT_ACCEPT, uint_option(u32::from(accept))));
     }
-    if let Some((num, szx)) = block {
-        options.push((OPT_BLOCK2, uint_option((num << 4) | u32::from(szx))));
-    }
+    let payload = match part {
+        Part::Whole => request.payload.clone(),
+        Part::Block2(num, szx) => {
+            options.push((
+                OPT_BLOCK2,
+                BlockValue {
+                    num,
+                    more: false,
+                    szx,
+                }
+                .encode(),
+            ));
+            Vec::new()
+        }
+        Part::Block1(block) => {
+            options.push((OPT_BLOCK1, block.encode()));
+            if block.num == 0 {
+                // RFC 7959 §4: announce the whole size, so a server can refuse it up front.
+                options.push((OPT_SIZE1, uint_option(request.payload.len() as u32)));
+            }
+            let start = block.offset().min(request.payload.len());
+            let end = (start + block.size()).min(request.payload.len());
+            request.payload[start..end].to_vec()
+        }
+    };
     CoapMessage {
         mtype: if request.confirmable {
             MessageType::Confirmable
@@ -281,11 +328,7 @@ fn request_message(
         message_id,
         token: token.to_vec(),
         options,
-        payload: if block.is_some() {
-            Vec::new()
-        } else {
-            request.payload.clone()
-        },
+        payload,
     }
 }
 
@@ -484,6 +527,7 @@ impl Transport {
                     ex.body.clear();
                     ex.blocks = 0;
                     ex.next_block = 0;
+                    ex.upload = None;
                 }
                 token
             }
@@ -508,13 +552,25 @@ impl Transport {
                         blocks: 0,
                         next_block: 0,
                         observing: false,
+                        upload: None,
+                        blocks_sent: 0,
                     },
                 );
                 token
             }
         };
         let mid = self.fresh_mid();
-        let msg = request_message(&request, mid, &token, None);
+        let part = match first_block(&request, self.reliability.block_szx) {
+            Some(block) => {
+                if let Some(ex) = self.exchanges.get_mut(&token) {
+                    ex.upload = Some(block);
+                    ex.blocks_sent = 1;
+                }
+                Part::Block1(block)
+            }
+            None => Part::Whole,
+        };
+        let msg = request_message(&request, mid, &token, part);
         match self.transmit(&token, msg).await {
             Ok(n) => {
                 debug!(
@@ -678,6 +734,64 @@ impl Transport {
         };
         let has_observe = msg.option_uint(OPT_OBSERVE).is_some();
 
+        // Block1: a 2.31 Continue for the block on the wire sends the next one. Anything else
+        // — the final block's answer, or a refusal part way (4.08, 4.13) — ends the upload and
+        // is reported like any response.
+        if let Some(sent) = ex.upload {
+            let echo = msg
+                .option_values(OPT_BLOCK1)
+                .first()
+                .and_then(|v| BlockValue::parse(v));
+            if msg.code == CODE_CONTINUE {
+                if echo.is_some_and(|e| e.num != sent.num) {
+                    let ex = self.exchanges.remove(&token).expect("present above");
+                    enqueue(
+                        &self.turn_tx,
+                        error_event(
+                            &ex.request,
+                            "bad_block",
+                            format!(
+                                "the server continued block {} while block {} was sent",
+                                echo.map_or(0, |e| e.num),
+                                sent.num
+                            ),
+                        ),
+                        client_id,
+                    );
+                    return;
+                }
+                let Some(next) = next_block(ex.request.payload.len(), sent, echo) else {
+                    let ex = self.exchanges.remove(&token).expect("present above");
+                    enqueue(
+                        &self.turn_tx,
+                        error_event(
+                            &ex.request,
+                            "bad_block",
+                            "the server asked for more after the last block".into(),
+                        ),
+                        client_id,
+                    );
+                    return;
+                };
+                ex.upload = Some(next);
+                ex.blocks_sent += 1;
+                let request = ex.request.clone();
+                let mid = self.fresh_mid();
+                let msg = request_message(&request, mid, &token, Part::Block1(next));
+                if let Err(e) = self.transmit(&token, msg).await {
+                    if let Some(ex) = self.exchanges.remove(&token) {
+                        enqueue(
+                            &self.turn_tx,
+                            error_event(&ex.request, "timeout", format!("send failed: {e}")),
+                            client_id,
+                        );
+                    }
+                }
+                return;
+            }
+            ex.upload = None;
+        }
+
         if ex.request.observe == ObserveAction::Cancel {
             if has_observe {
                 return; // a notification still in flight when the cancel went out
@@ -764,7 +878,7 @@ impl Transport {
                 ex.next_block = num + 1;
                 let request = ex.request.clone();
                 let mid = self.fresh_mid();
-                let next = request_message(&request, mid, &token, Some((num + 1, szx)));
+                let next = request_message(&request, mid, &token, Part::Block2(num + 1, szx));
                 if let Err(e) = self.transmit(&token, next).await {
                     if let Some(ex) = self.exchanges.remove(&token) {
                         enqueue(
@@ -787,6 +901,9 @@ impl Transport {
         // The response is complete.
         let body = std::mem::take(&mut ex.body);
         let mut data = response_data(&ex.request, &msg, &body, ex.blocks);
+        if ex.blocks_sent > 0 {
+            data["blocks_sent"] = json!(ex.blocks_sent);
+        }
         if ex.request.observe == ObserveAction::Register {
             data["observing"] = json!(ex.observing);
         }
