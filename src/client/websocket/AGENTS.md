@@ -100,7 +100,7 @@ comes back byte-for-byte when the event's `data` and `encoding` are fed straight
 
 - **`wss://`.** The `tokio-tungstenite` dependency is built without a TLS backend (no
   `native-tls` / `rustls-tls` feature), and enabling one is a `webrtc`-wide dependency decision.
-- **permessage-deflate (RFC 7692)** and every other extension.
+- **Every extension except permessage-deflate.**
 - **Reconnection.** A closed connection stays closed; the model must open a new client.
 - The repo-wide client limitation applies: `remove_client()` does not stop the network loop
   (`register_client_task` is called, so `stop_client` aborts it, but see
@@ -130,3 +130,16 @@ running client and answers with a `ClientSendOutcome`.
 
 On disconnect — and on a write error — the loop closes the sink and drops the command handle
 itself rather than waiting for the read loop to see the connection end.
+
+## permessage-deflate (RFC 7692)
+
+The client offers `permessage-deflate; client_max_window_bits` unless `permessage_deflate` is
+false. To put the server's `deflate::DeflateStream` beneath tungstenite on this side too, the
+client dials the TCP socket itself and hands it to `client_async_with_config` instead of
+`connect_async`; the stream starts in pass-through, reads the 101 response head itself, and
+switches to frame mode at the exact byte the head ends, with whatever the server accepted
+(including a `client_max_window_bits` it imposed — Python websockets imposes 12). A response
+naming an extension that was not offered fails the handshake. `websocket_client_connected`
+carries `permessage_deflate`. The message limits are tungstenite's defaults (64 MiB per
+message, 16 MiB per frame), which is what the client used before it dialled its own socket;
+an inflated message is bounded by the first.

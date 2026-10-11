@@ -101,6 +101,16 @@ on that assertion.
 ./cargo-isolated.sh test --no-default-features --features mqtt --test client -- mqtt:: --test-threads=100
 ```
 
+## `v5_real_server_test.rs` — MQTT 5.0 against the same Mosquitto
+
+No LLM calls: the client is created in process (`ClientForm`) with `protocol_version` "5.0"
+and a Python handler. Against Mosquitto 2 with `mosquitto_sub -V 5 -F` and `mosquitto_pub -V 5`:
+the status publish's Content Type and User Property are printed by libmosquitto; a request's
+Response Topic and Correlation Data reach the handler and the answer published to that topic
+carries the data back; and No Local is honoured — NetGet subscribes to `v5/out/#` where it
+publishes itself, and no message event for `v5/out/…` exists. Mutation-checked: dropping the
+publish properties, or sending `nolocal = false`, fails it.
+
 ## Not covered
 
 TLS, username/password against a broker that enforces it, Last Will, persistent sessions

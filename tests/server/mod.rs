@@ -535,6 +535,8 @@ pub mod restconf;
 pub mod rsync;
 #[cfg(feature = "smpp")]
 pub mod smpp;
+#[cfg(feature = "sse")]
+pub mod sse;
 #[cfg(feature = "stratum")]
 pub mod stratum;
 #[cfg(feature = "sunrpc")]
