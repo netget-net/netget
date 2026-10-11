@@ -104,7 +104,6 @@ const AFFIRMATIVE_DEFAULT_BASELINE: &[&str] = &[
     "server:ipp:actions.rs:ipp_status=\"successful-ok\"",
     "server:ipp:mod.rs:http_status=200",
     "server:kubernetes:actions.rs:status_code=200",
-    "server:mqtt:actions.rs:return_code=0",
     "server:s3:actions.rs:status_code=200",
     "server:s3:mod.rs:status_code=200",
     "server:sqs:mod.rs:status=200",

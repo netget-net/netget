@@ -31,6 +31,23 @@ pub static MQTT_CLIENT_CONNECTED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             description: "MQTT client ID used for connection".to_string(),
             required: true,
         },
+        Parameter {
+            name: "protocol_version".to_string(),
+            type_hint: "string".to_string(),
+            description: "\"3.1.1\" or \"5.0\", as chosen by the protocol_version startup \
+                          parameter"
+                .to_string(),
+            required: true,
+        },
+        Parameter {
+            name: "properties".to_string(),
+            type_hint: "object".to_string(),
+            description: "MQTT 5 only: the CONNACK's properties, e.g. \
+                          assigned_client_identifier, maximum_packet_size, \
+                          topic_alias_maximum, user_properties"
+                .to_string(),
+            required: false,
+        },
     ])
 });
 
@@ -66,10 +83,65 @@ pub static MQTT_MESSAGE_RECEIVED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             description: "Whether this is a retained message".to_string(),
             required: true,
         },
+        Parameter {
+            name: "properties".to_string(),
+            type_hint: "object".to_string(),
+            description: "MQTT 5 only: the message's properties - response_topic and \
+                          correlation_data (+ correlation_data_encoding) for request/response, \
+                          content_type, message_expiry_interval, subscription_identifiers, \
+                          user_properties as [[name, value], ...]"
+                .to_string(),
+            required: false,
+        },
     ])
 });
 
 /// MQTT client protocol action handler
+/// The MQTT 5 PUBLISH properties `publish` takes, under one `properties` object.
+fn publish_properties_parameter() -> Parameter {
+    Parameter {
+        name: "properties".to_string(),
+        type_hint: "object".to_string(),
+        description: "MQTT 5 only (protocol_version \"5.0\"): message properties - \
+                      content_type, response_topic, correlation_data (+ \
+                      correlation_data_encoding \"utf8\" or \"hex\"), message_expiry_interval, \
+                      payload_format_indicator, user_properties as [[name, value], ...]. To \
+                      answer a request, publish to its properties.response_topic with its \
+                      correlation_data."
+            .to_string(),
+        required: false,
+    }
+}
+
+/// The MQTT 5 subscription options `subscribe` takes.
+fn subscribe_option_parameters() -> Vec<Parameter> {
+    vec![
+        Parameter {
+            name: "no_local".to_string(),
+            type_hint: "boolean".to_string(),
+            description: "MQTT 5 only: do not receive messages this client published itself."
+                .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "retain_as_published".to_string(),
+            type_hint: "boolean".to_string(),
+            description: "MQTT 5 only: keep the retain flag forwarded messages were published \
+                          with."
+                .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "retain_handling".to_string(),
+            type_hint: "integer".to_string(),
+            description: "MQTT 5 only: 0 send retained messages on subscribe (default), 1 only \
+                          for a new subscription, 2 never."
+                .to_string(),
+            required: false,
+        },
+    ]
+}
+
 pub struct MqttClientProtocol;
 
 impl MqttClientProtocol {
@@ -98,7 +170,10 @@ impl Protocol for MqttClientProtocol {
                             description: "Quality of Service level (0=AtMostOnce, 1=AtLeastOnce, 2=ExactlyOnce). Default: 0".to_string(),
                             required: false,
                         },
-                    ],
+                    ]
+                    .into_iter()
+                    .chain(subscribe_option_parameters())
+                    .collect(),
                     example: json!({
                         "type": "subscribe",
                         "topics": ["sensors/temperature", "sensors/+/status", "devices/#"],
@@ -134,6 +209,7 @@ impl Protocol for MqttClientProtocol {
                             description: "Whether to retain the message on the broker. Default: false".to_string(),
                             required: false,
                         },
+                        publish_properties_parameter(),
                     ],
                     example: json!({
                         "type": "publish",
@@ -196,6 +272,7 @@ impl Protocol for MqttClientProtocol {
                         description: "Quality of Service level (0, 1, or 2)".to_string(),
                         required: false,
                     },
+                    publish_properties_parameter(),
                 ],
                 example: json!({
                     "type": "publish",
@@ -221,7 +298,10 @@ impl Protocol for MqttClientProtocol {
                         description: "Quality of Service level".to_string(),
                         required: false,
                     },
-                ],
+                ]
+                .into_iter()
+                .chain(subscribe_option_parameters())
+                .collect(),
                 example: json!({
                     "type": "subscribe",
                     "topics": ["responses/#"],
@@ -264,7 +344,10 @@ impl Protocol for MqttClientProtocol {
 
         ProtocolMetadataV2::builder()
             .state(DevelopmentState::Beta)
-            .implementation("rumqttc async client library")
+            .implementation(
+                "rumqttc async client library: its 3.1.1 stack, or its v5 stack with \
+                 protocol_version 5.0",
+            )
             .llm_control("Full control over subscriptions, publications, and QoS levels")
             .e2e_testing(
                 "tests/client/mqtt/real_server_test.rs, 7 LLM calls, against Eclipse Mosquitto \
@@ -274,11 +357,18 @@ impl Protocol for MqttClientProtocol {
                  mosquitto_pub message reaches the model with its topic and payload and the \
                  model's quoting reply comes back through the broker; a retained reading and a \
                  QoS 2 live reading on sensors/# reach the model with the granted QoS and the \
-                 retain bit intact. Not #[ignore]d, and a missing mosquitto fails the test \
-                 rather than skipping it.",
+                 retain bit intact. MQTT 5.0: tests/client/mqtt/v5_real_server_test.rs, no LLM \
+                 calls, against the same Mosquitto with mosquitto_sub/mosquitto_pub at -V 5 - a \
+                 publish's Content Type and User Property printed by libmosquitto, a request's \
+                 Response Topic and Correlation Data answered on that topic with the data \
+                 echoed, and No Local honoured (NetGet never hears its own publishes). Not \
+                 #[ignore]d, and a missing mosquitto fails the test rather than skipping it.",
             )
             .notes(
-                "MQTT 3.1.1 over plain TCP. Validated against Mosquitto for connect, \
+                "MQTT 3.1.1 (default) or 5.0 (protocol_version) over plain TCP. On v5, \
+                 publish takes properties, subscribe takes No Local / Retain As Published / \
+                 Retain Handling, and events carry the CONNACK's and each message's \
+                 properties. Validated against Mosquitto for connect, \
                  subscribe (including wildcards), publish at QoS 0/1, and inbound delivery at \
                  the granted QoS with the retain flag. Not exercised against a real broker: \
                  TLS, username/password against a broker that enforces it, Last Will, \
@@ -336,6 +426,17 @@ impl Protocol for MqttClientProtocol {
                 required: false,
                 example: json!(true),
                 default: None,
+            },
+            ParameterDefinition {
+                name: "protocol_version".to_string(),
+                type_hint: "string".to_string(),
+                description: "\"3.1.1\" (default) or \"5.0\". MQTT 5 adds reason codes and \
+                              message properties: response_topic and correlation_data for \
+                              request/response, content_type, user_properties."
+                    .to_string(),
+                required: false,
+                example: json!("5.0"),
+                default: Some(json!(super::DEFAULT_PROTOCOL_VERSION)),
             },
         ]
     }
@@ -448,11 +549,21 @@ impl Client for MqttClientProtocol {
                     anyhow::bail!("MQTT qos must be 0, 1 or 2");
                 }
 
+                let retain_handling: u8 =
+                    crate::client::wire_values::number(&action, "retain_handling", 0)?;
+                if retain_handling > 2 {
+                    anyhow::bail!("retain_handling must be 0, 1 or 2");
+                }
+                let flag = |k: &str| action.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
+
                 Ok(ClientActionResult::Custom {
                     name: "mqtt_subscribe".to_string(),
                     data: json!({
                         "topics": topic_strings,
                         "qos": qos,
+                        "no_local": flag("no_local"),
+                        "retain_as_published": flag("retain_as_published"),
+                        "retain_handling": retain_handling,
                     }),
                 })
             }
@@ -479,6 +590,16 @@ impl Client for MqttClientProtocol {
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
 
+                // Checked here so a malformed property is refused before anything is queued.
+                let properties = match action.get("properties") {
+                    None | Some(serde_json::Value::Null) => serde_json::Value::Null,
+                    Some(p @ serde_json::Value::Object(_)) => {
+                        validate_publish_properties(p)?;
+                        p.clone()
+                    }
+                    Some(other) => anyhow::bail!("properties must be an object, not {other}"),
+                };
+
                 Ok(ClientActionResult::Custom {
                     name: "mqtt_publish".to_string(),
                     data: json!({
@@ -486,6 +607,7 @@ impl Client for MqttClientProtocol {
                         "payload": payload,
                         "qos": qos,
                         "retain": retain,
+                        "properties": properties,
                     }),
                 })
             }
@@ -514,4 +636,50 @@ impl Client for MqttClientProtocol {
             )),
         }
     }
+}
+
+/// Refuse a `properties` object the v5 PUBLISH could not carry.
+fn validate_publish_properties(p: &serde_json::Value) -> Result<()> {
+    use crate::server::mqtt::v5;
+    const KNOWN: &[&str] = &[
+        "content_type",
+        "response_topic",
+        "correlation_data",
+        "correlation_data_encoding",
+        "message_expiry_interval",
+        "payload_format_indicator",
+        "user_properties",
+    ];
+    if let Some(map) = p.as_object() {
+        if let Some(unknown) = map.keys().find(|k| !KNOWN.contains(&k.as_str())) {
+            anyhow::bail!(
+                "unknown PUBLISH property {unknown:?}; known: {}",
+                KNOWN.join(", ")
+            );
+        }
+    }
+    if let Some(topic) = p.get("response_topic").and_then(|v| v.as_str()) {
+        if topic.is_empty() || topic.contains('+') || topic.contains('#') {
+            anyhow::bail!("response_topic must be a topic name, without wildcards");
+        }
+    }
+    if let Some(c) = p.get("correlation_data").and_then(|v| v.as_str()) {
+        v5::text_to_binary(
+            c,
+            p.get("correlation_data_encoding").and_then(|e| e.as_str()),
+        )
+        .map_err(|e| anyhow::anyhow!("correlation_data: {e}"))?;
+    }
+    if let Some(v) = p.get("payload_format_indicator") {
+        if !matches!(v.as_u64(), Some(0 | 1)) {
+            anyhow::bail!("payload_format_indicator is 0 or 1");
+        }
+    }
+    if let Some(v) = p.get("message_expiry_interval") {
+        if v.as_u64().and_then(|n| u32::try_from(n).ok()).is_none() {
+            anyhow::bail!("message_expiry_interval is a number of seconds up to 4294967295");
+        }
+    }
+    v5::user_properties_from_json(p.get("user_properties")).map_err(|e| anyhow::anyhow!(e))?;
+    Ok(())
 }

@@ -174,7 +174,6 @@ Wildcards cannot be used in publish topics.
 ## Future Enhancements
 
 1. **TLS/SSL support**: Add secure connections with certificate validation
-2. **MQTT 5.0**: Upgrade to MQTT 5 for additional features (user properties, reason codes, etc.)
 3. **Will messages**: Allow LLM to set Last Will and Testament
 4. **Retained message handling**: Better visibility into retained messages
 5. **Shared subscriptions**: Support for load balancing across multiple clients
@@ -233,3 +232,28 @@ Rated against the four-condition client bar in the root `AGENTS.md`, on the evid
    the actions the model returned makes the test fail.
 
 Not covered by that evidence: TLS, enforced username/password, Last Will, persistent sessions and reconnection.
+
+## MQTT 5.0 (`protocol_version: "5.0"`)
+
+`protocol_version` (default `"3.1.1"`) picks rumqttc's stack at connect time. Two enums in
+`mod.rs` are the only places that know there are two: `Broker` (the request handle every
+action is applied through, so the LLM path and the injected-command path stay one code path)
+and `Transport` (the event loop, reduced to a `Notice`: ConnAck, Publish, Disconnect, Other).
+Everything above them — the turn queue, the model calls, the command loop — is shared.
+
+On v5:
+
+- `mqtt_connected` adds `reason_code` (the CONNACK's, as its wire value), `session_present`
+  and `properties` (assigned_client_identifier, maximum_packet_size, topic_alias_maximum,
+  user_properties, ... under the same snake_case names the broker uses).
+- `mqtt_message_received` adds `properties`: response_topic, correlation_data (+
+  correlation_data_encoding: text when UTF-8, hex otherwise), content_type,
+  message_expiry_interval, subscription_identifiers, user_properties.
+- `publish` takes a `properties` object with the same names; it is validated in
+  `execute_action`, so a bad one is refused before anything is queued, and refused outright on
+  a 3.1.1 connection rather than silently dropped.
+- `subscribe` takes `no_local`, `retain_as_published` and `retain_handling`.
+- A broker DISCONNECT's reason code and Reason String reach the status line.
+
+Request/response is the case to copy: answer a message by publishing to its
+`properties.response_topic` with its `correlation_data` and `correlation_data_encoding`.

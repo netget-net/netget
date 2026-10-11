@@ -1,7 +1,9 @@
 # MQTT Protocol Implementation
 
-MQTT 3.1.1 broker. Control packets are parsed and built by hand in `mod.rs`; the LLM (or
-a script/static handler) decides every acknowledgement and every message delivery.
+MQTT 3.1.1 and 5.0 broker. Control packets are parsed and built by hand in `mod.rs` (v5
+properties and reason codes in `v5.rs`); the LLM (or a script/static handler) decides every
+acknowledgement and every message delivery. The version is the client's: protocol level 5 in
+its CONNECT makes the connection a v5 one, anything else is answered in 3.1.1 framing.
 
 **State**: **Beta** (August 2026) — works against a real third-party client. `rumqttc` drives
 CONNECT/CONNACK in `test_mqtt_basic_connect`, and
@@ -281,8 +283,12 @@ connection is closed when it is exceeded. Every parse function is bounds-checked
 
 ## Not implemented
 
-- **MQTT 5.0** — `protocol_level` is reported so a handler can refuse a v5 client with
-  CONNACK return code 1.
+- **MQTT 5.0 enhanced authentication** (AUTH, §4.12) — an AUTH packet is a Protocol Error
+  (DISCONNECT 0x82). A CONNECT naming an `authentication_method` reaches the handler, whose
+  answer should be reason 0x8C.
+- **v5 session state**: Session Expiry, Receive Maximum (the broker does not count its own
+  in-flight QoS>0 publishes), Will Delay, Request Response Information, Server Keep Alive.
+  Each is reported to the model where the client sent it; none changes the broker's behaviour.
 - **TLS (8883) and WebSocket transport.**
 - **Retained messages** — the RETAIN flag is reported inbound and settable outbound, but
   nothing is stored, so a late subscriber receives nothing automatically.
@@ -310,3 +316,56 @@ echoing the packet identifier, and PINGRESP.
 - [MQTT 3.1.1 (OASIS)](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html)
 - [rumqttc](https://docs.rs/rumqttc/) — client used by the E2E tests
 - Testing notes: `tests/server/mqtt/AGENTS.md`
+
+## MQTT 5.0
+
+Every v5 difference is in one of three places, and nowhere else:
+
+- **Parsing** (`parse_connect` / `parse_publish` / `parse_subscribe` / `parse_unsubscribe`,
+  each taking the connection's `v5` flag) reads the property block that follows the variable
+  header — and in CONNECT the Will Properties before the will topic — through
+  `v5::read_properties`. An unknown property identifier, a truncated value or ill-formed UTF-8
+  is 0x81 Malformed Packet; a non-repeatable property twice is 0x82 Protocol Error (§2.2.2.2).
+  The decoded block reaches the model as `properties` on every v5 event: snake_case names,
+  User Properties as `[[name, value], ...]` (names may repeat), Subscription Identifiers as a
+  list, and binary values (Correlation Data, Authentication Data) as text when they are UTF-8
+  without controls and hex otherwise, with `<name>_encoding` saying which.
+- **Encoding**: `build_connack_v5`, `build_ack_v5`, `build_suback_v5`, `build_unsuback_v5`,
+  `build_publish_v5`, `build_disconnect_v5`. A broker PUBLISH is an `OutPublish`, framed per
+  recipient by `encode(v5)`, because one `mqtt_publish` to `"*"` can reach clients of both
+  versions; a 3.1.1 recipient gets no properties, and the action result names it under
+  `properties_not_sent_to`.
+- **Executors** (`actions.rs`) take both vocabularies. `mqtt_connack` takes a 3.1.1
+  `return_code` or a v5 `reason_code`, mapped either way by `connack_v311_to_v5` /
+  `connack_v5_to_v311` so a refusal is always a refusal; `granted_qos` takes v5 SUBACK codes
+  and sends 0x80 for each on 3.1.1; `mqtt_puback` / `mqtt_pubrec` take a `reason_code` and
+  **refuse** a failure code on a 3.1.1 connection (its acknowledgement means "taken" and cannot
+  say otherwise); `mqtt_unsuback` takes per-filter `reason_codes`, defaulting to 0x00 for
+  each filter of the UNSUBSCRIBE it answers (`note_unsubscribe` records the count);
+  `close_this_connection` sends a DISCONNECT with `reason_code` first. Every v5 acknowledgement
+  may carry `reason_string` and `user_properties`. `mqtt_connack` no longer defaults to
+  accepting: a CONNACK with neither code is refused as an action error.
+
+What the broker does on a v5 connection without being asked:
+
+| | |
+|---|---|
+| Accepting CONNACK | Maximum Packet Size (`max_packet_size`), Topic Alias Maximum 16, and Assigned Client Identifier when the client sent an empty id (§3.2.2.3.7 makes it a MUST) |
+| Topic Alias | A PUBLISH with a topic and an alias defines it; an empty topic uses it; the model always sees the topic. An undefined alias is DISCONNECT 0x82, alias 0 or past 16 is 0x94 |
+| Client's Maximum Packet Size | The writer task drops any packet larger, logged `decision=dropped_over_client_max_packet_size` (§3.1.2.11.4) |
+| Protocol errors | DISCONNECT with 0x81 / 0x82 / 0x95 before the close (`Session::refuse`) |
+| Refusing CONNACK | The connection closes after it, on both versions (3.1.1 §3.2.2.3, 5.0 §3.2.2.2) |
+
+**Failure paths on v5** can say more than 3.1.1's, and `LlmOutcome::Failed` carries the
+`WireFailure` category so they do: CONNACK 0x89 Server Busy when the backend is saturated and
+0x88 Server Unavailable otherwise; PUBLISH still closes (a PUBACK of any reason ends the
+exchange and the publisher drops the message) but first sends DISCONNECT 0x89 / 0x80; SUBACK
+0x80 per filter as before; UNSUBACK 0x80 per filter **instead of closing**, because v5's
+UNSUBACK can say "not removed". The Reason String on each is the category text, never the error.
+
+The cap-refusal CONNACK in `accept_bounded` is still 3.1.1 framing — it is written before any
+CONNECT is read, so the client's version is unknown.
+
+Evidence: `tests/server/mqtt/v5_real_client_test.rs` (Mosquitto's C clients at `-V 5`, Eclipse
+Paho's Python client at MQTTv5) and `v5_wire_test.rs` (hand-built packets, exact bytes, the
+pcap oracle). See `tests/server/mqtt/AGENTS.md`.
