@@ -578,7 +578,13 @@ impl DnsServer {
                     Self::build_axfr(shared, reply, question, data)
                 }
                 ActionResult::Custom { name, data } if name == RESULT_IXFR => {
-                    if signed {
+                    let has_changes = data
+                        .get("changes")
+                        .and_then(|c| c.as_array())
+                        .is_some_and(|c| !c.is_empty());
+                    // "You are current" is the SOA alone and carries nothing unsigned; a
+                    // difference would.
+                    if signed && has_changes {
                         Err(anyhow::anyhow!(
                             "{zone} is signed and its IXFR must be answered with the full zone \
                              (send_dns_zone); a diff would carry no signatures"

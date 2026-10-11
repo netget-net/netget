@@ -13,4 +13,6 @@ mod test;
 #[cfg(feature = "dns")]
 pub mod transfer_test;
 #[cfg(feature = "dns")]
+pub mod transport_bounds_test;
+#[cfg(feature = "dns")]
 pub mod zone_support;
