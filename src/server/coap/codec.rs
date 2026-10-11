@@ -6,8 +6,10 @@
 //!
 //! Covers the 4-byte binary header, the four message types, tokens, the option
 //! delta/length encoding with both extension forms, the payload marker, and the
-//! request/response code space. Not covered: Observe (RFC 7641), Block-wise transfer
-//! (RFC 7959), DTLS.
+//! request/response code space, and the option values Observe (RFC 7641) and Block-wise
+//! transfer (RFC 7959) carry: [`BlockValue`] and the Observe sequence. What those options
+//! *mean* — registrations, reassembly, the transfer cache — is `observe.rs` and
+//! `blockwise.rs`; this file only reads and writes them. Not covered: DTLS.
 
 use std::fmt;
 
@@ -21,9 +23,9 @@ pub const PAYLOAD_MARKER: u8 = 0xFF;
 ///
 /// RFC 7252 §4.6 names this number: an endpoint that does not know the path MTU assumes
 /// `MAX_MESSAGE_SIZE` of 1152 bytes, and a constrained endpoint is entitled to refuse
-/// anything larger. Without Block-wise transfer (RFC 7959, not implemented here) there is
-/// no legal way for a peer to send more, so a bigger datagram is either a client that
-/// ignored the specification or somebody probing for a buffer to grow.
+/// anything larger. The legal way for a peer to send more is Block1 (RFC 7959), whose largest
+/// block is 1024 bytes and fits, so a bigger datagram is either a client that ignored the
+/// specification or somebody probing for a buffer to grow.
 ///
 /// Enforced in `mod.rs::handle_datagram`, **before** the message is decoded and before any
 /// model call, and answered in CoAP's own vocabulary with 4.13 Request Entity Too Large
@@ -38,19 +40,28 @@ pub const PAYLOAD_MARKER: u8 = 0xFF;
 /// enforces, at the point the length is decided".
 pub const MAX_MESSAGE_LEN: usize = 1152;
 
-/// Largest response payload this server will put on the wire, in bytes.
+/// Largest payload this server will put in **one message**, in bytes — the largest Block2
+/// block (SZX 6).
 ///
 /// RFC 7252 §4.6: absent any knowledge of the path MTU, a CoAP endpoint must assume
 /// `MAX_MESSAGE_SIZE` of 1152 bytes, "leading to a maximum payload size of 1024 bytes". A
-/// constrained peer is entitled to drop anything larger, and without Block-wise transfer
-/// (RFC 7959, not implemented here) there is no legal way to split it.
-///
-/// The bound is enforced in `actions.rs::decode_payload`, on the model's side of the wire,
-/// so an oversize representation is a legible error the model can act on. Without it
-/// `send_to` fails with `EMSGSIZE` somewhere past 65507 bytes and the peer simply never
-/// hears back - a fail-silent, which is the one outcome a request/response protocol must
-/// not produce.
+/// representation larger than this is split with Block2 (RFC 7959) rather than sent whole;
+/// the bound on the representation itself is [`MAX_REPRESENTATION_LEN`].
 pub const MAX_PAYLOAD_LEN: usize = 1024;
+
+/// Largest representation the model may return, in bytes — and the largest request body a
+/// Block1 upload may reassemble to.
+///
+/// Over [`MAX_PAYLOAD_LEN`] a representation goes out as Block2 blocks, so this is not a
+/// datagram limit but a memory one: every block of a transfer is served from one cached copy
+/// (`blockwise::Transfers`), and every upload is held until its last block arrives. 64 KiB is
+/// sixty-four blocks — far past anything a constrained device serves — and with the table
+/// caps in `blockwise.rs` bounds what one server holds to a few MiB.
+///
+/// Enforced on the model's side in `actions.rs::decode_payload`, so an oversize answer is a
+/// legible error the model can act on rather than an `EMSGSIZE` the peer never hears about,
+/// and on the peer's side in `blockwise::Uploads`, which answers 4.13 with Size1.
+pub const MAX_REPRESENTATION_LEN: usize = 64 * 1024;
 
 /// CoAP version implemented here.
 pub const VERSION: u8 = 1;
@@ -81,6 +92,9 @@ pub const OPT_IF_MATCH: u16 = 1;
 pub const OPT_URI_HOST: u16 = 3;
 pub const OPT_ETAG: u16 = 4;
 pub const OPT_IF_NONE_MATCH: u16 = 5;
+/// Observe (RFC 7641 §2): 0 registers, 1 deregisters, and in a notification it is the
+/// sequence number.
+pub const OPT_OBSERVE: u16 = 6;
 pub const OPT_URI_PORT: u16 = 7;
 pub const OPT_LOCATION_PATH: u16 = 8;
 pub const OPT_URI_PATH: u16 = 11;
@@ -89,6 +103,23 @@ pub const OPT_MAX_AGE: u16 = 14;
 pub const OPT_URI_QUERY: u16 = 15;
 pub const OPT_ACCEPT: u16 = 17;
 pub const OPT_LOCATION_QUERY: u16 = 20;
+/// Block2 (RFC 7959 §2.1): which block of the *response* this is, or which one is wanted.
+pub const OPT_BLOCK2: u16 = 23;
+/// Block1 (RFC 7959 §2.1): which block of the *request* body this is.
+pub const OPT_BLOCK1: u16 = 27;
+/// Size2 (RFC 7959 §4): the whole representation's length.
+pub const OPT_SIZE2: u16 = 28;
+/// Size1 (RFC 7252 §5.10.9, RFC 7959 §4): the whole request body's length, or in a 4.13
+/// the largest one the server will take.
+pub const OPT_SIZE1: u16 = 60;
+
+/// A CoAP unsigned integer option value: minimum-length big-endian (RFC 7252 §3.2), so zero
+/// is the empty string rather than a zero byte.
+pub fn uint_option(value: u32) -> Vec<u8> {
+    let bytes = value.to_be_bytes();
+    let first = bytes.iter().position(|&b| b != 0).unwrap_or(bytes.len());
+    bytes[first..].to_vec()
+}
 
 // ---------------------------------------------------------------------------
 // Codes
@@ -107,9 +138,12 @@ pub const fn code(class: u8, detail: u8) -> u8 {
 }
 
 pub const CODE_CONTENT: u8 = code(2, 5); // 2.05
+pub const CODE_CONTINUE: u8 = code(2, 31); // 2.31 (RFC 7959 §2.9.1)
 pub const CODE_BAD_REQUEST: u8 = code(4, 0); // 4.00
+pub const CODE_BAD_OPTION: u8 = code(4, 2); // 4.02
 pub const CODE_NOT_FOUND: u8 = code(4, 4); // 4.04
 pub const CODE_METHOD_NOT_ALLOWED: u8 = code(4, 5); // 4.05
+pub const CODE_REQUEST_ENTITY_INCOMPLETE: u8 = code(4, 8); // 4.08 (RFC 7959 §2.9.2)
 pub const CODE_REQUEST_ENTITY_TOO_LARGE: u8 = code(4, 13); // 4.13
 pub const CODE_INTERNAL_SERVER_ERROR: u8 = code(5, 0); // 5.00
 pub const CODE_SERVICE_UNAVAILABLE: u8 = code(5, 3); // 5.03
@@ -504,6 +538,92 @@ impl CoapMessage {
     /// True when the code is one of the four defined request methods.
     pub fn is_request(&self) -> bool {
         method_name(self.code).is_some()
+    }
+}
+
+/// A Block1 or Block2 option value: `NUM << 4 | M << 3 | SZX` (RFC 7959 §2.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockValue {
+    /// Block number, 0-based. At most 20 bits.
+    pub num: u32,
+    /// More blocks follow.
+    pub more: bool,
+    /// Size exponent: the block is `2^(szx + 4)` bytes, 16 to 1024.
+    pub szx: u8,
+}
+
+/// Largest block number a three-byte option value can carry.
+pub const MAX_BLOCK_NUM: u32 = (1 << 20) - 1;
+
+/// The largest size exponent: SZX 6 is 1024 bytes. 7 is reserved (BERT, CoAP over TCP only).
+pub const MAX_SZX: u8 = 6;
+
+impl BlockValue {
+    /// Read an option value. `None` for more than three bytes or the reserved SZX 7.
+    pub fn parse(value: &[u8]) -> Option<BlockValue> {
+        if value.len() > 3 {
+            return None;
+        }
+        let v = value.iter().fold(0u32, |acc, b| (acc << 8) | u32::from(*b));
+        let szx = (v & 0x07) as u8;
+        if szx > MAX_SZX {
+            return None;
+        }
+        Some(BlockValue {
+            num: v >> 4,
+            more: v & 0x08 != 0,
+            szx,
+        })
+    }
+
+    /// The option value, minimum-length big-endian. `num` is masked to 20 bits.
+    pub fn encode(self) -> Vec<u8> {
+        let v = ((self.num & MAX_BLOCK_NUM) << 4)
+            | if self.more { 0x08 } else { 0 }
+            | u32::from(self.szx.min(MAX_SZX));
+        let bytes = v.to_be_bytes();
+        let first = bytes.iter().position(|&b| b != 0).unwrap_or(bytes.len());
+        bytes[first..].to_vec()
+    }
+
+    /// Block size in bytes.
+    pub fn size(self) -> usize {
+        szx_size(self.szx)
+    }
+
+    /// Byte offset of this block in the whole body.
+    pub fn offset(self) -> usize {
+        self.num as usize * self.size()
+    }
+}
+
+/// Block size for a size exponent, `2^(szx + 4)`, clamped to SZX 6.
+pub const fn szx_size(szx: u8) -> usize {
+    let szx = if szx > MAX_SZX { MAX_SZX } else { szx };
+    1 << (szx as u32 + 4)
+}
+
+impl CoapMessage {
+    /// The Block1 option, if present and readable. `Some(None)` when present but malformed.
+    pub fn block1(&self) -> Option<Option<BlockValue>> {
+        self.option_values(OPT_BLOCK1)
+            .first()
+            .map(|v| BlockValue::parse(v))
+    }
+
+    /// The Block2 option, if present and readable. `Some(None)` when present but malformed.
+    pub fn block2(&self) -> Option<Option<BlockValue>> {
+        self.option_values(OPT_BLOCK2)
+            .first()
+            .map(|v| BlockValue::parse(v))
+    }
+
+    /// The Observe option's value, if present. Values are at most three bytes (24 bits).
+    pub fn observe(&self) -> Option<u32> {
+        self.option_values(OPT_OBSERVE)
+            .first()
+            .filter(|v| v.len() <= 3)
+            .map(|v| v.iter().fold(0u32, |acc, b| (acc << 8) | u32::from(*b)))
     }
 }
 

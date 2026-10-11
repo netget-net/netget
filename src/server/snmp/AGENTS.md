@@ -106,7 +106,7 @@ Single integration point:
   NetGet started) and snmpTrapOID.0 (`trap_oid`) in front of the model's bindings; at most 64
   bindings. The send runs as a registered server task beside the request that asked for it,
   and its outcome — acknowledged or not — is an `snmp_notification_sent` access-log entry.
-  `target` is host or host:port, port 162 when omitted. No SNMPv3.
+  `target` is host or host:port, port 162 when omitted. Notifications are v1/v2c only; requests are also served over SNMPv3 (see Known Limitations §1).
 
 ### 3. JSON to BER Translation
 
@@ -235,6 +235,18 @@ structure **iteratively** — an explicit stack, no recursion of its own — bef
 The client's response path has the identical exposure and calls the identical screen: the bytes
 come from wherever the operator pointed it, and over UDP an off-path attacker can beat the real
 agent to the reply.
+
+**SNMPv3 carries BER inside an OCTET STRING, and the datagram screen does not see into it.**
+msgSecurityParameters is a primitive OCTET STRING whose contents are the encoded
+UsmSecurityParameters, which `usm::decode` hands to `rasn` in a second decode. The datagram screen
+skips a primitive's contents, so a userName or engineID written as `24 80` repeated sits behind a
+clean outer message and, unscreened, reaches the same unbounded recursion — pre-authentication on
+the agent (`Agent::receive`) and on the manager (`Manager::learn`, `Manager::unwrap_reply`).
+`usm::decode` screens both the whole message and the msgSecurityParameters contents itself, so no
+caller can reach `rasn` unscreened, and a decrypted scoped PDU is screened before its decode in
+`scoped_pdu`.
+`notify::parse` and the inform-acknowledgement read in `notify::send` screen too. Every inner
+decode needs its own screen: the outer one's guarantee stops at the first primitive it skips.
 
 ### 8. Dual Logging
 
@@ -402,15 +414,49 @@ SNMP has no connection concept:
 
 ## Known Limitations
 
-### 1. No SNMPv3 Support
+### 1. SNMPv3: the USM, without VACM (`usm.rs`)
 
-- Only SNMPv1 and SNMPv2c supported
-- No encryption (all data plaintext)
-- No authentication beyond community string
-- No user-based security
+SNMPv3 is served when `v3_users` is set (`[{name, auth_protocol, auth_password, priv_protocol,
+priv_password}]`); without it a v3 message is dropped (`decision=dropped_v3_not_configured`).
+`usm.rs` is shared with the client and implements RFC 3412 message processing and the RFC 3414
+USM:
 
-**Rationale**: v1/v2c cover 90% of SNMP deployments. v3 adds significant complexity (encryption, user management, key
-exchange).
+- Keys: the megabyte password hash once per user, localized to the engine at start.
+- Authentication: HMAC-MD5-96, HMAC-SHA-96 and RFC 7860's HMAC-SHA-224/256/384/512. An
+  incoming MAC is checked over the bytes as received, the MAC field found by walking the BER
+  (`auth_params_span`) — never over a re-encoding.
+- Privacy: DES-CBC (RFC 3414 §8) and AES-128-CFB (RFC 3826). AES-192/256 are refused at
+  start-up: they exist only as expired drafts with two incompatible key extensions.
+- The procedure, in RFC 3414 §3.2's order, each refusal its own report and none of them
+  reaching the handler: unknown engine (discovery) → `usmStatsUnknownEngineIDs`; unknown user →
+  `UnknownUserNames`; a level other than the user's → `UnsupportedSecLevels`; a bad MAC →
+  `WrongDigests`; boots or time outside the 150 s window → `NotInTimeWindows`, **sent
+  authenticated** so the manager can believe the clock in it; undecryptable → `DecryptionErrors`.
+  Each is logged `decision=usm_report`.
+
+**A user is answered only at the level it is configured for.** An authPriv user asking at
+authNoPriv gets `UnsupportedSecLevels`, not an unencrypted answer. Without VACM that is what makes
+configuring keys mean anything: otherwise anyone who knew a user name could read at
+noAuthNoPriv. The event carries `user`, `security_level` and `context_name`, so a handler can
+decide per user what it may read or write — that is the VACM there is.
+
+The engine: `engine_id` (hex, 5–32 bytes) or a random RFC 3411 format-5 ID (enterprise 0)
+chosen at start. snmpEngineBoots is `engine_boots` when set; otherwise it is
+`usm::default_engine_boots()`, the wall-clock seconds since 2024-01-01 (and, within one process,
+always more than the value before). NetGet persists nothing, and with a fixed `engine_id` the
+localized keys are identical in every run, so boots is what separates runs: an authenticated
+message captured in one run carries that run's boots and the next run answers it with
+`NotInTimeWindows`. This rests on the wall clock — a clock set back across a restart can repeat a
+value — so where it cannot be trusted, set `engine_boots` and raise it on every restart.
+
+Received boots and time are `INTEGER (0..2147483647)` (RFC 3414 §2.2.1) and are range-checked
+before any arithmetic: the agent answers an out-of-range pair on an authenticated request with
+the authenticated `NotInTimeWindows` report and compares times with `abs_diff`; the manager
+refuses an out-of-range clock in the unauthenticated discovery report (`learn`) and in an
+authenticated report (`unwrap`), and adds elapsed seconds with saturation capped at the maximum.
+Answers larger than the request's msgMaxSize become tooBig. Not served: SNMPv3 traps and
+informs in either direction (a v3 Trap/Inform/Report PDU is dropped,
+`decision=dropped_v3_notification`).
 
 ### 2. No SET Request Implementation
 

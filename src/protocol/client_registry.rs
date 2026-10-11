@@ -654,6 +654,10 @@ impl ClientRegistry {
         self.register(Arc::new(
             crate::client::rsync::actions::RsyncClientProtocol::new(),
         ));
+        #[cfg(feature = "rdp-client")]
+        self.register(Arc::new(
+            crate::client::rdp::actions::RdpClientProtocol::new(),
+        ));
         #[cfg(feature = "pfcp")]
         self.register(Arc::new(
             crate::client::pfcp::actions::PfcpClientProtocol::new(),
@@ -1266,6 +1270,7 @@ pub(crate) const ALL_KNOWN_CLIENT_PROTOCOLS: &[(&str, &str)] = &[
     ("BFD", "bfd"),
     ("VXLAN", "vxlan"),
     ("rsync", "rsync"),
+    ("RDP", "rdp-client"),
     ("PFCP", "pfcp"),
     ("Matrix", "matrix"),
     ("libp2p", "libp2p"),

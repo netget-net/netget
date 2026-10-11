@@ -86,6 +86,12 @@ pub static PRODUCE_REQUEST_EVENT: Lazy<EventType> = Lazy::new(|| {
             description: "client_id from the request header (empty if absent)".to_string(),
             required: false,
         },
+        Parameter {
+            name: "api_version".to_string(),
+            type_hint: "number".to_string(),
+            description: "Produce API version the client negotiated".to_string(),
+            required: false,
+        },
     ])
     .with_log_template(
         LogTemplate::new()
@@ -146,6 +152,12 @@ pub static FETCH_REQUEST_EVENT: Lazy<EventType> = Lazy::new(|| {
             name: "client_id".to_string(),
             type_hint: "string".to_string(),
             description: "client_id from the request header (empty if absent)".to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "api_version".to_string(),
+            type_hint: "number".to_string(),
+            description: "Fetch API version the client negotiated".to_string(),
             required: false,
         },
     ])
@@ -265,6 +277,12 @@ pub static OFFSET_COMMIT_REQUEST_EVENT: Lazy<EventType> = Lazy::new(|| {
             name: "client_id".to_string(),
             type_hint: "string".to_string(),
             description: "client_id from the request header (empty if absent)".to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "api_version".to_string(),
+            type_hint: "number".to_string(),
+            description: "OffsetCommit API version the client negotiated".to_string(),
             required: false,
         },
     ])
@@ -590,13 +608,17 @@ impl Protocol for KafkaProtocol {
         ProtocolMetadataV2::builder()
             // Beta since September 2026: librdkafka -- a separate C implementation, not the
             // kafka-protocol crate this server frames with -- completes a produce and a fetch
-            // against it. Not Stable: that is one client, Stable wants two, and consumer
-            // groups do not work at all (see notes).
+            // against it, and so do Apache Kafka's Java client and franz-go. Not Stable: the
+            // other five conditions have not been worked through, and consumer groups do not
+            // work at all (see notes).
             .state(DevelopmentState::Beta)
             .well_known_port(9092)
             .implementation(
                 "kafka-protocol v0.14 wire format. Implements ApiVersions v0-3 (answered by Rust), \
-                 Metadata v0-8, Produce v0-8, Fetch v0-11, OffsetCommit v0-7",
+                 Metadata v0-12, Produce v0-11, Fetch v0-16, OffsetCommit v0-9: the newest \
+                 versions the crate knows, flexible (tagged-field) ones included. Topic ids \
+                 (Metadata v10+, Fetch v13+) are derived from the topic name, since nothing is \
+                 stored to keep an assigned one",
             )
             .llm_control(
                 "Metadata, Produce, Fetch and OffsetCommit responses. The model chooses which \
@@ -604,34 +626,35 @@ impl Protocol for KafkaProtocol {
                  and exactly which records a fetch returns",
             )
             .e2e_testing(
-                "kcat 1.7 on librdkafka 2.15 -- a C implementation independent of the \
-                 kafka-protocol crate this server frames with -- in \
-                 tests/server/kafka/real_client_test.rs::\
-                 test_kafka_produce_and_fetch_against_kcat, which is NOT #[ignore]d and FAILS \
-                 rather than skips when kcat is absent. It completes ApiVersions -> Metadata -> \
-                 Produce, the server decodes the key and value out of librdkafka's v2 record \
-                 batch, and a second kcat run completes ApiVersions -> Metadata -> Fetch and \
-                 prints that key and value back, so librdkafka accepted the batch this server \
-                 encoded (CRC, varint framing, attributes and offset deltas included). Also \
-                 mocked E2E against kafka-protocol's own client-side codecs for correlation-id \
-                 echo and ApiVersions negotiation. UNPROVEN: consumer groups (the APIs do not \
-                 exist here), the Java client, compression, transactions, TLS/SASL, multi-broker \
-                 metadata, and any Fetch that must resolve an offset -- the kcat consumer is \
-                 pinned to an absolute offset precisely because ListOffsets is not implemented.",
+                "Three independent clients, none built on the kafka-protocol crate this server \
+                 frames with. kcat 1.7 on librdkafka (tests/server/kafka/real_client_test.rs): \
+                 ApiVersions -> Metadata -> Produce and a second run that Fetches and prints the \
+                 key and value back, so librdkafka accepted the batch this server encoded; it \
+                 negotiates Metadata v12, Produce v7 and Fetch v11. Apache Kafka's own Java \
+                 client 3.9.1 and franz-go 1.18.1 (tests/server/kafka/flexible_versions_test.rs) \
+                 each produce and then consume at the newest versions, Metadata v12, Produce \
+                 v11 and Fetch v16 by topic id, and print a record whose value names the Fetch \
+                 version it was served at. None is #[ignore]d; all fail rather than skip. Also \
+                 mocked E2E against kafka-protocol's own client-side codecs, with the tshark \
+                 oracle. UNPROVEN: consumer groups (the APIs do not exist here), compression, \
+                 transactions, TLS/SASL, multi-broker metadata, any Fetch that must resolve an \
+                 offset (ListOffsets is not implemented), and OffsetCommit v8+ from a \
+                 third-party client, which would need a coordinator first.",
             )
             .notes(
-                "Supports exactly five API keys: ApiVersions (18) v0-3, Metadata (3) v0-8, \
-                 Produce (0) v0-8, Fetch (1) v0-11, OffsetCommit (8) v0-7. The ceilings sit one \
-                 below each message's first flexible/tagged-field version. Any other API key — \
-                 ListOffsets, FindCoordinator, JoinGroup, SyncGroup, Heartbeat, OffsetFetch, the \
-                 admin APIs — is not advertised and closes the connection with a logged error if \
-                 sent, so consumer groups do not work: a consumer must assign partitions manually \
-                 and fetch from an explicit offset. The broker stores nothing, so a Fetch returns \
+                "Supports exactly five API keys: ApiVersions (18) v0-3, Metadata (3) v0-12, \
+                 Produce (0) v0-11, Fetch (1) v0-16, OffsetCommit (8) v0-9. Topic ids are a \
+                 hash of the name (stable across restarts); one this broker never reported gets \
+                 UNKNOWN_TOPIC_ID (100), and the most recent 4096 are remembered for resolving \
+                 Fetch v13+ and Metadata v12 by-id requests. Any other API key — ListOffsets, \
+                 FindCoordinator, JoinGroup, SyncGroup, Heartbeat, OffsetFetch, the admin APIs \
+                 — is not advertised and closes the connection with a logged error if sent, so \
+                 consumer groups do not work: a consumer must assign partitions manually and \
+                 fetch from an explicit offset. The broker stores nothing, so a Fetch returns \
                  only what the model supplies for that request and a committed offset is \
                  acknowledged but not remembered. When the model returns no usable action the \
                  client gets UNKNOWN_SERVER_ERROR (-1) in the correct response type, never a \
-                 fabricated success. Validated against librdkafka (kcat) for produce and fetch; \
-                 not validated against the Java client.",
+                 fabricated success.",
             )
             .max_inbound_bytes(crate::server::kafka::MAX_REQUEST_BYTES)
             .build()

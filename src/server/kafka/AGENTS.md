@@ -8,26 +8,48 @@ empty API list so no client could negotiate, every decode and encode was hardcod
 version 0 so every request body after `client_id` was garbage, and the LLM was never called
 so all nine actions and all four event types were dead.
 
-Not validated against librdkafka or the Java client — see [Testing](#testing) for what *was*
-validated and how.
+It is now Beta, and three independent clients complete against it: librdkafka (kcat), Apache
+Kafka's own Java client 3.9.1 and franz-go 1.18.1 — see [Testing](#testing) and "Flexible
+versions and topic ids" below.
 
 ## Supported surface — this is the whole of it
 
 | API | key | versions | answered by |
 |---|---|---|---|
 | ApiVersions  | 18 | 0–3  | Rust, no LLM call |
-| Metadata     | 3  | 0–8  | LLM / script / static handler |
-| Produce      | 0  | 0–8  | LLM / script / static handler |
-| Fetch        | 1  | 0–11 | LLM / script / static handler |
-| OffsetCommit | 8  | 0–7  | LLM / script / static handler |
+| Metadata     | 3  | 0–12 | LLM / script / static handler |
+| Produce      | 0  | 0–11 | LLM / script / static handler |
+| Fetch        | 1  | 0–16 | LLM / script / static handler |
+| OffsetCommit | 8  | 0–9  | LLM / script / static handler |
 
 `SUPPORTED_APIS` in `mod.rs` is the single source of truth: ApiVersions is generated from
 it and the dispatcher validates against it, so the advertised table and the implemented set
 cannot drift apart.
 
-The version ceilings each sit one below that message's first *flexible* (tagged-field)
-version, and below the versions that replace topic names with topic UUIDs
-(Metadata v10+, Fetch v13+). Higher versions are refused rather than mis-encoded.
+The ceilings are the newest versions `kafka-protocol` 0.14 knows, flexible (tagged-field)
+versions and the topic-UUID versions (Metadata v10+, Fetch v13+) included. Anything above
+them is refused rather than mis-encoded.
+
+### Flexible versions and topic ids
+
+The codec does the flexible encoding; what the broker had to add was topic ids. NetGet
+stores no topics, so there is nowhere to keep an id assigned at creation: `topic_id(name)`
+derives one from the name (two FNV-1a hashes, RFC 9562 version nibble 8), so the same name
+gets the same id across connections and restarts, as a real broker's stored id would.
+Metadata v10+ reports it, and the broker remembers the most recent 4096 it reported
+(`MAX_KNOWN_TOPIC_IDS`, in `TopicIds`) so a Fetch v13+ or a Metadata v12 request naming a
+topic **by id alone** can be answered. Past 4096 the oldest id is forgotten, one at a time —
+a forgotten id costs a client one `UNKNOWN_TOPIC_ID` and a metadata refresh. The names come
+from the model, so a topic named over Kafka's own 249-byte limit (`MAX_TOPIC_NAME_LEN`) is
+left out of the Metadata answer and never remembered; if the client asked for it, it is
+answered `UNKNOWN_TOPIC_OR_PARTITION` like any topic the model did not describe. An id it
+never reported is `UNKNOWN_TOPIC_ID` (100), and the handler is not asked. The produce, fetch and offset-commit events carry `api_version`.
+
+Which client speaks what, measured: librdkafka 2.3 (kcat) negotiates Metadata v12, Produce
+v7 and Fetch v11; Apache Kafka's Java client and franz-go both take Metadata v12, Produce
+v11 and Fetch v16. Wireshark 4.2's dissector stops at Metadata v9, Produce v8, Fetch v11
+and OffsetCommit v8 and warns on an ApiVersions response advertising more, which the
+pcap-oracle test allows by name.
 
 **Not implemented, and not advertised**: `ListOffsets`, `FindCoordinator`, `JoinGroup`,
 `SyncGroup`, `Heartbeat`, `LeaveGroup`, `OffsetFetch`, and every admin API. The practical
@@ -305,9 +327,8 @@ the connection.
 3. Add `FindCoordinator` + `JoinGroup` + `SyncGroup` + `Heartbeat` + `OffsetFetch` if
    consumer groups are wanted. This is the large one, and it needs the model to hold group
    state across requests — server memory rather than Rust storage.
-4. Raise the version ceilings past the flexible boundary (Metadata v9+, Produce v9+,
-   Fetch v12+), which mostly means testing tagged-field encoding, and past the topic-UUID
-   boundary, which needs a UUID the model chooses per topic.
+4. ~~Raise the version ceilings past the flexible boundary~~ — done: Metadata v12, Produce
+   v11, Fetch v16 and OffsetCommit v9, topic ids derived from names (see above).
 
 ## References
 

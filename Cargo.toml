@@ -284,7 +284,7 @@ hsrp = []  # HSRP v1/v2 gateway redundancy over UDP 1985 - no extra deps
 eapol = ["pnet", "dep:pcap", "dep:md-5"]  # EAPOL / 802.1X authenticator - libpcap capture; md-5 for the RFC 1994 MD5-Challenge digest
 wol = []  # Wake-on-LAN magic packet listener (UDP 9) - no extra deps
 dc = ["dep:rustls", "dep:tokio-rustls", "dep:webpki-roots"]  # DC (Direct Connect) - supports TLS (DCCS)
-dns = ["hickory-server", "hickory-proto", "dep:hickory-client"]
+dns = ["hickory-server", "hickory-proto", "hickory-proto/dnssec-ring", "dep:hickory-client"]
 doq = ["dns", "dep:quinn", "dep:rustls", "dep:rustls-pemfile", "dep:rcgen", "dep:webpki-roots"]  # RFC 9250 DNS over QUIC server and client
 dot = ["dns", "hickory-server/dns-over-rustls", "hickory-proto/dns-over-rustls", "dep:rustls", "dep:tokio-rustls", "dep:rustls-pemfile", "dep:rcgen", "dep:webpki-roots"]  # DNS-over-TLS server
 doh = ["dns", "hickory-server/dns-over-https-rustls", "hickory-proto/dns-over-https-rustls", "dep:rustls", "dep:tokio-rustls", "dep:rustls-pemfile", "dep:rcgen", "dep:h2"]  # DNS-over-HTTPS server
@@ -328,7 +328,7 @@ finger = []  # Finger (RFC 1288) user information server - hand-rolled, no extra
 ssdp = []  # SSDP/UPnP discovery (HTTPU over UDP multicast) - hand-rolled, no extra deps
 llmnr = ["hickory-proto"]  # LLMNR (RFC 4795) - DNS wire format via hickory-proto
 netbios-ns = []  # NetBIOS Name Service (RFC 1002) - hand-rolled name encoding
-snmp = ["rasn-snmp", "rasn", "rasn-smi", "dep:snmp"]
+snmp = ["rasn-snmp", "rasn", "rasn-smi", "dep:snmp", "dep:des", "dep:aes", "dep:hmac", "dep:sha1", "dep:sha2", "dep:md-5"]  # SNMPv3 USM: DES-CBC/AES-CFB privacy, HMAC-MD5/SHA-1/SHA-2 authentication
 igmp = []  # IGMP multicast group management, no extra deps
 syslog = ["syslog_loose"]
 statsd = [] # StatsD / DogStatsD UDP collector and emitter; native codec
@@ -518,6 +518,7 @@ tor = ["dep:tor-netdoc", "dep:tor-cert", "dep:tor-cell", "dep:rustls", "dep:toki
 vnc = ["dep:des"]  # VNC server and client with custom RFB protocol implementation
 reverse-shell = []  # Reverse-shell listener EMULATION (red-team/CTF); model role-plays the shell, nothing is executed
 rdp = []  # RDP server: TPKT/X.224 connection-negotiation slice of [MS-RDPBCGR] (hand-rolled, no crate)
+rdp-client = ["rdp", "dep:rustls", "dep:ironrdp-connector", "dep:ironrdp-session", "dep:ironrdp-tokio", "dep:ironrdp-tls", "dep:ironrdp-input", "dep:ironrdp-pdu", "dep:ironrdp-graphics"]  # RDP client: IronRDP drives the connection sequence (TLS / CredSSP), the model types, clicks and reads the screen
 openapi = ["http", "dep:openapi-rs", "dep:matchit"]  # OpenAPI 3.1 server with runtime request validation and route matching
 openid = ["urlencoding"]  # OpenID Connect authentication provider with LLM-controlled token generation
 usb-common = ["dep:usbip"]  # Common USB/IP functionality for USB device protocols
@@ -1069,6 +1070,7 @@ all-protocols = [
     "vnc",
     "reverse-shell",
     "rdp",
+    "rdp-client",
     "openapi",
     "openid",
     "git",
@@ -1484,6 +1486,13 @@ aws-sdk-s3 = { version = "1.90", optional = true }
 aws-credential-types = { version = "1.2", optional = true }
 # Tor client with experimental-api for directory access
 arti-client = { version = "0.36", optional = true, features = ["experimental-api"] }
+ironrdp-connector = { version = "0.10", optional = true }
+ironrdp-session = { version = "0.11", optional = true }
+ironrdp-tokio = { version = "0.10", optional = true }
+ironrdp-tls = { version = "0.2", optional = true, features = ["rustls-ring"] }
+ironrdp-input = { version = "0.7", optional = true }
+ironrdp-pdu = { version = "0.9", optional = true }
+ironrdp-graphics = { version = "0.9", optional = true }
 tor-rtcompat = { version = "0.36", optional = true }
 tor-dirmgr = { version = "0.36", optional = true }  # Tor directory manager types
 tor-netdir = { version = "0.36", optional = true }  # Tor network directory queries

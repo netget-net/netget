@@ -8,10 +8,10 @@
 //! | API | key | versions | answered by |
 //! |---|---|---|---|
 //! | ApiVersions  | 18 | 0–3  | Rust (pure transport negotiation, no LLM call) |
-//! | Metadata     | 3  | 0–8  | LLM / script / static handler |
-//! | Produce      | 0  | 0–8  | LLM / script / static handler |
-//! | Fetch        | 1  | 0–11 | LLM / script / static handler |
-//! | OffsetCommit | 8  | 0–7  | LLM / script / static handler |
+//! | Metadata     | 3  | 0–12 | LLM / script / static handler |
+//! | Produce      | 0  | 0–11 | LLM / script / static handler |
+//! | Fetch        | 1  | 0–16 | LLM / script / static handler |
+//! | OffsetCommit | 8  | 0–9  | LLM / script / static handler |
 //!
 //! Everything else — `ListOffsets`, `FindCoordinator`, `JoinGroup`, `SyncGroup`,
 //! `Heartbeat`, `OffsetFetch`, the admin APIs — is **not implemented**. Those keys are
@@ -21,9 +21,11 @@
 //! assignment and an explicit fetch offset. Consumer *groups* do not work, because
 //! group coordination needs the APIs above.
 //!
-//! The version ceilings are all one below the first *flexible* (tagged-field) version of
-//! each message, and below the versions that replace topic names with topic UUIDs. That
-//! is the subset that has been exercised end to end.
+//! The ceilings are the newest versions `kafka-protocol` 0.14 knows, flexible (tagged-field)
+//! versions included; Apache Kafka's Java client and franz-go both complete at Metadata v12,
+//! Produce v11 and Fetch v16. From Fetch v13 a topic is named by id: ids are derived from the
+//! name ([`topic_id`]) because nothing is stored, and the broker remembers the ones it has
+//! reported so an id-only request can be resolved.
 //!
 //! # Version handling
 //!
@@ -166,16 +168,110 @@ const ERR_UNKNOWN_TOPIC_OR_PARTITION: i16 = 3;
 /// instead of recording a permanent fault - the distinction `WireFailure` exists to draw.
 const ERR_REQUEST_TIMED_OUT: i16 = 7;
 const ERR_UNSUPPORTED_VERSION: i16 = 35;
+/// A topic named by an id this broker has never reported (Fetch v13+, Metadata v12).
+const ERR_UNKNOWN_TOPIC_ID: i16 = 100;
+
+/// Topic ids remembered for resolving Fetch v13+ and Metadata v12 requests, which name
+/// topics by id alone. Every id this broker hands out is derived from the name, so a
+/// forgotten one costs a client one `UNKNOWN_TOPIC_ID` and a metadata refresh, never a wrong
+/// answer. Past this the oldest one is forgotten, one at a time.
+pub const MAX_KNOWN_TOPIC_IDS: usize = 4096;
+
+/// Kafka's own limit on a topic name, in bytes (`Topic.MAX_NAME_LENGTH`). A Metadata answer
+/// naming a longer topic leaves that topic out, and its name is never remembered.
+pub const MAX_TOPIC_NAME_LEN: usize = 249;
+
+/// The topic ids this broker has reported, oldest first, so a request naming a topic by id
+/// alone can be answered. Holds at most [`MAX_KNOWN_TOPIC_IDS`] names of at most
+/// [`MAX_TOPIC_NAME_LEN`] bytes each.
+#[derive(Default)]
+pub struct TopicIds {
+    inner: std::sync::Mutex<TopicIdTable>,
+}
+
+#[derive(Default)]
+struct TopicIdTable {
+    names: std::collections::HashMap<uuid::Uuid, String>,
+    order: std::collections::VecDeque<uuid::Uuid>,
+}
+
+impl TopicIds {
+    /// Remember and return the id reported for `name`; `None`, remembering nothing, for a
+    /// name over [`MAX_TOPIC_NAME_LEN`] bytes. At [`MAX_KNOWN_TOPIC_IDS`] the oldest id is
+    /// forgotten to make room.
+    pub fn report(&self, name: &str) -> Option<uuid::Uuid> {
+        if name.len() > MAX_TOPIC_NAME_LEN {
+            return None;
+        }
+        let id = topic_id(name);
+        let mut table = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        if !table.names.contains_key(&id) {
+            while table.names.len() >= MAX_KNOWN_TOPIC_IDS {
+                let Some(oldest) = table.order.pop_front() else {
+                    break;
+                };
+                table.names.remove(&oldest);
+            }
+            table.order.push_back(id);
+        }
+        table.names.insert(id, name.to_string());
+        Some(id)
+    }
+
+    /// The topic a reported id stands for.
+    pub fn name(&self, id: &uuid::Uuid) -> Option<String> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .names
+            .get(id)
+            .cloned()
+    }
+
+    /// Ids remembered.
+    pub fn len(&self) -> usize {
+        self.inner
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .names
+            .len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// The id this broker reports for a topic (Metadata v10+, Fetch v13+).
+///
+/// NetGet keeps no topics, so there is nowhere to store an id assigned at creation; it is
+/// derived from the name instead — two 64-bit FNV-1a hashes with different offsets, the
+/// RFC 9562 version nibble set to 8 (custom). The same name always gets the same id, across
+/// connections and restarts, which is what a real broker's stored id gives a client. The
+/// nil id and Kafka's reserved `0…01` are never produced.
+pub fn topic_id(name: &str) -> uuid::Uuid {
+    let fnv = |offset: u64| {
+        name.bytes().fold(offset, |h, b| {
+            (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3)
+        })
+    };
+    let mut bytes = [0u8; 16];
+    bytes[..8].copy_from_slice(&fnv(0xcbf2_9ce4_8422_2325).to_be_bytes());
+    bytes[8..].copy_from_slice(&fnv(0x6c62_272e_07bb_0142).to_be_bytes());
+    bytes[6] = (bytes[6] & 0x0f) | 0x80;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    uuid::Uuid::from_bytes(bytes)
+}
 
 /// The API keys this broker implements, with the version range it implements for each.
 ///
 /// This table is the single source of truth: it is what ApiVersions advertises and what
 /// the dispatcher validates against, so the two can never disagree.
 pub const SUPPORTED_APIS: &[(i16, i16, i16)] = &[
-    (ApiKey::Produce as i16, 0, 8),
-    (ApiKey::Fetch as i16, 0, 11),
-    (ApiKey::Metadata as i16, 0, 8),
-    (ApiKey::OffsetCommit as i16, 0, 7),
+    (ApiKey::Produce as i16, 0, 11),
+    (ApiKey::Fetch as i16, 0, 16),
+    (ApiKey::Metadata as i16, 0, 12),
+    (ApiKey::OffsetCommit as i16, 0, 9),
     (ApiKey::ApiVersions as i16, 0, 3),
 ];
 
@@ -199,6 +295,21 @@ pub struct KafkaServer {
     broker_id: i32,
     /// Host advertised to clients in Metadata when the model does not name one.
     advertised_host: String,
+    /// Ids this broker has reported, so a request naming a topic by id alone can be
+    /// answered.
+    topic_ids: TopicIds,
+}
+
+impl KafkaServer {
+    /// Remember (and return) the id reported for `name`; `None` for a name Kafka would refuse.
+    fn report_topic(&self, name: &str) -> Option<uuid::Uuid> {
+        self.topic_ids.report(name)
+    }
+
+    /// The topic a reported id stands for.
+    fn topic_name(&self, id: &uuid::Uuid) -> Option<String> {
+        self.topic_ids.name(id)
+    }
 }
 
 /// What the model said about one request unit.
@@ -273,19 +384,28 @@ impl KafkaServer {
             "Kafka broker listening on {} (cluster={}, broker_id={}, advertised_host={})",
             local_addr, cluster_id, broker_id, advertised_host
         ));
+        // Generated from SUPPORTED_APIS, so the log cannot disagree with what is advertised.
+        let supported = SUPPORTED_APIS
+            .iter()
+            .map(|(key, min, max)| match ApiKey::try_from(*key) {
+                Ok(api) => format!("{api:?} v{min}-{max}"),
+                Err(_) => format!("key {key} v{min}-{max}"),
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
         log.info(format!(
-            "Kafka supports ApiVersions v0-3, Metadata v0-8, Produce v0-8, Fetch v0-11, \
-             OffsetCommit v0-7. Other API keys (ListOffsets, FindCoordinator, JoinGroup, \
+            "Kafka supports {}. Other API keys (ListOffsets, FindCoordinator, JoinGroup, \
              SyncGroup, Heartbeat, OffsetFetch, admin) are not implemented, so consumer groups \
              do not work; consumers must assign partitions and fetch from an explicit offset. \
              Broker advertises host '{}'.",
-            advertised_host
+            supported, advertised_host
         ));
 
         let server = Arc::new(KafkaServer {
             cluster_id,
             broker_id,
             advertised_host,
+            topic_ids: Default::default(),
         });
 
         let protocol = Arc::new(KafkaProtocol::new());
@@ -719,6 +839,7 @@ impl KafkaServer {
                     Self::handle_fetch(
                         &mut cursor,
                         &ctx,
+                        &server,
                         &llm_client,
                         &app_state,
                         &status_tx,
@@ -875,13 +996,24 @@ impl KafkaServer {
 
         let request = MetadataRequest::decode(cursor, ctx.api_version)?;
 
-        // `topics: None` means "all topics"; `Some([])` means "no topics".
+        // `topics: None` means "all topics"; `Some([])` means "no topics". From v12 a topic
+        // may be named by id alone; an id this broker never reported is UNKNOWN_TOPIC_ID.
+        let mut unknown_ids = Vec::new();
         let requested_topics: Vec<String> = request
             .topics
             .as_ref()
             .map(|ts| {
                 ts.iter()
-                    .filter_map(|t| t.name.as_ref().map(|n| n.to_string()))
+                    .filter_map(|t| match &t.name {
+                        Some(n) => Some(n.to_string()),
+                        None => {
+                            let name = server.topic_name(&t.topic_id);
+                            if name.is_none() {
+                                unknown_ids.push(t.topic_id);
+                            }
+                            name
+                        }
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -963,6 +1095,16 @@ impl KafkaServer {
                             );
                             continue;
                         };
+                        // Kafka refuses such a name; a requested one falls through to the
+                        // unknown-topic answer below rather than being described.
+                        if name.len() > MAX_TOPIC_NAME_LEN {
+                            Log::new(Some(status_tx)).warn(format!(
+                                "Kafka metadata_response: topic name of {} bytes ignored; \
+                                 Kafka's limit is {MAX_TOPIC_NAME_LEN}",
+                                name.len()
+                            ));
+                            continue;
+                        }
                         let topic_error =
                             clamp_error_code(t.get("error_code").and_then(|v| v.as_i64()));
 
@@ -1021,12 +1163,16 @@ impl KafkaServer {
                             );
                         }
 
-                        topics.push(
-                            MetadataResponseTopic::default()
-                                .with_name(Some(StrBytes::from_string(name.to_string()).into()))
-                                .with_partitions(partitions)
-                                .with_error_code(topic_error),
-                        );
+                        let mut topic = MetadataResponseTopic::default()
+                            .with_name(Some(StrBytes::from_string(name.to_string()).into()))
+                            .with_partitions(partitions)
+                            .with_error_code(topic_error);
+                        if ctx.api_version >= 10 {
+                            if let Some(id) = server.report_topic(name) {
+                                topic = topic.with_topic_id(id);
+                            }
+                        }
+                        topics.push(topic);
                     }
                 }
                 (brokers, topics)
@@ -1060,6 +1206,14 @@ impl KafkaServer {
                         .with_error_code(fallback_error),
                 );
             }
+        }
+        for id in unknown_ids {
+            response_topics.push(
+                MetadataResponseTopic::default()
+                    .with_name(None)
+                    .with_topic_id(id)
+                    .with_error_code(ERR_UNKNOWN_TOPIC_ID),
+            );
         }
 
         if matches!(reply, Reply::NoAnswer(_)) && requested_topics.is_empty() {
@@ -1235,6 +1389,7 @@ impl KafkaServer {
                         "records": event_records,
                         "acks": acks,
                         "client_id": ctx.client_id,
+                        "api_version": ctx.api_version,
                     }),
                 );
 
@@ -1319,6 +1474,7 @@ impl KafkaServer {
     async fn handle_fetch(
         cursor: &mut std::io::Cursor<&[u8]>,
         ctx: &RequestCtx,
+        server: &Arc<KafkaServer>,
         llm_client: &OllamaClient,
         app_state: &Arc<AppState>,
         status_tx: &mpsc::UnboundedSender<String>,
@@ -1333,7 +1489,35 @@ impl KafkaServer {
         let mut units = 0usize;
 
         for topic in &request.topics {
-            let topic_name = topic.topic.to_string();
+            // From v13 a fetch names its topic by id; one this broker never reported cannot
+            // be asked about, and every partition of it is UNKNOWN_TOPIC_ID.
+            let by_id = ctx.api_version >= 13;
+            let topic_name = if by_id {
+                match server.topic_name(&topic.topic_id) {
+                    Some(name) => name,
+                    None => {
+                        topic_responses.push(
+                            FetchableTopicResponse::default()
+                                .with_topic_id(topic.topic_id)
+                                .with_partitions(
+                                    topic
+                                        .partitions
+                                        .iter()
+                                        .map(|p| {
+                                            PartitionData::default()
+                                                .with_partition_index(p.partition)
+                                                .with_error_code(ERR_UNKNOWN_TOPIC_ID)
+                                                .with_records(Some(Bytes::new()))
+                                        })
+                                        .collect(),
+                                ),
+                        );
+                        continue;
+                    }
+                }
+            } else {
+                topic.topic.to_string()
+            };
             let mut partition_responses = Vec::new();
 
             for partition in &topic.partitions {
@@ -1380,6 +1564,7 @@ impl KafkaServer {
                         "fetch_offset": fetch_offset,
                         "max_bytes": max_bytes,
                         "client_id": ctx.client_id,
+                        "api_version": ctx.api_version,
                     }),
                 );
 
@@ -1435,11 +1620,12 @@ impl KafkaServer {
                 partition_responses.push(pd);
             }
 
-            topic_responses.push(
-                FetchableTopicResponse::default()
-                    .with_topic(StrBytes::from_string(topic_name).into())
-                    .with_partitions(partition_responses),
-            );
+            let response = FetchableTopicResponse::default().with_partitions(partition_responses);
+            topic_responses.push(if by_id {
+                response.with_topic_id(topic.topic_id)
+            } else {
+                response.with_topic(StrBytes::from_string(topic_name).into())
+            });
         }
 
         let response = FetchResponse::default()
@@ -1508,6 +1694,7 @@ impl KafkaServer {
                         "partition": partition_idx,
                         "offset": partition.committed_offset,
                         "client_id": ctx.client_id,
+                        "api_version": ctx.api_version,
                     }),
                 );
 

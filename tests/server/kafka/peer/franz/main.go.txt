@@ -1,0 +1,60 @@
+// franz-go against NetGet's broker: produce one record and wait for its offset, then consume
+// partition 0 from offset 0 until a record arrives. franz-go negotiates the newest version
+// of every API both ends support. Idempotent writes are off (no InitProducerId).
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"time"
+
+	"github.com/twmb/franz-go/pkg/kgo"
+)
+
+func main() {
+	bootstrap, topic := os.Args[1], os.Args[2]
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	producer, err := kgo.NewClient(
+		kgo.SeedBrokers(bootstrap),
+		kgo.DisableIdempotentWrite(),
+		kgo.RequiredAcks(kgo.LeaderAck()),
+		kgo.RecordPartitioner(kgo.ManualPartitioner()),
+	)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "producer:", err)
+		os.Exit(2)
+	}
+	result := producer.ProduceSync(ctx, &kgo.Record{Topic: topic, Partition: 0, Key: []byte("franz-key"), Value: []byte("hello from franz-go")})
+	if err := result.FirstErr(); err != nil {
+		fmt.Fprintln(os.Stderr, "produce:", err)
+		os.Exit(2)
+	}
+	r, _ := result.First()
+	fmt.Printf("PRODUCED partition=%d offset=%d\n", r.Partition, r.Offset)
+	producer.Close()
+
+	consumer, err := kgo.NewClient(
+		kgo.SeedBrokers(bootstrap),
+		kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{topic: {0: kgo.NewOffset().At(0)}}),
+	)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "consumer:", err)
+		os.Exit(2)
+	}
+	defer consumer.Close()
+	for ctx.Err() == nil {
+		fetches := consumer.PollFetches(ctx)
+		for _, e := range fetches.Errors() {
+			fmt.Fprintln(os.Stderr, "fetch error:", e.Topic, e.Partition, e.Err)
+		}
+		for _, rec := range fetches.Records() {
+			fmt.Printf("CONSUMED offset=%d key=%s value=%s\n", rec.Offset, rec.Key, rec.Value)
+			return
+		}
+	}
+	fmt.Fprintln(os.Stderr, "no record consumed:", ctx.Err())
+	os.Exit(3)
+}

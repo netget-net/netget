@@ -24,6 +24,10 @@ pub=[
   {'path':'empty','type':'file','content':''}]
 if t=='rsync_list_modules':
   a=[{'type':'rsync_modules','modules':[{'name':'pub','comment':'public files'},{'name':'mirror','comment':'a mirror'}]}]
+elif t=='rsync_upload_request':
+  a=[{'type':'rsync_refuse','message':'module %s is read only' % e['module']}]
+elif t=='rsync_upload_complete':
+  a=[]
 elif e['module']=='pub':
   a=[{'type':'rsync_send_entries','entries':pub}]
 else:
@@ -192,7 +196,7 @@ async fn refusals() {
     let (code, _, err) = rsync(&[&url("pub/nope.txt"), d]).await;
     assert_eq!(code, 23, "{err}");
     assert!(err.contains("link_stat \"nope.txt\" failed"), "{err}");
-    // An upload: the daemon is read-only.
+    // An upload the model refuses: this policy's modules are read-only.
     let local = dest.path().join("up.txt");
     std::fs::write(&local, b"x").unwrap();
     let (code, _, err) = rsync(&[local.to_str().unwrap(), &url("pub/")]).await;

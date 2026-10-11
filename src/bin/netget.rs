@@ -47,6 +47,7 @@ async fn main() -> Result<()> {
         feature = "pop3",
         feature = "proxy",
         feature = "quic",
+        feature = "rdp-client",
         feature = "smtp",
         feature = "tls",
         feature = "tor",

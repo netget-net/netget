@@ -5,6 +5,51 @@
 Tests SNMP agent implementation with GET, GETNEXT, and custom MIB requests. Validates that the LLM can respond to SNMP
 queries with proper OID values and data types. Tests both basic system OIDs and custom enterprise OIDs.
 
+## SNMPv3 (`usm_test.rs`)
+
+- RFC 3414 A.3's key vectors (MD5 and SHA-1 Ku and Kul for "maplesyrup").
+- Net-SNMP's `snmpget` as ten users covering noAuthNoPriv, MD5 and SHA-512 at authNoPriv, and
+  DES/AES under MD5, SHA-1, SHA-224, SHA-256, SHA-384 and SHA-512; then `snmpgetnext`,
+  `snmpbulkget` and `snmpset` encrypted, and a context name. Every call does discovery and time
+  sync against the agent first. The handler echoes `user/level/context`, so each answer proves
+  the event too. `SNMP_PERSISTENT_DIR` is a temp dir per call, so no engine state is cached.
+- Refusals as Net-SNMP reports them: wrong auth password, unknown user, a level below or above
+  the user's, wrong privacy password — and the handler sees none of them.
+- The time window from the wire with `usm::encode`: 151 s off gets an authenticated
+  `NotInTimeWindows` report with the real clock and boots; 149 s is answered.
+- pysnmp 7.1.22 (pure Python, `NETGET_PYSNMP_PYTHON`, mandatory): GET per auth family and both
+  privacy protocols, each from a fresh engine, then GETNEXT, GETBULK, SET and a context; and
+  the three refusals by pysnmp's own names.
+- Start-up refusals: short password, privacy without auth, unknown protocols (AES-256 included),
+  duplicate users, long names, too many users, bad engine IDs.
+
+Mutations that fail it: MAC verification always true (the refusal test), the AES IV's boots and
+time swapped (Net-SNMP's AES users), DES without the pre-IV (Net-SNMP's DES users).
+
+## SNMPv3 hardening (`usm_hardening_test.rs`)
+
+No LLM and no external tools; a static handler answers every request.
+
+- `the_nested_message_passes_the_outer_screen_and_is_refused_inside`: a well-formed v3 message
+  whose UsmSecurityParameters nest 30000 `24 80` levels in the engineID, and again in the
+  userName, passes the datagram screen and is refused by `usm::decode` naming
+  UsmSecurityParameters — the builder's self-check that the nesting really sits where only the
+  inner screen can see it.
+- `nested_security_parameters_are_dropped_and_the_agent_keeps_answering`: both datagrams over raw
+  UDP, then discovery and an authenticated-path GET answered, and the server still `Running`.
+  Without the inner screen the test binary aborts with a stack overflow.
+- `default_engine_boots_increase_and_stay_in_range`: 1000 calls strictly increase, sit at or
+  above the wall-clock seconds since the epoch, and stay below 2147483647.
+- `a_restarted_agent_reports_more_boots_and_refuses_a_replay`: two agents with one fixed
+  `engine_id` and no `engine_boots`, started in sequence; the second's discovery report carries
+  more boots, and an authenticated GET captured from the first is answered by the second with
+  `NotInTimeWindows`, not a Response.
+- `out_of_range_boots_and_time_are_reported_not_computed_on`: correctly signed requests with time
+  `i64::MIN`, `i64::MAX`, `-1`, `2^31` and boots `i64::MIN`, `-1`, `2^31`, `i64::MAX` each get
+  the authenticated `NotInTimeWindows` report, and a GET is answered afterwards. Without the range
+  check, time `i64::MIN` overflows the window subtraction and panics the receive loop in a debug
+  build, so the agent stops answering.
+
 ## Test Strategy
 
 - **Isolated test servers**: Each test spawns a separate NetGet instance with specific OID

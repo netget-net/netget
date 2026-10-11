@@ -120,6 +120,13 @@ async fn roundtrip<B: Encodable, R: Decodable>(
             v
         };
         crate::helpers::pcap_oracle::PcapOracle::tcp("kafka")
+            // Wireshark 4.2's dissector knows Produce to v8, Fetch to v11, Metadata to v9 and
+            // OffsetCommit to v8, and says so as a warning on any ApiVersions response
+            // advertising more. The broker advertises Produce 11, Fetch 16, Metadata 12 and
+            // OffsetCommit 9, which Apache Kafka's Java client and franz-go complete at
+            // (flexible_versions_test.rs); the warning is a statement about the dissector's
+            // table, not about these bytes. Every request this suite sends stays inside it.
+            .allow_expert_containing(" version. Supports v0-")
             .to_server(&framed(&request))
             .from_server(&framed(&response))
             .assert_clean();
@@ -202,19 +209,19 @@ async fn test_kafka_api_versions_and_metadata() -> E2EResult<()> {
         "ApiVersions must advertise itself, got {advertised:?}"
     );
     assert!(
-        advertised.contains(&(ApiKey::Metadata as i16, 0, 8)),
+        advertised.contains(&(ApiKey::Metadata as i16, 0, 12)),
         "Metadata range missing from {advertised:?}"
     );
     assert!(
-        advertised.contains(&(ApiKey::Produce as i16, 0, 8)),
+        advertised.contains(&(ApiKey::Produce as i16, 0, 11)),
         "Produce range missing from {advertised:?}"
     );
     assert!(
-        advertised.contains(&(ApiKey::Fetch as i16, 0, 11)),
+        advertised.contains(&(ApiKey::Fetch as i16, 0, 16)),
         "Fetch range missing from {advertised:?}"
     );
     assert!(
-        advertised.contains(&(ApiKey::OffsetCommit as i16, 0, 7)),
+        advertised.contains(&(ApiKey::OffsetCommit as i16, 0, 9)),
         "OffsetCommit range missing from {advertised:?}"
     );
     assert!(

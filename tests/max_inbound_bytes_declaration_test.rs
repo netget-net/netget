@@ -74,7 +74,9 @@ const UNDECLARED_BASELINE: &[(&str, &str)] = &[
     ("dhcpv6", "single recv_from into a fixed 1500-byte buffer"),
     (
         "dns",
-        "single recv_from into a fixed 4096-byte buffer; no TCP path exists",
+        "UDP: single recv_from into a fixed 4096-byte buffer. TCP (since October 2026): the \
+         two-byte length prefix is the ceiling, 65535, read with read_u16 and allocated per \
+         message; kind 3 as well as kind 1",
     ),
     (
         "icmp",

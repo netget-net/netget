@@ -5,15 +5,18 @@
 //! `src/server/coap/CLAUDE.md`.
 
 pub mod actions;
+pub mod blockwise;
 pub mod codec;
+pub mod observe;
 
 use anyhow::Result;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU16, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::llm::action_helper::call_llm;
 use crate::llm::ollama_client::OllamaClient;
@@ -22,13 +25,375 @@ use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::server::connection::ConnectionId;
 use crate::state::app_state::AppState;
+use crate::utils::clock::Instant;
 use crate::{console_debug, console_trace};
 
 use actions::{CoapProtocol, COAP_REQUEST_EVENT, RESULT_IGNORE, RESULT_RESET, RESULT_RESPONSE};
-use codec::{CoapMessage, MessageType};
+use blockwise::{Representation, ResourceKey, Transfers, UploadKey, UploadStep, Uploads};
+use codec::{BlockValue, CoapMessage, MessageType};
+use observe::{Observer, Observers, Registered};
+
+/// RFC 7252 §4.8 ACK_TIMEOUT, the default wait before a Confirmable notification is resent.
+/// The `notification_ack_timeout_ms` startup parameter overrides it.
+pub const DEFAULT_NOTIFICATION_ACK_TIMEOUT_MS: u64 = 2000;
+
+/// RFC 7252 §4.8 MAX_RETRANSMIT: how often an unacknowledged Confirmable notification is
+/// resent before the observer is presumed gone and removed (RFC 7641 §4.5).
+pub const NOTIFICATION_MAX_RETRANSMIT: u32 = 4;
 
 /// CoAP server.
 pub struct CoapServer;
+
+/// The running server, as the actions reach it.
+///
+/// Registered with [`AppState::register_server_handle`] so `coap_notify` — an action the model
+/// may issue at any time, not only while answering a request — can find the socket and the
+/// observers. Every lock here is a `std::sync::Mutex` and none is held across an `.await`.
+pub struct CoapServerHandle {
+    socket: Arc<UdpSocket>,
+    server_id: crate::state::ServerId,
+    status_tx: mpsc::UnboundedSender<String>,
+    /// Message ids for messages the server originates: NON replies and notifications.
+    next_message_id: AtomicU16,
+    observers: Mutex<Observers>,
+    transfers: Mutex<Transfers>,
+    uploads: Mutex<Uploads>,
+    ack_timeout: Duration,
+}
+
+/// What [`CoapServerHandle::notify`] did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NotifyReport {
+    /// Observers a notification was sent to.
+    pub sent: usize,
+    /// Observers whose observation the notification ended (a non-2.xx code, RFC 7641 §4.2).
+    pub ended: usize,
+}
+
+impl CoapServerHandle {
+    fn fresh_message_id(&self) -> u16 {
+        self.next_message_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// Every registration, for the dashboard and for tests. Expired ones are removed first.
+    pub fn observers(&self) -> Vec<Observer> {
+        self.expire_observers();
+        lock(&self.observers).all()
+    }
+
+    /// Confirmable notifications still waiting for their ACK.
+    pub fn pending_notifications(&self) -> usize {
+        lock(&self.observers).pending_len()
+    }
+
+    /// Remove every registration unconfirmed for `observe::OBSERVER_MAX_AGE`, logging each.
+    fn expire_observers(&self) {
+        let expired = lock(&self.observers).expire(Instant::now());
+        for observer in expired {
+            info!(
+                "CoAP observer {} of {} unconfirmed for {} s; observation removed decision={}",
+                observer.peer,
+                observer.path,
+                observe::OBSERVER_MAX_AGE.as_secs(),
+                Decision::ObserverExpired.as_str()
+            );
+        }
+    }
+
+    /// Representations cached for Block2 continuations.
+    pub fn cached_transfers(&self) -> usize {
+        lock(&self.transfers).len()
+    }
+
+    /// Block1 uploads in progress.
+    pub fn uploads_in_progress(&self) -> usize {
+        lock(&self.uploads).len()
+    }
+
+    /// Push `rep` to every observer of `path` (RFC 7641 §4.2).
+    ///
+    /// A 2.xx goes out with the next Observe sequence number and keeps the observation; any
+    /// other code goes out *without* Observe and ends it, which is how the RFC says "this
+    /// resource is gone". A representation over one block is sent as its first Block2 block
+    /// and cached, so the client fetches the rest with ordinary GETs (RFC 7959 §2.6).
+    ///
+    /// `confirmable` is what the caller asked for; an observer unconfirmed for half of
+    /// `observe::OBSERVER_MAX_AGE` gets a Confirmable notification regardless (RFC 7641 §4.5),
+    /// so a live client renews its registration by acknowledging it and a dead or spoofed one
+    /// is removed when the retransmissions run out.
+    pub async fn notify(
+        &self,
+        app_state: &AppState,
+        path: &str,
+        rep: Representation,
+        confirmable: bool,
+    ) -> NotifyReport {
+        let rep = Arc::new(rep);
+        self.expire_observers();
+        let observers = lock(&self.observers).of_path(path);
+        let mut report = NotifyReport::default();
+        for observer in observers {
+            let keeps = codec::code_class(rep.code) == 2;
+            let confirmable = confirmable
+                || (keeps
+                    && lock(&self.observers).needs_confirmation(
+                        observer.peer,
+                        &observer.token,
+                        Instant::now(),
+                    ));
+            let mid = self.fresh_message_id();
+            let mut message = CoapMessage {
+                mtype: if confirmable {
+                    MessageType::Confirmable
+                } else {
+                    MessageType::NonConfirmable
+                },
+                code: rep.code,
+                message_id: mid,
+                token: observer.token.clone(),
+                options: Vec::new(),
+                payload: Vec::new(),
+            };
+            if keeps {
+                let seq = lock(&self.observers).next_sequence();
+                message
+                    .options
+                    .push((codec::OPT_OBSERVE, codec::uint_option(seq)));
+            }
+            let key = ResourceKey {
+                peer: observer.peer,
+                path: observer.path.clone(),
+                query: observer.query.clone(),
+            };
+            let szx = observer.block_szx.unwrap_or(codec::MAX_SZX);
+            self.fill_representation(&mut message, &rep, key, None, szx);
+
+            {
+                let mut obs = lock(&self.observers);
+                // Pending only when a retransmission task will wait for it.
+                obs.record(observer.peer, mid, &observer.token, confirmable && keeps);
+                if !keeps {
+                    obs.deregister(observer.peer, &observer.token);
+                    report.ended += 1;
+                }
+            }
+            info!(
+                "CoAP notification {} {} to {} (mid {mid}) decision={}",
+                codec::code_to_string(rep.code),
+                path,
+                observer.peer,
+                if keeps {
+                    Decision::Notified.as_str()
+                } else {
+                    Decision::ObservationEnded.as_str()
+                }
+            );
+            let sent = self
+                .send(&message, observer.peer, observer.connection_id, app_state)
+                .await;
+            if confirmable && keeps {
+                if sent {
+                    self.retransmit_later(app_state, observer, message).await;
+                } else {
+                    lock(&self.observers).settle(observer.peer, mid);
+                }
+            }
+            report.sent += usize::from(sent);
+        }
+        report
+    }
+
+    /// Resend a Confirmable notification until it is acknowledged; give up after
+    /// [`NOTIFICATION_MAX_RETRANSMIT`] and remove the observer (RFC 7641 §4.5).
+    async fn retransmit_later(
+        &self,
+        app_state: &AppState,
+        observer: Observer,
+        message: CoapMessage,
+    ) {
+        let Some(handle) = app_state
+            .server_handle::<CoapServerHandle>(self.server_id)
+            .await
+        else {
+            lock(&self.observers).settle(observer.peer, message.message_id);
+            return;
+        };
+        let state = app_state.clone();
+        let mut interval = self.ack_timeout.mul_f64(1.0 + rand::random::<f64>() * 0.5);
+        app_state
+            .spawn_server_task(self.server_id, async move {
+                for attempt in 0..=NOTIFICATION_MAX_RETRANSMIT {
+                    tokio::time::sleep(interval).await;
+                    // Not pending means acknowledged, reset, superseded by a newer
+                    // Confirmable notification, or its observer is gone. Pending entries are
+                    // never evicted, so this is never true merely because time passed.
+                    if !lock(&handle.observers).awaiting_ack(observer.peer, message.message_id) {
+                        return;
+                    }
+                    if attempt == NOTIFICATION_MAX_RETRANSMIT {
+                        break;
+                    }
+                    debug!(
+                        "CoAP notification mid {} to {} unacknowledged; retransmission {}",
+                        message.message_id,
+                        observer.peer,
+                        attempt + 1
+                    );
+                    handle
+                        .send(&message, observer.peer, observer.connection_id, &state)
+                        .await;
+                    interval *= 2;
+                }
+                {
+                    let mut obs = lock(&handle.observers);
+                    obs.settle(observer.peer, message.message_id);
+                    obs.deregister(observer.peer, &observer.token);
+                }
+                warn!(
+                    "CoAP observer {} of {} never acknowledged notification mid {} after {} \
+                     retransmissions; observation removed decision={}",
+                    observer.peer,
+                    observer.path,
+                    message.message_id,
+                    NOTIFICATION_MAX_RETRANSMIT,
+                    Decision::ObserverTimeout.as_str()
+                );
+            })
+            .await;
+    }
+
+    /// Put `rep` into `message`: the whole payload when it fits one block and nobody asked for
+    /// blocks, otherwise block `wanted` (or 0) with Block2, Size2 on the first block and the
+    /// ETag. A representation with blocks after this one is cached under `key`.
+    ///
+    /// Returns false when `wanted` starts past the end, and leaves `message` untouched so the
+    /// caller can answer 4.02.
+    fn fill_representation(
+        &self,
+        message: &mut CoapMessage,
+        rep: &Arc<Representation>,
+        key: ResourceKey,
+        wanted: Option<BlockValue>,
+        szx: u8,
+    ) -> bool {
+        let size = codec::szx_size(szx);
+        if wanted.is_none() && rep.payload.len() <= size {
+            if let Some(cf) = rep.content_format {
+                message
+                    .options
+                    .push((codec::OPT_CONTENT_FORMAT, codec::uint_option(u32::from(cf))));
+            }
+            message.payload = rep.payload.clone();
+            return true;
+        }
+        let block = BlockValue {
+            num: wanted.map_or(0, |b| b.num),
+            more: false,
+            szx,
+        };
+        let Some((slice, more)) = rep.block(block) else {
+            return false;
+        };
+        message.options.push((codec::OPT_ETAG, rep.etag.clone()));
+        if let Some(cf) = rep.content_format {
+            message
+                .options
+                .push((codec::OPT_CONTENT_FORMAT, codec::uint_option(u32::from(cf))));
+        }
+        message
+            .options
+            .push((codec::OPT_BLOCK2, BlockValue { more, ..block }.encode()));
+        if block.num == 0 {
+            message.options.push((
+                codec::OPT_SIZE2,
+                codec::uint_option(rep.payload.len() as u32),
+            ));
+        }
+        message.payload = slice.to_vec();
+        let mut transfers = lock(&self.transfers);
+        if more {
+            // A block served from the cache was charged by `Transfers::get`, and inserting the
+            // same representation again leaves its entry as it is.
+            if let Some(evicted) = transfers.insert(key, rep.clone(), slice.len(), Instant::now()) {
+                debug!(
+                    "CoAP Block2 cache full; evicted {}{} for {}",
+                    evicted.path,
+                    evicted.query.map(|q| format!("?{q}")).unwrap_or_default(),
+                    evicted.peer
+                );
+            }
+        } else {
+            transfers.remove(&key);
+        }
+        true
+    }
+
+    /// Encode and send one message, updating counters and the dual logs. False when nothing
+    /// went out.
+    async fn send(
+        &self,
+        message: &CoapMessage,
+        peer_addr: SocketAddr,
+        connection_id: ConnectionId,
+        app_state: &AppState,
+    ) -> bool {
+        // A message the codec refuses is never patched up and sent anyway: a CoAP reply whose
+        // token was shortened to fit matches nothing at the client, which is a silent drop
+        // dressed as an answer.
+        let bytes = match message.encode() {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                error!(
+                    "CoAP decision=fail_closed_encode: refusing to send {} to {}: {}",
+                    codec::code_to_string(message.code),
+                    peer_addr,
+                    e
+                );
+                let _ = self.status_tx.send(format!(
+                    "✗ CoAP refused to encode a reply to {peer_addr}: {e}"
+                ));
+                return false;
+            }
+        };
+        if let Err(e) = self.socket.send_to(&bytes, peer_addr).await {
+            error!("CoAP send to {} failed: {}", peer_addr, e);
+            let _ = self
+                .status_tx
+                .send(format!("✗ CoAP send to {peer_addr} failed: {e}"));
+            return false;
+        }
+
+        app_state
+            .update_connection_stats(
+                self.server_id,
+                connection_id,
+                None,
+                Some(bytes.len() as u64),
+                None,
+                Some(1),
+            )
+            .await;
+
+        let log = Log::new(Some(&self.status_tx));
+        log.debug(format!(
+            "CoAP sent {} {} ({} bytes) to {peer_addr}",
+            message.mtype.as_str(),
+            codec::code_to_string(message.code),
+            bytes.len()
+        ));
+        log.trace(format!("CoAP sent (hex): {}", hex::encode(&bytes)));
+        let _ = self
+            .status_tx
+            .send(format!("→ CoAP response to {peer_addr}"));
+        true
+    }
+}
+
+/// A poisoned lock is still the table: a panic elsewhere must not make every later request
+/// panic too.
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|p| p.into_inner())
+}
 
 impl CoapServer {
     /// Bind the UDP socket and start the receive loop.
@@ -41,14 +406,26 @@ impl CoapServer {
         app_state: Arc<AppState>,
         status_tx: mpsc::UnboundedSender<String>,
         server_id: crate::state::ServerId,
+        notification_ack_timeout: Duration,
     ) -> Result<SocketAddr> {
         let socket = Arc::new(UdpSocket::bind(listen_addr).await?);
         let local_addr = socket.local_addr()?;
         Log::new(Some(&status_tx)).info(format!("CoAP server listening on {local_addr}"));
 
         let protocol = Arc::new(CoapProtocol::new());
-        // Message ids for Non-confirmable replies, which do not reuse the request's.
-        let next_message_id = Arc::new(AtomicU16::new(1));
+        let handle = Arc::new(CoapServerHandle {
+            socket: socket.clone(),
+            server_id,
+            status_tx: status_tx.clone(),
+            next_message_id: AtomicU16::new(rand::random::<u16>()),
+            observers: Mutex::new(Observers::default()),
+            transfers: Mutex::new(Transfers::default()),
+            uploads: Mutex::new(Uploads::default()),
+            ack_timeout: notification_ack_timeout,
+        });
+        app_state
+            .register_server_handle(server_id, handle.clone())
+            .await;
 
         let task_registrar = app_state.clone();
         let recv_handle = tokio::spawn(async move {
@@ -99,10 +476,8 @@ impl CoapServer {
 
                         let llm = llm_client.clone();
                         let st = app_state.clone();
-                        let stx = status_tx.clone();
-                        let sock = socket.clone();
                         let proto = protocol.clone();
-                        let mid = next_message_id.clone();
+                        let shared = handle.clone();
 
                         // Tracked, not detached: stop_server must abort this task too.
                         let task_owner = app_state.clone();
@@ -112,13 +487,10 @@ impl CoapServer {
                                     data,
                                     peer_addr,
                                     connection_id,
-                                    server_id,
                                     llm,
                                     st,
-                                    stx,
-                                    sock,
+                                    shared,
                                     proto,
-                                    mid,
                                 )
                                 .await;
                             })
@@ -139,26 +511,34 @@ impl CoapServer {
         Ok(local_addr)
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn handle_datagram(
         data: Vec<u8>,
         peer_addr: SocketAddr,
         connection_id: ConnectionId,
-        server_id: crate::state::ServerId,
         llm_client: OllamaClient,
         app_state: Arc<AppState>,
-        status_tx: mpsc::UnboundedSender<String>,
-        socket: Arc<UdpSocket>,
+        shared: Arc<CoapServerHandle>,
         protocol: Arc<CoapProtocol>,
-        next_message_id: Arc<AtomicU16>,
     ) {
+        let server_id = shared.server_id;
+        let status_tx = shared.status_tx.clone();
+        let send = |message: CoapMessage| {
+            let shared = shared.clone();
+            let app_state = app_state.clone();
+            async move {
+                shared
+                    .send(&message, peer_addr, connection_id, &app_state)
+                    .await;
+            }
+        };
+
         // --- The inbound size bound, before anything is decoded or asked -------------
         //
-        // RFC 7252 §4.6 puts MAX_MESSAGE_SIZE at 1152 bytes when the path MTU is unknown,
-        // and Block-wise transfer (RFC 7959) — the legal way to exceed it — is not
-        // implemented here. So a larger datagram is refused in CoAP's own vocabulary
-        // (4.13 Request Entity Too Large, §5.9.2.9) rather than decoded, and the model is
-        // never asked about it: an oversize request must not become a prompt.
+        // RFC 7252 §4.6 puts MAX_MESSAGE_SIZE at 1152 bytes when the path MTU is unknown, and
+        // the legal way past it — Block1, whose largest block is 1024 bytes — fits under it.
+        // So a larger datagram is refused in CoAP's own vocabulary (4.13 Request Entity Too
+        // Large, §5.9.2.9) rather than decoded, and the model is never asked about it: an
+        // oversize request must not become a prompt.
         if data.len() > codec::MAX_MESSAGE_LEN {
             warn!(
                 "CoAP refusing a {}-byte datagram from {} (limit {}) decision={}",
@@ -179,7 +559,7 @@ impl CoapServer {
             // indistinguishable from the silence it exists to avoid.
             if let Some(prefix) = codec::message_prefix(&data) {
                 let reply = if codec::method_name(prefix.code).is_some() {
-                    let fresh = next_message_id.fetch_add(1, Ordering::Relaxed);
+                    let fresh = shared.fresh_message_id();
                     Some(codec::response_to_prefix(
                         &prefix,
                         fresh,
@@ -193,16 +573,7 @@ impl CoapServer {
                     None
                 };
                 if let Some(reply) = reply {
-                    Self::send(
-                        &reply,
-                        peer_addr,
-                        connection_id,
-                        server_id,
-                        &socket,
-                        &app_state,
-                        &status_tx,
-                    )
-                    .await;
+                    send(reply).await;
                 }
             }
             return;
@@ -221,16 +592,7 @@ impl CoapServer {
                     && MessageType::from_bits(data[0] >> 4) == MessageType::Confirmable
                 {
                     let message_id = u16::from_be_bytes([data[2], data[3]]);
-                    Self::send(
-                        &codec::reset_for(message_id),
-                        peer_addr,
-                        connection_id,
-                        server_id,
-                        &socket,
-                        &app_state,
-                        &status_tx,
-                    )
-                    .await;
+                    send(codec::reset_for(message_id)).await;
                 }
                 return;
             }
@@ -248,23 +610,42 @@ impl CoapServer {
                         peer_addr,
                         Decision::SpecReply.as_str()
                     );
-                    Self::send(
-                        &codec::reset_for(request.message_id),
-                        peer_addr,
-                        connection_id,
-                        server_id,
-                        &socket,
-                        &app_state,
-                        &status_tx,
-                    )
-                    .await;
+                    send(codec::reset_for(request.message_id)).await;
                 }
-                other => {
-                    debug!(
-                        "CoAP empty {} message from {} ignored",
-                        other.as_str(),
-                        peer_addr
-                    );
+                // An ACK for a Confirmable notification: stop retransmitting it.
+                MessageType::Acknowledgement => {
+                    if lock(&shared.observers).acknowledge(
+                        peer_addr,
+                        request.message_id,
+                        Instant::now(),
+                    ) {
+                        debug!(
+                            "CoAP notification mid {} acknowledged by {}",
+                            request.message_id, peer_addr
+                        );
+                    }
+                }
+                // A RST answering a notification: the client has forgotten the observation
+                // (RFC 7641 §3.6), so the server forgets it too.
+                MessageType::Reset => {
+                    let removed = lock(&shared.observers).reset(peer_addr, request.message_id);
+                    match removed {
+                        Some(observer) => info!(
+                            "CoAP observer {} of {} answered notification mid {} with RST; \
+                             observation removed decision={}",
+                            peer_addr,
+                            observer.path,
+                            request.message_id,
+                            Decision::ObserverReset.as_str()
+                        ),
+                        None => debug!(
+                            "CoAP RST from {} for mid {} matches no notification",
+                            peer_addr, request.message_id
+                        ),
+                    }
+                }
+                MessageType::NonConfirmable => {
+                    debug!("CoAP empty NON message from {} ignored", peer_addr);
                 }
             }
             return;
@@ -280,17 +661,12 @@ impl CoapServer {
                     peer_addr,
                     Decision::SpecReply.as_str()
                 );
-                let fresh = next_message_id.fetch_add(1, Ordering::Relaxed);
-                let response = codec::response_to(&request, fresh, codec::CODE_METHOD_NOT_ALLOWED);
-                Self::send(
-                    &response,
-                    peer_addr,
-                    connection_id,
-                    server_id,
-                    &socket,
-                    &app_state,
-                    &status_tx,
-                )
+                let fresh = shared.fresh_message_id();
+                send(codec::response_to(
+                    &request,
+                    fresh,
+                    codec::CODE_METHOD_NOT_ALLOWED,
+                ))
                 .await;
             } else {
                 debug!(
@@ -303,10 +679,154 @@ impl CoapServer {
             return;
         }
 
-        // --- Resource layer: the model decides -------------------------------------
-
         let method = codec::method_name(request.code).unwrap_or("GET");
         let path = request.uri_path();
+        let resource = ResourceKey {
+            peer: peer_addr,
+            path: path.clone(),
+            query: request.uri_query(),
+        };
+
+        // A reply the specification determines, with no model involved.
+        let spec_reply = |code: u8, decision: &'static str, why: String| {
+            let fresh = shared.fresh_message_id();
+            let response = codec::response_to(&request, fresh, code);
+            info!(
+                "CoAP {method} {path} from {peer_addr}: {} {why} decision={decision}",
+                codec::code_to_string(code)
+            );
+            response
+        };
+
+        // --- Block-wise options (RFC 7959) -----------------------------------------
+
+        let block2 = match request.block2() {
+            None => None,
+            Some(Some(b)) => Some(b),
+            Some(None) => {
+                let reply = spec_reply(
+                    codec::CODE_BAD_OPTION,
+                    Decision::SpecReply.as_str(),
+                    "unreadable Block2 option".into(),
+                );
+                send(reply).await;
+                return;
+            }
+        };
+
+        // Block1: the request body arrives in pieces. Every piece but the last is answered
+        // 2.31 Continue here; the last one carries the whole body on to the model.
+        let mut payload = request.payload.clone();
+        let mut upload: Option<(u32, BlockValue)> = None;
+        match request.block1() {
+            None => {}
+            Some(None) => {
+                let reply = spec_reply(
+                    codec::CODE_BAD_OPTION,
+                    Decision::SpecReply.as_str(),
+                    "unreadable Block1 option".into(),
+                );
+                send(reply).await;
+                return;
+            }
+            Some(Some(block)) => {
+                let key = UploadKey {
+                    resource: resource.clone(),
+                    method: request.code,
+                };
+                let size1 = request.option_uint(codec::OPT_SIZE1);
+                let step = lock(&shared.uploads).accept(
+                    key,
+                    block,
+                    &request.payload,
+                    size1,
+                    Instant::now(),
+                );
+                match step {
+                    UploadStep::Continue(echo) => {
+                        let mut reply = spec_reply(
+                            codec::CODE_CONTINUE,
+                            Decision::UploadContinue.as_str(),
+                            format!("block {} received", echo.num),
+                        );
+                        reply.options.push((codec::OPT_BLOCK1, echo.encode()));
+                        send(reply).await;
+                        return;
+                    }
+                    UploadStep::Refuse {
+                        code,
+                        size1,
+                        decision,
+                        reason,
+                    } => {
+                        let mut reply = spec_reply(code, decision, reason);
+                        if let Some(max) = size1 {
+                            reply
+                                .options
+                                .push((codec::OPT_SIZE1, codec::uint_option(max as u32)));
+                        }
+                        send(reply).await;
+                        return;
+                    }
+                    UploadStep::Complete { body, blocks, last } => {
+                        payload = body;
+                        upload = Some((blocks, last));
+                    }
+                }
+            }
+        }
+
+        // A later Block2 block of a representation the model already gave: served from the
+        // cache. A miss falls through to the model, whose answer is sliced the same way. So
+        // does a block that would take the entry past its serve budget
+        // (`blockwise::TRANSFER_SERVE_FACTOR`): the cache answers a spoofable address without
+        // the model, so what one answer can be made to send is bounded.
+        if let Some(block) = block2.filter(|b| b.num > 0) {
+            let cached = lock(&shared.transfers).get(&resource, block, Instant::now());
+            if let Some(rep) = cached {
+                let fresh = shared.fresh_message_id();
+                let mut response = codec::response_to(&request, fresh, rep.code);
+                if shared.fill_representation(&mut response, &rep, resource, Some(block), block.szx)
+                {
+                    debug!(
+                        "CoAP {method} {path} block {} from {peer_addr} served from cache \
+                         decision={}",
+                        block.num,
+                        Decision::BlockCache.as_str()
+                    );
+                    send(response).await;
+                } else {
+                    let reply = spec_reply(
+                        codec::CODE_BAD_OPTION,
+                        Decision::SpecReply.as_str(),
+                        format!("block {} is past the end of the representation", block.num),
+                    );
+                    send(reply).await;
+                }
+                return;
+            }
+        }
+
+        // Observe (RFC 7641): 0 asks to register, 1 to deregister. Only a GET observes, and a
+        // Block2 continuation never re-registers (RFC 7959 §2.6).
+        let observe = match (request.code, request.observe()) {
+            (codec::CODE_GET, Some(0)) if block2.is_none_or(|b| b.num == 0) => {
+                Some(ObserveRequest::Register)
+            }
+            (codec::CODE_GET, Some(1)) => {
+                if lock(&shared.observers).deregister(peer_addr, &request.token) {
+                    info!(
+                        "CoAP {peer_addr} deregistered from {path} decision={}",
+                        Decision::ObservationEnded.as_str()
+                    );
+                }
+                Some(ObserveRequest::Deregister)
+            }
+            _ => None,
+        };
+
+        // --- Resource layer: the model decides -------------------------------------
+
         let answer_with = actions::answer_with_for_request(method, &path);
 
         let mut event_data = serde_json::json!({
@@ -320,6 +840,12 @@ impl CoapServer {
         if let Some(query) = request.uri_query() {
             event_data["query"] = serde_json::json!(query);
         }
+        if let Some(observe) = observe {
+            event_data["observe"] = serde_json::json!(observe.as_str());
+        }
+        if let Some((blocks, _)) = upload {
+            event_data["blocks"] = serde_json::json!(blocks);
+        }
         if let Some(cf) = request.option_uint(codec::OPT_CONTENT_FORMAT) {
             let id = cf as u16;
             event_data["content_format"] = serde_json::json!(
@@ -332,17 +858,17 @@ impl CoapServer {
                 codec::content_format_name(id).unwrap_or("application/octet-stream")
             );
         }
-        if !request.payload.is_empty() {
-            let printable = request
-                .payload
+        if !payload.is_empty() {
+            event_data["payload_size"] = serde_json::json!(payload.len());
+            let printable = payload
                 .iter()
                 .all(|&b| b.is_ascii_graphic() || b.is_ascii_whitespace());
             if printable {
                 event_data["payload"] =
-                    serde_json::json!(String::from_utf8_lossy(&request.payload).to_string());
+                    serde_json::json!(String::from_utf8_lossy(&payload).to_string());
                 event_data["payload_encoding"] = serde_json::json!("utf8");
             } else {
-                event_data["payload"] = serde_json::json!(hex::encode(&request.payload));
+                event_data["payload"] = serde_json::json!(hex::encode(&payload));
                 event_data["payload_encoding"] = serde_json::json!("hex");
             }
         }
@@ -386,6 +912,7 @@ impl CoapServer {
                         code: codec::CODE_SERVICE_UNAVAILABLE,
                         payload: Vec::new(),
                         content_format: None,
+                        observable: false,
                     },
                 )
             }
@@ -406,7 +933,7 @@ impl CoapServer {
             debug!("{summary}");
         }
 
-        let fresh = next_message_id.fetch_add(1, Ordering::Relaxed);
+        let fresh = shared.fresh_message_id();
         let message = match outcome {
             Outcome::Ignore => {
                 debug!(
@@ -420,28 +947,85 @@ impl CoapServer {
                 code,
                 payload,
                 content_format,
+                observable,
             } => {
                 let mut response = codec::response_to(&request, fresh, code);
-                if let Some(cf) = content_format {
-                    response
-                        .options
-                        .push((codec::OPT_CONTENT_FORMAT, uint_option_value(cf as u32)));
+                let rep = Arc::new(Representation::new(code, payload, content_format));
+
+                // The registration, if one was asked for and the model served the resource.
+                if observe == Some(ObserveRequest::Register) && codec::code_class(code) == 2 {
+                    if observable {
+                        let observer = Observer {
+                            peer: peer_addr,
+                            token: request.token.clone(),
+                            path: path.clone(),
+                            query: request.uri_query(),
+                            block_szx: block2.map(|b| b.szx),
+                            connection_id,
+                        };
+                        shared.expire_observers();
+                        let mut observers = lock(&shared.observers);
+                        match observers.register(observer, Instant::now()) {
+                            Registered::Added | Registered::Replaced => {
+                                let seq = observers.next_sequence();
+                                drop(observers);
+                                response
+                                    .options
+                                    .push((codec::OPT_OBSERVE, codec::uint_option(seq)));
+                                info!(
+                                    "CoAP {peer_addr} now observes {path} decision={}",
+                                    Decision::ObserveRegistered.as_str()
+                                );
+                            }
+                            Registered::Full => {
+                                drop(observers);
+                                warn!(
+                                    "CoAP {peer_addr} asked to observe {path}, but {} observers \
+                                     are registered; served without Observe decision={}",
+                                    observe::MAX_OBSERVERS,
+                                    Decision::ObserveCapReached.as_str()
+                                );
+                            }
+                            Registered::PeerFull => {
+                                drop(observers);
+                                warn!(
+                                    "CoAP {peer_addr} asked to observe {path}, but its IP holds \
+                                     {} observations; served without Observe decision={}",
+                                    observe::MAX_OBSERVERS_PER_IP,
+                                    Decision::ObservePeerCapReached.as_str()
+                                );
+                            }
+                        }
+                    } else {
+                        info!(
+                            "CoAP {peer_addr} asked to observe {path}; the model declined \
+                             decision={}",
+                            Decision::ObserveDeclined.as_str()
+                        );
+                    }
                 }
-                response.payload = payload;
+
+                let szx = block2.map_or(codec::MAX_SZX, |b| b.szx);
+                if !shared.fill_representation(&mut response, &rep, resource, block2, szx) {
+                    let reply = spec_reply(
+                        codec::CODE_BAD_OPTION,
+                        Decision::SpecReply.as_str(),
+                        format!(
+                            "block {} is past the end of the representation",
+                            block2.map_or(0, |b| b.num)
+                        ),
+                    );
+                    send(reply).await;
+                    return;
+                }
+                if let Some((_, last)) = upload {
+                    response.options.push((codec::OPT_BLOCK1, last.encode()));
+                }
                 response
             }
         };
 
-        Self::send(
-            &message,
-            peer_addr,
-            connection_id,
-            server_id,
-            &socket,
-            &app_state,
-            &status_tx,
-        )
-        .await;
+        send(message).await;
     }
 
     /// Interpret the model's structured answer.
@@ -472,6 +1056,12 @@ impl CoapServer {
                         .get("content_format")
                         .and_then(|v| v.as_u64())
                         .map(|v| v as u16);
+                    // `execute_action` always writes it; absent only for a result built by
+                    // hand, which is then an ordinary response that registers nobody.
+                    let observable = data
+                        .get("observable")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
                     // A class-2 code is the model serving the resource; 4.xx and 5.xx are
                     // it refusing. `execute_action` has already rejected every other class.
                     let decision = if codec::code_class(code) == 2 {
@@ -485,6 +1075,7 @@ impl CoapServer {
                             code,
                             payload,
                             content_format,
+                            observable,
                         },
                     );
                 }
@@ -505,64 +1096,9 @@ impl CoapServer {
                 code: codec::CODE_SERVICE_UNAVAILABLE,
                 payload: Vec::new(),
                 content_format: None,
+                observable: false,
             },
         )
-    }
-
-    /// Encode and send one message, updating counters and the dual logs.
-    async fn send(
-        message: &CoapMessage,
-        peer_addr: SocketAddr,
-        connection_id: ConnectionId,
-        server_id: crate::state::ServerId,
-        socket: &Arc<UdpSocket>,
-        app_state: &Arc<AppState>,
-        status_tx: &mpsc::UnboundedSender<String>,
-    ) {
-        // A message the codec refuses is never patched up and sent anyway: a CoAP reply whose
-        // token was shortened to fit matches nothing at the client, which is a silent drop
-        // dressed as an answer.
-        let bytes = match message.encode() {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                error!(
-                    "CoAP decision=fail_closed_encode: refusing to send {} to {}: {}",
-                    codec::code_to_string(message.code),
-                    peer_addr,
-                    e
-                );
-                let _ = status_tx.send(format!(
-                    "✗ CoAP refused to encode a reply to {peer_addr}: {e}"
-                ));
-                return;
-            }
-        };
-        if let Err(e) = socket.send_to(&bytes, peer_addr).await {
-            error!("CoAP send to {} failed: {}", peer_addr, e);
-            let _ = status_tx.send(format!("✗ CoAP send to {peer_addr} failed: {e}"));
-            return;
-        }
-
-        app_state
-            .update_connection_stats(
-                server_id,
-                connection_id,
-                None,
-                Some(bytes.len() as u64),
-                None,
-                Some(1),
-            )
-            .await;
-
-        let log = Log::new(Some(&status_tx));
-        log.debug(format!(
-            "CoAP sent {} {} ({} bytes) to {peer_addr}",
-            message.mtype.as_str(),
-            codec::code_to_string(message.code),
-            bytes.len()
-        ));
-        log.trace(format!("CoAP sent (hex): {}", hex::encode(&bytes)));
-        let _ = status_tx.send(format!("→ CoAP response to {peer_addr}"));
     }
 }
 
@@ -593,6 +1129,29 @@ enum Decision {
     FailClosedLlmError,
     /// The model was asked and returned nothing this request could use.
     FailClosedNoAction,
+    /// A Block1 block that is not the last: 2.31 Continue, decided by RFC 7959, not the model.
+    UploadContinue,
+    /// A later Block2 block served from the representation the model already gave.
+    BlockCache,
+    /// A GET with Observe 0 the model served with a 2.xx: the client is now an observer.
+    ObserveRegistered,
+    /// The model served an Observe registration but said the resource is not observable.
+    ObserveDeclined,
+    /// `observe::MAX_OBSERVERS` were registered, so a registration was served without Observe.
+    ObserveCapReached,
+    /// The peer's IP held `observe::MAX_OBSERVERS_PER_IP` registrations, so a registration
+    /// was served without Observe.
+    ObservePeerCapReached,
+    /// A notification went out and the observation stands.
+    Notified,
+    /// An observation ended: deregistered, or a non-2.xx notification.
+    ObservationEnded,
+    /// A client answered a notification with RST (RFC 7641 §3.6).
+    ObserverReset,
+    /// A Confirmable notification was never acknowledged (RFC 7641 §4.5).
+    ObserverTimeout,
+    /// A registration went unconfirmed for `observe::OBSERVER_MAX_AGE`.
+    ObserverExpired,
 }
 
 impl Decision {
@@ -606,6 +1165,17 @@ impl Decision {
             Decision::RefusedTooLarge => "refused_too_large",
             Decision::FailClosedLlmError => "fail_closed_llm_error",
             Decision::FailClosedNoAction => "fail_closed_no_action",
+            Decision::UploadContinue => "upload_continue",
+            Decision::BlockCache => "block_cache",
+            Decision::ObserveRegistered => "observe_registered",
+            Decision::ObserveDeclined => "observe_declined",
+            Decision::ObserveCapReached => "observe_cap_reached",
+            Decision::ObservePeerCapReached => "observe_peer_cap_reached",
+            Decision::Notified => "notified",
+            Decision::ObservationEnded => "observation_ended",
+            Decision::ObserverReset => "observer_reset",
+            Decision::ObserverTimeout => "observer_timeout",
+            Decision::ObserverExpired => "observer_expired",
         }
     }
 
@@ -623,15 +1193,25 @@ enum Outcome {
         code: u8,
         payload: Vec<u8>,
         content_format: Option<u16>,
+        /// Whether an Observe registration this answers may stand.
+        observable: bool,
     },
     Reset,
     Ignore,
 }
 
-/// CoAP unsigned option values are minimum-length big-endian (RFC 7252 §3.2), so zero is
-/// the empty string rather than a zero byte.
-fn uint_option_value(value: u32) -> Vec<u8> {
-    let bytes = value.to_be_bytes();
-    let first = bytes.iter().position(|&b| b != 0).unwrap_or(bytes.len());
-    bytes[first..].to_vec()
+/// What a request's Observe option asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ObserveRequest {
+    Register,
+    Deregister,
+}
+
+impl ObserveRequest {
+    fn as_str(self) -> &'static str {
+        match self {
+            ObserveRequest::Register => "register",
+            ObserveRequest::Deregister => "deregister",
+        }
+    }
 }

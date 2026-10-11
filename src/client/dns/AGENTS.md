@@ -5,9 +5,11 @@
 DNS (Domain Name System) client for querying DNS servers. The LLM can send DNS queries for various record types and
 interpret responses to make follow-up decisions.
 
-**Status**: Experimental (Client Protocol)
-**RFC**: RFC 1035 (Domain Names), RFC 3596 (AAAA)
-**Transport**: UDP (port 53)
+**Status**: **Beta** since October 2026, on the client bar: ISC BIND `named` as the peer, see
+`tests/client/dns/AGENTS.md`
+**RFC**: RFC 1035 (Domain Names), RFC 3596 (AAAA), RFC 6891 (EDNS0), RFC 4035 (the DO bit),
+RFC 5936 (AXFR), RFC 1995 (IXFR)
+**Transport**: UDP for queries; a TCP connection per zone transfer
 
 ## Library Choices
 
@@ -65,17 +67,26 @@ The `recursion_desired` parameter (default: true) controls whether the DNS serve
 - **Recursive (true)**: Server resolves the full query by contacting other servers
 - **Iterative (false)**: Server only provides referrals to other servers
 
-Note: hickory-client doesn't expose easy control over the RD (Recursion Desired) flag, so this is noted for future
-enhancement.
+Since October 2026 every query is a message built by hand and sent with `DnsHandle::send`,
+not `ClientHandle::query`, so RD carries `recursion_desired` (it was accepted and ignored before)
+and the OPT record carries the DO bit when `dnssec` is true.
 
 ### 5. Connection Model
 
-DNS uses UDP, which is connectionless:
+Queries go over one UDP socket (hickory-client's `UdpClientStream`); each is independent.
 
-- No persistent connection state
-- Each query is independent
-- Client maintains a single UDP socket for all queries
-- Queries can be sent concurrently (hickory-client handles this)
+A **zone transfer** (`send_dns_zone_transfer`) opens a TCP connection of its own to the same
+server — `TcpClientStream` plus a second `AsyncClient`, whose driver is a registered client
+task — and runs hickory's `zone_transfer` (AXFR, or IXFR when given a serial). The server
+address comes from the client's own `remote_addr`. A transfer is abandoned with an error past
+`MAX_TRANSFER_RECORDS` (100 000), past `MAX_TRANSFER_BYTES` (64 MiB of DNS messages) or after
+`TRANSFER_TIMEOUT` (60 s, which is also the hickory request timeout of that `AsyncClient` —
+its 5 s default would otherwise end a transfer first). The byte bound is the one a hostile
+server meets: a record can be nearly 64 KiB, so 100 000 of them would be gigabytes.
+Only the first `MAX_REPORTED_RECORDS` (200) records are kept — the rest are counted — and the
+model is shown those with the count, `truncated` saying whether there were more. The transport
+driver is aborted when the transfer returns, so an abandoned one stops reading.
+`tests/client/dns/transfer_bound_test.rs` drives the byte bound from a hostile server.
 
 ### 6. Action loop is iterative, not recursive (important)
 
@@ -120,7 +131,9 @@ Send a DNS query to the server.
 
 - `domain` (required) - Domain name to query (e.g., "example.com")
 - `query_type` (required) - Record type (A, AAAA, MX, TXT, CNAME, NS, SOA, PTR, SRV, etc.)
-- `recursion_desired` (optional, default: true) - Request recursive resolution
+- `recursion_desired` (optional, default: true) - Request recursive resolution; sets RD
+- `dnssec` (optional, default: false) - Set the DO bit; RRSIG and NSEC records come back in
+  `answers` and `authority`
 
 **Example:**
 
@@ -132,6 +145,11 @@ Send a DNS query to the server.
   "recursion_desired": true
 }
 ```
+
+#### `send_dns_zone_transfer`
+
+`{zone, serial?}` — AXFR, or with `serial` IXFR from that serial, over TCP. Answered by
+`dns_zone_transfer_received`.
 
 #### `disconnect`
 
@@ -158,8 +176,24 @@ Triggered when DNS response is received.
 - `query_id` - DNS transaction ID
 - `domain` - Domain name queried
 - `query_type` - Record type queried
-- `answers` - Array of answer records (structured by type)
+- `answers` - Array of answer records (structured by type, each with `name` and `ttl`)
+- `authority` - Authority records, when there are any (a negative answer's SOA, and with
+  `dnssec` its NSEC proof)
 - `response_code` - Response code (NOERROR, NXDOMAIN, SERVFAIL, etc.)
+- `authenticated_data` - the AD bit; set only by a validating resolver, never by this client
+- `truncated` - the TC bit
+
+DNSSEC records are reported structurally: RRSIG as `type_covered`, `algorithm`, `key_tag`,
+`signer`, `inception`, `expiration`; DNSKEY as `flags`, `algorithm`, `key_tag`,
+`secure_entry_point`; NSEC as `next` and `types`; DS as `key_tag`, `algorithm`, `digest_type`.
+No key or signature bytes. A type the client does not read is `TYPE<n>` with `rdata_length`.
+
+#### `dns_zone_transfer_received`
+
+`zone`, `transfer_type` (AXFR/IXFR), `form` — `full`, `incremental` (an IXFR difference,
+recognised by RFC 1995 §4's rule that its second record is an SOA), `current` (the SOA alone)
+or `none` — `serial`, `record_count`, `messages`, `records` (in transfer order), `truncated`
+and `response_code`.
 
 **Answer Structure Examples:**
 
@@ -244,17 +278,16 @@ Flow:
 
 ## Known Limitations
 
-### 1. UDP Only
+### 1. Queries are UDP only
 
-- No TCP support for large responses (RFC 1035 requires TCP fallback for >512 bytes)
-- No EDNS0 support for larger UDP packets
-- Large responses may be truncated
+- Queries advertise a 1232-byte EDNS buffer, but a truncated answer (`truncated: true`) is
+  reported, not retried over TCP. Zone transfers are TCP.
 
 ### 2. No DNSSEC Validation
 
-- DNSSEC signatures are not validated
-- RRSIG, DNSKEY, DS records can be queried but not verified
-- Clients must trust the DNS server
+- With `dnssec` the signatures and NSEC proofs are reported, not verified; `authenticated_data`
+  is whatever the server said
+- No TSIG on transfers
 
 ### 3. No Caching
 
@@ -262,19 +295,13 @@ Flow:
 - Each query goes to the server (no local TTL tracking)
 - LLM must manage its own caching logic if needed
 
-### 4. Limited Recursion Control
-
-- hickory-client doesn't expose easy RD flag control
-- The `recursion_desired` parameter is accepted but may not be fully implemented
-- Future enhancement needed for true iterative mode
-
-### 5. Single Server Only
+### 4. Single Server Only
 
 - Client connects to one DNS server
 - No fallback to secondary servers
 - No support for DNS server lists
 
-### 6. No Query Pipelining
+### 5. No Query Pipelining
 
 - Queries are executed sequentially in the LLM loop
 - hickory-client supports concurrent queries internally
@@ -353,16 +380,9 @@ for answer in response.answers() {
 
 See `tests/client/dns/AGENTS.md` for detailed testing approach.
 
-**Test Servers:**
-
-- Public DNS: 8.8.8.8 (Google), 1.1.1.1 (Cloudflare)
-- Local test: `dnsmasq` or `unbound` in Docker container
-
-**E2E Budget:** < 5 LLM calls
-
-- Test 1: Simple A query (1 call)
-- Test 2: CNAME follow (2 calls)
-- Test 3: MX query (1 call)
+The evidence is `real_server_test.rs` against ISC BIND `named`; `e2e_test.rs` and
+`command_channel_test.rs` use NetGet's own server and say so. Public resolvers are not used —
+this repository forbids external endpoints.
 
 ## References
 

@@ -23,6 +23,30 @@ one peer that is a different language and a different project:
    built on it, so these two are one implementation family and count as **one** independent
    peer for the Beta/Stable bar, not two.
 
+4. **aiocoap 0.4** (Python) — for Observe and Block-wise only, `peer/aiocoap_peer.py`. Its own
+   codec, its own observation and block-wise state machines; shares nothing with libcoap or
+   coap-lite. The container this was written in has no IPv6 at all, and aiocoap's default
+   transports open AF_INET6 sockets, so the script selects `simple6` (client) and
+   `simplesocketserver` (server), which take the family from the address.
+
+### Observe and Block-wise (October 2026)
+
+`observe_blockwise_test.rs` drives libcoap's `coap-client` and aiocoap through the same three
+things — observe `/temp` and receive the two notifications a script handler pushes with
+`coap_notify` when another request PUTs, GET a 3000-byte `/big` as Block2 and reassemble it,
+PUT 3000 bytes as Block1 — and asserts from the server's side that `/big` was asked **once**
+and the upload reached the handler **once, whole**, with its block count. libcoap does it twice
+for Block2, once at its default size and once with `-b 64` (47 blocks).
+
+`observe_blockwise_bounds_test.rs` holds every new bound at its edge over a raw socket with
+coap-lite (Block values packed by hand from RFC 7959 §2.2, not with the server's encoder), and
+hands every exchange to the pcap oracle. See the table in its header.
+
+Both run **in-process with no model**: `observe_support.rs` starts the server through
+`ServerForm` with a script handler playing a device, so every count is exact and no mock is
+involved. The handler issues `coap_notify` from a PUT, which is the sync path; the bounds tests
+also call `CoapServerHandle::notify` directly to control the code and message type.
+
 Plus **the pcap oracle** (`tests/helpers/pcap_oracle.rs`) on every datagram `e2e_test::exchange`
 and `llm_failure_test::exchange` send or receive — Wireshark's own CoAP dissector as a third, unrelated reading of RFC 7252.
 CoAP's option encoding is delta-and-length nibbles with extension bytes, so an option that runs
@@ -52,6 +76,7 @@ rule applied to cost rather than to bytes.
 | `bounds_test::test_encode_…`, `test_message_prefix_…` | 0 | 0 | **0** |
 | `llm_failure_test::…_says_which_path_it_took` | 1 | 2 (one answered 500) | **3** |
 | `answer_with_test::*` (two tests) | 0 | 0 | **0** |
+| `observe_blockwise_test::*`, `observe_blockwise_bounds_test::*` (thirteen tests) | 0 | 0 (script handler) | **0** |
 
 **Total: 17** across six files, for 13 tests. This table used to read "Total: 7" and list only
 `e2e_test.rs`, which was true when that was the whole suite — derive it rather than reading it,
@@ -154,8 +179,30 @@ variants so a broken server fails the test in ten seconds instead of hanging it.
 | `MAX_TOKEN_LEN` (decode) | 8 | `codec.rs` | a socket: TKL=9 → RST for a CON, silence for a NON, zero model calls |
 | `MAX_TOKEN_LEN` (encode) | 8 | `codec.rs` | `encode()` directly — unreachable from the wire today, which is itself pinned |
 | `MAX_OPTION_LEN` (encode) | 65535 | `codec.rs` | `encode()` directly |
-| `MAX_PAYLOAD_LEN` (outbound) | 1024 | `codec.rs`, enforced in `actions.rs::decode_payload` | `e2e_test::test_oversize_payload_is_refused_rather_than_silently_dropped` |
+| `MAX_REPRESENTATION_LEN` (outbound) | 65536 | `codec.rs`, enforced in `actions.rs::decode_payload` | `e2e_test::test_oversize_payload_is_refused_rather_than_silently_dropped` (it was `MAX_PAYLOAD_LEN`, 1024, until Block2 existed) |
 | receive buffer | 2048 | `mod.rs` | implicitly, by the 1153-byte probe arriving intact |
+
+The Observe and Block-wise bounds reachable from one source IP — `MAX_OBSERVERS_PER_IP`,
+`MAX_UPLOADS_PER_IP` (the IP's oldest upload evicted, not the new one refused),
+`TRANSFER_SERVE_FACTOR` (the cache stops answering for the model after twice the
+representation, counted by handler calls), `MAX_TRANSFERS`, `MAX_REPRESENTATION_LEN` inbound,
+Block1 order and size, Block2 past the end, RST removal, `NOTIFICATION_MAX_RETRANSMIT`, and that
+a Confirmable notification pushed out of the `RECENT_NOTIFICATIONS` window by 300 later ones is
+still resent and its silent observer still removed — are in `observe_blockwise_bounds_test.rs`,
+tabulated in its header, each from raw UDP sockets on 127.0.0.1. The per-IP tests use two
+sockets so the cap is shown to be the IP's, not the endpoint's.
+
+The shared caps `MAX_OBSERVERS` and `MAX_UPLOADS` sit above the per-IP caps, and reaching them
+needs 16 and 8 source IPs, which loopback does not offer on macOS. They, and the rules that need
+a clock — `OBSERVER_MAX_AGE` expiry and its renewal by an ACK, the Confirmable notification due
+at half that age, and the Block2 TTL that a hit does not renew — are held directly on the pure
+tables in `observe_blockwise_table_test.rs`, passing `now` rather than waiting.
+
+Three were checked by removal when they were written: with the Block2 cache never storing,
+four tests fail (the handler is asked once per block); with the upload cap or the
+registration's Observe option removed, eight do. The October 2026 hardening tests (per-IP caps,
+serve budget, the pending map) were written without a build available and have not yet been
+checked by removal.
 
 Each has an **at-limit** half as well as an over-limit half, because a guard that refused
 everything would satisfy the over-limit assertion for the wrong reason. Each doc comment
@@ -166,11 +213,12 @@ catches what the decode-side guard stopped catching, and the server writes nothi
 ## Coverage gaps
 
 - ~~**No external binary peer.**~~ Closed September 2026: `real_client_test.rs` drives
-  libcoap 4.3.5's own `coap-client`, a C implementation — see below. `aiocoap-client` would be
-  a fourth and is still not exercised.
-- **Observe and Block-wise are not implemented and not tested.** So is DTLS/CoAPS. This is the
-  real ceiling on what the three peers above prove: they all drive the same one-datagram
-  request/response shape, because it is the only shape the server has.
+  libcoap 4.3.5's own `coap-client`, a C implementation — see below. aiocoap is now a fourth,
+  for Observe and Block-wise.
+- ~~**Observe and Block-wise are not implemented and not tested.**~~ Both implemented and
+  driven by two clients in October 2026, above. DTLS/CoAPS is still neither.
+- A CON notification that is never acknowledged is tested; one that is acknowledged only after
+  a retransmission is not.
 - No test for `send_coap_reset` or `ignore_coap_request` as *model* choices — the RST path is
   covered only via the ping, which the server answers itself.
 - No test for a retransmitted CON (there is no deduplication cache; a retransmission would
@@ -196,9 +244,12 @@ catches what the decode-side guard stopped catching, and the server writes nothi
     --test server -- --test-threads=100 coap
 ```
 
-About four seconds for all 11 tests at `--test-threads=100`, measured 16 September 2026;
-everything is loopback UDP and an in-process mock, except `real_client_test.rs`, which spawns
-the real `coap-client` three times.
+About twelve seconds for all 26 tests at `--test-threads=8`, measured 11 October 2026 — the
+retransmission test alone waits ~3.5 s for four resends at a 100 ms ACK timeout. Everything is
+loopback UDP and an in-process mock or script, except `real_client_test.rs` and
+`observe_blockwise_test.rs`, which spawn `coap-client` and aiocoap.
+`observe_blockwise_test.rs` needs `NETGET_AIOCOAP_PYTHON` pointing at a python with
+aiocoap 0.4.12 installed.
 
 ## Failure modes seen so far
 

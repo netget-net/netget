@@ -1,179 +1,45 @@
-# DNS Client E2E Test Strategy
-
-## Overview
-
-E2E tests for the DNS client protocol verify that NetGet can connect to DNS servers, send queries, and interpret
-responses correctly through LLM-controlled actions.
-
-## Test Approach
-
-**Black-box testing**: Tests spawn the actual NetGet binary and verify behavior through stdout/stderr output and exit
-codes.
-
-**Target DNS Servers:**
-
-- **Public DNS servers**: 8.8.8.8 (Google), 1.1.1.1 (Cloudflare)
-- **Rationale**: DNS is a standard protocol, testing against public servers verifies real-world interoperability
-
-**No local DNS server required**: Unlike other protocol tests, DNS tests use public infrastructure, simplifying test
-setup.
-
-## LLM Call Budget
-
-**Total budget: < 5 LLM calls across all tests**
-
-Breakdown:
-
-- Test 1: A record query → 1-2 LLM calls (connect + query)
-- Test 2: MX record query → 1-2 LLM calls (connect + query)
-- Test 3: NXDOMAIN handling → 1-2 LLM calls (connect + query)
-- Test 4: Multiple queries → 1-2 LLM calls (connect + multiple queries)
-
-**Optimization strategies:**
-
-1. Each test uses a single client instance
-2. Simple, focused instructions minimize LLM decision complexity
-3. No server startup needed (public DNS servers)
-4. Tests run independently (no shared state)
-
-## Test Cases
-
-### Test 1: Basic A Record Query
-
-**File:** `test_dns_client_a_record_query`
-**LLM Calls:** 1-2
-**Duration:** ~3 seconds
-
-**Purpose:** Verify basic DNS client functionality with A record lookup.
-
-**Instruction:**
-
-```
-Connect to 8.8.8.8:53 via DNS. Query A records for example.com and report the IP address.
-```
-
-**Expected Behavior:**
-
-1. Client connects to 8.8.8.8:53
-2. Sends DNS query for example.com A record
-3. Receives response with IP address (93.184.216.34)
-4. LLM reports the IP to user
-
-**Assertions:**
-
-- Output contains "DNS" or "dns"
-- Client connects successfully
-- No errors in output
-
-### Test 2: MX Record Query
-
-**File:** `test_dns_client_mx_record_query`
-**LLM Calls:** 1-2
-**Duration:** ~3 seconds
-
-**Purpose:** Verify client can query different record types (MX for mail servers).
-
-**Instruction:**
-
-```
-Connect to 1.1.1.1:53 via DNS. Query MX records for gmail.com and show the mail servers.
-```
-
-**Expected Behavior:**
-
-1. Client connects to Cloudflare DNS (1.1.1.1:53)
-2. Sends DNS query for gmail.com MX records
-3. Receives response with multiple MX records and preferences
-4. LLM reports mail servers
-
-**Assertions:**
-
-- Protocol is "DNS"
-- Client connects successfully
-- No errors in output
-
-### Test 3: NXDOMAIN Handling
-
-**File:** `test_dns_client_nxdomain`
-**LLM Calls:** 1-2
-**Duration:** ~3 seconds
-
-**Purpose:** Verify client handles non-existent domains gracefully (NXDOMAIN response).
-
-**Instruction:**
-
-```
-Connect to 8.8.8.8:53 via DNS. Query A records for nonexistent-domain-12345-xyz.com and report the result.
-```
-
-**Expected Behavior:**
-
-1. Client connects to 8.8.8.8:53
-2. Sends DNS query for nonexistent domain
-3. Receives NXDOMAIN response
-4. LLM handles gracefully and reports domain doesn't exist
-
-**Assertions:**
-
-- Output contains "DNS" or "dns"
-- Client doesn't crash on NXDOMAIN
-- No fatal errors
-
-### Test 4: Multiple Queries
-
-**File:** `test_dns_client_multiple_queries`
-**LLM Calls:** 1-2
-**Duration:** ~5 seconds
-
-**Purpose:** Verify client can send multiple sequential queries in one session.
-
-**Instruction:**
-
-```
-Connect to 8.8.8.8:53 via DNS. First query A records for google.com, then query AAAA records for google.com, and report both results.
-```
-
-**Expected Behavior:**
-
-1. Client connects to 8.8.8.8:53
-2. Sends first query for google.com A record
-3. Receives response with IPv4 addresses
-4. LLM sends follow-up query for AAAA records
-5. Receives response with IPv6 addresses
-6. LLM reports both IPv4 and IPv6 results
-
-**Assertions:**
-
-- Protocol is "DNS"
-- Client executes both queries
-- No errors between queries
-
-## Running Tests
-
-### Run all DNS client tests:
+# DNS client tests
 
 ```bash
-./cargo-isolated.sh test --no-default-features --features dns --test client -- client::dns::e2e_test
+./cargo-isolated.sh test --no-default-features --features dns --test client -- client::dns --test-threads=8
 ```
 
-### Run specific test:
+| file | peer | model calls | proves |
+|---|---|---|---|
+| `real_server_test.rs` | ISC BIND **`named`**, unprivileged on loopback, signing its zone inline; read back with `dig` | 0 (script handler) | the client bar (below): DNSSEC-aware query, AXFR, IXFR |
+| `e2e_test.rs` | NetGet's own DNS server (`open_server`) | mocked | the conversation loop: A, MX, NXDOMAIN, a follow-up query. **Self-served**: it proves the two halves agree, not that the client is right |
+| `command_channel_test.rs` | NetGet's own DNS server | mocked | an injected `send_dns_query` (the dashboard's `[ send ]`) |
+| `transfer_bound_test.rs` | a hand-written hostile TCP server on 127.0.0.1 | 0 | an endless AXFR of ~64 KiB TXT records ends with the `MAX_TRANSFER_BYTES` error (`passed … bytes; abandoned`), not a timeout or the record count |
 
-```bash
-./cargo-isolated.sh test --no-default-features --features dns --test client -- client::dns::e2e_test::test_dns_client_a_record_query
-```
+This file used to describe a suite that queried 8.8.8.8 and 1.1.1.1 and "skipped gracefully"
+offline. Neither had been true for a long time: `e2e_test.rs` starts NetGet's own server, and
+this repository forbids external endpoints.
 
-### With detailed output:
+## real_server_test.rs — the evidence the Beta rating rests on
 
-```bash
-./cargo-isolated.sh test --no-default-features --features dns --test client -- client::dns::e2e_test --nocapture
-```
+`named -g -c {dir}/named.conf` with one zone, `example.org`, `dnssec-policy default` and
+`inline-signing yes` (named generates an ECDSA P-256 key and signs), `allow-transfer { any; }`
+and `ixfr-from-differences yes`. Ready when named logs the signed zone loaded. A missing `named`
+or `dig` **fails** the test naming `bind9` / `bind9-dnsutils`.
 
-## Expected Runtime
+A script handler plays the model:
 
-- **Per test:** 3-5 seconds (mostly LLM processing time)
-- **Total suite:** ~15 seconds (4 tests)
-- **LLM overhead:** ~80-90% of test time
-- **DNS query latency:** ~10-100ms per query
+1. `dns_connected` → `send_dns_query {www.example.org., A, dnssec: true, recursion_desired: false}`.
+   The answer must carry the A record **and** named's RRSIG over it (type covered A, algorithm
+   13, signer `example.org.`) — which only arrives if the DO bit reached the wire. Removing the
+   DO bit fails here.
+2. That answer → `send_dns_zone_transfer {zone: example.org.}`. The AXFR's `record_count` must
+   equal the number of records `dig axfr` prints from the same server, its serial must be the
+   one `dig` reads, and it must contain SOA, DNSKEY, NSEC, RRSIG and MX.
+3. The test edits the zone file (serial 100 → 101, `www` .80 → .81) and sends named SIGHUP;
+   named computes the difference and re-signs. An **injected** `send_dns_zone_transfer
+   {serial: <old>}` must come back `transfer_type: IXFR`, `form: incremental`, with the new
+   serial, the old `www` address before the new one, and fewer records than the AXFR.
+4. named's own log must show an AXFR and an IXFR served — condition 4 from the server's side.
+
+**CI**: named is installed in the `dns-transfer-dnssec` protocol-pairs job. Ubuntu's AppArmor
+profile confines `/usr/sbin/named` to its packaged paths, so the job unloads it, as `ci.yml`
+does for mysqld and slapd.
 
 ## Mock rule ordering (`test_dns_client_multiple_queries`)
 
@@ -196,89 +62,3 @@ The client side is now defended independently — the action loop is iterative r
 than recursive, and a per-client LLM call budget (default 100, see
 `src/client/llm_budget.rs`) hard-stops any non-converging client — so a mistake of
 this shape now fails the mock expectations instead of killing the process.
-
-## Known Issues
-
-### Issue 1: Public DNS Server Dependency
-
-**Problem:** Tests depend on public DNS servers (8.8.8.8, 1.1.1.1) being accessible.
-**Impact:** Tests may fail in isolated network environments.
-**Mitigation:** Tests skip gracefully if DNS servers unreachable.
-**Future:** Add local DNS server option (dnsmasq in Docker).
-
-### Issue 2: Response Content Validation
-
-**Problem:** Tests verify DNS protocol is used but don't validate exact response data.
-**Reason:** DNS responses can vary (TTL, order, caching).
-**Mitigation:** Tests focus on protocol behavior, not specific IP addresses.
-**Alternative:** Add test with controlled local DNS server for deterministic responses.
-
-### Issue 3: LLM Interpretation Variability
-
-**Problem:** LLM may format responses differently between runs.
-**Impact:** Hard to assert on exact output strings.
-**Mitigation:** Tests verify protocol and connection, not exact output format.
-
-### Issue 4: Timeout Handling
-
-**Problem:** DNS queries have 5-second default timeout (hickory-client).
-**Impact:** NXDOMAIN or slow servers may take several seconds.
-**Mitigation:** Tests allow sufficient time (3-5 seconds per query).
-
-## Test Infrastructure
-
-### Helper Functions (in `tests/helpers/`)
-
-- `start_netget_client()` - Spawn NetGet binary as client
-- `NetGetConfig::new()` - Configure client instruction
-- `output_contains()` - Check client output for expected content
-- `stop()` - Clean shutdown of client process
-
-### Test Environment
-
-- **Ollama server**: Required for LLM processing
-- **Model**: qwen3-coder:30b (or default model)
-- **Isolation**: Each test runs in separate NetGet process
-
-## Success Criteria
-
-✅ All tests pass consistently
-✅ < 5 LLM calls total across all tests
-✅ Tests complete in < 20 seconds total
-✅ No memory leaks or hung processes
-✅ Graceful handling of errors (NXDOMAIN, timeouts)
-
-## Debugging Tips
-
-### Test hangs:
-
-- Check Ollama server is running
-- Verify network access to DNS servers (8.8.8.8, 1.1.1.1)
-- Look for deadlocks in `netget.log`
-
-### Test fails with connection errors:
-
-- Verify DNS port 53 is not blocked by firewall
-- Try alternative DNS server (1.1.1.1 instead of 8.8.8.8)
-- Check if DNS resolution works: `dig @8.8.8.8 example.com`
-
-### LLM makes incorrect decisions:
-
-- Review LLM prompt in logs
-- Check if instruction is clear and unambiguous
-- Verify DNS actions are properly defined in protocol
-
-### Flaky tests:
-
-- Increase sleep duration after client startup
-- Add retry logic for transient DNS failures
-- Use local DNS server for deterministic behavior
-
-## Future Enhancements
-
-1. **Local DNS server**: Docker container with dnsmasq for deterministic responses
-2. **DoT/DoH tests**: Test DNS-over-TLS and DNS-over-HTTPS clients
-3. **DNSSEC validation**: Test DNSSEC-enabled queries
-4. **Batch queries**: Test multiple concurrent queries
-5. **Zone transfer**: Test AXFR/IXFR if supported
-6. **Performance testing**: Measure queries per second with scripting mode

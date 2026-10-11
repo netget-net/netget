@@ -9,6 +9,7 @@
 | `real_server_test.rs` | libcoap `coap-server`, read back with `coap-client` | 7+ | the client bar (below) |
 | `transport_test.rs` | hand-written UDP servers built on the shared codec | 3-4 each | retransmission bound, Block2 cap and order, oversize drop, notification dedup and RST, exchange cap |
 | `request_test.rs` | none | 0 | `request_from_action`: options, content formats, refusals |
+| `blockwise_upload_test.rs` | libcoap `coap-server` + `coap-client`; aiocoap; a coap-lite server | 0 (script handler) | Block1 uploads: libcoap stores 3000 bytes sent in twelve 256-byte blocks and `coap-client` reads them back; aiocoap reassembles three 1024-byte blocks; the client continues at the smaller size a server asks for in its 2.31, from the right offset; a 4.13 part way reaches the model with `blocks_sent` |
 
 ## real_server_test.rs — the evidence the rating rests on
 
@@ -33,7 +34,20 @@ Then `coap-client -m get /example_data` must read the model's sentence. Conditio
 from the server's side; emptying the loop over `result.actions` fails this test.
 
 `injected_coap_put_reaches_libcoap` drives the command channel in-process (no model): a PUT that
-`coap-client` reads back, a 1025-byte payload refused (no Block1), and `disconnect`.
+`coap-client` reads back, a payload one byte over `MAX_REPRESENTATION_LEN` (64 KiB) refused
+before the wire, and `disconnect`. Until Block1 existed the refusal was at 1025 bytes.
+
+## blockwise_upload_test.rs — Block1
+
+A script handler on `coap_connected` answers with `coap_put` of 3000 LCG letters — the answer a
+model would give — so the upload is the client acting on its handler's answer, asserted at each
+server. aiocoap is `tests/server/coap/peer/aiocoap_peer.py server` and needs
+`NETGET_AIOCOAP_PYTHON`; like libcoap, missing, the test fails.
+
+The coap-lite server answers block 0 (1024 bytes) with a 2.31 whose Block1 says SZX 4 (256
+bytes). RFC 7959 §2.3 makes the client continue at the smaller size from the bytes already
+acknowledged, so the next block is number **4**; the test asserts the whole sequence
+`[0, 4, 5, …, 11]` and the body byte for byte. Making the client ignore the server's SZX fails it.
 
 **Version note.** Homebrew ships libcoap 4.3.5; Ubuntu 22.04, where CI's registry-audit runs,
 ships `libcoap2-bin` 4.2.1. The test was run against 4.3.5.
@@ -43,4 +57,5 @@ ships `libcoap2-bin` 4.2.1. The test was run against 4.3.5.
 Each removed on its own, with its test failing: the loop over `result.actions`
 (`real_server_test`), the retransmission bound, `MAX_BODY`, the oversize drop, message-id
 deduplication, RST for an unknown token, `MAX_EXCHANGES`, the block-order check
-(`transport_test`), the 1024-byte payload refusal (`request_test`).
+(`transport_test`), the payload refusal (`request_test`, now at `MAX_REPRESENTATION_LEN`), the
+smaller block size a server asks for (`blockwise_upload_test`).

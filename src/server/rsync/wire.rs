@@ -46,8 +46,14 @@ pub const MAX_LINE: usize = 4096;
 pub const MAX_ARGS: usize = 64;
 /// A file-list name.
 pub const MAX_NAME: usize = 4096;
-/// Entries in one file list.
+/// Entries in one file list a daemon sends (what the client reads on a download).
 pub const MAX_ENTRIES: usize = 100_000;
+/// Entries in one uploading client's file list, devices and specials included: twice the files
+/// one upload may deliver, so the directories and symlinks around them fit.
+pub const MAX_UPLOAD_LIST_ENTRIES: usize = 2 * super::MAX_UPLOAD_FILES;
+/// Name and symlink-target bytes in one uploading client's file list, all entries together.
+/// Every name reaches the model in `rsync_upload_request`, so this also bounds that event.
+pub const MAX_UPLOAD_LIST_NAME_BYTES: usize = 1024 * 1024;
 /// Total bytes of filter rules a client may send.
 pub const MAX_FILTER_BYTES: usize = 64 * 1024;
 /// Block checksums one request may carry (count × (4 + s2length) bytes are read and dropped).
@@ -202,6 +208,10 @@ pub struct Request {
     pub checksum: bool,
     pub numeric_ids: bool,
     pub list_only: bool,
+    /// -D: devices and specials are listed with their rdev.
+    pub devices: bool,
+    /// -H: an uploading client's list would carry device and inode numbers.
+    pub hard_links: bool,
     pub checksum_seed: Option<i32>,
     /// Paths after ".", with the module prefix stripped ("" is the module root).
     pub paths: Vec<String>,
@@ -233,6 +243,14 @@ pub fn parse_args(args: &[String], module: &str) -> Request {
             "--sender" => r.sender = true,
             "--numeric-ids" => r.numeric_ids = true,
             "--list-only" => r.list_only = true,
+            "--devices" | "--specials" => r.devices = true,
+            // With --delete the uploading client sends a filter list before its file list, and
+            // the receiver is expected to delete what the list does not name; neither applies
+            // to a daemon that stores nothing.
+            s if s.starts_with("--delete") || s == "--del" => {
+                r.refusal
+                    .get_or_insert(format!("{s} is not supported by this daemon"));
+            }
             s if s.starts_with("--checksum-seed=") => {
                 r.checksum_seed = s["--checksum-seed=".len()..].parse().ok();
             }
@@ -252,6 +270,8 @@ pub fn parse_args(args: &[String], module: &str) -> Request {
                         'g' => r.group = true,
                         'n' => r.dry_run = true,
                         'c' => r.checksum = true,
+                        'D' => r.devices = true,
+                        'H' => r.hard_links = true,
                         'z' | 'U' | 'N' | 'R' | 's' => {
                             r.refusal
                                 .get_or_insert(format!("-{c} is not supported by this daemon"));
@@ -263,8 +283,13 @@ pub fn parse_args(args: &[String], module: &str) -> Request {
             _ => {}
         }
     }
-    if !r.sender {
-        r.refusal = Some("module is read only".into());
+    if !r.sender && r.paths.len() > 1 {
+        r.refusal
+            .get_or_insert("an upload names one destination".into());
+    }
+    if !r.sender && r.hard_links {
+        r.refusal
+            .get_or_insert("-H is not supported for uploads by this daemon".into());
     }
     r
 }
@@ -372,10 +397,36 @@ impl FlistWriter {
     }
 }
 
+/// What one file list may hold: entries (every entry read counts, including the devices and
+/// specials that are skipped), and name plus symlink-target bytes over all entries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FlistLimits {
+    pub max_entries: usize,
+    pub max_name_bytes: usize,
+}
+
+impl FlistLimits {
+    /// A list a daemon sends to a downloading client: `MAX_ENTRIES`, each name at most
+    /// `MAX_NAME`.
+    pub const DOWNLOAD: Self = Self {
+        max_entries: MAX_ENTRIES,
+        max_name_bytes: usize::MAX,
+    };
+    /// A list an uploading client sends to the daemon.
+    pub const UPLOAD: Self = Self {
+        max_entries: MAX_UPLOAD_LIST_ENTRIES,
+        max_name_bytes: MAX_UPLOAD_LIST_NAME_BYTES,
+    };
+}
+
 /// A demultiplexing reader: MSG_DATA becomes a byte stream, other messages are collected.
 pub struct MuxReader<R> {
     inner: R,
     left: usize,
+    /// False for a stream that is not multiplexed (client to daemon at protocol 29).
+    mux: bool,
+    /// Bytes read from `inner`, frame headers included.
+    pub consumed: u64,
     pub messages: Vec<(u8, String)>,
     pub io_error: i32,
 }
@@ -385,12 +436,30 @@ impl<R: AsyncRead + Unpin> MuxReader<R> {
         Self {
             inner,
             left: 0,
+            mux: true,
+            consumed: 0,
             messages: vec![],
             io_error: 0,
         }
     }
+    /// The same decoders over a stream that carries no multiplexing frames: what a daemon
+    /// reads from an uploading client at protocol 29.
+    pub fn raw(inner: R) -> Self {
+        Self {
+            mux: false,
+            ..Self::new(inner)
+        }
+    }
     pub async fn read(&mut self, n: usize) -> Result<Vec<u8>> {
         let mut out = vec![0u8; n];
+        if !self.mux {
+            self.inner
+                .read_exact(&mut out)
+                .await
+                .context("the peer closed the connection")?;
+            self.consumed += n as u64;
+            return Ok(out);
+        }
         let mut have = 0;
         while have < n {
             while self.left == 0 {
@@ -399,6 +468,7 @@ impl<R: AsyncRead + Unpin> MuxReader<R> {
                     .read_exact(&mut h)
                     .await
                     .context("the daemon closed the connection")?;
+                self.consumed += 4;
                 let h = u32::from_le_bytes(h);
                 let tag = ((h >> 24) as u8).wrapping_sub(MPLEX_BASE);
                 let len = (h & 0x00ff_ffff) as usize;
@@ -409,6 +479,7 @@ impl<R: AsyncRead + Unpin> MuxReader<R> {
                 ensure!(len <= 8192, "a {len}-byte rsync message is too long");
                 let mut body = vec![0u8; len];
                 self.inner.read_exact(&mut body).await?;
+                self.consumed += len as u64;
                 match tag {
                     MSG_ERROR_XFER | MSG_INFO | MSG_ERROR | MSG_WARNING => self
                         .messages
@@ -423,6 +494,7 @@ impl<R: AsyncRead + Unpin> MuxReader<R> {
             }
             let k = (n - have).min(self.left);
             self.inner.read_exact(&mut out[have..have + k]).await?;
+            self.consumed += k as u64;
             have += k;
             self.left -= k;
         }
@@ -448,16 +520,35 @@ impl<R: AsyncRead + Unpin> MuxReader<R> {
         Ok(i64::from_le_bytes(b.try_into().unwrap_or([0; 8])) as u64)
     }
 
-    /// Read a file list sent for request `r` (entries in the order sent, plus io_error).
+    /// Read a file list sent for request `r` (entries in the order sent, plus io_error), within
+    /// [`FlistLimits::DOWNLOAD`].
     pub async fn file_list(&mut self, r: &Request) -> Result<(Vec<Entry>, i32)> {
+        self.file_list_bounded(r, FlistLimits::DOWNLOAD).await
+    }
+
+    /// Read a file list sent for request `r` within `limits`: past either bound the read stops
+    /// with an error, before the over-limit name or target is read.
+    pub async fn file_list_bounded(
+        &mut self,
+        r: &Request,
+        limits: FlistLimits,
+    ) -> Result<(Vec<Entry>, i32)> {
         let mut entries = Vec::new();
         let (mut last, mut mode, mut mtime, mut uid, mut gid) =
             (Vec::new(), 0u32, 0u32, 0u32, 0u32);
+        let mut listed = 0usize;
+        let mut name_bytes = 0usize;
         loop {
             let mut x = u16::from(self.byte().await?);
             if x == 0 {
                 break;
             }
+            listed += 1;
+            ensure!(
+                listed <= limits.max_entries,
+                "more than {} file-list entries",
+                limits.max_entries
+            );
             if x & XMIT_EXTENDED_FLAGS != 0 {
                 x |= u16::from(self.byte().await?) << 8;
             }
@@ -474,6 +565,12 @@ impl<R: AsyncRead + Unpin> MuxReader<R> {
             ensure!(
                 l1 <= last.len() && l1 + l2 <= MAX_NAME,
                 "a file-list name is malformed"
+            );
+            name_bytes += l1 + l2;
+            ensure!(
+                name_bytes <= limits.max_name_bytes,
+                "more than {} bytes of file-list names",
+                limits.max_name_bytes
             );
             let mut name = last[..l1].to_vec();
             name.extend(self.read(l2).await?);
@@ -499,8 +596,18 @@ impl<R: AsyncRead + Unpin> MuxReader<R> {
                     (0..=MAX_NAME as i32).contains(&n),
                     "a symlink target is too long"
                 );
+                name_bytes += n as usize;
+                ensure!(
+                    name_bytes <= limits.max_name_bytes,
+                    "more than {} bytes of file-list names",
+                    limits.max_name_bytes
+                );
                 data = self.read(n as usize).await?;
             }
+            ensure!(
+                kind.is_some() || !r.devices,
+                "a device or special file in the list; -D is not supported for uploads"
+            );
             if r.checksum && kind == Some(Kind::File) {
                 self.read(16).await?;
             }
@@ -508,10 +615,6 @@ impl<R: AsyncRead + Unpin> MuxReader<R> {
             ensure!(
                 !path.starts_with('/') && !path.split('/').any(|c| c == ".."),
                 "unsafe file-list name {path:?}"
-            );
-            ensure!(
-                entries.len() < MAX_ENTRIES,
-                "more than {MAX_ENTRIES} file-list entries"
             );
             // Devices, FIFOs and sockets are listed by mode only without -D; skip them.
             if let Some(kind) = kind {

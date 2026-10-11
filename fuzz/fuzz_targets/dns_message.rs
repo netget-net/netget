@@ -1,6 +1,7 @@
 //! DNS wire format — `hickory_proto::op::Message::from_vec`.
 //!
-//! **NetGet has no DNS parser of its own.** `src/server/dns/mod.rs`, `dot/mod.rs` and
+//! **NetGet has no DNS parser of its own** (DNS over TCP adds only a two-byte length prefix,
+//! read with `read_u16` and bounded by its own width). `src/server/dns/mod.rs`, `dot/mod.rs` and
 //! `doh/mod.rs` each call `DnsMessage::from_vec(&data)` inline in their receive loop and
 //! hand the result to the model; there is no hand-written framing or name decompression
 //! anywhere around it. That makes this the one target here that fuzzes a third-party crate
@@ -36,6 +37,21 @@ fuzz_target!(|data: &[u8]| {
     for r in msg.answers() {
         let _ = r.name().to_string();
         let _ = r.data();
+    }
+    // Since October 2026 the DNS server also reads the OPT record (the client's UDP size and
+    // DO bit decide truncation and signing) and, for IXFR, the serial of the SOA in the
+    // authority section — both from the first message of an unauthenticated peer. With the
+    // `dns` feature hickory now decodes DNSSEC rdata too (RRSIG, NSEC, DNSKEY), which a
+    // query's sections can carry.
+    if let Some(edns) = msg.extensions() {
+        let _ = edns.max_payload();
+        let _ = edns.dnssec_ok();
+    }
+    for r in msg.name_servers().iter().chain(msg.additionals()) {
+        if let Some(hickory_proto::rr::RData::SOA(soa)) = r.data() {
+            let _ = soa.serial();
+        }
+        let _ = r.data().map(|d| d.to_string());
     }
 
     // A message that decodes must re-encode; `to_vec` is what the servers call on the reply

@@ -48,7 +48,7 @@ impl Origin {
         })
     }
 }
-fn query(value: &str) -> String {
+pub(crate) fn query(value: &str) -> String {
     let mut out = String::new();
     for b in value.bytes() {
         if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {

@@ -32,7 +32,8 @@ fn config() -> String {
     format!(
         "use chroot = no\nstrict modes = no\nmotd file = {{dir}}/motd\n{ids}\
 [pub]\n    path = {{dir}}/pub\n    comment = public files\n    read only = yes\n\
-[secret]\n    path = {{dir}}/secret\n    comment = private\n    auth users = alice\n    secrets file = {{dir}}/secrets\n"
+[secret]\n    path = {{dir}}/secret\n    comment = private\n    auth users = alice\n    secrets file = {{dir}}/secrets\n\
+[inbox]\n    path = {{dir}}/inbox\n    comment = uploads\n    read only = no\n    munge symlinks = no\n"
     )
 }
 
@@ -46,6 +47,7 @@ async fn daemon() -> RealServer {
         .config_file("pub/docs/notes.txt", "notes\n")
         .config_file("pub/bin/data.bin", "\u{1}\u{2}\u{3}")
         .config_file("secret/s.txt", "only for alice\n")
+        .config_file("inbox/README", "drop files here\n")
         .args([
             "--daemon",
             "--no-detach",
@@ -250,4 +252,80 @@ async fn password_module() {
         panic!()
     };
     assert!(detail.contains("auth failed"), "{detail}");
+}
+
+/// Uploads: `rsync_push` against the stock daemon's writable `[inbox]`. What lands is read
+/// from the daemon's own directory, so every byte below crossed the wire and was accepted by
+/// stock rsync's receiver (which checks each file's MD4 sum against the one NetGet sent).
+#[tokio::test]
+async fn push_to_stock_rsyncd() {
+    let d = daemon().await;
+    let silent = vec![json!({"event_pattern":"*","handler":{"type":"static","actions":[]}})];
+    let (state, id) = client(&d.addr(), json!({}), silent).await;
+    // Larger than one 32 KiB literal token, so the file crosses as several.
+    let big: String = (0..5000).map(|i| format!("line {i:05}\n")).collect();
+    let ClientSendOutcome::Executed { detail } = state
+        .send_to_client(
+            id,
+            json!({"type":"rsync_push","path":"inbox/up","files":[
+                {"path":"note.txt","content":"pushed by netget\n"},
+                {"path":"bin/blob.bin","content":"00ff10","encoding":"hex"},
+                {"path":"deep/er/big.log","content":big},
+                {"path":"link","type":"symlink","target":"note.txt"},
+                {"path":"empty","type":"dir"}
+            ]}),
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!()
+    };
+    let detail: Value = serde_json::from_str(&detail).unwrap();
+    assert_eq!(detail["complete"], true, "{detail}");
+    assert_eq!(
+        detail["sent"],
+        // rsync's file-list order: a directory's files before its subdirectories.
+        json!([
+            {"path": "note.txt", "size": 17},
+            {"path": "bin/blob.bin", "size": 3},
+            {"path": "deep/er/big.log", "size": 55000}
+        ]),
+        "{detail}"
+    );
+    let up = d.dir().join("inbox/up");
+    assert_eq!(
+        std::fs::read_to_string(up.join("note.txt")).unwrap(),
+        "pushed by netget\n"
+    );
+    assert_eq!(
+        std::fs::read(up.join("bin/blob.bin")).unwrap(),
+        [0, 0xff, 0x10]
+    );
+    assert_eq!(
+        std::fs::read_to_string(up.join("deep/er/big.log")).unwrap(),
+        big
+    );
+    assert_eq!(
+        std::fs::read_link(up.join("link")).unwrap(),
+        std::path::Path::new("note.txt")
+    );
+    assert!(up.join("empty").is_dir());
+    // What was there before is untouched: a push adds, it never deletes.
+    assert!(d.dir().join("inbox/README").exists());
+
+    // A read-only module: the daemon refuses, and the refusal is what comes back.
+    let ClientSendOutcome::Executed { detail } = state
+        .send_to_client(
+            id,
+            json!({"type":"rsync_push","path":"pub/","files":[{"path":"x.txt","content":"x"}]}),
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert!(detail.contains("read only"), "{detail}");
+    assert!(!d.dir().join("pub/x.txt").exists());
 }

@@ -546,7 +546,7 @@ jobs:
 
   influxdb-pairs:
     if: inputs.suite != 'p2p-news'
-    name: InfluxDB writes with independent emitter, decoder and real service
+    name: InfluxDB writes and Flux/InfluxQL queries with independent clients, decoder and real service
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
@@ -561,6 +561,9 @@ jobs:
         with:
           go-version: '1.25.x'
           cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - uses: Swatinem/rust-cache@v2
         with:
           key: protocol-pairs-${{ github.job }}
@@ -579,9 +582,10 @@ jobs:
             printf 'NETGET_INFLUX_PYTHON=python3\n'
             printf 'NETGET_INFLUX_RECEIVER=%s/influxdb-peers/influx-decoder-receiver\n' "$RUNNER_TEMP"
             printf 'NETGET_INFLUX_DAEMON=%s/influxdb-peers/influxd-2.9.1\n' "$RUNNER_TEMP"
+            printf 'NETGET_INFLUX_NODE_MODULES=%s/influxdb-peers/node/node_modules\n' "$RUNNER_TEMP"
           } >> "$GITHUB_ENV"
 
-      - name: Both directions, five field types, precisions and service readback
+      - name: Both directions, five field types, precisions, four query clients and service queries
         run: |
           for filter in \
             influxdb:: client/influxdb:: \
@@ -7416,7 +7420,7 @@ jobs:
 
   snmp:
     if: inputs.suite != 'p2p-news'
-    name: SNMP agent and notifications against Net-SNMP
+    name: SNMP agent, manager, SNMPv3 USM and notifications against Net-SNMP and pysnmp
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -7427,19 +7431,27 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: protocol-pairs-${{ github.job }}
-      - name: Install Net-SNMP's tools, its trap receiver and tshark (the pcap oracle)
+      - name: Install Net-SNMP's tools, its agent, its trap receiver, tshark (the pcap oracle) and pysnmp
         run: |
           sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends snmp snmptrapd tshark
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends snmp snmpd snmptrapd tshark
+          # The packaged agent is not the one under test; the client suite runs its own.
+          sudo systemctl stop snmpd || true
           snmpget -V
           tshark --version | head -1
+          python3 -m venv "$RUNNER_TEMP/pysnmp"
+          "$RUNNER_TEMP/pysnmp/bin/pip" install --quiet pysnmp==7.1.22 pyasn1==0.6.4 cryptography==46.0.3
+          echo "NETGET_PYSNMP_PYTHON=$RUNNER_TEMP/pysnmp/bin/python" >> "$GITHUB_ENV"
       - name: Compile snmp as a standalone Cargo feature
         run: cargo check --locked --no-default-features --features snmp --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
           for filter in \
-            snmp::; do
+            snmp:: \
+            client/snmp::real_server_test:: \
+            client/snmp::command_channel_test:: \
+            client/snmp::usm_hardening_test::; do
             case "$filter" in
               client/*) target=client; filter=${filter#client/} ;;
               *) target=server ;;
@@ -7607,6 +7619,348 @@ jobs:
           for filter in \
             websocket:: \
             client/websocket::; do
+            case "$filter" in
+              client/*) target=client; filter=${filter#client/} ;;
+              *) target=server ;;
+            esac
+            pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
+            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+              --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
+            grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
+          done
+      - name: Shared declarations, native startup, privacy and ownership
+        run: |
+          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            --test event_action_declarations_test \
+            --test advertised_actions_test \
+            --test action_descriptions_test \
+            --test startup_examples_validation_test \
+            --test examples \
+            --test startup_param_defaults_test \
+            --test startup_param_drift_test \
+            --test protocol_startup_examples_test \
+            --test startup_params_result_test \
+            --test startup_constructed_input_test \
+            --test management_test \
+            --test management_form_test \
+            --test dual_protocol_test \
+            --test dashboard_wireshark_test \
+            --test client_event_wiring_test \
+            --test event_emit_sites_test \
+            --test task_registration_cancellation_test \
+            --test server_task_registry_test \
+            --test client_stop_releases_socket_test \
+            --test peer_handle_coverage_ratchet_test \
+            --test client_credential_logging_test \
+            --test client_llm_budget_test \
+            --test secret_redaction_test \
+            --test wire_failure_test \
+            --test site_protocol_list_test \
+            --test well_known_port_declaration_test \
+            --test failure_mode_declaration_test \
+            --test decision_tag_ratchet_test \
+            --test max_inbound_bytes_declaration_test \
+            --test max_inbound_bytes_bound_plus_one_test \
+            --test test_suite_hygiene_test \
+            --test real_client_evidence_is_run_test \
+            -- --test-threads=32
+
+  coap-observe-blockwise:
+    if: inputs.suite != 'p2p-news'
+    name: CoAP Observe and Block-wise with libcoap and aiocoap
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      PAIR_FEATURES: coap
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: protocol-pairs-${{ github.job }}
+      # libcoap 4.3.5 rather than noble's packaged libcoap3-bin, so this job drives the same
+      # coap-client and coap-server the registry-audit job builds. Without DTLS, into
+      # /usr/local; a TLS-suffixed binary name is linked to the plain one.
+      - name: Build libcoap 4.3.5
+        run: |
+          git clone --quiet --depth 1 --branch v4.3.5 https://github.com/obgm/libcoap.git /tmp/libcoap
+          cmake -S /tmp/libcoap -B /tmp/libcoap/build -DENABLE_DTLS=OFF -DENABLE_DOCS=OFF \
+            -DENABLE_EXAMPLES=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local
+          cmake --build /tmp/libcoap/build -j"$(nproc)"
+          sudo cmake --install /tmp/libcoap/build
+          sudo ldconfig
+          for tool in coap-server coap-client; do
+            if [ ! -x "/usr/local/bin/$tool" ]; then
+              suffixed=$(ls /usr/local/bin/"$tool"-* 2>/dev/null | head -1)
+              [ -n "$suffixed" ] && sudo ln -sf "$suffixed" "/usr/local/bin/$tool"
+            fi
+            [ "$(command -v $tool)" = "/usr/local/bin/$tool" ] || { echo "$tool is not the 4.3.5 build" >&2; exit 1; }
+          done
+      - name: Install aiocoap and tshark
+        run: |
+          sudo apt-get update -q
+          echo "wireshark-common wireshark-common/install-setuid boolean false" | sudo debconf-set-selections
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q tshark
+          python3 -m venv "$RUNNER_TEMP/aiocoap"
+          "$RUNNER_TEMP/aiocoap/bin/pip" install --no-cache-dir aiocoap==0.4.12
+          printf 'NETGET_AIOCOAP_PYTHON=%s/aiocoap/bin/python\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - name: Compile coap as a standalone Cargo feature
+        run: cargo check --locked --no-default-features --features coap --all-targets
+      - name: Both roles with mandatory independent peers, bounds and fail-closed paths
+        run: |
+          set -euo pipefail
+          for filter in \
+            coap::observe_blockwise_test \
+            coap::observe_blockwise_bounds_test \
+            coap::real_client_test \
+            client/coap::blockwise_upload_test \
+            client/coap::real_server_test; do
+            case "$filter" in
+              client/*) target=client; filter=${filter#client/} ;;
+              *) target=server ;;
+            esac
+            pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
+            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+              --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
+            grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
+          done
+      - name: Shared declarations, native startup, privacy and ownership
+        run: |
+          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            --test event_action_declarations_test \
+            --test advertised_actions_test \
+            --test action_descriptions_test \
+            --test startup_examples_validation_test \
+            --test examples \
+            --test startup_param_defaults_test \
+            --test startup_param_drift_test \
+            --test protocol_startup_examples_test \
+            --test startup_params_result_test \
+            --test startup_constructed_input_test \
+            --test management_test \
+            --test management_form_test \
+            --test dual_protocol_test \
+            --test dashboard_wireshark_test \
+            --test client_event_wiring_test \
+            --test event_emit_sites_test \
+            --test task_registration_cancellation_test \
+            --test server_task_registry_test \
+            --test client_stop_releases_socket_test \
+            --test peer_handle_coverage_ratchet_test \
+            --test client_credential_logging_test \
+            --test client_llm_budget_test \
+            --test secret_redaction_test \
+            --test wire_failure_test \
+            --test site_protocol_list_test \
+            --test well_known_port_declaration_test \
+            --test failure_mode_declaration_test \
+            --test decision_tag_ratchet_test \
+            --test max_inbound_bytes_declaration_test \
+            --test max_inbound_bytes_bound_plus_one_test \
+            --test test_suite_hygiene_test \
+            --test real_client_evidence_is_run_test \
+            -- --test-threads=32
+
+  dns-transfer-dnssec:
+    if: inputs.suite != 'p2p-news'
+    name: DNS TCP, zone transfers and DNSSEC with BIND, Knot and ldns
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      PAIR_FEATURES: dns
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: protocol-pairs-${{ github.job }}
+      # dig, delv and named (BIND), kdig (Knot), drill and ldns-verify-zone (ldns),
+      # dnssec-verify (bind9-utils), tshark for the pcap oracle. Ubuntu's AppArmor profile
+      # confines named to its packaged paths, and the client test runs it from a temp dir.
+      - name: Install BIND, Knot, ldns and tshark
+        run: |
+          sudo apt-get update -q
+          echo "wireshark-common wireshark-common/install-setuid boolean false" | sudo debconf-set-selections
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
+            bind9 bind9-utils bind9-dnsutils knot-dnsutils ldnsutils tshark
+          sudo systemctl stop named || true
+          if [ -f /etc/apparmor.d/usr.sbin.named ]; then
+            sudo apparmor_parser -R /etc/apparmor.d/usr.sbin.named || true
+          fi
+          for tool in named dig delv kdig drill ldns-verify-zone dnssec-verify tshark; do
+            command -v "$tool"
+          done
+      - name: Compile dns as a standalone Cargo feature
+        run: cargo check --locked --no-default-features --features dns --all-targets
+      - name: Both roles with mandatory independent peers, bounds and fail-closed paths
+        run: |
+          set -euo pipefail
+          for filter in \
+            dns::transfer_test \
+            dns::dnssec_test \
+            dns::transport_bounds_test \
+            client/dns::real_server_test; do
+            case "$filter" in
+              client/*) target=client; filter=${filter#client/} ;;
+              *) target=server ;;
+            esac
+            pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
+            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+              --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
+            grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
+          done
+      - name: Shared declarations, native startup, privacy and ownership
+        run: |
+          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            --test event_action_declarations_test \
+            --test advertised_actions_test \
+            --test action_descriptions_test \
+            --test startup_examples_validation_test \
+            --test examples \
+            --test startup_param_defaults_test \
+            --test startup_param_drift_test \
+            --test protocol_startup_examples_test \
+            --test startup_params_result_test \
+            --test startup_constructed_input_test \
+            --test management_test \
+            --test management_form_test \
+            --test dual_protocol_test \
+            --test dashboard_wireshark_test \
+            --test client_event_wiring_test \
+            --test event_emit_sites_test \
+            --test task_registration_cancellation_test \
+            --test server_task_registry_test \
+            --test client_stop_releases_socket_test \
+            --test peer_handle_coverage_ratchet_test \
+            --test client_credential_logging_test \
+            --test client_llm_budget_test \
+            --test secret_redaction_test \
+            --test wire_failure_test \
+            --test site_protocol_list_test \
+            --test well_known_port_declaration_test \
+            --test failure_mode_declaration_test \
+            --test decision_tag_ratchet_test \
+            --test max_inbound_bytes_declaration_test \
+            --test max_inbound_bytes_bound_plus_one_test \
+            --test test_suite_hygiene_test \
+            --test real_client_evidence_is_run_test \
+            -- --test-threads=32
+
+  kafka:
+    if: inputs.suite != 'p2p-news'
+    name: Kafka broker and client at the newest flexible versions against kcat, the Java client, franz-go and Apache Kafka 3.9.1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      PAIR_FEATURES: tcp,kafka
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: protocol-pairs-${{ github.job }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: false
+      - name: Install kcat, tshark (the pcap oracle) and the pinned Kafka peers
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends kcat tshark protobuf-compiler
+          kcat -V | head -1
+          python3 tests/server/kafka/install_peers.py "$RUNNER_TEMP/kafka-peers"
+          echo "NETGET_KAFKA_PEERS=$RUNNER_TEMP/kafka-peers" >> "$GITHUB_ENV"
+      - name: Compile kafka as a standalone Cargo feature
+        run: cargo check --locked --no-default-features --features kafka --all-targets
+      - name: Both roles with mandatory independent peers, bounds and fail-closed paths
+        run: |
+          set -euo pipefail
+          for filter in \
+            kafka::flexible_versions_test \
+            kafka::real_client_test \
+            kafka::e2e_test \
+            client/kafka::real_server_test \
+            client/kafka::e2e_test; do
+            case "$filter" in
+              client/*) target=client; filter=${filter#client/} ;;
+              *) target=server ;;
+            esac
+            pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
+            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+              --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
+            grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
+          done
+      - name: Shared declarations, native startup, privacy and ownership
+        run: |
+          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            --test event_action_declarations_test \
+            --test advertised_actions_test \
+            --test action_descriptions_test \
+            --test startup_examples_validation_test \
+            --test examples \
+            --test startup_param_defaults_test \
+            --test startup_param_drift_test \
+            --test protocol_startup_examples_test \
+            --test startup_params_result_test \
+            --test startup_constructed_input_test \
+            --test management_test \
+            --test management_form_test \
+            --test dual_protocol_test \
+            --test dashboard_wireshark_test \
+            --test client_event_wiring_test \
+            --test event_emit_sites_test \
+            --test task_registration_cancellation_test \
+            --test server_task_registry_test \
+            --test client_stop_releases_socket_test \
+            --test peer_handle_coverage_ratchet_test \
+            --test client_credential_logging_test \
+            --test client_llm_budget_test \
+            --test secret_redaction_test \
+            --test wire_failure_test \
+            --test site_protocol_list_test \
+            --test well_known_port_declaration_test \
+            --test failure_mode_declaration_test \
+            --test decision_tag_ratchet_test \
+            --test max_inbound_bytes_declaration_test \
+            --test max_inbound_bytes_bound_plus_one_test \
+            --test test_suite_hygiene_test \
+            --test real_client_evidence_is_run_test \
+            -- --test-threads=32
+
+  rdp-client:
+    if: inputs.suite != 'p2p-news'
+    name: RDP client against FreeRDP's shadow server (NLA) on Xvfb and xrdp (TLS)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      PAIR_FEATURES: tcp,rdp-client
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: protocol-pairs-${{ github.job }}
+      - name: Install xrdp, the FreeRDP shadow server, Xvfb and the X11 tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            xrdp freerdp3-shadow-x11 xvfb x11-utils x11-xserver-utils openssl
+          # The package starts system daemons on 3389/3350; the tests run their own xrdp.
+          sudo systemctl stop xrdp xrdp-sesman || true
+          xrdp --version | head -1
+          freerdp-shadow-cli3 /version || true
+      - name: Compile rdp-client as a standalone Cargo feature
+        run: cargo check --locked --no-default-features --features rdp-client --all-targets
+      - name: Both roles with mandatory independent peers, bounds and fail-closed paths
+        run: |
+          set -euo pipefail
+          for filter in \
+            client/rdp::; do
             case "$filter" in
               client/*) target=client; filter=${filter#client/} ;;
               *) target=server ;;

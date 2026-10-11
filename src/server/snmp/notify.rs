@@ -119,6 +119,10 @@ fn binding(oid: String, mut typed: Value) -> Value {
 
 /// Decode a notification; `None` for any other datagram (requests go the usual way).
 pub fn parse(data: &[u8]) -> Option<Received> {
+    // Screened here as well as by the receive loop, so no caller reaches `rasn` without it.
+    if super::check_ber_structure(data, super::MAX_BER_DEPTH).is_err() {
+        return None;
+    }
     if let Ok(msg) = ber::decode::<v2c::Message<v2::Pdus>>(data) {
         let (kind, pdu) = match &msg.data {
             v2::Pdus::Trap(t) => ("trap", &t.0),
@@ -436,6 +440,11 @@ pub async fn send(out: &Outgoing) -> Result<Value> {
             tokio::time::timeout_at(deadline, socket.recv_from(&mut buf)).await
         {
             if from.ip() != target.ip() {
+                continue;
+            }
+            // The acknowledgement is the target's bytes: screened for nesting depth before
+            // `rasn`'s unbounded recursion sees them, as every other received datagram is.
+            if super::check_ber_structure(&buf[..n], super::MAX_BER_DEPTH).is_err() {
                 continue;
             }
             if let Ok(msg) = ber::decode::<v2c::Message<v2::Pdus>>(&buf[..n]) {

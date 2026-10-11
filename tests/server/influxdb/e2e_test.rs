@@ -232,7 +232,7 @@ async fn token_check_route_query_and_header_errors_never_reach_handlers_or_leak_
     }
     for (method, target, extra, want) in [
         ("GET", TARGET, "", 405),
-        ("POST", "/query", "", 404),
+        ("POST", "/write", "", 404),
         ("POST", "/api/v2/write?org=x&org=y&bucket=z", "", 400),
         ("POST", "/api/v2/write?orgID=x&bucket=z", "", 400),
         ("POST", "/api/v2/write?org=x&bucket=z&precision=m", "", 400),

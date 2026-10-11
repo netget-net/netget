@@ -20,11 +20,14 @@ none of which shares a line with `codec.rs`:
 | peer | what it is | test |
 |---|---|---|
 | `coap-client` | libcoap 4.3.5, C, a different project | `real_client_test.rs` |
+| `coap-client` again | Observe, Block2 and Block1 | `observe_blockwise_test.rs` |
+| aiocoap 0.4 | Python, its own codec and observation/block-wise state machines (`peer/aiocoap_peer.py`) | `observe_blockwise_test.rs` |
 | `coap` 0.27 | a full Rust UDP client | `e2e_test.rs` |
 | `coap-lite` 0.13 | an independent Rust codec (`coap` is built on it) | `e2e_test.rs`, `bounds_test.rs` |
 
 None is `#[ignore]`d, none has a skip-when-missing gate — `real_client_test.rs::require_coap_client`
-**fails** when libcoap is absent — and both crates are **unconditional** dev-dependencies
+**fails** when libcoap is absent, and `observe_blockwise_test.rs` fails without `coap-client` or
+`NETGET_AIOCOAP_PYTHON` — and both crates are **unconditional** dev-dependencies
 (`[dev-dependencies] coap-lite = "0.13"`, `coap = "0.27"`; neither is `optional = true`), so the
 evidence compiles wherever the suite does. (The line also said "Experimental" once while the
 code said `Beta` — the code was right.) The blocking CI `test` job runs
@@ -65,10 +68,18 @@ Both test crates are dev-dependencies only: `coap-lite` 0.13 (MIT OR Apache-2.0)
 - RST in reply to a malformed CON (§4.2).
 - 4.13 Request Entity Too Large (§5.9.2.9) for a datagram over `codec::MAX_MESSAGE_LEN` — see
   decision 6b.
+- **Observe** (RFC 7641, `observe.rs`, decision 8): registration by a GET with Observe 0 that
+  the model answers 2.xx, deregistration by Observe 1 on the same token, notifications pushed
+  with `coap_notify` (NON, or CON with retransmission), and removal on a RST, on a CON
+  notification never acknowledged, or after `OBSERVER_MAX_AGE` (24 h) unconfirmed.
+- **Block-wise transfer** (RFC 7959, `blockwise.rs`, decision 9): Block2 for a representation
+  over 1024 bytes or whenever the client asks for blocks, every block served from one cached
+  answer with ETag and Size2 (at most `TRANSFER_SERVE_FACTOR`× its length); Block1 reassembled
+  with 2.31 Continue, refused 4.08 out of order, 4.13 with Size1 over `MAX_REPRESENTATION_LEN`,
+  5.03 when `MAX_UPLOADS` are in progress.
 
-**Not implemented**: Observe (RFC 7641), Block-wise transfer (RFC 7959), DTLS / CoAPS on 5684,
-separate (delayed, non-piggybacked) responses, retransmission of Confirmable responses, and
-multicast. `.well-known/core` is not special-cased: the model can serve it, but nothing
+**Not implemented**: DTLS / CoAPS on 5684, separate (delayed, non-piggybacked) responses,
+retransmission of Confirmable responses, and multicast. `.well-known/core` is not special-cased: the model can serve it, but nothing
 generates a link-format listing automatically, because there is no resource registry to list.
 
 ## Architecture decisions
@@ -157,13 +168,14 @@ opposite fixes. It also asserts the refusal is *matchable* — ACK, the request'
 request's token — because a 5.03 a client discards as unsolicited is the silence this path
 exists to replace. Until September 2026 this table was seven rows that nothing checked.
 
-### 6. A response has to fit one datagram, and the bound is on the model's side
+### 6. A representation has a ceiling, and the bound is on the model's side
 
-`codec::MAX_PAYLOAD_LEN` is **1024 bytes** and `decode_payload` enforces it, counting decoded
-bytes so a `hex` payload gets no extra budget. RFC 7252 §4.6 is where the number comes from:
-with the path MTU unknown an endpoint assumes `MAX_MESSAGE_SIZE` of 1152, "leading to a
-maximum payload size of 1024 bytes", and Block-wise transfer (RFC 7959) — the legal way to
-exceed it — is not implemented here.
+`codec::MAX_REPRESENTATION_LEN` is **64 KiB** and `decode_payload` enforces it, counting decoded
+bytes so a `hex` payload gets no extra budget. Until October 2026 this was
+`codec::MAX_PAYLOAD_LEN`, 1024 bytes — RFC 7252 §4.6's payload for an unknown path MTU — because
+without Block-wise transfer a response had to fit one datagram. Block2 now splits anything
+larger (decision 9), so 1024 is the size of one block and the bound is on what the server holds
+while it serves the blocks.
 
 The limitation was documented and unenforced, which is the worse combination. Nothing stopped
 the model returning a 100 KB representation; the oversize datagram then reached `send_to`,
@@ -172,7 +184,7 @@ four times and gave up with no diagnostic on its side. Refusing at `execute_acti
 turns it into a legible error the model can act on (return less), and the existing fail-closed
 path answers 5.03 if it does not.
 `tests/server/coap/e2e_test.rs::test_oversize_payload_is_refused_rather_than_silently_dropped`
-pins the limit, the message, and that exactly 1024 bytes is still accepted.
+pins the limit, the message, and that exactly `MAX_REPRESENTATION_LEN` bytes is still accepted.
 
 ### 6b. …and a request has to fit one too, which is the bound `max_inbound_bytes` declares
 
@@ -225,6 +237,91 @@ latent in a `pub fn` rather than reachable from the wire. `mod.rs::send` answers
 with `decision=fail_closed_encode` and sends nothing, which is the same fail-closed vocabulary
 the rest of the protocol uses.
 
+### 8. Observe: the model decides what is observable and when it changed
+
+A GET with Observe 0 reaches the model as `coap_request {observe: "register"}`. A 2.xx answer
+registers the client (`observe::Observers`, keyed by endpoint and token, RFC 7641 §3.1) unless
+the answer says `observable: false`; the response then carries an Observe sequence number. A
+4.xx/5.xx registers nobody, which is the RFC's own "this resource cannot be observed". Observe
+1 on the same token deregisters before the model is asked, and the model still answers the GET.
+
+The model pushes state with **`coap_notify {path, payload, …}`** — an async action (an operator
+asks for an update) *and* a sync one (a PUT changes what others observe). It reaches the live
+socket through `CoapServerHandle`, registered with `AppState::register_server_handle`, because
+the registry's protocol object is stateless; the stateless `execute_action` validates and then
+refuses, naming `execute_action_with_state`. A 2.xx keeps the observations; any other code goes
+out without Observe and ends them all (§4.2).
+
+An observation also ends on the message layer:
+
+- **RST** in reply to a notification (§3.6). `Observers::record` keeps the last
+  `RECENT_NOTIFICATIONS` (256) message ids so a RST can be matched back to its observer.
+- **A Confirmable notification never acknowledged.** It is resent after
+  `notification_ack_timeout_ms` (default `DEFAULT_NOTIFICATION_ACK_TIMEOUT_MS`, 2000, randomised
+  up to 1.5×, doubling) at most `NOTIFICATION_MAX_RETRANSMIT` (4) times, then the observer is
+  removed (§4.5), `decision=observer_timeout`. The resend task is registered with the server, so
+  stopping the server stops it. A Confirmable notification waiting for its ACK is held in a
+  pending map that is **not** the 256-entry RST window and is never evicted by age or count: it
+  leaves only when acknowledged, reset, superseded by a newer Confirmable notification to the
+  same observer (only the newest is retransmitted, §4.5.2, so there is at most one per
+  observer), settled by its resend task, or with its observer. A notification that fell out of
+  the RST window is therefore still waited for — when the window doubled as the pending list,
+  falling out of it read as "acknowledged" and an observer that never answered was kept, and
+  notified, forever.
+- **Unconfirmed for `OBSERVER_MAX_AGE` (24 h).** A registration is confirmed when it is made or
+  renewed (the same endpoint and token registering again) and when it acknowledges a Confirmable
+  notification. An observer unconfirmed for half that age gets its next notification as
+  Confirmable whatever `coap_notify` asked — RFC 7641 §4.5's "at least every 24 hours" — so a
+  live client renews itself by acknowledging it and a dead or spoofed one runs out of
+  retransmissions. One still unconfirmed at 24 h is removed, `decision=observer_expired`
+  (checked whenever a notification goes out, a registration is made, or the list is read).
+
+A registration is a claim about a UDP source address the server cannot verify, so two caps bound
+it. `MAX_OBSERVERS_PER_IP` (4) per source IP, whatever its ports and tokens
+(`decision=observe_peer_cap_reached`), and `MAX_OBSERVERS` (64) in all
+(`decision=observe_cap_reached`). A registration past either is *served* — the client asked for
+the representation too — without Observe, which tells it it is not registered rather than
+leaving it waiting for notifications that never come. Re-registering a token the endpoint
+already holds replaces it and is never refused.
+
+### 9. Block-wise: the model answers once, whatever the block count
+
+**Block2.** A representation over one block — 1024 bytes, or the smaller size the client asked
+for in its own Block2 — goes out as block 0 with Size2 and an ETag (an FNV-1a hash of format and
+payload, so two answers never share one), and is cached in `blockwise::Transfers` under (peer,
+path, query). Later blocks are served from the cache with no model call
+(`decision=block_cache`); a 64-block transfer costs one turn, and every block comes from the
+same answer. A miss — evicted, expired, or a client that starts at block 3 — is not an error: the
+request goes to the model again as RFC 7959 §2.4's stateless server would, and its answer is
+sliced the same way. A block past the end is 4.02. The cache holds `MAX_TRANSFERS` (32) entries
+for `TRANSFER_TTL` (60 s) and evicts the oldest: eviction costs a model call, never a refusal.
+
+A cache hit is a reply sent without the model to a source address the server cannot verify —
+one model answer, then ~1 KiB per ~20-byte spoofed request at a victim. Two rules bound that.
+**A hit does not renew the entry**: it lives `TRANSFER_TTL` from when it was cached, however often
+it is hit. **Each entry serves at most `TRANSFER_SERVE_FACTOR` (2) times its payload length**,
+counting the block sent when it was cached (a whole transfer is 1×; 2× leaves room for a client
+that retransmits every block once). The block that would pass the budget evicts the entry and
+goes to the model, so one model call buys at most twice the representation.
+
+**Block1.** Blocks are matched by (peer, path, query, method) — not token, which a client may
+change per block — and appended only at the exact offset the body has reached, which is also what
+lets a client lower the block size mid-upload (§2.3). Every block but the last is answered 2.31
+Continue echoing its Block1, with no model call (`decision=upload_continue`); the last carries the
+whole body on to the model as one `coap_request` with `payload_size` and `blocks`, and the answer
+echoes the final Block1. Refusals, each a `decision=refused_upload_*` and none reaching the model:
+4.08 out of order or with no upload in progress, 4.00 for a block whose length is not its size
+while it says more follow, 4.13 with Size1 when Size1 or the body passes
+`MAX_REPRESENTATION_LEN`, 5.03 when `MAX_UPLOADS` (16) are in progress. Unlike a cached
+representation, an upload cannot be evicted for a different peer without losing blocks already
+acknowledged, hence the refusal. One source IP holds at most `MAX_UPLOADS_PER_IP` (2): a new
+upload from an IP already at that cap evicts that IP's least recently advanced upload
+(`decision=upload_evicted_per_ip`), so one address — or one spoofed address — cannot fill the
+table for everyone.
+
+The tables are `std::sync::Mutex`es in `CoapServerHandle`, none held across an `.await`.
+`blockwise.rs` and `observe.rs` are pure and take `now`, so their rules need no clock to test.
+
 ## LLM integration
 
 ### Events
@@ -241,7 +338,10 @@ One event, `coap_request`, emitted for every well-formed GET/POST/PUT/DELETE. It
 | `message_id` | informational; echoed automatically |
 | `content_format` | media type of the request body, when declared |
 | `accept` | media type the client asked for, when it sent an Accept option |
-| `payload` / `payload_encoding` | request body, `utf8` when all bytes are printable, otherwise `hex` |
+| `payload` / `payload_encoding` | request body, `utf8` when all bytes are printable, otherwise `hex`; a Block1 upload arrives here whole |
+| `payload_size` | body length in bytes, when there is a body |
+| `blocks` | how many Block1 blocks the body came in; absent for a single message |
+| `observe` | `register` (a GET with Observe 0: a 2.xx answer registers the client) or `deregister` (Observe 1: already removed); absent otherwise |
 | `answer_with` | the answer this request takes (`actions::answer_with_for_request`): look the path up in the instructions; if they give the device nothing there, the literal `{"type": "send_coap_response", "code": "4.04"}`; if they do, the method's success code and, for a GET, the representation character for character |
 
 **Why `answer_with` exists, and why it is worded the way it is.** The code table in
@@ -266,39 +366,47 @@ rather than a plausible reading, and the description says so.
 
 ### Actions
 
-- `send_coap_response { code, payload?, encoding?, content_format? }` — `code` is written
-  `class.detail` (`"2.05"`, `"4.04"`, `"5.03"`); class must be 2, 4 or 5. The decoded payload
-  must be at most 1024 bytes. `content_format` absent, `null` or `""` means none for an empty
-  payload and text/plain for a non-empty one; any other unrecognised media type is refused.
+- `send_coap_response { code, payload?, encoding?, content_format?, observable? }` — `code` is
+  written `class.detail` (`"2.05"`, `"4.04"`, `"5.03"`); class must be 2, 4 or 5. The decoded
+  payload must be at most `MAX_REPRESENTATION_LEN` (64 KiB); over 1024 bytes it goes out in
+  Block2 blocks. `content_format` absent, `null` or `""` means none for an empty payload and
+  text/plain for a non-empty one; any other unrecognised media type is refused. `observable`
+  (default true) only matters for an `observe: register` request: false serves it without
+  registering.
+- `coap_notify { path, payload?, encoding?, content_format?, code?, confirmable? }` — sync and
+  async. Pushes to every observer of `path`; `code` defaults to 2.05 and a 4.xx/5.xx ends the
+  observations; `confirmable` (default false) sends CON with retransmission. Validated by the
+  same helpers as `send_coap_response`, executed only through `execute_action_with_state`.
+  Answers `coap_notified {observers_notified, observations_ended}`.
 - `send_coap_reset {}` — RST. For a message the device cannot make sense of at all, not for
   "not found".
 - `ignore_coap_request {}` — send nothing, modelling a sleeping or unreachable node.
 
 ## Startup parameters
 
-**None.** `get_startup_parameters()` is not overridden, so there is nothing declared and nothing
-read — no dead parameter for the model to reach for.
+One: `notification_ack_timeout_ms` (default `DEFAULT_NOTIFICATION_ACK_TIMEOUT_MS`, 2000, range
+100-60000) — RFC 7252's ACK_TIMEOUT for Confirmable notifications. Read in `spawn`, refused
+outside its range, and declared with the constant as its default.
 
-## Why `.connectionless()` is right here
+## Why `.connectionless()` is still right here
 
 The test is not "is it UDP" but "has it a connection concept" — declaring `.connectionless()`
 on a UDP protocol that carries a *transfer* is actively harmful, because the 10-second idle
 sweep then evicts a live transfer that is merely waiting on an LLM call (TFTP had exactly
-that). CoAP as implemented here has no session: Observe and Block-wise are the two features
-that would give it one and neither exists, so a datagram is answered and forgotten, and the
-per-datagram connection entry is genuinely disposable. The one visible consequence is that a
+that). Observe and Block-wise *do* give CoAP state that outlives a datagram, and that is
+exactly why none of it lives in a connection entry: observers, cached representations and
+uploads are tables in `CoapServerHandle`, keyed by the peer's address and the resource, with
+their own caps and TTLs (decisions 8 and 9). Every datagram still gets a fresh, disposable
+connection entry, and the sweep removing one touches none of the tables — an observer keeps
+the id of the entry its registration made only to attribute byte counts. The one visible consequence is that a
 request parked longer than 10 seconds can have its sent-byte counter land on an entry the
 sweep already removed; nothing about the reply itself depends on it.
 
 ## Known limitations
 
-1. **No Observe, no Block-wise.** Every message therefore has to fit one datagram, in both
-   directions: a request is capped at `codec::MAX_MESSAGE_LEN` (1152, decision 6b) and a
-   response payload at `codec::MAX_PAYLOAD_LEN` (1024, decision 6). This entry used to say that
-   an over-large request "is truncated by the kernel and then fails to decode, which produces an
-   RST for a CON" — that was the behaviour when nothing bounded the inbound path; it is now a
-   4.13 decided from the length, and truncation cannot disguise it because the buffer is larger
-   than the bound.
+1. **One datagram is still at most 1152 bytes** (decision 6b); a body larger than a block has to
+   come as Block1 blocks, and a client that sends one oversize datagram instead gets 4.13. This
+   entry used to say Observe and Block-wise were missing; both were added in October 2026.
 2. **No DTLS**, so no CoAPS on 5684.
 3. **Only piggybacked responses.** A slow model still answers in the ACK rather than sending an
    empty ACK followed by a separate CON, so a client with a short ACK_TIMEOUT (2s by default)
@@ -306,9 +414,12 @@ sweep already removed; nothing about the reply itself depends on it.
    matters.
 4. **No deduplication cache.** A retransmitted CON produces a second event and a second LLM
    call. RFC 7252 §4.5 permits re-processing an idempotent request; it is still a cost.
-5. **`get_async_actions()` is empty**, because a plain CoAP server has nothing to say
-   unprompted. Unsolicited notification is exactly what Observe is for, and it is not
-   implemented.
+5. **Notifications match the observed path only.** An observer registered on `/temp?unit=C`
+   gets every `coap_notify` for `/temp`; the query is kept only to find its cached Block2
+   representation. Accept is not compared either — the model is told what each observer asked
+   for at registration and is trusted to notify in that format.
+6. **Observe sequence numbers are one counter for the whole server.** RFC 7641 §4.4 needs only
+   that one observer's notifications increase, which a shared 24-bit counter gives.
 
 ## Example prompts
 
@@ -369,11 +480,21 @@ condition's letter is inapplicable; its reason is satisfied.
 
 ### What Stable does *not* mean here
 
-It means the evidence for the surface this server implements is complete. The surface is a
-subset of RFC 7252: **no Observe (RFC 7641), no Block-wise transfer (RFC 7959), no DTLS/CoAPS,
-no separate responses, no deduplication cache.** All three peers drive the same one-datagram
-request/response shape because it is the only shape there is. An IoT client that needs Observe
-cannot use this server, and nothing here says otherwise.
+It means the evidence for the surface this server implements is complete. The surface is
+RFC 7252 with Observe (RFC 7641) and Block-wise transfer (RFC 7959), and without DTLS/CoAPS,
+separate responses or a deduplication cache.
+
+**Observe and Block-wise were added in October 2026 and carry the six conditions on their own
+surface**, not the original evidence stretched over them:
+
+| # | condition | for Observe and Block-wise |
+|---|---|---|
+| 1 | two independent clients | libcoap's `coap-client` and **aiocoap** 0.4 (Python, its own codec and state machines) each observe and receive `coap_notify` pushes, reassemble a 3000-byte Block2 representation byte for byte, and upload 3000 bytes as Block1 — `observe_blockwise_test.rs`, neither able to skip |
+| 2 | pcap oracle | every exchange in `observe_blockwise_bounds_test.rs` — Observe, Block1, Block2, Size1, Size2, ETag, 2.31, 4.08, 4.13, RST — is read by tshark's dissector |
+| 3 | fuzz target | `coap_message.rs` reads Observe, Block1 and Block2 from every decoded message and requires a parsed Block value to survive its own encoder; the corpus seeds a registration, a Block1 PUT, a Block2 GET and the reserved SZX 7 |
+| 4 | every bound tested | `MAX_OBSERVERS_PER_IP`, `MAX_UPLOADS_PER_IP`, `TRANSFER_SERVE_FACTOR`, `MAX_TRANSFERS`, `MAX_REPRESENTATION_LEN` both directions, Block1 order and size, Block2 past the end, RST removal, `NOTIFICATION_MAX_RETRANSMIT` (also past the `RECENT_NOTIFICATIONS` window) — `observe_blockwise_bounds_test.rs`, on the wire; `MAX_OBSERVERS`, `MAX_UPLOADS`, `OBSERVER_MAX_AGE`, and the TTL a hit does not renew — `observe_blockwise_table_test.rs`, at the table, because loopback has too few source IPs for the shared caps and the clock rules are a minute and a day long; the cache, the upload cap and the registration's Observe option were each removed and the tests failed |
+| 5 | both `AGENTS.md` re-verified | this file and `tests/server/coap/AGENTS.md`, rewritten with the code |
+| 6 | no `#[ignore]`, no skip gate | unchanged |
 
 The `openvpn` precedent is the one to check this against, and it does not apply: openvpn stays
 Experimental because it implements only the front of the protocol, so *no client can use it for
@@ -382,17 +503,14 @@ both directions, with the bytes asserted.
 
 ## NetGet's CoAP client shares `codec.rs`
 
-`src/client/coap/` encodes and decodes with this module's `CoapMessage`. The client implements
-what this server does not — Observe registration and cancellation, Block2 reassembly,
-Confirmable retransmission, separate responses and deduplication — with the extra option numbers
-kept on the client side, so nothing in this file's surface changed. Pointed at this server the
-client simply never sees a Block2 or Observe option, and a `coap_observe` is answered as a
-plain GET (`observing: false`). Its evidence is libcoap's `coap-server`, not this server; see
-`tests/client/coap/AGENTS.md`.
+`src/client/coap/` encodes and decodes with this module's `CoapMessage`, and since October 2026
+with its option numbers and `BlockValue` too. The client also implements what this server does
+not — Confirmable retransmission, separate responses and deduplication. Its evidence is
+libcoap's `coap-server` and aiocoap, never this server; see `tests/client/coap/AGENTS.md`.
 
 ## References
 
 - [RFC 7252: The Constrained Application Protocol (CoAP)](https://datatracker.ietf.org/doc/html/rfc7252)
-- [RFC 7641: Observing Resources in CoAP](https://datatracker.ietf.org/doc/html/rfc7641) — not implemented
-- [RFC 7959: Block-Wise Transfers in CoAP](https://datatracker.ietf.org/doc/html/rfc7959) — not implemented
-- [coap-lite](https://docs.rs/coap-lite) / [coap](https://docs.rs/coap) — the test peers, not runtime dependencies
+- [RFC 7641: Observing Resources in CoAP](https://datatracker.ietf.org/doc/html/rfc7641)
+- [RFC 7959: Block-Wise Transfers in CoAP](https://datatracker.ietf.org/doc/html/rfc7959)
+- [coap-lite](https://docs.rs/coap-lite) / [coap](https://docs.rs/coap) / [aiocoap](https://aiocoap.readthedocs.io) — the test peers, not runtime dependencies

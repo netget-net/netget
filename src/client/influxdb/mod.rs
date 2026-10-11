@@ -1,4 +1,5 @@
 pub mod actions;
+pub mod query;
 pub mod transport;
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::protocol::{ConnectContext, Event};
@@ -16,7 +17,8 @@ pub const MAX_QUEUED_EVENTS: usize = 32;
 pub const MAX_HANDLER_ACTIONS: usize = 32;
 pub const MAX_FOLLOWUP_DEPTH: usize = 8;
 type Handler = Pin<Box<dyn Future<Output = Result<crate::llm::ClientLlmResult>> + Send>>;
-type Exchange = Pin<Box<dyn Future<Output = Result<transport::WriteResponse>> + Send>>;
+/// One HTTP exchange, a write or a query, ending in the event that reports it.
+type Exchange = Pin<Box<dyn Future<Output = Result<Event>> + Send>>;
 struct Inflight {
     exchange: Exchange,
     command: Option<ClientCommand>,
@@ -91,7 +93,7 @@ impl InfluxDbClient {
         let id = ctx.client_id;
         console_info!(
             ctx.status_tx,
-            "InfluxDB HTTP write session ready for {}",
+            "InfluxDB HTTP session ready for {}",
             origin.authority
         );
         let task = tokio::spawn(async move {
@@ -118,7 +120,7 @@ impl InfluxDbClient {
                 if pending.is_none() {
                     if let Some((action, depth)) = actions.pop_front() {
                         match prepare(&protocol, action, depth, &origin, &token) {
-                            Ok(Prepared::Write(exchange)) => {
+                            Ok(Prepared::Exchange(exchange)) => {
                                 pending = Some(Inflight {
                                     exchange,
                                     command: None,
@@ -139,18 +141,17 @@ impl InfluxDbClient {
                     result = async { pending.as_mut().unwrap().exchange.as_mut().await }, if pending.is_some() => {
                         let p = pending.take().unwrap();
                         match result {
-                            Ok(response) => {
+                            Ok(event) => {
                                 if let Some(command) = p.command {
                                     finish(&ctx, command, Ok(ClientSendOutcome::Executed {
-                                        detail: format!("InfluxDB HTTP {}", response.status),
+                                        detail: format!("InfluxDB HTTP {}", event.data["status"]),
                                     })).await;
                                 }
                                 if events.len() == MAX_QUEUED_EVENTS {
                                     console_error!(ctx.status_tx, "InfluxDB response-event queue limit");
                                     break;
                                 }
-                                events.push_back((Event::new(&actions::INFLUX_RESPONSE_EVENT,
-                                    serde_json::to_value(response).unwrap_or(Value::Null)), p.depth));
+                                events.push_back((event, p.depth));
                             }
                             Err(error) => {
                                 if let Some(command) = p.command {
@@ -186,11 +187,11 @@ impl InfluxDbClient {
                                 finish(&ctx, command, Ok(ClientSendOutcome::Disconnected)).await;
                                 break 'session;
                             }
-                            Ok(Prepared::Write(exchange)) if pending.is_none() => {
+                            Ok(Prepared::Exchange(exchange)) if pending.is_none() => {
                                 pending = Some(Inflight { exchange, command: Some(command), depth: 0 });
                             }
-                            Ok(Prepared::Write(_)) => finish(&ctx, command, Ok(ClientSendOutcome::Rejected {
-                                error: "One write is already in flight".into(),
+                            Ok(Prepared::Exchange(_)) => finish(&ctx, command, Ok(ClientSendOutcome::Rejected {
+                                error: "One request is already in flight".into(),
                             })).await,
                             Err(error) => finish(&ctx, command, Ok(ClientSendOutcome::Rejected {
                                 error: error.to_string(),
@@ -205,7 +206,7 @@ impl InfluxDbClient {
                     finish(
                         &ctx,
                         command,
-                        Err(anyhow::anyhow!("InfluxDB write cancelled")),
+                        Err(anyhow::anyhow!("InfluxDB request cancelled")),
                     )
                     .await;
                 }
@@ -222,7 +223,7 @@ impl InfluxDbClient {
 }
 enum Prepared {
     Disconnect,
-    Write(Exchange),
+    Exchange(Exchange),
 }
 fn prepare(
     protocol: &InfluxDbClientProtocol,
@@ -237,12 +238,27 @@ fn prepare(
             anyhow::ensure!(depth <= MAX_FOLLOWUP_DEPTH, "write follow-up depth limit");
             let batch: WriteBatch = serde_json::from_value(data).context("invalid typed write")?;
             let body = codec::encode_batch(&batch)?;
-            Ok(Prepared::Write(Box::pin(transport::write(
-                origin.clone(),
-                token.clone(),
-                batch,
-                body,
-            ))))
+            let exchange = transport::write(origin.clone(), token.clone(), batch, body);
+            Ok(Prepared::Exchange(Box::pin(async move {
+                let response = exchange.await?;
+                Ok(Event::new(
+                    &actions::INFLUX_RESPONSE_EVENT,
+                    serde_json::to_value(response)?,
+                ))
+            })))
+        }
+        ClientActionResult::Custom { name, data } if name == actions::QUERY_RESULT => {
+            anyhow::ensure!(depth <= MAX_FOLLOWUP_DEPTH, "query follow-up depth limit");
+            let spec: query::QuerySpec = serde_json::from_value(data).context("invalid query")?;
+            spec.validate()?;
+            let exchange = query::query(origin.clone(), token.clone(), spec);
+            Ok(Prepared::Exchange(Box::pin(async move {
+                let response = exchange.await?;
+                Ok(Event::new(
+                    &actions::INFLUX_QUERY_RESPONSE_EVENT,
+                    serde_json::to_value(response)?,
+                ))
+            })))
         }
         _ => anyhow::bail!("unsupported InfluxDB action result"),
     }

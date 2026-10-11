@@ -2,14 +2,19 @@
 
 ## Overview
 
-DNS (Domain Name System) server implementing RFC 1035 standard for domain name resolution. The LLM can respond to
-queries with A, AAAA, CNAME, MX, TXT records, and NXDOMAIN responses using structured actions.
+DNS (Domain Name System) server implementing RFC 1035 over UDP and TCP (RFC 7766), with EDNS0
+(RFC 6891), zone transfers (AXFR RFC 5936, IXFR RFC 1995) and DNSSEC signing of one zone
+(RFC 4033-4035). The model answers with structured actions — single records, any number of
+records of nine types, refusals, whole zones and their differences — and the server owns the
+protocol around them: EDNS, truncation, transfer framing, keys, signatures and NSEC.
 
 **Status**: **Stable**, set 16 September 2026. See "Maturity: the six conditions"
 at the foot of this file for what was checked and what the rating does *not*
 cover.
-**RFC**: RFC 1035 (Domain Names), RFC 3596 (AAAA), RFC 1034 (Concepts)
-**Port**: 53 (UDP), declared as `PrivilegeRequirement::PrivilegedPort(53)`
+**RFC**: RFC 1035 (Domain Names), RFC 3596 (AAAA), RFC 1034 (Concepts), RFC 7766 (TCP),
+RFC 6891 (EDNS0), RFC 5936 (AXFR), RFC 1995 (IXFR), RFC 4033-4035 (DNSSEC), RFC 9824 (compact
+denial)
+**Port**: 53, UDP and TCP on the same port, declared as `PrivilegeRequirement::PrivilegedPort(53)`
 
 ### What "Stable" covers here
 
@@ -20,11 +25,12 @@ CNAME, MX, TXT — plus NXDOMAIN is decoded by **two** independent resolvers, an
 one query is run the way a person actually runs `dig`, with EDNS offered and no
 flags.
 
-Not covered, because not implemented: TCP transport, EDNS0, DNSSEC, multi-record
-answers, and truncation with the TC bit (see Limitations). This section used to
-say record types "outside A/AAAA/CNAME/MX/TXT" were uncovered, which read as
-though those five were — three of them were not decoded by anything independent
-until this pass.
+**Since October 2026 it also covers TCP, EDNS0 with truncation, zone transfers and
+DNSSEC**, each on its own evidence (see "TCP, EDNS, transfers and DNSSEC" below): `dig` and
+`kdig` transfer, truncate-and-retry and decode every record type `send_dns_records` writes;
+`delv` and `drill` validate signed answers; `ldns-verify-zone` and BIND's `dnssec-verify`
+verify a whole signed zone received by AXFR. Until then this paragraph listed all five as
+not implemented.
 
 E2E coverage lives in `tests/server/dns/`: `test.rs` (note: `test.rs`, not
 `e2e_test.rs` as most protocols use), `dig_test.rs`, `kdig_test.rs`,
@@ -77,12 +83,16 @@ Each action includes required fields (query_id, domain, record data) and optiona
 
 ### 2. Stateless Request-Response
 
-DNS is connectionless UDP protocol:
+Each query is answered on its own, over UDP or TCP:
 
-- Each query is independent
-- No connection state maintained
-- "Connection" in UI represents recent queries from same client
+- Each query is independent; a TCP connection is only a framing of several
+- No state between queries but the signing key
+- "Connection" in UI is one UDP query, or one TCP connection
 - Query ID from client packet must be echoed in response
+
+The server keeps `.connectionless()`: the 10-second sweep can drop a TCP connection's UI entry
+while the connection waits, but nothing the connection does depends on the entry, and its
+own idle timeout (decision 6) is what closes it.
 
 ### 2b. Responses Echo the Question Section
 
@@ -140,6 +150,61 @@ Each DNS query creates a "connection" entry in ServerInstance:
   via `AppState::update_connection_stats` after the response goes out)
 - Status: Immediately active, no persistent state
 
+### 6. TCP, EDNS, transfers and DNSSEC (October 2026)
+
+**One answer path, two transports.** `mod.rs::answer` parses the query and decides; the UDP
+loop sends its first message, the TCP loop (`tcp_connection`) frames every message with a
+two-byte length (RFC 1035 §4.2.2) and answers queries on a connection in order. TCP binds the
+port UDP got, so `port: 0` yields one port for both. A connection is closed after
+`tcp_idle_timeout_secs` (default `DEFAULT_TCP_IDLE_TIMEOUT`, 10 s) with no query, and past
+`MAX_TCP_CONNECTIONS` (64) a new one is closed unread (`decision=fail_closed_connection_cap`).
+One address may hold at most `MAX_TCP_CONNECTIONS_PER_IP` (8, `tcp_connections_per_ip` 1-64)
+of them — IPv6 counted per /64, an IPv4-mapped address as its IPv4 address — and one more from
+it is closed unread too (`decision=fail_closed_per_source_cap`). Without it one host could hold
+every slot, cheaply, since some messages are answered without the model.
+
+**What happens after the model answers** (`Reply::finish`), in order:
+
+1. **DNSSEC**, when `dnssec_zone` names a zone covering the question and the query set DO:
+   every in-zone RRset in the three sections gets an RRSIG; a negative answer (NXDOMAIN, or
+   NOERROR with no answers) gets the zone's SOA if the model gave none, plus a compact-denial
+   NSEC at the queried name (next name `\000.<qname>`, types RRSIG and NSEC), and NXDOMAIN
+   becomes NOERROR — the documented cost of compact denial.
+2. **EDNS**: a query with an OPT gets one back advertising `EDNS_UDP_SIZE` (1232) and echoing
+   DO; a query without one never does (RFC 6891 §6.1.1).
+3. **Truncation**: over UDP, an answer larger than the client can take — 512 bytes without
+   EDNS, its advertised size with, never more than `MAX_UDP_RESPONSE` (4096) — is replaced by
+   header, question and OPT with TC set (`decision=truncated`), and the client retries over TCP.
+
+**Zone transfers** raise `dns_zone_transfer {query_id, zone, transfer_type, client_serial,
+transport, signed, client_ip, client_port}` — the client's serial comes from the SOA in its
+query's authority section, never from the model, and its address is in the event data so the
+instructions' "only to these clients" is a decision the model can make (there is no ACL in the
+server; see Known Limitations). AXFR over UDP is NOTIMP without asking (RFC 5936 §4.2). The
+model answers with `send_dns_zone` (the whole zone; also a legal answer to IXFR),
+`send_dns_ixfr` (changes since the client's serial, or none for "current"), or
+`send_dns_refused`. Neither transfer action builds wire bytes — a zone does not fit one
+message — so the executor validates and hands back the action, and `transfer.rs` builds the
+RFC sequence and cuts it into messages of about `TRANSFER_MESSAGE_BYTES` (16 KiB). Over UDP
+`send_dns_zone` is **always** answered with the SOA alone (RFC 1995 §2's "ask again over
+TCP", `decision=udp_soa_only`), however small the zone: a UDP source address can be forged,
+so a full zone is never sent to one. A `send_dns_ixfr` difference goes over UDP when it fits,
+and is replaced by the new SOA alone when it does not.
+
+**Signing a zone** (`dnssec.rs`): one ECDSA P-256 key (algorithm 13) generated at startup,
+flags 257, acting as KSK and ZSK — RFC 6781's single-type signing. The server answers the
+zone's DNSKEY query itself (`decision=spec_reply`). An AXFR of the signed zone carries the
+DNSKEY, a full NSEC chain over every owner name in canonical order, and an RRSIG for every
+RRset; delegations (NS below the apex) are refused, because their glue would need to stay
+unsigned. A signed zone's IXFR may be "current" but not a difference — a difference would
+carry no signatures — so a `send_dns_ixfr` with changes fails closed to SERVFAIL.
+Signatures run from an hour before signing to seven days after; the key lives as long as the
+server, so a validator's trust anchor is built from the DNSKEY it serves.
+
+`records.rs` is the record shape every new action shares — A, AAAA, CNAME, NS, PTR, MX, TXT
+(a string or an array of up to-255-octet strings), SRV and SOA, names absolute, relative to a
+zone, or `@` — and the reason NS, SOA, PTR and SRV no longer need `send_dns_response`.
+
 ## LLM Integration
 
 ### Event Type
@@ -151,6 +216,15 @@ Event parameters:
 - `query_id` (number) - DNS transaction ID from request packet
 - `domain` (string) - Domain name being queried
 - `query_type` (string) - Record type (A, AAAA, MX, TXT, CNAME, etc.)
+- `transport` (string) - `udp` or `tcp`, informational
+- `dnssec_ok` (boolean) - the DO bit, informational: signing is the server's
+- `client_ip` (string), `client_port` (number) - where the query came from; over UDP
+  unauthenticated
+
+**`dns_zone_transfer`** - an AXFR or IXFR, carrying `client_ip` and `client_port` like
+`dns_query`; see architecture decision 6. Its actions are
+`send_dns_zone`, `send_dns_ixfr`, `send_dns_refused` and `ignore_query` (which, on TCP,
+sends nothing and keeps the connection).
 
 ### Available Actions
 
@@ -224,10 +298,31 @@ Parameters:
 - `query_type` (optional, default: `A`) - echoed in the question section so the
   client can match the (answer-less) response to its query
 
+#### `send_dns_records`
+
+Any number of records (at most `MAX_ANSWER_RECORDS`, 100) in the answer, authority and
+additional sections, with any RCODE (NOERROR by default, NXDOMAIN, REFUSED, SERVFAIL, NOTIMP,
+FORMERR). Types A, AAAA, CNAME, NS, PTR, MX, TXT, SRV, SOA in the shared shape of
+`records.rs`; an answer record without `name` takes the queried domain.
+
+#### `send_dns_refused`
+
+REFUSED, echoing the question — the answer to a transfer the instructions do not allow.
+
+#### `send_dns_zone` / `send_dns_ixfr`
+
+Zone-transfer answers; see architecture decision 6. Offered only on `dns_zone_transfer`, and
+not forwarded to DoH, DoT or DoQ, which take `DnsProtocol::query_actions()`.
+
 #### `send_dns_response` (Escape hatch)
 
 Send a complete, hand-assembled DNS response message, hex-encoded. Intended only
-for record types with no dedicated action (NS, SOA, PTR, SRV, CAA, ...).
+for record types neither a dedicated action nor `send_dns_records` writes (CAA, NAPTR, ...).
+The bytes are parsed and go out re-encoded through the same finish as every other answer
+(OPT for an EDNS query, signing, UDP truncation). Bytes that do not parse as a DNS message are
+never sent: the query is answered SERVFAIL (`decision=fail_closed_unparseable_answer`, ERROR).
+Sent as given they skipped truncation, and over TCP a message past 65535 octets wrapped its
+two-byte length prefix.
 
 - `data` must be valid hex and at least 12 bytes (a DNS header). Invalid hex is
   rejected with an error. There is no plain-text fallback: the earlier behaviour
@@ -270,19 +365,20 @@ Don't send any response to this query.
 
 ### Connection Lifecycle
 
-1. **Query Received**: UDP datagram arrives on port 53
-2. **Register**: New ConnectionId created for this query
+1. **Query Received**: a UDP datagram, or a TCP connection accepted, on port 53
+2. **Register**: New ConnectionId created for this query (UDP) or this connection (TCP)
 3. **Track**: Added to ServerInstance.connections with:
     - `ProtocolConnectionInfo::empty()`
     - bytes_received, packets_received = 1
 4. **Process**: Parse query, dispatch through `call_llm` (which first tries any
    configured script/static event handler and only falls back to a model call if
    none matches), execute action
-5. **Respond**: Send UDP response
+5. **Respond**: Send the UDP response, or every framed message of a TCP answer
 6. **Update**: Track bytes_sent, packets_sent
 7. **Persist**: Connection remains in UI to show recent activity
 
-Note: DNS has no persistent connections. Each query-response is independent.
+Note: over UDP each query-response is independent; over TCP a connection lasts until the
+peer closes it or it is idle for `tcp_idle_timeout_secs`.
 
 ## Bounds
 
@@ -297,12 +393,21 @@ with the bound removed — a bound nobody tested is a comment.
 | MX `preference` | 0-65535 | `execute_send_dns_mx_response` | the executor |
 | raw message floor | 12 octets | `execute_send_dns_response` | the executor |
 | TXT character-string | 255 octets | `MAX_CHARACTER_STRING_LEN` | the executor |
+| open TCP connections | 64 | `MAX_TCP_CONNECTIONS` | `transport_bounds_test.rs`: the 65th is closed unread |
+| open TCP connections per address | 8, `tcp_connections_per_ip` 1-64 | `MAX_TCP_CONNECTIONS_PER_IP` | `security_test.rs`: the 9th from 127.0.0.1 is closed unread |
+| full zone over UDP | the SOA alone | `build_axfr` | `security_test.rs`: a zone that fits is still not sent |
+| model-supplied bytes | must parse as DNS, else SERVFAIL | `query`, `transfer` | `security_test.rs`: 12 and 70 012 unparseable bytes, UDP and TCP |
+| TCP idle | 10 s, `tcp_idle_timeout_secs` 1-300 | `DEFAULT_TCP_IDLE_TIMEOUT` | `transport_bounds_test.rs` at 1 s |
+| UDP answer | 512 / EDNS size / at most 4096 | `PLAIN_UDP_LIMIT`, `MAX_UDP_RESPONSE` | `transport_bounds_test.rs` |
+| records in one answer | 100 | `MAX_ANSWER_RECORDS` | the executor |
+| records in one transfer | 10 000 | `transfer::MAX_ZONE_RECORDS` | the executor |
+| transfer message | ~16 KiB | `transfer::TRANSFER_MESSAGE_BYTES` | `split_into_messages` directly |
 
 **DNS declares no `max_inbound_bytes`**, and that is deliberate rather than an
 omission: it is a "fixed-size read" entry in
-`tests/max_inbound_bytes_declaration_test.rs`'s baseline, on the reason "single
-`recv_from` into a fixed 4096-byte buffer; no TCP path exists". The allocation is
-a compile-time constant, so a declaration would be a knob that does nothing.
+`tests/max_inbound_bytes_declaration_test.rs`'s baseline. Over UDP the allocation is a
+compile-time constant; over TCP the two-byte length prefix is the ceiling (65535), which
+that file calls a structural bound. Neither has a constant a declaration could move.
 
 What the buffer guarantees is weaker than a refusal and is worth stating
 plainly: `recv_from` discards whatever does not fit, so an over-large datagram is
@@ -314,32 +419,31 @@ contain a complete question section.
 
 ## Known Limitations
 
-### 1. UDP Only
+### 1. DNSSEC is one zone, one key, NSEC
 
-- No TCP support (RFC 1035 specifies TCP for large responses), so a client that
-  retries over TCP after a truncated answer gets nothing
-- The receive buffer is 4096 bytes, which accommodates EDNS0-sized queries
-- EDNS0 itself is not implemented: the OPT record in a query is ignored and no
-  OPT record is added to responses
-- Oversized responses are not truncated with the TC bit set; they are simply sent
+- One `dnssec_zone` per server, signed with one ECDSA P-256 key acting as KSK and ZSK.
+  `dnssec-verify` is run with `-z` for that reason.
+- NSEC only: no NSEC3. Negative answers use compact denial, so NXDOMAIN reads as NOERROR.
+- No delegations in a signed zone, and no DS for a child.
+- The key lives as long as the process; a restart is a key rollover with no overlap.
 
-### 2. Single Answer Per Response
+### 2. Transfers trust whoever asks the model
 
-- Current action design returns one record per response
-- No support for multiple A records in single response
-- Workaround: Use `send_dns_response` with custom hex packet
+- There is no TSIG and no ACL in the server: whether a client may transfer a zone is the
+  model's decision (`send_dns_refused`), as everything else is. The event names the client's
+  address (`client_ip`, `client_port`) so the instructions can say who is allowed; over UDP
+  that address is unauthenticated, which is why a full zone never goes over UDP.
+- A signed zone answers IXFR only with the full zone or "current".
 
-### 3. No DNSSEC
+### 3. `send_dns_response` is checked only for being a DNS message
 
-- No cryptographic signatures
-- No RRSIG, DNSKEY, DS, NSEC records
-- Pure RFC 1035 implementation
+- Its hand-assembled bytes must parse, and are re-encoded, signed and truncated like any other
+  answer; nothing checks that they answer the question asked (the transaction ID and question
+  section are the caller's).
 
-### 4. Limited Record Types
+### 4. No DNS COOKIEs (RFC 7873)
 
-Actions support: A, AAAA, CNAME, MX, TXT, NXDOMAIN
-Missing: NS, SOA, PTR, SRV, NAPTR, CAA, and others
-Workaround: Use `send_dns_response` for unsupported types
+- A COOKIE option in a query is ignored and none is returned.
 
 ### 5. No Zone File Support
 
@@ -541,6 +645,22 @@ The root `AGENTS.md` defines `Stable` as six conditions. Re-derived against sour
 | 5 | both `AGENTS.md` files verified against source in this pass | **yes** — this file and `tests/server/dns/AGENTS.md` |
 | 6 | no `#[ignore]`, no skip-when-missing gate | **yes** — `grep -rn '#\[ignore\]' tests/server/dns/` is empty |
 
+**The October 2026 surface — TCP, EDNS, transfers, DNSSEC — holds the same six on its own
+evidence:**
+
+| # | condition | for TCP, EDNS, transfers and DNSSEC |
+|---|---|---|
+| 1 | two independent clients | `dig` and `kdig` (`transfer_test.rs`): AXFR of 611 records in two messages, IXFR difference and "current", TC and the retry over TCP, the OPT record, NS/SOA/SRV/PTR. For DNSSEC two validators and two zone verifiers (`dnssec_test.rs`): `delv` (positive, NXDOMAIN, NODATA, all "fully validated") and `drill` ("Chase successful"); `ldns-verify-zone` ("Zone is verified and complete") and `dnssec-verify -z`. Each fails rather than skips |
+| 2 | pcap oracle | `transport_bounds_test.rs` hands every UDP and TCP exchange to tshark |
+| 3 | fuzz target | `dns_message.rs` also reads the OPT and the authority SOA, with two new seeds; the crate compiles, and the target body ran clean over 2M mutated inputs on stable (no nightly where it was written) |
+| 4 | every bound tested | the Bounds table; the TCP cap, the UDP cap, the answer RRSIGs and the NSEC chain were each removed and a test failed |
+| 5 | both `AGENTS.md` | rewritten with the code |
+| 6 | no ignore, no skip | unchanged |
+
+`dig_test.rs` and `kdig_test.rs` still pass `+noedns`; they predate EDNS here, and the point
+they make — the original record types decode — does not depend on it. `transfer_test.rs` runs
+with EDNS on.
+
 **Two things about condition 1 were checked in this pass rather than assumed, because on the
 face of it they were the reasons to withhold the rating.**
 
@@ -566,11 +686,10 @@ record and the requestor treats the response as coming from a non-EDNS server, a
 
 ### What Stable does *not* mean here
 
-It means the evidence for the implemented surface is complete. The surface is plain UDP DNS
-with one record per answer: **no EDNS0, no TCP, no DNSSEC, no zone transfers, no multi-record
-answers, no TC-bit truncation** — an oversize response is sent rather than truncated. Those are
-whole features, each listed above and in Limitations, and nothing here says a client that needs
-one of them is served.
+It means the evidence for the implemented surface is complete. Until October 2026 that surface
+was plain UDP DNS with one record per answer; it is now UDP and TCP with EDNS0, truncation,
+multi-record answers, AXFR/IXFR and DNSSEC for one zone. What it still is not — NSEC3, several
+signed zones, a split KSK/ZSK, delegations under signing, TSIG, COOKIEs — is in Limitations.
 
 The `openvpn` precedent is the one to check this against, and it does not apply: openvpn stays
 Experimental because it implements only the front of the protocol, so no client can use it for

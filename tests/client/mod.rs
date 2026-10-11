@@ -416,6 +416,8 @@ pub mod pulsar;
 pub mod radsec;
 #[cfg(feature = "rcon")]
 pub mod rcon;
+#[cfg(feature = "rdp-client")]
+pub mod rdp;
 #[cfg(feature = "restconf")]
 pub mod restconf;
 #[cfg(feature = "rsync")]

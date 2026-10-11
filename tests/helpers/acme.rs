@@ -134,7 +134,9 @@ pub(crate) fn peer(var: &str) -> String {
     std::env::var(var).unwrap_or_else(|_| panic!("{var} must be set from tests/server/acme/install_peers.py (lego 4.35.2, Pebble 2.10.1, certbot 5.8.0); this evidence never skips"))
 }
 
-/// A free loopback port.
+/// A free loopback port. The port is released before it is returned, so a caller that must
+/// keep it from Pebble's own port probing (the client's http-01 listener) holds a listener
+/// instead; the server ACME tests and the SNMP client test use this.
 pub(crate) fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
         .unwrap()

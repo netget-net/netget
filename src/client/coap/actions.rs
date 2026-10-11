@@ -13,7 +13,7 @@ use crate::llm::actions::{
 };
 use crate::protocol::log_template::LogTemplate;
 use crate::protocol::EventType;
-use crate::server::coap::codec::{content_format_id, MAX_PAYLOAD_LEN};
+use crate::server::coap::codec::{content_format_id, MAX_REPRESENTATION_LEN};
 use crate::state::app_state::AppState;
 use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
@@ -28,6 +28,10 @@ pub const DEFAULT_ACK_TIMEOUT_MS: u64 = 2000;
 
 /// RFC 7252 §4.8 `MAX_RETRANSMIT`: a Confirmable request is sent at most this many more times.
 pub const DEFAULT_MAX_RETRANSMIT: u64 = 4;
+
+/// Block1 block size in bytes: a request body over this goes out in blocks (RFC 7959). 1024 is
+/// SZX 6, the largest a block can be; a server may ask for smaller ones and is obeyed.
+pub const DEFAULT_BLOCK_SIZE: u64 = 1024;
 
 /// Longest a Uri-Path segment or Uri-Query item may be (RFC 7252 §5.10: 0-255 octets).
 pub const MAX_URI_OPTION_LEN: usize = 255;
@@ -208,8 +212,8 @@ fn common_params(with_payload: bool) -> Vec<Parameter> {
         params.push(param(
             "payload",
             "any",
-            "The body: a string is sent as text, an object or array as JSON. At most 1024 \
-             bytes",
+            "The body: a string is sent as text, an object or array as JSON. Up to 64 KiB; \
+             over one block (block_size, default 1024 bytes) it is sent in Block1 blocks",
             true,
         ));
         params.push(param(
@@ -414,10 +418,10 @@ pub fn request_from_action(action: &Value) -> Result<Option<CoapRequest>> {
     } else {
         (Vec::new(), None)
     };
-    if payload.len() > MAX_PAYLOAD_LEN {
+    if payload.len() > MAX_REPRESENTATION_LEN {
         return Err(anyhow!(
-            "payload is {} bytes; this client sends at most {MAX_PAYLOAD_LEN} in one message \
-             and does not implement Block1",
+            "payload is {} bytes; this client uploads at most {MAX_REPRESENTATION_LEN} (a body \
+             over one block is sent in Block1 blocks, RFC 7959)",
             payload.len()
         ));
     }
@@ -460,6 +464,17 @@ impl Protocol for CoapClientProtocol {
                 required: false,
                 example: json!(4),
                 default: Some(json!(DEFAULT_MAX_RETRANSMIT)),
+            },
+            ParameterDefinition {
+                name: "block_size".to_string(),
+                type_hint: "integer".to_string(),
+                description: "Block1 block size in bytes: a request body larger than this is \
+                              uploaded in blocks of this size (RFC 7959). A power of two from \
+                              16 to 1024. A server that asks for smaller blocks gets them"
+                    .to_string(),
+                required: false,
+                example: json!(1024),
+                default: Some(json!(DEFAULT_BLOCK_SIZE)),
             },
         ]
     }
@@ -517,7 +532,8 @@ impl Protocol for CoapClientProtocol {
             )
             .llm_control(
                 "Which requests to send: GET/POST/PUT/DELETE with path, query, content format \
-                 and a text or JSON payload, Confirmable or not, and Observe register/cancel. \
+                 and a text or JSON payload (Block1 over block_size), Confirmable or not, and \
+                 Observe register/cancel. \
                  Every answer arrives as coap_response, coap_notification or coap_error.",
             )
             .e2e_testing(
@@ -527,16 +543,21 @@ impl Protocol for CoapClientProtocol {
                  reassembled from three Block2 blocks, PUTs a sentence built from that body \
                  (checked byte for byte), which coap-client reads back, then observes /time: \
                  registration, notifications, cancellation on the same token. A second test \
-                 injects a PUT through the command channel that coap-client reads back. Not \
+                 injects a PUT through the command channel that coap-client reads back, and a \
+                 third PUTs 3000 bytes the transport uploads as Block1 blocks, read back whole \
+                 by coap-client; blockwise_upload_test.rs does the same against aiocoap's \
+                 server and against a hand-written server that lowers the block size. Not \
                  #[ignore]d; a missing coap-server or coap-client fails the test. \
                  transport_test.rs drives retransmission, the Block2 cap and order, the \
                  oversize drop, deduplication, RST and the exchange cap against hand-written \
                  servers.",
             )
             .notes(
-                "No DTLS (coaps), no CoAP over TCP/WebSocket, no Block1 (a request payload is \
-                 at most 1024 bytes), no multicast. Payloads reach the model as text or parsed \
-                 JSON; a non-UTF-8 payload is reported by size only, never re-encoded.",
+                "No DTLS (coaps), no CoAP over TCP/WebSocket, no multicast. A request body is \
+                 at most 64 KiB, uploaded in Block1 blocks over block_size. A notification \
+                 over one block is reported truncated rather than fetched. Payloads reach the \
+                 model as text or parsed JSON; a non-UTF-8 payload is reported by size only, \
+                 never re-encoded.",
             )
             .build()
     }
@@ -606,15 +627,26 @@ impl Client for CoapClientProtocol {
         Box<dyn std::future::Future<Output = anyhow::Result<std::net::SocketAddr>> + Send>,
     > {
         Box::pin(async move {
-            let (ack_timeout_ms, max_retransmit) = match ctx.startup_params.as_ref() {
+            let (ack_timeout_ms, max_retransmit, block_size) = match ctx.startup_params.as_ref() {
                 Some(p) => (
                     p.get_optional_u64("ack_timeout_ms")?
                         .unwrap_or(DEFAULT_ACK_TIMEOUT_MS),
                     p.get_optional_u64("max_retransmit")?
                         .unwrap_or(DEFAULT_MAX_RETRANSMIT),
+                    p.get_optional_u64("block_size")?
+                        .unwrap_or(DEFAULT_BLOCK_SIZE),
                 ),
-                None => (DEFAULT_ACK_TIMEOUT_MS, DEFAULT_MAX_RETRANSMIT),
+                None => (
+                    DEFAULT_ACK_TIMEOUT_MS,
+                    DEFAULT_MAX_RETRANSMIT,
+                    DEFAULT_BLOCK_SIZE,
+                ),
             };
+            let block_szx = (0..=crate::server::coap::codec::MAX_SZX)
+                .find(|szx| crate::server::coap::codec::szx_size(*szx) as u64 == block_size)
+                .ok_or_else(|| {
+                    anyhow!("block_size {block_size} is not a power of two from 16 to 1024")
+                })?;
             if !(10..=60_000).contains(&ack_timeout_ms) {
                 return Err(anyhow!(
                     "ack_timeout_ms {ack_timeout_ms} is outside 10-60000"
@@ -629,6 +661,7 @@ impl Client for CoapClientProtocol {
                     ack_timeout: std::time::Duration::from_millis(ack_timeout_ms),
                     // Range-checked above.
                     max_retransmit: u32::try_from(max_retransmit).unwrap_or(4),
+                    block_szx,
                 },
                 ctx.llm_client,
                 ctx.state,

@@ -176,7 +176,7 @@ async fn reassembles_puts_and_observes(server: &RealServer) -> E2EResult<()> {
 }
 
 /// The dashboard's `[ send ]` / MCP `send_to_client` path against the same server: an injected
-/// PUT that `coap-client` reads back, a payload over 1024 bytes refused before the wire, and a
+/// PUT that `coap-client` reads back, a payload over 64 KiB refused before the wire, and a
 /// `disconnect`.
 #[tokio::test]
 async fn injected_coap_put_reaches_libcoap() -> E2EResult<()> {
@@ -228,13 +228,17 @@ async fn injected_put(server: &RealServer) -> E2EResult<()> {
     let outcome = state
         .send_to_client(
             client_id,
-            json!({"type": "coap_put", "path": "/example_data", "payload": "x".repeat(1025)}),
+            json!({
+                "type": "coap_put",
+                "path": "/example_data",
+                "payload": "x".repeat(::netget::server::coap::codec::MAX_REPRESENTATION_LEN + 1)
+            }),
             Duration::from_secs(10),
         )
         .await?;
     assert!(
         matches!(outcome, ClientSendOutcome::Rejected { .. }),
-        "a payload over 1024 bytes must be refused (no Block1), got {outcome:?}"
+        "a payload over MAX_REPRESENTATION_LEN must be refused before the wire, got {outcome:?}"
     );
 
     let mut value = String::new();

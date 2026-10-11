@@ -60,6 +60,12 @@ pub static SNMP_CLIENT_RESPONSE_RECEIVED_EVENT: LazyLock<EventType> = LazyLock::
             description: "SNMP error status (0=noError, 2=noSuchName, etc.)".to_string(),
             required: true,
         },
+        Parameter {
+            name: "usm_report".to_string(),
+            type_hint: "object".to_string(),
+            description: "SNMPv3 only, present when the agent answered with a USM report instead of a response: {report, count}, report being usmStatsWrongDigests (wrong auth password), usmStatsUnknownUserNames, usmStatsUnsupportedSecLevels, usmStatsDecryptionErrors (wrong privacy password) or usmStatsNotInTimeWindows (the clock was resynchronised from it; resend). variables is then empty".to_string(),
+            required: false,
+        },
     ])
 });
 
@@ -245,9 +251,10 @@ impl Protocol for SnmpClientProtocol {
 
         ProtocolMetadataV2::builder()
             .state(DevelopmentState::Experimental)
-            .implementation("UDP-based with rasn-snmp for BER encoding/decoding")
-            .llm_control("Full control over SNMP operations (GET, GETNEXT, GETBULK, SET)")
-            .e2e_testing("net-snmp agent container")
+            .implementation("UDP-based with rasn-snmp for BER encoding/decoding; SNMPv3 USM (src/server/snmp/usm.rs, shared with the agent): engine discovery at start, HMAC-MD5/SHA-1/SHA-224/256/384/512 authentication, DES-CBC and AES-128-CFB privacy, every reply's message id, engine, level and MAC checked before it is read")
+            .llm_control("Full control over SNMP operations (GET, GETNEXT, GETBULK, SET); SNMPv3 reports reach the handler as usm_report")
+            .e2e_testing("tests/client/snmp/real_server_test.rs: Net-SNMP's snmpd, unprivileged in a temp dir, with a SHA-256/AES and an MD5/DES user. NetGet discovers its engine, GETs, and a handler SETs sysContact from the reply; the value is read back with Net-SNMP's snmpget as the other user. A wrong password is snmpd's own wrongDigests report. Fails, not skips, without snmpd")
+            .notes("v1/v2c with a community; v3 with one USM user per client. No AES-192/256 (expired drafts with two incompatible key extensions), no VACM on this side, no v3 informs or traps")
             .build()
     }
     fn description(&self) -> &'static str {
@@ -271,10 +278,26 @@ impl Protocol for SnmpClientProtocol {
             },
             ParameterDefinition {
                 name: "version".to_string(),
-                description: "SNMP version: 'v1' or 'v2c' (default: 'v2c')".to_string(),
+                description: "SNMP version: 'v1', 'v2c' or 'v3' (default: 'v2c'). v3 needs v3_user; the agent's engine is discovered when the client starts, and an agent that never answers discovery fails the start".to_string(),
                 type_hint: "string".to_string(),
                 required: false,
                 example: json!("v2c"),
+                default: None,
+            },
+            ParameterDefinition {
+                name: "v3_user".to_string(),
+                description: "SNMPv3 USM user: {name, auth_protocol: none|md5|sha|sha224|sha256|sha384|sha512, auth_password, priv_protocol: none|des|aes, priv_password}. Passwords are 8 to 256 bytes and never appear in events or logs. The level follows from the protocols: no auth is noAuthNoPriv, auth alone authNoPriv, both authPriv".to_string(),
+                type_hint: "object".to_string(),
+                required: false,
+                example: json!({"name": "monitor", "auth_protocol": "sha256", "auth_password": "monitor-auth-pass", "priv_protocol": "aes", "priv_password": "monitor-priv-pass"}),
+                default: None,
+            },
+            ParameterDefinition {
+                name: "context_name".to_string(),
+                description: "SNMPv3 contextName for every request, at most 32 bytes (default: the empty default context)".to_string(),
+                type_hint: "string".to_string(),
+                required: false,
+                example: json!("vlan-7"),
                 default: None,
             },
             ParameterDefinition {
