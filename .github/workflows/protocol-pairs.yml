@@ -7652,3 +7652,98 @@ jobs:
             --test test_suite_hygiene_test \
             --test real_client_evidence_is_run_test \
             -- --test-threads=32
+
+  coap-observe-blockwise:
+    if: inputs.suite != 'p2p-news'
+    name: CoAP Observe and Block-wise with libcoap and aiocoap
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      PAIR_FEATURES: coap
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: protocol-pairs-${{ github.job }}
+      # libcoap 4.3.5 rather than noble's packaged libcoap3-bin, so this job drives the same
+      # coap-client and coap-server the registry-audit job builds. Without DTLS, into
+      # /usr/local; a TLS-suffixed binary name is linked to the plain one.
+      - name: Build libcoap 4.3.5
+        run: |
+          git clone --quiet --depth 1 --branch v4.3.5 https://github.com/obgm/libcoap.git /tmp/libcoap
+          cmake -S /tmp/libcoap -B /tmp/libcoap/build -DENABLE_DTLS=OFF -DENABLE_DOCS=OFF \
+            -DENABLE_EXAMPLES=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local
+          cmake --build /tmp/libcoap/build -j"$(nproc)"
+          sudo cmake --install /tmp/libcoap/build
+          sudo ldconfig
+          for tool in coap-server coap-client; do
+            if [ ! -x "/usr/local/bin/$tool" ]; then
+              suffixed=$(ls /usr/local/bin/"$tool"-* 2>/dev/null | head -1)
+              [ -n "$suffixed" ] && sudo ln -sf "$suffixed" "/usr/local/bin/$tool"
+            fi
+            [ "$(command -v $tool)" = "/usr/local/bin/$tool" ] || { echo "$tool is not the 4.3.5 build" >&2; exit 1; }
+          done
+      - name: Install aiocoap and tshark
+        run: |
+          sudo apt-get update -q
+          echo "wireshark-common wireshark-common/install-setuid boolean false" | sudo debconf-set-selections
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q tshark
+          python3 -m venv "$RUNNER_TEMP/aiocoap"
+          "$RUNNER_TEMP/aiocoap/bin/pip" install --no-cache-dir aiocoap==0.4.12
+          printf 'NETGET_AIOCOAP_PYTHON=%s/aiocoap/bin/python\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - name: Compile coap as a standalone Cargo feature
+        run: cargo check --locked --no-default-features --features coap --all-targets
+      - name: Both roles with mandatory independent peers, bounds and fail-closed paths
+        run: |
+          set -euo pipefail
+          for filter in \
+            coap::observe_blockwise \
+            coap::real_client_test \
+            client/coap::blockwise_upload_test \
+            client/coap::real_server_test; do
+            case "$filter" in
+              client/*) target=client; filter=${filter#client/} ;;
+              *) target=server ;;
+            esac
+            pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
+            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+              --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
+            grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
+          done
+      - name: Shared declarations, native startup, privacy and ownership
+        run: |
+          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            --test event_action_declarations_test \
+            --test advertised_actions_test \
+            --test action_descriptions_test \
+            --test startup_examples_validation_test \
+            --test examples \
+            --test startup_param_defaults_test \
+            --test startup_param_drift_test \
+            --test protocol_startup_examples_test \
+            --test startup_params_result_test \
+            --test startup_constructed_input_test \
+            --test management_test \
+            --test management_form_test \
+            --test dual_protocol_test \
+            --test dashboard_wireshark_test \
+            --test client_event_wiring_test \
+            --test event_emit_sites_test \
+            --test task_registration_cancellation_test \
+            --test server_task_registry_test \
+            --test client_stop_releases_socket_test \
+            --test peer_handle_coverage_ratchet_test \
+            --test client_credential_logging_test \
+            --test client_llm_budget_test \
+            --test secret_redaction_test \
+            --test wire_failure_test \
+            --test site_protocol_list_test \
+            --test well_known_port_declaration_test \
+            --test failure_mode_declaration_test \
+            --test decision_tag_ratchet_test \
+            --test max_inbound_bytes_declaration_test \
+            --test max_inbound_bytes_bound_plus_one_test \
+            --test test_suite_hygiene_test \
+            --test real_client_evidence_is_run_test \
+            -- --test-threads=32

@@ -464,9 +464,9 @@ fn test_codec_header_bits_match_the_rfc() {
 /// request/response protocol must not produce a fail-silent, and a CON client would
 /// retransmit four times and then give up with no diagnostic anywhere on its side.
 ///
-/// RFC 7252 §4.6 fixes the number: with the path MTU unknown an endpoint assumes
-/// MAX_MESSAGE_SIZE of 1152, "leading to a maximum payload size of 1024 bytes". Block-wise
-/// transfer (RFC 7959) is the legal way to exceed it and is not implemented here.
+/// The number used to be RFC 7252 §4.6's 1024-byte payload. Block-wise transfer (RFC 7959)
+/// now splits anything larger into blocks, so the bound is on the representation the server
+/// holds while it serves those blocks: `MAX_REPRESENTATION_LEN`, 64 KiB.
 #[test]
 fn test_oversize_payload_is_refused_rather_than_silently_dropped() {
     use netget::llm::actions::protocol_trait::Server;
@@ -475,7 +475,7 @@ fn test_oversize_payload_is_refused_rather_than_silently_dropped() {
 
     let protocol = CoapProtocol::new();
 
-    let at_limit = "x".repeat(codec::MAX_PAYLOAD_LEN);
+    let at_limit = "x".repeat(codec::MAX_REPRESENTATION_LEN);
     assert!(
         protocol
             .execute_action(serde_json::json!({
@@ -484,11 +484,11 @@ fn test_oversize_payload_is_refused_rather_than_silently_dropped() {
                 "payload": at_limit,
             }))
             .is_ok(),
-        "exactly MAX_PAYLOAD_LEN bytes is legal and must still be accepted - a guard that \
+        "exactly MAX_REPRESENTATION_LEN bytes is legal and must still be accepted - a guard that \
          refused everything would pass the over-limit assertion below for the wrong reason"
     );
 
-    let over_limit = "x".repeat(codec::MAX_PAYLOAD_LEN + 1);
+    let over_limit = "x".repeat(codec::MAX_REPRESENTATION_LEN + 1);
     let err = protocol
         .execute_action(serde_json::json!({
             "type": "send_coap_response",
@@ -498,18 +498,18 @@ fn test_oversize_payload_is_refused_rather_than_silently_dropped() {
         .expect_err("one byte over the limit must be refused");
     let err = err.to_string();
     assert!(
-        err.contains(&codec::MAX_PAYLOAD_LEN.to_string()),
+        err.contains(&codec::MAX_REPRESENTATION_LEN.to_string()),
         "the refusal must tell the model the actual limit, got: {err}"
     );
     assert!(
         err.contains("7959") || err.contains("Block-wise"),
-        "the refusal should name Block-wise transfer as the reason there is no legal way \
-         to send it, got: {err}"
+        "the refusal should say why there is a ceiling at all when Block-wise transfer \
+         splits a representation, got: {err}"
     );
 
     // The bound is on the decoded bytes, not on the string: two hex digits per byte, so a
-    // hex payload of 2 * MAX_PAYLOAD_LEN characters is exactly at the limit and legal.
-    let hex_at_limit = "41".repeat(codec::MAX_PAYLOAD_LEN);
+    // hex payload of 2 * MAX_REPRESENTATION_LEN characters is exactly at the limit and legal.
+    let hex_at_limit = "41".repeat(codec::MAX_REPRESENTATION_LEN);
     assert!(protocol
         .execute_action(serde_json::json!({
             "type": "send_coap_response",
@@ -519,7 +519,7 @@ fn test_oversize_payload_is_refused_rather_than_silently_dropped() {
         }))
         .is_ok());
 
-    let hex_over_limit = "41".repeat(codec::MAX_PAYLOAD_LEN + 1);
+    let hex_over_limit = "41".repeat(codec::MAX_REPRESENTATION_LEN + 1);
     assert!(
         protocol
             .execute_action(serde_json::json!({
