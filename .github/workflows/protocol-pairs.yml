@@ -7359,7 +7359,9 @@ jobs:
         run: |
           set -euo pipefail
           for filter in \
-            snmp:: client/snmp::; do
+            snmp:: \
+            client/snmp::real_server_test:: \
+            client/snmp::command_channel_test::; do
             case "$filter" in
               client/*) target=client; filter=${filter#client/} ;;
               *) target=server ;;
