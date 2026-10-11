@@ -7420,7 +7420,7 @@ jobs:
 
   snmp:
     if: inputs.suite != 'p2p-news'
-    name: SNMP agent and notifications against Net-SNMP
+    name: SNMP agent, manager, SNMPv3 USM and notifications against Net-SNMP and pysnmp
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -7431,19 +7431,24 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: protocol-pairs-${{ github.job }}
-      - name: Install Net-SNMP's tools, its trap receiver and tshark (the pcap oracle)
+      - name: Install Net-SNMP's tools, its agent, its trap receiver, tshark (the pcap oracle) and pysnmp
         run: |
           sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends snmp snmptrapd tshark
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends snmp snmpd snmptrapd tshark
+          # The packaged agent is not the one under test; the client suite runs its own.
+          sudo systemctl stop snmpd || true
           snmpget -V
           tshark --version | head -1
+          python3 -m venv "$RUNNER_TEMP/pysnmp"
+          "$RUNNER_TEMP/pysnmp/bin/pip" install --quiet pysnmp==7.1.22 pyasn1==0.6.4 cryptography==46.0.3
+          echo "NETGET_PYSNMP_PYTHON=$RUNNER_TEMP/pysnmp/bin/python" >> "$GITHUB_ENV"
       - name: Compile snmp as a standalone Cargo feature
         run: cargo check --locked --no-default-features --features snmp --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
           for filter in \
-            snmp::; do
+            snmp:: client/snmp::; do
             case "$filter" in
               client/*) target=client; filter=${filter#client/} ;;
               *) target=server ;;

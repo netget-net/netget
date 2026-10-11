@@ -41,6 +41,35 @@ impl Protocol for SnmpProtocol {
     fn get_event_types(&self) -> Vec<EventType> {
         get_snmp_event_types()
     }
+    fn get_startup_parameters(&self) -> Vec<crate::llm::actions::ParameterDefinition> {
+        use crate::llm::actions::ParameterDefinition;
+        vec![
+            ParameterDefinition {
+                name: "v3_users".into(),
+                type_hint: "array".into(),
+                description: "SNMPv3 USM users: [{name, auth_protocol: none|md5|sha|sha224|sha256|sha384|sha512, auth_password, priv_protocol: none|des|aes, priv_password}]. Passwords are 8 to 256 bytes. A user is answered only at the level it is configured for (authPriv users never get an unencrypted answer); others get the USM's reports. Absent means SNMPv3 is not served and v3 messages are dropped".into(),
+                required: false,
+                example: json!([{"name": "monitor", "auth_protocol": "sha256", "auth_password": "monitor-auth-pass", "priv_protocol": "aes", "priv_password": "monitor-priv-pass"}]),
+                default: None,
+            },
+            ParameterDefinition {
+                name: "engine_id".into(),
+                type_hint: "string".into(),
+                description: "The agent's snmpEngineID in hexadecimal, 5 to 32 bytes, as Net-SNMP writes it. Absent means a random RFC 3411 format-5 ID chosen at start".into(),
+                required: false,
+                example: json!("8000000005a1b2c3d4e5f60718"),
+                default: None,
+            },
+            ParameterDefinition {
+                name: "engine_boots".into(),
+                type_hint: "number".into(),
+                description: "The agent's snmpEngineBoots. NetGet keeps no state between runs, so raise it by hand when restarting with a fixed engine_id, or managers will see the clock go backwards".into(),
+                required: false,
+                example: json!(2),
+                default: Some(json!(super::usm::DEFAULT_ENGINE_BOOTS)),
+            },
+        ]
+    }
     fn stack_name(&self) -> &'static str {
         "ETH>IP>UDP>SNMP"
     }
@@ -59,10 +88,10 @@ impl Protocol for SnmpProtocol {
             .state(DevelopmentState::Beta)
             .privilege_requirement(PrivilegeRequirement::PrivilegedPort(161))
             .well_known_udp_port(161)
-            .implementation("rasn-snmp v0.18 for parsing + manual BER encoding")
+            .implementation("rasn-snmp v0.18 for parsing + manual BER encoding; SNMPv3 USM in usm.rs (RustCrypto hmac/md-5/sha1/sha2/des/aes)")
             .llm_control("OID responses (sysDescr, ifTable, custom MIBs)")
-            .e2e_testing("Net-SNMP's own snmpget/snmpgetnext (tests/server/snmp/test.rs), run with -On -Oe so the assertions pin the decoded type tag and value rather than the local MIB set. Not ignored, and it hard-fails rather than skipping when the binaries are absent. Not the `snmp` Rust crate, whatever the older notes said. Notifications (tests/server/snmp/notification_test.rs): Net-SNMP's snmptrap (v1 and v2c) and snmpinform send to NetGet, and snmptrapd receives NetGet's v2c trap, v2c inform (acknowledged) and v1 trap")
-            .notes("SNMPv1/v2c only (no SNMPv3/USM). request-id and community are echoed from the request automatically. Notifications both ways: send_trap sends v1/v2c traps and v2c informs (resent until acknowledged), and received traps and informs are snmp_notification events, an inform acknowledged only when the handler says so. Incoming BER is depth- and length-screened before rasn decodes it: rasn 0.18 recurses without a bound on constructed OCTET STRINGs, and a 60 KB datagram was enough to stack-overflow the whole process")
+            .e2e_testing("Net-SNMP's own snmpget/snmpgetnext (tests/server/snmp/test.rs), run with -On -Oe so the assertions pin the decoded type tag and value rather than the local MIB set. Not ignored, and it hard-fails rather than skipping when the binaries are absent. Not the `snmp` Rust crate, whatever the older notes said. Notifications (tests/server/snmp/notification_test.rs): Net-SNMP's snmptrap (v1 and v2c) and snmpinform send to NetGet, and snmptrapd receives NetGet's v2c trap, v2c inform (acknowledged) and v1 trap. SNMPv3 (tests/server/snmp/usm_test.rs): Net-SNMP's snmpget/getnext/bulkget/set and pysnmp 7.1.22 at every level, with MD5, SHA-1, SHA-224/256/384/512 and DES/AES-128, plus the USM's refusals and RFC 3414's key vectors")
+            .notes("SNMPv1/v2c with a community; SNMPv3 with the USM when v3_users is set (RFC 3414 procedure and reports, HMAC-MD5/SHA-1/SHA-2 authentication, DES-CBC and AES-128-CFB privacy; a user is served only at its configured level; no VACM - the event names the user and level - no AES-192/256, no v3 notifications). request-id and community are echoed from the request automatically. Notifications both ways: send_trap sends v1/v2c traps and v2c informs (resent until acknowledged), and received traps and informs are snmp_notification events, an inform acknowledged only when the handler says so. Incoming BER is depth- and length-screened before rasn decodes it, decrypted v3 PDUs included: rasn 0.18 recurses without a bound on constructed OCTET STRINGs, and a 60 KB datagram was enough to stack-overflow the whole process")
             .build()
     }
     fn description(&self) -> &'static str {
@@ -132,12 +161,14 @@ impl Server for SnmpProtocol {
     > {
         Box::pin(async move {
             use crate::server::snmp::SnmpServer;
+            let usm = super::usm::agent_from_params(ctx.startup_params.as_ref())?;
             SnmpServer::spawn_with_llm_actions(
                 ctx.legacy_listen_addr(),
                 ctx.llm_client,
                 ctx.state,
                 ctx.status_tx,
                 ctx.server_id,
+                usm,
             )
             .await
         })
@@ -608,13 +639,31 @@ pub static SNMP_REQUEST_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         Parameter {
             name: "version".to_string(),
             type_hint: "string".to_string(),
-            description: "'v1' or 'v2c'. The reply uses the same version".to_string(),
+            description: "'v1', 'v2c' or 'v3'. The reply uses the same version".to_string(),
             required: false,
         },
         Parameter {
             name: "client_ip".to_string(),
             type_hint: "string".to_string(),
             description: "IP address the request came from".to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "user".to_string(),
+            type_hint: "string".to_string(),
+            description: "SNMPv3 only: the USM user the request was authenticated as (its MAC verified and its time checked before you see it). Decide per user what it may read or write".to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "security_level".to_string(),
+            type_hint: "string".to_string(),
+            description: "SNMPv3 only: noAuthNoPriv, authNoPriv or authPriv - always the level the user is configured for. The answer goes back at the same level, encrypted when authPriv".to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "context_name".to_string(),
+            type_hint: "string".to_string(),
+            description: "SNMPv3 only: the contextName the manager asked in, empty for the default context".to_string(),
             required: false,
         },
     ])

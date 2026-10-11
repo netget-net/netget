@@ -5,6 +5,27 @@
 Tests SNMP agent implementation with GET, GETNEXT, and custom MIB requests. Validates that the LLM can respond to SNMP
 queries with proper OID values and data types. Tests both basic system OIDs and custom enterprise OIDs.
 
+## SNMPv3 (`usm_test.rs`)
+
+- RFC 3414 A.3's key vectors (MD5 and SHA-1 Ku and Kul for "maplesyrup").
+- Net-SNMP's `snmpget` as ten users covering noAuthNoPriv, MD5 and SHA-512 at authNoPriv, and
+  DES/AES under MD5, SHA-1, SHA-224, SHA-256, SHA-384 and SHA-512; then `snmpgetnext`,
+  `snmpbulkget` and `snmpset` encrypted, and a context name. Every call does discovery and time
+  sync against the agent first. The handler echoes `user/level/context`, so each answer proves
+  the event too. `SNMP_PERSISTENT_DIR` is a temp dir per call, so no engine state is cached.
+- Refusals as Net-SNMP reports them: wrong auth password, unknown user, a level below or above
+  the user's, wrong privacy password — and the handler sees none of them.
+- The time window from the wire with `usm::encode`: 151 s off gets an authenticated
+  `NotInTimeWindows` report with the real clock and boots; 149 s is answered.
+- pysnmp 7.1.22 (pure Python, `NETGET_PYSNMP_PYTHON`, mandatory): GET per auth family and both
+  privacy protocols, each from a fresh engine, then GETNEXT, GETBULK, SET and a context; and
+  the three refusals by pysnmp's own names.
+- Start-up refusals: short password, privacy without auth, unknown protocols (AES-256 included),
+  duplicate users, long names, too many users, bad engine IDs.
+
+Mutations that fail it: MAC verification always true (the refusal test), the AES IV's boots and
+time swapped (Net-SNMP's AES users), DES without the pre-IV (Net-SNMP's DES users).
+
 ## Test Strategy
 
 - **Isolated test servers**: Each test spawns a separate NetGet instance with specific OID
