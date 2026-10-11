@@ -1,5 +1,5 @@
 //! What the model can do as an rsync client against a daemon (rsync://): list its modules,
-//! list a path, and fetch files.
+//! list a path, fetch files, and push files whose contents it supplies.
 use crate::llm::actions::{
     client_trait::{Client, ClientActionResult},
     protocol_trait::Protocol,
@@ -15,6 +15,9 @@ use std::sync::LazyLock;
 /// The most file data one fetch brings back into an event.
 pub const DEFAULT_MAX_FETCH_BYTES: u64 = 4 * 1024 * 1024;
 pub const MAX_FETCH_BYTES_LIMIT: u64 = 64 * 1024 * 1024;
+/// Files and bytes one push may carry.
+pub const MAX_PUSH_FILES: usize = 1000;
+pub const MAX_PUSH_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Default)]
 pub struct RsyncClientProtocol;
@@ -76,6 +79,23 @@ fn fetch_action() -> ActionDefinition {
     )
 }
 
+fn push_action() -> ActionDefinition {
+    action(
+        "rsync_push",
+        "Upload files whose contents you supply to a module path (like rsync -rl files rsync://host/module/path/). Directories they imply are created. The outcome arrives as rsync_pushed.",
+        vec![
+            p("path", "string", "Destination: module and directory, e.g. inbox/ or inbox/reports/", true),
+            p(
+                "files",
+                "array",
+                "Each {path (relative to the destination, e.g. a.txt or docs/b.md), type (file, dir or symlink; default file), content, encoding (utf8 or hex), target (symlinks), mode (octal string), mtime (unix seconds)}",
+                true,
+            ),
+        ],
+        json!({"type":"rsync_push","path":"inbox/","files":[{"path":"report.txt","content":"all good\n"}]}),
+    )
+}
+
 fn disconnect_action() -> ActionDefinition {
     action(
         "disconnect",
@@ -90,6 +110,7 @@ pub fn actions() -> Vec<ActionDefinition> {
         list_modules_action(),
         list_action(),
         fetch_action(),
+        push_action(),
         disconnect_action(),
     ]
 }
@@ -167,6 +188,25 @@ pub static FETCHED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     )
 });
 
+pub static PUSHED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    ev(
+        "rsync_pushed",
+        "A push finished: what the daemon asked for and was sent (whole, with rsync's MD4), and what it said about the rest.",
+        vec![
+            p("path", "string", "The destination", true),
+            p("sent", "array", "Each file the daemon took, {path, size}", true),
+            p("not_requested", "array", "Files in the list the daemon never asked for", true),
+            p(
+                "errors",
+                "array",
+                "What the daemon reported (a refused file, a read-only module); empty when every file was taken",
+                true,
+            ),
+            p("complete", "boolean", "Every file was sent and the daemon reported nothing", true),
+        ],
+    )
+});
+
 pub static ERROR_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     ev(
         "rsync_error",
@@ -175,7 +215,7 @@ pub static ERROR_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             p(
                 "operation",
                 "string",
-                "rsync_list_modules, rsync_list or rsync_fetch",
+                "rsync_list_modules, rsync_list, rsync_fetch or rsync_push",
                 true,
             ),
             p("path", "string", "The path it was about, if any", false),
@@ -193,6 +233,29 @@ pub static ERROR_EVENT: LazyLock<EventType> = LazyLock::new(|| {
 pub fn check(v: &Value) -> Result<Option<(String, String)>> {
     match v["type"].as_str().unwrap_or_default() {
         "rsync_list_modules" => Ok(None),
+        "rsync_push" => {
+            let files = v["files"].as_array().context("files is an array")?;
+            ensure!(
+                !files.is_empty() && files.len() <= MAX_PUSH_FILES,
+                "a push carries 1 to {MAX_PUSH_FILES} files"
+            );
+            let mut bytes = 0usize;
+            for f in files {
+                bytes += crate::server::rsync::wire::entry_from_json(f, 0)?
+                    .data
+                    .len();
+            }
+            ensure!(
+                bytes <= MAX_PUSH_BYTES,
+                "a push carries at most {MAX_PUSH_BYTES} bytes"
+            );
+            let mut target = check(&json!({"type": "rsync_list", "path": v["path"]}))?
+                .context("a push needs a destination")?;
+            if !target.1.ends_with('/') {
+                target.1.push('/');
+            }
+            Ok(Some(target))
+        }
         "rsync_list" | "rsync_fetch" => {
             let path = v["path"]
                 .as_str()
@@ -290,8 +353,8 @@ impl Protocol for RsyncClientProtocol {
             .privilege_requirement(PrivilegeRequirement::None)
             .implementation("The server's protocol-29 codec (src/server/rsync/wire.rs) as the receiver: @RSYNCD handshake with MOTD and MD4 challenge-response authentication, -ld/-lr requests, demultiplexed input, the file list sorted into rsync's order, whole-file requests written concurrently with the replies they produce, every file checked against MD4(seed ‖ data), and the end-of-run exchange")
             .llm_control("Which modules and paths to list and which files to fetch, and what to do with what came back")
-            .e2e_testing("tests/client/rsync: a stock rsync 3.2.7 daemon (rsync --daemon) — module listing with MOTD, a recursive listing, a fetch whose contents the model acts on, a password-protected module, and an unknown module")
-            .notes("Files come back into the event, bounded by max_fetch_bytes; nothing is written to disk. No uploads. Devices and special files in a listing are skipped.")
+            .e2e_testing("tests/client/rsync: a stock rsync 3.2.7 daemon (rsync --daemon) — module listing with MOTD, a recursive listing, a fetch whose contents the model acts on, a password-protected module, an unknown module, and rsync_push of a tree (text, hex, a multi-token file, a symlink, an empty directory) read back from the daemon's own directory, plus a push refused by a read-only module")
+            .notes("Files come back into the event, bounded by max_fetch_bytes; nothing is written to disk. rsync_push sends files whose contents the model supplies (whole, at most 1000 files and 8 MiB) and never deletes anything on the daemon. Devices and special files in a listing are skipped.")
             .max_inbound_bytes(MAX_FETCH_BYTES_LIMIT as usize)
             .build()
     }

@@ -11,6 +11,19 @@ Each action is one TCP connection, as rsync itself makes one per transfer:
   each regular file while `max_fetch_bytes` lasts; the rest are listed as `skipped`. Each
   file is checked against MD4(seed ‖ data). Contents arrive in `rsync_fetched`, as utf8, or
   as hex when not text.
+- **`rsync_push{path, files}`**: arguments `--server -lr . <path>/`, as `rsync -rl` sends
+  them. The client builds the file list itself, from the model's files plus the directories
+  they imply and the `"."` root, and writes it raw: at protocol 29 nothing the client sends is
+  multiplexed.
+  - The daemon's generator then asks for files, multiplexed. Each transfer request is
+    answered whole: the request's header echoed, literal tokens of at most 32 KiB, and
+    MD4(le32(seed) ‖ data).
+  - Items it only touches (directories) are echoed with their flags.
+  - Up to three `DONE`s are echoed, then the final one is read.
+  - The result arrives as `rsync_pushed`: `sent`, `not_requested`, and the daemon's `errors`.
+  - A push that the daemon refuses outright (for example a read-only module) is an error
+    carrying the daemon's message.
+  - Nothing is ever deleted on the daemon.
 - `@RSYNCD: AUTHREQD` is answered with `username` and base64 (no padding) of
   MD4(0000 ‖ password ‖ challenge). Without credentials the operation reports that the module
   requires authentication.
@@ -24,4 +37,4 @@ reader), because rsync's sender stops reading while it is blocked writing file d
 Failures (a refusal, a missing path, a checksum mismatch, a timeout of 120 s per operation)
 arrive as `rsync_error`. Injected actions return the event's data as the `Executed` detail.
 
-Chains are bounded at `MAX_FOLLOWUP_DEPTH` (8). Nothing is written to disk.
+Chains are bounded at `MAX_FOLLOWUP_DEPTH` (8). Nothing is written to local disk.

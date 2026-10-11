@@ -167,10 +167,13 @@ async fn run(
         };
         let kind = action["type"].as_str().unwrap_or_default().to_string();
         let recursive = action["recursive"].as_bool().unwrap_or(false);
-        let result = tokio::time::timeout(
-            OPERATION_TIMEOUT,
-            operation(&settings, &kind, target.clone(), recursive),
-        )
+        let result = tokio::time::timeout(OPERATION_TIMEOUT, async {
+            if kind == "rsync_push" {
+                push(&settings, target.clone(), &action).await
+            } else {
+                operation(&settings, &kind, target.clone(), recursive).await
+            }
+        })
         .await;
         let (event, data): (&'static EventType, Value) = match result {
             Ok(Ok(v)) => v,
@@ -457,6 +460,177 @@ async fn operation(
             json!({"path": arg, "entries": listing}),
         ))
     }
+}
+
+/// A push: this client is rsync's sender, the daemon its receiver (protocol 29).
+///
+/// The file list goes out raw, built from the action's files plus the directories they imply
+/// and "." for the destination itself. The daemon's generator then asks for files by index —
+/// multiplexed, each with an item-flags word and a checksum header — and every one is answered
+/// whole: the same header echoed, the data as literal tokens, MD4(seed ‖ data). Items it only
+/// reports (a directory it made) are echoed back as rsync's sender does. Each NDX_DONE is
+/// echoed; after the third comes the daemon's final one, and the connection closes.
+async fn push(
+    s: &Settings,
+    target: Option<(String, String)>,
+    action: &Value,
+) -> Result<(&'static EventType, Value)> {
+    let (module, arg) = target.context("a push needs a destination")?;
+    let now = crate::utils::clock::SystemTime::now()
+        .duration_since(crate::utils::clock::UNIX_EPOCH)
+        .map(|d| d.as_secs() as u32)
+        .unwrap_or(0);
+    let mut entries = Vec::new();
+    for f in action["files"].as_array().into_iter().flatten() {
+        entries.push(wire::entry_from_json(f, now)?);
+    }
+    crate::server::rsync::complete_dirs(&mut entries, now);
+    let mut root = wire::entry_from_json(&json!({"path": "root", "type": "dir"}), now)?;
+    root.path = ".".into();
+    entries.push(root);
+    wire::sort(&mut entries);
+    let req = Request {
+        recursive: true,
+        links: true,
+        ..Default::default()
+    };
+    let mut list = Vec::new();
+    let mut writer = wire::FlistWriter::default();
+    for e in &entries {
+        writer.entry(e, e.path == ".", &req, &mut list);
+    }
+    wire::FlistWriter::finish(&req, 0, &mut list);
+
+    let stream = tokio::time::timeout(Duration::from_secs(10), TcpStream::connect(s.daemon))
+        .await
+        .context("connecting timed out")??;
+    let (rd, mut wr) = stream.into_split();
+    let mut rd = BufReader::new(rd);
+    let (ok, _motd) = handshake(&mut rd, &mut wr, &module, &s.auth).await?;
+    ensure!(
+        ok,
+        "the daemon ended the session before accepting the module"
+    );
+    wr.write_all(format!("--server\n-lr\n.\n{arg}\n\n").as_bytes())
+        .await?;
+    let mut seed = [0u8; 4];
+    tokio::io::AsyncReadExt::read_exact(&mut rd, &mut seed)
+        .await
+        .context("no checksum seed")?;
+    let seed = i32::from_le_bytes(seed);
+    wr.write_all(&list).await?;
+
+    let mut mux = MuxReader::new(rd);
+    let mut sent = Vec::new();
+    let mut requested = std::collections::HashSet::new();
+    let mut dones = 0;
+    let result: Result<()> = async {
+        loop {
+            let ndx = mux.int().await?;
+            if ndx == wire::NDX_DONE {
+                wr.write_all(&wire::le32(wire::NDX_DONE)).await?;
+                dones += 1;
+                if dones == 3 {
+                    break;
+                }
+                continue;
+            }
+            if ndx as usize == entries.len() {
+                // A protocol-29 keep-alive from a generator busy on something slow.
+                mux.short().await?;
+                continue;
+            }
+            ensure!(
+                ndx >= 0 && (ndx as usize) < entries.len(),
+                "the daemon asked for index {ndx} of {}",
+                entries.len()
+            );
+            let iflags = mux.short().await?;
+            let mut reply = wire::le32(ndx).to_vec();
+            reply.extend_from_slice(&iflags.to_le_bytes());
+            if iflags & wire::ITEM_BASIS_TYPE_FOLLOWS != 0 {
+                reply.push(mux.byte().await?);
+            }
+            if iflags & wire::ITEM_XNAME_FOLLOWS != 0 {
+                let first = mux.byte().await?;
+                reply.push(first);
+                let mut n = first as usize;
+                if n & 0x80 != 0 {
+                    let low = mux.byte().await?;
+                    reply.push(low);
+                    n = ((n & 0x7f) << 8) | low as usize;
+                }
+                reply.extend(mux.read(n).await?);
+            }
+            if iflags & wire::ITEM_TRANSFER == 0 {
+                wr.write_all(&reply).await?;
+                continue;
+            }
+            let entry = &entries[ndx as usize];
+            ensure!(
+                entry.kind == Kind::File,
+                "the daemon asked to transfer {:?}, which is not a file",
+                entry.path
+            );
+            let mut head = [0i32; 4];
+            for v in head.iter_mut() {
+                *v = mux.int().await?;
+            }
+            let [count, _blength, s2length, _remainder] = head;
+            ensure!(
+                (0..=wire::MAX_SUM_COUNT).contains(&count) && (0..=16).contains(&s2length),
+                "a malformed checksum header"
+            );
+            // Block checksums of the daemon's existing copy: read, and not used, since every
+            // file is sent whole.
+            mux.read(count as usize * (4 + s2length as usize)).await?;
+            for v in head {
+                reply.extend_from_slice(&wire::le32(v));
+            }
+            for chunk in entry.data.chunks(wire::CHUNK) {
+                reply.extend_from_slice(&wire::le32(chunk.len() as i32));
+                reply.extend_from_slice(chunk);
+            }
+            reply.extend_from_slice(&wire::le32(0));
+            reply.extend_from_slice(&wire::file_sum(seed, &entry.data));
+            wr.write_all(&reply).await?;
+            if requested.insert(ndx) {
+                sent.push(json!({"path": entry.path, "size": entry.data.len()}));
+            }
+        }
+        // The daemon's final NDX_DONE, then it closes.
+        ensure!(
+            mux.int().await? == wire::NDX_DONE,
+            "no final goodbye from the daemon"
+        );
+        Ok(())
+    }
+    .await;
+    let _ = wr.shutdown().await;
+    let errors: Vec<String> = mux
+        .messages
+        .iter()
+        .filter(|(t, _)| *t == wire::MSG_ERROR_XFER || *t == wire::MSG_ERROR)
+        .map(|(_, m)| m.clone())
+        .collect();
+    if let Err(e) = result {
+        // A daemon that refuses outright says why and closes; that is the answer.
+        if errors.is_empty() {
+            return Err(e);
+        }
+        bail!("{}", errors.join("; "));
+    }
+    let not_requested: Vec<String> = entries
+        .iter()
+        .enumerate()
+        .filter(|(i, e)| e.kind == Kind::File && !requested.contains(&(*i as i32)))
+        .map(|(_, e)| e.path.clone())
+        .collect();
+    let complete = errors.is_empty() && mux.io_error == 0;
+    Ok((
+        &actions::PUSHED_EVENT,
+        json!({"path": arg, "sent": sent, "not_requested": not_requested, "errors": errors, "complete": complete}),
+    ))
 }
 
 async fn run_turns(
