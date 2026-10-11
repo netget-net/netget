@@ -61,6 +61,7 @@ impl Protocol for QuicProtocol {
             send_quic_data_action(),
             wait_for_more_action(),
             close_this_stream_action(),
+            send_quic_datagram_action(),
         ]
     }
     fn protocol_name(&self) -> &'static str {
@@ -109,7 +110,11 @@ impl Protocol for QuicProtocol {
                 "Raw QUIC streams (RFC 9000/9001), NOT an RFC 9114 HTTP/3 server: bidirectional \
                  streams under ALPN netget-quic with no HEADERS/DATA frames and no QPACK, so real HTTP/3 \
                  clients (curl --http3, browsers, and NetGet's own http3 client) cannot talk to \
-                 it. The peer must be a raw QUIC client. request_filter is not supported.",
+                 it. The peer must be a raw QUIC client. request_filter is not supported. \
+                 RFC 9221 DATAGRAM frames are negotiated: each raises quic_datagram_received \
+                 (one turn at a time per connection; Quinn's 64 KiB buffer drops the excess) \
+                 and send_quic_datagram answers on the same connection - verified against \
+                 aioquic and quic-go in tests/server/quic/datagram_test.rs.",
             )
             .max_inbound_bytes(crate::server::quic::MAX_STREAM_QUEUE_BYTES)
             .build()
@@ -245,6 +250,13 @@ impl Server for QuicProtocol {
             "send_quic_data" => self.execute_send_quic_data(action),
             "wait_for_more" => Ok(ActionResult::WaitForMore),
             "close_this_stream" => Ok(ActionResult::CloseConnection),
+            "send_quic_datagram" => {
+                let bytes = datagram_payload(&action)?;
+                Ok(ActionResult::Custom {
+                    name: DATAGRAM_RESULT.into(),
+                    data: json!(hex::encode(bytes)),
+                })
+            }
             _ => Err(anyhow::anyhow!("Unknown QUIC action: {action_type}")),
         }
     }
@@ -411,6 +423,61 @@ fn send_quic_data_action() -> ActionDefinition {
     }
 }
 
+/// The `ActionResult::Custom` name a `send_quic_datagram` executes to; its data is the
+/// payload as hex, which the connection's datagram handler decodes and sends.
+pub const DATAGRAM_RESULT: &str = "quic_datagram";
+
+/// Largest DATAGRAM payload an action may ask for. A frame must fit one UDP packet, and the
+/// actual limit is the connection's (`max_datagram_size` in the events), always below this.
+pub const MAX_DATAGRAM_BYTES: usize = 1500;
+
+/// The bytes of a `send_quic_datagram` action, shared by server and client.
+pub fn datagram_payload(action: &serde_json::Value) -> Result<Vec<u8>> {
+    let data = action
+        .get("data")
+        .and_then(|v| v.as_str())
+        .context("Missing 'data' parameter")?;
+    let bytes = decode_quic_payload(data, action.get("encoding").and_then(|v| v.as_str()))?;
+    anyhow::ensure!(
+        bytes.len() <= MAX_DATAGRAM_BYTES,
+        "A QUIC datagram carries at most one packet's worth ({MAX_DATAGRAM_BYTES} bytes, and \
+         the connection's max_datagram_size below that); use send_quic_data for more"
+    );
+    Ok(bytes)
+}
+
+/// Action definition for send_quic_datagram (sync)
+fn send_quic_datagram_action() -> ActionDefinition {
+    ActionDefinition {
+        name: "send_quic_datagram".to_string(),
+        description: "Send an unreliable RFC 9221 DATAGRAM frame on this QUIC connection: no \
+            stream, no retransmission, no ordering, at most max_datagram_size bytes. Use it \
+            to answer a quic_datagram_received event."
+            .to_string(),
+        parameters: vec![
+            Parameter {
+                name: "data".to_string(),
+                type_hint: "string".to_string(),
+                description: "Datagram payload, read according to 'encoding' (UTF-8 text by \
+                    default)."
+                    .to_string(),
+                required: true,
+            },
+            encoding_parameter(),
+        ],
+        example: json!({
+            "type": "send_quic_datagram",
+            "data": "pong",
+            "encoding": "utf8"
+        }),
+        log_template: Some(
+            LogTemplate::new()
+                .with_info("-> QUIC datagram")
+                .with_debug("QUIC send_quic_datagram"),
+        ),
+    }
+}
+
 /// Action definition for wait_for_more (sync)
 fn wait_for_more_action() -> ActionDefinition {
     ActionDefinition {
@@ -462,6 +529,8 @@ pub static SEND_QUIC_DATA_ACTION: LazyLock<ActionDefinition> = LazyLock::new(sen
 pub static WAIT_FOR_MORE_ACTION: LazyLock<ActionDefinition> = LazyLock::new(wait_for_more_action);
 pub static CLOSE_THIS_STREAM_ACTION: LazyLock<ActionDefinition> =
     LazyLock::new(close_this_stream_action);
+pub static SEND_QUIC_DATAGRAM_ACTION: LazyLock<ActionDefinition> =
+    LazyLock::new(send_quic_datagram_action);
 
 // ============================================================================
 // QUIC Event Type Constants
@@ -561,11 +630,58 @@ pub static QUIC_DATA_RECEIVED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     ])
 });
 
+/// An RFC 9221 DATAGRAM frame arrived on a connection.
+pub static QUIC_DATAGRAM_RECEIVED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    EventType::new(
+        "quic_datagram_received",
+        "An unreliable QUIC DATAGRAM frame (RFC 9221) arrived on the connection - not on a \
+         stream. Answer with send_quic_datagram, or with nothing: a datagram needs no reply.",
+        json!({"type": "send_quic_datagram", "data": "pong"}),
+    )
+    .with_parameters(vec![
+        Parameter {
+            name: "data".to_string(),
+            type_hint: "string".to_string(),
+            description: "The datagram's payload, read according to 'encoding'".to_string(),
+            required: true,
+        },
+        Parameter {
+            name: "encoding".to_string(),
+            type_hint: "string".to_string(),
+            description: "\"utf8\" when the payload is printable text, \"hex\" otherwise. \
+                To echo it, pass 'data' and 'encoding' to send_quic_datagram unchanged."
+                .to_string(),
+            required: true,
+        },
+        Parameter {
+            name: "bytes".to_string(),
+            type_hint: "number".to_string(),
+            description: "Payload length in bytes".to_string(),
+            required: true,
+        },
+        Parameter {
+            name: "max_datagram_size".to_string(),
+            type_hint: "number".to_string(),
+            description: "Largest datagram payload the peer accepts now; a reply must fit"
+                .to_string(),
+            required: true,
+        },
+    ])
+    .with_log_template(
+        LogTemplate::new()
+            .with_info("QUIC datagram ({bytes} bytes)")
+            .with_debug("QUIC datagram received: {bytes} bytes")
+            .with_trace("QUIC datagram: {json_pretty(.)}"),
+    )
+    .with_actions(vec![SEND_QUIC_DATAGRAM_ACTION.clone()])
+});
+
 /// Get QUIC event types
 pub fn get_quic_event_types() -> Vec<EventType> {
     vec![
         QUIC_CONNECTION_OPENED_EVENT.clone(),
         QUIC_STREAM_OPENED_EVENT.clone(),
         QUIC_DATA_RECEIVED_EVENT.clone(),
+        QUIC_DATAGRAM_RECEIVED_EVENT.clone(),
     ]
 }

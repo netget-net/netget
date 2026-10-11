@@ -39,3 +39,25 @@ and bounded channels, so it does not depend on sleeps or interfere with other te
 `certificate_validation_test.rs` verifies that numeric, null and object SAN
 entries are rejected before binding. It uses no peer or model. This audit
 regression runs alongside the existing stream and independent-peer suites.
+
+## DATAGRAM: `datagram_test.rs`
+
+Two independent RFC 9221 implementations drive the server, each through the same command
+line so one test body serves both: **aioquic 1.3.0** (`tests/helpers/quic_datagram_peer.py`)
+and **quic-go 0.54** (`tests/helpers/quic_go_peer/`, Go, pinned by its `go.sum`). Each sends
+the text datagram `ping` and the binary `00 ff 10`; the script handler answers `pong:ping` and
+`ff 00 ff 10` (the hex path), and the peer reports both as received. The access log shows the
+binary one reached the handler as hex with the negotiated `max_datagram_size`. A third test
+refuses a `send_quic_datagram` larger than a packet. No LLM calls.
+
+Peers: `NETGET_AIOQUIC_PYTHON` as above, and `NETGET_QUIC_GO_PEER`, built with
+`go build -o <dir>/quic-go-peer ./tests/helpers/quic_go_peer` (Go 1.24). Both fail rather
+than skip. The `stream-pairs` job in `protocol-pairs.yml` builds the Go peer.
+
+Mutation-checked: sending an empty datagram instead of the handler's bytes fails both peers'
+tests on each side.
+
+`quic_datagram_peer.py` opens an IPv4 UDP endpoint itself rather than calling aioquic's
+`connect()`, which opens a dual-stack IPv6 socket and fails on a host without IPv6. The older
+`quic_peer.py` still calls `connect()`, so `independent_peer_test` and the client's
+`real_server_test` fail with `EAFNOSUPPORT` on such a host; GitHub's runners have IPv6.

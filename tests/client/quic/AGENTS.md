@@ -33,3 +33,11 @@ See server test notes for one unreproduced earlier mocked-test timeout.
 response event, disconnect and connection/port cleanup. Boundary tests enforce
 4 MiB encoded text before allocation and 1 MiB decoded payload, with bounded error
 messages. This pairing is separate from the independent peer evidence.
+
+## DATAGRAM: `datagram_test.rs`
+
+The client against the aioquic and quic-go echo servers (see `tests/server/quic/AGENTS.md`):
+on `quic_connected` the handler sends the datagram `hello`; each peer echoes `echo:hello`,
+which arrives as `quic_datagram_received`; the handler answers it with `00 ff`; and the peer
+server reports receiving exactly `hello` then `00 ff`. `quic_connected` carries the
+negotiated `max_datagram_size`. No LLM calls.
