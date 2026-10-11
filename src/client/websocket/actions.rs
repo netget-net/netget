@@ -96,6 +96,18 @@ impl Protocol for WebSocketClientProtocol {
                 example: json!({"Origin": "https://example.com"}),
                 default: None,
             },
+            ParameterDefinition {
+                name: "permessage_deflate".to_string(),
+                type_hint: "boolean".to_string(),
+                description: "Offer RFC 7692 permessage-deflate in the upgrade, so the server may \
+                     compress messages in both directions (default true). Messages reach the \
+                     handler as plain text either way; whether the server accepted is reported \
+                     in websocket_client_connected."
+                    .to_string(),
+                required: false,
+                example: json!(true),
+                default: Some(json!(super::DEFAULT_PERMESSAGE_DEFLATE)),
+            },
         ]
     }
 
@@ -151,10 +163,16 @@ impl Protocol for WebSocketClientProtocol {
                 "Every text and binary frame sent, ping payloads, the close code and reason, \
                  and which subprotocols to offer at connect time",
             )
-            .e2e_testing("The NetGet WebSocket server and websocat 1.14.1 in server mode (-s)")
+            .e2e_testing(
+                "The NetGet WebSocket server and websocat 1.14.1 in server mode (-s); RFC 7692 \
+                 permessage-deflate against Python websockets 15 (12-bit windows, its \
+                 default) and Node ws 8 (no context takeover), with a relay reading RSV1 off \
+                 the wire (tests/client/websocket/deflate_real_server_test.rs)",
+            )
             .notes(
                 "ws:// only — wss:// is not supported because the tokio-tungstenite dependency \
-                 is built without a TLS backend. No permessage-deflate. Pong frames are logged \
+                 is built without a TLS backend. permessage-deflate is offered by default \
+                 (permessage_deflate) and applied beneath tungstenite. Pong frames are logged \
                  rather than surfaced as an event. Validated against websocat 1.14.1 running as \
                  the server.",
             )
@@ -510,6 +528,14 @@ pub static WEBSOCKET_CLIENT_CONNECTED_EVENT: LazyLock<EventType> = LazyLock::new
                 "The subprotocol the server agreed on, or empty if it chose none. Never a value \
                  that was not offered."
                     .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "permessage_deflate".to_string(),
+            type_hint: "object".to_string(),
+            description: "The RFC 7692 compression parameters the server accepted, or null when \
+                 the connection is uncompressed"
+                .to_string(),
             required: false,
         },
     ])
