@@ -325,7 +325,7 @@ fn flux_reader_handles_quoting_defaults_blocks_and_in_band_errors() {
     );
     assert!(csv_records("a,\"open").is_err());
     let text = "#datatype,string,long,double,string\r\n#group,false,false,false,true\r\n#default,_result,,7.5,x\r\n,result,table,v,k\r\n,,0,1,a\r\n,,0,,a\r\n,,1,2,\r\n\r\n#datatype,string,long,boolean\r\n#group,false,false,false\r\n#default,_result,,\r\n,result,table,b\r\n,,2,true\r\n";
-    let tables = read_flux(text).unwrap();
+    let tables = read_flux(text).unwrap().tables;
     assert_eq!(tables.len(), 3);
     assert_eq!(tables[0].rows, vec![json!([1.0, "a"]), json!([7.5, "a"])]);
     assert_eq!(tables[1].rows, vec![json!([2.0, "x"])]);

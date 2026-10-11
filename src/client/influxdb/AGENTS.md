@@ -44,3 +44,15 @@ not a closed session.
 An event carries at most 1000 rows and 64 tables, with `row_count`, `reported_rows` and
 `truncated` saying what was left out. The answer body is capped at 4 MiB and the exchange at
 30 s. Query and write share the one-request-in-flight rule and the follow-up depth bound.
+
+The 4 MiB body cap does not by itself bound what reading it costs, so the Flux reader holds
+only what an event can carry. `CsvRecords` yields one record at a time and refuses a record
+past `MAX_COLUMNS + 1` fields at the comma that passes it. A header's column descriptors are
+built once and shared by every row and table under it; a header's names and each annotation
+row are capped at `MAX_HEADER_BYTES` (16 KiB), since descriptors and `#default` values are
+copied into the event. Only the first 64 tables and the first 1000 rows are stored — every
+later row is still checked against its datatype, then counted (`read_flux` returns
+`FluxAnswer { tables, table_count, row_count }`). Server-supplied error text — a v2/v1 error
+body's `code` and `message`, an in-band Flux `error`, an InfluxQL statement's `error`, and why
+a 2xx answer could not be read — reaches the model cut to `MAX_ERROR_TEXT_BYTES` (1024) on a
+char boundary.

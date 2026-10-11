@@ -8,7 +8,12 @@
 //! how a Flux result says which table a row belongs to. An InfluxQL answer is already JSON,
 //! and is bounded and passed through series by series.
 //!
-//! An event carries at most [`MAX_REPORTED_ROWS`] rows, and says how many it left out.
+//! An event carries at most [`MAX_REPORTED_ROWS`] rows in at most [`MAX_REPORTED_TABLES`]
+//! tables, and says how many it left out. The Flux reader holds no more than that while it
+//! reads: rows and tables past the bounds are validated and counted, never stored, each
+//! header's column descriptors are built once and shared by its rows, and a header or
+//! annotation row is refused past [`MAX_HEADER_BYTES`]. Error text from the server reaches
+//! the model cut to [`MAX_ERROR_TEXT_BYTES`].
 use super::transport::{query as percent, Origin};
 use anyhow::{bail, ensure, Context, Result};
 use bytes::Bytes;
@@ -21,6 +26,7 @@ use hyper::{
 use hyper_util::rt::TokioIo;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
+use std::sync::Arc;
 use std::time::Duration;
 
 /// A whole query exchange, connect to last byte.
@@ -35,6 +41,13 @@ pub const MAX_REPORTED_ROWS: usize = 1000;
 pub const MAX_REPORTED_TABLES: usize = 64;
 /// Columns in one table.
 pub const MAX_COLUMNS: usize = 256;
+/// Bytes in one Flux header row's column names, and in one annotation row's fields. Column
+/// descriptors and `#default` values are copied into what an event carries, so their size is
+/// bounded where they are read.
+pub const MAX_HEADER_BYTES: usize = 16 * 1024;
+/// Server-supplied error text, as the model sees it: a v1/v2 error body's message, an
+/// in-band Flux error, or why a 2xx answer could not be read.
+pub const MAX_ERROR_TEXT_BYTES: usize = 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -230,7 +243,10 @@ pub async fn query(
     // status line was already sent — is reported to the model as an error, not as tables,
     // and the session carries on.
     if let Err(e) = read_answer(&mut response, spec.language, &content_type, &body) {
-        response.error = Some(json!({"code": "unreadable_answer", "message": e.to_string()}));
+        response.error = Some(json!({
+            "code": "unreadable_answer",
+            "message": crate::utils::truncate_for_log(&e.to_string(), MAX_ERROR_TEXT_BYTES),
+        }));
     }
     Ok(response)
 }
@@ -251,8 +267,8 @@ fn read_answer(
                     || content_type == "application/csv",
                 "a Flux answer must be CSV, not {content_type}"
             );
-            let tables = read_flux(text)?;
-            response.tables = Some(budget.tables(tables));
+            let answer = read_flux(text)?;
+            response.tables = Some(budget.flux(answer));
         }
         Language::Influxql => {
             let value: Value =
@@ -265,17 +281,39 @@ fn read_answer(
 }
 
 /// An error body as the model sees it: v2's `{code, message}`, v1's `{error}` as
-/// `{message}`, or the text itself (bounded) when it is neither.
+/// `{message}`, or the text itself when it is neither — each cut to [`MAX_ERROR_TEXT_BYTES`].
 fn error_body(body: &[u8]) -> Value {
     let text = String::from_utf8_lossy(body);
     match serde_json::from_str::<Value>(&text) {
-        Ok(v) if v.get("message").is_some() => {
-            json!({"code": v.get("code").cloned().unwrap_or(Value::Null), "message": v["message"]})
+        Ok(v) if v.get("message").is_some() => json!({
+            "code": v.get("code").map_or(Value::Null, bounded),
+            "message": bounded(&v["message"]),
+        }),
+        Ok(v) if v.get("error").is_some() => {
+            json!({"code": Value::Null, "message": bounded(&v["error"])})
         }
-        Ok(v) if v.get("error").is_some() => json!({"code": Value::Null, "message": v["error"]}),
-        _ => {
-            json!({"code": Value::Null, "message": crate::utils::truncate_for_log(text.trim(), 1024)})
+        _ => json!({
+            "code": Value::Null,
+            "message": crate::utils::truncate_for_log(text.trim(), MAX_ERROR_TEXT_BYTES),
+        }),
+    }
+}
+
+/// A server-supplied JSON value bounded for the model: a string cut on a char boundary to
+/// [`MAX_ERROR_TEXT_BYTES`]; an array or object whose JSON text passes that becomes its
+/// text, cut the same way.
+fn bounded(value: &Value) -> Value {
+    match value {
+        Value::String(s) => Value::String(crate::utils::truncate_for_log(s, MAX_ERROR_TEXT_BYTES)),
+        Value::Array(_) | Value::Object(_) => {
+            let text = value.to_string();
+            if text.len() <= MAX_ERROR_TEXT_BYTES {
+                value.clone()
+            } else {
+                Value::String(crate::utils::truncate_for_log(&text, MAX_ERROR_TEXT_BYTES))
+            }
         }
+        _ => value.clone(),
     }
 }
 
@@ -308,9 +346,10 @@ impl Budget {
         true
     }
 
-    fn tables(&mut self, tables: Vec<FluxTable>) -> Vec<Value> {
+    /// The tables `read_flux` kept, with the counts of everything it did not.
+    fn flux(&mut self, answer: FluxAnswer) -> Vec<Value> {
         let mut out = Vec::new();
-        for t in tables {
+        for t in answer.tables {
             if !self.table_room() {
                 self.rows += t.rows.len();
                 continue;
@@ -322,6 +361,11 @@ impl Budget {
                 "columns": t.columns,
                 "rows": rows,
             }));
+        }
+        // `take` counted only the rows the reader kept; the reader counted them all.
+        self.rows = answer.row_count;
+        if answer.table_count > MAX_REPORTED_TABLES || answer.row_count > self.reported {
+            self.truncated = true;
         }
         out
     }
@@ -335,7 +379,7 @@ impl Budget {
         for r in results {
             let id = r.get("statement_id").cloned().unwrap_or(Value::Null);
             if let Some(e) = r.get("error") {
-                out.push(json!({"statement_id": id, "error": e}));
+                out.push(json!({"statement_id": id, "error": bounded(e)}));
                 continue;
             }
             let mut series = Vec::new();
@@ -392,60 +436,108 @@ pub struct FluxTable {
     pub rows: Vec<Value>,
 }
 
+/// A Flux answer as read: the first [`MAX_REPORTED_TABLES`] tables, holding the first
+/// [`MAX_REPORTED_ROWS`] rows between them, and how many of each the answer had in all.
+#[derive(Debug)]
+pub struct FluxAnswer {
+    pub tables: Vec<FluxTable>,
+    /// Tables in the answer, kept or not.
+    pub table_count: usize,
+    /// Rows in the answer, kept or not.
+    pub row_count: usize,
+}
+
 /// Split a CSV document into records, RFC 4180: quoted fields may hold commas, doubled quotes
 /// and line breaks; a record ends at CRLF or LF; an empty line is an empty record.
 pub fn csv_records(text: &str) -> Result<Vec<Vec<String>>> {
-    let mut records = Vec::new();
-    let mut record = Vec::new();
-    let mut field = String::new();
-    let mut quoted = false;
-    let mut chars = text.chars().peekable();
-    let mut empty_line = true;
-    while let Some(c) = chars.next() {
-        if quoted {
-            if c == '"' {
-                if chars.peek() == Some(&'"') {
-                    field.push('"');
-                    chars.next();
-                } else {
-                    quoted = false;
-                }
-            } else {
-                field.push(c);
-            }
-            continue;
+    CsvRecords::new(text, usize::MAX).collect()
+}
+
+/// [`csv_records`] one record at a time, so a reader holds one record rather than the whole
+/// document. A record with more than `max_fields` fields is an error, raised at the comma that
+/// passes the bound rather than after the record is held whole.
+pub struct CsvRecords<'a> {
+    chars: std::iter::Peekable<std::str::Chars<'a>>,
+    max_fields: usize,
+    done: bool,
+}
+
+impl<'a> CsvRecords<'a> {
+    pub fn new(text: &'a str, max_fields: usize) -> Self {
+        CsvRecords {
+            chars: text.chars().peekable(),
+            max_fields,
+            done: false,
         }
-        match c {
-            '"' => {
-                quoted = true;
-                empty_line = false;
-            }
-            ',' => {
-                record.push(std::mem::take(&mut field));
-                empty_line = false;
-            }
-            '\r' if chars.peek() == Some(&'\n') => {}
-            '\n' => {
-                if empty_line && record.is_empty() && field.is_empty() {
-                    records.push(Vec::new());
+    }
+}
+
+impl Iterator for CsvRecords<'_> {
+    type Item = Result<Vec<String>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+        let mut record = Vec::new();
+        let mut field = String::new();
+        let mut quoted = false;
+        let mut empty_line = true;
+        while let Some(c) = self.chars.next() {
+            if quoted {
+                if c == '"' {
+                    if self.chars.peek() == Some(&'"') {
+                        field.push('"');
+                        self.chars.next();
+                    } else {
+                        quoted = false;
+                    }
                 } else {
+                    field.push(c);
+                }
+                continue;
+            }
+            match c {
+                '"' => {
+                    quoted = true;
+                    empty_line = false;
+                }
+                ',' => {
                     record.push(std::mem::take(&mut field));
-                    records.push(std::mem::take(&mut record));
+                    empty_line = false;
+                    // At least one more field follows this comma.
+                    if record.len() >= self.max_fields {
+                        self.done = true;
+                        return Some(Err(anyhow::anyhow!(
+                            "a CSV record has more than {} fields",
+                            self.max_fields
+                        )));
+                    }
                 }
-                empty_line = true;
-            }
-            c => {
-                field.push(c);
-                empty_line = false;
+                '\r' if self.chars.peek() == Some(&'\n') => {}
+                '\n' => {
+                    if empty_line && record.is_empty() && field.is_empty() {
+                        return Some(Ok(Vec::new()));
+                    }
+                    record.push(field);
+                    return Some(Ok(record));
+                }
+                c => {
+                    field.push(c);
+                    empty_line = false;
+                }
             }
         }
+        self.done = true;
+        if quoted {
+            return Some(Err(anyhow::anyhow!("unterminated quoted CSV field")));
+        }
+        if !empty_line || !record.is_empty() || !field.is_empty() {
+            record.push(field);
+            return Some(Ok(record));
+        }
+        None
     }
-    ensure!(!quoted, "unterminated quoted CSV field");
-    if !empty_line || !record.is_empty() || !field.is_empty() {
-        record.push(field);
-        records.push(record);
-    }
-    Ok(records)
 }
 
 fn typed(text: &str, datatype: &str) -> Result<Value> {
@@ -474,19 +566,116 @@ fn typed(text: &str, datatype: &str) -> Result<Value> {
     })
 }
 
+/// The header row of the current block, read once.
+struct Header {
+    names: Vec<String>,
+    /// The descriptor of every column but `result` and `table`, built once per header and
+    /// shared by every table it starts.
+    columns: Arc<Vec<Value>>,
+    /// Which header this is: rows under the same header have the same columns.
+    generation: usize,
+    /// A header with an `error` column and no `table` column is Flux reporting a failure.
+    error_at: Option<usize>,
+}
+
+impl Header {
+    fn new(names: Vec<String>, datatypes: &[String], groups: &[String], generation: usize) -> Self {
+        let error_at = if names.iter().any(|n| n == "table") {
+            None
+        } else {
+            names.iter().position(|n| n == "error")
+        };
+        let columns = Arc::new(Self::columns(&names, datatypes, groups));
+        Header {
+            names,
+            columns,
+            generation,
+            error_at,
+        }
+    }
+
+    fn columns(names: &[String], datatypes: &[String], groups: &[String]) -> Vec<Value> {
+        names
+            .iter()
+            .enumerate()
+            .skip(1)
+            .filter(|(_, name)| *name != "result" && *name != "table")
+            .map(|(i, name)| {
+                json!({
+                    "name": name,
+                    "type": datatypes.get(i).map(String::as_str).unwrap_or("string"),
+                    "group": groups.get(i).is_some_and(|g| g == "true"),
+                })
+            })
+            .collect()
+    }
+
+    /// The last column named `name`, as a row reads it.
+    fn last(&self, name: &str) -> Option<usize> {
+        self.names
+            .iter()
+            .enumerate()
+            .skip(1)
+            .filter(|(_, n)| *n == name)
+            .map(|(i, _)| i)
+            .last()
+    }
+}
+
+/// The table the last row belonged to, whether or not it was kept.
+struct Current {
+    result: String,
+    table: i64,
+    generation: usize,
+    columns: Arc<Vec<Value>>,
+    kept: bool,
+}
+
+fn record_bytes(record: &[String]) -> usize {
+    record.iter().map(String::len).sum()
+}
+
+/// Field `i` of a row, or the column's `#default` when it is empty. Borrowed: nothing is
+/// copied until a row is kept.
+fn cell<'a>(record: &'a [String], defaults: &'a [String], i: usize) -> &'a str {
+    if record[i].is_empty() {
+        defaults.get(i).map_or("", String::as_str)
+    } else {
+        &record[i]
+    }
+}
+
 /// Read Flux's annotated CSV into tables. A block is a run of annotation rows, a header, and
 /// data rows, ending at an empty line or the next annotation. A block whose header has an
 /// `error` column is Flux reporting a failure mid-stream, and is returned as an error.
-pub fn read_flux(text: &str) -> Result<Vec<FluxTable>> {
-    let mut tables: Vec<FluxTable> = Vec::new();
+///
+/// Every row is checked against its header and datatypes, but only the first
+/// [`MAX_REPORTED_TABLES`] tables and the first [`MAX_REPORTED_ROWS`] rows are stored; the
+/// rest are counted. A header or annotation row past [`MAX_HEADER_BYTES`] is an error.
+pub fn read_flux(text: &str) -> Result<FluxAnswer> {
+    let mut answer = FluxAnswer {
+        tables: Vec::new(),
+        table_count: 0,
+        row_count: 0,
+    };
+    let mut kept_rows = 0usize;
     let mut datatypes: Vec<String> = Vec::new();
     let mut groups: Vec<String> = Vec::new();
     let mut defaults: Vec<String> = Vec::new();
-    let mut header: Option<Vec<String>> = None;
-    for record in csv_records(text)? {
+    let mut header: Option<Header> = None;
+    let mut generation = 0usize;
+    let mut current: Option<Current> = None;
+    for record in CsvRecords::new(text, MAX_COLUMNS + 1) {
+        let record = record?;
         if record.is_empty() || record.iter().all(|f| f.is_empty()) {
             header = None;
             continue;
+        }
+        if matches!(record[0].as_str(), "#datatype" | "#group" | "#default") {
+            ensure!(
+                record_bytes(&record) <= MAX_HEADER_BYTES,
+                "a Flux annotation row passes {MAX_HEADER_BYTES} bytes"
+            );
         }
         match record[0].as_str() {
             "#datatype" => {
@@ -496,6 +685,12 @@ pub fn read_flux(text: &str) -> Result<Vec<FluxTable>> {
             }
             "#group" => {
                 groups = record;
+                // A #group row after the header changes the columns of the rows after it.
+                if let Some(h) = header.as_mut() {
+                    generation += 1;
+                    h.columns = Arc::new(Header::columns(&h.names, &datatypes, &groups));
+                    h.generation = generation;
+                }
                 continue;
             }
             "#default" => {
@@ -504,72 +699,102 @@ pub fn read_flux(text: &str) -> Result<Vec<FluxTable>> {
             }
             _ => {}
         }
-        let Some(names) = &header else {
+        let Some(h) = &header else {
             ensure!(
                 record.len() <= MAX_COLUMNS + 1,
                 "more than {MAX_COLUMNS} columns"
             );
-            if record.iter().any(|n| n == "error") && !record.iter().any(|n| n == "table") {
-                header = Some(record);
-                continue;
-            }
             ensure!(
-                datatypes.len() == record.len(),
-                "a Flux header without a matching #datatype annotation"
+                record_bytes(&record) <= MAX_HEADER_BYTES,
+                "a Flux header passes {MAX_HEADER_BYTES} bytes of column names"
             );
-            header = Some(record);
+            let reports_error =
+                record.iter().any(|n| n == "error") && !record.iter().any(|n| n == "table");
+            if !reports_error {
+                ensure!(
+                    datatypes.len() == record.len(),
+                    "a Flux header without a matching #datatype annotation"
+                );
+            }
+            generation += 1;
+            header = Some(Header::new(record, &datatypes, &groups, generation));
             continue;
         };
         ensure!(
-            record.len() == names.len(),
+            record.len() == h.names.len(),
             "a Flux row has {} fields for {} columns",
             record.len(),
-            names.len()
+            h.names.len()
         );
-        if let Some(at) = names.iter().position(|n| n == "error") {
-            if !names.iter().any(|n| n == "table") {
-                bail!("the query failed: {}", record[at]);
-            }
+        if let Some(at) = h.error_at {
+            bail!(
+                "the query failed: {}",
+                crate::utils::truncate_for_log(&record[at], MAX_ERROR_TEXT_BYTES)
+            );
         }
-        let mut result = String::from("_result");
-        let mut table = 0i64;
-        let mut columns = Vec::new();
-        let mut row = Vec::new();
-        for (i, name) in names.iter().enumerate().skip(1) {
-            let datatype = datatypes.get(i).map(String::as_str).unwrap_or("string");
-            let text = if record[i].is_empty() {
-                defaults.get(i).cloned().unwrap_or_default()
-            } else {
-                record[i].clone()
-            };
-            match name.as_str() {
-                "result" => result = text,
-                "table" => table = text.parse().context("the table column is not a long")?,
-                _ => {
-                    columns.push(json!({
-                        "name": name,
-                        "type": datatype,
-                        "group": groups.get(i).is_some_and(|g| g == "true"),
-                    }));
-                    row.push(if text.is_empty() && datatype != "string" {
-                        Value::Null
-                    } else {
-                        typed(&text, datatype)?
-                    });
-                }
+        let result = h
+            .last("result")
+            .map_or("_result", |i| cell(&record, &defaults, i));
+        let table: i64 = match h.last("table") {
+            Some(i) => cell(&record, &defaults, i)
+                .parse()
+                .context("the table column is not a long")?,
+            None => 0,
+        };
+
+        let same = current.as_ref().is_some_and(|c| {
+            c.table == table
+                && c.result == result
+                && (c.generation == h.generation || c.columns == h.columns)
+        });
+        if same {
+            if let Some(c) = current.as_mut() {
+                c.generation = h.generation;
             }
-        }
-        match tables.last_mut() {
-            Some(t) if t.table == table && t.result == result && t.columns == columns => {
-                t.rows.push(Value::Array(row))
+        } else {
+            answer.table_count += 1;
+            let kept = answer.tables.len() < MAX_REPORTED_TABLES;
+            if kept {
+                answer.tables.push(FluxTable {
+                    result: result.to_string(),
+                    table,
+                    columns: h.columns.as_ref().clone(),
+                    rows: Vec::new(),
+                });
             }
-            _ => tables.push(FluxTable {
-                result,
+            current = Some(Current {
+                result: result.to_string(),
                 table,
-                columns,
-                rows: vec![Value::Array(row)],
-            }),
+                generation: h.generation,
+                columns: h.columns.clone(),
+                kept,
+            });
+        }
+        answer.row_count += 1;
+        let keep = current.as_ref().is_some_and(|c| c.kept) && kept_rows < MAX_REPORTED_ROWS;
+
+        let mut row = Vec::new();
+        for (i, name) in h.names.iter().enumerate().skip(1) {
+            if name == "result" || name == "table" {
+                continue;
+            }
+            let datatype = datatypes.get(i).map(String::as_str).unwrap_or("string");
+            let text = cell(&record, &defaults, i);
+            let value = if text.is_empty() && datatype != "string" {
+                Value::Null
+            } else {
+                typed(text, datatype)?
+            };
+            if keep {
+                row.push(value);
+            }
+        }
+        if keep {
+            if let Some(t) = answer.tables.last_mut() {
+                t.rows.push(Value::Array(row));
+                kept_rows += 1;
+            }
         }
     }
-    Ok(tables)
+    Ok(answer)
 }

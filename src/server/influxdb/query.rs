@@ -25,7 +25,7 @@ pub const MAX_QUERY_BYTES: usize = 16 * 1024;
 pub const MAX_STATEMENTS: usize = 16;
 /// Tables in one answer, all statements together.
 pub const MAX_RESULT_TABLES: usize = 64;
-/// Columns in one table.
+/// Columns in one table, and tags on one table (Flux renders each tag as a column too).
 pub const MAX_RESULT_COLUMNS: usize = 64;
 /// Rows in one answer, all tables together.
 pub const MAX_RESULT_ROWS: usize = 10_000;
@@ -374,6 +374,11 @@ pub fn tables_from_json(
             .transpose()?;
         let mut tags = BTreeMap::new();
         if let Some(obj) = t.get("tags").and_then(|t| t.as_object()) {
+            ensure!(
+                obj.len() <= MAX_RESULT_COLUMNS,
+                "tables[{ti}] has {} tags; at most {MAX_RESULT_COLUMNS}",
+                obj.len()
+            );
             for (k, v) in obj {
                 let v = v
                     .as_str()
@@ -508,8 +513,34 @@ fn cell_text(c: &Cell) -> String {
 /// Flux's annotated CSV (RFC 4180 rows under `#datatype`, `#group`, `#default`). Each table
 /// is a block of its own, separated by an empty line, with its index in the `table` column.
 /// Tags become string columns in the group key, and the measurement `_measurement`.
+///
+/// Every line is measured before it is appended, so the answer is refused at the line that
+/// would take it past [`MAX_RESPONSE_BYTES`] and never grows beyond it.
 pub fn render_flux(tables: &[Table]) -> Result<String> {
     let mut out = String::new();
+    let line = |out: &mut String, first: &str, a: &str, b: &str, rest: Vec<String>| {
+        let len = first.len()
+            + a.len()
+            + b.len()
+            + 2
+            + rest.iter().map(|r| r.len() + 1).sum::<usize>()
+            + 2;
+        ensure!(
+            out.len() + len <= MAX_RESPONSE_BYTES,
+            "the answer passes {MAX_RESPONSE_BYTES} bytes"
+        );
+        out.push_str(first);
+        out.push(',');
+        out.push_str(a);
+        out.push(',');
+        out.push_str(b);
+        for r in rest {
+            out.push(',');
+            out.push_str(&r);
+        }
+        out.push_str("\r\n");
+        Ok(())
+    };
     for (index, t) in tables.iter().enumerate() {
         let mut columns = t.columns.clone();
         let mut constants: Vec<String> = Vec::new();
@@ -519,7 +550,7 @@ pub fn render_flux(tables: &[Table]) -> Result<String> {
                 kind: ColumnType::String,
                 group: true,
             });
-            constants.push(m.clone());
+            constants.push(csv_field(m));
         }
         for (k, v) in &t.tags {
             columns.push(Column {
@@ -527,23 +558,15 @@ pub fn render_flux(tables: &[Table]) -> Result<String> {
                 kind: ColumnType::String,
                 group: true,
             });
-            constants.push(v.clone());
+            constants.push(csv_field(v));
         }
         if index > 0 {
+            ensure!(
+                out.len() + 2 <= MAX_RESPONSE_BYTES,
+                "the answer passes {MAX_RESPONSE_BYTES} bytes"
+            );
             out.push_str("\r\n");
         }
-        let line = |out: &mut String, first: &str, a: &str, b: &str, rest: Vec<String>| {
-            out.push_str(first);
-            out.push(',');
-            out.push_str(a);
-            out.push(',');
-            out.push_str(b);
-            for r in rest {
-                out.push(',');
-                out.push_str(&r);
-            }
-            out.push_str("\r\n");
-        };
         line(
             &mut out,
             "#datatype",
@@ -553,37 +576,34 @@ pub fn render_flux(tables: &[Table]) -> Result<String> {
                 .iter()
                 .map(|c| c.kind.annotation().to_string())
                 .collect(),
-        );
+        )?;
         line(
             &mut out,
             "#group",
             "false",
             "false",
             columns.iter().map(|c| c.group.to_string()).collect(),
-        );
+        )?;
         line(
             &mut out,
             "#default",
             "_result",
             "",
             columns.iter().map(|_| String::new()).collect(),
-        );
+        )?;
         line(
             &mut out,
             "",
             "result",
             "table",
             columns.iter().map(|c| csv_field(&c.name)).collect(),
-        );
+        )?;
+        let table = index.to_string();
         for row in &t.rows {
             let mut cells: Vec<String> = row.iter().map(|c| csv_field(&cell_text(c))).collect();
-            cells.extend(constants.iter().map(|c| csv_field(c)));
-            line(&mut out, "", "", &index.to_string(), cells);
+            cells.extend(constants.iter().cloned());
+            line(&mut out, "", "", &table, cells)?;
         }
-        ensure!(
-            out.len() <= MAX_RESPONSE_BYTES,
-            "the answer passes {MAX_RESPONSE_BYTES} bytes"
-        );
     }
     if out.is_empty() {
         // No tables: an empty result is an empty body with the CSV content type.

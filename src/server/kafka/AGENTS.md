@@ -37,9 +37,13 @@ stores no topics, so there is nowhere to keep an id assigned at creation: `topic
 derives one from the name (two FNV-1a hashes, RFC 9562 version nibble 8), so the same name
 gets the same id across connections and restarts, as a real broker's stored id would.
 Metadata v10+ reports it, and the broker remembers the most recent 4096 it reported
-(`MAX_KNOWN_TOPIC_IDS`) so a Fetch v13+ or a Metadata v12 request naming a topic **by id
-alone** can be answered. An id it never reported is `UNKNOWN_TOPIC_ID` (100), and the
-handler is not asked. The produce, fetch and offset-commit events carry `api_version`.
+(`MAX_KNOWN_TOPIC_IDS`, in `TopicIds`) so a Fetch v13+ or a Metadata v12 request naming a
+topic **by id alone** can be answered. Past 4096 the oldest id is forgotten, one at a time —
+a forgotten id costs a client one `UNKNOWN_TOPIC_ID` and a metadata refresh. The names come
+from the model, so a topic named over Kafka's own 249-byte limit (`MAX_TOPIC_NAME_LEN`) is
+left out of the Metadata answer and never remembered; if the client asked for it, it is
+answered `UNKNOWN_TOPIC_OR_PARTITION` like any topic the model did not describe. An id it
+never reported is `UNKNOWN_TOPIC_ID` (100), and the handler is not asked. The produce, fetch and offset-commit events carry `api_version`.
 
 Which client speaks what, measured: librdkafka 2.3 (kcat) negotiates Metadata v12, Produce
 v7 and Fetch v11; Apache Kafka's Java client and franz-go both take Metadata v12, Produce

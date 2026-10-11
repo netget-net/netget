@@ -12,3 +12,5 @@ pub mod flexible_versions_test;
 pub mod peer_inject_test;
 #[cfg(all(test, feature = "kafka"))]
 pub mod real_client_test;
+#[cfg(all(test, feature = "kafka"))]
+pub mod topic_id_cache_test;

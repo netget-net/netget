@@ -174,8 +174,73 @@ const ERR_UNKNOWN_TOPIC_ID: i16 = 100;
 /// Topic ids remembered for resolving Fetch v13+ and Metadata v12 requests, which name
 /// topics by id alone. Every id this broker hands out is derived from the name, so a
 /// forgotten one costs a client one `UNKNOWN_TOPIC_ID` and a metadata refresh, never a wrong
-/// answer.
+/// answer. Past this the oldest one is forgotten, one at a time.
 pub const MAX_KNOWN_TOPIC_IDS: usize = 4096;
+
+/// Kafka's own limit on a topic name, in bytes (`Topic.MAX_NAME_LENGTH`). A Metadata answer
+/// naming a longer topic leaves that topic out, and its name is never remembered.
+pub const MAX_TOPIC_NAME_LEN: usize = 249;
+
+/// The topic ids this broker has reported, oldest first, so a request naming a topic by id
+/// alone can be answered. Holds at most [`MAX_KNOWN_TOPIC_IDS`] names of at most
+/// [`MAX_TOPIC_NAME_LEN`] bytes each.
+#[derive(Default)]
+pub struct TopicIds {
+    inner: std::sync::Mutex<TopicIdTable>,
+}
+
+#[derive(Default)]
+struct TopicIdTable {
+    names: std::collections::HashMap<uuid::Uuid, String>,
+    order: std::collections::VecDeque<uuid::Uuid>,
+}
+
+impl TopicIds {
+    /// Remember and return the id reported for `name`; `None`, remembering nothing, for a
+    /// name over [`MAX_TOPIC_NAME_LEN`] bytes. At [`MAX_KNOWN_TOPIC_IDS`] the oldest id is
+    /// forgotten to make room.
+    pub fn report(&self, name: &str) -> Option<uuid::Uuid> {
+        if name.len() > MAX_TOPIC_NAME_LEN {
+            return None;
+        }
+        let id = topic_id(name);
+        let mut table = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        if !table.names.contains_key(&id) {
+            while table.names.len() >= MAX_KNOWN_TOPIC_IDS {
+                let Some(oldest) = table.order.pop_front() else {
+                    break;
+                };
+                table.names.remove(&oldest);
+            }
+            table.order.push_back(id);
+        }
+        table.names.insert(id, name.to_string());
+        Some(id)
+    }
+
+    /// The topic a reported id stands for.
+    pub fn name(&self, id: &uuid::Uuid) -> Option<String> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .names
+            .get(id)
+            .cloned()
+    }
+
+    /// Ids remembered.
+    pub fn len(&self) -> usize {
+        self.inner
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .names
+            .len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
 
 /// The id this broker reports for a topic (Metadata v10+, Fetch v13+).
 ///
@@ -231,26 +296,19 @@ pub struct KafkaServer {
     /// Host advertised to clients in Metadata when the model does not name one.
     advertised_host: String,
     /// Ids this broker has reported, so a request naming a topic by id alone can be
-    /// answered. Bounded by [`MAX_KNOWN_TOPIC_IDS`].
-    topic_ids: std::sync::Mutex<std::collections::HashMap<uuid::Uuid, String>>,
+    /// answered.
+    topic_ids: TopicIds,
 }
 
 impl KafkaServer {
-    /// Remember (and return) the id reported for `name`.
-    fn report_topic(&self, name: &str) -> uuid::Uuid {
-        let id = topic_id(name);
-        if let Ok(mut ids) = self.topic_ids.lock() {
-            if ids.len() >= MAX_KNOWN_TOPIC_IDS && !ids.contains_key(&id) {
-                ids.clear();
-            }
-            ids.insert(id, name.to_string());
-        }
-        id
+    /// Remember (and return) the id reported for `name`; `None` for a name Kafka would refuse.
+    fn report_topic(&self, name: &str) -> Option<uuid::Uuid> {
+        self.topic_ids.report(name)
     }
 
     /// The topic a reported id stands for.
     fn topic_name(&self, id: &uuid::Uuid) -> Option<String> {
-        self.topic_ids.lock().ok()?.get(id).cloned()
+        self.topic_ids.name(id)
     }
 }
 
@@ -1037,6 +1095,16 @@ impl KafkaServer {
                             );
                             continue;
                         };
+                        // Kafka refuses such a name; a requested one falls through to the
+                        // unknown-topic answer below rather than being described.
+                        if name.len() > MAX_TOPIC_NAME_LEN {
+                            Log::new(Some(status_tx)).warn(format!(
+                                "Kafka metadata_response: topic name of {} bytes ignored; \
+                                 Kafka's limit is {MAX_TOPIC_NAME_LEN}",
+                                name.len()
+                            ));
+                            continue;
+                        }
                         let topic_error =
                             clamp_error_code(t.get("error_code").and_then(|v| v.as_i64()));
 
@@ -1100,7 +1168,9 @@ impl KafkaServer {
                             .with_partitions(partitions)
                             .with_error_code(topic_error);
                         if ctx.api_version >= 10 {
-                            topic = topic.with_topic_id(server.report_topic(name));
+                            if let Some(id) = server.report_topic(name) {
+                                topic = topic.with_topic_id(id);
+                            }
                         }
                         topics.push(topic);
                     }

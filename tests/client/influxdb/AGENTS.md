@@ -25,3 +25,11 @@ drives connect → write → write response → query → answer through static 
 Turning off the typed conversion fails both the daemon test and the reader test.
 `reported_rows_stop_at_the_bound` points the client at NetGet's own server for a 1001-row
 answer in each dialect — a bound test, not interoperability evidence.
+
+`flux_bounds_test.rs` needs no peer. It reads hostile Flux answers directly with `read_flux`
+and serves them from a fake HTTP server on 127.0.0.1 to `query()`: 9 000 rows each in a table
+of its own under a near-limit header (64 tables kept, 9 000 counted, prompt), a 1.5 MiB header
+(refused as `unreadable_answer`), annotation and header rows at and past `MAX_HEADER_BYTES`, a
+4 MiB record of commas (refused at the comma past `MAX_COLUMNS + 1`), and error text — v2 and
+v1 bodies, an in-band Flux error, an unparsable cell, an InfluxQL statement error — each
+reaching the event within `MAX_ERROR_TEXT_BYTES` plus the `...` marker.

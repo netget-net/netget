@@ -196,6 +196,13 @@ Fetch v16, by topic id. A third test sends a Fetch v16 by an id never reported a
 `UNKNOWN_TOPIC_ID` without the handler being asked. Leaving the topic id out of Metadata
 fails both client tests (they fall back below v13). `NETGET_KAFKA_PEERS` is mandatory.
 
+`topic_id_cache_test.rs` holds the topic-id table's two bounds: on `TopicIds` directly (a
+249-byte name is remembered and a 250-byte one is not; past `MAX_KNOWN_TOPIC_IDS` only the
+oldest id goes and the rest still resolve), and on the wire, where a Metadata v12 answer
+naming both lengths describes the 249-byte topic with its id, answers the 250-byte one
+`UNKNOWN_TOPIC_OR_PARTITION` with no id, and a Fetch v16 by the id the long name would have
+is `UNKNOWN_TOPIC_ID`. No peer needed.
+
 The tshark oracle in `e2e_test.rs` allows expert info containing ` version. Supports v0-`:
 Wireshark 4.2's Kafka dissector says that on any ApiVersions response advertising beyond
 its own table, which is a statement about the dissector, not these bytes.

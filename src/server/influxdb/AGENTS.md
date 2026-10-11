@@ -69,5 +69,7 @@ An empty result asserts there is no data, and nobody made that assertion. Every 
 not having an answer — the handler errored, an action failed, no answer action, two of them,
 an answer that does not render — is the same 503 with its own `decision=fail_closed_*` tag.
 
-Query bounds: 16 KiB query, 16 statements, 64 tables, 64 columns, 10 000 rows, 64 KiB per cell,
-tag or name, 4 MiB rendered answer.
+Query bounds: 16 KiB query, 16 statements, 64 tables, 64 columns and 64 tags per table, 10 000
+rows, 64 KiB per cell, tag or name, 4 MiB rendered answer. Flux repeats a table's measurement
+and tags on every row, so `render_flux` measures each line before appending it and refuses the
+answer at the line that would pass 4 MiB; it never builds a larger answer to measure it.

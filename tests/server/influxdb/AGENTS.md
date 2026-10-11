@@ -25,6 +25,9 @@ per-statement error, a whole-request refusal, Basic and `u`/`p` credentials). On
 handler plays the store for all four. Disabling CSV quoting fails both Flux tests; dropping the
 epoch conversion fails both InfluxQL tests. The bounds test steps one past each declared query
 bound; the fail-closed test covers no handler, a mistyped cell and a statement-count mismatch.
+`render_bounds_test.rs` holds the renderer to its bound without a peer: 64 tags taken and 65
+refused, an answer rendered to exactly 4 MiB and one byte more refused, and rows that each
+repeat 64 tags of 64 KiB refused at the first row rather than after the table.
 Node scripts run with `node -e`, where the port is `process.argv.at(-1)`. The access log lists
 newest first.
 
