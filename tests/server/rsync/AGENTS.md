@@ -25,8 +25,21 @@ the daemon (`apt-get install rsync`). It fails rather than skips without it.
 - Refusals:
   - an unknown module (the model's `rsync_refuse`);
   - a missing path (exit 23, `link_stat`);
-  - an upload (`read only`);
+  - an upload (the policy refuses it with `module pub is read only`);
   - `-z` (refused).
+
+`upload_test.rs` drives stock rsync pushing to NetGet. Its policy accepts `inbox`, except
+`deny.txt`, refuses `ro`, and records each `rsync_upload_complete`.
+
+- A tree with text, binary, empty and multi-chunk files, a symlink and a nested directory.
+  `deny.txt` is refused per file (exit 23). Every other file's content in the event is
+  compared byte for byte with the client's disk.
+- One file with `-a`.
+- Refusals: the `ro` module (the model's refusal), `--delete`, `-H`, and a file at the 1 MiB
+  bound, which is taken, next to one a byte over it, which is not.
+
+Mutation-checked: skipping the sort (indexes then name the wrong files) and a wrong MD4 seed
+both fail.
 
 `wire_test.rs` covers the codec alone:
 

@@ -1,6 +1,6 @@
-//! What the model decides for an rsync daemon: which modules exist, and what a module holds
-//! at the path a client asked for. The daemon is read-only; the model supplies every byte,
-//! nothing is read from disk.
+//! What the model decides for an rsync daemon: which modules exist, what a module holds at the
+//! path a client asked for, and which uploaded files to take. The model supplies every byte it
+//! serves and is handed every byte it takes; nothing is read from or written to disk.
 use crate::llm::actions::{
     protocol_trait::{ActionResult, Protocol, Server},
     ActionDefinition, Parameter, ParameterDefinition, StartupExamples,
@@ -14,6 +14,7 @@ use std::sync::LazyLock;
 pub const MODULES: &str = "rsync_modules";
 pub const ENTRIES: &str = "rsync_send_entries";
 pub const REFUSE: &str = "rsync_refuse";
+pub const ACCEPT_UPLOAD: &str = "rsync_accept_upload";
 /// Modules one listing may name.
 pub const MAX_MODULES: usize = 256;
 
@@ -45,6 +46,7 @@ pub fn action(
         MODULES => "-> rsync module list".to_string(),
         ENTRIES => "-> rsync file list".to_string(),
         REFUSE => "-> rsync refusal: {message}".to_string(),
+        ACCEPT_UPLOAD => "-> rsync upload accepted".to_string(),
         other => format!("-> rsync {}", other.trim_start_matches("rsync_")),
     };
     ActionDefinition {
@@ -95,6 +97,53 @@ pub fn refuse_action() -> ActionDefinition {
         json!({"type":REFUSE,"message":"Unknown module 'secret'"}),
     )
 }
+
+pub fn accept_upload_action() -> ActionDefinition {
+    action(
+        ACCEPT_UPLOAD,
+        "Accept an upload. Give `paths` to take only those files (the rest are refused, each with an error the client prints); leave it out to take every file. The files' contents arrive afterwards in rsync_upload_complete. Nothing is written to disk.",
+        vec![p(
+            "paths",
+            "array",
+            "Optional: the files to take, as module-relative paths from the event's files list",
+            false,
+        )],
+        json!({"type":ACCEPT_UPLOAD,"paths":["incoming/report.txt"]}),
+    )
+}
+
+pub static UPLOAD_REQUEST_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    EventType::new(
+        "rsync_upload_request",
+        "A client is uploading (rsync files rsync://host/module/path/). Its file list is here, without contents. Answer rsync_accept_upload to take all or some of the files, or rsync_refuse.",
+        accept_upload_action().example.clone(),
+    )
+    .with_parameters(vec![
+        p("module", "string", "The module named in the request", true),
+        p("path", "string", "The destination inside the module (empty for its root)", true),
+        p("files", "array", "Each {path (module-relative), type (file, dir or symlink), size, mode (octal string), target (symlinks)}", true),
+        p("file_count", "number", "Regular files in the list", true),
+        p("total_bytes", "number", "Their sizes added up", true),
+        p("client", "string", "The client's address and port", true),
+    ])
+    .with_actions(vec![accept_upload_action(), refuse_action()])
+});
+
+pub static UPLOAD_COMPLETE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    EventType::new(
+        "rsync_upload_complete",
+        "An upload finished: the files that were taken, with their contents (each checked against the client's MD4), and the ones that were not. Nothing was written to disk; record what matters in memory if it should be served later.",
+        json!({"type":"set_memory","value":"received incoming/report.txt"}),
+    )
+    .with_parameters(vec![
+        p("module", "string", "The module uploaded to", true),
+        p("path", "string", "The destination inside the module", true),
+        p("files", "array", "Each received file {path, size, content, encoding (utf8 or hex)}; directories and symlinks the list named are included without content", true),
+        p("refused", "array", "Files not taken, each {path, reason}", true),
+        p("client", "string", "The client's address and port", true),
+    ])
+    .with_no_actions()
+});
 
 pub static LIST_MODULES_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
@@ -150,6 +199,13 @@ pub fn check(v: &Value) -> Result<()> {
                 .as_str()
                 .context("rsync_refuse needs a message")?;
         }
+        ACCEPT_UPLOAD => {
+            if let Some(paths) = v.get("paths") {
+                let list = paths.as_array().context("paths is an array")?;
+                ensure!(list.len() <= super::wire::MAX_ENTRIES, "too many paths");
+                ensure!(list.iter().all(|p| p.is_string()), "every path is a string");
+            }
+        }
         other => bail!("Unknown rsync action {other:?}"),
     }
     Ok(())
@@ -173,16 +229,26 @@ impl Protocol for RsyncProtocol {
         ]
     }
     fn description(&self) -> &'static str {
-        "rsync daemon (rsync://, protocol 29): read-only modules whose listings and file contents the model supplies, for stock rsync clients to list and download"
+        "rsync daemon (rsync://, protocol 29): modules whose listings and file contents the model supplies, for stock rsync clients to list and download, and uploads whose files the model chooses to take"
     }
     fn get_async_actions(&self, _: &AppState) -> Vec<ActionDefinition> {
         Vec::new()
     }
     fn get_sync_actions(&self) -> Vec<ActionDefinition> {
-        vec![modules_action(), entries_action(), refuse_action()]
+        vec![
+            modules_action(),
+            entries_action(),
+            refuse_action(),
+            accept_upload_action(),
+        ]
     }
     fn get_event_types(&self) -> Vec<EventType> {
-        vec![LIST_MODULES_EVENT.clone(), REQUEST_EVENT.clone()]
+        vec![
+            LIST_MODULES_EVENT.clone(),
+            REQUEST_EVENT.clone(),
+            UPLOAD_REQUEST_EVENT.clone(),
+            UPLOAD_COMPLETE_EVENT.clone(),
+        ]
     }
     fn get_startup_parameters(&self) -> Vec<ParameterDefinition> {
         vec![
@@ -214,8 +280,8 @@ impl Protocol for RsyncProtocol {
             .request_only("rsync carries one request per connection on a strictly sequenced binary stream; a message injected into it would desynchronise the client")
             .implementation("Hand-rolled rsync daemon protocol pinned at 29 (src/server/rsync/wire.rs): @RSYNCD handshake and MOTD, module listing, newline-terminated arguments, the raw checksum seed, multiplexed output, the protocol-29 file list in rsync's f_name_cmp order, whole-file transfers as literal tokens with MD4(seed ‖ data), dry runs, -c list checksums, and the three-NDX_DONE end of run with stats")
             .llm_control("Which modules exist, and the files, directories and symlinks a module holds (with their contents) at each requested path; refusals")
-            .e2e_testing("tests/server/rsync: the stock rsync 3.2.7 client — module listing, --list-only, -a and -r downloads compared byte for byte, a dry run, a symlink, a refusal, and an upload refused as read-only")
-            .notes("Read-only: an upload is refused ('module is read only'). -z, -R, -U, -N, -s and --files-from are refused rather than half-supported. No authentication (every module is open). Block matching against an existing destination file is not done: every file is sent whole, which is correct, just not minimal.")
+            .e2e_testing("tests/server/rsync: the stock rsync 3.2.7 client — module listing, --list-only, -a and -r downloads compared byte for byte, a dry run, a symlink, a refusal, and an upload refused as read-only; upload_test.rs: pushes of a tree and of one file with -a, the model taking part of an upload with the rest refused per file, contents compared byte for byte, and uploads refused (the model, --delete, -H, the per-file size bound)")
+            .notes("Uploads are offered to the model, which takes all or some files; their contents reach it in rsync_upload_complete and nothing is written to disk. An upload names one destination; --delete and -H are refused for it. Bounds: 1 MiB per uploaded file, 8 MiB and 1000 files per upload. -z, -R, -U, -N, -s and --files-from are refused rather than half-supported. No authentication (every module is open). Block matching against an existing destination file is not done: every file is sent whole, which is correct, just not minimal.")
             .max_inbound_bytes(wire::MAX_FILTER_BYTES)
             .build()
     }

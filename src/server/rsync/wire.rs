@@ -202,6 +202,10 @@ pub struct Request {
     pub checksum: bool,
     pub numeric_ids: bool,
     pub list_only: bool,
+    /// -D: devices and specials are listed with their rdev.
+    pub devices: bool,
+    /// -H: an uploading client's list would carry device and inode numbers.
+    pub hard_links: bool,
     pub checksum_seed: Option<i32>,
     /// Paths after ".", with the module prefix stripped ("" is the module root).
     pub paths: Vec<String>,
@@ -233,6 +237,14 @@ pub fn parse_args(args: &[String], module: &str) -> Request {
             "--sender" => r.sender = true,
             "--numeric-ids" => r.numeric_ids = true,
             "--list-only" => r.list_only = true,
+            "--devices" | "--specials" => r.devices = true,
+            // With --delete the uploading client sends a filter list before its file list, and
+            // the receiver is expected to delete what the list does not name; neither applies
+            // to a daemon that stores nothing.
+            s if s.starts_with("--delete") || s == "--del" => {
+                r.refusal
+                    .get_or_insert(format!("{s} is not supported by this daemon"));
+            }
             s if s.starts_with("--checksum-seed=") => {
                 r.checksum_seed = s["--checksum-seed=".len()..].parse().ok();
             }
@@ -252,6 +264,8 @@ pub fn parse_args(args: &[String], module: &str) -> Request {
                         'g' => r.group = true,
                         'n' => r.dry_run = true,
                         'c' => r.checksum = true,
+                        'D' => r.devices = true,
+                        'H' => r.hard_links = true,
                         'z' | 'U' | 'N' | 'R' | 's' => {
                             r.refusal
                                 .get_or_insert(format!("-{c} is not supported by this daemon"));
@@ -263,8 +277,13 @@ pub fn parse_args(args: &[String], module: &str) -> Request {
             _ => {}
         }
     }
-    if !r.sender {
-        r.refusal = Some("module is read only".into());
+    if !r.sender && r.paths.len() > 1 {
+        r.refusal
+            .get_or_insert("an upload names one destination".into());
+    }
+    if !r.sender && r.hard_links {
+        r.refusal
+            .get_or_insert("-H is not supported for uploads by this daemon".into());
     }
     r
 }
@@ -376,6 +395,10 @@ impl FlistWriter {
 pub struct MuxReader<R> {
     inner: R,
     left: usize,
+    /// False for a stream that is not multiplexed (client to daemon at protocol 29).
+    mux: bool,
+    /// Bytes read from `inner`, frame headers included.
+    pub consumed: u64,
     pub messages: Vec<(u8, String)>,
     pub io_error: i32,
 }
@@ -385,12 +408,30 @@ impl<R: AsyncRead + Unpin> MuxReader<R> {
         Self {
             inner,
             left: 0,
+            mux: true,
+            consumed: 0,
             messages: vec![],
             io_error: 0,
         }
     }
+    /// The same decoders over a stream that carries no multiplexing frames: what a daemon
+    /// reads from an uploading client at protocol 29.
+    pub fn raw(inner: R) -> Self {
+        Self {
+            mux: false,
+            ..Self::new(inner)
+        }
+    }
     pub async fn read(&mut self, n: usize) -> Result<Vec<u8>> {
         let mut out = vec![0u8; n];
+        if !self.mux {
+            self.inner
+                .read_exact(&mut out)
+                .await
+                .context("the peer closed the connection")?;
+            self.consumed += n as u64;
+            return Ok(out);
+        }
         let mut have = 0;
         while have < n {
             while self.left == 0 {
@@ -399,6 +440,7 @@ impl<R: AsyncRead + Unpin> MuxReader<R> {
                     .read_exact(&mut h)
                     .await
                     .context("the daemon closed the connection")?;
+                self.consumed += 4;
                 let h = u32::from_le_bytes(h);
                 let tag = ((h >> 24) as u8).wrapping_sub(MPLEX_BASE);
                 let len = (h & 0x00ff_ffff) as usize;
@@ -409,6 +451,7 @@ impl<R: AsyncRead + Unpin> MuxReader<R> {
                 ensure!(len <= 8192, "a {len}-byte rsync message is too long");
                 let mut body = vec![0u8; len];
                 self.inner.read_exact(&mut body).await?;
+                self.consumed += len as u64;
                 match tag {
                     MSG_ERROR_XFER | MSG_INFO | MSG_ERROR | MSG_WARNING => self
                         .messages
@@ -423,6 +466,7 @@ impl<R: AsyncRead + Unpin> MuxReader<R> {
             }
             let k = (n - have).min(self.left);
             self.inner.read_exact(&mut out[have..have + k]).await?;
+            self.consumed += k as u64;
             have += k;
             self.left -= k;
         }
@@ -501,6 +545,10 @@ impl<R: AsyncRead + Unpin> MuxReader<R> {
                 );
                 data = self.read(n as usize).await?;
             }
+            ensure!(
+                kind.is_some() || !r.devices,
+                "a device or special file in the list; -D is not supported for uploads"
+            );
             if r.checksum && kind == Some(Kind::File) {
                 self.read(16).await?;
             }
