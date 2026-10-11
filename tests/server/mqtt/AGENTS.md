@@ -92,7 +92,7 @@ not a slow path: the client declares the connection dead while the call is in fl
 
 ## Not covered
 
-TLS (8883), WebSocket transport, MQTT v5, a retained-message *store* (the model publishes a
+TLS (8883), WebSocket transport, MQTT v5 enhanced authentication, a retained-message *store* (the model publishes a
 retained message itself; `answer_with_test.rs` covers that path), wildcard subscription matching,
 last-will delivery and session resume across reconnect — the broker does not implement a
 subscription table or a retained-message store, so there is nothing to test. Keep-alive
@@ -145,6 +145,44 @@ Three things about driving it:
   backend cannot answer is refused with CONNACK 3, so an absent or under-counted rule here
   would be testing a broker that turns mosquitto away.
 
-Unproven by either client: MQTT v5, TLS on 8883, WebSocket transport, QoS 1/2 end to end,
+Unproven by either client: TLS on 8883, WebSocket transport, QoS 1/2 end to end,
 retained messages, wildcard filter matching, last-will delivery, session resume and keep-alive
 reaping — the broker implements no subscription table, no retained store and no keep-alive timer.
+
+## MQTT 5.0: `v5_real_client_test.rs` and `v5_wire_test.rs`
+
+No LLM calls in either file: a Python handler answers every event, in process (`ServerForm`),
+so the access log is the record of what the handler saw.
+
+`v5_real_client_test.rs` — two independent v5 clients, each failing rather than skipping:
+
+- `mosquitto_v5_clients_carry_properties_and_read_reason_codes`: `mosquitto_pub -V 5` publishes
+  with Content Type, Response Topic, Correlation Data, a User Property and a Message Expiry
+  Interval; the handler forwards it with those properties to `mosquitto_sub -V 5`, whose `-F`
+  line is asserted whole. Then a CONNECT refused with reason 0x87 (libmosquitto prints "not
+  authorised") and a SUBACK 0x87 (it prints "denied").
+- `paho_v5_reads_assigned_ids_reason_codes_correlation_data_and_disconnect`: paho-mqtt 2 at
+  MQTTv5 with an empty client id. Asserts, from paho's callbacks: the Assigned Client
+  Identifier, Maximum Packet Size and Topic Alias Maximum on the CONNACK; SUBACK `[1, 135]`
+  with its Reason String (and the subscribe event's No Local / Retain Handling / Subscription
+  Identifier); a request whose binary Correlation Data `00 ff 49 44` reached the model as hex
+  and came back as the same four bytes; a second request sent with only a Topic Alias; PUBACK
+  135; UNSUBACK `[17]`; and DISCONNECT 152 "kicked by admin".
+
+`v5_wire_test.rs` — packets written by hand from the specification, answers compared byte for
+byte, and the pcap oracle over each exchange (Wireshark decodes v5 property blocks against the
+CONNECT's protocol level, so a length that disagrees with its contents is Malformed there):
+the whole session, the three refusing DISCONNECTs (0x82 undefined alias, 0x94 alias past 16,
+0x95 past `max_packet_size`), the fail-closed CONNACK 0x88 with a category-only Reason String
+when the backend is unreachable, and one PUBLISH framed as 3.1.1 for one recipient and as v5
+for another.
+
+`install_v5_peers.py <dir>` creates a venv with paho-mqtt and prints `NETGET_MQTT_PYTHON`;
+Mosquitto comes from the system packages. CI: the `mqtt-v5-pairs` job in
+`.github/workflows/protocol-pairs.yml`.
+
+Mutation-checked: sending no properties from `mqtt_publish` fails four of the six tests.
+
+Note on running as root: `client/mqtt::keepalive_test` points Mosquitto's `log_dest file` at a
+root-owned temp dir; a root-run Mosquitto drops to the `mosquitto` user and cannot write it, so
+that test fails there and passes on a CI runner. The v5 tests log to stderr and are unaffected.

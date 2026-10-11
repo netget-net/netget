@@ -112,3 +112,29 @@ is contacted.
 - `push_websocket_text` / `push_websocket_binary` / `list_websocket_connections` — the
   unprompted-push actions — are not covered end to end, because the harness has no way to send
   a user command to a running server mid-test.
+
+## permessage-deflate: `deflate_real_client_test.rs`
+
+Two independent RFC 7692 implementations, neither sharing code with tungstenite or with
+`deflate.rs`, set up by `install_peers.py <dir>` (prints `NETGET_WS_PYTHON` and
+`NETGET_WS_NODE_MODULES`; the tests fail rather than skip without them):
+
+- **Python websockets 15** (`peer/deflate_peer.py`) through a TCP relay that records each
+  frame's RSV1 bit and length: a short text, a 15 000-byte text, a text fragmented across three
+  frames and a binary message come back echoed, and every frame NetGet sent had RSV1 set; the
+  repetitive ones shrank to under half. The relay is the point — an uncompressed frame is legal
+  on a deflate connection, so the library alone cannot show NetGet compressed.
+- **Node ws 8** (`peer/ws_deflate.cjs`) offering a 10-bit window for the server and no context
+  takeover either way. The long text repeats at a distance of 5000 bytes (an LCG block, built
+  identically by both peers and the Rust tests), so a server compressing with a 15-bit window
+  sends back-references ws cannot follow.
+- With `permessage_deflate: false` the offer is declined and no frame has RSV1.
+- A decompression bomb (a ~1 KB frame inflating to 1 MB, `max_message_size` 4096) closes the
+  connection, never reaches the handler, and is refused by the inflate bound itself — asserted
+  on its `decision=permessage_deflate_refused` line, because tungstenite's own message limit
+  would also close the connection after a full inflation.
+
+Mutation-checked: compressing with a 15-bit window regardless of the negotiation fails the ws
+test; keeping the compression context when no-context-takeover was agreed fails it too;
+removing the inflate bound fails the bomb test. CI: the `websocket-deflate-pairs` job in
+`protocol-pairs.yml`.

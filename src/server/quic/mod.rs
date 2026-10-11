@@ -23,7 +23,8 @@ use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::state::app_state::AppState;
 use actions::{
-    QuicProtocol, QUIC_CONNECTION_OPENED_EVENT, QUIC_DATA_RECEIVED_EVENT, QUIC_STREAM_OPENED_EVENT,
+    QuicProtocol, QUIC_CONNECTION_OPENED_EVENT, QUIC_DATAGRAM_RECEIVED_EVENT,
+    QUIC_DATA_RECEIVED_EVENT, QUIC_STREAM_OPENED_EVENT,
 };
 
 /// Stream state for LLM processing
@@ -197,8 +198,26 @@ impl QuicServer {
         .await;
         let streams = Arc::new(Mutex::new(HashMap::new()));
         let mut work = FuturesUnordered::new();
+        // One datagram turn at a time. While it runs, datagrams wait in Quinn's bounded
+        // receive buffer and the oldest are dropped past it — which RFC 9221 permits, and
+        // which is the only bound that cannot be outrun by a sender.
+        let mut datagram_turn = FuturesUnordered::new();
         loop {
             tokio::select! {
+                datagram=connection.0.read_datagram(),if datagram_turn.is_empty()=>{
+                    let Ok(datagram)=datagram else{break;};
+                    datagram_turn.push(Self::handle_datagram(
+                        datagram,
+                        connection.0.clone(),
+                        connection_id,
+                        server_id,
+                        llm_client.clone(),
+                        app_state.clone(),
+                        status_tx.clone(),
+                        protocol.clone(),
+                    ));
+                }
+                _=datagram_turn.next(),if !datagram_turn.is_empty()=>{}
                 result=connection.0.accept_bi(),if work.len()<MAX_STREAMS=>{
                     let Ok((send,recv))=result else{break;};
                     tracing::trace!(stream = %recv.id(), "QUIC stream accepted");
@@ -224,11 +243,113 @@ impl QuicServer {
             }
         }
         drop(work);
+        drop(datagram_turn);
         drop(streams);
         app_state
             .close_connection_on_server(server_id, connection_id)
             .await;
         let _ = status_tx.send("__UPDATE_UI__".into());
+    }
+
+    /// Answer one RFC 9221 DATAGRAM frame. The handler's `send_quic_datagram` actions go back
+    /// as DATAGRAM frames on the same connection; anything larger than the peer accepts is
+    /// refused here, where the connection's limit is known.
+    #[allow(clippy::too_many_arguments)]
+    async fn handle_datagram(
+        datagram: Bytes,
+        connection: quinn::Connection,
+        connection_id: ConnectionId,
+        server_id: crate::state::ServerId,
+        llm_client: OllamaClient,
+        app_state: Arc<AppState>,
+        status_tx: mpsc::UnboundedSender<String>,
+        protocol: Arc<QuicProtocol>,
+    ) {
+        app_state
+            .update_connection_stats(
+                server_id,
+                connection_id,
+                Some(datagram.len() as u64),
+                None,
+                Some(1),
+                None,
+            )
+            .await;
+        let (data, encoding) = actions::encode_quic_payload(&datagram);
+        let event = Event::new(
+            &QUIC_DATAGRAM_RECEIVED_EVENT,
+            serde_json::json!({
+                "data": data,
+                "encoding": encoding,
+                "bytes": datagram.len(),
+                "max_datagram_size": connection.max_datagram_size(),
+            }),
+        );
+        let result = tokio::time::timeout(
+            EXCHANGE_TIMEOUT,
+            call_llm(
+                &llm_client,
+                &app_state,
+                server_id,
+                Some(connection_id),
+                &event,
+                protocol.as_ref(),
+            ),
+        )
+        .await;
+        let results = match result {
+            Ok(Ok(r)) => r.protocol_results,
+            Ok(Err(e)) => {
+                // A datagram has no reply channel to fail on: answering it is optional, so a
+                // backend failure is silence, logged with the reason.
+                let decision = if crate::llm::is_overload_error(&e) {
+                    "fail_closed_llm_overloaded"
+                } else {
+                    "fail_closed_llm_error"
+                };
+                Log::new(Some(&status_tx)).error(format!(
+                    "QUIC datagram on connection {connection_id} decision={decision}: {e}"
+                ));
+                return;
+            }
+            Err(_) => {
+                Log::new(Some(&status_tx)).warn(format!(
+                    "QUIC datagram on connection {connection_id} decision=fail_closed_timeout"
+                ));
+                return;
+            }
+        };
+        for result in results {
+            let ActionResult::Custom { name, data } = result else {
+                continue;
+            };
+            if name != actions::DATAGRAM_RESULT {
+                continue;
+            }
+            let Some(bytes) = data.as_str().and_then(|h| hex::decode(h).ok()) else {
+                continue;
+            };
+            let n = bytes.len();
+            match connection.send_datagram(Bytes::from(bytes)) {
+                Ok(()) => {
+                    app_state
+                        .update_connection_stats(
+                            server_id,
+                            connection_id,
+                            None,
+                            Some(n as u64),
+                            None,
+                            Some(1),
+                        )
+                        .await;
+                }
+                Err(e) => Log::new(Some(&status_tx)).warn(format!(
+                    "QUIC datagram of {n} bytes not sent on connection {connection_id} \
+                     (peer limit {:?}): {e}",
+                    connection.max_datagram_size()
+                )),
+            }
+        }
     }
 
     /// Handle a QUIC stream with LLM actions.

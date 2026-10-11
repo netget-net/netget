@@ -690,6 +690,10 @@ impl ClientRegistry {
         self.register(Arc::new(
             crate::client::tr069::actions::Tr069ClientProtocol::new(),
         ));
+        #[cfg(feature = "sse")]
+        self.register(Arc::new(
+            crate::client::sse::actions::SseClientProtocol::new(),
+        ));
         #[cfg(feature = "zabbix")]
         self.register(Arc::new(
             crate::client::zabbix::actions::ZabbixClientProtocol::new(),
@@ -1271,6 +1275,7 @@ pub(crate) const ALL_KNOWN_CLIENT_PROTOCOLS: &[(&str, &str)] = &[
     ("Stratum", "stratum"),
     ("Apache Pulsar", "pulsar"),
     ("TR-069 (CWMP)", "tr069"),
+    ("SSE", "sse"),
     ("Zabbix", "zabbix"),
     ("RTP", "rtp"),
     ("RTSP", "rtsp"),
