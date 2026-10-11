@@ -696,6 +696,13 @@ async fn dispatch_packet(
 
             session.v5 = connect.protocol_level == 5;
             protocol.set_v5(session.v5);
+            // The client asked for enhanced authentication (§4.12), which this broker does not
+            // perform. Only an explicit `mqtt_connack` from the handler admits such a client.
+            let wants_enhanced_auth = session.v5
+                && connect
+                    .properties
+                    .text(v5::AUTHENTICATION_METHOD)
+                    .is_some();
             let assigned = connect.client_id.is_empty();
             let effective_id = if assigned {
                 format!("anon-{}", connection_id.as_u32())
@@ -784,6 +791,20 @@ async fn dispatch_packet(
                 // A refusing CONNACK ends the connection on the server's side too: 3.1.1
                 // §3.2.2.3 and 5.0 §3.2.2.2 both say the server MUST close after one.
                 LlmOutcome::Responded => !protocol.connack_refused(),
+                LlmOutcome::Silent if wants_enhanced_auth => {
+                    // The CONNECT names an Authentication Method and the handler said nothing.
+                    // Accepting would admit a client whose authentication never ran, so silence
+                    // refuses here: 0x8C Bad Authentication Method, and the server closes after
+                    // a refusing CONNACK (§3.2.2.2).
+                    Log::new(Some(&status_tx)).warn(format!(
+                        "MQTT CONNECT from '{}' names an authentication method and the handler \
+                         sent no mqtt_connack decision=fail_closed_auth_method, refusing with \
+                         CONNACK 0x8C",
+                        effective_id
+                    ));
+                    let _ = out_tx.send(build_connack_v5(0x8C, false, &v5::PropertyWriter::new()));
+                    false
+                }
                 LlmOutcome::Silent => {
                     // CONNACK is mandatory (3.2). Accept by default rather than let the
                     // client sit in its connect timeout. Safe only because the handler ran
@@ -793,9 +814,10 @@ async fn dispatch_packet(
                     // where a *permissive* packet follows a `decision=model_silent`. The
                     // session is accepted, credentials and all, because the model said
                     // nothing - which is the OAuth2 shape, narrowed to the case where the
-                    // handler demonstrably ran. The preceding `decision=model_silent` line
-                    // is what makes it auditable; see the fail-open note in
-                    // `src/server/mqtt/CLAUDE.md`.
+                    // handler demonstrably ran and the client asked for no enhanced
+                    // authentication (the arm above refuses that one). The preceding
+                    // `decision=model_silent` line is what makes it auditable; see the
+                    // fail-open note in `src/server/mqtt/AGENTS.md`.
                     Log::new(Some(&status_tx)).warn(format!(
                         "MQTT no mqtt_connack from handler for '{}'; accepting by default \
                          (CONNACK 0 — an accepted session nothing decided)",
@@ -1491,7 +1513,9 @@ impl From<v5::PropertyError> for PacketError {
     fn from(e: v5::PropertyError) -> Self {
         match e {
             v5::PropertyError::Malformed(_) => PacketError::malformed(e.to_string()),
-            v5::PropertyError::Duplicate(_) => PacketError::protocol(e.to_string()),
+            v5::PropertyError::Duplicate(_) | v5::PropertyError::Protocol(_) => {
+                PacketError::protocol(e.to_string())
+            }
         }
     }
 }
@@ -1638,9 +1662,18 @@ pub fn parse_connect(body: &[u8]) -> std::result::Result<ConnectPacket, PacketEr
     pos += 2;
 
     let properties = if v5 {
-        v5::read_properties(body, &mut pos)
+        let props = v5::read_properties(body, &mut pos)
             .map_err(PacketError::from)
-            .map_err(tag)?
+            .map_err(tag)?;
+        v5::forbid(&props, &[v5::SUBSCRIPTION_IDENTIFIER], "CONNECT")
+            .map_err(PacketError::from)
+            .map_err(tag)?;
+        // §3.1.2.11.4: "It is a Protocol Error ... for the value to be set to zero." A limit of
+        // 0 would also leave every packet the broker sends this client unsendable.
+        if props.int(v5::MAXIMUM_PACKET_SIZE) == Some(0) {
+            return Err(tag(PacketError::protocol("maximum packet size 0")));
+        }
+        props
     } else {
         v5::Properties::default()
     };
@@ -1651,6 +1684,9 @@ pub fn parse_connect(body: &[u8]) -> std::result::Result<ConnectPacket, PacketEr
     let (will_topic, will_message) = if flags & 0x04 != 0 {
         if v5 {
             will_properties = v5::read_properties(body, &mut pos)
+                .map_err(PacketError::from)
+                .map_err(tag)?;
+            v5::forbid(&will_properties, &[v5::SUBSCRIPTION_IDENTIFIER], "Will Properties")
                 .map_err(PacketError::from)
                 .map_err(tag)?;
         }
@@ -1707,7 +1743,10 @@ pub fn parse_publish(
         0
     };
     let properties = if v5 {
-        v5::read_properties(body, &mut pos)?
+        let props = v5::read_properties(body, &mut pos)?;
+        // [MQTT-3.3.4-6]: a PUBLISH from a client MUST NOT carry a Subscription Identifier.
+        v5::forbid(&props, &[v5::SUBSCRIPTION_IDENTIFIER], "a client's PUBLISH")?;
+        props
     } else {
         v5::Properties::default()
     };
@@ -1742,6 +1781,8 @@ pub fn parse_subscribe(body: &[u8], v5: bool) -> std::result::Result<SubscribePa
     let packet_id = read_u16_at(body, pos).ok_or_else(short)?;
     pos += 2;
     let properties = if v5 {
+        // The one packet a client may put a Subscription Identifier in; `read_properties`
+        // refuses a second one and the value 0 (§3.8.2.1.2) as Protocol Errors.
         v5::read_properties(body, &mut pos)?
     } else {
         v5::Properties::default()
@@ -1795,7 +1836,9 @@ pub fn parse_unsubscribe(
     let packet_id = read_u16_at(body, pos).ok_or_else(short)?;
     pos += 2;
     let properties = if v5 {
-        v5::read_properties(body, &mut pos)?
+        let props = v5::read_properties(body, &mut pos)?;
+        v5::forbid(&props, &[v5::SUBSCRIPTION_IDENTIFIER], "UNSUBSCRIBE")?;
+        props
     } else {
         v5::Properties::default()
     };

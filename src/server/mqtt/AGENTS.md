@@ -284,8 +284,11 @@ connection is closed when it is exceeded. Every parse function is bounds-checked
 ## Not implemented
 
 - **MQTT 5.0 enhanced authentication** (AUTH, §4.12) — an AUTH packet is a Protocol Error
-  (DISCONNECT 0x82). A CONNECT naming an `authentication_method` reaches the handler, whose
-  answer should be reason 0x8C.
+  (DISCONNECT 0x82). A CONNECT naming an `authentication_method` reaches the handler; only
+  an explicit accepting `mqtt_connack` admits it. A silent handler gets CONNACK 0x8C Bad
+  Authentication Method and the connection closes (`decision=fail_closed_auth_method`),
+  because admitting it would skip an authentication the client asked for
+  (`tests/server/mqtt/v5_property_limits_test.rs`).
 - **v5 session state**: Session Expiry, Receive Maximum (the broker does not count its own
   in-flight QoS>0 publishes), Will Delay, Request Response Information, Server Keep Alive.
   Each is reported to the model where the client sent it; none changes the broker's behaviour.
@@ -326,6 +329,9 @@ Every v5 difference is in one of three places, and nowhere else:
   header — and in CONNECT the Will Properties before the will topic — through
   `v5::read_properties`. An unknown property identifier, a truncated value or ill-formed UTF-8
   is 0x81 Malformed Packet; a non-repeatable property twice is 0x82 Protocol Error (§2.2.2.2).
+  A block may carry at most `MAX_USER_PROPERTIES` (128) User Properties; a Subscription
+  Identifier is accepted only once in a SUBSCRIBE and never as 0 or in a client PUBLISH; a
+  CONNECT Maximum Packet Size of 0 is a Protocol Error.
   The decoded block reaches the model as `properties` on every v5 event: snake_case names,
   User Properties as `[[name, value], ...]` (names may repeat), Subscription Identifiers as a
   list, and binary values (Correlation Data, Authentication Data) as text when they are UTF-8

@@ -246,6 +246,10 @@ On v5:
 - `mqtt_connected` adds `reason_code` (the CONNACK's, as its wire value), `session_present`
   and `properties` (assigned_client_identifier, maximum_packet_size, topic_alias_maximum,
   user_properties, ... under the same snake_case names the broker uses).
+- The client advertises no Topic Alias Maximum (0), so any PUBLISH from the broker carrying a
+  `topic_alias` is a protocol violation and ends the connection: rumqttc would otherwise keep
+  every alias a hostile broker sends, up to 65535 topics
+  (`tests/client/mqtt/v5_topic_alias_test.rs`).
 - `mqtt_message_received` adds `properties`: response_topic, correlation_data (+
   correlation_data_encoding: text when UTF-8, hex otherwise), content_type,
   message_expiry_interval, subscription_identifiers, user_properties.

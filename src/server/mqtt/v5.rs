@@ -249,6 +249,13 @@ fn read_utf8(buf: &[u8], pos: &mut usize) -> Option<String> {
     String::from_utf8(read_bin(buf, pos)?).ok()
 }
 
+/// Most User Properties one property block may carry.
+///
+/// The specification sets no count, so without one a single packet up to `max_packet_size`
+/// (16 MiB at most) could carry millions of five-byte pairs, each becoming an owned entry and
+/// then a JSON value in the model's event. Real clients send a handful.
+pub const MAX_USER_PROPERTIES: usize = 128;
+
 /// Why a property block was rejected. Each maps to the reason code a v5 DISCONNECT carries.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PropertyError {
@@ -256,6 +263,9 @@ pub enum PropertyError {
     Malformed(String),
     /// A property that may appear once appeared twice (0x82, §2.2.2.2).
     Duplicate(&'static str),
+    /// A well-formed property the packet may not carry, a value the specification calls a
+    /// Protocol Error, or more User Properties than [`MAX_USER_PROPERTIES`] (0x82).
+    Protocol(String),
 }
 
 impl std::fmt::Display for PropertyError {
@@ -263,12 +273,30 @@ impl std::fmt::Display for PropertyError {
         match self {
             PropertyError::Malformed(m) => write!(f, "malformed properties: {m}"),
             PropertyError::Duplicate(n) => write!(f, "property {n} appears more than once"),
+            PropertyError::Protocol(m) => write!(f, "invalid properties: {m}"),
         }
     }
 }
 
-/// Decode one property block at `pos` — its varint length, then exactly that many bytes of
-/// properties — advancing `pos` past it.
+/// Refuse a block carrying any of `ids`: properties §2.2.2.2 does not allow in `packet`.
+pub fn forbid(props: &Properties, ids: &[u8], packet: &str) -> Result<(), PropertyError> {
+    match props.entries.iter().find(|(id, _)| ids.contains(id)) {
+        Some((id, _)) => Err(PropertyError::Protocol(format!(
+            "{} is not allowed in {packet}",
+            describe(*id).map(|d| d.0).unwrap_or("property")
+        ))),
+        None => Ok(()),
+    }
+}
+
+/// Decode one property block a client sent at `pos` — its varint length, then exactly that
+/// many bytes of properties — advancing `pos` past it.
+///
+/// Besides the framing, it enforces what holds for every client-sent block: no identifier
+/// except User Property appears twice (Subscription Identifier repeats only in a PUBLISH the
+/// *server* sends, §3.3.2.3.8), a Subscription Identifier is never 0 (§3.8.2.1.2), and at most
+/// [`MAX_USER_PROPERTIES`] User Properties. Which identifiers a particular packet may carry is
+/// the caller's to check with [`forbid`].
 pub fn read_properties(buf: &[u8], pos: &mut usize) -> Result<Properties, PropertyError> {
     let malformed = |m: &str| PropertyError::Malformed(m.to_string());
     let len = read_varint(buf, pos).ok_or_else(|| malformed("property length"))? as usize;
@@ -279,6 +307,7 @@ pub fn read_properties(buf: &[u8], pos: &mut usize) -> Result<Properties, Proper
     let block = &buf[*pos..end];
     let mut p = 0usize;
     let mut props = Properties::default();
+    let mut user_properties = 0usize;
     while p < block.len() {
         let id = read_varint(block, &mut p).ok_or_else(|| malformed("property identifier"))?;
         let id = u8::try_from(id).map_err(|_| malformed("property identifier out of range"))?;
@@ -310,11 +339,22 @@ pub fn read_properties(buf: &[u8], pos: &mut usize) -> Result<Properties, Proper
         if kind == Kind::Byte {
             p += 1;
         }
-        // User Property may repeat, and so may Subscription Identifier in a PUBLISH the
-        // server sends; everything else is "a Protocol Error to include ... more than once".
-        let repeatable = id == USER_PROPERTY || id == SUBSCRIPTION_IDENTIFIER;
-        if !repeatable && props.entries.iter().any(|(i, _)| *i == id) {
+        // User Property may repeat; everything else a client sends is "a Protocol Error to
+        // include ... more than once".
+        if id == USER_PROPERTY {
+            user_properties += 1;
+            if user_properties > MAX_USER_PROPERTIES {
+                return Err(PropertyError::Protocol(format!(
+                    "more than {MAX_USER_PROPERTIES} user properties"
+                )));
+            }
+        } else if props.entries.iter().any(|(i, _)| *i == id) {
             return Err(PropertyError::Duplicate(name));
+        }
+        if id == SUBSCRIPTION_IDENTIFIER && value == PropValue::Int(0) {
+            return Err(PropertyError::Protocol(
+                "subscription identifier 0".to_string(),
+            ));
         }
         props.entries.push((id, value));
     }

@@ -373,8 +373,14 @@ enum Notice {
     Publish(Message),
     /// The broker closed the session; on v5 its DISCONNECT may say why.
     Disconnect(Option<String>),
+    /// The broker broke the protocol in a way this client ends the connection over. Carries
+    /// the category only, never the packet's content.
+    ProtocolViolation(&'static str),
     Other,
 }
+
+/// What a v5 PUBLISH carrying a Topic Alias is reported as.
+pub const TOPIC_ALIAS_VIOLATION: &str = "topic alias";
 
 /// The event-loop side of a connection.
 enum Transport {
@@ -413,6 +419,21 @@ impl Transport {
                             info["properties"] = connack_properties_json(p);
                         }
                         Ok(Notice::ConnAck(Some(info)))
+                    }
+                    // NetGet's CONNECT sends no Topic Alias Maximum, which is 0, so the broker
+                    // MUST NOT send an alias (§3.1.2.11.5, [MQTT-3.1.2-27]). rumqttc does not
+                    // check that: it stores every alias it reads in a map of its own with no
+                    // bound, before the PUBLISH reaches this code. So the first aliased
+                    // PUBLISH ends the connection. What rumqttc stored by then is bounded by
+                    // one read batch (it handles at most 10 packets before yielding the first,
+                    // each within its 10 KiB incoming limit), and dropping the event loop frees
+                    // it. rumqttc's socket is private, so no DISCONNECT 0x94 precedes the close.
+                    E5::Incoming(P5::Publish(p))
+                        if p.properties
+                            .as_ref()
+                            .is_some_and(|props| props.topic_alias.is_some()) =>
+                    {
+                        Ok(Notice::ProtocolViolation(TOPIC_ALIAS_VIOLATION))
                     }
                     E5::Incoming(P5::Publish(p)) => Ok(Notice::Publish(Message {
                         topic: String::from_utf8_lossy(&p.topic).into_owned(),
@@ -605,6 +626,28 @@ async fn poll_transport(
                         let _ = status_tx.send(format!(
                             "[CLIENT] MQTT client {} disconnected by broker{}",
                             client_id, why
+                        ));
+                        let _ = status_tx.send("__UPDATE_UI__".to_string());
+                        break;
+                    }
+                    Notice::ProtocolViolation(category) => {
+                        // Returning ends the connection: the event loop, its socket and
+                        // whatever rumqttc stored for it are dropped below.
+                        warn!(
+                            "MQTT client {} closing: broker sent a {} \
+                             decision=protocol_error",
+                            client_id, category
+                        );
+                        app_state
+                            .update_client_status(
+                                client_id,
+                                ClientStatus::Error(format!("protocol violation: {category}")),
+                            )
+                            .await;
+                        let _ = status_tx.send(format!(
+                            "[CLIENT] MQTT client {} closed the connection: protocol violation \
+                             ({})",
+                            client_id, category
                         ));
                         let _ = status_tx.send("__UPDATE_UI__".to_string());
                         break;
