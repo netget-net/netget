@@ -236,6 +236,18 @@ The client's response path has the identical exposure and calls the identical sc
 come from wherever the operator pointed it, and over UDP an off-path attacker can beat the real
 agent to the reply.
 
+**SNMPv3 carries BER inside an OCTET STRING, and the datagram screen does not see into it.**
+msgSecurityParameters is a primitive OCTET STRING whose contents are the encoded
+UsmSecurityParameters, which `usm::decode` hands to `rasn` in a second decode. The datagram screen
+skips a primitive's contents, so a userName or engineID written as `24 80` repeated sits behind a
+clean outer message and, unscreened, reaches the same unbounded recursion — pre-authentication on
+the agent (`Agent::receive`) and on the manager (`Manager::learn`, `Manager::unwrap_reply`).
+`usm::decode` screens both the whole message and the msgSecurityParameters contents itself, so no
+caller can reach `rasn` unscreened, and a decrypted scoped PDU is screened before its decode in
+`scoped_pdu`.
+`notify::parse` and the inform-acknowledgement read in `notify::send` screen too. Every inner
+decode needs its own screen: the outer one's guarantee stops at the first primitive it skips.
+
 ### 8. Dual Logging
 
 All operations use **dual logging**:
@@ -429,8 +441,19 @@ noAuthNoPriv. The event carries `user`, `security_level` and `context_name`, so 
 decide per user what it may read or write — that is the VACM there is.
 
 The engine: `engine_id` (hex, 5–32 bytes) or a random RFC 3411 format-5 ID (enterprise 0)
-chosen at start; `engine_boots` (default 1) is a parameter because NetGet persists nothing — a
-fixed `engine_id` restarted without raising it looks to managers like a clock going backwards.
+chosen at start. snmpEngineBoots is `engine_boots` when set; otherwise it is
+`usm::default_engine_boots()`, the wall-clock seconds since 2024-01-01 (and, within one process,
+always more than the value before). NetGet persists nothing, and with a fixed `engine_id` the
+localized keys are identical in every run, so boots is what separates runs: an authenticated
+message captured in one run carries that run's boots and the next run answers it with
+`NotInTimeWindows`. This rests on the wall clock — a clock set back across a restart can repeat a
+value — so where it cannot be trusted, set `engine_boots` and raise it on every restart.
+
+Received boots and time are `INTEGER (0..2147483647)` (RFC 3414 §2.2.1) and are range-checked
+before any arithmetic: the agent answers an out-of-range pair on an authenticated request with
+the authenticated `NotInTimeWindows` report and compares times with `abs_diff`; the manager
+refuses an out-of-range clock in the unauthenticated discovery report (`learn`) and in an
+authenticated report (`unwrap`), and adds elapsed seconds with saturation capped at the maximum.
 Answers larger than the request's msgMaxSize become tooBig. Not served: SNMPv3 traps and
 informs in either direction (a v3 Trap/Inform/Report PDU is dropped,
 `decision=dropped_v3_notification`).

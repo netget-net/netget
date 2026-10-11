@@ -271,6 +271,24 @@ string passed in `startup_params` — which also proves the injected path uses t
 configuration rather than defaults. `Rejected` is asserted twice: for an unknown action type
 and for a `send_snmp_get` with an empty `oids` array.
 
+## SNMPv3 hardening (`usm_hardening_test.rs`)
+
+No LLM and no external tools.
+
+- `learn_and_unwrap_refuse_nested_security_parameters`: a v3 message whose UsmSecurityParameters'
+  engineID nests 30000 `24 80` levels, shallow everywhere the datagram screen looks, is refused by
+  `Manager::learn` and by `Manager::unwrap_reply` (with its message id outstanding), each naming
+  UsmSecurityParameters. Without the inner screen the test binary aborts with a stack overflow.
+- `a_discovery_report_with_an_out_of_range_clock_is_not_learnt`: time `i64::MAX`, `-1`, `2^31`
+  and boots `-1`, `i64::MAX`, `2^31` are refused and no engine is stored; time `2^31 - 1` is
+  learnt and the next request's time stays `2^31 - 1`.
+- `an_authenticated_report_with_an_out_of_range_clock_is_not_believed`: correctly signed reports
+  with an out-of-range clock are refused, and the next request still carries the clock learnt at
+  discovery.
+- `a_client_survives_a_nested_discovery_reply_and_connects`: a fake agent on 127.0.0.1 answers the
+  real client's discovery probe with the nested message and then a valid report; the client
+  reaches `Connected`.
+
 ## SNMPv3 against a real agent (`real_server_test.rs`)
 
 Net-SNMP's `snmpd`, unprivileged through `RealServer` (`-f -Lo -C -c {dir}/snmpd.conf

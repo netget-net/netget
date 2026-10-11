@@ -309,7 +309,11 @@ same PDU on the wire. A reply is believed only after its message id matches one 
 sent, its engine is the discovered one, and — when authenticated — its MAC verifies; a response
 must also come back at the level asked. A USM report reaches the handler as
 `snmp_response_received` with `usm_report: {report, count}` and empty variables; an authenticated
-`NotInTimeWindows` report resynchronises the clock first, so resending works. Passwords live only
+`NotInTimeWindows` report resynchronises the clock first, so resending works. A clock outside
+RFC 3414's `0..2147483647`, in the discovery report or in an authenticated report, is refused
+rather than stored. Every reply — the discovery report included — goes through `usm::decode`,
+which depth-screens the whole message and then the msgSecurityParameters contents before `rasn`
+decodes either (see `src/server/snmp/AGENTS.md` §7). Passwords live only
 in the localized keys and are redacted from every log by name. Not offered: AES-192/256, v3
 notifications.
 

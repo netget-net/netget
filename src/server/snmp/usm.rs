@@ -20,10 +20,18 @@
 //!   authenticated so the manager can trust the clock in it.
 //! - **The manager's side**: discovery, a clock kept from the agent's reports, and replies
 //!   checked for message id, engine, level and MAC before anything in them is believed.
+//! - **Engine boots without persistence**: an agent given no `engine_boots` counts them as
+//!   seconds of wall-clock time since [`ENGINE_BOOTS_EPOCH_UNIX_SECS`], so every restart reports
+//!   a larger value than the run before it and a message captured in one run carries a boots the
+//!   next run refuses.
 //!
 //! What it does not: VACM (every authenticated user sees what the handler answers — the user
-//! and level are in the event for the handler to decide on), SNMPv3 notifications, and
-//! persisted engine boots: the agent's `engine_boots` is a startup parameter.
+//! and level are in the event for the handler to decide on) and SNMPv3 notifications.
+//!
+//! Every BER decode here runs on bytes screened by [`crate::server::snmp::check_ber_structure`]
+//! first: the whole message, the msgSecurityParameters OCTET STRING's contents (which the outer
+//! screen treats as one primitive and never descends into), and a decrypted scoped PDU. The
+//! screen is applied inside [`decode`] itself, so no caller can reach `rasn` without it.
 
 use anyhow::{bail, ensure, Context, Result};
 use des::cipher::{Block, BlockDecrypt, BlockEncrypt, KeyInit};
@@ -33,7 +41,7 @@ use rasn::types::{Integer, ObjectIdentifier, OctetString};
 use rasn_snmp::{v2, v3};
 use serde::Serialize;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
 
 /// The USM's security-model number (RFC 3411).
@@ -46,6 +54,9 @@ pub const FLAG_REPORTABLE: u8 = 0x04;
 pub const TIME_WINDOW_SECS: i64 = 150;
 /// RFC 3414 §2.2.2: boots at this value means the engine must be reconfigured.
 pub const MAX_ENGINE_BOOTS: i64 = 2_147_483_647;
+/// RFC 3414 §2.2.1: snmpEngineBoots and snmpEngineTime are both `INTEGER (0..2147483647)`.
+/// A received value outside `0..=MAX_ENGINE_TIME` is refused before any arithmetic is done on it.
+pub const MAX_ENGINE_TIME: i64 = 2_147_483_647;
 /// The size of message NetGet's agent will accept and say it can receive.
 pub const MAX_MESSAGE_SIZE: i64 = 65_507;
 /// RFC 3414 A.2: the password is repeated to this many bytes before hashing.
@@ -57,8 +68,52 @@ pub const MIN_PASSWORD_BYTES: usize = 8;
 pub const MAX_PASSWORD_BYTES: usize = 256;
 pub const MAX_ENGINE_ID_BYTES: usize = 32;
 pub const MIN_ENGINE_ID_BYTES: usize = 5;
-/// The agent's snmpEngineBoots when none is configured.
-pub const DEFAULT_ENGINE_BOOTS: i64 = 1;
+/// The instant default engine boots are counted from: 2024-01-01T00:00:00Z. Counting seconds
+/// from here stays below [`MAX_ENGINE_BOOTS`] until 2092.
+pub const ENGINE_BOOTS_EPOCH_UNIX_SECS: u64 = 1_704_067_200;
+
+/// The largest boots value this process has handed out, so two agents started in the same
+/// second of one process still get strictly increasing values.
+static LAST_DEFAULT_BOOTS: AtomicI64 = AtomicI64::new(0);
+
+/// snmpEngineBoots for an agent whose operator configured none.
+///
+/// NetGet persists nothing between runs, so boots cannot be a counter read from disk. It is the
+/// number of wall-clock seconds since [`ENGINE_BOOTS_EPOCH_UNIX_SECS`] instead, which grows
+/// across restarts as a stored counter would: with a fixed `engine_id` the localized keys are
+/// the same in every run, and a captured authenticated message carries the boots of the run it
+/// was sent in, which every later run refuses as `usmStatsNotInTimeWindows`. Within one process
+/// each call returns more than the last. The guarantee rests on the wall clock: a clock set back
+/// across a restart can repeat an earlier run's value, and an operator who cannot trust it sets
+/// `engine_boots` explicitly and raises it on every restart.
+pub fn default_engine_boots() -> i64 {
+    let wall = crate::utils::clock::SystemTime::now()
+        .duration_since(crate::utils::clock::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let since_epoch = wall.saturating_sub(ENGINE_BOOTS_EPOCH_UNIX_SECS);
+    let since_epoch = i64::try_from(since_epoch).unwrap_or(MAX_ENGINE_BOOTS - 1);
+    let mut previous = LAST_DEFAULT_BOOTS.load(Ordering::Relaxed);
+    loop {
+        let next = since_epoch
+            .max(previous.saturating_add(1))
+            .clamp(1, MAX_ENGINE_BOOTS - 1);
+        match LAST_DEFAULT_BOOTS.compare_exchange_weak(
+            previous,
+            next,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return next,
+            Err(current) => previous = current,
+        }
+    }
+}
+
+/// Whether a received snmpEngineBoots or snmpEngineTime is inside RFC 3414's `0..2147483647`.
+pub fn in_engine_range(value: i64) -> bool {
+    (0..=MAX_ENGINE_TIME).contains(&value)
+}
 
 /// The agent's USM from its startup parameters, or `None` when no v3 user is configured —
 /// then a v3 message is dropped and only v1/v2c are served.
@@ -80,9 +135,10 @@ pub fn agent_from_params(
             .context("engine_id is hexadecimal, as Net-SNMP writes it (e.g. 80001f8880...)")?,
         None => Agent::random_engine_id(),
     };
-    let boots = params
-        .get_optional_i64("engine_boots")?
-        .unwrap_or(DEFAULT_ENGINE_BOOTS);
+    let boots = match params.get_optional_i64("engine_boots")? {
+        Some(boots) => boots,
+        None => default_engine_boots(),
+    };
     Ok(Some(std::sync::Arc::new(Agent::new(
         engine_id, boots, users,
     )?)))
@@ -619,8 +675,17 @@ pub struct Received {
     pub data: v3::ScopedPduData,
 }
 
-/// Decode a v3 message's envelope. The caller has already depth-screened the bytes.
+/// Decode a v3 message's envelope.
+///
+/// The message is depth-screened before `rasn` sees it, and so are msgSecurityParameters'
+/// contents before they are decoded in turn. The outer screen cannot cover the second: it reads
+/// msgSecurityParameters as one primitive OCTET STRING and skips its contents, while the
+/// UsmSecurityParameters inside are BER of their own whose OCTET STRINGs may be constructed —
+/// `24 80` repeated buys one level of `rasn`'s unbounded recursion per two bytes, enough in one
+/// datagram to overflow the stack and abort the process before any key is checked.
 pub fn decode(data: &[u8]) -> Result<Received> {
+    crate::server::snmp::check_ber_structure(data, crate::server::snmp::MAX_BER_DEPTH)
+        .map_err(|e| anyhow::anyhow!("not an SNMPv3 message: {e}"))?;
     let msg: v3::Message =
         ber::decode(data).map_err(|e| anyhow::anyhow!("not an SNMPv3 message: {e}"))?;
     ensure!(int(&msg.version)? == 3, "not version 3");
@@ -633,6 +698,11 @@ pub fn decode(data: &[u8]) -> Result<Received> {
         msg.global_data.flags.len() == 1,
         "msgFlags must be one byte"
     );
+    crate::server::snmp::check_ber_structure(
+        &msg.security_parameters,
+        crate::server::snmp::MAX_BER_DEPTH,
+    )
+    .map_err(|e| anyhow::anyhow!("bad UsmSecurityParameters: {e}"))?;
     let usm: v3::USMSecurityParameters = ber::decode(&msg.security_parameters)
         .map_err(|e| anyhow::anyhow!("bad UsmSecurityParameters: {e}"))?;
     Ok(Received {
@@ -946,9 +1016,13 @@ impl Agent {
             ) else {
                 return reply(ReportKind::NotInTimeWindows, Some(keys));
             };
-            if boots == MAX_ENGINE_BOOTS
+            // Both are the peer's numbers: range-checked before any arithmetic, and the
+            // distance taken without a subtraction that could overflow.
+            if !in_engine_range(boots)
+                || !in_engine_range(time)
+                || boots == MAX_ENGINE_BOOTS
                 || boots != self.boots
-                || (time - self.time()).abs() > TIME_WINDOW_SECS
+                || time.abs_diff(self.time()) > TIME_WINDOW_SECS.unsigned_abs()
             {
                 return reply(ReportKind::NotInTimeWindows, Some(keys));
             }
@@ -998,6 +1072,21 @@ impl Agent {
             pdu,
         })
     }
+}
+
+/// A received message's snmpEngineBoots and snmpEngineTime, refused outside RFC 3414's range.
+fn engine_clock(rx: &Received) -> Result<(i64, i64)> {
+    let boots = int(&rx.usm.authoritative_engine_boots)?;
+    let time = int(&rx.usm.authoritative_engine_time)?;
+    ensure!(
+        in_engine_range(boots),
+        "snmpEngineBoots {boots} is outside 0..={MAX_ENGINE_BOOTS}"
+    );
+    ensure!(
+        in_engine_range(time),
+        "snmpEngineTime {time} is outside 0..={MAX_ENGINE_TIME}"
+    );
+    Ok((boots, time))
 }
 
 pub fn pdu_request_id(pdu: &v2::Pdus) -> i32 {
@@ -1132,14 +1221,17 @@ impl Manager {
             "the agent reported a {}-byte engine ID",
             id.len()
         );
+        // The discovery report is unauthenticated: its clock is the peer's word, and is held
+        // to the range RFC 3414 gives it before anything adds to it.
+        let (boots, time) = engine_clock(&rx)?;
         let keys = self.user.localize(&id);
         *self
             .engine
             .lock()
             .map_err(|_| anyhow::anyhow!("engine lock"))? = Some(Engine {
             id,
-            boots: int(&rx.usm.authoritative_engine_boots)?,
-            time: int(&rx.usm.authoritative_engine_time)?,
+            boots,
+            time,
             at: crate::utils::clock::Instant::now(),
             keys,
         });
@@ -1162,7 +1254,10 @@ impl Manager {
             flags: level.flags() | FLAG_REPORTABLE,
             engine_id: &engine.id,
             boots: engine.boots,
-            time: engine.time + engine.at.elapsed().as_secs() as i64,
+            time: engine
+                .time
+                .saturating_add(i64::try_from(engine.at.elapsed().as_secs()).unwrap_or(i64::MAX))
+                .min(MAX_ENGINE_TIME),
             user: self.user.name.as_bytes(),
             keys: (level != SecurityLevel::NoAuthNoPriv).then_some(&engine.keys),
             salt: self.salt.fetch_add(1, Ordering::Relaxed),
@@ -1208,8 +1303,9 @@ impl Manager {
         )?;
         if let v2::Pdus::Report(r) = &scoped.data {
             if authenticated {
-                engine.boots = int(&rx.usm.authoritative_engine_boots)?;
-                engine.time = int(&rx.usm.authoritative_engine_time)?;
+                let (boots, time) = engine_clock(&rx)?;
+                engine.boots = boots;
+                engine.time = time;
                 engine.at = crate::utils::clock::Instant::now();
             }
             let vb =

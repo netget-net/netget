@@ -26,6 +26,30 @@ queries with proper OID values and data types. Tests both basic system OIDs and 
 Mutations that fail it: MAC verification always true (the refusal test), the AES IV's boots and
 time swapped (Net-SNMP's AES users), DES without the pre-IV (Net-SNMP's DES users).
 
+## SNMPv3 hardening (`usm_hardening_test.rs`)
+
+No LLM and no external tools; a static handler answers every request.
+
+- `the_nested_message_passes_the_outer_screen_and_is_refused_inside`: a well-formed v3 message
+  whose UsmSecurityParameters nest 30000 `24 80` levels in the engineID, and again in the
+  userName, passes the datagram screen and is refused by `usm::decode` naming
+  UsmSecurityParameters — the builder's self-check that the nesting really sits where only the
+  inner screen can see it.
+- `nested_security_parameters_are_dropped_and_the_agent_keeps_answering`: both datagrams over raw
+  UDP, then discovery and an authenticated-path GET answered, and the server still `Running`.
+  Without the inner screen the test binary aborts with a stack overflow.
+- `default_engine_boots_increase_and_stay_in_range`: 1000 calls strictly increase, sit at or
+  above the wall-clock seconds since the epoch, and stay below 2147483647.
+- `a_restarted_agent_reports_more_boots_and_refuses_a_replay`: two agents with one fixed
+  `engine_id` and no `engine_boots`, started in sequence; the second's discovery report carries
+  more boots, and an authenticated GET captured from the first is answered by the second with
+  `NotInTimeWindows`, not a Response.
+- `out_of_range_boots_and_time_are_reported_not_computed_on`: correctly signed requests with time
+  `i64::MIN`, `i64::MAX`, `-1`, `2^31` and boots `i64::MIN`, `-1`, `2^31`, `i64::MAX` each get
+  the authenticated `NotInTimeWindows` report, and a GET is answered afterwards. Without the range
+  check, time `i64::MIN` overflows the window subtraction and panics the receive loop in a debug
+  build, so the agent stops answering.
+
 ## Test Strategy
 
 - **Isolated test servers**: Each test spawns a separate NetGet instance with specific OID

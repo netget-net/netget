@@ -63,10 +63,12 @@ impl Protocol for SnmpProtocol {
             ParameterDefinition {
                 name: "engine_boots".into(),
                 type_hint: "number".into(),
-                description: "The agent's snmpEngineBoots. NetGet keeps no state between runs, so raise it by hand when restarting with a fixed engine_id, or managers will see the clock go backwards".into(),
+                description: "The agent's snmpEngineBoots, 1 to 2147483646. Absent means the number of wall-clock seconds since 2024-01-01, so each restart reports more boots than the last and an authenticated message captured in one run is refused in the next even with a fixed engine_id. Set it only where the wall clock cannot be trusted, and then raise it on every restart".into(),
                 required: false,
                 example: json!(2),
-                default: Some(json!(super::usm::DEFAULT_ENGINE_BOOTS)),
+                // Derived from the wall clock at start (`usm::default_engine_boots`); no single
+                // number describes it.
+                default: None,
             },
         ]
     }

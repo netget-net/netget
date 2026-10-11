@@ -9,4 +9,6 @@ mod notification_test;
 #[cfg(all(test, feature = "snmp"))]
 mod test;
 #[cfg(all(test, feature = "snmp"))]
+mod usm_hardening_test;
+#[cfg(all(test, feature = "snmp"))]
 mod usm_test;
