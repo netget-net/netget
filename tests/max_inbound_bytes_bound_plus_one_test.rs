@@ -224,6 +224,14 @@ const NOT_PROBED: &[(&str, &str)] = &[
          over_cap_upload_closes_without_waiting_for_declared_eof separately proves an unfinished \
          over-cap upload closes without an unlimited drain.",
     ),
+    #[cfg(feature = "connect_rpc")]
+    (
+        "ConnectRPC",
+        "will not start without a `proto_schema` startup parameter, like grpc. \
+         tests/server/connect_rpc/e2e_test.rs::incoming_request_limits_plain_and_gzip_independent_peer \
+         accepts the exact MAX_MESSAGE_BYTES message and refuses one byte more, plain and gzip, \
+         through an independent peer.",
+    ),
     #[cfg(feature = "capnp-rpc")]
     (
         "Cap'n Proto RPC",
@@ -439,15 +447,23 @@ async fn probe_protocol(name: &str, bound: usize, stack: &'static str, streaming
         // Non-empty and with no `event_handlers`: the model is the only thing that could
         // answer, so a zero count is the bound's doing and nothing else's.
         instruction: Some("Answer whatever arrives.".to_string()),
-        // Diameter requires a local identity. Enable its explicit model opt-in
-        // so zero calls here measure parser refusal rather than default denial.
-        startup_params: name.eq_ignore_ascii_case("diameter").then(|| {
-            serde_json::json!({
+        // Diameter requires a local identity and TACACS+ a shared secret. Both enable their
+        // explicit model opt-in so zero calls here measure parser refusal rather than
+        // default denial.
+        startup_params: if name.eq_ignore_ascii_case("diameter") {
+            Some(serde_json::json!({
                 "origin_host": "bounds.example",
                 "origin_realm": "example",
                 "llm_fallback": true
-            })
-        }),
+            }))
+        } else if name.eq_ignore_ascii_case("tacacs") {
+            Some(serde_json::json!({
+                "shared_secret": "bound-probe-secret",
+                "llm_fallback": true
+            }))
+        } else {
+            None
+        },
         ..Default::default()
     };
     let server_id = match form.create(&state, tx).await {
