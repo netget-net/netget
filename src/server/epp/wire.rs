@@ -446,7 +446,7 @@ pub fn res_data(action: &Value, command: &str, object: &str) -> Result<String> {
         }
         "epp_info" => {
             ensure!(command == "info", "epp_info answers info");
-            let o = &action["object"];
+            let o = &action["info"];
             let id = s(o, key).context("the object names itself")?;
             let mut body = format!("<{p}:{key}>{}</{p}:{key}>", escape(id));
             body.push_str(&format!(

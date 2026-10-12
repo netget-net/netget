@@ -30,7 +30,7 @@ if c=='create' and o=='domain':
     out({'type':'epp_created','name':f['name'],'cr_date':NOW,'ex_date':'2028-10-04T12:00:00.0Z'})
 if c=='info' and o=='domain':
     if f['name'] not in TAKEN: out({'type':'epp_result','code':2303,'reason':'No such domain'})
-    out({'type':'epp_info','object':{'name':'taken.example','roid':'TAKEN1-REP','status':['clientTransferProhibited'],'registrant':'other-1','contacts':[{'type':'admin','id':'other-1'}],'ns':['ns1.other.example'],'cl_id':'OtherReg','cr_date':'2020-01-02T03:04:05.0Z','ex_date':'2030-01-02T03:04:05.0Z'}})
+    out({'type':'epp_info','info':{'name':'taken.example','roid':'TAKEN1-REP','status':['clientTransferProhibited'],'registrant':'other-1','contacts':[{'type':'admin','id':'other-1'}],'ns':['ns1.other.example'],'cl_id':'OtherReg','cr_date':'2020-01-02T03:04:05.0Z','ex_date':'2030-01-02T03:04:05.0Z'}})
 if c=='renew': out({'type':'epp_renewed','name':f['name'],'ex_date':'2029-10-04T12:00:00.0Z'})
 if c=='transfer':
     if f.get('auth_info')!='move-me-1': out({'type':'epp_result','code':2202,'reason':'Wrong authInfo'})

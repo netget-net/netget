@@ -62,8 +62,8 @@ fn info() -> ActionDefinition {
     action(
         "epp_info",
         "Answer an info command with the object's data",
-        vec![parameter("object", "object", "Domain: name, roid, status[], registrant, contacts[{type,id}], ns[], cl_id, cr_date, ex_date, auth_info. Host: name, roid, status[], addrs[{ip: v4|v6, addr}], cl_id, cr_date. Contact: id, roid, status[], name, org, street[], city, sp, pc, cc, voice, email, cl_id, cr_date. Dates as 2026-10-04T12:00:00.0Z", true)],
-        json!({"type": "epp_info", "object": {"name": "example.com", "roid": "EXAMPLE1-REP", "status": ["ok"], "registrant": "jd1234", "contacts": [{"type": "admin", "id": "sh8013"}], "ns": ["ns1.example.net"], "cl_id": "ClientX", "cr_date": "2024-04-03T22:00:00.0Z", "ex_date": "2027-04-03T22:00:00.0Z"}}),
+        vec![parameter("info", "object", "The object's data. Domain: name, roid, status[], registrant, contacts[{type,id}], ns[], cl_id, cr_date, ex_date, auth_info. Host: name, roid, status[], addrs[{ip: v4|v6, addr}], cl_id, cr_date. Contact: id, roid, status[], name, org, street[], city, sp, pc, cc, voice, email, cl_id, cr_date. Dates as 2026-10-04T12:00:00.0Z", true)],
+        json!({"type": "epp_info", "info": {"name": "example.com", "roid": "EXAMPLE1-REP", "status": ["ok"], "registrant": "jd1234", "contacts": [{"type": "admin", "id": "sh8013"}], "ns": ["ns1.example.net"], "cl_id": "ClientX", "cr_date": "2024-04-03T22:00:00.0Z", "ex_date": "2027-04-03T22:00:00.0Z"}}),
     )
 }
 fn created() -> ActionDefinition {
@@ -178,7 +178,7 @@ pub fn validate(v: &Value) -> Result<()> {
                 );
             }
         }
-        Some("epp_info") => ensure!(v["object"].is_object(), "object is an object"),
+        Some("epp_info") => ensure!(v["info"].is_object(), "info is an object"),
         Some("epp_created") => ensure!(
             v["name"].is_string() || v["id"].is_string(),
             "epp_created names the object"
