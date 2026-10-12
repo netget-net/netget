@@ -76,17 +76,23 @@ and the OPT record carries the DO bit when `dnssec` is true.
 Queries go over one UDP socket (hickory-client's `UdpClientStream`); each is independent.
 
 A **zone transfer** (`send_dns_zone_transfer`) opens a TCP connection of its own to the same
-server — `TcpClientStream` plus a second `AsyncClient`, whose driver is a registered client
-task — and runs hickory's `zone_transfer` (AXFR, or IXFR when given a serial). The server
-address comes from the client's own `remote_addr`. A transfer is abandoned with an error past
-`MAX_TRANSFER_RECORDS` (100 000), past `MAX_TRANSFER_BYTES` (64 MiB of DNS messages) or after
-`TRANSFER_TIMEOUT` (60 s, which is also the hickory request timeout of that `AsyncClient` —
-its 5 s default would otherwise end a transfer first). The byte bound is the one a hostile
-server meets: a record can be nearly 64 KiB, so 100 000 of them would be gigabytes.
-Only the first `MAX_REPORTED_RECORDS` (200) records are kept — the rest are counted — and the
-model is shown those with the count, `truncated` saying whether there were more. The transport
-driver is aborted when the transfer returns, so an abandoned one stops reading.
-`tests/client/dns/transfer_bound_test.rs` drives the byte bound from a hostile server.
+server, sends hickory-proto's AXFR request (IXFR when given a serial) and reads the answer one
+length-prefixed message at a time straight off the socket. It does not use hickory-client's
+`zone_transfer`: that reads through a multiplexer which hands responses over with `try_send`
+into a 32-slot channel and drops what does not fit, so a burst of messages lost most of them
+and the transfer still reported success (109 of 202 in the test below). Read directly, a slow
+reader only slows the server down. `XfrEnd` decides where the transfer ends with
+hickory-client's own rules (the first SOA's serial; AXFR ends at the next SOA; IXFR on an even
+count of SOAs closing on that serial); a transfer that does not open with an SOA, or carries
+records after its closing SOA, is an error, and every message must carry the request's id.
+The server address comes from the client's own `remote_addr`. A transfer is abandoned with an
+error past `MAX_TRANSFER_RECORDS` (100 000), past `MAX_TRANSFER_BYTES` (64 MiB of DNS
+messages), on the connection closing before the transfer ends, or after `TRANSFER_TIMEOUT`
+(60 s). The byte bound is the one a hostile server meets: a record can be nearly 64 KiB, so
+100 000 of them would be gigabytes. Only the first `MAX_REPORTED_RECORDS` (200) records are
+kept — the rest are counted — and the model is shown those with the count, `truncated` saying
+whether there were more. `tests/client/dns/transfer_bound_test.rs` drives the byte bound from a
+hostile server and a 202-message burst that must arrive whole.
 
 ### 6. Action loop is iterative, not recursive (important)
 

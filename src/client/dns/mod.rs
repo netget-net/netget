@@ -23,12 +23,9 @@ use crate::protocol::{Event, EventType};
 use crate::state::app_state::AppState;
 use crate::state::{ClientId, ClientStatus};
 
-use futures::StreamExt;
-use hickory_client::client::{AsyncClient, ClientHandle};
+use hickory_client::client::AsyncClient;
 use hickory_client::rr::{Name, RecordType};
-use hickory_client::tcp::TcpClientStream;
 use hickory_client::udp::UdpClientStream;
-use hickory_proto::iocompat::AsyncIoTokioAsStd;
 use hickory_proto::op::{Edns, Message, MessageType, OpCode, Query, ResponseCode};
 use hickory_proto::rr::dnssec::rdata::DNSSECRData;
 use hickory_proto::rr::rdata::SOA;
@@ -641,52 +638,78 @@ impl DnsClient {
     /// [`MAX_TRANSFER_BYTES`], the whole exchange at [`TRANSFER_TIMEOUT`]. Only the first
     /// [`MAX_REPORTED_RECORDS`] are kept and reported, so a large zone is a count and a sample
     /// rather than an event the model cannot read, and memory does not grow with the zone.
+    ///
+    /// The messages are read straight off the socket, one length-prefixed message at a time,
+    /// rather than through hickory's multiplexer, which hands responses over with `try_send`
+    /// into a 32-slot channel and drops what does not fit: a transfer read that way could lose
+    /// messages and still look complete. Read here, a slow reader only slows the server down
+    /// (TCP backpressure), and [`XfrEnd`] decides where the transfer ends as hickory does.
     async fn zone_transfer(
         server: SocketAddr,
         zone: &str,
         serial: Option<u32>,
-        client_id: ClientId,
-        app_state: &Arc<AppState>,
+        _client_id: ClientId,
+        _app_state: &Arc<AppState>,
     ) -> Result<serde_json::Value> {
-        let origin = Name::from_utf8(zone).with_context(|| format!("invalid zone {zone:?}"))?;
-        let (stream, sender) =
-            TcpClientStream::<AsyncIoTokioAsStd<tokio::net::TcpStream>>::new(server);
-        // hickory's own request timeout (5 s by default) would cut a transfer short of
-        // TRANSFER_TIMEOUT, which is the bound this client states.
-        let (mut client, bg) = AsyncClient::with_timeout(stream, sender, TRANSFER_TIMEOUT, None)
-            .await
-            .with_context(|| {
-                format!("cannot open a TCP connection to {server} for the transfer")
-            })?;
-        // The transport driver is a task of its own; registered so stopping the client ends it,
-        // and aborted when this transfer returns, so an abandoned transfer stops reading.
-        let driver = tokio::spawn(async move {
-            let _ = bg.await;
-        });
-        let _driver_guard = AbortOnDrop(driver.abort_handle());
-        app_state.register_client_task(client_id, driver).await;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+        let origin = Name::from_utf8(zone).with_context(|| format!("invalid zone {zone:?}"))?;
         // IXFR names the serial the client holds in an SOA; the other fields are not read.
         let last_soa = serial.map(|s| SOA::new(origin.clone(), origin.clone(), s, 0, 0, 0, 0));
         let transfer_type = if last_soa.is_some() { "IXFR" } else { "AXFR" };
-        let mut responses = client.zone_transfer(origin.clone(), last_soa);
+        let mut request =
+            hickory_proto::op::update_message::zone_transfer(origin.clone(), last_soa.clone());
+        let id: u16 = rand::random();
+        request.set_id(id);
+        let wire = request
+            .to_vec()
+            .context("cannot encode the transfer request")?;
+        let request_len =
+            u16::try_from(wire.len()).context("the transfer request does not fit one message")?;
+
         // The first MAX_REPORTED_RECORDS records; `record_count` counts every one.
         let mut records: Vec<Record> = Vec::new();
         let mut record_count = 0usize;
         let mut bytes_received = 0usize;
         let mut messages = 0usize;
         let mut rcode = ResponseCode::NoError;
-        let collect = async {
-            while let Some(response) = responses.next().await {
-                let response =
-                    response.map_err(|e| anyhow::anyhow!("{transfer_type} failed: {e}"))?;
-                messages += 1;
-                bytes_received = bytes_received.saturating_add(response.as_buffer().len());
+        let mut end = XfrEnd::new(last_soa.is_some());
+        let exchange = async {
+            let mut stream = tokio::net::TcpStream::connect(server)
+                .await
+                .with_context(|| {
+                    format!("cannot open a TCP connection to {server} for the transfer")
+                })?;
+            stream.write_all(&request_len.to_be_bytes()).await?;
+            stream.write_all(&wire).await?;
+            loop {
+                let mut len = [0u8; 2];
+                match stream.read_exact(&mut len).await {
+                    Ok(_) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => anyhow::bail!(
+                        "{transfer_type} of {zone}: the server closed the connection before the \
+                         transfer ended"
+                    ),
+                    Err(e) => return Err(e.into()),
+                }
+                let len = usize::from(u16::from_be_bytes(len));
+                bytes_received = bytes_received.saturating_add(len + 2);
                 if bytes_received > MAX_TRANSFER_BYTES {
                     anyhow::bail!(
                         "{transfer_type} of {zone} passed {MAX_TRANSFER_BYTES} bytes; abandoned"
                     );
                 }
+                let mut body = vec![0u8; len];
+                stream.read_exact(&mut body).await?;
+                let response = Message::from_vec(&body)
+                    .map_err(|e| anyhow::anyhow!("{transfer_type} failed: {e}"))?;
+                if response.id() != id {
+                    anyhow::bail!(
+                        "{transfer_type} of {zone}: a message answered id {} where {id} was asked",
+                        response.id()
+                    );
+                }
+                messages += 1;
                 rcode = response.response_code();
                 if rcode != ResponseCode::NoError {
                     break;
@@ -700,10 +723,15 @@ impl DnsClient {
                         "{transfer_type} of {zone} passed {MAX_TRANSFER_RECORDS} records; abandoned"
                     );
                 }
+                end.process(answers)
+                    .map_err(|e| anyhow::anyhow!("{transfer_type} of {zone}: {e}"))?;
+                if end.ended() {
+                    break;
+                }
             }
             Ok::<(), anyhow::Error>(())
         };
-        tokio::time::timeout(TRANSFER_TIMEOUT, collect)
+        tokio::time::timeout(TRANSFER_TIMEOUT, exchange)
             .await
             .map_err(|_| {
                 anyhow::anyhow!(
@@ -741,12 +769,98 @@ impl DnsClient {
     }
 }
 
-/// Aborts a task when dropped.
-struct AbortOnDrop(tokio::task::AbortHandle);
+/// Where an AXFR or IXFR ends, decided from the answers in order: hickory-client 0.24's
+/// `ClientStreamXfrState`, without the stream it wraps. The first record's SOA serial is the
+/// one the transfer closes on. An AXFR ends at the next SOA; a second SOA with the same serial
+/// is an empty zone. An IXFR (RFC 1995) alternates old and new SOAs and ends on an even count
+/// of them whose last carries the expected serial.
+#[derive(Debug)]
+pub enum XfrEnd {
+    Start { maybe_incr: bool },
+    Second { maybe_incr: bool, expected: u32 },
+    Axfr { expected: u32 },
+    Ixfr { even: bool, expected: u32 },
+    Ended,
+}
 
-impl Drop for AbortOnDrop {
-    fn drop(&mut self) {
-        self.0.abort();
+impl XfrEnd {
+    pub fn new(maybe_incr: bool) -> Self {
+        XfrEnd::Start { maybe_incr }
+    }
+
+    pub fn ended(&self) -> bool {
+        matches!(self, XfrEnd::Ended)
+    }
+
+    /// Takes one message's answers in order; `Err` for a transfer that cannot be valid.
+    pub fn process(&mut self, answers: &[Record]) -> Result<(), &'static str> {
+        fn serial(r: &Record) -> Option<u32> {
+            r.data().and_then(RData::as_soa).map(SOA::serial)
+        }
+        if answers.is_empty() {
+            return Ok(());
+        }
+        match std::mem::replace(self, XfrEnd::Ended) {
+            XfrEnd::Start { maybe_incr } => match serial(&answers[0]) {
+                Some(expected) => {
+                    *self = XfrEnd::Second {
+                        maybe_incr,
+                        expected,
+                    };
+                    self.process(&answers[1..])
+                }
+                None => Err("the transfer does not start with the zone's SOA"),
+            },
+            XfrEnd::Second {
+                maybe_incr,
+                expected,
+            } => match serial(&answers[0]) {
+                Some(s) if s == expected => {
+                    if answers.len() == 1 {
+                        Ok(())
+                    } else {
+                        Err("invalid zone transfer, contains trailing records")
+                    }
+                }
+                Some(_) if maybe_incr => {
+                    *self = XfrEnd::Ixfr {
+                        even: true,
+                        expected,
+                    };
+                    self.process(&answers[1..])
+                }
+                Some(_) => Err("invalid zone transfer, expected AXFR, got IXFR"),
+                None => {
+                    *self = XfrEnd::Axfr { expected };
+                    self.process(&answers[1..])
+                }
+            },
+            XfrEnd::Axfr { expected } => {
+                let soas = answers
+                    .iter()
+                    .filter(|a| a.record_type() == RecordType::SOA)
+                    .count();
+                match soas {
+                    0 => {
+                        *self = XfrEnd::Axfr { expected };
+                        Ok(())
+                    }
+                    1 if answers.last().map(|r| r.record_type()) == Some(RecordType::SOA) => Ok(()),
+                    _ => Err("invalid zone transfer, contains trailing records"),
+                }
+            }
+            XfrEnd::Ixfr { even, expected } => {
+                let even = answers
+                    .iter()
+                    .fold(even, |even, a| even ^ (a.record_type() == RecordType::SOA));
+                let last_is_expected = answers.last().and_then(serial) == Some(expected);
+                if !(even && last_is_expected) {
+                    *self = XfrEnd::Ixfr { even, expected };
+                }
+                Ok(())
+            }
+            XfrEnd::Ended => Ok(()),
+        }
     }
 }
 
