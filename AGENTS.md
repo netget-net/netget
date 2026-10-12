@@ -1149,7 +1149,7 @@ targeted stress runs.** If a test hangs, fix the hang rather than serializing th
 | `smb-evidence` | yes | The SMB server suite, including bounds, both independent clients, and the packet oracle |
 | `wasm-web` | yes | Browser bundle build and smoke exchanges |
 | `orphaned-tests` | yes | Fails if a test directory on disk is undeclared in `mod.rs` |
-| `clippy-wide` | **no** (`continue-on-error`) | Clippy over the wide feature set |
+| `clippy-wide` | **no** (`continue-on-error`, manual `workflow_dispatch` only) | Clippy over the wide feature set; too slow for every push at 275 protocols |
 | `registry-audit` | **no** (`continue-on-error`) | Registry audits and all-feature real-client/server evidence, with their external peers installed |
 
 The broad registry audit has separate compilation and execution budgets, a five-minute

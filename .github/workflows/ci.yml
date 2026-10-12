@@ -167,8 +167,12 @@ jobs:
   # Until then this exists so the number is visible instead of unknown.
   clippy-wide:
     name: Clippy (wide feature set, advisory)
+    # Only on a manual run of this workflow. Its warnings are style rather than defects, it
+    # cannot fail the build, and over every protocol it no longer finishes inside its budget,
+    # so on every push it held a runner for its whole timeout and reported nothing.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-22.04
-    timeout-minutes: 40
+    timeout-minutes: 90
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
