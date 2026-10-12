@@ -53,7 +53,6 @@ async fn datagram_answers_to_an_echoing_peer_stop_at_the_follow_up_depth() {
         "{sent:?}"
     );
 
-    // Long enough for an unbounded exchange to pass the bound many times over.
     let received = || async {
         state
             .list_access_logs_for(Some(AccessLogOwner::Client(id.as_u32())), None)
@@ -62,10 +61,22 @@ async fn datagram_answers_to_an_echoing_peer_stop_at_the_follow_up_depth() {
             .filter(|e| e.event_type == "quic_datagram_received")
             .count()
     };
-    tokio::time::sleep(Duration::from_secs(6)).await;
-    let settled = received().await;
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    let later = received().await;
+    // Wait for the exchange to go quiet: the count has held still for three seconds, polled
+    // every 100 ms, within a deadline an unbounded exchange would pass the bound long before.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let mut later = received().await;
+    let mut still_since = std::time::Instant::now();
+    while std::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let now = received().await;
+        if now != later {
+            later = now;
+            still_since = std::time::Instant::now();
+        } else if later >= 2 && still_since.elapsed() >= Duration::from_secs(3) {
+            break;
+        }
+    }
+    let settled = later;
     assert!(
         settled >= 2,
         "the echo exchange never ran: {settled} datagrams received"
@@ -74,6 +85,9 @@ async fn datagram_answers_to_an_echoing_peer_stop_at_the_follow_up_depth() {
         later <= 5,
         "the client answered past the follow-up depth: {later} datagrams received"
     );
-    assert_eq!(settled, later, "the exchange was still running");
+    assert!(
+        still_since.elapsed() >= Duration::from_secs(3),
+        "the exchange was still running at the deadline: {later} datagrams received"
+    );
     state.remove_client(id).await;
 }

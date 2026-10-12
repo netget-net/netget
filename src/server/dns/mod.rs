@@ -178,14 +178,31 @@ impl DnsServer {
         server_id: crate::state::ServerId,
         settings: DnsSettings,
     ) -> Result<SocketAddr> {
-        let socket = Arc::new(UdpSocket::bind(listen_addr).await?);
-        let local_addr = socket.local_addr()?;
-        // The same port for TCP (RFC 7766 §5: every server MUST serve TCP). A port the OS
-        // picked for UDP is usually free for TCP too; if it is not, starting fails rather than
-        // serving half the protocol.
-        let listener = TcpListener::bind(local_addr)
-            .await
-            .with_context(|| format!("DNS over TCP cannot bind {local_addr}"))?;
+        // The same port for TCP (RFC 7766 §5: every server MUST serve TCP). When the OS picks the
+        // port, the number it gave UDP can already be taken for TCP by another process, so a
+        // fresh pair is tried; an explicitly requested port that TCP cannot have fails rather
+        // than serving half the protocol.
+        const PORT_PAIR_ATTEMPTS: usize = 16;
+        let mut attempt = 0;
+        let (socket, local_addr, listener) = loop {
+            attempt += 1;
+            let socket = Arc::new(UdpSocket::bind(listen_addr).await?);
+            let local_addr = socket.local_addr()?;
+            match TcpListener::bind(local_addr).await {
+                Ok(listener) => break (socket, local_addr, listener),
+                Err(e)
+                    if listen_addr.port() == 0
+                        && e.kind() == std::io::ErrorKind::AddrInUse
+                        && attempt < PORT_PAIR_ATTEMPTS =>
+                {
+                    continue
+                }
+                Err(e) => {
+                    return Err(anyhow::Error::new(e)
+                        .context(format!("DNS over TCP cannot bind {local_addr}")))
+                }
+            }
+        };
         let log = Log::new(Some(&status_tx));
         log.info(format!(
             "DNS server listening on {local_addr} (UDP and TCP)"
