@@ -15,6 +15,51 @@ Status of the catalogue as of this survey: **194 server registrations, 87 client
 registrations**; Programme 3's 72 items are all complete. This document is the *next*
 pool, not a commitment.
 
+## Implementation status (12 October 2026)
+
+**Everything in Tier A and Tier B, every missing role with a usable peer, and every listed
+extension has landed on `master`**, each as a server+client pair tested against the
+independent peer named below (the pair jobs in `.github/workflows/protocol-pairs.yml` run
+them and fail rather than skip when the peer is absent). Verified against `master` by
+checking `src/server/<p>/` and `src/client/<p>/` and the Cargo feature for each item, not
+against a memory of having done it.
+
+| Batch | Landed in | Items |
+|---|---|---|
+| Tier A (all 12) and the first Tier B pairs | #164 (`3cf5db8e`) | ClickHouse, ZeroMQ, 9P (`ninep`), LMTP, LPD, inetd services (`inetd`), RCON + A2S + Minecraft SLP, SMPP, Cap'n Proto RPC, MessagePack-RPC, Zipkin, NATS JetStream; KNX/IP, D-Bus, X11 client, BFD, VXLAN + Geneve, WS-Discovery, Consul, Milter, Anthropic Messages API, PFCP, rsync (downloads), RadSec, Matrix |
+| Remaining Tier B | #181–#187 (`66eb3c27`, `04999aca`) | libp2p, SunRPC/portmap, Guacamole, ActivityPub + WebFinger, Stratum V1, Pulsar, TR-069 (CWMP) |
+| Missing roles | #188, #189–#195 (`04999aca`, `56c64b04`), #209 (`de365f09`) | Zabbix client, RTP / RTSP / HLS clients, RDP client |
+| Extensions | #189–#195, #196–#201 (`b7657a5f`), #202–#211 (`de365f09`) | Redis RESP3, SNMP traps/informs, SNMPv3 USM, HTTP SSE, MQTT 5.0, QUIC DATAGRAM, WebSocket permessage-deflate, CoAP Observe + Block-wise, DNS TCP/EDNS0/AXFR/IXFR/DNSSEC, InfluxQL/Flux queries, Kafka flexible versions, gRPC client-streaming/bidi evidence (grpcurl), rsync uploads |
+
+The mercurial and svn clients listed under "missing roles" below already existed when
+this survey was written (they landed 4 October 2026); the survey was wrong about them.
+
+### Not implemented
+
+What is left from this document, with the reason each is still open:
+
+- **Partial slices of shipped items:**
+  - **GRE**: VXLAN and Geneve shipped, GRE did not. It is IP protocol 47 rather than
+    UDP, so it needs raw sockets and a root-only test.
+  - **ONVIF**: the WS-Discovery half finds ONVIF devices and answers as one. The ONVIF
+    SOAP device and media services were not built.
+  - **Stratum V2**: only V1 shipped. V2 is the SRI Noise-encrypted binary protocol and
+    would be its own item.
+  - **IPFS above libp2p**: the libp2p host does Noise, yamux, identify and ping. Bitswap,
+    Kademlia and the IPFS data model were not built, so Kubo can connect but cannot
+    exchange blocks.
+  - **NGAP/N2**: PFCP shipped; NGAP needs SCTP and was not attempted.
+  - **Redis cluster and pub/sub depth**: RESP3 shipped; `CLUSTER` and pub/sub were not
+    extended.
+- **Peer-limited missing clients**: gtp, db2, snowflake, spark and yarn still have no
+  client. None has a clean local independent server to test against.
+- **Tier C**: all deferred, unchanged, for the reasons in the table below. This includes
+  the LoRaWAN Semtech UDP packet-forwarder slice, which could be promoted if IoT is
+  wanted.
+- **Maturity**: almost everything above landed at `Experimental` or `Beta`. The client
+  promotions that came with it are Kafka, DNS and RDP (Beta). None of these items has
+  been taken through the six Stable conditions in `AGENTS.md`.
+
 Priority: **A** strongest general fit · **B** useful follow-on · **C** workload-specific.
 Effort **S/M/L** covers both roles plus interoperability tests.
 
@@ -87,8 +132,8 @@ is a phone or a switch). The genuinely missing **client** roles, with their peer
 
 | Add client for | Peer | Note |
 |---|---|---|
-| **mercurial** | `hg` binary | VC client next to the Hg server; `git` already has both. |
-| **svn** | `svn` / `svnserve` | VC client. |
+| ~~**mercurial**~~ | `hg` binary | Already existed (see status above). |
+| ~~**svn**~~ | `svn` / `svnserve` | Already existed (see status above). |
 | **rtsp / rtp / hls** | `ffmpeg`/`ffprobe` (installed), VLC | Media clients; ffmpeg is already a test peer. |
 | **rdp** | `xfreerdp` | Remote-desktop client (server exists). |
 | **zabbix** | `zabbix_server`/`zabbix_sender` | Agent/sender client. |
