@@ -1,9 +1,8 @@
 name: Protocol pair interoperability
 
+# Run by hand (Actions → Run workflow) or by release.yml before publishing; not on every push
+# or pull request, where its hundred-odd jobs mostly re-ran protocols the change never touched.
 on:
-  pull_request:
-  push:
-    branches: [master]
   workflow_call:
     inputs:
       suite:

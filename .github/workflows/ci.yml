@@ -322,6 +322,8 @@ jobs:
 
   registry-audit:
     name: Registry-wide audits (--all-features, advisory)
+    # Manual runs only (Actions → Run workflow): too heavy for every push.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-22.04
     # The previous 45-minute budget expired during SMB after 45 passing groups.
     # Leave room for cold compilation, every evidence group, and artifact upload.
@@ -1205,6 +1207,8 @@ jobs:
 
   smb-evidence:
     name: SMB stable evidence
+    # Manual runs only (Actions → Run workflow): too heavy for every push.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
@@ -1352,6 +1356,8 @@ jobs:
 
   single-feature:
     name: Single-feature build (shard ${{ matrix.shard }}/4)
+    # Manual runs only (Actions → Run workflow): too heavy for every push.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-22.04
     # 45, not 30: a shard is ~34 features at ~25s each (~14 min) once its cache is warm,
     # but the first run after a cache key changes compiles that shard's whole dependency

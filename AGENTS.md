@@ -1139,18 +1139,22 @@ targeted stress runs.** If a test hangs, fix the hang rather than serializing th
 
 `release.yml` builds the `dist*` feature sets on release tags and manual dispatch.
 `ci.yml` is the PR/push-to-master gate; `fuzz.yml` remains an on-demand search.
+`protocol-pairs.yml` (the third-party interoperability jobs) runs only by hand or when
+`release.yml` calls it before publishing; it no longer runs on every push or pull request.
+The jobs marked *manual* below likewise run only on a manual dispatch of `ci.yml`: push
+changes that touch a protocol, then run the workflow (Actions → Run workflow) to get them.
 
 | Job | Blocking | What it does |
 |---|---|---|
 | `lint` | yes | Formatting and correctness/suspicious clippy lints over the library and every compiled test target |
 | `test` | yes | Tests the representative `CI_FEATURES` set, including `finger` so the Experimental refusal path stays covered |
-| `single-feature` | yes | Checks tests for every standalone feature in `SINGLE_FEATURE_CORE` and `SINGLE_FEATURE_REST`, one feature at a time across four shards |
+| `single-feature` | yes, *manual* | Checks tests for every standalone feature in `SINGLE_FEATURE_CORE` and `SINGLE_FEATURE_REST`, one feature at a time across four shards |
 | `ratchets` | yes | Whole-tree source checks, server/client Beta evidence declarations, fuzz target compilation |
-| `smb-evidence` | yes | The SMB server suite, including bounds, both independent clients, and the packet oracle |
+| `smb-evidence` | yes, *manual* | The SMB server suite, including bounds, both independent clients, and the packet oracle |
 | `wasm-web` | yes | Browser bundle build and smoke exchanges |
 | `orphaned-tests` | yes | Fails if a test directory on disk is undeclared in `mod.rs` |
-| `clippy-wide` | **no** (`continue-on-error`, manual `workflow_dispatch` only) | Clippy over the wide feature set; too slow for every push at 275 protocols |
-| `registry-audit` | **no** (`continue-on-error`) | Registry audits and all-feature real-client/server evidence, with their external peers installed |
+| `clippy-wide` | **no** (`continue-on-error`), *manual* | Clippy over the wide feature set; too slow for every push at 275 protocols |
+| `registry-audit` | **no** (`continue-on-error`), *manual* | Registry audits and all-feature real-client/server evidence, with their external peers installed |
 
 The broad registry audit has separate compilation and execution budgets, a five-minute
 limit per evidence group, and a summary/artifact step that preserves partial results after
