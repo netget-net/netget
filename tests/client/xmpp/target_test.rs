@@ -224,6 +224,32 @@ async fn a_missing_password_is_refused_before_any_connection() {
 }
 
 #[tokio::test]
+async fn a_jid_without_a_local_part_is_refused_before_any_connection() {
+    let state = new_state().await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let target = listener.local_addr().expect("local addr");
+
+    let err = spawn_create(
+        &state,
+        target.to_string(),
+        serde_json::json!({ "jid": "example.invalid", "password": "pw" }),
+    )
+    .await
+    .expect("create task")
+    .expect_err("a JID with no local part must not start: tokio-xmpp's login would panic on it");
+    assert!(
+        err.to_string().contains("local part"),
+        "the error should say what is missing, got: {err}"
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), listener.accept())
+            .await
+            .is_err(),
+        "a client refused at startup must not have dialled the server"
+    );
+}
+
+#[tokio::test]
 async fn the_target_comes_from_remote_addr_alone() {
     let explicit: SocketAddr = "127.0.0.1:15222".parse().unwrap();
     assert_eq!(resolve_target("127.0.0.1:15222").await.unwrap(), explicit);

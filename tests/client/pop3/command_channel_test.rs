@@ -1,8 +1,9 @@
 //! The dashboard's `[ send_pop3_command ]` path on a POP3 client: `AppState::send_to_client`
 //! injects an action from outside the client's read loop, and the command reaches a NetGet
-//! POP3 server of our own. Zero LLM calls - the server answers through a `*` static handler and
-//! the client's LLM points at an unreachable URL (its connected-event call fails; the loop
-//! tolerates that, and the command task is independent of it by design).
+//! POP3 server of our own. Zero LLM calls - the server answers through a `*` static handler,
+//! and the client answers every event of its own with a zero-action static handler, as a
+//! dashboard-created client does. Its LLM points at an unreachable URL, so a model call would
+//! fail, and a client whose model call fails ends its session.
 //!
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features pop3 --test client -- pop3::command_channel --test-threads=100
@@ -93,6 +94,10 @@ async fn injected_pop3_command_reaches_our_own_server() {
         protocol: "pop3".to_string(),
         remote_addr: Some(format!("127.0.0.1:{port}")),
         instruction: Some("test client".to_string()),
+        event_handlers: Some(vec![serde_json::json!({
+            "event_pattern": "*",
+            "handler": { "type": "static", "actions": [] }
+        })]),
         ..Default::default()
     }
     .create(

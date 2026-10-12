@@ -618,6 +618,13 @@ impl XmppClientConnection {
         let jid: Jid = jid_str
             .parse()
             .with_context(|| format!("Invalid JID {:?}", jid_str))?;
+        // A client logs in as an account, so the JID needs a local part. tokio-xmpp's login
+        // unwraps it inside a task of its own, where a missing one panics instead of failing.
+        anyhow::ensure!(
+            jid.node().is_some(),
+            "the JID {jid_str:?} has no local part; the XMPP client logs in as an account, \
+             so 'jid' must look like \"alice@example.com\""
+        );
         Ok((jid, password))
     }
 

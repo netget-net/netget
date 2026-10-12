@@ -18,7 +18,7 @@ use crate::server::connection::ConnectionId;
 use crate::server::DnsProtocol;
 use crate::state::app_state::AppState;
 use actions::{DNS_QUERY_EVENT, DNS_ZONE_TRANSFER_EVENT, RESULT_IXFR, RESULT_ZONE};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use dnssec::ZoneSigner;
 use hickory_proto::op::{Edns, Message as DnsMessage, Query, ResponseCode};
 use hickory_proto::rr::{Name, Record, RecordType};

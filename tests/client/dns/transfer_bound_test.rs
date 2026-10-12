@@ -164,3 +164,100 @@ async fn an_endless_transfer_of_large_records_ends_at_the_byte_bound() {
         "the server wrote {written} bytes"
     );
 }
+
+/// Accept one connection, read its AXFR, and answer with `records` messages of one A record
+/// each between the opening and closing SOA, all written in one burst.
+async fn bursting_axfr_server(listener: TcpListener, records: usize) {
+    let Ok((mut stream, _)) = listener.accept().await else {
+        return;
+    };
+    let Ok(len) = stream.read_u16().await else {
+        return;
+    };
+    let mut buf = vec![0u8; len as usize];
+    if stream.read_exact(&mut buf).await.is_err() {
+        return;
+    }
+    let query = Message::from_vec(&buf).expect("the client's AXFR decodes");
+    let zone = query.queries()[0].name().clone();
+    let soa = Record::from_rdata(
+        zone.clone(),
+        300,
+        RData::SOA(SOA::new(
+            zone.clone(),
+            zone.clone(),
+            7,
+            3600,
+            600,
+            604_800,
+            300,
+        )),
+    );
+    let mut burst = framed_response(&query, vec![soa.clone()]);
+    for i in 0..records {
+        let a = Record::from_rdata(
+            zone.clone(),
+            300,
+            RData::A(std::net::Ipv4Addr::new(10, 0, (i / 256) as u8, (i % 256) as u8).into()),
+        );
+        burst.extend(framed_response(&query, vec![a]));
+    }
+    burst.extend(framed_response(&query, vec![soa]));
+    let _ = stream.write_all(&burst).await;
+    // Hold the connection until the client has read and closed it.
+    let mut rest = Vec::new();
+    let _ = stream.read_to_end(&mut rest).await;
+}
+
+/// A transfer far longer than hickory's 32-slot response channel, written in one burst, is
+/// received whole: every message is counted. Read through hickory's multiplexer, messages
+/// that did not fit the channel were dropped and the transfer still looked complete.
+#[tokio::test]
+async fn a_burst_of_transfer_messages_is_received_whole() {
+    const RECORDS: usize = 200;
+    let state = AppState::new_with_options(false, "http://127.0.0.1:1".to_string());
+    state
+        .set_llm_client(netget::llm::OllamaClient::new(
+            "http://127.0.0.1:1".to_string(),
+        ))
+        .await;
+    let (tx, _rx) = mpsc::unbounded_channel();
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let server_addr = listener.local_addr().expect("server addr");
+    tokio::spawn(bursting_axfr_server(listener, RECORDS));
+
+    let client_id = ClientForm {
+        protocol: "dns".to_string(),
+        remote_addr: Some(server_addr.to_string()),
+        instruction: Some("test client".to_string()),
+        event_handlers: Some(vec![serde_json::json!({
+            "event_pattern": "*",
+            "handler": { "type": "static", "actions": [] }
+        })]),
+        ..Default::default()
+    }
+    .create(
+        &state,
+        netget::llm::OllamaClient::new("http://127.0.0.1:1".to_string()),
+        tx.clone(),
+    )
+    .await
+    .expect("create dns client");
+    wait_for_client_handle(&state, client_id).await;
+
+    let outcome = state
+        .send_to_client(
+            client_id,
+            serde_json::json!({"type": "send_dns_zone_transfer", "zone": "burst.test."}),
+            Duration::from_secs(60),
+        )
+        .await
+        .expect("the transfer completes");
+    let detail = format!("{outcome:?}");
+    let total = RECORDS + 2;
+    assert!(
+        detail.contains(&format!("{total} record(s) in {total} message(s)")),
+        "every message of the burst must be counted: {detail}"
+    );
+}
