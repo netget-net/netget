@@ -172,8 +172,18 @@ pub static SCREEN_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         "rdp_screen",
         "What the remote desktop looks like now, as colours.",
         vec![
-            p("width", "number", "Desktop width", true),
-            p("height", "number", "Desktop height", true),
+            p(
+                "width",
+                "number",
+                "Width in pixels of the desktop this reading covers; an rdp_mouse x must be below it",
+                true,
+            ),
+            p(
+                "height",
+                "number",
+                "Height in pixels of the desktop this reading covers; an rdp_mouse y must be below it",
+                true,
+            ),
             p(
                 "dominant_color",
                 "string",

@@ -7767,7 +7767,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: dns
+      PAIR_FEATURES: tcp,dns
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
