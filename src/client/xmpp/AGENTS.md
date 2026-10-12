@@ -50,7 +50,8 @@ and interact with other XMPP clients.
 ### Connection Flow
 
 ```
-1. Read `jid` and `password` from the startup parameters (both required)
+1. Read `jid` and `password` from the startup parameters (both required). A JID with no local
+   part (`example.com`) is refused here: tokio-xmpp's login would unwrap it in its own task and panic
 
 2. Resolve the target from `remote_addr` alone (`resolve_target`)
 
