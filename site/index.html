@@ -3,10 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NetGet — Describe a server. Get a server.</title>
-    <meta name="description" content="Low-level protocol access for LLMs.">
-    <meta property="og:title" content="NetGet — Describe a server. Get a server.">
-    <meta property="og:description" content="Low-level protocol access for LLMs.">
+    <title>NetGet — Network Protocol Stubbing Multitool</title>
+    <meta name="description" content="With LLM or Human driven requests/responses">
+    <meta property="og:title" content="NetGet — Network Protocol Stubbing Multitool">
+    <meta property="og:description" content="With LLM or Human driven requests/responses">
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://netget.net/">
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
@@ -29,81 +29,28 @@
 
     <main id="main">
         <header class="hero">
-            <h1>Describe a server.<br><span class="accent">Get a server.</span></h1>
-            <p>Low-level protocol access for LLMs.</p>
+            <h1>Network Protocol<br><span class="accent">Stubbing Multitool</span></h1>
+            <p>With LLM or Human driven requests/responses</p>
         </header>
 
         <section class="section" id="how-it-works" aria-label="Protocol stacks">
-            <figure class="protocol-landscape" aria-label="Protocol stacks controlled by an LLM">
-                <ol class="protocol-stack" aria-label="LLM over Ethernet">
-                    <li class="stack-llm">LLM</li>
-                    <li class="stack-link">Ethernet</li>
-                </ol>
-                <ol class="protocol-stack" aria-label="LLM over UDP over IP over Ethernet">
-                    <li class="stack-llm">LLM</li>
-                    <li class="stack-transport">UDP</li>
-                    <li class="stack-network">IP</li>
-                    <li class="stack-link">Ethernet</li>
-                </ol>
-                <ol class="protocol-stack" aria-label="LLM over DNS over UDP over IP over Ethernet">
-                    <li class="stack-llm">LLM</li>
-                    <li class="stack-application">DNS</li>
-                    <li class="stack-transport">UDP</li>
-                    <li class="stack-network">IP</li>
-                    <li class="stack-link">Ethernet</li>
-                </ol>
-                <ol class="protocol-stack" aria-label="LLM over HTTP over TLS over TCP over IP over Ethernet">
-                    <li class="stack-llm">LLM</li>
-                    <li class="stack-application">HTTP</li>
-                    <li class="stack-application">TLS</li>
-                    <li class="stack-transport">TCP</li>
-                    <li class="stack-network">IP</li>
-                    <li class="stack-link">Ethernet</li>
-                </ol>
-                <ol class="protocol-stack" aria-label="LLM over GATT over ATT over L2CAP over Bluetooth">
-                    <li class="stack-llm">LLM</li>
-                    <li class="stack-application">GATT</li>
-                    <li class="stack-transport">ATT</li>
-                    <li class="stack-network">L2CAP</li>
-                    <li class="stack-link">Bluetooth</li>
-                </ol>
-                <ol class="protocol-stack" aria-label="LLM over MQTT over TCP over IP over Ethernet">
-                    <li class="stack-llm">LLM</li>
-                    <li class="stack-application">MQTT</li>
-                    <li class="stack-transport">TCP</li>
-                    <li class="stack-network">IP</li>
-                    <li class="stack-link">Ethernet</li>
-                </ol>
-                <ol class="protocol-stack" aria-label="LLM over HID over USB">
-                    <li class="stack-llm">LLM</li>
-                    <li class="stack-application">HID</li>
-                    <li class="stack-link">USB</li>
-                </ol>
-                <ol class="protocol-stack" aria-label="LLM over USB">
-                    <li class="stack-llm">LLM</li>
-                    <li class="stack-link">USB</li>
-                </ol>
-                <ol class="protocol-stack" aria-label="LLM over Bluetooth">
-                    <li class="stack-llm">LLM</li>
-                    <li class="stack-link">Bluetooth</li>
-                </ol>
-            </figure>
+            <figure class="protocol-landscape" aria-label="Protocol stacks with LLM driven, static response, script driven, and manual intercept modes"></figure>
         </section>
 
         <section class="section" id="examples">
             <h2>Example prompts</h2>
             <div class="examples">
                 <article>
-                    <p>Respond on HTTP 8080 with cooking recipes</p>
+                    <p>Return sassy responses on HTTP 8080</p>
                 </article>
                 <article>
-                    <p>Over DHCP advertise self as default gateway and DNS; listen on DNS 53 and resolve all to self; listen on HTTP 80 and respond with 'Hello World' to all</p>
+                    <p>DHCP-advertise self as gateway/DNS; DNS-resolve all to self; HTTP always return Hello World.</p>
                 </article>
                 <article>
                     <p>Provide life coaching services over Telnet.</p>
                 </article>
                 <article>
-                    <p>You are an FTP server with a single file containing a zip bomb.</p>
+                    <p>Connect to PostgreSQL on localhost:5432 and send select query with an invalid UTF-8 continuation byte</p>
                 </article>
             </div>
         </section>
@@ -497,5 +444,6 @@ cargo build --release --no-default-features --features tcp,http,ssh,dns,mcp-stdi
         <a href="https://github.com/smotanacom/netget/blob/master/LICENSE">AGPL-3.0</a>
     </footer>
     <script src="js/main.js"></script>
+    <script type="module" src="js/protocol-landscape.js"></script>
 </body>
 </html>

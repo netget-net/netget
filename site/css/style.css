@@ -63,11 +63,11 @@ h1 { font-size: clamp(2.25rem, 5vw, 3.3rem); line-height: 1.12; letter-spacing: 
 .section { padding: 1.8rem 0; }
 h2 { font-size: 1.3rem; font-weight: 600; letter-spacing: -0.025em; margin-bottom: 1rem; }
 /* Protocol stacks of different depths align at their base layers. */
-/* One row that never wraps: where the screen is narrower than the row, it stays centred and both ends are clipped. */
-.protocol-landscape { display: flex; justify-content: center; align-items: flex-end; gap: 10px; overflow: hidden; margin: 0; padding: 1.25rem 0 0.75rem; }
-.protocol-stack { flex: 1 0 76px; display: flex; flex-direction: column; gap: 5px; list-style: none; margin: 0; padding: 0; }
-.protocol-stack li { display: grid; place-items: center; min-height: 36px; padding: 0.4rem 0.15rem; border: 1px solid var(--border); border-radius: 4px; background: var(--panel); color: var(--text); font-family: var(--mono); font-size: 0.7rem; line-height: 1.3; white-space: nowrap; }
-.protocol-stack .stack-llm { color: var(--bg); background: var(--green); border-color: var(--green); font-weight: 600; margin-bottom: 3px; }
+/* The renderer fits whole columns to the available width, keeping one row. */
+.protocol-landscape { --stack-min-width: 88px; display: grid; grid-template-columns: repeat(var(--stack-count, 1), minmax(0, 1fr)); align-items: end; gap: 10px; margin: 0; padding: 1.25rem 0 0.75rem; }
+.protocol-stack { min-width: 0; display: flex; flex-direction: column; gap: 5px; list-style: none; margin: 0; padding: 0; }
+.protocol-stack li { display: grid; place-items: center; min-height: 36px; padding: 0.4rem 0.25rem; border: 1px solid var(--border); border-radius: 4px; background: var(--panel); color: var(--text); font-family: var(--mono); font-size: 0.7rem; line-height: 1.3; text-align: center; overflow-wrap: anywhere; }
+.protocol-stack .stack-driver { min-height: 48px; color: var(--bg); background: var(--green); border-color: var(--green); font-weight: 600; margin-bottom: 3px; }
 .protocol-stack .stack-application { color: var(--cyan); border-color: color-mix(in srgb, var(--cyan) 30%, var(--border)); background: color-mix(in srgb, var(--cyan) 7%, var(--panel)); }
 .protocol-stack .stack-transport { color: var(--cyan); }
 .protocol-stack .stack-network { color: var(--muted); }

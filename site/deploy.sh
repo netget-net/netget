@@ -35,6 +35,8 @@ HTML_PAGES=(index.html demo.html)
 
 cd "$(dirname "$0")"
 
+python3 ../scripts/site_protocol_stacks.py
+
 if [ ! -f demo/pkg/netget_web_bg.wasm ]; then
   echo "demo/pkg/netget_web_bg.wasm is missing: run ./web/build.sh first" >&2
   exit 1
