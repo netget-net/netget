@@ -1,10 +1,10 @@
-//! NetGet's VXLAN/Geneve endpoint against a tunnel endpoint written in the test, for both
-//! encapsulations, what the kernel test cannot cover (Geneve: this kernel has no geneve
-//! module), and the refusals. tshark's VXLAN and Geneve dissectors read every frame both sides
-//! sent (the pcap oracle). Unprivileged; no LLM calls.
+//! NetGet's VXLAN/Geneve/GRE endpoint against a tunnel endpoint written in the test, for every
+//! encapsulation, what the kernel test cannot cover (Geneve, GRE without a key), and the
+//! refusals. tshark's VXLAN, Geneve and GRE dissectors read every frame both sides sent (the
+//! pcap oracle). Unprivileged; no LLM calls.
 use crate::helpers::pcap_oracle::PcapOracle;
 use netget::cli::management::ServerForm;
-use netget::server::vxlan::frame::{self, Encap, Payload};
+use netget::server::vxlan::frame::{self, Encap, Header, Payload};
 use netget::state::app_state::AppState;
 use netget::state::{AccessLogOwner, ServerId};
 use serde_json::{json, Value};
@@ -73,29 +73,36 @@ async fn events(state: &AppState, id: ServerId, event_type: &str) -> Vec<Value> 
         .collect()
 }
 
-/// The test's VTEP, on 127.0.0.9 at the server's own port: where NetGet replies.
+/// The test's tunnel endpoint, on 127.0.0.9 at the server's own port: where NetGet replies.
 struct Vtep {
     socket: UdpSocket,
     port: u16,
     encap: Encap,
-    vni: u32,
+    /// What every frame is sent with; a GRE sequence number counts up from its value.
+    header: Header,
     sent: Vec<Vec<u8>>,
     received: Vec<Vec<u8>>,
+    /// The GRE sequence numbers NetGet's replies carried.
+    sequences: Vec<u32>,
 }
 
 impl Vtep {
-    async fn new(port: u16, encap: Encap, vni: u32) -> Self {
+    async fn new(port: u16, encap: Encap, header: Header) -> Self {
         Self {
             socket: UdpSocket::bind(("127.0.0.9", port)).await.unwrap(),
             port,
             encap,
-            vni,
+            header,
             sent: vec![],
             received: vec![],
+            sequences: vec![],
         }
     }
     async fn send(&mut self, inner: &[u8]) {
-        let d = frame::encap(self.encap, self.vni, inner);
+        let d = frame::encap(self.encap, &self.header, inner);
+        if let Some(s) = &mut self.header.sequence {
+            *s += 1;
+        }
         self.socket
             .send_to(&d, ("127.0.0.1", self.port))
             .await
@@ -116,15 +123,22 @@ impl Vtep {
             .unwrap()
             .0;
         self.received.push(buf[..n].to_vec());
-        let (vni, inner) = frame::decap(self.encap, &buf[..n]).expect("NetGet's encapsulation");
-        assert_eq!(vni, self.vni);
+        let (header, inner) = frame::decap(self.encap, &buf[..n])
+            .expect("NetGet's encapsulation (a GRE checksum included)");
+        // The reply is encapsulated as the request was: same VNI or key (or none), and for GRE
+        // a checksum and a sequence number exactly when the request had them.
+        assert_eq!(header.vni, self.header.vni);
+        assert_eq!(header.checksum, self.header.checksum);
+        assert_eq!(header.sequence.is_some(), self.header.sequence.is_some());
+        self.sequences.extend(header.sequence);
         Some(frame::parse_frame(inner).expect("NetGet's inner frame (checksums included)"))
     }
 }
 
-async fn exchange(encap: Encap, dissector: &str, oracle_port: u16) {
-    let (state, id, port) = start(json!({"encapsulation": encap.name(), "vni": 42})).await;
-    let mut v = Vtep::new(port, encap, 42).await;
+/// ARP, ping and UDP through the tunnel, then the oracle over every datagram.
+async fn exchange(encap: Encap, header: Header, params: Value, dissector: &str) -> Vtep {
+    let (state, id, port) = start(params).await;
+    let mut v = Vtep::new(port, encap, header).await;
 
     v.send(&frame::arp_frame(true, PEER_MAC, PEER_IP, [0; 6], HOST_IP))
         .await;
@@ -192,7 +206,7 @@ async fn exchange(encap: Encap, dissector: &str, oracle_port: u16) {
         }
     );
 
-    let mut oracle = PcapOracle::udp(dissector).port(oracle_port);
+    let mut oracle = PcapOracle::udp(dissector).port(encap.port());
     for d in &v.sent {
         oracle = oracle.to_server(d);
     }
@@ -200,39 +214,123 @@ async fn exchange(encap: Encap, dissector: &str, oracle_port: u16) {
         oracle = oracle.from_server(d);
     }
     oracle.assert_clean();
-    assert_eq!(events(&state, id, "vxlan_udp_datagram").await[0]["vni"], 42);
+    assert_eq!(
+        events(&state, id, "vxlan_udp_datagram").await[0]["vni"],
+        json!(header.vni)
+    );
+    v
 }
 
 #[tokio::test]
 async fn vxlan_arp_ping_udp_and_oracle() {
-    exchange(Encap::Vxlan, "vxlan", frame::VXLAN_PORT).await;
+    exchange(
+        Encap::Vxlan,
+        Header::vni(42),
+        json!({"encapsulation": "vxlan", "vni": 42}),
+        "vxlan",
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn geneve_arp_ping_udp_and_oracle() {
-    exchange(Encap::Geneve, "geneve", frame::GENEVE_PORT).await;
+    exchange(
+        Encap::Geneve,
+        Header::vni(42),
+        json!({"encapsulation": "geneve", "vni": 42}),
+        "geneve",
+    )
+    .await;
+}
+
+/// Every optional GRE field on: key 42, a checksum, and sequence numbers. NetGet's replies
+/// carry the key and a valid checksum, and number themselves 0, 1, 2 in the order they left.
+#[tokio::test]
+async fn gretap_with_key_checksum_and_sequence_and_oracle() {
+    let header = Header {
+        vni: Some(42),
+        checksum: true,
+        sequence: Some(100),
+    };
+    let v = exchange(
+        Encap::Gretap,
+        header,
+        json!({"encapsulation": "gretap", "vni": 42}),
+        "gre",
+    )
+    .await;
+    assert_eq!(v.sequences, [0, 1, 2]);
+}
+
+/// Plain GRE: no key, no checksum, no sequence number, and a server with no key filter.
+#[tokio::test]
+async fn gretap_without_a_key_and_oracle() {
+    exchange(
+        Encap::Gretap,
+        Header::default(),
+        json!({"encapsulation": "gretap"}),
+        "gre",
+    )
+    .await;
+}
+
+/// The GRE codec on its own: each optional field round-trips, a corrupted byte fails the
+/// checksum, and renumbering keeps the checksum valid.
+#[test]
+fn gre_header_round_trip_and_sequence_stamping() {
+    let inner = frame::arp_frame(true, PEER_MAC, PEER_IP, [0; 6], HOST_IP);
+    for checksum in [false, true] {
+        for vni in [None, Some(0), Some(u32::MAX)] {
+            for sequence in [None, Some(7)] {
+                let h = Header {
+                    vni,
+                    checksum,
+                    sequence,
+                };
+                let mut d = frame::encap(Encap::Gretap, &h, &inner);
+                assert_eq!(
+                    frame::decap(Encap::Gretap, &d).unwrap(),
+                    (h, &inner[..]),
+                    "{h:?}"
+                );
+                assert_eq!(
+                    frame::stamp_sequence(Encap::Gretap, &mut d, 9),
+                    sequence.is_some()
+                );
+                let (after, _) = frame::decap(Encap::Gretap, &d).expect("checksum redone");
+                assert_eq!(after.sequence, sequence.map(|_| 9));
+                if checksum {
+                    let last = d.len() - 1;
+                    d[last] ^= 1;
+                    let e = frame::decap(Encap::Gretap, &d).unwrap_err();
+                    assert!(e.to_string().contains("bad GRE checksum"), "{e}");
+                }
+            }
+        }
+    }
 }
 
 #[tokio::test]
 async fn refusals_and_the_vni_filter() {
     let (state, id, port) = start(json!({"vni": 42})).await;
-    let mut v = Vtep::new(port, Encap::Vxlan, 42).await;
+    let mut v = Vtep::new(port, Encap::Vxlan, Header::vni(42)).await;
     let arp = frame::arp_frame(true, PEER_MAC, PEER_IP, [0; 6], HOST_IP);
 
     // The I flag clear: no valid VNI, dropped.
-    let mut no_i = frame::encap(Encap::Vxlan, 42, &arp);
+    let mut no_i = frame::encap(Encap::Vxlan, &Header::vni(42), &arp);
     no_i[0] = 0;
     v.send_raw(&no_i).await;
     // Another VNI: not this server's overlay.
-    v.send_raw(&frame::encap(Encap::Vxlan, 43, &arp)).await;
+    v.send_raw(&frame::encap(Encap::Vxlan, &Header::vni(43), &arp))
+        .await;
     // A truncated inner frame, and an IPv4 header with a wrong checksum.
-    v.send_raw(&frame::encap(Encap::Vxlan, 42, &arp[..20]))
+    v.send_raw(&frame::encap(Encap::Vxlan, &Header::vni(42), &arp[..20]))
         .await;
     let mut bad = frame::ipv4(PEER_IP, HOST_IP, 1, 7, &frame::icmp_echo(true, 1, 1, b"x"));
     bad[10] ^= 0xff;
     v.send_raw(&frame::encap(
         Encap::Vxlan,
-        42,
+        &Header::vni(42),
         &frame::ethernet(HOST_MAC, PEER_MAC, frame::ETHERTYPE_IPV4, &bad),
     ))
     .await;
@@ -258,4 +356,62 @@ async fn refusals_and_the_vni_filter() {
     ))
     .await;
     assert!(v.recv(2).await.is_none());
+}
+
+/// Each datagram below is an ARP request for 10.99.0.2 that the policy would answer, broken in
+/// exactly one way, so a check that stopped refusing it shows up as a reply (or, for the
+/// truncated header, as a server whose receive loop died and answers nothing afterwards).
+#[tokio::test]
+async fn gre_refusals_before_the_model() {
+    let (state, id, port) = start(json!({"encapsulation": "gretap", "vni": 42})).await;
+    let mut v = Vtep::new(port, Encap::Gretap, Header::vni(42)).await;
+    let arp = frame::arp_frame(true, PEER_MAC, PEER_IP, [0; 6], HOST_IP);
+    let plain = frame::encap(Encap::Gretap, &Header::vni(42), &arp);
+
+    // Version 1 is PPTP's enhanced GRE, a different header.
+    let mut version = plain.clone();
+    version[1] |= 0x01;
+    v.send_raw(&version).await;
+    // Protocol type IPv4 (0x0800), not Transparent Ethernet Bridging (0x6558).
+    let mut protocol = plain.clone();
+    protocol[2..4].copy_from_slice(&0x0800u16.to_be_bytes());
+    v.send_raw(&protocol).await;
+    // RFC 1701's routing-present bit, which RFC 2784 receivers discard.
+    let mut routing = plain.clone();
+    routing[0] |= 0x40;
+    v.send_raw(&routing).await;
+    // A checksum that no longer matches: one bit of the inner source MAC flipped after it was
+    // computed (header: 4 + checksum 4 + key 4 bytes).
+    let mut corrupted = frame::encap(
+        Encap::Gretap,
+        &Header {
+            vni: Some(42),
+            checksum: true,
+            sequence: None,
+        },
+        &arp,
+    );
+    corrupted[12 + 11] ^= 0x02;
+    v.send_raw(&corrupted).await;
+    // Another key, and no key at all: not this server's overlay.
+    v.send_raw(&frame::encap(Encap::Gretap, &Header::vni(43), &arp))
+        .await;
+    v.send_raw(&frame::encap(Encap::Gretap, &Header::default(), &arp))
+        .await;
+    // K and S set, but the datagram ends after the key: the sequence number is missing.
+    v.send_raw(&[0x30, 0, 0x65, 0x58, 0, 0, 0, 42]).await;
+    // C set on a four-byte datagram: the checksum field itself is missing.
+    v.send_raw(&[0x80, 0, 0x65, 0x58]).await;
+    // A truncated inner frame.
+    v.send_raw(&frame::encap(Encap::Gretap, &Header::vni(42), &arp[..20]))
+        .await;
+    assert!(
+        v.recv(2).await.is_none(),
+        "answered a GRE datagram it should have dropped"
+    );
+    assert!(events(&state, id, "vxlan_arp_request").await.is_empty());
+
+    // The server is still up and answers the same request sent properly.
+    v.send(&arp).await;
+    assert!(v.recv(20).await.is_some(), "the server stopped answering");
 }

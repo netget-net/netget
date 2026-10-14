@@ -1,4 +1,4 @@
-//! What the model answers as hosts on a VXLAN or Geneve overlay: who has an IP (ARP), echo
+//! What the model answers as hosts on a VXLAN, Geneve or GRE (gretap) overlay: who has an IP (ARP), echo
 //! replies, and UDP replies. The frames are built here from the request they answer, so the
 //! model supplies only what a host would decide — its MAC, and what its service says.
 use super::frame::{self, Encap, Frame, Mac, Payload};
@@ -20,7 +20,9 @@ pub const DEFAULT_ENCAPSULATION: &str = "vxlan";
 #[derive(Clone)]
 pub struct FrameContext {
     pub encap: Encap,
-    pub vni: u32,
+    /// The request's encapsulation header, which the reply mirrors: the same VNI or GRE key,
+    /// and for GRE a checksum and a sequence number when the request had them.
+    pub header: frame::Header,
     pub frame: Frame,
     pub default_mac: Mac,
     /// The MAC each IP was given in an ARP reply, used as the source of that IP's frames.
@@ -115,8 +117,8 @@ fn common_params() -> Vec<Parameter> {
         p(
             "vni",
             "number",
-            "The overlay network (VXLAN/Geneve Network Identifier)",
-            true,
+            "The overlay network: the VXLAN/Geneve Network Identifier, or the GRE key (null for GRE without a key)",
+            false,
         ),
         p(
             "vtep",
@@ -217,8 +219,14 @@ impl FrameContext {
         })
         .unwrap_or(self.default_mac)
     }
+    /// Encapsulated as the request was. A GRE sequence number is a placeholder here; the
+    /// server writes the real one as the reply leaves.
     fn wrap(&self, inner: Vec<u8>) -> ActionResult {
-        ActionResult::Output(frame::encap(self.encap, self.vni, &inner))
+        let header = frame::Header {
+            sequence: self.header.sequence.map(|_| 0),
+            ..self.header
+        };
+        ActionResult::Output(frame::encap(self.encap, &header, &inner))
     }
     /// An IPv4 reply to the request's sender, from the address it was sent to.
     fn ip_reply(&self, protocol: u8, payload: &[u8]) -> Result<ActionResult> {
@@ -247,15 +255,19 @@ impl Protocol for VxlanProtocol {
         vec![
             "vxlan",
             "geneve",
+            "gre",
+            "gretap",
+            "gre-in-udp",
             "overlay",
             "vtep",
             "4789",
             "6081",
+            "4754",
             "tunnel endpoint",
         ]
     }
     fn description(&self) -> &'static str {
-        "VXLAN/Geneve tunnel endpoint whose overlay hosts the model plays: answers ARP, ping and UDP arriving through the tunnel from Linux, Open vSwitch or a switch"
+        "VXLAN/Geneve/GRE (gretap in UDP) tunnel endpoint whose overlay hosts the model plays: answers ARP, ping and UDP arriving through the tunnel from Linux, Open vSwitch or a switch"
     }
     fn get_async_actions(&self, _: &AppState) -> Vec<ActionDefinition> {
         Vec::new()
@@ -274,7 +286,7 @@ impl Protocol for VxlanProtocol {
             ParameterDefinition {
                 name: "encapsulation".into(),
                 type_hint: "string".into(),
-                description: "vxlan (RFC 7348, port 4789) or geneve (RFC 8926, port 6081)".into(),
+                description: "vxlan (RFC 7348, port 4789), geneve (RFC 8926, port 6081) or gretap (Ethernet over GRE, RFC 2784/2890, in UDP per RFC 8086 on port 4754: a Linux gretap link with encap fou). Pass the port for geneve and gretap; with none the server takes VXLAN's 4789".into(),
                 required: false,
                 example: json!("geneve"),
                 default: Some(json!(DEFAULT_ENCAPSULATION)),
@@ -282,7 +294,7 @@ impl Protocol for VxlanProtocol {
             ParameterDefinition {
                 name: "vni".into(),
                 type_hint: "number".into(),
-                description: "Serve only this VNI (default: every VNI that arrives)".into(),
+                description: "Serve only this VNI; for gretap, only frames carrying this GRE key, so keyless frames are dropped (default: every VNI or key that arrives, and frames without a key)".into(),
                 required: false,
                 example: json!(42),
                 default: None,
@@ -305,10 +317,10 @@ impl Protocol for VxlanProtocol {
             .well_known_udp_port(4789)
             .connectionless()
             .deliberately_silent()
-            .implementation("Hand-rolled VXLAN (RFC 7348) and Geneve (RFC 8926, options skipped) decapsulation, with Ethernet, ARP, IPv4 (header checksum checked, fragments not reassembled), ICMP echo and UDP (checksums checked and written) for the overlay hosts; replies go back through the tunnel to the sending VTEP")
+            .implementation("Hand-rolled VXLAN (RFC 7348), Geneve (RFC 8926, options skipped) and Ethernet-over-GRE (RFC 2784/2890 key, checksum and sequence number; carried in UDP per RFC 8086) decapsulation, with Ethernet, ARP, IPv4 (header checksum checked, fragments not reassembled), ICMP echo and UDP (checksums checked and written) for the overlay hosts; replies go back through the tunnel to the sending endpoint, mirroring the request's VNI or GRE key, checksum and sequence flags")
             .llm_control("Which overlay IPs exist and at which MAC (ARP), which hosts answer ping, and what each UDP service replies")
-            .e2e_testing("tests/server/vxlan: the Linux kernel's vxlan driver in a network namespace (ping and a UDP exchange through the tunnel, the neighbour entry the model's ARP reply created); the pcap oracle (tshark) over NetGet's VXLAN and Geneve frames")
-            .notes("DELIBERATELY SILENT: an overlay IP with no host is silence, never a reply, because every ARP, echo or UDP reply asserts that a host exists (logged decision=model_silent / fail_closed_*). No TCP, no IPv6 (frames are logged and dropped), no IP fragmentation, no MAC learning or flooding to other VTEPs. Geneve interop with a kernel peer is unverified here (this kernel has no geneve module); its framing is checked by tshark.")
+            .e2e_testing("tests/server/vxlan: the Linux kernel's vxlan driver, and its gretap driver over a fou port (GRE key, checksum and sequence numbers on), each in a network namespace (ping and a UDP exchange through the tunnel, the neighbour entry the model's ARP reply created); the pcap oracle (tshark's vxlan, geneve and gre dissectors) over NetGet's frames; GRE refusals (version, protocol type, checksum, key, truncation) before the model")
+            .notes("DELIBERATELY SILENT: an overlay IP with no host is silence, never a reply, because every ARP, echo or UDP reply asserts that a host exists (logged decision=model_silent / fail_closed_*). No TCP, no IPv6 (frames are logged and dropped), no IP fragmentation, no MAC learning or flooding to other VTEPs. GRE is GRE-in-UDP only: GRE directly on IP protocol 47 needs a raw socket and is not implemented. Geneve interop with a kernel peer is unverified here; its framing is checked by tshark.")
             .max_inbound_bytes(frame::MAX_DATAGRAM)
             .build()
     }

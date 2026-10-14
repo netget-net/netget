@@ -1,5 +1,5 @@
-//! What the model can do as a host on a VXLAN or Geneve overlay, reached through a tunnel to
-//! one remote VTEP: resolve an IP, ping it, send it UDP.
+//! What the model can do as a host on a VXLAN, Geneve or GRE (gretap) overlay, reached
+//! through a tunnel to one remote endpoint: resolve an IP, ping it, send it UDP.
 use crate::llm::actions::{
     client_trait::{Client, ClientActionResult},
     protocol_trait::Protocol,
@@ -15,6 +15,10 @@ use std::net::Ipv4Addr;
 use std::sync::LazyLock;
 
 pub const DEFAULT_VNI: u32 = 1;
+/// gretap: frames carry no GRE checksum unless asked.
+pub const DEFAULT_GRE_CHECKSUM: bool = false;
+/// gretap: frames carry no GRE sequence number unless asked.
+pub const DEFAULT_GRE_SEQUENCE: bool = false;
 
 #[derive(Default)]
 pub struct VxlanClientProtocol;
@@ -107,8 +111,13 @@ pub static READY_EVENT: LazyLock<EventType> = LazyLock::new(|| {
                 "The tunnel endpoint frames go to",
                 true,
             ),
-            p("vni", "number", "The overlay network identifier", true),
-            p("encapsulation", "string", "vxlan or geneve", true),
+            p(
+                "vni",
+                "number",
+                "The overlay network identifier, or the GRE key (null for gretap without a key)",
+                false,
+            ),
+            p("encapsulation", "string", "vxlan, geneve or gretap", true),
         ],
     )
 });
@@ -249,6 +258,8 @@ impl Protocol for VxlanClientProtocol {
         vec![
             "vxlan",
             "geneve",
+            "gre",
+            "gretap",
             "overlay",
             "vtep",
             "tunnel",
@@ -256,7 +267,7 @@ impl Protocol for VxlanClientProtocol {
         ]
     }
     fn description(&self) -> &'static str {
-        "VXLAN/Geneve tunnel endpoint as a host on the overlay: ARPs, pings and sends UDP through the tunnel to a remote VTEP (Linux, Open vSwitch, a switch), and answers ARP and ping for itself"
+        "VXLAN/Geneve/GRE (gretap in UDP) tunnel endpoint as a host on the overlay: ARPs, pings and sends UDP through the tunnel to a remote endpoint (Linux, Open vSwitch, a switch), and answers ARP and ping for itself"
     }
     fn get_async_actions(&self, _: &AppState) -> Vec<ActionDefinition> {
         actions()
@@ -295,7 +306,7 @@ impl Protocol for VxlanClientProtocol {
             ParameterDefinition {
                 name: "vni".into(),
                 type_hint: "number".into(),
-                description: "The overlay network identifier (0-16777215)".into(),
+                description: "The overlay network identifier (0-16777215). For gretap it is the GRE key (0-4294967295), and leaving it out sends and accepts frames with no key".into(),
                 required: false,
                 example: json!(42),
                 default: Some(json!(DEFAULT_VNI)),
@@ -303,10 +314,26 @@ impl Protocol for VxlanClientProtocol {
             ParameterDefinition {
                 name: "encapsulation".into(),
                 type_hint: "string".into(),
-                description: "vxlan (port 4789) or geneve (port 6081)".into(),
+                description: "vxlan (port 4789), geneve (port 6081) or gretap (Ethernet over GRE in UDP, port 4754: a Linux gretap link with encap fou)".into(),
                 required: false,
                 example: json!("vxlan"),
                 default: Some(json!(crate::server::vxlan::actions::DEFAULT_ENCAPSULATION)),
+            },
+            ParameterDefinition {
+                name: "gre_checksum".into(),
+                type_hint: "boolean".into(),
+                description: "gretap only: put a GRE checksum on every frame (what a Linux gretap with csum/ocsum expects)".into(),
+                required: false,
+                example: json!(true),
+                default: Some(json!(DEFAULT_GRE_CHECKSUM)),
+            },
+            ParameterDefinition {
+                name: "gre_sequence".into(),
+                type_hint: "boolean".into(),
+                description: "gretap only: number every frame with a GRE sequence number (what a Linux gretap with seq/iseq expects)".into(),
+                required: false,
+                example: json!(true),
+                default: Some(json!(DEFAULT_GRE_SEQUENCE)),
             },
             ParameterDefinition {
                 name: "local_address".into(),
@@ -323,10 +350,10 @@ impl Protocol for VxlanClientProtocol {
         ProtocolMetadataV2::builder()
             .state(DevelopmentState::Experimental)
             .privilege_requirement(PrivilegeRequirement::None)
-            .implementation("The server's VXLAN/Geneve and Ethernet/ARP/IPv4/ICMP/UDP framing (src/server/vxlan/frame.rs); one overlay host with an ARP cache, answering ARP and echo requests for its own IP in Rust; sends wait on ARP (2 s) and report vxlan_unreachable when nobody answers")
+            .implementation("The server's VXLAN/Geneve/GRE-in-UDP and Ethernet/ARP/IPv4/ICMP/UDP framing (src/server/vxlan/frame.rs); one overlay host with an ARP cache, answering ARP and echo requests for its own IP in Rust; sends wait on ARP (2 s) and report vxlan_unreachable when nobody answers; for gretap, the GRE key, checksum and sequence number are each optional")
             .llm_control("Which overlay IPs to resolve, ping and send UDP to, and what to do with what comes back")
-            .e2e_testing("tests/client/vxlan: the Linux kernel's vxlan driver in a network namespace, which answers ARP and ping itself, with a UDP service behind it and a closed port for the ICMP error")
-            .notes("No TCP, no IPv6, no IP fragmentation; the tunnel goes to one remote VTEP (no flooding or learning of others).")
+            .e2e_testing("tests/client/vxlan: the Linux kernel's vxlan driver, and its gretap driver over a fou port (GRE key, checksum and sequence numbers on), each in a network namespace, which answers ARP and ping itself, with a UDP service behind it and a closed port for the ICMP error")
+            .notes("No TCP, no IPv6, no IP fragmentation; the tunnel goes to one remote endpoint (no flooding or learning of others). GRE is GRE-in-UDP only: GRE directly on IP protocol 47 needs a raw socket and is not implemented.")
             .max_inbound_bytes(frame::MAX_DATAGRAM)
             .build()
     }
