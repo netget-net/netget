@@ -135,6 +135,9 @@ const PLAIN_UDP: Wire = Wire {
     note: None,
 };
 
+const VXLAN_ENCAPSULATION_NOTE: &str = "This decodes VXLAN. With encapsulation geneve use \
+    `-d udp.port==<port>,geneve` instead, and with gretap (GRE in UDP) `-d udp.port==<port>,gre`.";
+
 const TFTP_TID_NOTE: &str = "A `udp port 69` filter captures only the initial RRQ/WRQ. TFTP \
     then moves the transfer to an ephemeral TID port, so every DATA and ACK packet is missed. \
     Capture the host instead (drop the port from the filter) and use the `tftp` display filter.";
@@ -480,9 +483,14 @@ pub fn wire_for(protocol: &str) -> Wire {
         "turn" => with_display(udp("stun"), "stun || turnchannel"),
         "coap" => udp("coap"),
         "rip" => udp("rip"),
-        "vxlan" => udp("vxlan"),
+        // The vxlan protocol also speaks Geneve and GRE-in-UDP, chosen by its `encapsulation`
+        // startup parameter, which this table cannot see; the note names their decode-as.
+        "vxlan" => with_note(udp("vxlan"), VXLAN_ENCAPSULATION_NOTE),
         "pfcp" => udp("pfcp"),
         "geneve" => udp("geneve"),
+        // GRE-in-UDP (RFC 8086): tshark 4.6.8 registers `gre` on udp.port 4754 and accepts it
+        // in `-d udp.port==N,gre`; protocol type 0x6558 hands the inner frame to `eth`.
+        "gre" | "gretap" => udp("gre"),
         "bfd" => udp("bfd"),
         "sip" => either("sip"),
         "rtp" => udp("rtp"),

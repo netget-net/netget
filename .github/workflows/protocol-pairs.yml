@@ -6187,7 +6187,7 @@ jobs:
 
   vxlan:
     if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'vxlan')
-    name: VXLAN and Geneve server and client against the Linux kernel's vxlan driver
+    name: VXLAN, Geneve and GRE server and client against the Linux kernel's vxlan and gretap (over fou) drivers
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -6205,7 +6205,14 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends iproute2 ethtool iputils-ping tshark
           # The kernel peer lives in a network namespace, which the tests create through sudo -n.
           sudo -n true
-          sudo modprobe vxlan
+          # vxlan for the VXLAN peer; ip_gre (gretap) and fou (GRE-in-UDP on port 4754) for the
+          # GRE peer. Ubuntu ships some tunnel modules only in linux-modules-extra.
+          for module in vxlan ip_gre fou; do
+            if ! sudo modprobe "$module"; then
+              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)"
+              sudo modprobe "$module"
+            fi
+          done
       - name: Compile vxlan as a standalone Cargo feature
         run: cargo check --locked --no-default-features --features vxlan --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths

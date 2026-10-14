@@ -1,13 +1,24 @@
-//! VXLAN (RFC 7348) and Geneve (RFC 8926) encapsulation, and just enough of Ethernet, ARP,
-//! IPv4, ICMP echo and UDP to be a host on the overlay. Shared by the server and the client
-//! (`src/client/vxlan/`). Pure: no sockets here.
+//! VXLAN (RFC 7348), Geneve (RFC 8926) and Ethernet over GRE (RFC 2784 with RFC 2890's key
+//! and sequence number, carried in UDP per RFC 8086) encapsulation, and just enough of
+//! Ethernet, ARP, IPv4, ICMP echo and UDP to be a host on the overlay. Shared by the server
+//! and the client (`src/client/vxlan/`). Pure: no sockets here.
 use anyhow::{bail, ensure, Context, Result};
 use std::net::Ipv4Addr;
 
 pub const VXLAN_PORT: u16 = 4789;
 pub const GENEVE_PORT: u16 = 6081;
-/// Geneve's protocol type for an Ethernet payload (Transparent Ethernet Bridging).
+/// GRE-in-UDP (RFC 8086): the UDP payload is a GRE header and what it carries.
+pub const GRE_IN_UDP_PORT: u16 = 4754;
+/// Geneve's and GRE's protocol type for an Ethernet payload (Transparent Ethernet Bridging).
 const ETH_BRIDGING: u16 = 0x6558;
+/// GRE flag bits in the first header byte (RFC 2784 section 2.1, RFC 2890 section 2).
+const GRE_CHECKSUM: u8 = 0x80;
+const GRE_KEY: u8 = 0x20;
+const GRE_SEQUENCE: u8 = 0x10;
+/// RFC 2784's "bits 1-5", less RFC 2890's K and S: RFC 1701's Routing Present (0x40), Strict
+/// Source Route (0x08) and the top bit of Recursion Control (0x04). A receiver discards a
+/// packet with any of them set.
+const GRE_RFC1701_ONLY: u8 = 0x40 | 0x08 | 0x04;
 pub const ETHERTYPE_IPV4: u16 = 0x0800;
 pub const ETHERTYPE_ARP: u16 = 0x0806;
 /// The largest UDP payload: one IPv4 datagram's worth.
@@ -24,6 +35,8 @@ pub type Mac = [u8; 6];
 pub enum Encap {
     Vxlan,
     Geneve,
+    /// Ethernet over GRE (a Linux `gretap` link), in UDP on port 4754 (a Linux `fou` port).
+    Gretap,
 }
 
 impl Encap {
@@ -31,27 +44,69 @@ impl Encap {
         match s {
             "vxlan" => Ok(Encap::Vxlan),
             "geneve" => Ok(Encap::Geneve),
-            other => bail!("encapsulation {other:?} is not vxlan or geneve"),
+            "gretap" => Ok(Encap::Gretap),
+            other => bail!("encapsulation {other:?} is not vxlan, geneve or gretap"),
         }
     }
     pub fn name(self) -> &'static str {
         match self {
             Encap::Vxlan => "vxlan",
             Encap::Geneve => "geneve",
+            Encap::Gretap => "gretap",
         }
     }
     pub fn port(self) -> u16 {
         match self {
             Encap::Vxlan => VXLAN_PORT,
             Encap::Geneve => GENEVE_PORT,
+            Encap::Gretap => GRE_IN_UDP_PORT,
+        }
+    }
+    /// The largest VNI: 24 bits for VXLAN and Geneve, the whole 32-bit key for GRE.
+    pub fn max_vni(self) -> u32 {
+        match self {
+            Encap::Vxlan | Encap::Geneve => MAX_VNI,
+            Encap::Gretap => u32::MAX,
         }
     }
 }
 
 pub const MAX_VNI: u32 = 0xff_ffff;
 
-/// The VNI and the inner Ethernet frame of one encapsulated datagram.
-pub fn decap(encap: Encap, b: &[u8]) -> Result<(u32, &[u8])> {
+/// What an encapsulation header says besides the frame it carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Header {
+    /// The VXLAN or Geneve VNI (always there), or the GRE key (there when the K bit is set).
+    pub vni: Option<u32>,
+    /// GRE only: a checksum is present. On input it has been verified.
+    pub checksum: bool,
+    /// GRE only: the sequence number, when the S bit is set.
+    pub sequence: Option<u32>,
+}
+
+impl Header {
+    pub fn vni(vni: u32) -> Self {
+        Header {
+            vni: Some(vni),
+            ..Default::default()
+        }
+    }
+}
+
+/// `VNI 42`, `key 42` or `no key`, for logs.
+pub fn vni_str(encap: Encap, vni: Option<u32>) -> String {
+    match (encap, vni) {
+        (Encap::Gretap, Some(k)) => format!("key {k}"),
+        (Encap::Gretap, None) => "no key".into(),
+        (_, v) => format!("VNI {}", v.unwrap_or_default()),
+    }
+}
+
+/// The header and the inner Ethernet frame of one encapsulated datagram.
+pub fn decap(encap: Encap, b: &[u8]) -> Result<(Header, &[u8])> {
+    if encap == Encap::Gretap {
+        return decap_gre(b);
+    }
     ensure!(
         b.len() >= 8,
         "a {}-byte datagram has no {} header",
@@ -62,7 +117,7 @@ pub fn decap(encap: Encap, b: &[u8]) -> Result<(u32, &[u8])> {
     match encap {
         Encap::Vxlan => {
             ensure!(b[0] & 0x08 != 0, "the VXLAN I flag is clear: no valid VNI");
-            Ok((vni, &b[8..]))
+            Ok((Header::vni(vni), &b[8..]))
         }
         Encap::Geneve => {
             let version = b[0] >> 6;
@@ -78,14 +133,71 @@ pub fn decap(encap: Encap, b: &[u8]) -> Result<(u32, &[u8])> {
                 b.len() >= 8 + options,
                 "Geneve options run past the datagram"
             );
-            Ok((vni, &b[8 + options..]))
+            Ok((Header::vni(vni), &b[8 + options..]))
         }
+        Encap::Gretap => unreachable!("decap_gre"),
     }
 }
 
-pub fn encap(encap: Encap, vni: u32, inner: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(8 + inner.len());
-    let v = vni.to_be_bytes();
+/// RFC 2784 with RFC 2890's key and sequence number. Each optional field is length-checked
+/// before it is read, and a present checksum must verify over the header and the payload.
+fn decap_gre(b: &[u8]) -> Result<(Header, &[u8])> {
+    ensure!(
+        b.len() >= 4,
+        "a {}-byte datagram has no GRE header",
+        b.len()
+    );
+    let version = b[1] & 0x07;
+    ensure!(
+        version == 0,
+        "GRE version {version} (1 is PPTP's enhanced GRE)"
+    );
+    ensure!(
+        b[0] & GRE_RFC1701_ONLY == 0,
+        "GRE flags {:#04x}: RFC 1701 routing, strict source route or recursion bits are set",
+        b[0]
+    );
+    let protocol = u16::from_be_bytes([b[2], b[3]]);
+    ensure!(
+        protocol == ETH_BRIDGING,
+        "GRE protocol type {protocol:#06x}, not Transparent Ethernet Bridging"
+    );
+    let checksum = b[0] & GRE_CHECKSUM != 0;
+    let mut at = 4;
+    let mut field = |present: bool, what: &str| -> Result<Option<u32>> {
+        if !present {
+            return Ok(None);
+        }
+        ensure!(
+            b.len() >= at + 4,
+            "a {}-byte datagram ends inside the GRE {what}",
+            b.len()
+        );
+        let v = u32::from_be_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]]);
+        at += 4;
+        Ok(Some(v))
+    };
+    field(checksum, "checksum")?;
+    let key = field(b[0] & GRE_KEY != 0, "key")?;
+    let sequence = field(b[0] & GRE_SEQUENCE != 0, "sequence number")?;
+    // RFC 2784: the checksum covers the GRE header and the payload, so a correct one sums the
+    // whole datagram, checksum field included, to zero.
+    ensure!(!checksum || self::checksum(&[b]) == 0, "bad GRE checksum");
+    Ok((
+        Header {
+            vni: key,
+            checksum,
+            sequence,
+        },
+        &b[at..],
+    ))
+}
+
+/// Encapsulate an inner frame. VXLAN and Geneve take the VNI (0 when `None`) and ignore the
+/// rest; GRE writes each field the header has.
+pub fn encap(encap: Encap, header: &Header, inner: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(16 + inner.len());
+    let v = header.vni.unwrap_or_default().to_be_bytes();
     match encap {
         Encap::Vxlan => out.extend_from_slice(&[0x08, 0, 0, 0, v[1], v[2], v[3], 0]),
         Encap::Geneve => {
@@ -93,9 +205,57 @@ pub fn encap(encap: Encap, vni: u32, inner: &[u8]) -> Vec<u8> {
             out.extend_from_slice(&ETH_BRIDGING.to_be_bytes());
             out.extend_from_slice(&[v[1], v[2], v[3], 0]);
         }
+        Encap::Gretap => {
+            let flags = if header.checksum { GRE_CHECKSUM } else { 0 }
+                | if header.vni.is_some() { GRE_KEY } else { 0 }
+                | if header.sequence.is_some() {
+                    GRE_SEQUENCE
+                } else {
+                    0
+                };
+            out.extend_from_slice(&[flags, 0]);
+            out.extend_from_slice(&ETH_BRIDGING.to_be_bytes());
+            if header.checksum {
+                out.extend_from_slice(&[0; 4]);
+            }
+            if header.vni.is_some() {
+                out.extend_from_slice(&v);
+            }
+            if let Some(s) = header.sequence {
+                out.extend_from_slice(&s.to_be_bytes());
+            }
+            out.extend_from_slice(inner);
+            if header.checksum {
+                let sum = checksum(&[&out]);
+                out[4..6].copy_from_slice(&sum.to_be_bytes());
+            }
+            return out;
+        }
     }
     out.extend_from_slice(inner);
     out
+}
+
+/// Write `sequence` into a GRE datagram that carries a sequence number, and redo its checksum
+/// when it has one, so the number can be given at the moment of sending: a peer that checks
+/// sequence numbers (a Linux `gretap` with `iseq`) drops one that goes backwards. False, with
+/// nothing changed, for a datagram that carries none.
+pub fn stamp_sequence(encap: Encap, datagram: &mut [u8], sequence: u32) -> bool {
+    if encap != Encap::Gretap || datagram.len() < 4 || datagram[0] & GRE_SEQUENCE == 0 {
+        return false;
+    }
+    let has_checksum = datagram[0] & GRE_CHECKSUM != 0;
+    let at = 4 + 4 * usize::from(has_checksum) + 4 * usize::from(datagram[0] & GRE_KEY != 0);
+    if datagram.len() < at + 4 {
+        return false;
+    }
+    datagram[at..at + 4].copy_from_slice(&sequence.to_be_bytes());
+    if has_checksum {
+        datagram[4..6].copy_from_slice(&[0, 0]);
+        let sum = checksum(&[datagram]);
+        datagram[4..6].copy_from_slice(&sum.to_be_bytes());
+    }
+    true
 }
 
 pub fn parse_mac(s: &str) -> Result<Mac> {

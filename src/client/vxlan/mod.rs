@@ -1,14 +1,14 @@
-//! VXLAN / Geneve client: one host on the overlay, behind a tunnel to one remote VTEP. ARP
-//! and echo requests for its own IP are answered in Rust, as any host's stack would; what the
-//! model asks for (resolve, ping, UDP) waits on ARP when the MAC is not yet known, and what
-//! comes back is reported as events.
+//! VXLAN / Geneve / GRE (gretap, in UDP) client: one host on the overlay, behind a tunnel to
+//! one remote tunnel endpoint. ARP and echo requests for its own IP are answered in Rust, as
+//! any host's stack would; what the model asks for (resolve, ping, UDP) waits on ARP when the
+//! MAC is not yet known, and what comes back is reported as events.
 pub mod actions;
 
 use crate::client::llm_budget::call_llm_for_client;
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::logging::emit::Log;
 use crate::protocol::{ConnectContext, Event, EventType};
-use crate::server::vxlan::frame::{self, Encap, Mac, Payload};
+use crate::server::vxlan::frame::{self, Encap, Header, Mac, Payload};
 use crate::state::client_handles::{ClientCommand, ClientSendOutcome};
 use crate::state::{AccessLogOwner, ClientStatus};
 pub use actions::VxlanClientProtocol;
@@ -42,7 +42,11 @@ struct Host {
     socket: UdpSocket,
     remote: SocketAddr,
     encap: Encap,
-    vni: u32,
+    /// What every frame is sent with: the VNI or GRE key, and the GRE checksum and sequence
+    /// flags. Frames that come back must carry the same VNI or key (or, keyless, none).
+    header: Header,
+    /// The next GRE sequence number, when `header.sequence` is on.
+    next_sequence: u32,
     ip: Ipv4Addr,
     mac: Mac,
     arp: HashMap<Ipv4Addr, Mac>,
@@ -76,13 +80,38 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
     let vni = params
         .map(|p| p.get_optional_u64("vni"))
         .transpose()?
-        .flatten()
-        .unwrap_or(actions::DEFAULT_VNI as u64);
-    anyhow::ensure!(
-        vni <= frame::MAX_VNI as u64,
-        "vni must be at most {}",
-        frame::MAX_VNI
-    );
+        .flatten();
+    if let Some(v) = vni {
+        anyhow::ensure!(
+            v <= encap.max_vni() as u64,
+            "vni must be at most {} for {}",
+            encap.max_vni(),
+            encap.name()
+        );
+    }
+    let flag = |k: &str, default: bool| -> Result<bool> {
+        let on = params
+            .map(|p| p.get_optional_bool(k))
+            .transpose()?
+            .flatten()
+            .unwrap_or(default);
+        anyhow::ensure!(
+            !on || encap == Encap::Gretap,
+            "{k} applies to encapsulation gretap only, not {}",
+            encap.name()
+        );
+        Ok(on)
+    };
+    let header = Header {
+        // GRE without a vni is GRE without a key; VXLAN and Geneve always carry a VNI.
+        vni: match encap {
+            Encap::Gretap => vni.map(|v| v as u32),
+            _ => Some(vni.map_or(actions::DEFAULT_VNI, |v| v as u32)),
+        },
+        checksum: flag("gre_checksum", actions::DEFAULT_GRE_CHECKSUM)?,
+        sequence: flag("gre_sequence", actions::DEFAULT_GRE_SEQUENCE)?.then_some(0),
+    };
+    let vni_text = frame::vni_str(encap, header.vni);
     let remote = parse_remote(&ctx.remote_addr, encap).await?;
     let local_ip = match get("local_address")? {
         Some(raw) => raw
@@ -99,7 +128,7 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
         .update_client_status(ctx.client_id, ClientStatus::Connected)
         .await;
     Log::new(Some(&ctx.status_tx)).info(format!(
-        "{} client {} is {ip} ({}) on VNI {vni} via {remote}, from {local}",
+        "{} client {} is {ip} ({}) on {vni_text} via {remote}, from {local}",
         encap.name().to_uppercase(),
         ctx.client_id,
         frame::mac_str(&mac)
@@ -112,7 +141,7 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
         Event::new(
             &actions::READY_EVENT,
             json!({"overlay_ip": ip.to_string(), "overlay_mac": frame::mac_str(&mac), "remote_vtep": remote.to_string(),
-                   "vni": vni, "encapsulation": encap.name()}),
+                   "vni": header.vni, "encapsulation": encap.name()}),
         ),
         0,
     ));
@@ -125,7 +154,8 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
         socket,
         remote,
         encap,
-        vni: vni as u32,
+        header,
+        next_sequence: 0,
         ip,
         mac,
         arp: HashMap::new(),
@@ -202,9 +232,16 @@ impl Host {
         }
     }
 
-    async fn send_frame(&self, inner: Vec<u8>) -> Result<()> {
+    /// Every frame leaves from this one task, so numbering GRE frames as they are built keeps
+    /// the sequence in sending order.
+    async fn send_frame(&mut self, inner: Vec<u8>) -> Result<()> {
+        let mut header = self.header;
+        if header.sequence.is_some() {
+            header.sequence = Some(self.next_sequence);
+            self.next_sequence = self.next_sequence.wrapping_add(1);
+        }
         self.socket
-            .send_to(&frame::encap(self.encap, self.vni, &inner), self.remote)
+            .send_to(&frame::encap(self.encap, &header, &inner), self.remote)
             .await
             .with_context(|| format!("sending to {}", self.remote))?;
         Ok(())
@@ -426,15 +463,16 @@ impl Host {
 
     async fn incoming(&mut self, datagram: &[u8]) {
         let parsed = frame::decap(self.encap, datagram)
-            .and_then(|(vni, inner)| Ok((vni, frame::parse_frame(inner)?)));
-        let (vni, f) = match parsed {
+            .and_then(|(header, inner)| Ok((header, frame::parse_frame(inner)?)));
+        let (header, f) = match parsed {
             Ok(p) => p,
             Err(e) => {
                 tracing::debug!("VXLAN client {} dropped a datagram: {e:#}", self.client);
                 return;
             }
         };
-        if vni != self.vni {
+        // Our VNI or GRE key only; keyless GRE when we have no key.
+        if header.vni != self.header.vni {
             return;
         }
         match f.payload {

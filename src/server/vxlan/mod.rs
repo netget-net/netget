@@ -1,7 +1,7 @@
-//! VXLAN / Geneve tunnel endpoint: decapsulates what other VTEPs send, and the model plays
-//! the hosts on the overlay — ARP, ping and UDP — with replies built in Rust and sent back
-//! through the tunnel. **Deliberately silent**: an overlay IP with no host never answers, and
-//! a backend failure reads the same way.
+//! VXLAN / Geneve / GRE (gretap, in UDP) tunnel endpoint: decapsulates what other tunnel
+//! endpoints send, and the model plays the hosts on the overlay — ARP, ping and UDP — with
+//! replies built in Rust and sent back through the tunnel. **Deliberately silent**: an overlay
+//! IP with no host never answers, and a backend failure reads the same way.
 pub mod actions;
 pub mod frame;
 
@@ -12,7 +12,7 @@ use crate::protocol::{Event, SpawnContext};
 use crate::server::connection::ConnectionId;
 use actions::{FrameContext, VxlanProtocol};
 use anyhow::{Context, Result};
-use frame::{Encap, Frame, Mac, Payload};
+use frame::{Encap, Frame, Header, Mac, Payload};
 use serde_json::json;
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -24,6 +24,9 @@ struct Config {
     encap: Encap,
     default_mac: Mac,
     macs: Arc<Mutex<HashMap<Ipv4Addr, Mac>>>,
+    /// GRE: the next sequence number for replies to peers that send them. Given as each reply
+    /// leaves, under this lock, so concurrent answers cannot go out of order.
+    sequence: Arc<Mutex<u32>>,
 }
 
 pub async fn spawn(ctx: SpawnContext) -> Result<SocketAddr> {
@@ -41,9 +44,10 @@ pub async fn spawn(ctx: SpawnContext) -> Result<SocketAddr> {
         .flatten();
     if let Some(v) = only_vni {
         anyhow::ensure!(
-            v <= frame::MAX_VNI as u64,
-            "vni must be at most {}",
-            frame::MAX_VNI
+            v <= encap.max_vni() as u64,
+            "vni must be at most {} for {}",
+            encap.max_vni(),
+            encap.name()
         );
     }
     let default_mac = frame::parse_mac(
@@ -70,13 +74,14 @@ pub async fn spawn(ctx: SpawnContext) -> Result<SocketAddr> {
         "{} endpoint listening on {local}{}",
         encap.name().to_uppercase(),
         only_vni
-            .map(|v| format!(", VNI {v} only"))
+            .map(|v| format!(", {} only", frame::vni_str(encap, Some(v as u32))))
             .unwrap_or_default()
     ));
     let config = Config {
         encap,
         default_mac,
         macs: Default::default(),
+        sequence: Default::default(),
     };
     let state = ctx.state.clone();
     let server_id = ctx.server_id;
@@ -92,24 +97,23 @@ pub async fn spawn(ctx: SpawnContext) -> Result<SocketAddr> {
                 }
             };
             let parsed = frame::decap(encap, &buf[..n])
-                .and_then(|(vni, inner)| Ok((vni, frame::parse_frame(inner)?)));
-            let (vni, frame) = match parsed {
+                .and_then(|(header, inner)| Ok((header, frame::parse_frame(inner)?)));
+            let (header, frame) = match parsed {
                 Ok(p) => p,
                 Err(e) => {
                     tracing::warn!("{} dropped a datagram from {from}: {e:#}", encap.name());
                     continue;
                 }
             };
-            if only_vni.is_some_and(|v| v != vni as u64) {
-                tracing::debug!("{} dropped a frame for VNI {vni} from {from}", encap.name());
+            let vni = frame::vni_str(encap, header.vni);
+            // A GRE frame with no key carries no VNI, so it is not on a filtered overlay.
+            if only_vni.is_some_and(|v| header.vni.map(u64::from) != Some(v)) {
+                tracing::debug!("{} dropped a frame for {vni} from {from}", encap.name());
                 continue;
             }
-            let Some(event) = event_for(&frame, vni, from) else {
+            let Some(event) = event_for(&frame, header.vni, from) else {
                 if let Payload::Other { what } = &frame.payload {
-                    tracing::debug!(
-                        "{} from {from} VNI {vni}: {what}, not answered",
-                        encap.name()
-                    );
+                    tracing::debug!("{} from {from} {vni}: {what}, not answered", encap.name());
                 }
                 continue;
             };
@@ -120,7 +124,7 @@ pub async fn spawn(ctx: SpawnContext) -> Result<SocketAddr> {
             // they send to, not on the source port they send from.
             let reply_to = SocketAddr::new(from.ip(), local.port());
             let handle = tokio::spawn(async move {
-                answer(child, socket, config, vni, frame, event, reply_to, id).await
+                answer(child, socket, config, header, frame, event, reply_to, id).await
             });
             ctx.state.register_server_task(ctx.server_id, handle).await;
         }
@@ -129,7 +133,7 @@ pub async fn spawn(ctx: SpawnContext) -> Result<SocketAddr> {
     Ok(local)
 }
 
-fn event_for(f: &Frame, vni: u32, from: SocketAddr) -> Option<Event> {
+fn event_for(f: &Frame, vni: Option<u32>, from: SocketAddr) -> Option<Event> {
     let mut data = json!({
         "vni": vni,
         "vtep": from.to_string(),
@@ -210,20 +214,21 @@ async fn answer(
     ctx: SpawnContext,
     socket: Arc<UdpSocket>,
     config: Config,
-    vni: u32,
+    header: Header,
     frame: Frame,
     event: Event,
     reply_to: SocketAddr,
     id: ConnectionId,
 ) {
     let summary = format!(
-        "{} {} from {reply_to} VNI {vni}",
+        "{} {} from {reply_to} {}",
         config.encap.name(),
-        event.id()
+        event.id(),
+        frame::vni_str(config.encap, header.vni)
     );
     let protocol = VxlanProtocol::for_frame(FrameContext {
         encap: config.encap,
-        vni,
+        header,
         frame,
         default_mac: config.default_mac,
         macs: config.macs.clone(),
@@ -255,7 +260,7 @@ async fn answer(
         };
         for item in items {
             if let ActionResult::Output(bytes) = item {
-                match socket.send_to(bytes, reply_to).await {
+                match send(&socket, &config, bytes.clone(), reply_to).await {
                     Ok(n) => {
                         sent += 1;
                         ctx.state
@@ -280,4 +285,32 @@ async fn answer(
         _ => "model_answered",
     };
     log.info(format!("{summary} decision={decision}"));
+}
+
+/// Send one reply. A GRE reply that carries a sequence number gets the next one as it leaves:
+/// the number is written and the datagram handed to the socket under one lock, which is never
+/// held across an await (a full send buffer releases it, waits, and takes the next number).
+async fn send(
+    socket: &UdpSocket,
+    config: &Config,
+    mut datagram: Vec<u8>,
+    to: SocketAddr,
+) -> std::io::Result<usize> {
+    loop {
+        {
+            let mut next = config.sequence.lock().unwrap_or_else(|e| e.into_inner());
+            let numbered = frame::stamp_sequence(config.encap, &mut datagram, *next);
+            match socket.try_send_to(&datagram, to) {
+                Ok(n) => {
+                    if numbered {
+                        *next = next.wrapping_add(1);
+                    }
+                    return Ok(n);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(e) => return Err(e),
+            }
+        }
+        socket.writable().await?;
+    }
 }
