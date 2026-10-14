@@ -8124,7 +8124,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq capnproto
+          sudo apt-get install -y -qq capnproto libcapnp-dev
           python3 tests/server/stratum_v2/install_peers.py "$RUNNER_TEMP/stratum-v2" | sed 's/^export //' >> "$GITHUB_ENV"
       - name: Compile stratum-v2 as a standalone Cargo feature
         run: cargo check --locked --no-default-features --features stratum-v2 --all-targets

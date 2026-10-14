@@ -1,10 +1,16 @@
 # Stratum V2 pool tests
 
 `install_peers.py <dir>` installs the peers for both roles — SRI's sv2-apps v0.8.0 (commit
-7f49074357e5, built with cargo; needs `capnp`) for `pool_sv2` and `mining_device`, and Bitcoin
-Core 31.0 (SHA-256 pinned, linux x86_64 or macOS arm64) — and prints `NETGET_SV2_POOL`,
+7f49074357e5, built with cargo) for `pool_sv2` and `mining_device`, and Bitcoin Core 31.0
+(SHA-256 pinned, linux x86_64/aarch64 or macOS arm64) — and prints `NETGET_SV2_POOL`,
 `NETGET_SV2_MINING_DEVICE`, `NETGET_SV2_BITCOIN_NODE`, `NETGET_SV2_BITCOIN_CLI`. The tests fail
 without them. No LLM calls: a python policy is the model (`support::policy`).
+
+The build needs the Cap'n Proto compiler **and its standard schemas**: on Ubuntu that is
+`capnproto` *and* `libcapnp-dev`. `bitcoin-capnp-types` (the Bitcoin Core IPC schemas the pool
+links) imports `/capnp/c++.capnp`, which only `libcapnp-dev` installs, so with `capnproto` alone
+its build script fails with "Import failed: /capnp/c++.capnp". Homebrew's `capnp` ships both. A
+failing build step prints cargo's output to stderr.
 
 - `real_client_test::sri_mining_device_mines_against_netget`: SRI's `mining_device` pins
   NetGet's authority key (SRI's example pair, so the key NetGet derives from the secret is the

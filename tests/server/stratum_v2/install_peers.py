@@ -7,9 +7,10 @@
 - Bitcoin Core 31.0 (SHA-256 pinned): `bitcoin-node`, whose IPC socket `pool_sv2` takes its
   templates from, and `bitcoin-cli`.
 
-Building sv2-apps needs a Rust toolchain and the Cap'n Proto compiler
-(Ubuntu: capnproto; macOS: brew install capnp). Only the two binaries are kept (ROOT/bin), so
-ROOT is small enough to cache.
+Building sv2-apps needs a Rust toolchain and the Cap'n Proto compiler with its standard schemas
+(Ubuntu: capnproto and libcapnp-dev — the Bitcoin Core IPC schemas import /capnp/c++.capnp, which
+only libcapnp-dev installs; macOS: brew install capnp, which ships both). Only the two binaries
+are kept (ROOT/bin), so ROOT is small enough to cache.
 
 Usage: python3 install_peers.py /absolute/owned/root
 Prints the NETGET_SV2_POOL, NETGET_SV2_MINING_DEVICE, NETGET_SV2_BITCOIN_NODE and
@@ -22,7 +23,9 @@ SV2_APPS = ("https://github.com/stratum-mining/sv2-apps", "v0.8.0",
 BITCOIN = {
     ("Linux", "x86_64"): ("bitcoin-31.0-x86_64-linux-gnu.tar.gz",
                           "d3e4c58a35b1d0a97a457462c94f55501ad167c660c245cb1ffa565641c65074"),
-    ("Darwin", "arm64"): ("bitcoin-31.0-arm64-apple-darwin.tar.gz",
+    ("Linux", "aarch64"): ("bitcoin-31.0-aarch64-linux-gnu.tar.gz",
+                           "4de1d568dedd48604f75132421bc0abeca432639589b49a3909c81db3a813112"),
+    ("Darwin", "arm64"):("bitcoin-31.0-arm64-apple-darwin.tar.gz",
                           "a2d7a13b4da53d4a3e4c517f3a0269e2429813417bb320d3b268993cfdc545d0"),
 }
 
@@ -31,8 +34,12 @@ root.mkdir(parents=True, exist_ok=True)
 
 
 def run(cmd, cwd, env=None):
-    subprocess.run(cmd, cwd=cwd, check=True, timeout=3600, env=env,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+    """Run quietly (stdout carries only the exports), but show everything when it fails."""
+    done = subprocess.run(cmd, cwd=cwd, timeout=3600, env=env,
+                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    if done.returncode != 0:
+        sys.stderr.write(done.stdout[-20000:])
+        sys.exit(f"{' '.join(cmd)} exited {done.returncode} in {cwd}")
 
 
 def sv2_apps():
