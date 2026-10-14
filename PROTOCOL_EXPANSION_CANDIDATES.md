@@ -53,9 +53,12 @@ What is left from this document, with the reason each is still open:
     standard and extended channels, Noise NX with the SV2 certificate), hand-rolled from
     sv2-spec so that SRI's `mining_device` and `pool_sv2` (over Bitcoin Core regtest) are
     independent peers. The Job Declaration and Template Distribution protocols are not built.
-  - **IPFS above libp2p**: the libp2p host does Noise, yamux, identify and ping. Bitswap,
-    Kademlia and the IPFS data model were not built, so Kubo can connect but cannot
-    exchange blocks.
+  - ~~**IPFS above libp2p**~~: landed 14 October 2026 on the `libp2p` feature behind an
+    `ipfs` startup parameter — Bitswap 1.0–1.2, CIDv0/v1 with `raw` and `dag-pb`, single-block
+    UnixFS files, and the Kademlia DHT (FIND_NODE answered in Rust, GET_PROVIDERS and
+    ADD_PROVIDER by the model) — with Kubo 0.43.1 fetching from NetGet and serving to it.
+    Serving multi-block DAGs, Bitswap sessions, IPNS/DHT records and a second independent
+    IPFS implementation are not done.
   - **NGAP/N2**: PFCP shipped; NGAP needs SCTP and was not attempted.
   - **Redis cluster and pub/sub depth**: RESP3 shipped; `CLUSTER` and pub/sub were not
     extended.
