@@ -254,6 +254,8 @@ pub use m3ua::actions::M3uaProtocol;
 pub use m3ua::M3uaServer;
 #[cfg(feature = "can")]
 pub mod can;
+#[cfg(feature = "ngap")]
+pub mod ngap;
 #[cfg(feature = "can")]
 pub use can::actions::CanProtocol;
 #[cfg(feature = "can")]

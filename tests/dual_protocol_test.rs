@@ -134,6 +134,7 @@ fn golden_duals_map() {
         "VXLAN",
         "rsync",
         "PFCP",
+        "NGAP",
         "Matrix",
         "libp2p",
         "SunRPC",

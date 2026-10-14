@@ -169,6 +169,9 @@ impl ServerRegistry {
         #[cfg(feature = "m3ua")]
         self.register(Arc::new(crate::server::M3uaProtocol::new()));
 
+        #[cfg(feature = "ngap")]
+        self.register(Arc::new(crate::server::ngap::actions::NgapProtocol::new()));
+
         #[cfg(feature = "can")]
         self.register(Arc::new(crate::server::CanProtocol::new()));
 
@@ -1569,6 +1572,7 @@ pub(crate) const ALL_KNOWN_PROTOCOLS: &[(&str, &str)] = &[
     ("Raw IP", "rawip"),
     ("GTP", "gtp"),
     ("M3UA", "m3ua"),
+    ("NGAP", "ngap"),
     ("CAN", "can"),
     ("LLDP", "lldp"),
     ("CDP", "cdp"),
