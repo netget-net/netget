@@ -43,8 +43,12 @@ What is left from this document, with the reason each is still open:
     (Ethernet over GRE in UDP, RFC 8086, port 4754), tested against the Linux kernel's
     gretap-over-fou driver. GRE directly on IP protocol 47 is still not built: it needs a
     raw socket, and privilege is declared per protocol.
-  - **ONVIF**: the WS-Discovery half finds ONVIF devices and answers as one. The ONVIF
-    SOAP device and media services were not built.
+  - ~~**ONVIF**~~: landed 14 October 2026 as the `onvif` pair — device service
+    (GetSystemDateAndTime, GetDeviceInformation, GetCapabilities, GetServices, GetScopes,
+    GetNetworkInterfaces) and media ver10 (GetProfiles, GetVideoSources, GetStreamUri,
+    GetSnapshotUri) with WS-Security UsernameToken digest, against onvif-zeep-async and
+    use-go/onvif (server) and RPOS (client). Media2, PTZ, Imaging, Events, Recording and
+    the Set* operations are not built.
   - **Stratum V2**: only V1 shipped. V2 is the SRI Noise-encrypted binary protocol and
     would be its own item.
   - **IPFS above libp2p**: the libp2p host does Noise, yamux, identify and ping. Bitswap,
