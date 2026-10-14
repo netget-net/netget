@@ -281,8 +281,8 @@ async fn kubo_finds_netget_as_a_provider_through_its_dht() {
             .all(|a| a.as_str().unwrap().starts_with("/ip4/127.0.0.1/")),
         "{announced}"
     );
-    // NetGet is in Kubo's routing table, which Kubo only allows once a FIND_NODE for NetGet's
-    // own id has come back with NetGet in it (answered in Rust, not by the model).
+    // NetGet is in Kubo's routing table: it advertised the DHT protocols and answered as a
+    // DHT server (FIND_NODE in Rust, GET_PROVIDERS through the model).
     let table = String::from_utf8(kubo.ok(&["stats", "dht"]).await).unwrap();
     assert!(table.contains(&peer_id()), "{table}");
     let log = drain(&mut rx);
@@ -525,6 +525,59 @@ async fn refusals_before_the_model() {
     assert!(events(&state, id, "ipfs_kad_request").await.is_empty());
 }
 
+/// One DHT request over go-libp2p, and the answer NetGet wrote back on the same stream.
+async fn kad_exchange(port: u16, req: &kad::Message) -> kad::Message {
+    let (r, _, text) = raw(port, kad::KAD, &wire::length_prefixed(&kad::encode(req)), 0).await;
+    let reply = hex::decode(r["reply_hex"].as_str().unwrap()).unwrap();
+    let (n, used) = wire::get_uvarint(&reply).unwrap_or_else(|e| panic!("{e}: {text}"));
+    kad::decode(&reply[used..used + n as usize]).unwrap()
+}
+
+#[tokio::test]
+async fn find_node_is_answered_from_what_netget_knows() {
+    let (state, id, port, _rx) = start(policy()).await;
+    let me = netget::server::libp2p::identity_from_params(Some(SEED.into()))
+        .unwrap()
+        .peer_id;
+
+    // Asked for its own id, a DHT server names itself, with the address it listens on.
+    let own = kad_exchange(
+        port,
+        &kad::Message::request(kad::Kind::FindNode, me.clone()),
+    )
+    .await;
+    assert_eq!(own.kind, kad::Kind::FindNode);
+    assert_eq!(own.key, me);
+    assert_eq!(own.closer.len(), 1, "{own:?}");
+    assert_eq!(own.closer[0].id, me);
+    assert_eq!(
+        own.closer[0].to_json()["addrs"],
+        json!([format!("/ip4/127.0.0.1/tcp/{port}")])
+    );
+
+    // Asked for anyone else, with nobody but the asker connected, it knows nobody: it never
+    // names the asker back to itself, and invents no one.
+    let other = netget::server::libp2p::noise::Identity::from_seed([9; 32]).peer_id;
+    let none = kad_exchange(port, &kad::Message::request(kad::Kind::FindNode, other)).await;
+    assert!(none.closer.is_empty(), "{none:?}");
+
+    // A key that is not a peer id is refused.
+    let (r, _, text) = raw(
+        port,
+        kad::KAD,
+        &wire::length_prefixed(&kad::encode(&kad::Message::request(
+            kad::Kind::FindNode,
+            b"not a peer id".to_vec(),
+        ))),
+        0,
+    )
+    .await;
+    assert!(r["error"].as_str().unwrap().contains("reset"), "{text}");
+
+    // Routing facts never cost a model call.
+    assert!(events(&state, id, "ipfs_kad_request").await.is_empty());
+}
+
 #[test]
 fn the_data_model_round_trips() {
     let raw = Cid::v1(ipfs::RAW, b"hello");
@@ -580,4 +633,36 @@ fn the_data_model_round_trips() {
         (Some("file"), Some(5))
     );
     assert_eq!(d.links, node.links);
+}
+
+#[test]
+fn a_block_over_two_mib_is_refused_both_ways() {
+    use bitswap::{Format, Supplied};
+    let over = vec![b'x'; ipfs::MAX_BLOCK + 1];
+    // The model cannot supply one...
+    assert!(Supplied::new(&over, Format::Raw, None).is_err());
+    assert!(Supplied::new(&over[..ipfs::MAX_BLOCK], Format::Raw, None).is_ok());
+    // ...and a peer cannot deliver one, whatever its prefix says.
+    let cid = Cid::v1(ipfs::RAW, &over);
+    let message = |data: &[u8]| {
+        bitswap::encode(
+            &Message {
+                blocks: vec![bitswap::Block {
+                    cid,
+                    data: data.to_vec(),
+                }],
+                ..Default::default()
+            },
+            Version::V120,
+        )
+    };
+    let e = bitswap::decode(&message(&over)).unwrap_err();
+    assert!(format!("{e:#}").contains("block over"), "{e:#}");
+    assert_eq!(
+        bitswap::decode(&message(&over[..ipfs::MAX_BLOCK]))
+            .unwrap()
+            .blocks
+            .len(),
+        1
+    );
 }
