@@ -1,7 +1,10 @@
 //! What the model does as a libp2p host: answer messages on the application protocols'
 //! streams, open streams of its own to a connected peer, close them, and drop peers. Rust
 //! owns the transport (Noise, yamux, multistream-select) and answers identify and ping.
-use super::host;
+use super::bitswap::{self, Format, Supplied};
+use super::host::{self, Config};
+use super::ipfs::{self, Cid};
+use super::kad;
 use crate::llm::actions::{
     protocol_trait::{ActionResult, Protocol, Server},
     ActionDefinition, Parameter, ParameterDefinition, StartupExamples,
@@ -16,6 +19,10 @@ pub const SEND: &str = "libp2p_send";
 pub const OPEN: &str = "libp2p_open_stream";
 pub const CLOSE: &str = "libp2p_close_stream";
 pub const DISCONNECT: &str = "libp2p_disconnect";
+pub const BLOCKS: &str = "ipfs_bitswap_blocks";
+pub const KAD_REPLY: &str = "ipfs_kad_reply";
+/// IPFS (Bitswap and the DHT) is off unless asked for.
+pub const IPFS_DEFAULT: bool = false;
 
 #[derive(Default, Clone)]
 pub struct Libp2pProtocol;
@@ -132,6 +139,193 @@ pub fn all_actions() -> Vec<ActionDefinition> {
     ]
 }
 
+pub fn blocks_action() -> ActionDefinition {
+    action(
+        BLOCKS,
+        "Answer a Bitswap wantlist with the blocks you have. Give each block's content and format; NetGet computes its CID from the bytes and sends it only for a want it really matches (a block claimed under a CID it does not hash to is never sent). Wants you do not answer get DONT_HAVE. Answer with no blocks to say you have none.",
+        vec![p(
+            "blocks",
+            "array",
+            "Blocks: {content, encoding (utf8 default, or hex), format (raw, or unixfs for a single-block UnixFS file; default: from cid's codec, else raw), cid (optional: the wanted CID this answers)}",
+            true,
+        )],
+        json!({"type": BLOCKS, "blocks": [{"content": "hello from NetGet\n", "format": "unixfs"}]}),
+    )
+}
+
+pub fn kad_reply_action() -> ActionDefinition {
+    action(
+        KAD_REPLY,
+        "Answer a DHT GET_PROVIDERS request. provider_peers: peers that have the content; closer_peers: peers closer to the key (default: the connected peers closest to it). Each is {peer_id, addrs}; peer_id \"self\" is this host, and addrs may be omitted for this host and for connected peers.",
+        vec![
+            p(
+                "closer_peers",
+                "array",
+                "[{peer_id, addrs: [multiaddr]}], at most 20",
+                false,
+            ),
+            p(
+                "provider_peers",
+                "array",
+                "[{peer_id, addrs: [multiaddr]}], at most 20",
+                false,
+            ),
+        ],
+        json!({"type": KAD_REPLY, "provider_peers": [{"peer_id": "self"}], "closer_peers": []}),
+    )
+}
+
+pub fn ipfs_actions() -> Vec<ActionDefinition> {
+    vec![blocks_action(), kad_reply_action()]
+}
+
+/// The blocks an `ipfs_bitswap_blocks` action supplies, each checked and encoded, its CID
+/// not yet compared with any want.
+pub fn supplied_blocks(v: &Value) -> Result<Vec<Supplied>> {
+    let list = v["blocks"].as_array().context("blocks must be an array")?;
+    ensure!(
+        list.len() <= bitswap::MAX_SUPPLIED_BLOCKS,
+        "at most {} blocks per answer",
+        bitswap::MAX_SUPPLIED_BLOCKS
+    );
+    list.iter()
+        .map(|b| {
+            ensure!(b.is_object(), "each block is an object with content");
+            let content = super::wire::data_bytes(&json!({
+                "data": b["content"].as_str().context("each block needs content")?,
+                "encoding": b["encoding"].clone(),
+            }))?;
+            let claimed = match b["cid"].as_str() {
+                Some(c) => Some(Cid::parse(c)?),
+                None => None,
+            };
+            if let Some(c) = &claimed {
+                c.supported()?;
+            }
+            let format = match (b["format"].as_str(), &claimed) {
+                (Some(f), _) => Format::parse(f)?,
+                (None, Some(c)) if c.codec == ipfs::DAG_PB => Format::UnixFsFile,
+                _ => Format::Raw,
+            };
+            Supplied::new(&content, format, claimed)
+        })
+        .collect()
+}
+
+/// The peers an `ipfs_kad_reply` names, (closer, providers): ids checked, addresses parsed,
+/// and "self" and omitted addresses filled in from what the host knows.
+pub fn kad_peers(v: &Value, cfg: &Config) -> Result<(Vec<kad::Peer>, Vec<kad::Peer>)> {
+    let list = |field: &str| -> Result<Vec<kad::Peer>> {
+        let Some(items) = v[field].as_array() else {
+            ensure!(v[field].is_null(), "{field} must be an array");
+            return Ok(Vec::new());
+        };
+        ensure!(
+            items.len() <= kad::MAX_PEERS,
+            "{field} may name at most {} peers",
+            kad::MAX_PEERS
+        );
+        items
+            .iter()
+            .map(|p| {
+                let id = p["peer_id"].as_str().context("each peer needs peer_id")?;
+                let addrs: Vec<String> = match p["addrs"].as_array() {
+                    Some(a) => a
+                        .iter()
+                        .map(|x| x.as_str().map(str::to_string).context("addrs are strings"))
+                        .collect::<Result<_>>()?,
+                    None => Vec::new(),
+                };
+                let id = if id == "self" {
+                    super::wire::base58(&cfg.identity.peer_id)
+                } else {
+                    id.to_string()
+                };
+                let mut peer = kad::Peer::from_text(&id, &addrs)?;
+                if peer.addrs.is_empty() {
+                    peer.addrs = super::serve_ipfs::known_addrs(cfg, &peer.id);
+                }
+                Ok(peer)
+            })
+            .collect()
+    };
+    Ok((list("closer_peers")?, list("provider_peers")?))
+}
+
+pub static WANT_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    EventType::new(
+        "ipfs_bitswap_want",
+        "A peer asked this host for blocks over Bitswap. Supply the ones you have with ipfs_bitswap_blocks (content and format; NetGet computes and checks each CID); the rest are answered DONT_HAVE.",
+        json!({"type": BLOCKS, "blocks": [{"content": "hello from NetGet\n", "format": "raw"}]}),
+    )
+    .with_parameters(vec![
+        p("peer_id", "string", "The peer id of the peer asking, proven by its Noise handshake", true),
+        p(
+            "wants",
+            "array",
+            "[{cid, codec (raw or dag-pb), want (block or have)}]",
+            true,
+        ),
+        p(
+            "full",
+            "boolean",
+            "Whether this is the peer's whole wantlist rather than an update",
+            true,
+        ),
+    ])
+    .with_actions(vec![blocks_action(), disconnect_action()])
+});
+
+pub static KAD_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    EventType::new(
+        "ipfs_kad_request",
+        "A peer asked this host's Kademlia DHT who provides some content (GET_PROVIDERS: answer with ipfs_kad_reply), or announced that it provides some (ADD_PROVIDER: no answer is sent; remember it if you want to name it later). FIND_NODE is answered by NetGet itself from the connected peers.",
+        json!({"type": KAD_REPLY, "provider_peers": [{"peer_id": "self"}]}),
+    )
+    .with_parameters(vec![
+        p("peer_id", "string", "The peer id of the peer asking, proven by its Noise handshake", true),
+        p("stream_id", "number", "The stream it arrived on", true),
+        p(
+            "protocol",
+            "string",
+            "/ipfs/kad/1.0.0, or the LAN DHT's /ipfs/lan/kad/1.0.0",
+            true,
+        ),
+        p(
+            "request",
+            "string",
+            "GET_PROVIDERS or ADD_PROVIDER",
+            true,
+        ),
+        p(
+            "key",
+            "string",
+            "The content key: a base58 sha2-256 multihash (the CIDv0 spelling)",
+            true,
+        ),
+        p(
+            "cids",
+            "array",
+            "The CIDs (v0, v1 dag-pb, v1 raw) the key stands for",
+            true,
+        ),
+        p(
+            "providers",
+            "array",
+            "For ADD_PROVIDER: the peer announcing itself, with its addrs",
+            true,
+        ),
+        p("self", "object", "This host: {peer_id, addrs}", true),
+        p(
+            "connected_peers",
+            "array",
+            "Peers connected to this host, closest to the key first",
+            true,
+        ),
+    ])
+    .with_actions(vec![kad_reply_action(), disconnect_action()])
+});
+
 pub static CONNECTED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "libp2p_peer_connected",
@@ -202,6 +396,21 @@ pub fn check(v: &Value) -> Result<()> {
             }
         }
         DISCONNECT => {}
+        BLOCKS => {
+            supplied_blocks(v)?;
+        }
+        KAD_REPLY => {
+            // Checked against a stand-in host: the real one fills in "self" when it answers.
+            let stand_in = Config {
+                identity: super::noise::Identity::from_seed([0; 32]),
+                protocols: Vec::new(),
+                listen_addrs: Vec::new(),
+                bitswap: false,
+                kad: false,
+                directory: Default::default(),
+            };
+            kad_peers(v, &stand_in)?;
+        }
         other => bail!("Unknown libp2p action {other:?}"),
     }
     Ok(())
@@ -233,10 +442,17 @@ impl Protocol for Libp2pProtocol {
         Vec::new()
     }
     fn get_sync_actions(&self) -> Vec<ActionDefinition> {
-        all_actions()
+        let mut a = all_actions();
+        a.extend(ipfs_actions());
+        a
     }
     fn get_event_types(&self) -> Vec<EventType> {
-        vec![CONNECTED_EVENT.clone(), MESSAGE_EVENT.clone()]
+        vec![
+            CONNECTED_EVENT.clone(),
+            MESSAGE_EVENT.clone(),
+            WANT_EVENT.clone(),
+            KAD_EVENT.clone(),
+        ]
     }
     fn default_binding(&self) -> Option<crate::protocol::BindingDefaults> {
         Some(crate::protocol::BindingDefaults::port_based("127.0.0.1", 0))
@@ -258,6 +474,14 @@ impl Protocol for Libp2pProtocol {
                 required: false,
                 example: json!("my-stable-node"),
                 default: None,
+            },
+            ParameterDefinition {
+                name: "ipfs".into(),
+                type_hint: "boolean".into(),
+                description: "Also be an IPFS peer: answer Bitswap wantlists (ipfs_bitswap_want) with blocks the model supplies, and Kademlia DHT requests (ipfs_kad_request), so Kubo can fetch from and route through this host".into(),
+                required: false,
+                example: json!(true),
+                default: Some(json!(IPFS_DEFAULT)),
             },
         ]
     }

@@ -4,6 +4,11 @@
 //	libp2p-peer dial <multiaddr with /p2p/>   connect to NetGet, identify, ping, talk
 //	libp2p-peer probe <multiaddr with /p2p/>  one message, one answer or the error
 //	libp2p-peer listen                         wait for NetGet, echo its messages, talk back
+//	libp2p-peer raw <multiaddr> <protocol> <hex> [n]
+//	                                           write bytes verbatim on one stream, report the
+//	                                           answer, then wait for n Bitswap messages
+//	libp2p-peer bitswap-liar <good content>    listen; answer wants with the good content's
+//	                                           raw block, or a tampered block under the CID
 //
 // One JSON object per line on stdout.
 package main
@@ -12,12 +17,16 @@ import (
 	"bufio"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"sort"
+	"strconv"
 	"time"
 
+	"github.com/ipfs/go-cid"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -30,6 +39,7 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
 	"github.com/libp2p/go-msgio"
 	ma "github.com/multiformats/go-multiaddr"
+	"google.golang.org/protobuf/encoding/protowire"
 )
 
 const chat = protocol.ID("/netget/chat/1.0.0")
@@ -209,6 +219,10 @@ func main() {
 		_ = s.SetReadDeadline(time.Now().Add(15 * time.Second))
 		b, err := msgio.NewVarintReaderSize(s, 1<<20).ReadMsg()
 		out(map[string]any{"step": "probe", "reply": string(b), "error": fmt.Sprint(err)})
+	case "raw":
+		raw()
+	case "bitswap-liar":
+		bitswapLiar()
 	case "listen":
 		h := newHost(true)
 		h.SetStreamHandler(chat, echo)
@@ -236,4 +250,238 @@ func main() {
 		_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
 		_ = h.Close()
 	}
+}
+
+var bitswapIDs = []protocol.ID{"/ipfs/bitswap/1.2.0", "/ipfs/bitswap/1.1.0", "/ipfs/bitswap/1.0.0", "/ipfs/bitswap"}
+
+type field struct {
+	num protowire.Number
+	v   uint64
+	b   []byte
+}
+
+// Every varint and bytes field of a protobuf message, in order; stops at the first error.
+func parse(b []byte) []field {
+	var fs []field
+	for len(b) > 0 {
+		num, typ, n := protowire.ConsumeTag(b)
+		if n < 0 {
+			return fs
+		}
+		b = b[n:]
+		switch typ {
+		case protowire.VarintType:
+			v, n := protowire.ConsumeVarint(b)
+			if n < 0 {
+				return fs
+			}
+			fs = append(fs, field{num: num, v: v})
+			b = b[n:]
+		case protowire.BytesType:
+			v, n := protowire.ConsumeBytes(b)
+			if n < 0 {
+				return fs
+			}
+			fs = append(fs, field{num: num, b: v})
+			b = b[n:]
+		default:
+			n := protowire.ConsumeFieldValue(num, typ, b)
+			if n < 0 {
+				return fs
+			}
+			b = b[n:]
+		}
+	}
+	return fs
+}
+
+// A Bitswap message as go-cid reads it: each block's CID computed from its prefix and its
+// bytes, and each presence.
+func describeBitswap(b []byte) map[string]any {
+	blocks := []map[string]any{}
+	presences := []map[string]any{}
+	for _, f := range parse(b) {
+		switch f.num {
+		case 3:
+			var prefix, data []byte
+			for _, x := range parse(f.b) {
+				if x.num == 1 {
+					prefix = x.b
+				} else if x.num == 2 {
+					data = x.b
+				}
+			}
+			p, err := cid.PrefixFromBytes(prefix)
+			if err != nil {
+				blocks = append(blocks, map[string]any{"error": err.Error()})
+				continue
+			}
+			c, err := p.Sum(data)
+			if err != nil {
+				blocks = append(blocks, map[string]any{"error": err.Error()})
+				continue
+			}
+			blocks = append(blocks, map[string]any{"cid": c.String(), "data": string(data)})
+		case 4:
+			entry := map[string]any{"type": "have"}
+			for _, x := range parse(f.b) {
+				if x.num == 1 {
+					c, err := cid.Cast(x.b)
+					if err == nil {
+						entry["cid"] = c.String()
+					}
+				} else if x.num == 2 && x.v == 1 {
+					entry["type"] = "dont_have"
+				}
+			}
+			presences = append(presences, entry)
+		}
+	}
+	return map[string]any{"blocks": blocks, "presences": presences}
+}
+
+// Print every Bitswap message that arrives, and count it.
+func bitswapIn(got chan<- struct{}) network.StreamHandler {
+	return func(s network.Stream) {
+		r := msgio.NewVarintReaderSize(s, 4<<20)
+		for {
+			b, err := r.ReadMsg()
+			if err != nil {
+				return
+			}
+			m := describeBitswap(b)
+			m["step"] = "bitswap_in"
+			m["protocol"] = string(s.Protocol())
+			out(m)
+			select {
+			case got <- struct{}{}:
+			default:
+			}
+		}
+	}
+}
+
+// Write bytes verbatim on one stream, report what comes back on it, then wait for Bitswap
+// messages NetGet sends on streams of its own.
+func raw() {
+	ctx := context.Background()
+	h := newHost(false)
+	got := make(chan struct{}, 64)
+	for _, id := range bitswapIDs {
+		h.SetStreamHandler(id, bitswapIn(got))
+	}
+	addr, err := ma.NewMultiaddr(os.Args[2])
+	if err != nil {
+		fail("addr", err)
+	}
+	info, err := peer.AddrInfoFromP2pAddr(addr)
+	if err != nil {
+		fail("addr", err)
+	}
+	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	if err := h.Connect(cctx, *info); err != nil {
+		fail("connect", err)
+	}
+	s, err := h.NewStream(cctx, info.ID, protocol.ID(os.Args[3]))
+	if err != nil {
+		out(map[string]any{"step": "raw", "open_error": err.Error()})
+		return
+	}
+	payload, err := hex.DecodeString(os.Args[4])
+	if err != nil {
+		fail("hex", err)
+	}
+	_, _ = s.Write(payload)
+	_ = s.CloseWrite()
+	_ = s.SetReadDeadline(time.Now().Add(15 * time.Second))
+	reply, err := io.ReadAll(s)
+	out(map[string]any{"step": "raw", "reply_hex": hex.EncodeToString(reply), "error": fmt.Sprint(err)})
+	want := 0
+	if len(os.Args) > 5 {
+		want, _ = strconv.Atoi(os.Args[5])
+	}
+	deadline := time.After(20 * time.Second)
+	for i := 0; i < want; i++ {
+		select {
+		case <-got:
+		case <-deadline:
+			out(map[string]any{"step": "timeout"})
+			i = want
+		}
+	}
+	_ = h.Close()
+	out(map[string]any{"step": "done"})
+}
+
+// Listen, and answer every want with a block: the good content's bytes when they hash to
+// the wanted CID, and otherwise "tampered" under the wanted CID's prefix.
+func bitswapLiar() {
+	ctx := context.Background()
+	good := []byte(os.Args[2])
+	h := newHost(true)
+	handler := func(s network.Stream) {
+		r := msgio.NewVarintReaderSize(s, 4<<20)
+		for {
+			b, err := r.ReadMsg()
+			if err != nil {
+				return
+			}
+			var wanted []cid.Cid
+			for _, f := range parse(b) {
+				if f.num != 1 {
+					continue
+				}
+				for _, e := range parse(f.b) {
+					if e.num != 1 {
+						continue
+					}
+					for _, x := range parse(e.b) {
+						if x.num == 1 {
+							if c, err := cid.Cast(x.b); err == nil {
+								wanted = append(wanted, c)
+							}
+						}
+					}
+				}
+			}
+			names := []string{}
+			var msg []byte
+			for _, c := range wanted {
+				names = append(names, c.String())
+				data := []byte("tampered")
+				if sum, err := c.Prefix().Sum(good); err == nil && sum.Equals(c) {
+					data = good
+				}
+				var blk []byte
+				blk = protowire.AppendTag(blk, 1, protowire.BytesType)
+				blk = protowire.AppendBytes(blk, c.Prefix().Bytes())
+				blk = protowire.AppendTag(blk, 2, protowire.BytesType)
+				blk = protowire.AppendBytes(blk, data)
+				msg = protowire.AppendTag(msg, 3, protowire.BytesType)
+				msg = protowire.AppendBytes(msg, blk)
+			}
+			out(map[string]any{"step": "wanted", "cids": names})
+			if len(wanted) == 0 {
+				continue
+			}
+			sctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			ws, err := h.NewStream(sctx, s.Conn().RemotePeer(), bitswapIDs...)
+			cancel()
+			if err != nil {
+				out(map[string]any{"step": "answered", "error": err.Error()})
+				continue
+			}
+			_ = msgio.NewVarintWriter(ws).WriteMsg(msg)
+			_ = ws.CloseWrite()
+			out(map[string]any{"step": "answered", "blocks": len(wanted)})
+		}
+	}
+	for _, id := range bitswapIDs {
+		h.SetStreamHandler(id, handler)
+	}
+	addrs := h.Addrs()
+	out(map[string]any{"step": "listening", "addr": fmt.Sprintf("%s/p2p/%s", addrs[0], h.ID())})
+	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+	_ = h.Close()
 }

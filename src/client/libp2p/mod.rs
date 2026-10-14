@@ -1,10 +1,12 @@
 //! libp2p client (the dialler): Noise as initiator, yamux, identify and ping, and the
 //! application protocols' streams as events. Shares the server's stack (`server::libp2p`).
 pub mod actions;
+pub mod ipfs;
 use crate::client::llm_budget::call_llm_for_client;
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::logging::emit::Log;
 use crate::protocol::{ConnectContext, Event};
+use crate::server::libp2p::bitswap::{self, WantSet};
 use crate::server::libp2p::host::{self, Config, Note, Peer, Spawn, Task};
 use crate::server::libp2p::{identity_from_params, protocols_from_params, wire, yamux};
 use crate::state::client_handles::{ClientCommand, ClientSendOutcome};
@@ -51,6 +53,11 @@ pub async fn connect(ctx: ConnectContext) -> Result<std::net::SocketAddr> {
             .transpose()?
             .flatten(),
     )?;
+    let ipfs = params
+        .map(|p| p.get_optional_bool("ipfs"))
+        .transpose()?
+        .flatten()
+        .unwrap_or(crate::server::libp2p::actions::IPFS_DEFAULT);
     let tcp = tokio::time::timeout(CONNECT_TIMEOUT, tokio::net::TcpStream::connect(&addr))
         .await
         .context("connect timed out")??;
@@ -60,7 +67,13 @@ pub async fn connect(ctx: ConnectContext) -> Result<std::net::SocketAddr> {
         identity,
         protocols,
         listen_addrs: Vec::new(),
+        // A dialler receives blocks on streams the remote opens, so it accepts Bitswap; it
+        // serves no DHT, so it does not claim to.
+        bitswap: ipfs,
+        kad: false,
+        directory: Default::default(),
     });
+    let wants: Arc<std::sync::Mutex<WantSet>> = Default::default();
     let conn = host::upgrade_outbound(tcp, &cfg, expected.as_deref()).await?;
     let remote_peer = wire::peer_id_string(&conn.remote_peer);
     let session = yamux::session(conn, true);
@@ -128,10 +141,41 @@ pub async fn connect(ctx: ConnectContext) -> Result<std::net::SocketAddr> {
     let (ended_tx, ended_rx) = tokio::sync::oneshot::channel::<String>();
     let notes_events = event_tx.clone();
     let notes_peer = peer.clone();
+    let notes_wants = wants.clone();
+    let notes_log = ctx.status_tx.clone();
     spawn(Box::pin(async move {
         let mut ended_tx = Some(ended_tx);
         while let Some(note) = notes.recv().await {
             match note {
+                Note::Message {
+                    stream_id,
+                    protocol,
+                    data,
+                } if bitswap::is_bitswap(&protocol) => {
+                    let log = Log::new(Some(&notes_log));
+                    match ipfs::received(&data, &notes_wants) {
+                        Ok((events, refused)) => {
+                            for why in refused {
+                                log.warn(format!(
+                                    "libp2p client operation=bitswap decision=refused_block: {why}"
+                                ));
+                            }
+                            for e in events {
+                                if notes_events.send((e, 0)).await.is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            log.warn(format!(
+                                "libp2p client operation=bitswap decision=refused_malformed: {e:#}"
+                            ));
+                            if let Some((_, w)) = notes_peer.writer(stream_id) {
+                                w.reset();
+                            }
+                        }
+                    }
+                }
                 Note::Message {
                     stream_id,
                     protocol,
@@ -163,17 +207,7 @@ pub async fn connect(ctx: ConnectContext) -> Result<std::net::SocketAddr> {
     let events_ctx = ctx.clone();
     spawn(Box::pin(async move {
         while let Some((event, depth)) = event_rx.recv().await {
-            events_ctx
-                .state
-                .record_access_log(
-                    AccessLogOwner::Client(events_ctx.client_id.as_u32()),
-                    "libp2p",
-                    None,
-                    event.id(),
-                    event.data.clone(),
-                    vec![],
-                )
-                .await;
+            // call_llm_for_client records the event (with what was answered) itself.
             let instruction = events_ctx
                 .state
                 .get_instruction_for_client(events_ctx.client_id)
@@ -223,6 +257,7 @@ pub async fn connect(ctx: ConnectContext) -> Result<std::net::SocketAddr> {
             &session_ctx,
             &peer,
             &session_spawn,
+            &wants,
             external,
             internal_rx,
             event_tx,
@@ -246,10 +281,12 @@ pub async fn connect(ctx: ConnectContext) -> Result<std::net::SocketAddr> {
 }
 
 /// Perform actions until the client is told to stop or the connection ends; why it ended.
+#[allow(clippy::too_many_arguments)]
 async fn run(
     ctx: &ConnectContext,
     peer: &Arc<Peer>,
     spawn: &Spawn,
+    wants: &std::sync::Mutex<WantSet>,
     mut external: mpsc::Receiver<ClientCommand>,
     mut internal: mpsc::Receiver<(Value, usize)>,
     events: mpsc::Sender<(Event, usize)>,
@@ -340,6 +377,23 @@ async fn run(
                 }
                 "libp2p_ping" => Ok(Some(match host::ping(peer).await {
                     Ok(rtt) => json!({"operation": operation, "ok": true, "rtt_ms": rtt.as_secs_f64() * 1000.0}),
+                    Err(e) => json!({"operation": operation, "ok": false, "error": format!("{e:#}")}),
+                })),
+                "ipfs_bitswap_want" => {
+                    let detail = ipfs::want(peer, wants, &action).await?;
+                    Log::new(Some(&ctx.status_tx)).info(format!("libp2p client: {detail}"));
+                    Ok(None)
+                }
+                "ipfs_bitswap_cancel" => {
+                    ipfs::cancel(peer, wants, &action).await?;
+                    Ok(None)
+                }
+                "ipfs_kad_find_node" | "ipfs_kad_get_providers" => Ok(Some(match ipfs::kad_ask(peer, &action).await {
+                    Ok(mut r) => {
+                        r["operation"] = json!(operation);
+                        r["ok"] = json!(true);
+                        r
+                    }
                     Err(e) => json!({"operation": operation, "ok": false, "error": format!("{e:#}")}),
                 })),
                 "libp2p_identify" => Ok(Some(match host::identify(peer).await {

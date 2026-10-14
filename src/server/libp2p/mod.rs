@@ -2,8 +2,12 @@
 //! answers identify and ping in Rust, and hands every message on the application protocols'
 //! streams to the model, one connection's events at a time.
 pub mod actions;
+pub mod bitswap;
 pub mod host;
+pub mod ipfs;
+pub mod kad;
 pub mod noise;
+mod serve_ipfs;
 pub mod wire;
 pub mod yamux;
 
@@ -61,6 +65,10 @@ pub fn protocols_from_params(list: Option<&Vec<Value>>) -> Result<Vec<String>> {
                 ![wire::IDENTIFY, wire::IDENTIFY_PUSH, wire::PING].contains(&p),
                 "{p} is answered by NetGet itself"
             );
+            anyhow::ensure!(
+                !bitswap::is_bitswap(p) && !kad::is_kad(p),
+                "{p} is IPFS: set the ipfs startup parameter instead"
+            );
             Ok(p.to_string())
         })
         .collect()
@@ -79,18 +87,26 @@ pub async fn spawn(ctx: SpawnContext) -> Result<SocketAddr> {
             .flatten(),
     )?;
     let identity = identity_from_params(seed)?;
+    let ipfs = params
+        .map(|p| p.get_optional_bool("ipfs"))
+        .transpose()?
+        .flatten()
+        .unwrap_or(actions::IPFS_DEFAULT);
     let listener = tokio::net::TcpListener::bind(ctx.legacy_listen_addr()).await?;
     let local = listener.local_addr()?;
     let cfg = Arc::new(Config {
         listen_addrs: vec![wire::multiaddr_bytes(&local)],
         identity,
         protocols,
+        bitswap: ipfs,
+        kad: ipfs,
+        directory: Default::default(),
     });
     Log::new(Some(&ctx.status_tx)).info(format!(
         "libp2p host listening on {}/p2p/{} ({})",
         wire::multiaddr_string(&local),
         cfg.identity.peer_id_string(),
-        cfg.protocols.join(", ")
+        cfg.served_protocols().join(", ")
     ));
     let server_id = ctx.server_id;
     let state = ctx.state.clone();
@@ -226,6 +242,17 @@ async fn connection(
     log.info(format!(
         "libp2p connection {id}: peer {remote_peer} ({agent}) connected"
     ));
+    if cfg.kad {
+        let addrs = listen
+            .iter()
+            .filter_map(|a| wire::multiaddr_from_text(a).ok())
+            .take(kad::MAX_ADDRS)
+            .collect();
+        cfg.directory
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(remote_peer.clone(), addrs);
+    }
     let mut peer_rx =
         crate::server::peer_support::register_peer_channel(&ctx.state, ctx.server_id, id.as_u32())
             .await;
@@ -243,6 +270,14 @@ async fn connection(
                     ctx.state
                         .update_connection_stats(ctx.server_id, id, Some(data.len() as u64), None, Some(1), None)
                         .await;
+                    if bitswap::is_bitswap(&protocol) {
+                        serve_ipfs::bitswap(&ctx, id, &peer, stream_id, &data).await;
+                        continue;
+                    }
+                    if kad::is_kad(&protocol) {
+                        serve_ipfs::kad(&ctx, id, &peer, &cfg, stream_id, &protocol, &data).await;
+                        continue;
+                    }
                     let (text, encoding) = wire::shown(&data);
                     let event = Event::new(
                         &actions::MESSAGE_EVENT,
@@ -272,6 +307,12 @@ async fn connection(
         }
     };
     peer.opener.go_away();
+    if cfg.kad {
+        cfg.directory
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&remote_peer);
+    }
     close(reason).await;
 }
 
@@ -286,13 +327,34 @@ async fn answer(
     stream: Option<u32>,
 ) {
     let log = Log::new(Some(&ctx.status_tx));
+    let Some(todo) = ask(ctx, id, &event).await else {
+        // Fail closed: the stream being answered is reset, so the peer is not left waiting.
+        if let Some((_, w)) = stream.and_then(|s| peer.writer(s)) {
+            w.reset();
+        }
+        return;
+    };
+    for action in todo {
+        if let Err(e) = apply(ctx, id, peer, spawn, &action, stream).await {
+            log.warn(format!(
+                "libp2p connection {id}: {} failed: {e:#}",
+                action["type"]
+            ));
+        }
+    }
+}
+
+/// Ask the model about one event: the actions it answered with, in order, or None when it
+/// failed (logged `decision=fail_closed_llm_error`; the caller fails closed).
+async fn ask(ctx: &SpawnContext, id: ConnectionId, event: &Event) -> Option<Vec<Value>> {
+    let log = Log::new(Some(&ctx.status_tx));
     let op = event.id().to_string();
     let result = match call_llm(
         &ctx.llm_client,
         &ctx.state,
         ctx.server_id,
         Some(id),
-        &event,
+        event,
         &actions::Libp2pProtocol,
     )
     .await
@@ -302,11 +364,7 @@ async fn answer(
             log.error(format!(
                 "libp2p connection {id} operation={op} decision=fail_closed_llm_error"
             ));
-            // Fail closed: the stream being answered is reset, so the peer is not left waiting.
-            if let Some((_, w)) = stream.and_then(|s| peer.writer(s)) {
-                w.reset();
-            }
-            return;
+            return None;
         }
     };
     let mut todo = Vec::new();
@@ -327,14 +385,7 @@ async fn answer(
     log.info(format!(
         "libp2p connection {id} operation={op} decision={decision}"
     ));
-    for action in todo {
-        if let Err(e) = apply(ctx, id, peer, spawn, &action, stream).await {
-            log.warn(format!(
-                "libp2p connection {id}: {} failed: {e:#}",
-                action["type"]
-            ));
-        }
-    }
+    Some(todo)
 }
 
 /// Carry out one validated action on this connection; a description of what happened.
@@ -394,6 +445,9 @@ async fn apply(
         actions::DISCONNECT => {
             peer.opener.go_away();
             Ok("disconnecting".into())
+        }
+        t @ (actions::BLOCKS | actions::KAD_REPLY) => {
+            anyhow::bail!("{t} answers an IPFS request, and can only be given as that answer")
         }
         other => anyhow::bail!("unknown action {other}"),
     }
