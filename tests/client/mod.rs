@@ -434,6 +434,8 @@ pub mod smpp;
 pub mod sse;
 #[cfg(feature = "stratum")]
 pub mod stratum;
+#[cfg(feature = "stratum-v2")]
+pub mod stratum_v2;
 #[cfg(feature = "sunrpc")]
 pub mod sunrpc;
 #[cfg(feature = "tr069")]

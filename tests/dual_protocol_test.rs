@@ -140,6 +140,7 @@ fn golden_duals_map() {
         "Guacamole",
         "ActivityPub",
         "Stratum",
+        "Stratum V2",
         "Apache Pulsar",
         "TR-069 (CWMP)",
         "SSE",
