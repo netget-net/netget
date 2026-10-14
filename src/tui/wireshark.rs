@@ -286,6 +286,7 @@ pub fn wire_for(protocol: &str) -> Wire {
         // OCPP-J is JSON text in WebSocket frames; no OCPP dissector exists in this build.
         "ocpp" => with_note(with_display(tcp("http"), "websocket"), "OCPP-J messages are JSON arrays in WebSocket text frames; the websocket filter shows each CALL, CALLRESULT and CALLERROR."),
         // A2A is JSON-RPC over plain HTTP (SSE for streams); no A2A dissector exists.
+        "stratum v2" | "stratum_v2" | "stratumv2" => with_note(PLAIN_TCP, "Wireshark has no Stratum V2 dissector, and after the handshake there is nothing to dissect: the first 64 bytes from the device and 234 from the pool are the Noise NX handshake (ElligatorSwift keys, then the encrypted static key and certificate), and every frame after is a 22-byte encrypted header followed by ChaCha20-Poly1305 chunks. Message timing and sizes are all a capture shows."),
         "onvif" => with_note(tcp("http"), "ONVIF is SOAP 1.2 in HTTP POST bodies to /onvif/device_service and /onvif/media_service; the http filter shows each envelope, with its WS-Security UsernameToken in the header."),
         "a2a" => with_note(tcp("http"), "A2A 1.0 is JSON-RPC 2.0 in HTTP POST bodies to /, with streamed answers as text/event-stream; the agent card is GET /.well-known/agent-card.json."),
         // GraphQL is JSON over plain HTTP; no GraphQL dissector exists in this build.

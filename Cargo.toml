@@ -152,6 +152,7 @@ portable-base = [
     "guacamole",
     "activitypub",
     "stratum",
+    "stratum-v2",
     "pulsar",
     "tr069",
     "sse",
@@ -412,6 +413,7 @@ sunrpc = [] # ONC RPC portmapper/rpcbind (PMAP v2, RPCBIND v3-v4) server and cli
 guacamole = ["dep:font8x8"] # Apache Guacamole protocol server (in guacd's place) and client of guacd, hand-rolled
 activitypub = ["dep:rsa", "dep:sha2", "urlencoding"] # ActivityPub instance and actor (WebFinger, HTTP Signatures rsa-sha256, signed delivery), hyper + reqwest
 stratum = ["dep:sha2"]  # Stratum V1 mining pool and miner (LLM-controlled; shares verified in Rust)
+stratum-v2 = ["dep:sha2", "dep:secp256k1", "dep:chacha20poly1305"]  # Stratum V2 pool and mining device: Noise NX (secp256k1 EllSwift, ChaChaPoly), Mining Protocol, hand-rolled
 pulsar = ["dep:prost"]  # Apache Pulsar binary protocol broker and client (LLM-controlled)
 tr069 = ["quick-xml"]  # TR-069 CWMP ACS and CPE (SOAP over HTTP, LLM-controlled)
 sse = []  # Server-sent events (text/event-stream) server and EventSource-style client, hand-rolled HTTP/1.1
@@ -753,6 +755,7 @@ dist-windows = [
     "guacamole",
     "activitypub",
     "stratum",
+    "stratum-v2",
     "pulsar",
     "tr069",
     "sse",
@@ -991,6 +994,7 @@ all-protocols = [
     "guacamole",
     "activitypub",
     "stratum",
+    "stratum-v2",
     "pulsar",
     "tr069",
     "sse",
@@ -1343,6 +1347,9 @@ bitcoin = { version = "0.32", optional = true }
 # Nostr relay: BIP-340 Schnorr verification and signing. The same 0.29 that `bitcoin` links,
 # so the tree carries one secp256k1, not two curve libraries.
 secp256k1 = { version = "0.29", optional = true }
+# Stratum V2: the Noise transport's AEAD (ChaCha20-Poly1305, IETF); its chacha20 and poly1305
+# are the versions already in the tree.
+chacha20poly1305 = { version = "0.10", optional = true }
 
 # WireGuard VPN server (full implementation with LLM control)
 defguard_wireguard_rs = { version = "0.7", optional = true, features = ["serde"] }

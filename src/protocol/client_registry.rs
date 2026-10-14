@@ -686,6 +686,10 @@ impl ClientRegistry {
         self.register(Arc::new(
             crate::client::stratum::actions::StratumClientProtocol::new(),
         ));
+        #[cfg(feature = "stratum-v2")]
+        self.register(Arc::new(
+            crate::client::stratum_v2::actions::StratumV2ClientProtocol::new(),
+        ));
         #[cfg(feature = "pulsar")]
         self.register(Arc::new(
             crate::client::pulsar::actions::PulsarClientProtocol::new(),
@@ -1282,6 +1286,7 @@ pub(crate) const ALL_KNOWN_CLIENT_PROTOCOLS: &[(&str, &str)] = &[
     ("Guacamole", "guacamole"),
     ("ActivityPub", "activitypub"),
     ("Stratum", "stratum"),
+    ("Stratum V2", "stratum-v2"),
     ("Apache Pulsar", "pulsar"),
     ("TR-069 (CWMP)", "tr069"),
     ("SSE", "sse"),
