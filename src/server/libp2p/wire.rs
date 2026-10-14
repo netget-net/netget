@@ -113,9 +113,19 @@ pub enum PbValue<'a> {
 
 /// Every (field, value) in a message; unknown wire types are an error, fixed-width ones are
 /// skipped.
-pub fn pb_fields(mut b: &[u8]) -> Result<Vec<(u32, PbValue<'_>)>> {
+pub fn pb_fields(b: &[u8]) -> Result<Vec<(u32, PbValue<'_>)>> {
+    pb_fields_bounded(b, usize::MAX)
+}
+
+/// [`pb_fields`], refusing a message with more than `max` fields before collecting them, so
+/// a peer cannot turn a few megabytes of two-byte fields into a vector many times larger.
+pub fn pb_fields_bounded(mut b: &[u8], max: usize) -> Result<Vec<(u32, PbValue<'_>)>> {
     let mut out = Vec::new();
     while !b.is_empty() {
+        ensure!(
+            out.len() < max,
+            "protobuf message has more than {max} fields"
+        );
         let (key, n) = get_uvarint(b)?;
         b = &b[n..];
         let field = (key >> 3) as u32;
@@ -319,6 +329,51 @@ pub fn multiaddr_text(mut b: &[u8]) -> Result<String> {
     Ok(s)
 }
 
+/// A text multiaddr in binary: `/ip4|ip6/…`, `/tcp|udp/…`, `/quic-v1`, `/p2p/<id>`, in any
+/// order the text gives them. Anything else is refused rather than guessed.
+pub fn multiaddr_from_text(s: &str) -> Result<Vec<u8>> {
+    ensure!(
+        s.starts_with('/') && s.len() <= 256,
+        "{s:?} is not a multiaddr"
+    );
+    let mut out = Vec::new();
+    let mut parts = s.trim_end_matches('/').split('/').skip(1);
+    while let Some(name) = parts.next() {
+        let mut value = || {
+            parts
+                .next()
+                .with_context(|| format!("{name} needs a value in {s}"))
+        };
+        match name {
+            "ip4" => {
+                let a: std::net::Ipv4Addr = value()?.parse().context("bad ip4 address")?;
+                put_uvarint(&mut out, P_IP4);
+                out.extend_from_slice(&a.octets());
+            }
+            "ip6" => {
+                let a: std::net::Ipv6Addr = value()?.parse().context("bad ip6 address")?;
+                put_uvarint(&mut out, P_IP6);
+                out.extend_from_slice(&a.octets());
+            }
+            "tcp" | "udp" => {
+                let port: u16 = value()?.parse().context("bad port")?;
+                put_uvarint(&mut out, if name == "tcp" { P_TCP } else { 0x0111 });
+                out.extend_from_slice(&port.to_be_bytes());
+            }
+            "quic-v1" => put_uvarint(&mut out, 0x01cc),
+            "p2p" | "ipfs" => {
+                let id = unbase58(value()?).context("the /p2p/ peer id is not base58")?;
+                put_uvarint(&mut out, P_P2P);
+                put_uvarint(&mut out, id.len() as u64);
+                out.extend(id);
+            }
+            other => bail!("multiaddr component /{other} is not supported in {s}"),
+        }
+    }
+    ensure!(!out.is_empty(), "empty multiaddr");
+    Ok(out)
+}
+
 /// `host:port`, `/ip4/a/tcp/p[/p2p/id]` or `/ip6/…`: the address to dial and the expected
 /// peer id, if named.
 pub fn parse_dial_target(s: &str) -> Result<(String, Option<Vec<u8>>)> {
@@ -391,6 +446,39 @@ pub async fn ms_dial(io: &mut impl Io, protocol: &str) -> Result<bool> {
         Ok(false)
     } else {
         bail!("listener answered {answer:?} to {protocol:?}")
+    }
+}
+
+/// Propose each protocol in turn on one stream; the first the listener accepts, or None when
+/// it refuses them all.
+pub async fn ms_dial_any(io: &mut impl Io, protocols: &[&str]) -> Result<Option<String>> {
+    let Some((first, rest)) = protocols.split_first() else {
+        return Ok(None);
+    };
+    let mut out = ms_message(MULTISTREAM);
+    out.extend(ms_message(first));
+    io.write_all(&out).await?;
+    let header = ms_read(io).await?;
+    ensure!(
+        header == MULTISTREAM,
+        "expected {MULTISTREAM}, got {header:?}"
+    );
+    let mut proposed = *first;
+    let mut rest = rest.iter();
+    loop {
+        let answer = ms_read(io).await?;
+        if answer == proposed {
+            return Ok(Some(answer));
+        }
+        ensure!(
+            answer == "na",
+            "listener answered {answer:?} to {proposed:?}"
+        );
+        let Some(next) = rest.next() else {
+            return Ok(None);
+        };
+        proposed = next;
+        io.write_all(&ms_message(next)).await?;
     }
 }
 

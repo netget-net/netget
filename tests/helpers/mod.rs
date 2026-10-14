@@ -180,3 +180,6 @@ pub mod ics;
 pub mod p2p;
 #[cfg(feature = "radsec")]
 pub mod radsec_pki;
+
+#[cfg(feature = "libp2p")]
+pub mod kubo;

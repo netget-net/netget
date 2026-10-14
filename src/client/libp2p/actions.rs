@@ -88,6 +88,39 @@ pub fn actions() -> Vec<ActionDefinition> {
             json!({"type": "libp2p_identify"}),
         ),
         action(
+            "ipfs_bitswap_want",
+            "Ask the remote for blocks over Bitswap (needs the ipfs startup parameter). Each block that comes back is hashed and checked against the CID you asked for before it reaches you as ipfs_block_received; anything else is refused. DONT_HAVE and HAVE arrive as ipfs_bitswap_presence.",
+            vec![
+                p("cids", "array", "CIDs to fetch (Qm… or b…), raw or dag-pb", true),
+                p("want", "string", "block (default: send the block) or have (only say whether you have it)", false),
+            ],
+            json!({"type": "ipfs_bitswap_want", "cids": ["bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku"]}),
+        ),
+        action(
+            "ipfs_bitswap_cancel",
+            "Withdraw wants sent with ipfs_bitswap_want.",
+            vec![p("cids", "array", "CIDs no longer wanted", true)],
+            json!({"type": "ipfs_bitswap_cancel", "cids": ["bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku"]}),
+        ),
+        action(
+            "ipfs_kad_find_node",
+            "Ask the remote's Kademlia DHT for the peers closest to a peer id (FIND_NODE). The answer arrives as libp2p_response with closer_peers.",
+            vec![
+                p("peer_id", "string", "The peer id to look up", true),
+                p("protocol", "string", "/ipfs/kad/1.0.0 (default) or the LAN DHT's /ipfs/lan/kad/1.0.0", false),
+            ],
+            json!({"type": "ipfs_kad_find_node", "peer_id": "12D3KooWD3eckifWpRn9wQpMG9R9hX3sD158z7EqHWmweQAJU5SA"}),
+        ),
+        action(
+            "ipfs_kad_get_providers",
+            "Ask the remote's Kademlia DHT who provides a CID (GET_PROVIDERS). The answer arrives as libp2p_response with provider_peers and closer_peers.",
+            vec![
+                p("cid", "string", "The CID whose providers to find", true),
+                p("protocol", "string", "/ipfs/kad/1.0.0 (default) or the LAN DHT's /ipfs/lan/kad/1.0.0", false),
+            ],
+            json!({"type": "ipfs_kad_get_providers", "cid": "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku"}),
+        ),
+        action(
             "disconnect",
             "Close the connection.",
             vec![],
@@ -149,21 +182,81 @@ pub static MESSAGE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     )
 });
 
-pub static RESPONSE_EVENT: LazyLock<EventType> =
-    LazyLock::new(|| {
-        event(
+pub static RESPONSE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    event(
         "libp2p_response",
         "The outcome of an action that asks something of the remote (open_stream, ping, identify).",
         vec![
             p("operation", "string", "The action that was performed", true),
             p("ok", "boolean", "Whether it succeeded", true),
-            p("stream_id", "number", "The new stream, for open_stream", false),
+            p(
+                "stream_id",
+                "number",
+                "The new stream, for open_stream",
+                false,
+            ),
             p("rtt_ms", "number", "The round trip, for ping", false),
-            p("result", "object", "The remote's identify, for identify", false),
-            p("error", "string", "Why it failed, e.g. the remote refused the protocol", false),
+            p(
+                "result",
+                "object",
+                "The remote's identify, for identify",
+                false,
+            ),
+            p(
+                "closer_peers",
+                "array",
+                "For a DHT request: [{peer_id, addrs}] the remote says are closer",
+                false,
+            ),
+            p(
+                "provider_peers",
+                "array",
+                "For ipfs_kad_get_providers: [{peer_id, addrs}] that have the content",
+                false,
+            ),
+            p(
+                "error",
+                "string",
+                "Why it failed, e.g. the remote refused the protocol",
+                false,
+            ),
         ],
     )
-    });
+});
+
+pub static BLOCK_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    event(
+        "ipfs_block_received",
+        "A block you wanted arrived over Bitswap, and its bytes hash to the CID you asked for. A dag-pb block's links are listed; want them to fetch the rest of a file or directory.",
+        vec![
+            p("cid", "string", "The CID you asked for", true),
+            p("codec", "string", "The block's codec: raw (the bytes are the content) or dag-pb (a UnixFS node)", true),
+            p("size", "number", "The block's size in bytes", true),
+            p("data", "string", "The content: the block for raw, the UnixFS data for dag-pb (text, or hex when encoding is hex)", true),
+            p("encoding", "string", "How data is written: utf8 text, or hex for binary", true),
+            p("truncated", "boolean", "Whether data was cut short for display (the block was verified whole)", true),
+            p("unixfs_type", "string", "For dag-pb: file, directory, raw, symlink, …", false),
+            p("file_size", "number", "For a UnixFS file: the whole file's size", false),
+            p("links", "array", "For dag-pb: [{cid, name, size}] of the children", true),
+        ],
+    )
+});
+
+pub static PRESENCE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    event(
+        "ipfs_bitswap_presence",
+        "The remote said whether it has a block you wanted: HAVE (have true) or DONT_HAVE.",
+        vec![
+            p("cid", "string", "The CID you asked about", true),
+            p(
+                "have",
+                "boolean",
+                "true for HAVE, false for DONT_HAVE",
+                true,
+            ),
+        ],
+    )
+});
 
 pub fn check(v: &Value) -> Result<()> {
     let stream = || {
@@ -193,6 +286,17 @@ pub fn check(v: &Value) -> Result<()> {
             stream()?;
         }
         "libp2p_ping" | "libp2p_identify" | "disconnect" => {}
+        "ipfs_bitswap_want" => {
+            super::ipfs::cids(v)?;
+            super::ipfs::want_type(v)?;
+        }
+        "ipfs_bitswap_cancel" => {
+            super::ipfs::cids(v)?;
+        }
+        "ipfs_kad_find_node" | "ipfs_kad_get_providers" => {
+            super::ipfs::kad_request(v)?;
+            super::ipfs::kad_protocol(v)?;
+        }
         t => bail!("Unknown libp2p client action {t:?}"),
     }
     Ok(())
@@ -206,10 +310,20 @@ impl Protocol for Libp2pClientProtocol {
         "ETH>IP>TCP>libp2p"
     }
     fn keywords(&self) -> Vec<&'static str> {
-        vec!["libp2p", "ipfs", "p2p", "dial peer", "multiaddr"]
+        vec![
+            "libp2p",
+            "ipfs",
+            "p2p",
+            "dial peer",
+            "multiaddr",
+            "bitswap",
+            "cid",
+            "kademlia",
+            "kubo",
+        ]
     }
     fn description(&self) -> &'static str {
-        "libp2p dialler over TCP (Noise, yamux): identifies and pings the remote, and talks length-prefixed messages on its protocols' streams"
+        "libp2p dialler over TCP (Noise, yamux): identifies and pings the remote, talks length-prefixed messages on its protocols' streams, and with ipfs on fetches blocks by CID over Bitswap (each verified) and asks the remote's Kademlia DHT"
     }
     fn get_async_actions(&self, _: &AppState) -> Vec<ActionDefinition> {
         actions()
@@ -222,6 +336,8 @@ impl Protocol for Libp2pClientProtocol {
             CONNECTED_EVENT.clone(),
             MESSAGE_EVENT.clone(),
             RESPONSE_EVENT.clone(),
+            BLOCK_EVENT.clone(),
+            PRESENCE_EVENT.clone(),
         ]
     }
     fn get_startup_parameters(&self) -> Vec<ParameterDefinition> {
@@ -250,6 +366,14 @@ impl Protocol for Libp2pClientProtocol {
                 example: json!("my-stable-node"),
                 default: None,
             },
+            ParameterDefinition {
+                name: "ipfs".into(),
+                type_hint: "boolean".into(),
+                description: "Also speak IPFS: accept Bitswap so blocks wanted with ipfs_bitswap_want can arrive (each verified against its CID)".into(),
+                required: false,
+                example: json!(true),
+                default: Some(json!(crate::server::libp2p::actions::IPFS_DEFAULT)),
+            },
         ]
     }
     fn metadata(&self) -> crate::protocol::metadata::ProtocolMetadataV2 {
@@ -257,10 +381,10 @@ impl Protocol for Libp2pClientProtocol {
         ProtocolMetadataV2::builder()
             .state(DevelopmentState::Experimental)
             .privilege_requirement(PrivilegeRequirement::None)
-            .implementation("The server's hand-rolled stack in the dialler role: multistream-select, Noise XX as initiator (checking the remote's peer id when one is named), yamux, identify and ping; the remote's own identify and ping are answered")
-            .llm_control("Which protocols to open streams on, what to send, when to ping, identify, close and disconnect, and how to answer the remote's messages")
-            .e2e_testing("tests/client/libp2p: go-libp2p listening (TCP, Noise, yamux), which identifies NetGet, answers its chat stream and opens one of its own to NetGet")
-            .notes("TCP only; Ed25519 identities only; no DHT, gossipsub, relay or hole punching. remote_addr is host:port or /ip4|ip6|dns/…/tcp/…[/p2p/<id>]. A handler chain stops after 8 follow-ups.")
+            .implementation("The server's hand-rolled stack in the dialler role: multistream-select, Noise XX as initiator (checking the remote's peer id when one is named), yamux, identify and ping; the remote's own identify and ping are answered. With ipfs: Bitswap wants on a stream of its own and blocks accepted on the remote's streams, each hashed against the outstanding wants; DHT FIND_NODE and GET_PROVIDERS, one question per stream")
+            .llm_control("Which protocols to open streams on, what to send, when to ping, identify, close and disconnect, and how to answer the remote's messages. With ipfs: which CIDs to want or cancel (a dag-pb block's links let it walk a chunked file or directory), and what to ask the remote's DHT")
+            .e2e_testing("tests/client/libp2p: go-libp2p listening (TCP, Noise, yamux), which identifies NetGet, answers its chat stream and opens one of its own to NetGet; Kubo 0.43.1 (loopback only) serves files it added — a CIDv0 UnixFS file, a CIDv1 raw block, and a chunked file whose leaves NetGet wants from the root's links — and answers FIND_NODE and GET_PROVIDERS; a go-libp2p peer answering wants with tampered bytes is refused before the model hears of it")
+            .notes("TCP only; Ed25519 identities only; no gossipsub, relay or hole punching. remote_addr is host:port or /ip4|ip6|dns/…/tcp/…[/p2p/<id>]. A handler chain stops after 8 follow-ups. IPFS limits: sha2-256 and the raw and dag-pb codecs only (other CIDs are refused before anything is sent); at most 1024 outstanding wants; block content shown to the model is cut at 64 KiB (the block is verified whole); the client serves no blocks and answers no DHT requests; Kubo keeps its own provider records in its LAN DHT while its WAN DHT is inactive, so ask /ipfs/lan/kad/1.0.0 on a private network.")
             .build()
     }
     fn example_prompt(&self) -> &'static str {

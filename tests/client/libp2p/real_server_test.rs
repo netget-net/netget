@@ -25,7 +25,7 @@ elif t=='libp2p_message' and not e['data'].startswith('echo: '):
   a=[{'type':'libp2p_send','stream_id':e['stream_id'],'data':'echo: '+e['data']}]
 print(json.dumps({'actions':a}))"#;
 
-fn peer() -> String {
+pub fn peer() -> String {
     let p = std::env::var("NETGET_LIBP2P_GO_PEER").unwrap_or_default();
     assert!(
         !p.is_empty() && std::path::Path::new(&p).exists(),

@@ -4,8 +4,9 @@
 use super::noise::{self, Identity, NoiseConn};
 use super::wire::{self, Io};
 use super::yamux::{Opener, Stream, StreamWriter};
+use super::{bitswap, kad};
 use anyhow::{ensure, Context, Result};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -32,6 +33,45 @@ pub struct Config {
     pub identity: Identity,
     pub protocols: Vec<String>,
     pub listen_addrs: Vec<Vec<u8>>,
+    /// Accept Bitswap streams (`/ipfs/bitswap/1.2.0` and older) and advertise them.
+    pub bitswap: bool,
+    /// Accept Kademlia DHT streams (`/ipfs/kad/1.0.0`, `/ipfs/lan/kad/1.0.0`) and advertise
+    /// them, which makes this host a DHT server in its peers' eyes.
+    pub kad: bool,
+    /// The peers connected to this host and the addresses their identify gave, for DHT
+    /// answers. One entry per live connection, so it is bounded by the connection limit.
+    pub directory: Directory,
+}
+
+/// Connected peers (base58 id) and their listen addresses (binary multiaddrs).
+pub type Directory = Arc<Mutex<BTreeMap<String, Vec<Vec<u8>>>>>;
+
+impl Config {
+    /// Every protocol this host answers, in the order identify lists them.
+    pub fn served_protocols(&self) -> Vec<String> {
+        let mut out: Vec<String> = [wire::IDENTIFY, wire::IDENTIFY_PUSH, wire::PING]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        if self.bitswap {
+            out.extend(bitswap::PROTOCOLS.iter().map(|s| s.to_string()));
+        }
+        if self.kad {
+            out.extend(kad::PROTOCOLS.iter().map(|s| s.to_string()));
+        }
+        out.extend(self.protocols.iter().cloned());
+        out
+    }
+    /// The longest message a stream of `protocol` may carry.
+    pub fn max_message(&self, protocol: &str) -> usize {
+        if bitswap::is_bitswap(protocol) {
+            bitswap::MAX_MESSAGE
+        } else if kad::is_kad(protocol) {
+            kad::MAX_MESSAGE
+        } else {
+            MAX_MESSAGE
+        }
+    }
 }
 
 /// What a connection's streams report to whoever answers for it.
@@ -137,10 +177,8 @@ pub async fn accept_streams(
 }
 
 async fn inbound(mut stream: Stream, cfg: Arc<Config>, peer: Arc<Peer>) {
-    let supported = |p: &str| {
-        matches!(p, wire::IDENTIFY | wire::IDENTIFY_PUSH | wire::PING)
-            || cfg.protocols.iter().any(|x| x == p)
-    };
+    let served = cfg.served_protocols();
+    let supported = |p: &str| served.iter().any(|x| x == p);
     let writer = stream.writer();
     let protocol =
         match tokio::time::timeout(NEGOTIATION_TIMEOUT, wire::ms_listen(&mut stream, supported))
@@ -160,11 +198,7 @@ async fn inbound(mut stream: Stream, cfg: Arc<Config>, peer: Arc<Peer>) {
                 public_key: cfg.identity.public_key_proto.clone(),
                 listen_addrs: cfg.listen_addrs.clone(),
                 observed_addr: Some(wire::multiaddr_bytes(&peer.remote_addr)),
-                protocols: [wire::IDENTIFY, wire::IDENTIFY_PUSH, wire::PING]
-                    .iter()
-                    .map(|s| s.to_string())
-                    .chain(cfg.protocols.iter().cloned())
-                    .collect(),
+                protocols: cfg.served_protocols(),
             });
             let _ = writer.send(wire::length_prefixed(&msg));
             writer.close();
@@ -185,15 +219,21 @@ async fn inbound(mut stream: Stream, cfg: Arc<Config>, peer: Arc<Peer>) {
         }
         _ => {
             peer.remember(stream.id, protocol.clone(), writer);
-            read_messages(stream, protocol, peer.notes.clone()).await;
+            let max = cfg.max_message(&protocol);
+            read_messages(stream, protocol, peer.notes.clone(), max).await;
         }
     }
 }
 
-/// Turn a stream's messages into notes until the peer closes it.
-pub async fn read_messages(mut stream: Stream, protocol: String, notes: mpsc::Sender<Note>) {
+/// Turn a stream's messages (each at most `max` bytes) into notes until the peer closes it.
+pub async fn read_messages(
+    mut stream: Stream,
+    protocol: String,
+    notes: mpsc::Sender<Note>,
+    max: usize,
+) {
     let error = loop {
-        match wire::read_length_prefixed(&mut stream, MAX_MESSAGE).await {
+        match wire::read_length_prefixed(&mut stream, max).await {
             Ok(data) => {
                 let note = Note::Message {
                     stream_id: stream.id,
@@ -293,8 +333,29 @@ pub async fn open_app_stream(peer: &Arc<Peer>, protocol: &str) -> Result<Option<
     }
     let id = s.id;
     peer.remember(id, protocol.to_string(), s.writer());
-    let reader: Task = Box::pin(read_messages(s, protocol.to_string(), peer.notes.clone()));
+    let reader: Task = Box::pin(read_messages(
+        s,
+        protocol.to_string(),
+        peer.notes.clone(),
+        MAX_MESSAGE,
+    ));
     Ok(Some((id, reader)))
+}
+
+/// Open a stream proposing each of `protocols` in turn: the stream and the protocol the peer
+/// accepted, or None when it accepts none of them. The caller owns the stream.
+pub async fn open_negotiated(peer: &Peer, protocols: &[&str]) -> Result<Option<(Stream, String)>> {
+    let mut s = peer.opener.open()?;
+    let accepted = tokio::time::timeout(NEGOTIATION_TIMEOUT, wire::ms_dial_any(&mut s, protocols))
+        .await
+        .context("protocol negotiation timed out")??;
+    match accepted {
+        Some(p) => Ok(Some((s, p))),
+        None => {
+            s.writer().close();
+            Ok(None)
+        }
+    }
 }
 
 /// Write one message to a stream this connection has open.
