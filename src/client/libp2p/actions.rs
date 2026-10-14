@@ -310,10 +310,20 @@ impl Protocol for Libp2pClientProtocol {
         "ETH>IP>TCP>libp2p"
     }
     fn keywords(&self) -> Vec<&'static str> {
-        vec!["libp2p", "ipfs", "p2p", "dial peer", "multiaddr"]
+        vec![
+            "libp2p",
+            "ipfs",
+            "p2p",
+            "dial peer",
+            "multiaddr",
+            "bitswap",
+            "cid",
+            "kademlia",
+            "kubo",
+        ]
     }
     fn description(&self) -> &'static str {
-        "libp2p dialler over TCP (Noise, yamux): identifies and pings the remote, and talks length-prefixed messages on its protocols' streams"
+        "libp2p dialler over TCP (Noise, yamux): identifies and pings the remote, talks length-prefixed messages on its protocols' streams, and with ipfs on fetches blocks by CID over Bitswap (each verified) and asks the remote's Kademlia DHT"
     }
     fn get_async_actions(&self, _: &AppState) -> Vec<ActionDefinition> {
         actions()
@@ -371,10 +381,10 @@ impl Protocol for Libp2pClientProtocol {
         ProtocolMetadataV2::builder()
             .state(DevelopmentState::Experimental)
             .privilege_requirement(PrivilegeRequirement::None)
-            .implementation("The server's hand-rolled stack in the dialler role: multistream-select, Noise XX as initiator (checking the remote's peer id when one is named), yamux, identify and ping; the remote's own identify and ping are answered")
-            .llm_control("Which protocols to open streams on, what to send, when to ping, identify, close and disconnect, and how to answer the remote's messages")
-            .e2e_testing("tests/client/libp2p: go-libp2p listening (TCP, Noise, yamux), which identifies NetGet, answers its chat stream and opens one of its own to NetGet")
-            .notes("TCP only; Ed25519 identities only; no DHT, gossipsub, relay or hole punching. remote_addr is host:port or /ip4|ip6|dns/…/tcp/…[/p2p/<id>]. A handler chain stops after 8 follow-ups.")
+            .implementation("The server's hand-rolled stack in the dialler role: multistream-select, Noise XX as initiator (checking the remote's peer id when one is named), yamux, identify and ping; the remote's own identify and ping are answered. With ipfs: Bitswap wants on a stream of its own and blocks accepted on the remote's streams, each hashed against the outstanding wants; DHT FIND_NODE and GET_PROVIDERS, one question per stream")
+            .llm_control("Which protocols to open streams on, what to send, when to ping, identify, close and disconnect, and how to answer the remote's messages. With ipfs: which CIDs to want or cancel (a dag-pb block's links let it walk a chunked file or directory), and what to ask the remote's DHT")
+            .e2e_testing("tests/client/libp2p: go-libp2p listening (TCP, Noise, yamux), which identifies NetGet, answers its chat stream and opens one of its own to NetGet; Kubo 0.43.1 (loopback only) serves files it added — a CIDv0 UnixFS file, a CIDv1 raw block, and a chunked file whose leaves NetGet wants from the root's links — and answers FIND_NODE and GET_PROVIDERS; a go-libp2p peer answering wants with tampered bytes is refused before the model hears of it")
+            .notes("TCP only; Ed25519 identities only; no gossipsub, relay or hole punching. remote_addr is host:port or /ip4|ip6|dns/…/tcp/…[/p2p/<id>]. A handler chain stops after 8 follow-ups. IPFS limits: sha2-256 and the raw and dag-pb codecs only (other CIDs are refused before anything is sent); at most 1024 outstanding wants; block content shown to the model is cut at 64 KiB (the block is verified whole); the client serves no blocks and answers no DHT requests; Kubo keeps its own provider records in its LAN DHT while its WAN DHT is inactive, so ask /ipfs/lan/kad/1.0.0 on a private network.")
             .build()
     }
     fn example_prompt(&self) -> &'static str {

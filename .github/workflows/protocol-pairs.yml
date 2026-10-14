@@ -6498,7 +6498,7 @@ jobs:
 
   libp2p:
     if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'libp2p')
-    name: libp2p host and dialler against go-libp2p
+    name: libp2p host and dialler, with IPFS (Bitswap, DHT), against go-libp2p and Kubo
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -6513,7 +6513,7 @@ jobs:
         with:
           go-version: '1.25.x'
           cache: false
-      - name: Build the go-libp2p peer
+      - name: Build the go-libp2p peer and fetch Kubo (sha256-pinned)
         run: |
           set -euo pipefail
           python3 tests/server/libp2p/install_peers.py "$RUNNER_TEMP/libp2p-peers" | tee "$RUNNER_TEMP/libp2p-env"

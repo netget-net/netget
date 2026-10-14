@@ -433,10 +433,14 @@ impl Protocol for Libp2pProtocol {
             "multistream",
             "peer id",
             "4001",
+            "bitswap",
+            "kademlia",
+            "cid",
+            "kubo",
         ]
     }
     fn description(&self) -> &'static str {
-        "libp2p host over TCP (multistream-select, Noise, yamux): answers identify and ping, and talks length-prefixed messages on its application protocols' streams"
+        "libp2p host over TCP (multistream-select, Noise, yamux): answers identify and ping, talks length-prefixed messages on its application protocols' streams, and with ipfs on serves Bitswap blocks the model supplies and answers the Kademlia DHT"
     }
     fn get_async_actions(&self, _: &AppState) -> Vec<ActionDefinition> {
         Vec::new()
@@ -491,10 +495,10 @@ impl Protocol for Libp2pProtocol {
             .state(DevelopmentState::Experimental)
             .privilege_requirement(PrivilegeRequirement::None)
             .well_known_port(4001)
-            .implementation("Hand-rolled (src/server/libp2p): multistream-select 1.0; Noise XX (25519, ChaChaPoly, SHA256) with the libp2p handshake payload, on ring, x25519-dalek and ed25519-dalek; yamux with per-stream windows; identify (/ipfs/id/1.0.0, push accepted) and ping answered in Rust; Ed25519 peer ids")
-            .llm_control("Every message on the application protocols' streams: reply, open streams to the peer, close them, drop the peer")
-            .e2e_testing("tests/server/libp2p: go-libp2p (TCP, Noise, yamux) dials NetGet, verifies its peer id, runs identify and ping, and talks on /netget/chat/1.0.0; raw bytes for refusals and bounds")
-            .notes("TCP only: no QUIC, WebTransport, WebRTC, TLS security or mplex. Ed25519 identities only (RSA/secp256k1/ECDSA peers are refused). No DHT, no gossipsub, no relay, no hole punching, no signed peer records. Messages are uvarint-length-prefixed, at most 1 MiB. A model failure resets the stream it was answering.")
+            .implementation("Hand-rolled (src/server/libp2p): multistream-select 1.0; Noise XX (25519, ChaChaPoly, SHA256) with the libp2p handshake payload, on ring, x25519-dalek and ed25519-dalek; yamux with per-stream windows; identify (/ipfs/id/1.0.0, push accepted) and ping answered in Rust; Ed25519 peer ids. With ipfs: Bitswap 1.2.0/1.1.0/1.0.0 (answers on a stream of its own), CIDv0/CIDv1 (base58btc, base32) over sha2-256, raw and dag-pb, single-block UnixFS files, and the Kademlia DHT message on /ipfs/kad/1.0.0 and /ipfs/lan/kad/1.0.0")
+            .llm_control("Every message on the application protocols' streams: reply, open streams to the peer, close them, drop the peer. With ipfs: which wanted blocks it has (their content and format; Rust computes each CID and sends only blocks that hash to a want), and who provides a key (GET_PROVIDERS); it is told of ADD_PROVIDER. FIND_NODE is a routing fact answered in Rust")
+            .e2e_testing("tests/server/libp2p: go-libp2p (TCP, Noise, yamux) dials NetGet, verifies its peer id, runs identify and ping, and talks on /netget/chat/1.0.0; Kubo 0.43.1 (loopback only) fetches model-served content with ipfs cat and ipfs block get (raw, CIDv0 UnixFS, a 200 KB block), finds NetGet as a provider through its LAN DHT and sends it ADD_PROVIDER; over go-libp2p, go-cid recomputes the CID of every block sent, a block that does not hash is never sent, a failed model answers DONT_HAVE, and oversized, malformed and unknown-codec messages are refused before the model")
+            .notes("TCP only: no QUIC, WebTransport, WebRTC, TLS security or mplex. Ed25519 identities only (RSA/secp256k1/ECDSA peers are refused). No gossipsub, no relay, no hole punching, no signed peer records. Messages are uvarint-length-prefixed, at most 1 MiB (Bitswap 4 MiB, DHT 64 KiB). A model failure resets the stream it was answering; a failed Bitswap answer is DONT_HAVE, never a block. IPFS limits: sha2-256 only; raw and dag-pb only (dag-cbor and others answered DONT_HAVE); the model serves raw blocks and single-block UnixFS files, not chunked DAGs or directories; DHT records (PUT_VALUE, GET_VALUE values, IPNS) are not stored; provider records are not kept by Rust (the model may remember ADD_PROVIDER); no Bitswap sessions, ledgers or want rebroadcast.")
             .max_inbound_bytes(host::MAX_MESSAGE)
             .build()
     }
