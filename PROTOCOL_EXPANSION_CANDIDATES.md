@@ -39,8 +39,10 @@ this survey was written (they landed 4 October 2026); the survey was wrong about
 What is left from this document, with the reason each is still open:
 
 - **Partial slices of shipped items:**
-  - **GRE**: VXLAN and Geneve shipped, GRE did not. It is IP protocol 47 rather than
-    UDP, so it needs raw sockets and a root-only test.
+  - ~~**GRE**~~: landed 14 October 2026 as the `vxlan` feature's `gretap` encapsulation
+    (Ethernet over GRE in UDP, RFC 8086, port 4754), tested against the Linux kernel's
+    gretap-over-fou driver. GRE directly on IP protocol 47 is still not built: it needs a
+    raw socket, and privilege is declared per protocol.
   - **ONVIF**: the WS-Discovery half finds ONVIF devices and answers as one. The ONVIF
     SOAP device and media services were not built.
   - **Stratum V2**: only V1 shipped. V2 is the SRI Noise-encrypted binary protocol and
