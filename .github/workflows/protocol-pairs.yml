@@ -9,6 +9,10 @@ on:
         description: Protocol family to validate
         type: string
         default: all
+      only:
+        description: Run just this job id (empty runs every job in the suite)
+        type: string
+        default: ''
   workflow_dispatch:
     inputs:
       suite:
@@ -16,6 +20,10 @@ on:
         type: choice
         options: [all, p2p-news]
         default: all
+      only:
+        description: Run just this job id (empty runs every job in the suite)
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -33,7 +41,7 @@ env:
 
 jobs:
   first-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'first-pairs')
     name: NUT, DoQ and StatsD with independent peers
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -101,7 +109,7 @@ jobs:
             --test event_emit_sites_test
 
   stream-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'stream-pairs')
     name: Graphite, queue, DICT, Gemini and raw QUIC with independent peers
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -185,7 +193,7 @@ jobs:
             --test client_stop_releases_socket_test
 
   gelf-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'gelf-pairs')
     name: GELF TCP and UDP with independent emitters and collectors
     runs-on: ubuntu-24.04
     timeout-minutes: 35
@@ -250,7 +258,7 @@ jobs:
             --test detached_task_drift_test
 
   nsq-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'nsq-pairs')
     name: NSQ publisher and subscriber with independent peers
     runs-on: ubuntu-24.04
     timeout-minutes: 35
@@ -302,7 +310,7 @@ jobs:
             --test detached_task_drift_test
 
   http3-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'http3-pairs')
     name: HTTP3 with independent aioquic peers and pending-read cancellation
     runs-on: ubuntu-24.04
     timeout-minutes: 35
@@ -359,7 +367,7 @@ jobs:
             --test client_stop_releases_socket_test
 
   forward-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'forward-pairs')
     name: Fluent Forward with independent emitter and official Fluentd collector
     runs-on: ubuntu-24.04
     timeout-minutes: 35
@@ -424,7 +432,7 @@ jobs:
             --test detached_task_drift_test
 
   gearman-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'gearman-pairs')
     name: Gearman submitter and selected worker with independent peers
     runs-on: ubuntu-24.04
     timeout-minutes: 40
@@ -492,7 +500,7 @@ jobs:
           retention-days: 7
 
   ssh-sftp-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'ssh-sftp-pairs')
     name: SSH and read-only SFTP with independent OpenSSH peers
     runs-on: ubuntu-24.04
     timeout-minutes: 40
@@ -544,7 +552,7 @@ jobs:
             --test client_stop_releases_socket_test
 
   influxdb-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'influxdb-pairs')
     name: InfluxDB writes and Flux/InfluxQL queries with independent clients, decoder and real service
     runs-on: ubuntu-24.04
     timeout-minutes: 40
@@ -619,7 +627,7 @@ jobs:
             --test decision_tag_ratchet_test
 
   prometheus-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'prometheus-pairs')
     name: Prometheus scraping with independent daemon and OpenMetrics exporter
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -680,7 +688,7 @@ jobs:
             --test client_stop_releases_socket_test
 
   docker-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'docker-pairs')
     name: Docker read-only Engine operations with independent daemon and CLI
     runs-on: ubuntu-24.04
     timeout-minutes: 40
@@ -739,7 +747,7 @@ jobs:
             --test client_stop_releases_socket_test
 
   loki-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'loki-pairs')
     name: Loki pushes with official service and maintained Alloy emitter
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -803,7 +811,7 @@ jobs:
             --test client_stop_releases_socket_test
 
   otlp-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'otlp-pairs')
     name: OTLP HTTP and gRPC with official Collector and independent exporters
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -874,7 +882,7 @@ jobs:
             --test client_stop_releases_socket_test
 
   ipfix-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'ipfix-pairs')
     name: IPFIX templates and flows with independent Python and GoFlow2 peers
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -937,7 +945,7 @@ jobs:
             --test client_stop_releases_socket_test
 
   grpc-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'grpc-pairs')
     name: Generic gRPC streams and reflection with independent grpcio and grpcurl peers
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -1006,7 +1014,7 @@ jobs:
             --test vendored_tonic_patch_test
 
   sflow-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'sflow-pairs')
     name: sFlow compact and expanded samples with Cistern and GoFlow2 peers
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -1069,7 +1077,7 @@ jobs:
             --test peer_handle_coverage_ratchet_test
 
   vault-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'vault-pairs')
     name: Vault client and programmable server with isolated native Vault peers
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -1133,7 +1141,7 @@ jobs:
             --test secret_redaction_test
 
   remote-write-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'remote-write-pairs')
     name: Published remote write1.0 with official Prometheus sender and receiver
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -1193,7 +1201,7 @@ jobs:
             --test peer_handle_coverage_ratchet_test
 
   grpc-web-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'grpc-web-pairs')
     name: Binary gRPC-Web with independent Connect-ES peers and bounded framing
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -1259,7 +1267,7 @@ jobs:
             --test rustls_provider_gate_test
 
   nostr-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'nostr-pairs')
     name: Nostr publishing and subscriptions with independent nak and rust-nostr peers
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -1325,7 +1333,7 @@ jobs:
             --test rustls_provider_gate_test
 
   netflow-v9-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'netflow-v9-pairs')
     name: Native NetFlow v9 with unmodified softflowd and GoFlow2 peers
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -1387,7 +1395,7 @@ jobs:
             --test decision_tag_ratchet_test
 
   connect-rpc-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'connect-rpc-pairs')
     name: Binary ConnectRPC and gRPC-Web with independent Connect-ES peers
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -1459,7 +1467,7 @@ jobs:
             --test site_protocol_list_test
 
   tacacs-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'tacacs-pairs')
     name: Legacy TACACS+ roles with pinned independent Go and Python SDKs
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -1529,7 +1537,7 @@ jobs:
             --test site_protocol_list_test
 
   bolt-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'bolt-pairs')
     name: Bolt roles with official Neo4j Community and native cypher-shell
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -1606,7 +1614,7 @@ jobs:
             --test site_protocol_list_test
 
   oci-registry-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'oci-registry-pairs')
     name: OCI registry pulls with unchanged crane SDK and native registry
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -1676,7 +1684,7 @@ jobs:
             -- --test-threads=32
 
   gnmi-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'gnmi-pairs')
     name: Native gNMI RPCs and subscriptions with OpenConfig gNMIc and grpcio
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -1770,7 +1778,7 @@ jobs:
             -- --test-threads=32
 
   diameter-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'diameter-pairs')
     name: Stateless Diameter NASREQ with independent Go and Python SDKs
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -1857,7 +1865,7 @@ jobs:
             -- --test-threads=32
 
   netconf-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'netconf-pairs')
     name: NETCONF over SSH with independent ncclient and netconf 2.1.0 peers
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -1936,7 +1944,7 @@ jobs:
             -- --test-threads=32
 
   rpki-rtr-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'rpki-rtr-pairs')
     name: RPKI-RTR cache and router with StayRTR and RTRlib
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -2016,7 +2024,7 @@ jobs:
             -- --test-threads=32
 
   rdap-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'rdap-pairs')
     name: RDAP server and client with OpenRDAP and ICANN rdap tooling
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -2099,7 +2107,7 @@ jobs:
             -- --test-threads=32
 
   hl7-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'hl7-pairs')
     name: HL7 v2 MLLP endpoint and sender with python-hl7
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -2178,7 +2186,7 @@ jobs:
             -- --test-threads=32
 
   icap-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'icap-pairs')
     name: ICAP server and client with c-icap
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -2257,7 +2265,7 @@ jobs:
             -- --test-threads=32
 
   ocpp-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'ocpp-pairs')
     name: OCPP 1.6 and 2.0.1 CSMS and charge point with python ocpp
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -2335,7 +2343,7 @@ jobs:
             --test real_client_evidence_is_run_test \
             -- --test-threads=32
   a2a-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'a2a-pairs')
     name: A2A 1.0 agent and client with a2a-sdk
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -2413,7 +2421,7 @@ jobs:
             --test real_client_evidence_is_run_test \
             -- --test-threads=32
   graphql-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'graphql-pairs')
     name: GraphQL over HTTP server and client with gql and strawberry
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -2491,7 +2499,7 @@ jobs:
             --test real_client_evidence_is_run_test \
             -- --test-threads=32
   fastcgi-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'fastcgi-pairs')
     name: FastCGI responder and client with nginx and flup
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -2569,7 +2577,7 @@ jobs:
             --test real_client_evidence_is_run_test \
             -- --test-threads=32
   redfish-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'redfish-pairs')
     name: Redfish service and client with gofish, redfishtool and the DMTF mockup server
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -2651,7 +2659,7 @@ jobs:
             --test real_client_evidence_is_run_test \
             -- --test-threads=32
   scim-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'scim-pairs')
     name: SCIM 2.0 service and client with scim2-tester, scim2-cli and scim2-server
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -2729,7 +2737,7 @@ jobs:
             --test real_client_evidence_is_run_test \
             -- --test-threads=32
   socketio-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'socketio-pairs')
     name: Socket.IO server and client with python-socketio and socket.io-client
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -2810,7 +2818,7 @@ jobs:
             --test real_client_evidence_is_run_test \
             -- --test-threads=32
   caldav-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'caldav-pairs')
     name: CalDAV server and client with python caldav, vdirsyncer and Radicale
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -2888,7 +2896,7 @@ jobs:
             --test real_client_evidence_is_run_test \
             -- --test-threads=32
   carddav-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'carddav-pairs')
     name: CardDAV server and client with python caldav, vdirsyncer and Radicale
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -2967,7 +2975,7 @@ jobs:
             -- --test-threads=32
 
   dicom-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'dicom-pairs')
     name: DICOM SCP and SCU with pynetdicom
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -3046,7 +3054,7 @@ jobs:
             -- --test-threads=32
 
   acme-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'acme-pairs')
     name: ACME CA and client with lego, certbot and Pebble
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -3129,7 +3137,7 @@ jobs:
             -- --test-threads=32
 
   fix-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'fix-pairs')
     name: FIX acceptor and initiator with QuickFIX/Go
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -3212,7 +3220,7 @@ jobs:
             -- --test-threads=32
 
   wamp-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'wamp-pairs')
     name: WAMP router and client with nexus and autobahn-python
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -3295,7 +3303,7 @@ jobs:
             -- --test-threads=32
 
   rtmp-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'rtmp-pairs')
     name: RTMP server and client with FFmpeg and MediaMTX
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -3376,7 +3384,7 @@ jobs:
             -- --test-threads=32
 
   srt-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'srt-pairs')
     name: SRT listener and caller with libsrt
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -3457,7 +3465,7 @@ jobs:
             -- --test-threads=32
 
   amqp1-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'amqp1-pairs')
     name: AMQP 1.0 container and client with rhea and go-amqp
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -3543,7 +3551,7 @@ jobs:
             -- --test-threads=32
 
   thrift-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'thrift-pairs')
     name: Thrift server and client with thriftpy2 and Apache Thrift
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -3623,7 +3631,7 @@ jobs:
             -- --test-threads=32
 
   bmp-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'bmp-pairs')
     name: BMP collector and exporter with GoBGP and gobmp
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -3704,7 +3712,7 @@ jobs:
             -- --test-threads=32
 
   mqtt-sn-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'mqtt-sn-pairs')
     name: MQTT-SN gateway and client with mqtt-sn-tools and the Paho gateway
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -3781,7 +3789,7 @@ jobs:
             -- --test-threads=32
 
   nbd-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'nbd-pairs')
     name: NBD server and client with libnbd and nbdkit
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -3858,7 +3866,7 @@ jobs:
             -- --test-threads=32
 
   managesieve-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'managesieve-pairs')
     name: ManageSieve server and client with sievelib and Dovecot Pigeonhole
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -3935,7 +3943,7 @@ jobs:
             -- --test-threads=32
 
   zenoh-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'zenoh-pairs')
     name: Zenoh router and client with zenoh-pico
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -4012,7 +4020,7 @@ jobs:
             -- --test-threads=32
 
   lwm2m-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'lwm2m-pairs')
     name: LwM2M server and device with Eclipse Leshan
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -4093,7 +4101,7 @@ jobs:
             -- --test-threads=32
 
   restconf-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'restconf-pairs')
     name: RESTCONF server and client with FreeCONF
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -4173,7 +4181,7 @@ jobs:
             --test real_client_evidence_is_run_test \
             -- --test-threads=32
   webtransport-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'webtransport-pairs')
     name: WebTransport server and client with aioquic and headless Chrome
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -4261,7 +4269,7 @@ jobs:
             --test real_client_evidence_is_run_test \
             -- --test-threads=32
   jmap-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'jmap-pairs')
     name: JMAP server and client with jmapc and Stalwart
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -4337,7 +4345,7 @@ jobs:
             --test real_client_evidence_is_run_test \
             -- --test-threads=32
   epp-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'epp-pairs')
     name: EPP server and client with pyepp and epp-lib
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -4418,7 +4426,7 @@ jobs:
             -- --test-threads=32
 
   lmtp-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'lmtp-pairs')
     name: LMTP server and client with smtplib, swaks and aiosmtpd
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -4495,7 +4503,7 @@ jobs:
             -- --test-threads=32
 
   lpd-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'lpd-pairs')
     name: LPD server and client with LPRng and the CUPS lpd backend
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -4568,7 +4576,7 @@ jobs:
             -- --test-threads=32
 
   inetd-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'inetd-pairs')
     name: Echo, Discard, Daytime, QOTD, Chargen and Time with Perl Net::Ping/Net::Time, rdate, netcat and xinetd
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -4641,7 +4649,7 @@ jobs:
             -- --test-threads=32
 
   rcon-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'rcon-pairs')
     name: RCON server and client with gorcon/rcon and the Python rcon package
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -4717,7 +4725,7 @@ jobs:
             -- --test-threads=32
 
   a2s-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'a2s-pairs')
     name: A2S server and client with python-a2s and woozymasta/a2s
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -4793,7 +4801,7 @@ jobs:
             -- --test-threads=32
 
   minecraft-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'minecraft-pairs')
     name: Minecraft server and client with mcstatus and node-minecraft-protocol
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -4868,7 +4876,7 @@ jobs:
             -- --test-threads=32
 
   ninep-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'ninep-pairs')
     name: 9P server and client with 9fans.net/go and knusbaum/go9p
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -4944,7 +4952,7 @@ jobs:
             -- --test-threads=32
 
   zeromq-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'zeromq-pairs')
     name: ZeroMQ server and client with pyzmq and go-zeromq/zmq4
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -5023,7 +5031,7 @@ jobs:
             -- --test-threads=32
 
   smpp-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'smpp-pairs')
     name: SMPP server and client with smpplib, gosmpp and the Melrose Labs SMSC simulator
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -5099,7 +5107,7 @@ jobs:
             -- --test-threads=32
 
   clickhouse-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'clickhouse-pairs')
     name: ClickHouse server and client with the official 24.8 binary and clickhouse-driver
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -5174,7 +5182,7 @@ jobs:
             -- --test-threads=32
 
   msgpack-rpc-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'msgpack-rpc-pairs')
     name: MessagePack-RPC server and client with Neovim and ugorji/go
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -5252,7 +5260,7 @@ jobs:
             -- --test-threads=32
 
   zipkin-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'zipkin-pairs')
     name: Zipkin collector and reporter with zipkin-go, OpenTelemetry, zipkin-server and Jaeger
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -5333,7 +5341,7 @@ jobs:
             -- --test-threads=32
 
   capnp-rpc-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'capnp-rpc-pairs')
     name: Cap'n Proto RPC server and client with pycapnp and go-capnp
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -5411,7 +5419,7 @@ jobs:
             -- --test-threads=32
 
   nats-jetstream-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'nats-jetstream-pairs')
     name: NATS JetStream with nats.go, nats-py and nats-server
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -5492,7 +5500,7 @@ jobs:
             -- --test-threads=32
 
   knx-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'knx-pairs')
     name: KNX/IP server and client with xknx, knxd and knxtool
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -5566,7 +5574,7 @@ jobs:
             -- --test-threads=32
 
   consul-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'consul-pairs')
     name: Consul server and client with the consul CLI, py-consul and consul agent -dev
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -5638,7 +5646,7 @@ jobs:
             -- --test-threads=32
 
   milter-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'milter-pairs')
     name: Milter filter and MTA side with miltertest, pymilter and go-milter
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -5716,7 +5724,7 @@ jobs:
             -- --test-threads=32
 
   anthropic-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'anthropic-pairs')
     name: Anthropic Messages API server and client with both official SDKs and llama-server
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -5795,7 +5803,7 @@ jobs:
             -- --test-threads=32
 
   radsec-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'radsec-pairs')
     name: RadSec server and client with radsecproxy and FreeRADIUS
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -5871,7 +5879,7 @@ jobs:
             -- --test-threads=32
 
   x11-client:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'x11-client')
     name: X11 client against Xvfb, read back with xprop and xwininfo
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -5945,7 +5953,7 @@ jobs:
             -- --test-threads=32
 
   dbus-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'dbus-pairs')
     name: D-Bus server and client with dbus-send, gdbus, dbus-next and dbus-daemon
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -6019,7 +6027,7 @@ jobs:
             -- --test-threads=32
 
   wsdiscovery:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'wsdiscovery')
     name: WS-Discovery server and client against python WSDiscovery and wsdd
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -6096,7 +6104,7 @@ jobs:
             -- --test-threads=32
 
   bfd:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'bfd')
     name: BFD server and client against BIRD
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -6178,7 +6186,7 @@ jobs:
             -- --test-threads=32
 
   vxlan:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'vxlan')
     name: VXLAN and Geneve server and client against the Linux kernel's vxlan driver
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -6253,7 +6261,7 @@ jobs:
             -- --test-threads=32
 
   rsync:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'rsync')
     name: rsync daemon and client against the stock rsync 3.2.7 client and daemon
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -6328,7 +6336,7 @@ jobs:
             -- --test-threads=32
 
   pfcp:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'pfcp')
     name: PFCP UPF and SMF against wmnsk/go-pfcp, with the tshark oracle
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -6406,7 +6414,7 @@ jobs:
             -- --test-threads=32
 
   matrix-chat:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'matrix-chat')
     name: Matrix homeserver and client with matrix-nio and Synapse
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -6482,7 +6490,7 @@ jobs:
             -- --test-threads=32
 
   libp2p:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'libp2p')
     name: libp2p host and dialler against go-libp2p
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -6558,7 +6566,7 @@ jobs:
             -- --test-threads=32
 
   sunrpc:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'sunrpc')
     name: SunRPC portmapper and client with rpcinfo and rpcbind
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -6632,7 +6640,7 @@ jobs:
             -- --test-threads=32
 
   rtsp-client:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'rtsp-client')
     name: RTSP client against mediamtx with an ffmpeg publisher
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -6702,7 +6710,7 @@ jobs:
             -- --test-threads=32
 
   sse:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'sse')
     name: SSE server and client with eventsource, httpx-sse, sse-starlette and aiohttp-sse
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -6776,7 +6784,7 @@ jobs:
             -- --test-threads=32
 
   ics:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'ics')
     name: ICS independent peers (${{ matrix.feature }})
     runs-on: ubuntu-22.04
     strategy:
@@ -6809,6 +6817,7 @@ jobs:
           cargo clippy --locked --no-default-features --features ${{ matrix.feature }} --all-targets -- -D clippy::correctness -D clippy::suspicious -D unused_must_use
 
   p2p-news:
+    if: inputs.only == '' || inputs.only == 'p2p-news'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -6840,7 +6849,7 @@ jobs:
           cargo clippy --locked --no-default-features --features adc_peer,dc_peer,soulseek_peer,gnutella,nntp --all-targets -- -D clippy::correctness -D clippy::suspicious -D unused_must_use
 
   guacamole:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'guacamole')
     name: Guacamole server and client with pyguacamole, guacamole-common, guacd and Xvnc
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -6918,7 +6927,7 @@ jobs:
             -- --test-threads=32
 
   activitypub:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'activitypub')
     name: ActivityPub pair (Fedify)
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -6990,7 +6999,7 @@ jobs:
             -- --test-threads=32
 
   stratum:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'stratum')
     name: Stratum pool and miner with cpuminer, ckpool and Bitcoin Core
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -7062,7 +7071,7 @@ jobs:
             -- --test-threads=32
 
   pulsar:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'pulsar')
     name: Pulsar broker and client with the Python and Java clients and Pulsar 4.0.6
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -7135,7 +7144,7 @@ jobs:
             -- --test-threads=32
 
   tr069:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'tr069')
     name: TR-069 ACS and device with genieacs-sim, GenieACS and MongoDB
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -7207,7 +7216,7 @@ jobs:
             -- --test-threads=32
 
   zabbix-client:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'zabbix-client')
     name: Zabbix client against zabbix_agentd and zabbix_proxy 7.0
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -7280,7 +7289,7 @@ jobs:
             -- --test-threads=32
 
   rtp-client:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'rtp-client')
     name: RTP endpoint against ffmpeg in both directions
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -7348,7 +7357,7 @@ jobs:
             -- --test-threads=32
 
   hls-client:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'hls-client')
     name: HLS client against ffmpeg and GStreamer hlssink2
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -7418,7 +7427,7 @@ jobs:
             -- --test-threads=32
 
   snmp:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'snmp')
     name: SNMP agent, manager, SNMPv3 USM and notifications against Net-SNMP and pysnmp
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -7498,7 +7507,7 @@ jobs:
             -- --test-threads=32
 
   mqtt-v5-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'mqtt-v5-pairs')
     name: MQTT 3.1.1 and 5.0 broker and client with Mosquitto and Paho
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -7584,7 +7593,7 @@ jobs:
             -- --test-threads=32
 
   websocket-deflate-pairs:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'websocket-deflate-pairs')
     name: WebSocket server and client with websocat, Python websockets and Node ws (permessage-deflate)
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -7665,7 +7674,7 @@ jobs:
             -- --test-threads=32
 
   coap-observe-blockwise:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'coap-observe-blockwise')
     name: CoAP Observe and Block-wise with libcoap and aiocoap
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -7761,7 +7770,7 @@ jobs:
             -- --test-threads=32
 
   dns-transfer-dnssec:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'dns-transfer-dnssec')
     name: DNS TCP, zone transfers and DNSSEC with BIND, Knot and ldns
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -7846,7 +7855,7 @@ jobs:
             -- --test-threads=32
 
   kafka:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'kafka')
     name: Kafka broker and client at the newest flexible versions against kcat, the Java client, franz-go and Apache Kafka 3.9.1
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -7931,7 +7940,7 @@ jobs:
             -- --test-threads=32
 
   rdp-client:
-    if: inputs.suite != 'p2p-news'
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'rdp-client')
     name: RDP client against FreeRDP's shadow server (NLA) on Xvfb and xrdp (TLS)
     runs-on: ubuntu-24.04
     timeout-minutes: 45

@@ -1141,6 +1141,8 @@ targeted stress runs.** If a test hangs, fix the hang rather than serializing th
 `ci.yml` is the PR/push-to-master gate; `fuzz.yml` remains an on-demand search.
 `protocol-pairs.yml` (the third-party interoperability jobs) runs only by hand or when
 `release.yml` calls it before publishing; it no longer runs on every push or pull request.
+Its `only` input runs a single job by id — `gh workflow run protocol-pairs.yml --ref <branch>
+-f only=<job>` — which is how a new or changed pair is checked without the other hundred.
 The jobs marked *manual* below likewise run only on a manual dispatch of `ci.yml`: push
 changes that touch a protocol, then run the workflow (Actions → Run workflow) to get them.
 
