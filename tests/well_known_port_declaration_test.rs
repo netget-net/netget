@@ -173,6 +173,7 @@ const NO_WELL_KNOWN_PORT: &[(&str, &str)] = &[
     ("acme", "ACME is JSON over HTTPS at a directory URL the CA publishes (RFC 8555 §7.1.1); no port is assigned, and test CAs such as Pebble use arbitrary ones"),
     ("socketio", "Socket.IO is served over HTTP(S) at a path (/socket.io/) on an application-chosen port; none is assigned"),
     ("scim", "SCIM is a REST API served over HTTPS at an application-chosen path and port; none is assigned"),
+    ("onvif", "ONVIF services are carried on the device's HTTP port (80 by convention, shared with its web UI); the ONVIF Core Specification assigns none, and devices advertise theirs in WS-Discovery XAddrs"),
     ("redfish", "Redfish is served over HTTPS on the BMC's web port (443 by convention, often shared with its web UI); no port is assigned to Redfish itself"),
     ("fastcgi", "FastCGI has no assigned port; an application listens wherever its web server is told to pass requests (php-fpm's 9000 is a convention, not an assignment)"),
     ("hls", "HLS is playlists and segments served over plain HTTP; no port of its own"),

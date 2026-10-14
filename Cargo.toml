@@ -156,6 +156,7 @@ portable-base = [
     "tr069",
     "sse",
     "wsdiscovery",
+    "onvif",
     "x11",
     "sflow",
     "prometheus-remote-write",
@@ -415,6 +416,7 @@ pulsar = ["dep:prost"]  # Apache Pulsar binary protocol broker and client (LLM-c
 tr069 = ["quick-xml"]  # TR-069 CWMP ACS and CPE (SOAP over HTTP, LLM-controlled)
 sse = []  # Server-sent events (text/event-stream) server and EventSource-style client, hand-rolled HTTP/1.1
 wsdiscovery = ["quick-xml"] # WS-Discovery (SOAP-over-UDP 3702) target service and discovery client, 2005/04 and 2009/01
+onvif = ["quick-xml", "dep:sha1"] # ONVIF device (Device and Media services, SOAP 1.2, WS-Security digest) and client
 x11 = [] # X11 client (X Window System core protocol): windows, properties and events against an X server
 jmap = ["dep:rustls", "dep:tokio-rustls", "dep:rustls-pemfile", "dep:rcgen"] # JMAP (RFC 8620/8621) server and client
 webtransport = ["dep:rustls", "dep:wtransport", "dep:wtransport-proto", "dep:sha2"] # WebTransport over HTTP/3 (draft-02) server and client
@@ -755,6 +757,7 @@ dist-windows = [
     "tr069",
     "sse",
     "wsdiscovery",
+    "onvif",
     "x11",
     "sflow",
     "prometheus-remote-write",
@@ -992,6 +995,7 @@ all-protocols = [
     "tr069",
     "sse",
     "wsdiscovery",
+    "onvif",
     "x11",
     "sflow",
     "prometheus-remote-write",

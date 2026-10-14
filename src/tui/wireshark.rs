@@ -286,6 +286,7 @@ pub fn wire_for(protocol: &str) -> Wire {
         // OCPP-J is JSON text in WebSocket frames; no OCPP dissector exists in this build.
         "ocpp" => with_note(with_display(tcp("http"), "websocket"), "OCPP-J messages are JSON arrays in WebSocket text frames; the websocket filter shows each CALL, CALLRESULT and CALLERROR."),
         // A2A is JSON-RPC over plain HTTP (SSE for streams); no A2A dissector exists.
+        "onvif" => with_note(tcp("http"), "ONVIF is SOAP 1.2 in HTTP POST bodies to /onvif/device_service and /onvif/media_service; the http filter shows each envelope, with its WS-Security UsernameToken in the header."),
         "a2a" => with_note(tcp("http"), "A2A 1.0 is JSON-RPC 2.0 in HTTP POST bodies to /, with streamed answers as text/event-stream; the agent card is GET /.well-known/agent-card.json."),
         // GraphQL is JSON over plain HTTP; no GraphQL dissector exists in this build.
         "graphql" => with_note(tcp("http"), "GraphQL requests are JSON POST bodies (or GET query strings) to the endpoint path; answers are application/graphql-response+json or application/json. Subscriptions are graphql-transport-ws JSON in WebSocket text frames on the same path: add the websocket display filter."),
