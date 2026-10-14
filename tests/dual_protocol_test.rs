@@ -144,6 +144,7 @@ fn golden_duals_map() {
         "TR-069 (CWMP)",
         "SSE",
         "WS-Discovery",
+        "ONVIF",
         "Nostr",
         "Vault",
         "Bolt",

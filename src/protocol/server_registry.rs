@@ -506,6 +506,8 @@ impl ServerRegistry {
         self.register(Arc::new(
             crate::server::wsdiscovery::actions::WsDiscoveryProtocol::new(),
         ));
+        #[cfg(feature = "onvif")]
+        self.register(Arc::new(crate::server::onvif::actions::OnvifProtocol::new()));
 
         #[cfg(feature = "netflow-v9")]
         self.register(Arc::new(
@@ -1751,6 +1753,7 @@ pub(crate) const ALL_KNOWN_PROTOCOLS: &[(&str, &str)] = &[
     ("TR-069 (CWMP)", "tr069"),
     ("SSE", "sse"),
     ("WS-Discovery", "wsdiscovery"),
+    ("ONVIF", "onvif"),
     ("etcd", "etcd"),
     ("ZooKeeper", "zookeeper"),
     ("Tor Relay", "tor"),

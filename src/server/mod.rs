@@ -1370,6 +1370,8 @@ pub mod minecraft;
 pub mod msgpack_rpc;
 #[cfg(feature = "ninep")]
 pub mod ninep;
+#[cfg(feature = "onvif")]
+pub mod onvif;
 #[cfg(feature = "pfcp")]
 pub mod pfcp;
 #[cfg(feature = "pulsar")]

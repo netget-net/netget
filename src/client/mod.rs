@@ -812,6 +812,8 @@ pub mod msgpack_rpc;
 pub mod ninep;
 #[cfg(feature = "oci-registry")]
 pub mod oci_registry;
+#[cfg(feature = "onvif")]
+pub mod onvif;
 #[cfg(feature = "pfcp")]
 pub mod pfcp;
 #[cfg(feature = "pulsar")]
