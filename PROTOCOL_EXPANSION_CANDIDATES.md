@@ -49,8 +49,10 @@ What is left from this document, with the reason each is still open:
     GetSnapshotUri) with WS-Security UsernameToken digest, against onvif-zeep-async and
     use-go/onvif (server) and RPOS (client). Media2, PTZ, Imaging, Events, Recording and
     the Set* operations are not built.
-  - **Stratum V2**: only V1 shipped. V2 is the SRI Noise-encrypted binary protocol and
-    would be its own item.
+  - ~~**Stratum V2**~~: landed 14 October 2026 as the `stratum-v2` pair (Mining Protocol,
+    standard and extended channels, Noise NX with the SV2 certificate), hand-rolled from
+    sv2-spec so that SRI's `mining_device` and `pool_sv2` (over Bitcoin Core regtest) are
+    independent peers. The Job Declaration and Template Distribution protocols are not built.
   - **IPFS above libp2p**: the libp2p host does Noise, yamux, identify and ping. Bitswap,
     Kademlia and the IPFS data model were not built, so Kubo can connect but cannot
     exchange blocks.
