@@ -50,9 +50,17 @@ fn mit_klist_entry(text: &str, service: &str) -> (i64, i64, String) {
         .captures(&c[3])
         .map(|f| f[1].to_string())
         .unwrap_or_default();
+    // MIT 1.20/1.22 `printtime` tries `%c`, `%d %b %Y %T`, then `%x %X` in a 20-byte buffer
+    // (src/lib/krb5/krb/str_conv.c); in the C locale only the third fits: `10/15/26 04:43:52`.
+    // A four-digit year is what an en_US locale gives, kept for anyone running without LC_ALL.
     let parse = |s: &str| {
-        NaiveDateTime::parse_from_str(s, "%m/%d/%Y %H:%M:%S")
-            .or_else(|_| NaiveDateTime::parse_from_str(s, "%m/%d/%y %H:%M:%S"))
+        let date = s.split(' ').next().unwrap_or_default();
+        let format = if date.len() == 8 {
+            "%m/%d/%y %H:%M:%S"
+        } else {
+            "%m/%d/%Y %H:%M:%S"
+        };
+        NaiveDateTime::parse_from_str(s, format)
             .unwrap_or_else(|e| panic!("klist time {s:?}: {e}"))
             .and_utc()
             .timestamp()
@@ -313,6 +321,8 @@ async fn heimdal_kinit_and_kgetcred_against_netget_over_tcp() {
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ");
+        // Heimdal prints ctime(3) from the month on (kuser/klist.c printable_time_internal),
+        // which is locale-independent and space-pads the day.
         NaiveDateTime::parse_from_str(&s, "%b %d %H:%M:%S %Y")
             .unwrap()
             .and_utc()

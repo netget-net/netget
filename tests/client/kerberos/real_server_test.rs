@@ -184,6 +184,9 @@ async fn tool(program: &Path, args: &[&str], conf: &Path, ccache: &Path) -> (boo
     let out = tokio::process::Command::new(program)
         .args(args)
         .env("KRB5_CONFIG", conf)
+        // MIT klist formats times with the locale's `%x %X`; C makes it `10/15/26 04:43:52`
+        // on every machine, so the parser below has one shape to read.
+        .env("LC_ALL", "C")
         .env("KRB5CCNAME", format!("FILE:{}", ccache.display()))
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true)
@@ -326,7 +329,7 @@ async fn a_wrong_password_never_becomes_a_ticket() {
 
 const HEIMDAL_KDC: InstallHint = InstallHint {
     brew: "(nothing: macOS ships Heimdal's kdc in /System/Library/PrivateFrameworks/Heimdal.framework/Helpers)",
-    apt: "heimdal-kdc heimdal-clients",
+    apt: "heimdal-clients, plus heimdal-kdc (which conflicts with krb5-kdc: CI unpacks it with dpkg -x and puts its kdc on PATH, see the kerberos job in protocol-pairs.yml)",
 };
 
 /// The first of `candidates` that exists and says it is Heimdal.
