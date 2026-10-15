@@ -118,22 +118,22 @@ Prebuilt binaries cover macOS (arm64/x64), Linux (x64/arm64 glibc, x64 musl), an
 
 **Option 2: cargo (every protocol)**
 
-The crate is `netget-tool` (crates.io's `netget` is an unrelated project); the command it installs is `netget`. Every protocol is compiled in — there are no per-protocol features. The default build links five system libraries and builds llama.cpp, so install those first:
+The crate is `netget-tool` (crates.io's `netget` is an unrelated project); the command it installs is `netget`. Every protocol is compiled in — there are no per-protocol features. The default build links five system libraries and builds llama.cpp (which needs cmake and libclang), so install those first:
 
 ```bash
 # macOS (libpcap, PC/SC and CoreBluetooth ship with the OS)
 brew install samba libusb pkgconf cmake
 
 # Debian / Ubuntu
-sudo apt-get install build-essential pkg-config cmake libssl-dev libltdl-dev \
+sudo apt-get install build-essential pkg-config cmake libclang-dev libssl-dev libltdl-dev \
     libpcap-dev libdbus-1-dev libusb-1.0-0-dev libpcsclite-dev libsmbclient-dev
 
 # Fedora
-sudo dnf install gcc gcc-c++ make pkgconf-pkg-config cmake openssl-devel libtool-ltdl-devel \
+sudo dnf install gcc gcc-c++ make pkgconf-pkg-config cmake clang-devel openssl-devel libtool-ltdl-devel \
     libpcap-devel dbus-devel libusb1-devel pcsc-lite-devel libsmbclient-devel
 
 # Arch
-sudo pacman -S --needed base-devel cmake openssl libpcap dbus libusb pcsclite smbclient
+sudo pacman -S --needed base-devel cmake clang openssl libpcap dbus libusb pcsclite smbclient
 
 cargo install --locked netget-tool
 ```

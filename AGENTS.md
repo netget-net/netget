@@ -1504,7 +1504,8 @@ behind a feature of its own; derive the current list from `[features]` rather th
 | `libusb` | `libusb-1.0-0-dev` / `libusb` | the `usb-*` virtual devices |
 | `libsmbclient` | `libsmbclient-dev` / `samba` | the SMB client |
 
-`embedded-llm` (default) builds llama.cpp and needs `cmake` and a C++ compiler. The protobuf
+`embedded-llm` (default) builds llama.cpp and needs `cmake`, a C++ compiler and libclang (bindgen;
+`libclang-dev` / `clang-devel` / `clang`, Xcode's command-line tools on macOS). The protobuf
 compiler is **not** a requirement any more: `build.rs` uses `protoc-bin-vendored` unless
 `PROTOC` names one.
 

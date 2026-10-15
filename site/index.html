@@ -473,19 +473,19 @@
             <p class="caption">Debian / Ubuntu</p>
             <div class="code-block">
                 <button class="copy-btn" hidden data-target="deps-debian">Copy</button>
-                <pre id="deps-debian"><code>sudo apt-get install build-essential pkg-config cmake libssl-dev libltdl-dev \
+                <pre id="deps-debian"><code>sudo apt-get install build-essential pkg-config cmake libclang-dev libssl-dev libltdl-dev \
     libpcap-dev libdbus-1-dev libusb-1.0-0-dev libpcsclite-dev libsmbclient-dev</code></pre>
             </div>
             <p class="caption">Fedora</p>
             <div class="code-block">
                 <button class="copy-btn" hidden data-target="deps-fedora">Copy</button>
-                <pre id="deps-fedora"><code>sudo dnf install gcc gcc-c++ make pkgconf-pkg-config cmake openssl-devel libtool-ltdl-devel \
+                <pre id="deps-fedora"><code>sudo dnf install gcc gcc-c++ make pkgconf-pkg-config cmake clang-devel openssl-devel libtool-ltdl-devel \
     libpcap-devel dbus-devel libusb1-devel pcsc-lite-devel libsmbclient-devel</code></pre>
             </div>
             <p class="caption">Arch</p>
             <div class="code-block">
                 <button class="copy-btn" hidden data-target="deps-arch">Copy</button>
-                <pre id="deps-arch"><code>sudo pacman -S --needed base-devel cmake openssl libpcap dbus libusb pcsclite smbclient</code></pre>
+                <pre id="deps-arch"><code>sudo pacman -S --needed base-devel cmake clang openssl libpcap dbus libusb pcsclite smbclient</code></pre>
             </div>
             <p class="caption">Then:</p>
             <div class="code-block">
