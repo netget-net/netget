@@ -303,7 +303,7 @@ pub static TIMEOUT_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         "gtp_timeout",
         "A request went unanswered through all its retransmissions (T3-RESPONSE x N3-REQUESTS).",
         vec![
-            p("request", "string", "The request", true),
+            p("request", "string", "The request that went unanswered: echo_request, create_session, modify_bearer or delete_session", true),
             p("sequence", "number", "Its sequence number", true),
             p("session", "number", "The session, if any", false),
             p("attempts", "number", "How many times it was sent", true),
