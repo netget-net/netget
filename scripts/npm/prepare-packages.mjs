@@ -98,7 +98,7 @@ for (const [key, binPath] of Object.entries(binaries)) {
     license: 'AGPL-3.0-or-later',
     repository: {
       type: 'git',
-      url: 'git+https://github.com/smotanacom/netget.git',
+      url: 'git+https://github.com/netget-net/netget.git',
     },
     os: [meta.os],
     cpu: [meta.cpu],

@@ -199,7 +199,7 @@ impl RelayInfo {
             "description": self.description,
             "self": self.relay_pubkey,
             "supported_nips": self.supported_nips,
-            "software": "https://github.com/smotanacom/netget",
+            "software": "https://github.com/netget-net/netget",
             "version": env!("CARGO_PKG_VERSION"),
             "limitation": {
                 "max_message_length": wire::MAX_MESSAGE_BYTES,

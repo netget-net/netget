@@ -5,10 +5,10 @@
   "license": "AGPL-3.0-or-later",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/smotanacom/netget.git"
+    "url": "git+https://github.com/netget-net/netget.git"
   },
-  "homepage": "https://github.com/smotanacom/netget",
-  "bugs": "https://github.com/smotanacom/netget/issues",
+  "homepage": "https://github.com/netget-net/netget",
+  "bugs": "https://github.com/netget-net/netget/issues",
   "keywords": [
     "mcp",
     "mcp-server",

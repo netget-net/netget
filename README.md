@@ -114,7 +114,7 @@ npm i -g @smotana/netget
 netget
 ```
 
-Prebuilt binaries cover macOS (arm64/x64), Linux (x64/arm64 glibc, x64 musl), and Windows x64. They need no system library: on Linux and Windows they leave out the few protocols that link one (packet capture, Bluetooth LE, the NFC client, USB devices, the SMB client); macOS ships those libraries, so its binaries include them. Tarballs are also on [GitHub Releases](https://github.com/smotanacom/netget/releases).
+Prebuilt binaries cover macOS (arm64/x64), Linux (x64/arm64 glibc, x64 musl), and Windows x64. They need no system library: on Linux and Windows they leave out the few protocols that link one (packet capture, Bluetooth LE, the NFC client, USB devices, the SMB client); macOS ships those libraries, so its binaries include them. Tarballs are also on [GitHub Releases](https://github.com/netget-net/netget/releases).
 
 **Option 2: cargo (every protocol)**
 
@@ -147,7 +147,7 @@ cargo install --locked netget-tool --no-default-features --features mcp-stdio,mc
 **Option 3: Build from source**
 
 ```bash
-git clone https://github.com/smotanacom/netget.git
+git clone https://github.com/netget-net/netget.git
 cd netget
 cargo build --release          # same system libraries as Option 2
 ```
