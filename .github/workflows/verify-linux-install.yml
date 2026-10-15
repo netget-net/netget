@@ -1,0 +1,47 @@
+name: Verify Linux install
+
+# Throwaway: runs the README's Debian/Ubuntu install of this tree on both Linux
+# architectures. Lives only on the verify-linux-install branch.
+on:
+  push:
+    branches: [verify-linux-install]
+
+jobs:
+  install:
+    name: cargo install (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04-arm, ubuntu-24.04]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: make room (swap and disk)
+        run: |
+          sudo swapoff -a || true
+          sudo fallocate -l 16G /mnt/netget-swap
+          sudo chmod 600 /mnt/netget-swap
+          sudo mkswap /mnt/netget-swap
+          sudo swapon /mnt/netget-swap
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          free -h
+          df -h / /mnt
+      - name: system libraries, exactly as README.md lists them
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config cmake libclang-dev libssl-dev libltdl-dev \
+              libpcap-dev libdbus-1-dev libusb-1.0-0-dev libpcsclite-dev libsmbclient-dev
+      - name: cargo install --locked
+        run: cargo install --locked --path .
+      - name: the installed binary answers over MCP
+        run: |
+          netget --version
+          printf '%s\n%s\n%s\n' \
+           '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"1"}}}' \
+           '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+           '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_protocols","arguments":{}}}' \
+           | timeout 45 netget --mcp > /tmp/mcp.out 2>&1 || true
+          head -c 600 /tmp/mcp.out
+          grep -q '"id":2' /tmp/mcp.out
