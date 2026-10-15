@@ -24,7 +24,6 @@ use crate::state::app_state::AppState;
 use crate::state::client_handles::{ClientCommand, ClientSendOutcome};
 use crate::state::{AccessLogOwner, ClientId, ClientStatus};
 
-#[cfg(feature = "openapi")]
 use openapi_rs::model::parse::OpenAPI;
 
 /// One completed OpenAPI operation.
@@ -155,12 +154,9 @@ impl OpenApiClient {
         };
 
         // Parse OpenAPI spec
-        #[cfg(feature = "openapi")]
         let parsed_spec: OpenAPI =
             serde_yaml::from_str(&spec_yaml).context("Failed to parse OpenAPI spec (YAML)")?;
 
-        #[cfg(not(feature = "openapi"))]
-        let parsed_spec = ();
 
         // Determine the base URL. Precedence: an explicit `base_url` parameter, then the
         // address the operator named, and the spec's own `servers[0]` only as a last resort.
@@ -176,7 +172,6 @@ impl OpenApiClient {
         // The tell was in the test suite: `tests/client/openapi/e2e_test.rs` has to rewrite
         // `{port}` inside the spec before every run, which is the workaround you write when
         // `remote_addr` is not what decides. It still passes now, because both agree.
-        #[cfg(feature = "openapi")]
         let base_url =
             if let Some(override_url) = startup_params.get("base_url").and_then(|v| v.as_str()) {
                 override_url.to_string()
@@ -214,8 +209,6 @@ impl OpenApiClient {
                 ));
             };
 
-        #[cfg(not(feature = "openapi"))]
-        let base_url = format!("http://{}", remote_addr);
 
         info!("OpenAPI client {} using base URL: {}", client_id, base_url);
 
@@ -273,23 +266,14 @@ impl OpenApiClient {
             .await;
 
         // Extract operation list for LLM
-        #[cfg(feature = "openapi")]
         let operations = Self::extract_operations(&parsed_spec);
 
-        #[cfg(not(feature = "openapi"))]
-        let operations: Vec<serde_json::Value> = vec![];
 
         // Call LLM with openapi_client_connected event
         if let Some(instruction) = app_state.get_instruction_for_client(client_id).await {
-            #[cfg(feature = "openapi")]
             let spec_title = parsed_spec.info.title.clone();
-            #[cfg(feature = "openapi")]
             let spec_version = parsed_spec.info.version.clone();
 
-            #[cfg(not(feature = "openapi"))]
-            let spec_title = String::new();
-            #[cfg(not(feature = "openapi"))]
-            let spec_version = String::new();
 
             let event = Event::new(
                 &OPENAPI_CLIENT_CONNECTED_EVENT,
@@ -336,7 +320,6 @@ impl OpenApiClient {
     }
 
     /// Extract operation list from OpenAPI spec for LLM
-    #[cfg(feature = "openapi")]
     fn extract_operations(spec: &OpenAPI) -> Vec<serde_json::Value> {
         let mut operations = Vec::new();
 
@@ -680,16 +663,12 @@ impl OpenApiClient {
         let base_url = base_url.context("No base URL found")?;
 
         // Parse spec
-        #[cfg(feature = "openapi")]
         let parsed_spec: OpenAPI =
             serde_yaml::from_str(&spec_yaml).context("Failed to parse OpenAPI spec")?;
 
         // Find operation in spec
-        #[cfg(feature = "openapi")]
         let (path_template, method) = Self::find_operation(&parsed_spec, &operation_id)?;
 
-        #[cfg(not(feature = "openapi"))]
-        let (path_template, method) = (String::from("/"), String::from("GET"));
 
         // Substitute path parameters
         let path = Self::substitute_path_params(&path_template, &path_params)?;
@@ -912,7 +891,6 @@ impl OpenApiClient {
     }
 
     /// Find operation in spec by operation_id
-    #[cfg(feature = "openapi")]
     fn find_operation(spec: &OpenAPI, operation_id: &str) -> Result<(String, String)> {
         for (path, path_item) in &spec.paths {
             for (method, operation) in &path_item.operations {

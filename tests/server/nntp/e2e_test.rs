@@ -3,7 +3,6 @@
 //! These tests verify NNTP functionality by spawning real NNTP servers
 //! and connecting with real NNTP clients.
 
-#![cfg(all(test, feature = "nntp"))]
 
 use crate::helpers::{start_netget_server, E2EResult, NetGetConfig};
 

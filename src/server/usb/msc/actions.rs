@@ -1,29 +1,29 @@
 //! USB Mass Storage Class protocol actions implementation
 
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::llm::actions::{
     protocol_trait::{ActionResult, Protocol, Server},
     ActionDefinition, Parameter,
 };
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::protocol::log_template::LogTemplate;
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::protocol::EventType;
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::server::connection::ConnectionId;
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::state::app_state::AppState;
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use anyhow::{Context, Result};
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use serde_json::json;
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use std::collections::HashMap;
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use std::sync::{Arc, LazyLock};
 
 // Event type definitions (static for efficient reuse)
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 pub static USB_MSC_ATTACHED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "usb_msc_attached",
@@ -65,7 +65,7 @@ pub static USB_MSC_ATTACHED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     ])
 });
 
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 pub static USB_MSC_DETACHED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "usb_msc_detached",
@@ -82,7 +82,7 @@ pub static USB_MSC_DETACHED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     .with_no_actions()
 });
 
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 pub static USB_MSC_READ_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "usb_msc_read",
@@ -129,7 +129,7 @@ pub static USB_MSC_READ_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     ])
 });
 
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 pub static USB_MSC_WRITE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "usb_msc_write",
@@ -183,11 +183,11 @@ pub static USB_MSC_WRITE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
 /// is synchronous — it runs on a tokio worker, where the `Handle::current().block_on(...)`
 /// this registry used to need would panic outright. The guard is never held across an
 /// `.await`.
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 type SharedHandler = Arc<std::sync::Mutex<Box<dyn usbip::UsbInterfaceHandler + Send>>>;
 
 /// USB Mass Storage Class protocol action handler
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 pub struct UsbMscProtocol {
     handlers: Arc<std::sync::Mutex<HashMap<ConnectionId, SharedHandler>>>,
     /// The directory `mount_disk` images must live in. `None` on the registry's instance,
@@ -195,14 +195,14 @@ pub struct UsbMscProtocol {
     image_dir: Option<super::image_dir::ImageDir>,
 }
 
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 impl Default for UsbMscProtocol {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 impl UsbMscProtocol {
     pub fn new() -> Self {
         Self {
@@ -347,7 +347,7 @@ impl UsbMscProtocol {
 }
 
 // Implement Protocol trait
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 impl Protocol for UsbMscProtocol {
     fn get_startup_parameters(&self) -> Vec<crate::llm::actions::ParameterDefinition> {
         vec![
@@ -557,7 +557,7 @@ impl Protocol for UsbMscProtocol {
 }
 
 // Implement Server trait
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 impl Server for UsbMscProtocol {
     fn spawn(
         &self,
@@ -757,7 +757,7 @@ impl Server for UsbMscProtocol {
 /// SCSI READ(10) carries a 32-bit LBA and the sector size is fixed at 512, so 2 TiB is the
 /// most this device can address. Anything past it has to be truncated somewhere, and a device
 /// that advertises a capacity it cannot reach is worse than one that refuses to be that big.
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 const MAX_DISK_MB: u64 = (u32::MAX as u64) * 512 / (1024 * 1024);
 
 // Action definitions
@@ -768,7 +768,7 @@ const MAX_DISK_MB: u64 = (u32::MAX as u64) * 512 / (1024 * 1024);
 /// asking a model to copy an id back is a reliable source of wrong answers. When exactly one
 /// host is attached the action needs no id; when several are, an omitted id is an error naming
 /// the candidates rather than a guess.
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 fn connection_id_parameter() -> Parameter {
     Parameter {
         name: "connection_id".to_string(),
@@ -781,7 +781,7 @@ fn connection_id_parameter() -> Parameter {
 }
 
 /// Declare what the drive contains. The LLM-driven path, and the one to reach for first.
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 fn serve_files_action() -> ActionDefinition {
     ActionDefinition {
         name: "serve_files".to_string(),
@@ -827,7 +827,7 @@ fn serve_files_action() -> ActionDefinition {
     }
 }
 
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 fn mount_disk_action() -> ActionDefinition {
     ActionDefinition {
         name: "mount_disk".to_string(),
@@ -872,7 +872,7 @@ fn mount_disk_action() -> ActionDefinition {
     }
 }
 
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 fn eject_disk_action() -> ActionDefinition {
     ActionDefinition {
         name: "eject_disk".to_string(),
@@ -891,7 +891,7 @@ fn eject_disk_action() -> ActionDefinition {
     }
 }
 
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 fn set_write_protect_action() -> ActionDefinition {
     ActionDefinition {
         name: "set_write_protect".to_string(),
@@ -917,7 +917,7 @@ fn set_write_protect_action() -> ActionDefinition {
     }
 }
 
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 fn wait_for_more_action() -> ActionDefinition {
     ActionDefinition {
         name: "wait_for_more".to_string(),

@@ -7,7 +7,6 @@
 //!
 //! See `tests/server/modbus/CLAUDE.md` for the LLM call budget.
 
-#![cfg(feature = "modbus")]
 
 use crate::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use netget::server::modbus::codec;

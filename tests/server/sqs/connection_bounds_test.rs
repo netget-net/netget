@@ -15,7 +15,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features sqs --test server -- \
 //!       sqs::connection_bounds --test-threads=100
 
-#![cfg(all(test, feature = "sqs"))]
 
 use std::time::Duration;
 

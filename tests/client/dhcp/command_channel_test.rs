@@ -11,7 +11,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features dhcp --test client -- dhcp::command_channel --test-threads=100
 
-#![cfg(all(test, feature = "dhcp"))]
 
 use std::time::Duration;
 

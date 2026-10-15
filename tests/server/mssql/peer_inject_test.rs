@@ -17,7 +17,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features mssql \
 //!       --test server -- mssql::peer_inject --test-threads=100
 
-#![cfg(feature = "mssql")]
 
 use std::time::Duration;
 

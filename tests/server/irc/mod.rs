@@ -1,12 +1,6 @@
-#[cfg(all(test, feature = "irc"))]
 mod connection_bounds_test;
-#[cfg(all(test, feature = "irc"))]
 mod decision_tag_test;
-#[cfg(all(test, feature = "irc"))]
 mod e2e_test;
-#[cfg(all(test, feature = "irc"))]
 mod framing_test;
-#[cfg(all(test, feature = "irc"))]
 mod llm_failure_test;
-#[cfg(all(test, feature = "irc"))]
 mod peer_inject_test;

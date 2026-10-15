@@ -7,7 +7,7 @@
 //!
 //! No Bluetooth adapter needed, so this is not ignored.
 
-#![cfg(all(test, feature = "bluetooth-ble-battery"))]
+#![cfg(all(unix, feature = "bluetooth"))]
 
 use netget::server::bluetooth_ble_battery::encode_battery_level;
 

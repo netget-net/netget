@@ -1,4 +1,3 @@
-#![cfg(feature = "gnmi")]
 use netget::server::gnmi::{
     proto::gnmi as pb,
     semantic,

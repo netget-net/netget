@@ -14,7 +14,6 @@
 //! The previous version of this file hand-built request bytes and never sent a
 //! `ConnectRequest` at all, which is exactly why the missing handshake went unnoticed.
 
-#![cfg(all(test, feature = "zookeeper"))]
 
 use crate::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;

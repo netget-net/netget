@@ -25,7 +25,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features nats,tcp --test server -- nats::connection_bounds --test-threads=100
 
-#![cfg(feature = "nats")]
 
 use std::time::Duration;
 

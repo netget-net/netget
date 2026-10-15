@@ -15,7 +15,6 @@
 //! deliberately check structure and round-tripping, never that a signature validates,
 //! because no signature is ever produced.
 
-#![cfg(all(test, feature = "openid"))]
 
 use crate::helpers::*;
 use reqwest;

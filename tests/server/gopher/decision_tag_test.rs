@@ -6,7 +6,6 @@
 //! usable action, and the log is the only place that distinction can live. That is what
 //! these tests assert: the reply is the category, and the log says which of the two it was.
 
-#![cfg(feature = "gopher")]
 
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;

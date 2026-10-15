@@ -3,7 +3,6 @@
 //! These tests spawn the actual NetGet binary with SSH prompts
 //! and validate the responses using the ssh2 client library.
 
-#![cfg(feature = "ssh")]
 
 // Helper module imported from parent
 

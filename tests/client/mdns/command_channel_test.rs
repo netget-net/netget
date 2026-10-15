@@ -14,7 +14,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features mdns --test client -- mdns::command_channel --test-threads=100
 
-#![cfg(all(test, feature = "mdns"))]
 
 use std::time::Duration;
 

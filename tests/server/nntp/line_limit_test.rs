@@ -13,7 +13,6 @@
 //! the refusal is expressed in NNTP's own vocabulary rather than as a bare close — a client
 //! that reads a closed socket reports a transport fault, not the refusal it was given.
 
-#![cfg(feature = "nntp")]
 
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;

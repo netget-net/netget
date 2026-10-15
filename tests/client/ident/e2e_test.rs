@@ -30,7 +30,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features ident \
 //!       --test client -- client::ident::e2e_test --test-threads=100
 
-#![cfg(feature = "ident")]
 
 use std::sync::Arc;
 use std::time::Duration;

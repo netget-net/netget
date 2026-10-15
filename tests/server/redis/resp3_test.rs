@@ -13,7 +13,6 @@
 //! redis-cli and a Python with `redis` 5 installed (`NETGET_REDIS_PYTHON`, default `python3`)
 //! are required; the tests fail rather than skip without them. No LLM calls: a python handler
 //! answers every command.
-#![cfg(all(test, feature = "redis"))]
 
 use netget::cli::management::ServerForm;
 use netget::state::app_state::AppState;

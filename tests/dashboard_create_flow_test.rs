@@ -6,7 +6,6 @@
 //! servers and clients without asking the LLM to do it. The mock LLM URL is
 //! unreachable on purpose — nothing here may contact a model.
 
-#![cfg(feature = "tcp")]
 
 use std::time::Duration;
 
@@ -146,7 +145,6 @@ fn create_defaults_route_the_connect_event_past_the_human() {
     // does not build it.) A Telnet server raises its connect event for every connection, so that event is answered
     // with nothing ahead of time, then the manual wildcard. Without the first rule a person at
     // the dashboard is asked "someone connected - say anything?" for every connection.
-    #[cfg(feature = "telnet")]
     {
         let telnet_form = FormModel::for_create(Section::Servers, "Telnet", None);
         let handlers = read_handlers(&telnet_form);
@@ -568,7 +566,6 @@ async fn an_auto_assigned_server_edits_with_the_port_it_actually_bound() {
 /// client protocol can still declare a required startup parameter nothing
 /// can default (openai's `api_key`). The form must surface that and land the
 /// cursor on the missing field rather than fail the connect in the chat.
-#[cfg(feature = "openai")]
 #[test]
 fn a_client_with_a_required_startup_param_is_asked_for_it_not_started_blind() {
     let mut form = FormModel::for_create(Section::Clients, "openai", None);
@@ -645,7 +642,6 @@ fn send_first_help_describes_the_protocols_that_honour_it() {
     assert!(send_first.help.contains("declare a `send_first`"));
 }
 
-#[cfg(feature = "openapi")]
 #[test]
 fn openapi_pair_inherits_spec_and_missing_spec_opens_the_right_field() {
     use netget::tui::actions::client_form_for_server;
@@ -692,7 +688,6 @@ fn openapi_pair_inherits_spec_and_missing_spec_opens_the_right_field() {
     assert_eq!(server.missing_required().as_deref(), Some("spec"));
 }
 
-#[cfg(feature = "oauth2")]
 #[test]
 fn oauth_pair_knows_endpoints_and_requests_credentials() {
     let mut form = netget::tui::actions::client_form_for_server(
@@ -718,7 +713,6 @@ fn oauth_pair_knows_endpoints_and_requests_credentials() {
     );
 }
 
-#[cfg(feature = "openidconnect")]
 #[test]
 fn oidc_pair_uses_an_absolute_provider_url_and_acknowledges_discovery() {
     let mut form = netget::tui::actions::client_form_for_server(
@@ -742,7 +736,6 @@ fn oidc_pair_uses_an_absolute_provider_url_and_acknowledges_discovery() {
     assert_eq!(rules.last().unwrap()["handler"]["type"], "manual");
 }
 
-#[cfg(any(feature = "npm", feature = "pypi", feature = "maven"))]
 async fn registry_pair_exchanges_plain_http(
     protocol: &str,
     response: serde_json::Value,
@@ -807,7 +800,6 @@ async fn registry_pair_exchanges_plain_http(
     state.remove_server(server_id).await;
 }
 
-#[cfg(feature = "npm")]
 #[tokio::test]
 async fn npm_dashboard_pair_round_trips_over_http() {
     registry_pair_exchanges_plain_http("NPM", serde_json::json!({
@@ -815,7 +807,6 @@ async fn npm_dashboard_pair_round_trips_over_http() {
     }), serde_json::json!({"type": "get_package_info", "package_name": "pair"}), "npm_package_info_received").await;
 }
 
-#[cfg(feature = "pypi")]
 #[tokio::test]
 async fn pypi_dashboard_pair_round_trips_over_http() {
     registry_pair_exchanges_plain_http("PyPI", serde_json::json!({
@@ -824,7 +815,6 @@ async fn pypi_dashboard_pair_round_trips_over_http() {
     }), serde_json::json!({"type": "get_package_info", "package_name": "pair"}), "pypi_package_info_received").await;
 }
 
-#[cfg(feature = "maven")]
 #[tokio::test]
 async fn maven_dashboard_pair_round_trips_over_http() {
     registry_pair_exchanges_plain_http("Maven", serde_json::json!({

@@ -22,7 +22,7 @@
 //! rather than skipping: a capability check that returns success when the
 //! capability is absent is worse than no test at all.
 
-#![cfg(feature = "openvpn")]
+#![cfg(unix)]
 
 use super::wire::*;
 use crate::helpers::*;

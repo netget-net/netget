@@ -56,7 +56,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features tcp --test empty_static_handler_test -- --test-threads=100
 
-#![cfg(feature = "tcp")]
 
 mod helpers;
 
@@ -353,7 +352,6 @@ async fn the_dashboards_client_connect_rule_keeps_the_event_off_the_model() {
 
 /// Start a Telnet server with the given routing, CONNECT without sending anything, and count the
 /// calls the model received. Only `telnet_connection_opened` can fire.
-#[cfg(feature = "telnet")]
 async fn server_connect_llm_calls(routing: Option<serde_json::Value>, expect_call: bool) -> usize {
     let mock = MockOllamaServer::start(
         MockLlmBuilder::new()
@@ -408,7 +406,6 @@ async fn server_connect_llm_calls(routing: Option<serde_json::Value>, expect_cal
 /// Telnet server — called, not inlined — so if the protocol stops declaring its connect event with
 /// `raised_on_every_connection()`, or the dashboard stops reading the marker, the rule vanishes
 /// and this fails.
-#[cfg(feature = "telnet")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_dashboards_server_connect_rule_keeps_the_connect_event_off_the_model() {
     // === Control: no routing. A bare connection must now reach the model. ===

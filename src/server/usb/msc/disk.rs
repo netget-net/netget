@@ -16,19 +16,19 @@
 //! for. A path the caller names is host state the model refers to — the same shape as `proxy`'s
 //! `ca_export_path` — and it is opt-in now rather than the default.
 
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use anyhow::{Context, Result};
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use memmap2::MmapMut;
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use std::fs::OpenOptions;
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use std::path::Path;
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use tracing::{debug, info, trace};
 
 /// Where a `DiskImage`'s sectors actually live.
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Debug)]
 enum Backing {
     /// In-process bytes. Nothing is written to the filesystem and nothing outlives the server.
@@ -37,7 +37,7 @@ enum Backing {
     Mapped(MmapMut),
 }
 
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 impl Backing {
     fn as_slice(&self) -> &[u8] {
         match self {
@@ -63,7 +63,7 @@ impl Backing {
 }
 
 /// Virtual disk: a flat array of sectors, in memory or memory-mapped from a file.
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Debug)]
 pub struct DiskImage {
     backing: Backing,
@@ -73,7 +73,7 @@ pub struct DiskImage {
     bytes_per_sector: u32,
 }
 
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 impl DiskImage {
     /// Open existing disk image or create new one
     ///

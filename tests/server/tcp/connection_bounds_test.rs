@@ -32,7 +32,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features tcp --test server -- tcp::connection_bounds --test-threads=100
 
-#![cfg(feature = "tcp")]
 
 use std::time::Duration;
 

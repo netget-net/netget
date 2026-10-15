@@ -8,7 +8,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features tls --test client -- tls::command_channel --test-threads=100
 
-#![cfg(feature = "tls")]
 
 use std::sync::Arc;
 use std::time::Duration;

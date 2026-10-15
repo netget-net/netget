@@ -34,7 +34,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features smtp --test server -- smtp::connection_bounds --test-threads=100
 
-#![cfg(feature = "smtp")]
 
 use std::time::Duration;
 

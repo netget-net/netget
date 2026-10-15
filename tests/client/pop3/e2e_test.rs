@@ -7,7 +7,6 @@
 //! - Local POP3 server (NetGet POP3 server or Dovecot)
 //! - For testing, we use NetGet's own POP3 server
 
-#[cfg(all(test, feature = "pop3"))]
 mod pop3_client_tests {
     use crate::helpers::*;
     use std::time::Duration;

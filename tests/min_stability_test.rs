@@ -65,7 +65,6 @@ fn development_state_parses_case_insensitively() {
 
 /// `--min-stability beta` must refuse an Experimental protocol with a clear
 /// error and still start a Beta one.
-#[cfg(feature = "tcp")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn min_stability_beta_refuses_experimental_and_allows_beta() {
     use netget::state::app_state::AppState;

@@ -10,7 +10,6 @@
 //! deliver has to come back out of the consumer stream. Everything before it is setup
 //! that would fail the test on its own if the wire format were wrong.
 
-#![cfg(feature = "amqp")]
 
 use crate::server::helpers::*;
 use futures::StreamExt;

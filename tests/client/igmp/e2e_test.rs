@@ -4,7 +4,7 @@
 //! and testing multicast group join/leave behavior as a black-box.
 //! Test strategy: Use netget binary to start IGMP client, < 10 LLM calls total.
 
-#[cfg(all(test, feature = "igmp"))]
+#[cfg(unix)]
 mod igmp_client_tests {
     use crate::helpers::*;
     use std::time::Duration;

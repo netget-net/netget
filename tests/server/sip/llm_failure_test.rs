@@ -8,7 +8,6 @@
 //! ACK is checked too, because it is the one method where silence *is* correct: RFC 3261 §17
 //! makes ACK a message that takes no response at all, so answering it would be the bug.
 
-#![cfg(feature = "sip")]
 
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;

@@ -9,7 +9,6 @@
 //! subsystem is not operational". It is never a success, so it cannot be mistaken for an empty
 //! directory, and it is distinct from any code the model itself can return.
 
-#![cfg(feature = "ldap")]
 
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use ldap3::{LdapConnAsync, Scope};

@@ -1,79 +1,63 @@
-//! The landing page's protocol table is derived from `Cargo.toml`, and this keeps it that way.
+//! The landing page's protocol table lists every protocol, and this keeps it that way.
 //!
-//! `site/index.html` lists every protocol feature in a hand-grouped table. It drifts
-//! silently — a protocol lands in `Cargo.toml` and nobody thinks of the website — so this
-//! walks both files a visitor's claims rest on: every protocol feature is on the page, and
-//! nothing on the page is a feature that no longer exists. Whole-tree source scan, so it
-//! holds at any feature set.
+//! `site/index.html` lists every protocol in a hand-grouped table. It drifts silently — a
+//! protocol lands in the registries and nobody thinks of the website — so this walks the files
+//! a visitor's claims rest on: every registered protocol is on the page, and nothing on the
+//! page is a protocol that no longer exists. Whole-tree source scan.
 //!
-//! To update the page, edit the table by hand: put the new feature in the row it belongs to.
-//! This test says what is missing.
+//! A protocol's identity on the page is its id in `scripts/site_protocol_ids.json`, one entry
+//! per `register()` call in either registry. Protocols are not Cargo features, so that file is
+//! where the id lives; a new protocol adds its registrations there and its link here.
 //!
 //! The same number is the headline: every "<N> Protocols" / "<N> network protocols" /
 //! "<N> protocol features" on the page and in the README must be exactly the count of
-//! protocol features, and a rounded-down "150+" is a failure that names the line to fix.
+//! protocols, and a rounded-down "150+" is a failure that names the line to fix.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 
-/// Features that are not protocols: aggregates, build switches, the test-only feature, the
-/// shared USB base, and the runtime facilities. Adding a protocol never touches this list;
-/// adding a new *kind* of non-protocol feature does, deliberately.
-const NOT_PROTOCOLS: &[&str] = &[
-    "default",
-    "terminal-snapshot",
-    "portable-base",
-    "dist",
-    "dist-darwin",
-    "dist-windows",
-    "all-protocols",
-    "gpu",
-    "android-termux",
-    "mcp-stdio",
-    "mcp-http",
-    "tun",
-    "sha1",
-    "usb-common",
-    "sqlite",
-    "embedded-llm",
-];
+/// Every registration in both registries, as `role::path` (the id map's keys).
+fn registrations() -> BTreeSet<String> {
+    let mut all = BTreeSet::new();
+    for role in ["server", "client"] {
+        let source = fs::read_to_string(format!("src/protocol/{role}_registry.rs")).unwrap();
+        let needle = format!("self.register(Arc::new(");
+        let mut rest = source.as_str();
+        while let Some(i) = rest.find(&needle) {
+            let after = rest[i + needle.len()..].trim_start();
+            let path = after
+                .strip_prefix(&format!("crate::{role}::"))
+                .unwrap_or_else(|| panic!("unrecognised {role} registration: {}", &after[..60]));
+            let end = path
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == ':'))
+                .unwrap();
+            all.insert(format!("{role}::{}", &path[..end]));
+            rest = &rest[i + needle.len()..];
+        }
+    }
+    all
+}
 
-fn feature_names(manifest: &str) -> BTreeSet<String> {
-    let start = manifest.find("[features]").expect("[features] table");
-    let end = manifest[start..]
-        .find("\n[dependencies]")
-        .map(|i| start + i)
-        .expect("[dependencies] after [features]");
-    manifest[start..end]
-        .lines()
-        .filter_map(|line| {
-            let (name, rest) = line.split_once('=')?;
-            let name = name.trim();
-            if name.is_empty()
-                || name.starts_with('#')
-                || name.starts_with('[')
-                || !rest.trim_start().starts_with('[')
-            {
-                return None;
-            }
-            if name
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
-            {
-                Some(name.to_string())
-            } else {
-                None
-            }
-        })
-        .collect()
+fn site_ids() -> BTreeMap<String, String> {
+    serde_json::from_str(&fs::read_to_string("scripts/site_protocol_ids.json").unwrap()).unwrap()
 }
 
 fn protocol_features() -> BTreeSet<String> {
-    let manifest = fs::read_to_string("Cargo.toml").expect("Cargo.toml");
-    feature_names(&manifest)
-        .into_iter()
-        .filter(|n| !NOT_PROTOCOLS.contains(&n.as_str()))
-        .collect()
+    site_ids().into_values().collect()
+}
+
+#[test]
+fn every_registration_has_a_site_id() {
+    let ids = site_ids();
+    let registered = registrations();
+    assert!(registered.len() > 200, "registry scan found only {}", registered.len());
+    let missing: Vec<_> = registered.iter().filter(|r| !ids.contains_key(*r)).collect();
+    let stale: Vec<_> = ids.keys().filter(|k| !registered.contains(*k)).collect();
+    assert!(
+        missing.is_empty() && stale.is_empty(),
+        "scripts/site_protocol_ids.json drifted from the registries.\n  registered without an id: \
+         {missing:?}\n  ids for no registration: {stale:?}"
+    );
 }
 
 /// Every token in the page's protocol table.
@@ -100,8 +84,8 @@ fn page_tokens() -> BTreeSet<String> {
                 "safe external link: {tag}"
             );
             let (_, feature) = tag
-                .split_once(" · feature: ")
-                .expect("feature identity in title");
+                .split_once(" · protocol: ")
+                .expect("protocol identity in title");
             let feature = feature.split('"').next().unwrap();
             assert!(
                 all.insert(feature.to_string()),
@@ -132,8 +116,8 @@ fn every_protocol_feature_is_on_the_landing_page_and_nothing_else_is() {
     let stale: Vec<_> = on_page.difference(&features).cloned().collect();
     assert!(
         missing.is_empty() && stale.is_empty(),
-        "site/index.html's protocol table drifted from Cargo.toml.\n  missing from the page: {missing:?}\n  on the page but not a feature: {stale:?}\n\
-         Add each missing feature to the fitting row of the table (or to NOT_PROTOCOLS in this test if it is not a protocol), and remove stale ones."
+        "site/index.html's protocol table drifted from scripts/site_protocol_ids.json.\n  missing from the page: {missing:?}\n  on the page but not a protocol: {stale:?}\n\
+         Add each missing protocol to the fitting row of the table, and remove stale ones."
     );
 }
 
@@ -194,7 +178,7 @@ fn every_headline_count_is_the_exact_number() {
             if plus || count != n {
                 problems.push(format!(
                     "  {file}:{line}: \"{claim}\" — write the exact count, {n} (the protocol \
-                     features in Cargo.toml), with no \"+\""
+                     ids in scripts/site_protocol_ids.json), with no \"+\""
                 ));
             }
         }

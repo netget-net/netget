@@ -14,7 +14,6 @@
 //!
 //! TODO: Investigate pgwire ExtendedQueryHandler timeout behavior and fix LLM call completion.
 
-#![cfg(feature = "postgresql")]
 
 // Helper module imported from parent
 

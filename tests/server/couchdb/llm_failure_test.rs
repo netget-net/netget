@@ -9,7 +9,6 @@
 //! 503 `unavailable` when the backend is merely saturated, 500 `internal_server_error`
 //! otherwise.
 
-#![cfg(all(test, feature = "couchdb"))]
 
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use serde_json::Value;

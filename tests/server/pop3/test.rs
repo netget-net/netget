@@ -3,7 +3,6 @@
 //! These tests spawn the actual NetGet binary with POP3 prompts
 //! and validate the responses using POP3 protocol clients.
 
-#![cfg(feature = "pop3")]
 
 // Helper module imported from parent
 

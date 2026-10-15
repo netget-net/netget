@@ -25,7 +25,7 @@ pub struct BluetoothBleKeyboard;
 
 impl BluetoothBleKeyboard {
     /// Spawn BLE HID keyboard server
-    #[cfg(feature = "bluetooth-ble-keyboard")]
+    #[cfg(all(unix, feature = "bluetooth"))]
     pub async fn spawn_with_llm_actions(
         device_name: String,
         llm_client: OllamaClient,
@@ -85,7 +85,7 @@ pub fn radio_start_failure(device_name: &str, err: &anyhow::Error) -> String {
     )
 }
 
-#[cfg(not(feature = "bluetooth-ble-keyboard"))]
+#[cfg(any(all(unix, not(feature = "bluetooth")), not(unix)))]
 impl BluetoothBleKeyboard {
     pub async fn spawn_with_llm_actions(
         _device_name: String,

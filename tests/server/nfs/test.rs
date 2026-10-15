@@ -16,7 +16,7 @@
 //!
 //! These tests validate server startup, connection handling, and basic NFS protocol.
 
-#![cfg(feature = "nfs")]
+#![cfg(unix)]
 
 // Helper module imported from parent
 

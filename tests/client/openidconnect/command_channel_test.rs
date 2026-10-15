@@ -14,7 +14,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features openidconnect --test client -- openidconnect::command_channel --test-threads=100
 
-#![cfg(feature = "openidconnect")]
 
 use std::time::Duration;
 

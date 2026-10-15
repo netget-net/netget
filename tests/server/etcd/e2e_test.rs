@@ -1,6 +1,5 @@
 //! etcd E2E tests using real etcd-client
 
-#![cfg(feature = "etcd")]
 
 use super::super::helpers::{start_netget_server, NetGetConfig};
 use etcd_client::Client;
@@ -19,7 +18,6 @@ use tokio::time::sleep;
 ///
 /// Target: < 10 total LLM calls (1 startup + ~6 operations)
 #[tokio::test]
-#[cfg_attr(not(feature = "etcd"), ignore)]
 async fn test_etcd_kv_operations() -> Result<(), Box<dyn std::error::Error>> {
     // Start etcd server with comprehensive prompt and mocks
     let prompt = r#"

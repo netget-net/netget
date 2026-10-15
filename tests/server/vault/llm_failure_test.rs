@@ -4,7 +4,6 @@
 //! The dangerous outcomes are a 404 ("no value found" — a monitoring job would conclude the
 //! secret was deleted) and an empty secret. Neither may come out of an outage.
 
-#![cfg(feature = "vault")]
 
 use super::real_client_test::{require_tool, vault};
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};

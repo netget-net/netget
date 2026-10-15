@@ -18,7 +18,7 @@
 //! server started, while the protocol could not emit a beacon frame at all. It verified the
 //! base GATT stack's LLM plumbing and called it beacon coverage.
 
-#![cfg(all(test, feature = "bluetooth-ble-beacon"))]
+#![cfg(all(unix, feature = "bluetooth"))]
 
 use netget::llm::actions::protocol_trait::Protocol;
 use netget::llm::OllamaClient;

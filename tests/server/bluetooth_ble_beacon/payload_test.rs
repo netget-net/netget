@@ -14,7 +14,7 @@
 //! - AD structure framing and the 31-octet limit: Bluetooth Core Specification Supplement,
 //!   Part A, §1.
 
-#![cfg(all(test, feature = "bluetooth-ble-beacon"))]
+#![cfg(all(unix, feature = "bluetooth"))]
 
 use netget::server::bluetooth_ble_beacon::actions::{
     frame_from_action, BluetoothBleBeaconProtocol, BEACON_STARTED_EVENT,

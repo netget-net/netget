@@ -3,7 +3,6 @@
 //! These tests spawn the actual NetGet binary with DC prompts
 //! and validate the responses using DC protocol clients.
 
-#![cfg(feature = "dc")]
 
 // Helper module imported from parent
 

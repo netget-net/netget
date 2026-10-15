@@ -12,7 +12,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features bolt --test server -- bolt::state_machine --test-threads=100
 
-#![cfg(feature = "bolt")]
 
 use super::common::{self, *};
 use netget::server::bolt::packstream::Value;

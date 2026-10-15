@@ -15,7 +15,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features kubernetes \
 //!       --test client -- --test-threads=100 kubernetes
 
-#[cfg(all(test, feature = "kubernetes"))]
 mod kubernetes_client_tests {
     /// The protocol is registered and reports the identity the rail and the resolver use.
     #[test]

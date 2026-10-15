@@ -13,7 +13,6 @@
 //! `usmStatsWrongDigests` report, and nothing is set.
 //!
 //! snmpd and snmpget are required; the test fails rather than skips without them.
-#![cfg(all(test, feature = "snmp"))]
 
 use crate::helpers::real_server::{InstallHint, RealServer};
 use netget::cli::management::ClientForm;

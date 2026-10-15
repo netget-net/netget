@@ -1,6 +1,6 @@
 //! End-to-end Bluetooth LE Running Service tests for NetGet
 
-#![cfg(all(test, feature = "bluetooth-ble-running"))]
+#![cfg(all(unix, feature = "bluetooth"))]
 
 use crate::helpers::{self, E2EResult, NetGetConfig};
 use std::time::Duration;

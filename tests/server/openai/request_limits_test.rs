@@ -8,7 +8,6 @@
 //! category and the log must get the error. "LLM did not return valid response" and a raw
 //! `anyhow` chain are both netget's own internals on a stranger's terminal.
 
-#![cfg(all(test, feature = "openai"))]
 
 use crate::server::helpers::{self, E2EResult, NetGetConfig};
 

@@ -17,7 +17,6 @@
 //! wire) is asserted from each server's side. libcoap and aiocoap are not optional: missing,
 //! the test fails.
 
-#![cfg(all(test, feature = "coap"))]
 
 use crate::helpers::real_server::{run_tool, InstallHint, RealServer};
 use crate::helpers::E2EResult;

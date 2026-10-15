@@ -1,4 +1,4 @@
 //! Generic raw IP protocol-N tests
 
-#[cfg(all(test, feature = "rawip"))]
+#[cfg(unix)]
 pub mod e2e_test;

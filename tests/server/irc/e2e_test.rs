@@ -3,7 +3,6 @@
 //! These tests spawn the actual NetGet binary with IRC prompts
 //! and validate the responses using IRC protocol clients.
 
-#![cfg(feature = "irc")]
 
 // Helper module imported from parent
 

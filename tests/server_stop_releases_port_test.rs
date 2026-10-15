@@ -23,13 +23,11 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 /// True if a plain (non-reuse) TCP bind on `addr` succeeds — i.e. the port is free.
-#[cfg(feature = "telnet")]
 fn tcp_port_is_free(addr: SocketAddr) -> bool {
     std::net::TcpListener::bind(addr).is_ok()
 }
 
 /// True if a plain UDP bind on `addr` succeeds — i.e. the port is free.
-#[cfg(feature = "udp")]
 fn udp_port_is_free(addr: SocketAddr) -> bool {
     std::net::UdpSocket::bind(addr).is_ok()
 }
@@ -40,7 +38,6 @@ async fn add_placeholder(state: &Arc<AppState>, proto: &str) -> ServerId {
     state.add_server(server).await
 }
 
-#[cfg(feature = "telnet")]
 #[tokio::test]
 async fn stopping_telnet_server_releases_tcp_port() {
     use netget::llm::ollama_client::OllamaClient;
@@ -83,7 +80,6 @@ async fn stopping_telnet_server_releases_tcp_port() {
     );
 }
 
-#[cfg(feature = "udp")]
 #[tokio::test]
 async fn stopping_udp_server_releases_udp_port() {
     use netget::llm::ollama_client::OllamaClient;

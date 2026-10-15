@@ -20,7 +20,6 @@ use tracing::{debug, error, info, trace};
 
 use actions::{DHCP_CLIENT_CONNECTED_EVENT, DHCP_CLIENT_RESPONSE_RECEIVED_EVENT};
 
-#[cfg(feature = "dhcp")]
 use dhcproto::{v4, Decodable, Decoder};
 
 /// Connection state for LLM processing
@@ -263,14 +262,8 @@ impl DhcpClient {
                                 drop(client_data_lock);
 
                                 // Parse DHCP response
-                                #[cfg(feature = "dhcp")]
                                 let parsed_info = Self::parse_dhcp_response(&data);
 
-                                #[cfg(not(feature = "dhcp"))]
-                                let parsed_info: Option<(
-                                    String,
-                                    serde_json::Value,
-                                )> = None;
 
                                 let event_data = if let Some((message_type, details)) = parsed_info
                                 {
@@ -414,7 +407,6 @@ impl DhcpClient {
     ) -> Result<Applied> {
         match result {
             ClientActionResult::Custom { name, data } => {
-                #[cfg(feature = "dhcp")]
                 {
                     let (packet, label) = match name.as_str() {
                         "dhcp_discover" => (Self::build_discover_packet(&data)?, "DISCOVER"),
@@ -453,11 +445,6 @@ impl DhcpClient {
                     Ok(Applied::Sent(sent))
                 }
 
-                #[cfg(not(feature = "dhcp"))]
-                {
-                    let _ = (&name, &data, socket, unicast_target, client_id);
-                    Err(anyhow::anyhow!("DHCP feature not enabled"))
-                }
             }
             ClientActionResult::Disconnect => Ok(Applied::Disconnect),
             ClientActionResult::WaitForMore => Ok(Applied::Executed("wait_for_more".to_string())),
@@ -527,7 +514,6 @@ impl DhcpClient {
         disconnect
     }
 
-    #[cfg(feature = "dhcp")]
     fn build_discover_packet(params: &serde_json::Value) -> Result<Vec<u8>> {
         use dhcproto::Encodable;
         use std::net::Ipv4Addr;
@@ -567,7 +553,6 @@ impl DhcpClient {
         Ok(bytes)
     }
 
-    #[cfg(feature = "dhcp")]
     fn build_request_packet(params: &serde_json::Value) -> Result<Vec<u8>> {
         use dhcproto::Encodable;
         use std::net::Ipv4Addr;
@@ -620,7 +605,6 @@ impl DhcpClient {
         Ok(bytes)
     }
 
-    #[cfg(feature = "dhcp")]
     fn build_inform_packet(params: &serde_json::Value) -> Result<Vec<u8>> {
         use dhcproto::Encodable;
         use std::net::Ipv4Addr;
@@ -659,7 +643,6 @@ impl DhcpClient {
         Ok(bytes)
     }
 
-    #[cfg(feature = "dhcp")]
     fn parse_mac_address(mac_str: &str) -> Result<Vec<u8>> {
         let parts: Vec<&str> = mac_str.split(':').collect();
         if parts.len() != 6 {
@@ -680,7 +663,6 @@ impl DhcpClient {
         Ok(mac)
     }
 
-    #[cfg(feature = "dhcp")]
     fn parse_dhcp_response(data: &[u8]) -> Option<(String, serde_json::Value)> {
         use std::net::Ipv4Addr;
 

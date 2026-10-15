@@ -23,7 +23,7 @@
 //! "not yet implemented", and returned `NoAction`. A suite that never enumerates the device
 //! cannot tell that apart from a working mouse.
 
-#[cfg(all(test, feature = "usb-mouse"))]
+#[cfg(all(unix, feature = "libusb"))]
 mod usb_mouse_e2e {
     use crate::helpers::usbip_client::UsbIpClient;
     use crate::helpers::*;

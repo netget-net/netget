@@ -14,7 +14,6 @@
 //!
 //! No LLM calls: a python handler plays the model, deciding policy from the event it is given.
 //! redis-cli is required; the tests fail rather than skip without it.
-#![cfg(all(test, feature = "redis"))]
 
 use futures::StreamExt;
 use netget::cli::management::ServerForm;

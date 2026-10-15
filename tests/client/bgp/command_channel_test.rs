@@ -16,7 +16,6 @@
 //! reported the condition as never happening when it simply had not happened *yet* -- a
 //! failure that pointed at the protocol instead of at the deadline.
 
-#![cfg(feature = "bgp")]
 
 use std::time::Duration;
 

@@ -10,7 +10,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features maven --test client -- maven::command_channel --test-threads=100
 
-#![cfg(all(test, feature = "maven"))]
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

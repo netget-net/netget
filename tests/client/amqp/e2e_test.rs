@@ -16,7 +16,6 @@
 //!    `mock_action_names` panicked while the test was being configured.
 //! 3. Every `expect_calls` was commented out, so `verify_mocks()` asserted nothing.
 
-#[cfg(all(test, feature = "amqp"))]
 mod amqp_client_tests {
     use crate::helpers::client::start_netget_client;
     use crate::helpers::netget::NetGetConfig;

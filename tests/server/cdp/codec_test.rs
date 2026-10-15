@@ -18,7 +18,7 @@
 //! also asserts that the RFC-1071 answer is *different*, so "simplifying" the padding away
 //! cannot pass.
 
-#[cfg(all(test, feature = "cdp"))]
+#[cfg(all(unix, feature = "libpcap"))]
 mod tests {
     use netget::server::cdp::codec::{
         self, capability_bits, capability_names, decode_frame, decode_payload, encode_frame,

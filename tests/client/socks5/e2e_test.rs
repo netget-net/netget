@@ -8,7 +8,6 @@
 //!
 //! LLM Call Budget: < 10 calls total (keep test scenarios minimal)
 
-#![cfg(all(test, feature = "socks5"))]
 
 use netget::llm::OllamaClient;
 use netget::protocol::CLIENT_REGISTRY;

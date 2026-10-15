@@ -12,7 +12,6 @@
 //! A third layer lives in `real_client_test.rs`: FreeRADIUS `radclient`, an entirely
 //! independent implementation, which is the only peer here that NetGet did not write.
 
-#![cfg(feature = "radius")]
 
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use netget::server::radius::packet::{

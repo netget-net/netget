@@ -31,7 +31,6 @@
 //! part that matters — **renders** the reply. A field name or JSON shape the Rust SDK tolerates
 //! through its generated deserialiser shows up here as a missing column or a parse error.
 
-#![cfg(all(test, feature = "sqs"))]
 
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use serde_json::json;

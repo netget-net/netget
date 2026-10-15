@@ -11,7 +11,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features sqs --test client -- sqs::command_channel --test-threads=100
 
-#![cfg(all(test, feature = "sqs"))]
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

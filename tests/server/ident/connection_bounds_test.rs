@@ -31,7 +31,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features ident --test server -- ident::connection_bounds --test-threads=100
 
-#![cfg(feature = "ident")]
 
 use std::time::Duration;
 

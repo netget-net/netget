@@ -4,7 +4,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features otlp --test server -- otlp::codec --test-threads=100
 
-#![cfg(feature = "otlp")]
 
 use super::common::{gzip, string_attribute, traces_json, traces_protobuf};
 use netget::server::otlp::codec::{self, Encoding, Signal};

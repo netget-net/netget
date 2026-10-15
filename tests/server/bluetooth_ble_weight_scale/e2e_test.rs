@@ -1,6 +1,6 @@
 //! End-to-end Bluetooth LE Weight Scale Service tests for NetGet
 
-#![cfg(all(test, feature = "bluetooth-ble-weight-scale"))]
+#![cfg(all(unix, feature = "bluetooth"))]
 
 use crate::helpers::{self, E2EResult, NetGetConfig};
 use std::time::Duration;

@@ -3,7 +3,6 @@
 //! These tests verify SMB client functionality by connecting to a Samba server.
 //! Requires a Samba server running with guest access.
 
-#[cfg(all(test, feature = "smb"))]
 mod smb_client_tests {
     use crate::helpers::*;
     use std::time::Duration;

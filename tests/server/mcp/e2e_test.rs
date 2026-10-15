@@ -3,7 +3,6 @@
 //! These tests spawn the actual NetGet binary with MCP prompts
 //! and validate the responses using HTTP JSON-RPC 2.0 clients.
 
-#![cfg(feature = "mcp")]
 
 use crate::server::helpers::{self, E2EResult, NetGetConfig};
 use serde_json::{json, Value};

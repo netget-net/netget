@@ -8,7 +8,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features whois --test client -- whois::command_channel --test-threads=100
 
-#![cfg(feature = "whois")]
 
 use std::time::Duration;
 

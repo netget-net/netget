@@ -6,7 +6,6 @@
 //! reaches in the two seconds a pty test waits (a running server with peers,
 //! a client with verbs, a request parked for the human).
 
-#![cfg(feature = "tcp")]
 
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
@@ -628,7 +627,6 @@ fn the_button_grid_walks_with_the_arrows() {
 }
 
 /// Open the picker filtered to `filter`, as `a` then typing would, with the given capabilities.
-#[cfg(any(feature = "redis", feature = "dns"))]
 fn picker_frame(filter: &str, caps: &SystemCapabilities) -> String {
     let mut app = app();
     app.absorb_snapshot(RailSnapshot::default());
@@ -644,7 +642,6 @@ fn picker_frame(filter: &str, caps: &SystemCapabilities) -> String {
 }
 
 /// The picker names the port a server will start on, and it is the protocol's registered one.
-#[cfg(feature = "redis")]
 #[test]
 fn the_picker_shows_the_well_known_port() {
     let text = picker_frame("redis", &SystemCapabilities::detect());
@@ -657,7 +654,6 @@ fn the_picker_shows_the_well_known_port() {
 }
 
 /// Below 1024 without privilege, the picker says why the server will not take the port.
-#[cfg(feature = "dns")]
 #[test]
 fn the_picker_says_why_a_privileged_well_known_port_is_not_used() {
     let mut caps = SystemCapabilities::detect();
@@ -673,7 +669,6 @@ fn the_picker_says_why_a_privileged_well_known_port_is_not_used() {
 /// there, disabled, and saying *why* — which depends on the protocol. HTTP declares
 /// `request_only`, so it gives the protocol's own reason and no "yet"; a protocol that could
 /// message a peer but has no path for it here says it is not implemented yet.
-#[cfg(feature = "http")]
 #[test]
 fn a_peer_that_cannot_be_messaged_says_why_in_the_protocols_own_terms() {
     use netget::tui::cards::NO_PEER_HANDLE_REASON;

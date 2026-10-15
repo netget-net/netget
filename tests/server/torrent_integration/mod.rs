@@ -8,12 +8,6 @@
 //! These tests create a minimal local BitTorrent network and validate end-to-end functionality
 //! using both Rust client libraries and real BitTorrent clients.
 
-#[cfg(all(
-    test,
-    feature = "torrent-tracker",
-    feature = "torrent-dht",
-    feature = "torrent-peer"
-))]
 pub mod e2e_test;
 
 pub mod helpers;

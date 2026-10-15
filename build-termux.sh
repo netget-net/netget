@@ -120,7 +120,7 @@ EXAMPLES:
   ./build-termux.sh --method termux
 
 FEATURES:
-  The android-termux feature includes 70+ pure-Rust protocols:
+  Every protocol that builds on Android is compiled in, including:
   ✓ TCP, UDP, HTTP, HTTP/2, HTTP/3, DNS, DHCP, NTP
   ✓ SSH, SMTP, IMAP, FTP, Telnet, IRC, XMPP
   ✓ MySQL, PostgreSQL, Redis, MongoDB, Elasticsearch
@@ -160,14 +160,14 @@ build_with_cross() {
 
     print_info "Target: $TARGET"
     print_info "Mode: ${RELEASE:-debug}"
-    print_info "Feature: android-termux (70+ protocols)"
+    print_info "Features: mcp-stdio,sqlite,libpcap (every protocol is compiled in)"
     echo ""
 
     print_info "Building with cross..."
     cross build $RELEASE \
         --target "$TARGET" \
         --no-default-features \
-        --features android-termux
+        --features mcp-stdio,sqlite,libpcap
 
     print_success "Build complete!"
     echo ""
@@ -206,14 +206,14 @@ build_with_ndk() {
     print_info "NDK location: $ANDROID_NDK_HOME"
     print_info "Target: $TARGET"
     print_info "Mode: ${RELEASE:-debug}"
-    print_info "Feature: android-termux (70+ protocols)"
+    print_info "Features: mcp-stdio,sqlite,libpcap (every protocol is compiled in)"
     echo ""
 
     print_info "Building with cargo..."
     cargo build $RELEASE \
         --target "$TARGET" \
         --no-default-features \
-        --features android-termux
+        --features mcp-stdio,sqlite,libpcap
 
     print_success "Build complete!"
     echo ""
@@ -252,7 +252,7 @@ SETUP (one-time):
 BUILD:
   $ cargo build --release \\
       --no-default-features \\
-      --features android-termux
+      --features mcp-stdio,sqlite,libpcap
 
   This will compile natively on your Android device.
   Binary will be in: target/release/netget

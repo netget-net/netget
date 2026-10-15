@@ -3,7 +3,7 @@
 //! Pure unit tests: no adapter, no radio, no `#[ignore]`. See the header of
 //! `tests/server/bluetooth_ble_keyboard/hid_descriptor.rs` for why the walker lives there.
 
-#![cfg(all(test, feature = "bluetooth-ble-gamepad"))]
+#![cfg(all(unix, feature = "bluetooth"))]
 
 use netget::llm::actions::protocol_trait::Protocol;
 use netget::server::bluetooth_ble_gamepad::actions::BluetoothBleGamepadProtocol;

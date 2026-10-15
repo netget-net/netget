@@ -8,7 +8,6 @@
 //! The executor refuses an out-of-range status rather than clamping it, and names the range
 //! so the repair loop can correct the call.
 
-#![cfg(all(test, feature = "openapi"))]
 
 use netget::llm::actions::protocol_trait::{ActionResult, Server};
 use netget::server::openapi::actions::OpenApiProtocol;

@@ -1,6 +1,5 @@
 //! BitTorrent Tracker E2E tests with mocks
 
-#![cfg(all(test, feature = "torrent-tracker"))]
 
 use crate::helpers::*;
 use serde_json::json;

@@ -9,7 +9,6 @@
 //! Both paths used to write nothing at all and close the socket, which for the greeting meant
 //! the client blocked on a banner that was never coming.
 
-#![cfg(feature = "pop3")]
 
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;

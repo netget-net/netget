@@ -768,10 +768,37 @@ prompting, actions) · `events/` (coordination) · `scripting/` (deterministic h
 **Decentralization (CRITICAL)**: no centralized per-protocol logic. Each protocol implements
 traits independently. The only legitimate central touchpoints are:
 
-- `protocol/server_registry.rs` / `protocol/client_registry.rs` — one feature-gated `register()` line
-- `Cargo.toml` — feature flag
-- `src/server/mod.rs` / `src/client/mod.rs` — feature-gated `pub mod`
-- `tests/server/mod.rs` / `tests/client/mod.rs` — feature-gated `pub mod` (see the footgun below)
+- `protocol/server_registry.rs` / `protocol/client_registry.rs` — one `register()` line
+- `Cargo.toml` — the protocol's dependencies (no feature; see "Protocols are not Cargo features")
+- `src/server/mod.rs` / `src/client/mod.rs` — one `pub mod`
+- `tests/server/mod.rs` / `tests/client/mod.rs` — one `pub mod` (see the footgun below)
+
+### Protocols are not Cargo features (CRITICAL)
+
+**Never add a Cargo feature for a protocol.** Since October 2026 every protocol compiles into
+every build of every platform that can build it; `#[cfg(feature = "<protocol>")]` does not
+exist anywhere, and a new one is a defect. crates.io caps a crate at 300 features, NetGet had
+297, and a per-protocol feature list also hid protocols from whoever forgot to name one.
+
+What gates a protocol is the platform, written as a target cfg:
+
+| The protocol builds on | Gate (`#[cfg(...)]` on its `pub mod`, `register()` and test module) | Its dependencies go in |
+|---|---|---|
+| every target, browser included | none | `[dependencies]` |
+| native targets, not the browser (real sockets, processes, C libraries) | `not(target_arch = "wasm32")` | `[target.'cfg(not(target_arch = "wasm32"))'.dependencies]` |
+| Unix only (raw sockets, pty, Unix pipes) | `unix` | `[target.'cfg(unix)'.dependencies]` |
+| Unix, linking a system library | `all(unix, feature = "<lib>")` | `[target.'cfg(unix)'.dependencies]`, `optional = true`, listed in that feature |
+
+The only features are the five system libraries (`libpcap`, `bluetooth`, `pcsc`, `libusb`,
+`libsmbclient`, all default-on) and optional capabilities (`mcp-stdio`, `mcp-http`,
+`embedded-llm`, `sqlite`, `gpu`, `vendored-openssl`, `terminal-snapshot`). A protocol that
+needs a new system library gets a new library feature, named after the library, not after
+the protocol. Tests never gate on the browser (integration tests do not build for wasm32), so
+under `tests/` only `unix` and the library features appear.
+
+Add the protocol to `ALL_KNOWN_PROTOCOLS` / `ALL_KNOWN_CLIENT_PROTOCOLS` with what it needs
+("a native build (not the browser)", "the `libpcap` feature, on Unix", …) — that string is
+what the "not compiled into this build" error tells the user.
 
 `cli/server_startup.rs` and `cli/client_startup.rs` are **fully generic** — they look the
 protocol up in the registry and call `spawn(ctx)` / `connect(ctx)`. There is no
@@ -938,10 +965,10 @@ some configurations need is expressed with `startup_dependencies(startup_params)
    privilege + `well_known_port`), `get_startup_parameters()`, async/sync actions,
    `get_event_types()`, `execute_action()`
 3. `src/server/<protocol>/CLAUDE.md` — implementation notes, library choice, limitations
-4. `src/server/mod.rs` — feature-gated `pub mod`
-5. `src/protocol/server_registry.rs` — feature-gated `register()`
-6. `Cargo.toml` — feature flag, optional deps, add to `all-protocols`; add to `dist` /
-   `dist-darwin` / `dist-windows` only if it links no system library unavailable on that target
+4. `src/server/mod.rs` — `pub mod`, with a platform gate only if it cannot build everywhere
+5. `src/protocol/server_registry.rs` — `register()` (same gate) and its `ALL_KNOWN_PROTOCOLS` row
+6. `Cargo.toml` — its dependencies as plain (non-optional) dependencies, in the target table
+   for the platforms that build it. **No feature.** See "Protocols are not Cargo features".
 7. `tests/server/<protocol>/e2e_test.rs` — mocked E2E (see Testing)
 8. `tests/server/<protocol>/CLAUDE.md` — strategy, mock expectations, LLM call budget
 9. **`tests/server/mod.rs` — add `pub mod <protocol>;`** (see footgun below)
@@ -1111,9 +1138,8 @@ Bind to localhost only (127.0.0.1 / ::1); never contact external endpoints.
 ### Running tests
 
 ```bash
-# Single protocol (fast: 10-30s)
-./cargo-isolated.sh test --no-default-features --features tcp \
-    --test server -- server::tcp::e2e_test --test-threads=100
+# Single protocol: select its suite by module path (every protocol is compiled in)
+./cargo-isolated.sh test --test server -- server::tcp::e2e_test --test-threads=100
 
 # Full sweep. NOTE THE THREAD COUNT: 32, not 100.
 ./cargo-isolated.sh test --all-features --no-fail-fast -- --test-threads=32 > /tmp/sweep.txt 2>&1
@@ -1144,7 +1170,9 @@ targeted stress runs.** If a test hangs, fix the hang rather than serializing th
 
 ### CI reality
 
-`release.yml` builds the `dist*` feature sets on release tags and manual dispatch.
+`release.yml` builds every target's binaries on release tags and manual dispatch (macOS with the
+`libpcap`, `bluetooth` and `pcsc` features, whose libraries ship with the OS; Linux and Windows
+with no system-library feature).
 `ci.yml` is the PR/push-to-master gate; `fuzz.yml` remains an on-demand search.
 `protocol-pairs.yml` (the third-party interoperability jobs) runs only by hand or when
 `release.yml` calls it before publishing; it no longer runs on every push or pull request.
@@ -1156,13 +1184,12 @@ changes that touch a protocol, then run the workflow (Actions → Run workflow) 
 | Job | Blocking | What it does |
 |---|---|---|
 | `lint` | yes | Formatting and correctness/suspicious clippy lints over the library and every compiled test target |
-| `test` | yes | Tests the representative `CI_FEATURES` set, including `finger` so the Experimental refusal path stays covered |
-| `single-feature` | yes, *manual* | Checks tests for every standalone feature in `SINGLE_FEATURE_CORE` and `SINGLE_FEATURE_REST`, one feature at a time across four shards |
+| `test` | yes | Every top-level test target, plus the `CI_PROTOCOL_TESTS` suites (tcp, http, dns, udp, redis, finger) out of `tests/server` and `tests/client`; every protocol compiles, only those run |
 | `ratchets` | yes | Whole-tree source checks, server/client Beta evidence declarations, fuzz target compilation |
 | `smb-evidence` | yes, *manual* | The SMB server suite, including bounds, both independent clients, and the packet oracle |
 | `wasm-web` | yes | Browser bundle build and smoke exchanges |
 | `orphaned-tests` | yes | Fails if a test directory on disk is undeclared in `mod.rs` |
-| `clippy-wide` | **no** (`continue-on-error`), *manual* | Clippy over the wide feature set; too slow for every push at 275 protocols |
+| `clippy-wide` | **no** (`continue-on-error`), *manual* | Clippy with the default features, the system-library protocols included |
 | `registry-audit` | **no** (`continue-on-error`), *manual* | Registry audits and all-feature real-client/server evidence, with their external peers installed |
 
 The broad registry audit has separate compilation and execution budgets, a five-minute
@@ -1179,27 +1206,17 @@ python3 -c "import yaml; d=yaml.safe_load(open('.github/workflows/ci.yml')); \
   [print(k, 'advisory' if v.get('continue-on-error') else 'BLOCKING') for k,v in d['jobs'].items()]"
 ```
 
-**`single-feature-full` is gone, and why it existed is the lesson.** It was the only check that
-compiled the 109 features in `SINGLE_FEATURE_REST`, and it ran on `workflow_dispatch` only —
-so those 109 had no automatic compile coverage at all. `tor` did not compile *at any feature
-set* (`src/server/tor_relay/mod.rs` asked for `rustls::crypto::aws_lc_rs` while `Cargo.toml`
-pins rustls to `default-features = false, features = ["ring"]`), and every CI run was green
-throughout. A sweep of all 133 at HEAD in September 2026 found nothing else — 133 of 133 pass
-— so `tor` was the only one, but it was entirely broken and nothing could have said so.
+**There is no per-feature build check any more, because there are no protocol features.** It
+used to exist because a protocol that compiled only alongside others went unnoticed: `tor` did
+not compile *at any feature set* in September 2026 while every CI run was green. With every
+protocol in every build, `lint` and `test` compile all of them on every push; the system-library
+protocols are compiled by `clippy-wide` and `registry-audit`, which install those libraries.
 
-`single-feature` now covers all 133 on every PR and push, sharded four ways. The sizing is
-measured rather than assumed: `gh api` on two completed runs put the old 24-feature job at 9
-and 12 minutes warm, ~25s per feature and near-constant because each iteration recompiles the
-library and ~170 test targets whatever the feature is. 133 in one job is ~55 minutes against a
-30-minute timeout, so the split's premise was real; four shards of ~34 are ~14 minutes each in
-parallel, for ~4x the runner minutes (10 → 60 per run) which are free on a public repository.
-
-**A nightly cron was the obvious alternative and is the wrong shape**, and the distinction
-generalises to anything else you are tempted to move off the commit: `fuzz`, `nightly-soak` and
+**Putting a check on a nightly cron is the wrong shape**, and the distinction generalises to
+anything else you are tempted to move off the commit: `fuzz`, `nightly-soak` and
 `nightly-eval` are *searches and measurements*, which return no verdict about any particular
 commit and so suit a nightly cadence. A compile check is a *gate* — it answers yes or no about
-the commit in front of it — so it belongs on the commit. Nightly would have caught `tor` too, a
-day late and on `master` rather than on the change that broke it.
+the commit in front of it — so it belongs on the commit.
 
 **In fact none of the three is on a cron any more**: `fuzz.yml`, `nightly-soak.yml` and
 `nightly-eval.yml` are all `workflow_dispatch` only, so between dispatches nothing runs them at
@@ -1307,9 +1324,11 @@ Logs land in `./tmp/netget-<command>-<PPID>.log`; the path is printed on each ru
 **Fix every error in one pass.** Builds cost 10s-2min; rebuilding after each individual fix
 wastes hours. Build once, extract the full error list from the log, fix all of it, rebuild once.
 
-Use minimal features. `--all-features` compiles 50+ protocols and their dependency trees
-(1-2 min, 3GB+ RAM); `--no-default-features --features <protocol>` takes 10-30s. Reach for
-`--all-features` only for release validation.
+Every build compiles every protocol, so there is no faster single-protocol build. What
+features change is the system libraries: `--no-default-features --features mcp-stdio,sqlite`
+builds without libpcap, D-Bus, libusb, PC/SC, libsmbclient and llama.cpp (no cmake), which is
+the build to use where those are not installed. Narrow a *test run* with filters
+(`--test server -- server::tcp::`), not features.
 
 Kill stuck builds with `./cargo-isolated-kill.sh`, never `pkill cargo`.
 
@@ -1326,8 +1345,7 @@ the code was written. CI already uses the qualified form in both its clippy jobs
 table did not, which is how several passes in this repository ran the deprecated one.
 
 ```bash
-cargo clippy --no-default-features --features <set> --all-targets \
-    -- -D clippy::correctness -D clippy::suspicious
+cargo clippy --all-targets -- -D clippy::correctness -D clippy::suspicious
 ```
 
 `--all-targets` is not optional either: without it the ~200 test files are outside the gate.
@@ -1391,23 +1409,22 @@ Two things make this expensive rather than merely annoying:
 ### The installed binary — `/Users/matus/bin/netget`
 
 The maintainer's `netget` on `PATH` lives at `/Users/matus/bin/netget` and **must always have every
-protocol compiled in.** Build it with the **`all-protocols`** feature, release — **NOT
-`--all-features`** (see the footgun below). After any change that adds a protocol or affects the
-compiled surface, rebuild and reinstall:
+protocol compiled in.** That is the default feature set, release — **NOT `--all-features`** (see
+the footgun below). After any change that adds a protocol or affects the compiled surface,
+rebuild and reinstall:
 
 ```bash
-./cargo-isolated.sh build --release --no-default-features \
-    --features all-protocols,mcp-stdio,mcp-http && \
+./cargo-isolated.sh build --release && \
   cp target/release/netget /Users/matus/bin/.netget.new && \
   mv -f /Users/matus/bin/.netget.new /Users/matus/bin/netget   # atomic; safe if netget is running
 ```
 
-**`all-protocols` does NOT include `mcp-stdio`, and this command omitted them until
-September 2026.** The name reads as "everything", and it is not — it is every *protocol*.
-Following it produced a binary that answers `--mcp` with `Error: MCP STDIO mode requires the
-'mcp-stdio' feature`, which is exactly how the maintainer runs it. Nothing catches this: the
-build succeeds, the binary starts, and only the one invocation that matters fails. Smoke-test
-the installed binary over its own MCP surface rather than trusting `--version`:
+**Check that the binary answers `--mcp`.** Until September 2026 this command built
+`all-protocols` without `mcp-stdio`, which produced a binary answering `--mcp` with `Error: MCP
+STDIO mode requires the 'mcp-stdio' feature` — exactly how the maintainer runs it. MCP is in the
+default set now, but nothing would catch its removal: the build succeeds, the binary starts, and
+only the one invocation that matters fails. Smoke-test the installed binary over its own MCP
+surface rather than trusting `--version`:
 
 ```bash
 printf '%s\n%s\n%s\n' \
@@ -1422,13 +1439,12 @@ file in place can fail with `ETXTBSY` while it is running. Rename swaps the inod
 live process keeps the old image, the new binary takes effect on next launch. **Never kill the
 running `netget` to install** — the rename never needs it stopped.
 
-**`--all-features` vs `all-protocols` — they are NOT interchangeable.** `--all-features` is a
-Cargo built-in that turns on *every* feature in `Cargo.toml`: not just protocols but also
-`embedded-llm`, **`gpu`** (GPU stats via `gfxinfo`),
-`android-termux`, the test-only `terminal-snapshot`, and the `dist*`/`portable-base` aggregates.
-`all-protocols` is the curated "every protocol, and only things safe to run" set — it includes
-`embedded-llm` (dormant unless `--embedded-model` is passed) but **not** `gpu`. Use `--all-features`
-for a compile check (`cargo check --all-features`) and `all-protocols` for a binary you run.
+**`--all-features` vs the default — they are NOT interchangeable.** `--all-features` is a Cargo
+built-in that turns on *every* feature in `Cargo.toml`: the default set plus **`gpu`** (GPU stats
+via `gfxinfo`), `vendored-openssl` and the test-only `terminal-snapshot`. The default is the
+curated "everything, and only things safe to run" set — it includes `embedded-llm` (dormant
+unless `--embedded-model` is passed) but **not** `gpu`. Use `--all-features` for a compile check
+(`cargo check --all-features`) and the default for a binary you run.
 
 **The `gpu` crash this section used to describe is fixed, and the description of it was wrong in
 every detail worth acting on.** It said the feature "initializes a Metal context at startup" that
@@ -1459,31 +1475,28 @@ SIGSEGV/SIGABRT/SIGTRAP from a C/ObjC library bypasses Rust's `Drop`/panic machi
 a crash leaves the shell wedged in raw mode. The handler restores cooked mode + cursor before the
 process dies. It is a safety net, not a licence to ship a crashing binary — fix the crash too.
 
-### Features unavailable in Claude Code for Web
+### System libraries, and what builds without them
 
-Detect with `./am_i_claude_code_for_web.sh` or `[ "$CLAUDE_CODE_REMOTE" = "true" ]`.
-These need system libraries absent there — derive the current list from `Cargo.toml`
-rather than a hardcoded copy:
+Detect Claude Code for Web with `./am_i_claude_code_for_web.sh` or
+`[ "$CLAUDE_CODE_REMOTE" = "true" ]`. The default features link five system libraries, each
+behind a feature of its own; derive the current list from `[features]` rather than this copy:
 
-| Group | Needs | Features |
+| Feature | Library (Debian / Homebrew) | Protocols |
 |---|---|---|
-| Bluetooth LE | `libdbus-1-dev` | all `bluetooth-ble*` (18) |
-| USB | `libusb-1.0-dev` | `usb`, `usb-keyboard`, `usb-mouse`, `usb-serial`, `usb-msc`, `usb-fido2`, `usb-smartcard` |
-| NFC | `pcsclite` | `nfc`, `nfc-client` |
-| Protobuf | `protoc` | `etcd`, `grpc`, `zookeeper` (**not** `kubernetes` — see below) |
-| Packet capture | `libpcap` | `datalink`, `arp`, `isis` |
-| Other | — | `smb-client` (`libsmbclient`) |
+| `libpcap` | `libpcap-dev` / ships with macOS | `arp`, `datalink`, `isis`, `lldp`, `cdp`, `stp`, `eapol` |
+| `bluetooth` | `libdbus-1-dev` / CoreBluetooth ships with macOS | all `bluetooth-ble*` |
+| `pcsc` | `libpcsclite-dev` / ships with macOS | the NFC client |
+| `libusb` | `libusb-1.0-0-dev` / `libusb` | the `usb-*` virtual devices |
+| `libsmbclient` | `libsmbclient-dev` / `samba` | the SMB client |
+
+`embedded-llm` (default) builds llama.cpp and needs `cmake` and a C++ compiler. The protobuf
+compiler is **not** a requirement any more: `build.rs` uses `protoc-bin-vendored` unless
+`PROTOC` names one.
 
 ```bash
-# Safe pattern
-./cargo-isolated.sh build --no-default-features --features tcp,http,dns
+# Everything that needs no system library
+./cargo-isolated.sh build --no-default-features --features mcp-stdio,mcp-http,sqlite
 ```
-
-`kubernetes` was listed under `protoc` for a long time and never needed it: `build.rs` invokes
-`protoc` only under `#[cfg(feature = "etcd")]`. The `kubernetes` *client* pulls `kube` +
-`k8s-openapi` (large, but no system library); the `kubernetes-server` protocol deliberately
-depends on neither, because `kubectl` speaks JSON to an apiserver by default. Derive this table
-from `Cargo.toml` and `build.rs` rather than trusting it — it has been wrong.
 
 ## The website — netget.net
 

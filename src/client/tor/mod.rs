@@ -11,9 +11,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, Mutex};
 use tracing::{error, info, trace, warn};
 
-#[cfg(feature = "tor")]
+#[cfg(unix)]
 use serde::Serialize;
-#[cfg(feature = "tor")]
+#[cfg(unix)]
 use tor_netdir::{NetDir, Relay};
 
 use crate::client::llm_budget::call_llm_for_client;
@@ -40,7 +40,7 @@ struct ClientData {
 }
 
 /// Relay filter criteria for directory queries
-#[cfg(feature = "tor")]
+#[cfg(unix)]
 #[derive(Debug, Clone, Default)]
 pub struct RelayFilter {
     pub flags: Option<Vec<String>>,
@@ -49,7 +49,7 @@ pub struct RelayFilter {
     pub limit: Option<usize>,
 }
 
-#[cfg(feature = "tor")]
+#[cfg(unix)]
 impl RelayFilter {
     /// Check if a relay matches this filter
     fn matches(&self, _relay: &Relay<'_>) -> bool {
@@ -67,7 +67,7 @@ impl RelayFilter {
 }
 
 /// Simplified relay information for LLM
-#[cfg(feature = "tor")]
+#[cfg(unix)]
 #[derive(Debug, Clone, Serialize)]
 pub struct RelayInfo {
     pub nickname: String,
@@ -81,7 +81,7 @@ pub struct RelayInfo {
     pub is_valid: bool,
 }
 
-#[cfg(feature = "tor")]
+#[cfg(unix)]
 impl RelayInfo {
     /// Create RelayInfo from a Tor relay
     fn from_relay(relay: &Relay<'_>) -> Self {
@@ -183,7 +183,7 @@ type TorWriteHalf = Arc<Mutex<tokio::io::WriteHalf<arti_client::DataStream>>>;
 
 /// Run one directory verb. Needs no circuit — the consensus lives in `AppState`, put there
 /// when `create_bootstrapped` returned.
-#[cfg(feature = "tor")]
+#[cfg(unix)]
 async fn run_directory_action(
     name: &str,
     data: &serde_json::Value,
@@ -288,7 +288,7 @@ pub async fn apply_actions(
                 info!("Tor client {} disconnecting", client_id);
                 return true;
             }
-            #[cfg(feature = "tor")]
+            #[cfg(unix)]
             Ok(ClientActionResult::Custom { name, data }) => {
                 run_directory_action(&name, &data, client_id, app_state, status_tx).await;
             }
@@ -371,13 +371,13 @@ impl TorClient {
         let _ = status_tx.send(format!("[CLIENT] Tor client {} bootstrapped", client_id));
 
         // Store Tor client for directory queries (requires experimental-api feature)
-        #[cfg(feature = "tor")]
+        #[cfg(unix)]
         app_state
             .set_tor_client(client_id, Arc::new(tor_client.clone()))
             .await;
 
         // Emit bootstrap complete event with consensus info
-        #[cfg(feature = "tor")]
+        #[cfg(unix)]
         if let Some(instruction) = app_state.get_instruction_for_client(client_id).await {
             let protocol = Arc::new(crate::client::tor::actions::TorClientProtocol::new());
 
@@ -709,7 +709,7 @@ impl TorClient {
     ///
     /// This allows testing with a local tor_relay server (using BEGIN_DIR for directory queries)
     /// instead of real Tor network. The directory_server parameter should be in format "127.0.0.1:9001"
-    #[cfg(feature = "tor")]
+    #[cfg(unix)]
     fn create_custom_config(directory_server: &str) -> Result<TorClientConfig> {
         use arti_client::config::dir::FallbackDir;
 
@@ -746,7 +746,7 @@ impl TorClient {
     }
 
     /// Get network directory from Arti (requires experimental-api feature)
-    #[cfg(feature = "tor")]
+    #[cfg(unix)]
     pub async fn get_netdir(
         app_state: &Arc<crate::state::app_state::AppState>,
         client_id: crate::state::ClientId,
@@ -768,7 +768,7 @@ impl TorClient {
     }
 
     /// Query relays from network directory with optional filter
-    #[cfg(feature = "tor")]
+    #[cfg(unix)]
     pub async fn query_relays(
         app_state: &Arc<crate::state::app_state::AppState>,
         client_id: crate::state::ClientId,
@@ -792,7 +792,7 @@ impl TorClient {
     }
 
     /// Get consensus metadata (relay count, validity times)
-    #[cfg(feature = "tor")]
+    #[cfg(unix)]
     pub async fn get_consensus_info(
         app_state: &Arc<crate::state::app_state::AppState>,
         client_id: crate::state::ClientId,

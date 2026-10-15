@@ -23,7 +23,6 @@
 //! the reply is **matchable** (ACK type, the request's message id, the request's token) and that
 //! the log says which of the two happened.
 
-#![cfg(feature = "coap")]
 
 use crate::helpers::pcap_oracle::PcapOracle;
 use crate::helpers::{start_netget_server, E2EResult, NetGetConfig};

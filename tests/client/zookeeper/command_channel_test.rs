@@ -13,7 +13,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features zookeeper --test client -- zookeeper::command_channel --test-threads=100
 
-#![cfg(feature = "zookeeper")]
 
 use std::time::Duration;
 

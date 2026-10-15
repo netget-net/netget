@@ -10,7 +10,6 @@
 //! 2. Different prompting strategy
 //! 3. Or these tests should use --no-scripts mode with direct stack specification
 
-#![cfg(feature = "ipsec")]
 
 use crate::helpers::server::get_server_output;
 use crate::helpers::*;

@@ -3,7 +3,6 @@
 //! Tests the CouchDB server implementation against real HTTP clients.
 //! Uses mocks for LLM responses to keep test suite fast (< 10 LLM calls).
 
-#![cfg(feature = "couchdb")]
 
 use crate::server::helpers::*;
 use reqwest;

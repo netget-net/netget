@@ -2,7 +2,6 @@
 //!
 //! Tests etcd client operations against NetGet etcd server
 
-#![cfg(all(test, feature = "etcd"))]
 
 use crate::helpers::*;
 use serde_json::json;

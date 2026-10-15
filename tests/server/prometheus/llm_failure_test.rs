@@ -6,7 +6,6 @@
 //! series would fire for the wrong reason. A 500 makes `up` 0 and puts the status line in the
 //! target's error column, which is the truth.
 
-#![cfg(feature = "prometheus")]
 
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;

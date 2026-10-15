@@ -11,7 +11,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features vnc --test client -- vnc::command_channel --test-threads=100
 
-#![cfg(feature = "vnc")]
 
 use std::time::Duration;
 

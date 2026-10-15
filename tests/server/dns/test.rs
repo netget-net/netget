@@ -3,7 +3,6 @@
 //! These tests spawn the actual NetGet binary with DNS prompts
 //! and validate the responses using the hickory-client DNS client library.
 
-#![cfg(feature = "dns")]
 
 // Helper module imported from parent
 

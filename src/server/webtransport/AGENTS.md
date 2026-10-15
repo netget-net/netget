@@ -1,8 +1,8 @@
 # WebTransport server — Experimental
 
 WebTransport over HTTP/3 (draft-ietf-webtrans-http3, the draft-02 wire Chrome and aioquic
-speak) on the vendored `wtransport` 0.7.2 over quinn. `vendor/wtransport/README.netget.md`
-lists what the vendored copy changes: an owned driver that closes on drop, bounded readers,
+speak) on NetGet's fork of `wtransport` 0.7.2 over quinn. The fork (`netget-wtransport`,
+github.com/netget-net/wtransport) lists what it changes in NETGET.md: an owned driver that closes on drop, bounded readers,
 checked SETTINGS and bounded QPACK.
 
 `mod.rs` owns the endpoint and admission: every incoming connection that completes the QUIC

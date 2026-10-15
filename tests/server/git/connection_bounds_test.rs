@@ -24,7 +24,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features git --test server -- git::connection_bounds --test-threads=100
 
-#![cfg(feature = "git")]
 
 use std::time::Duration;
 

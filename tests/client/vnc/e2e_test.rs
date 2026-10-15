@@ -19,7 +19,6 @@
 //! if the RFB handshake against the server actually completed. The server-side event mocks are
 //! the other half — they are reachable only if the client's request crossed the wire.
 
-#[cfg(all(test, feature = "vnc"))]
 mod vnc_client_tests {
     use crate::helpers::*;
     use std::time::Duration;

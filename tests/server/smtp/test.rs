@@ -3,7 +3,6 @@
 //! These tests spawn the actual NetGet binary with SMTP prompts
 //! and validate the responses using SMTP protocol clients.
 
-#![cfg(feature = "smtp")]
 
 // Helper module imported from parent
 

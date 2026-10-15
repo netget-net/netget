@@ -3,7 +3,6 @@
 //! These tests verify SIP server functionality by starting NetGet with SIP prompts
 //! and using raw UDP sockets to send SIP messages.
 
-#![cfg(feature = "sip")]
 
 use crate::server::helpers::*;
 use std::net::SocketAddr;

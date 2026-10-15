@@ -23,7 +23,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features mongodb-server \
 //!       --test server -- server::mongodb::bson_depth --test-threads=100
 
-#![cfg(feature = "mongodb-server")]
 
 use std::time::Duration;
 

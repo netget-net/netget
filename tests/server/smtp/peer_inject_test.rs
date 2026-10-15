@@ -5,7 +5,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features smtp --test server -- smtp::peer_inject --test-threads=100
 
-#![cfg(feature = "smtp")]
 
 use std::time::Duration;
 

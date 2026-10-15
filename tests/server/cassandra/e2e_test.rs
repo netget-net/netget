@@ -3,7 +3,6 @@
 //! These tests spawn the NetGet binary and test Cassandra protocol operations
 //! using real Cassandra/ScyllaDB client (scylla crate).
 
-#[cfg(all(test, feature = "cassandra"))]
 mod e2e_cassandra {
     use crate::helpers::{start_netget_server, with_cassandra_timeout, E2EResult, NetGetConfig};
     use std::num::NonZeroUsize;

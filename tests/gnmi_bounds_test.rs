@@ -1,4 +1,3 @@
-#![cfg(feature = "gnmi")]
 use netget::server::gnmi::{codec, json, proto::gnmi as pb};
 use prost::Message;
 use tonic::Code;

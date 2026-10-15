@@ -10,7 +10,6 @@
 //! over-budget datagrams get nothing, a handler-answered datagram gets media *at the same
 //! ceiling of zero*, and the window itself admits exactly N and then stops.
 
-#![cfg(feature = "rtp")]
 
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};

@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 
 pub struct BluetoothBleProximity;
 impl BluetoothBleProximity {
-    #[cfg(feature = "bluetooth-ble-proximity")]
+    #[cfg(all(unix, feature = "bluetooth"))]
     pub async fn spawn_with_llm_actions(
         device_name: String,
         llm: crate::llm::ollama_client::OllamaClient,
@@ -26,7 +26,7 @@ impl BluetoothBleProximity {
         .await
     }
 }
-#[cfg(not(feature = "bluetooth-ble-proximity"))]
+#[cfg(any(all(unix, not(feature = "bluetooth")), not(unix)))]
 impl BluetoothBleProximity {
     pub async fn spawn_with_llm_actions(
         _: String,

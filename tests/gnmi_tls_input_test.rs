@@ -1,4 +1,3 @@
-#![cfg(feature = "gnmi")]
 use netget::server::gnmi::tls::{read_pem, MAX_PEM_BYTES};
 #[tokio::test]
 async fn regular_file_exact_bound_plus_one_and_directory_refusal() {

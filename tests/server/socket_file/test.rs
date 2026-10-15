@@ -5,7 +5,7 @@
 //!
 //! Platform: Unix/Linux only
 
-#![cfg(all(feature = "socket_file", unix))]
+#![cfg(unix)]
 
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use std::time::Duration;

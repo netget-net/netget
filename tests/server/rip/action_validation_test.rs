@@ -9,7 +9,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features rip --test server -- rip::action_validation --test-threads=100
 
-#![cfg(feature = "rip")]
 
 use netget::llm::actions::protocol_trait::{ActionResult, Server};
 use netget::server::rip::actions::RipProtocol;

@@ -4,7 +4,7 @@
 //! and testing client behavior as a black-box.
 //! Test strategy: Use netget binary to start proxy + client, < 10 LLM calls total.
 
-#[cfg(all(test, feature = "http_proxy"))]
+#[cfg(unix)]
 mod http_proxy_client_tests {
     use crate::helpers::*;
     use std::time::Duration;

@@ -7,7 +7,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features ftp --test server -- ftp::peer_injection --test-threads=100
 
-#![cfg(feature = "ftp")]
 
 use std::time::Duration;
 

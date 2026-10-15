@@ -7,7 +7,6 @@
 //! their own event loops), so the client is hand-rolled — it is roughly 150 lines, and it is
 //! the only way to prove the bytes on the wire mean what the server claims.
 
-#![cfg(feature = "vnc")]
 
 use super::super::helpers::{self, E2EResult, NetGetConfig};
 use netget::server::vnc::PLACEHOLDER_BACKGROUND;

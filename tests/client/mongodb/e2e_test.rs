@@ -14,7 +14,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features mongodb,mongodb-server \
 //!       --test client -- mongodb --test-threads=100
 
-#![cfg(all(feature = "mongodb", feature = "mongodb-server"))]
 
 use crate::helpers::*;
 use tokio::time::{sleep, Duration};

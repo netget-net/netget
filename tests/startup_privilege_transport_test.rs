@@ -57,7 +57,7 @@ fn only_the_udp_test_transports_relax_the_requirement() {
 /// Through the real startup path, not `Server::spawn`: the gate must let the UDP transport in.
 /// VRRP needs raw sockets for real, which no unprivileged process has, so this fails on any
 /// unprivileged host if the gate reads the declared requirement.
-#[cfg(feature = "vrrp")]
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
 async fn vrrp_over_udp_starts_through_the_gate_without_privilege() {
     use netget::{cli::management::ServerForm, state::app_state::AppState};

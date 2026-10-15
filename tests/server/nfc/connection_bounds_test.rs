@@ -29,7 +29,7 @@
 //!   ./cargo-isolated.sh test --no-default-features --features nfc --test server -- \
 //!       nfc::connection_bounds --test-threads=100
 
-#![cfg(feature = "nfc")]
+#![cfg(unix)]
 
 use std::time::Duration;
 

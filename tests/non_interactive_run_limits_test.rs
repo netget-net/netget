@@ -14,7 +14,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features tcp \
 //!       --test non_interactive_run_limits_test -- --test-threads=100
 
-#![cfg(feature = "tcp")]
 
 #[path = "helpers/child_guard.rs"]
 mod child_guard;

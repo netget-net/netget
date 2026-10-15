@@ -1,5 +1,4 @@
 //! Ollama server tests
-#![cfg(all(test, feature = "ollama"))]
 
 pub mod connection_bounds_test;
 pub mod e2e_test;

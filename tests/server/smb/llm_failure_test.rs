@@ -15,7 +15,6 @@
 //! The assertions are at the protocol level - the actual response bytes - because a
 //! failure response the client cannot correlate to its request is as useless as silence.
 
-#![cfg(all(test, feature = "smb"))]
 
 use super::wire_util::{nbss, read_frame_sync, tree_connect};
 use crate::server::helpers::{start_netget_server, E2EResult};

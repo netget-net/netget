@@ -19,15 +19,15 @@ use crate::state::app_state::AppState;
 use crate::state::{ClientId, ClientStatus};
 use serde_json::json;
 
-#[cfg(feature = "nfs")]
+#[cfg(unix)]
 use nfs3_client::{tokio::TokioConnector, Nfs3ConnectionBuilder};
-#[cfg(feature = "nfs")]
+#[cfg(unix)]
 use nfs3_types::nfs3::*;
 
 use crate::client::nfs::actions::{NFS_CLIENT_CONNECTED_EVENT, NFS_CLIENT_OPERATION_RESULT_EVENT};
 
 /// The mounted NFS3 connection. Named because it appears in a dozen signatures.
-#[cfg(feature = "nfs")]
+#[cfg(unix)]
 type NfsConn = nfs3_client::Nfs3Connection<nfs3_client::tokio::TokioIo<tokio::net::TcpStream>>;
 
 /// NFS client that connects to a remote NFS server
@@ -35,7 +35,7 @@ pub struct NfsClient;
 
 impl NfsClient {
     /// Connect to an NFS server with integrated LLM actions
-    #[cfg(feature = "nfs")]
+    #[cfg(unix)]
     pub async fn connect_with_llm_actions(
         remote_addr: String,
         llm_client: OllamaClient,
@@ -200,7 +200,7 @@ impl NfsClient {
     }
 
     /// Handle NFS operations with LLM integration
-    #[cfg(feature = "nfs")]
+    #[cfg(unix)]
     async fn handle_nfs_operations(
         connection: Arc<Mutex<NfsConn>>,
         fh_cache: Arc<Mutex<HashMap<String, nfs_fh3>>>,
@@ -282,7 +282,7 @@ impl NfsClient {
     }
 
     /// Execute a single NFS action
-    #[cfg(feature = "nfs")]
+    #[cfg(unix)]
     async fn execute_action(
         connection: &Arc<Mutex<NfsConn>>,
         fh_cache: &Arc<Mutex<HashMap<String, nfs_fh3>>>,
@@ -355,7 +355,7 @@ impl NfsClient {
     /// Split out of [`Self::execute_action`] so the command loop can run an injected
     /// operation, reply with its outcome immediately, and only then let the model react - a
     /// handler parked for a human must not hold up the next injected command.
-    #[cfg(feature = "nfs")]
+    #[cfg(unix)]
     #[allow(clippy::too_many_arguments)]
     async fn report_operation(
         connection: &Arc<Mutex<NfsConn>>,
@@ -422,7 +422,7 @@ impl NfsClient {
     ///
     /// The single place the operation table lives, so an injected dashboard command and an
     /// LLM-produced action reach exactly the same code.
-    #[cfg(feature = "nfs")]
+    #[cfg(unix)]
     async fn perform_op(
         connection: &Arc<Mutex<NfsConn>>,
         fh_cache: &Arc<Mutex<HashMap<String, nfs_fh3>>>,
@@ -453,7 +453,7 @@ impl NfsClient {
     /// Outcome semantics: `nfs3_client` frames every RPC, so this loop can honestly claim no
     /// byte count. An operation that ran reports `Executed` naming it and summarising the
     /// reply; one the server refused is an `Err`, never a quieter `Sent`.
-    #[cfg(feature = "nfs")]
+    #[cfg(unix)]
     #[allow(clippy::too_many_arguments)]
     async fn command_loop(
         connection: Arc<Mutex<NfsConn>>,
@@ -571,7 +571,7 @@ impl NfsClient {
     }
 
     /// Resolve path to file handle
-    #[cfg(feature = "nfs")]
+    #[cfg(unix)]
     async fn resolve_path(
         connection: &Arc<Mutex<NfsConn>>,
         fh_cache: &Arc<Mutex<HashMap<String, nfs_fh3>>>,
@@ -641,7 +641,7 @@ impl NfsClient {
     }
 
     /// NFS lookup operation
-    #[cfg(feature = "nfs")]
+    #[cfg(unix)]
     async fn op_lookup(
         connection: &Arc<Mutex<NfsConn>>,
         fh_cache: &Arc<Mutex<HashMap<String, nfs_fh3>>>,
@@ -658,7 +658,7 @@ impl NfsClient {
     }
 
     /// NFS read file operation
-    #[cfg(feature = "nfs")]
+    #[cfg(unix)]
     async fn op_read_file(
         connection: &Arc<Mutex<NfsConn>>,
         fh_cache: &Arc<Mutex<HashMap<String, nfs_fh3>>>,
@@ -694,7 +694,7 @@ impl NfsClient {
     }
 
     /// NFS write file operation
-    #[cfg(feature = "nfs")]
+    #[cfg(unix)]
     async fn op_write_file(
         connection: &Arc<Mutex<NfsConn>>,
         fh_cache: &Arc<Mutex<HashMap<String, nfs_fh3>>>,
@@ -727,7 +727,7 @@ impl NfsClient {
     }
 
     /// NFS list directory operation
-    #[cfg(feature = "nfs")]
+    #[cfg(unix)]
     async fn op_list_dir(
         connection: &Arc<Mutex<NfsConn>>,
         fh_cache: &Arc<Mutex<HashMap<String, nfs_fh3>>>,
@@ -768,7 +768,7 @@ impl NfsClient {
     }
 
     /// NFS get attributes operation
-    #[cfg(feature = "nfs")]
+    #[cfg(unix)]
     async fn op_get_attr(
         connection: &Arc<Mutex<NfsConn>>,
         fh_cache: &Arc<Mutex<HashMap<String, nfs_fh3>>>,
@@ -794,7 +794,7 @@ impl NfsClient {
     }
 
     /// NFS create file operation
-    #[cfg(feature = "nfs")]
+    #[cfg(unix)]
     async fn op_create_file(
         connection: &Arc<Mutex<NfsConn>>,
         fh_cache: &Arc<Mutex<HashMap<String, nfs_fh3>>>,
@@ -839,7 +839,7 @@ impl NfsClient {
     }
 
     /// NFS mkdir operation
-    #[cfg(feature = "nfs")]
+    #[cfg(unix)]
     async fn op_mkdir(
         connection: &Arc<Mutex<NfsConn>>,
         fh_cache: &Arc<Mutex<HashMap<String, nfs_fh3>>>,
@@ -884,7 +884,7 @@ impl NfsClient {
     }
 
     /// NFS remove file operation
-    #[cfg(feature = "nfs")]
+    #[cfg(unix)]
     async fn op_remove(
         connection: &Arc<Mutex<NfsConn>>,
         fh_cache: &Arc<Mutex<HashMap<String, nfs_fh3>>>,
@@ -918,7 +918,7 @@ impl NfsClient {
     }
 
     /// NFS rmdir operation
-    #[cfg(feature = "nfs")]
+    #[cfg(unix)]
     async fn op_rmdir(
         connection: &Arc<Mutex<NfsConn>>,
         fh_cache: &Arc<Mutex<HashMap<String, nfs_fh3>>>,
@@ -977,7 +977,7 @@ impl NfsClient {
     }
 
     /// Connect to NFS server without the nfs feature (fallback)
-    #[cfg(not(feature = "nfs"))]
+    #[cfg(not(unix))]
     pub async fn connect_with_llm_actions(
         _remote_addr: String,
         _llm_client: OllamaClient,

@@ -30,7 +30,6 @@
 //!     --test client -- client::irc --test-threads=100
 //! ```
 
-#[cfg(all(test, feature = "irc"))]
 mod irc_client_tests {
     use crate::helpers::*;
     use std::time::Duration;

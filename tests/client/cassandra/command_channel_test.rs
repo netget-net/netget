@@ -11,7 +11,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features cassandra --test client -- cassandra::command_channel --test-threads=100
 
-#![cfg(feature = "cassandra")]
 
 use std::time::Duration;
 

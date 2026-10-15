@@ -7,7 +7,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features socks5 --test client -- socks5::command_channel --test-threads=100
 
-#![cfg(feature = "socks5")]
 
 use std::time::Duration;
 

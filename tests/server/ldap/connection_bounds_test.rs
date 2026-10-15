@@ -24,7 +24,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features ldap,tcp --test server -- ldap::connection_bounds --test-threads=100
 
-#![cfg(feature = "ldap")]
 
 use std::time::Duration;
 

@@ -16,7 +16,7 @@
 //! 8656 / RFC 8489 wire format (message types are the literal constants from RFC
 //! 8656 section 17) rather than by calling NetGet's own encoder.
 
-#![cfg(feature = "turn")]
+#![cfg(unix)]
 
 use crate::server::helpers::*;
 use std::net::SocketAddr;

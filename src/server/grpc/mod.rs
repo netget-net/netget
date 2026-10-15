@@ -4,7 +4,7 @@
 //! and controls RPC request/response handling through JSON.
 
 pub mod actions;
-#[cfg(any(feature = "grpc-web", feature = "connect_rpc"))]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod http1;
 mod reflection;
 pub(crate) mod schema;
@@ -19,39 +19,39 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, info, trace, warn};
 
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::llm::action_helper::call_llm;
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::llm::ollama_client::OllamaClient;
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::llm::ActionResult;
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::logging::emit::Log;
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::protocol::Event;
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::server::grpc::actions::GRPC_UNARY_REQUEST_EVENT;
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::server::GrpcProtocol;
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::state::app_state::AppState;
 use crate::{console_error, console_info};
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 use bytes::Bytes;
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 use http_body_util::{BodyExt, Limited};
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 use hyper::{body::Incoming, header::HeaderValue, Request, Response, StatusCode};
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 use prost::Message;
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 use prost_reflect::{DescriptorPool, DynamicMessage};
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 use serde_json::json;
 
 /// Largest request body buffered, before gRPC framing. Matches gRPC's own default
 /// `maxReceiveMessageLength` of 4 MiB.
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 pub const MAX_REQUEST_BYTES: usize = 4 * 1024 * 1024;
 
 /// How long to wait for a peer's first byte after it connects.
@@ -62,7 +62,7 @@ pub const MAX_REQUEST_BYTES: usize = 4 * 1024 * 1024;
 /// connection at all, which is the state an unauthenticated flood lives in. Enforced with
 /// `TcpStream::peek` *before* the socket reaches hyper, so the preface is still there for hyper
 /// afterwards.
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 const FIRST_BYTE_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// How long a connection may do nothing at all once it is up.
@@ -71,7 +71,7 @@ const FIRST_BYTE_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_s
 /// RPCs: a response body retains its busy guard through EOS/drop, including
 /// a subscription, flow-control stall or parked handler. Each stream separately
 /// has a whole-operation deadline.
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 const IDLE_BETWEEN_REQUESTS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(900);
 
 /// Concurrent connections this server admits.
@@ -79,7 +79,7 @@ const IDLE_BETWEEN_REQUESTS_TIMEOUT: std::time::Duration = std::time::Duration::
 /// Each admitted connection may buffer a request of up to [`MAX_REQUEST_BYTES`] and holds an
 /// HTTP/2 session with its own flow-control windows, so the cap is what turns that
 /// per-connection bound into a total one.
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_CONNECTIONS: usize = crate::server::accept_bounded::DEFAULT_MAX_CONNECTIONS;
 
 /// What a peer over [`MAX_CONNECTIONS`] is told before the socket closes.
@@ -90,7 +90,7 @@ const MAX_CONNECTIONS: usize = crate::server::accept_bounded::DEFAULT_MAX_CONNEC
 /// follow a SETTINGS exchange this server is declining to perform. A gRPC client reports a
 /// transport failure either way, but the bytes on the wire now say why, and `curl` or a human
 /// can read it.
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 const CONNECTION_CAP_REFUSAL: &[u8] = b"HTTP/1.1 503 Service Unavailable\r\n\
     Content-Length: 0\r\nRetry-After: 5\r\nConnection: close\r\n\r\n";
 
@@ -100,7 +100,7 @@ const CONNECTION_CAP_REFUSAL: &[u8] = b"HTTP/1.1 503 Service Unavailable\r\n\
 /// anything: the code was parsed, logged, and then folded into a `bail!` message, so every
 /// error reached the client as `13 INTERNAL` with the real code smuggled into the text of
 /// `grpc-message`.
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(i32)]
 pub enum GrpcStatus {
@@ -123,7 +123,7 @@ pub enum GrpcStatus {
     Unauthenticated = 16,
 }
 
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 impl GrpcStatus {
     /// Parse the `code` field of a `grpc_error` action. Accepts the canonical spec spellings
     /// (`NOT_FOUND`), lowercase, and the bare integer. Anything unrecognized is `UNKNOWN`
@@ -192,7 +192,7 @@ impl GrpcStatus {
 /// `pub` so `tests/` can exercise the classification directly — the project forbids
 /// `#[cfg(test)]` modules in `src/`, and driving the rate limiter to refusal through a spawned
 /// binary needs bounds the E2E harness cannot set.
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 pub fn grpc_status_for_llm_failure(err: &anyhow::Error) -> GrpcStatus {
     if crate::llm::is_overload_error(err) {
         GrpcStatus::Unavailable
@@ -202,7 +202,7 @@ pub fn grpc_status_for_llm_failure(err: &anyhow::Error) -> GrpcStatus {
 }
 
 /// Classify a peer value conversion refusal without exposing its data in an error header.
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 pub fn grpc_status_for_value_failure(error: &anyhow::Error) -> GrpcStatus {
     if error
         .downcast_ref::<value_codec::ValueLimitExceeded>()
@@ -223,7 +223,7 @@ pub fn grpc_status_for_value_failure(error: &anyhow::Error) -> GrpcStatus {
 /// `grpc_error_response` amounts to. Capped at 512 characters because a status message is a
 /// diagnostic, not a payload, and everything is ASCII by then so the cut cannot split a
 /// codepoint.
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 fn header_safe(message: &str) -> String {
     let mut out = String::with_capacity(message.len().min(512));
     let mut last_was_space = false;
@@ -251,13 +251,13 @@ fn header_safe(message: &str) -> String {
 }
 
 /// A handler failure carrying the gRPC status it should be reported as.
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 struct GrpcFailure {
     status: GrpcStatus,
     message: String,
 }
 
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 impl GrpcFailure {
     fn new(status: GrpcStatus, message: impl Into<String>) -> Self {
         Self {
@@ -267,7 +267,7 @@ impl GrpcFailure {
     }
 }
 
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 impl From<anyhow::Error> for GrpcFailure {
     fn from(e: anyhow::Error) -> Self {
         // Classify here too, not only at the explicit call site: `?` on an anyhow error is
@@ -282,7 +282,7 @@ impl From<anyhow::Error> for GrpcFailure {
     }
 }
 
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 impl From<serde_json::Error> for GrpcFailure {
     fn from(e: serde_json::Error) -> Self {
         // Logged in full; the peer gets the category only.
@@ -291,7 +291,7 @@ impl From<serde_json::Error> for GrpcFailure {
     }
 }
 
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 impl From<prost::EncodeError> for GrpcFailure {
     fn from(e: prost::EncodeError) -> Self {
         debug!("gRPC response encoding failed: {e}");
@@ -302,7 +302,7 @@ impl From<prost::EncodeError> for GrpcFailure {
 /// gRPC server with dynamic schema support
 pub struct GrpcServer;
 
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 impl GrpcServer {
     /// Spawn gRPC server with LLM-provided schema and actions
     ///
@@ -591,7 +591,7 @@ impl GrpcServer {
 }
 
 /// Dynamic gRPC service that handles requests using LLM
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone)]
 struct DynamicGrpcService {
     llm_client: OllamaClient,
@@ -608,10 +608,10 @@ struct DynamicGrpcService {
 
 /// HTTP/1 RPC bindings share typed method handling, admission and cancellation with native
 /// gRPC. Each binding owns its framing; legacy unary behavior is untouched.
-#[cfg(any(feature = "grpc-web", feature = "connect_rpc"))]
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone)]
 pub(crate) struct HttpCore(Arc<DynamicGrpcService>);
-#[cfg(any(feature = "grpc-web", feature = "connect_rpc"))]
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct WebAdmission {
     pub(crate) deadline: tokio::time::Instant,
     permit: tokio::sync::OwnedSemaphorePermit,
@@ -619,7 +619,7 @@ pub(crate) struct WebAdmission {
     pub(crate) method: prost_reflect::MethodDescriptor,
     id: u32,
 }
-#[cfg(any(feature = "grpc-web", feature = "connect_rpc"))]
+#[cfg(not(target_arch = "wasm32"))]
 impl WebAdmission {
     /// Wrap the final status-converted body, so admission survives every reply path.
     pub(crate) fn guard(
@@ -630,7 +630,7 @@ impl WebAdmission {
         response.map(|body| http1::hold_body(body, (self.permit, busy, self.timer)))
     }
 }
-#[cfg(any(feature = "grpc-web", feature = "connect_rpc"))]
+#[cfg(not(target_arch = "wasm32"))]
 impl HttpCore {
     pub(crate) fn new(
         ctx: &crate::protocol::SpawnContext,
@@ -750,13 +750,13 @@ impl HttpCore {
 /// be written `#[ignore]`d.
 ///
 /// The identical defect was found and fixed in `src/server/etcd/mod.rs` at the same time.
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 type GrpcBody = tonic::body::BoxBody;
 
 /// A message frame followed by trailers carrying `grpc-status`.
 ///
 /// Errors do not come through here — `grpc_error_response` is deliberately Trailers-Only.
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 fn grpc_body_with_trailers(body: Bytes, status: i32, message: &str) -> GrpcBody {
     use http_body_util::StreamBody;
 
@@ -780,14 +780,14 @@ fn grpc_body_with_trailers(body: Bytes, status: i32, message: &str) -> GrpcBody 
 }
 
 /// An empty body, for a Trailers-Only reply whose status rides in the initial headers.
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 fn empty_grpc_body() -> GrpcBody {
     http_body_util::Empty::<Bytes>::new()
         .map_err(|never| match never {})
         .boxed_unsync()
 }
 
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 impl DynamicGrpcService {
     /// Handle a gRPC HTTP/2 request
     async fn handle_grpc_request(

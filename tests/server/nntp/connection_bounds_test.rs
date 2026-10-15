@@ -26,7 +26,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features nntp --test server -- nntp::connection_bounds --test-threads=100
 
-#![cfg(feature = "nntp")]
 
 use std::time::Duration;
 

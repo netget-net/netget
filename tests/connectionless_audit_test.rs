@@ -79,33 +79,27 @@ const CONNECTIONLESS_EXCEPTIONS: &[&str] = &[
     // sFlow also removes each temporary datagram row when its common handler ends.
     // Reaping it while manual/model work is parked would hide a live request;
     // diagnostic sequence state expires independently on its owned 1-second timer.
-    #[cfg(feature = "sflow")]
     "sFlow",
     // NetFlow v9 owns the same temporary datagram row lifecycle: each common
     // handler removes its row on completion. The idle sweep must leave a parked
     // request visible; its template/session cache expires on a separate owned timer.
-    #[cfg(feature = "netflow-v9")]
     "NetFlowV9",
     // The portmapper serves TCP connections (tracked, and closed when they end) and UDP calls
     // on the same port. A UDP call creates no per-remote row at all — each datagram is one
     // call, answered and forgotten — so the idle sweep has nothing to reap there, and must not
     // reap the TCP rows a slow handler is answering on.
-    #[cfg(feature = "sunrpc")]
     "SunRPC",
     // SRT is a connection protocol over UDP: a handshake, then ARQ and timestamped delivery
     // owned by srt-tokio. Its row is closed when that connection ends; a quiet publisher
     // between frames is still a live session.
-    #[cfg(feature = "srt")]
     "SRT",
     // An MQTT-SN client session: CONNECT, registered topic ids, subscriptions and sleep.
     // The row closes on DISCONNECT, a lost keep-alive, or a will; a sleeping client is idle
     // by design and must keep its session.
-    #[cfg(feature = "mqtt_sn")]
     "MQTT-SN",
     // An LwM2M registration lives for its declared lifetime and is closed on deregistration or
     // expiry by the server's own timer; reaping it after ten quiet seconds would drop every
     // registered device between updates.
-    #[cfg(feature = "lwm2m")]
     "LwM2M",
 ];
 
@@ -291,7 +285,6 @@ fn every_udp_serving_protocol_declares_connectionless() {
 /// found, must read as UDP-serving, and must already carry the flag. If this
 /// fails, fix the audit, not the protocol.
 #[test]
-#[cfg(feature = "udp")]
 fn the_audit_recognises_the_reference_udp_protocol() {
     let server_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/server");
 

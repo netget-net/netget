@@ -25,7 +25,7 @@
 //!
 //! Test strategy: Use netget binary to start OSPF client, < 5 LLM calls total.
 
-#[cfg(all(test, feature = "ospf"))]
+#[cfg(unix)]
 mod ospf_client_tests {
     use crate::helpers::*;
     use std::time::Duration;

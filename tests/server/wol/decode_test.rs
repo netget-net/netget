@@ -12,7 +12,6 @@
 //! These are pure function calls: no socket, no process, no LLM. The e2e suite next door
 //! covers what the *server* does with the result.
 
-#![cfg(feature = "wol")]
 
 use netget::server::wol::{
     decode_magic_packet, MagicPacket, Transport, MAC_LEN, MAC_REPETITIONS, MAGIC_PACKET_LEN,

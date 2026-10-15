@@ -15,7 +15,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features yarn --test server -- \
 //!       yarn::connection_bounds --test-threads=100
 
-#![cfg(all(test, feature = "yarn"))]
 
 use std::time::Duration;
 

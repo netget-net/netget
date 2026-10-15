@@ -37,7 +37,7 @@ if (landscape) {
     }));
 
     const protocolNames = new Map([...document.querySelectorAll('.proto-list a')].map(link => [
-        link.title.split(' · feature: ')[1], link.textContent.trim(),
+        link.title.split(' · protocol: ')[1], link.textContent.trim(),
     ]));
 
     function layersFor(stack, feature) {

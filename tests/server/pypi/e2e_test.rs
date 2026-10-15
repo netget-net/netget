@@ -3,7 +3,6 @@
 //! These tests verify PyPI server functionality by starting NetGet with PyPI prompts
 //! and using the real pip command to install packages.
 
-#![cfg(feature = "pypi")]
 
 use crate::server::helpers::*;
 use std::process::Command;

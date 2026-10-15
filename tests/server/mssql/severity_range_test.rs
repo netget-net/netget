@@ -12,7 +12,6 @@
 //! of the `mssql_error` payload that `mod.rs` re-reads, so refusing at this choke point means
 //! no out-of-range number ever reaches the token builder.
 
-#![cfg(all(test, feature = "mssql"))]
 
 use netget::llm::actions::protocol_trait::{ActionResult, Server};
 use netget::server::connection::ConnectionId;

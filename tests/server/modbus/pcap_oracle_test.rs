@@ -16,7 +16,6 @@
 //!
 //! The server is model-free: static handlers answer every event, so the test costs no LLM call.
 
-#![cfg(feature = "modbus")]
 
 use std::time::Duration;
 

@@ -14,7 +14,6 @@
 //!   carrying one is refused rather than believed.
 //!
 //! No LLM calls and no external tools.
-#![cfg(all(test, feature = "snmp"))]
 
 use netget::cli::management::ClientForm;
 use netget::server::snmp::usm::{self, User};

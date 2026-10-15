@@ -8,7 +8,6 @@
 //!
 //! Driven with `mysql_async`, an independent client implementation.
 
-#![cfg(feature = "mysql")]
 
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use mysql_async::prelude::Queryable;

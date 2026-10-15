@@ -9,8 +9,8 @@
 //!   transport, plus the silence-on-failure guarantee and the raw transport's refusal to
 //!   report success without a capture handle.
 
-#[cfg(all(test, feature = "stp"))]
+#[cfg(all(unix, feature = "libpcap"))]
 mod codec_test;
 
-#[cfg(all(test, feature = "stp"))]
+#[cfg(all(unix, feature = "libpcap"))]
 mod e2e_test;

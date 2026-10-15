@@ -28,7 +28,7 @@
 //! they were going to provoke had its chance before the import's did. The short settle
 //! afterwards is a backstop against a call still in flight, not the assertion's only defence.
 
-#[cfg(all(test, feature = "usb-keyboard"))]
+#[cfg(all(unix, feature = "libusb"))]
 mod usb_keyboard_attach_on_import {
     use crate::helpers::usbip_client::UsbIpClient;
     use crate::helpers::*;

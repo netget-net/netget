@@ -18,7 +18,7 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features tor --test client -- tor::command_channel --test-threads=100
 
-#![cfg(feature = "tor")]
+#![cfg(unix)]
 
 use std::time::Duration;
 

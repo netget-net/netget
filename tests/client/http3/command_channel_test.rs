@@ -1,6 +1,5 @@
 //! Injected commands on an authenticated live HTTP/3 connection.
 
-#![cfg(feature = "http3")]
 
 use std::time::Duration;
 

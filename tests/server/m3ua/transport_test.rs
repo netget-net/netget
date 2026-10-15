@@ -12,7 +12,7 @@
 //!
 //! These tests bind no ports of consequence and make no LLM calls.
 
-#[cfg(all(test, feature = "m3ua"))]
+#[cfg(unix)]
 mod m3ua_transport_test {
     use netget::server::m3ua::{bind_listener, M3uaTransport};
     use std::net::SocketAddr;

@@ -8,7 +8,7 @@
 //!
 //! No Bluetooth adapter needed, so this is not ignored.
 
-#![cfg(all(test, feature = "bluetooth-ble-heart-rate"))]
+#![cfg(all(unix, feature = "bluetooth"))]
 
 use netget::server::bluetooth_ble_heart_rate::encode_heart_rate;
 

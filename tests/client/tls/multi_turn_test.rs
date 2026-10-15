@@ -21,7 +21,6 @@
 //! not `PONG2` - which is what proves the accumulated bytes survived rather than
 //! being silently dropped.
 
-#[cfg(all(test, feature = "tls"))]
 mod tls_client_multi_turn {
     use crate::helpers::*;
     use std::time::Duration;

@@ -17,7 +17,6 @@
 //! opcode 5, an error code, and a NUL-terminated message, because that is all a client
 //! parses.
 
-#![cfg(all(test, feature = "tftp"))]
 
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;

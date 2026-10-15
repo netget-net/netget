@@ -10,7 +10,6 @@
 //! 2. Whatever the failure, the response body may not contain the error text, the backend
 //!    URL, the model name or any other internal detail.
 
-#![cfg(feature = "openapi")]
 
 use crate::helpers::*;
 use serde_json::Value;

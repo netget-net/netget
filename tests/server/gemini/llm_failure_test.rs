@@ -15,7 +15,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features gemini --test server -- gemini::llm_failure --test-threads=100
 
-#![cfg(feature = "gemini")]
 
 use super::common::{self, raw_request, split_response};
 use netget::cli::management::ServerForm;

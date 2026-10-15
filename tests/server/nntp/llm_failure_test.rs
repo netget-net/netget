@@ -12,7 +12,6 @@
 //! Every code here is 4xx. None of them can be confused with 200/201 (ready), 211 (group
 //! selected), 220 (article follows) or 281 (authentication accepted).
 
-#![cfg(all(test, feature = "nntp"))]
 
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;

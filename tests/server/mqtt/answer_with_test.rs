@@ -12,7 +12,6 @@
 //! * a second CONNACK on one connection is not sent, logged
 //!   `decision=duplicate_response_dropped`, so the next packet the client reads is its SUBACK.
 
-#![cfg(feature = "mqtt")]
 
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;

@@ -24,83 +24,44 @@ use super::case::{EvalCase, Expect, Probe};
 /// Every case this build knows about, in protocol order.
 pub fn all_cases() -> Vec<EvalCase> {
     let mut cases = Vec::new();
-    #[cfg(feature = "http")]
     cases.extend(http());
-    #[cfg(feature = "dns")]
     cases.extend(dns());
-    #[cfg(feature = "whois")]
     cases.extend(whois());
-    #[cfg(feature = "gopher")]
     cases.extend(gopher());
-    #[cfg(feature = "dict")]
     cases.extend(dict());
-    #[cfg(feature = "gemini")]
     cases.extend(gemini());
-    #[cfg(feature = "beanstalkd")]
     cases.extend(beanstalkd());
-    #[cfg(feature = "zabbix")]
     cases.extend(zabbix());
-    #[cfg(feature = "gearman")]
     cases.extend(gearman());
-    #[cfg(feature = "nsq")]
     cases.extend(nsq());
-    #[cfg(feature = "finger")]
     cases.extend(finger());
-    #[cfg(feature = "redis")]
     cases.extend(redis());
-    #[cfg(feature = "postgresql")]
     cases.extend(postgresql());
-    #[cfg(feature = "mysql")]
     cases.extend(mysql());
-    #[cfg(feature = "ldap")]
     cases.extend(ldap());
-    #[cfg(feature = "ipp")]
     cases.extend(ipp());
-    #[cfg(feature = "syslog")]
     cases.extend(syslog());
-    #[cfg(feature = "ntp")]
     cases.extend(ntp());
-    #[cfg(feature = "telnet")]
     cases.extend(telnet());
-    #[cfg(feature = "tcp")]
     cases.extend(tcp());
-    #[cfg(feature = "ftp")]
     cases.extend(ftp());
-    #[cfg(feature = "udp")]
     cases.extend(udp());
-    #[cfg(feature = "prometheus")]
     cases.extend(prometheus());
-    #[cfg(feature = "otlp")]
     cases.extend(otlp());
-    #[cfg(feature = "docker")]
     cases.extend(docker());
-    #[cfg(feature = "vault")]
     cases.extend(vault());
-    #[cfg(feature = "bolt")]
     cases.extend(bolt());
-    #[cfg(feature = "smtp")]
     cases.extend(smtp());
-    #[cfg(feature = "pop3")]
     cases.extend(pop3());
-    #[cfg(feature = "imap")]
     cases.extend(imap());
-    #[cfg(feature = "nntp")]
     cases.extend(nntp());
-    #[cfg(feature = "memcached")]
     cases.extend(memcached());
-    #[cfg(feature = "mqtt")]
     cases.extend(mqtt());
-    #[cfg(feature = "coap")]
     cases.extend(coap());
-    #[cfg(feature = "modbus")]
     cases.extend(modbus());
-    #[cfg(feature = "snmp")]
     cases.extend(snmp());
-    #[cfg(feature = "sip")]
     cases.extend(sip());
-    #[cfg(feature = "websocket")]
     cases.extend(websocket());
-    #[cfg(feature = "nostr")]
     cases.extend(nostr());
     cases
 }
@@ -110,13 +71,11 @@ pub fn all_cases() -> Vec<EvalCase> {
 // status line, and four instructions an operator would plausibly type.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "http")]
 fn curl(path: &str) -> Probe {
     let url = format!("http://127.0.0.1:{{PORT}}{}", path);
     Probe::client("curl", &["-sS", "-i", "--max-time", "230", url.as_str()])
 }
 
-#[cfg(feature = "http")]
 fn http() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -160,7 +119,6 @@ fn http() -> Vec<EvalCase> {
 // model built a wire-correct packet with the right transaction id.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "dns")]
 fn dig(name: &str, rtype: &str) -> Probe {
     Probe::client(
         "dig",
@@ -176,7 +134,6 @@ fn dig(name: &str, rtype: &str) -> Probe {
     )
 }
 
-#[cfg(feature = "dns")]
 fn dns() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -229,13 +186,11 @@ fn dns() -> Vec<EvalCase> {
 // beyond the label, which is why these rows say `generic-transport`.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "whois")]
 fn whois_probe(query: &str) -> Probe {
     let line = format!("{}\r\n", query);
     Probe::generic("nc", &["-w", "235", "127.0.0.1", "{PORT}"]).stdin(line.as_str())
 }
 
-#[cfg(feature = "whois")]
 fn whois() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -270,13 +225,11 @@ fn whois() -> Vec<EvalCase> {
 // Gopher — curl, which speaks gopher natively (see `curl --version`).
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "gopher")]
 fn gopher_probe(selector: &str) -> Probe {
     let url = format!("gopher://127.0.0.1:{{PORT}}{}", selector);
     Probe::client("curl", &["-sS", "--max-time", "230", url.as_str()])
 }
 
-#[cfg(feature = "gopher")]
 fn gopher() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -309,14 +262,12 @@ fn gopher() -> Vec<EvalCase> {
 // status lines and un-stuffs the text blocks before printing them.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "dict")]
 fn dict_probe(args: &[&str]) -> Probe {
     let mut all = vec!["-h", "127.0.0.1", "-p", "{PORT}"];
     all.extend_from_slice(args);
     Probe::client("dict", &all)
 }
 
-#[cfg(feature = "dict")]
 fn dict() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -352,7 +303,6 @@ fn dict() -> Vec<EvalCase> {
 // prints the status and meta it parsed, then the body of a 2x.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "gemini")]
 const IGNITION_PROBE: &str = r#"import os, sys, tempfile, ignition
 ignition.set_default_hosts_file(os.path.join(tempfile.mkdtemp(), 'known_hosts'))
 r = ignition.request(sys.argv[1], timeout=230)
@@ -360,7 +310,6 @@ print(r.status, r.meta)
 print(r.raw_body.decode('utf-8', 'replace') if r.status.startswith('2') else '')
 "#;
 
-#[cfg(feature = "gemini")]
 fn gemini_probe(path: &str) -> Probe {
     let url = format!("gemini://127.0.0.1:{{PORT}}{}", path);
     // Python writes ignition's CryptographyDeprecationWarning to stderr while
@@ -370,7 +319,6 @@ fn gemini_probe(path: &str) -> Probe {
     Probe::client("python3", &["-c", IGNITION_PROBE, url.as_str()]).until_exit()
 }
 
-#[cfg(feature = "gemini")]
 fn gemini() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -414,7 +362,6 @@ fn gemini() -> Vec<EvalCase> {
 // probe dies with an IndentationError before it connects and the run reads as
 // an event that never reached the model. `probe_check.rs` runs this probe
 // against a mocked model.
-#[cfg(feature = "beanstalkd")]
 const GREENSTALK_PROBE: &str = r#"import sys, greenstalk
 c = greenstalk.Client(('127.0.0.1', int(sys.argv[1])), watch=sys.argv[3])
 try:
@@ -429,12 +376,10 @@ except greenstalk.Error as e:
     print(type(e).__name__)
 "#;
 
-#[cfg(feature = "beanstalkd")]
 fn beanstalkd_probe(mode: &str, tube: &str) -> Probe {
     Probe::client("python3", &["-c", GREENSTALK_PROBE, "{PORT}", mode, tube])
 }
 
-#[cfg(feature = "beanstalkd")]
 fn beanstalkd() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -469,7 +414,6 @@ fn beanstalkd() -> Vec<EvalCase> {
 // processed/failed counts it scanned from the response.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "zabbix")]
 fn zabbix_probe(host: &str, key: &str, value: &str) -> Probe {
     Probe::client(
         "zabbix_sender",
@@ -488,7 +432,6 @@ fn zabbix_probe(host: &str, key: &str, value: &str) -> Probe {
     )
 }
 
-#[cfg(feature = "zabbix")]
 fn zabbix() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -516,7 +459,6 @@ fn zabbix() -> Vec<EvalCase> {
 // WORK_FAIL.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "gearman")]
 fn gearman_probe(function: &str, workload: &str) -> Probe {
     Probe::client(
         "gearman",
@@ -534,7 +476,6 @@ fn gearman_probe(function: &str, workload: &str) -> Probe {
     )
 }
 
-#[cfg(feature = "gearman")]
 fn gearman() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -562,7 +503,6 @@ fn gearman() -> Vec<EvalCase> {
 // prints each message body it receives, exiting after -n of them.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "nsq")]
 fn to_nsq_probe(topic: &str, lines: &str) -> Probe {
     Probe::client(
         "to_nsq",
@@ -572,7 +512,6 @@ fn to_nsq_probe(topic: &str, lines: &str) -> Probe {
     .until_exit()
 }
 
-#[cfg(feature = "nsq")]
 fn nsq_tail_probe(topic: &str, n: &str) -> Probe {
     Probe::client(
         "nsq_tail",
@@ -588,7 +527,6 @@ fn nsq_tail_probe(topic: &str, n: &str) -> Probe {
     .until_exit()
 }
 
-#[cfg(feature = "nsq")]
 fn nsq() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -629,7 +567,6 @@ fn nsq() -> Vec<EvalCase> {
 // a refusal prints "server returned … code".
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "otlp")]
 fn otel_cli_probe(service: &str, span: &str) -> Probe {
     Probe::client(
         "otel-cli",
@@ -654,7 +591,6 @@ fn otel_cli_probe(service: &str, span: &str) -> Probe {
     .until_exit()
 }
 
-#[cfg(feature = "otlp")]
 fn otlp() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -691,12 +627,10 @@ fn otlp() -> Vec<EvalCase> {
 // `generic-transport` so the weaker evidence is visible in the table.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "finger")]
 fn finger_probe(query: &str) -> Probe {
     Probe::generic("nc", &["-w", "235", "127.0.0.1", "{PORT}"]).stdin(query)
 }
 
-#[cfg(feature = "finger")]
 fn finger() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -729,14 +663,12 @@ fn finger() -> Vec<EvalCase> {
 // Redis — redis-cli, the reference client, which decodes RESP for itself.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "redis")]
 fn redis_cli(args: &[&str]) -> Probe {
     let mut full = vec!["-h", "127.0.0.1", "-p", "{PORT}", "-t", "230"];
     full.extend_from_slice(args);
     Probe::client("redis-cli", &full)
 }
 
-#[cfg(feature = "redis")]
 fn redis() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -776,7 +708,6 @@ fn redis() -> Vec<EvalCase> {
 // arrives, so a failure here may be at the handshake rather than at the query.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "postgresql")]
 fn psql(sql: &str) -> Probe {
     Probe::client(
         "psql",
@@ -800,7 +731,6 @@ fn psql(sql: &str) -> Probe {
     .env("PGSSLMODE", "disable")
 }
 
-#[cfg(feature = "postgresql")]
 fn postgresql() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -853,10 +783,8 @@ fn postgresql() -> Vec<EvalCase> {
 // the case is recorded `client-missing` rather than silently passing.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "mysql")]
 const MYSQL_8_CLIENT: &str = "/opt/homebrew/opt/mysql@8.0/bin/mysql";
 
-#[cfg(feature = "mysql")]
 fn mysql_cli(sql: &str) -> Probe {
     Probe::client(
         MYSQL_8_CLIENT,
@@ -877,7 +805,6 @@ fn mysql_cli(sql: &str) -> Probe {
     )
 }
 
-#[cfg(feature = "mysql")]
 fn mysql() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -911,7 +838,6 @@ fn mysql() -> Vec<EvalCase> {
 // LDAP — ldapsearch, OpenLDAP's own client.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "ldap")]
 fn ldapsearch(base: &str, filter: &str) -> Probe {
     // Bind, then search, one model call each. A bind answered with a
     // diagnostic message makes ldapsearch print `ldap_bind: Success (0)` and
@@ -937,7 +863,6 @@ fn ldapsearch(base: &str, filter: &str) -> Probe {
     .until_exit()
 }
 
-#[cfg(feature = "ldap")]
 fn ldap() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -974,10 +899,8 @@ fn ldap() -> Vec<EvalCase> {
 // test file. It validates the IPP encoding itself, so a pass is strong.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "ipp")]
 const IPPTOOL_GET_ATTRS: &str = "/usr/share/cups/ipptool/get-printer-attributes.test";
 
-#[cfg(feature = "ipp")]
 fn ipptool() -> Probe {
     // `-v` echoes the request before it is sent and the answer only once it
     // arrives, with the whole model call in between — so this client is done
@@ -995,7 +918,6 @@ fn ipptool() -> Probe {
     .until_exit()
 }
 
-#[cfg(feature = "ipp")]
 fn ipp() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -1023,12 +945,10 @@ fn ipp() -> Vec<EvalCase> {
 // `nc -u` carries the datagram instead.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "syslog")]
 fn syslog_probe(message: &str) -> Probe {
     Probe::generic("nc", &["-u", "-w", "1", "127.0.0.1", "{PORT}"]).stdin(message)
 }
 
-#[cfg(feature = "syslog")]
 fn syslog() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -1057,7 +977,6 @@ fn syslog() -> Vec<EvalCase> {
 // is already written — and so the results file says "no client", not "passed".
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "ntp")]
 fn ntp() -> Vec<EvalCase> {
     vec![EvalCase::unavailable(
         "ntp/current-time",
@@ -1073,7 +992,6 @@ fn ntp() -> Vec<EvalCase> {
 // Telnet — curl speaks telnet:// and performs real option negotiation.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "telnet")]
 fn telnet_probe(input: Option<&str>) -> Probe {
     // `-N`: curl buffers a telnet session's output when stdout is a pipe, so without it
     // nothing reached the probe until `--max-time` ended the session — every telnet run took
@@ -1094,7 +1012,6 @@ fn telnet_probe(input: Option<&str>) -> Probe {
     }
 }
 
-#[cfg(feature = "telnet")]
 fn telnet() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -1127,12 +1044,10 @@ fn telnet() -> Vec<EvalCase> {
 // third-party client to implement.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "tcp")]
 fn nc_tcp(input: &str) -> Probe {
     Probe::generic("nc", &["-w", "235", "127.0.0.1", "{PORT}"]).stdin(input)
 }
 
-#[cfg(feature = "tcp")]
 fn tcp() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -1163,7 +1078,6 @@ fn tcp() -> Vec<EvalCase> {
 // FTP — inetutils `ftp`, which takes the port as a positional argument.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "ftp")]
 fn ftp_probe(script: &str) -> Probe {
     // Several model calls in a row (banner, USER, PASS, PWD) with `-v` narrating each one as it
     // lands, so the client talks between calls; the idle settle cut it off after the banner
@@ -1178,7 +1092,6 @@ fn ftp_probe(script: &str) -> Probe {
         .until_exit()
 }
 
-#[cfg(feature = "ftp")]
 fn ftp() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -1210,12 +1123,10 @@ fn ftp() -> Vec<EvalCase> {
 // UDP — nc -u. Same caveat as TCP.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "udp")]
 fn nc_udp(input: &str) -> Probe {
     Probe::generic("nc", &["-u", "-w", "235", "127.0.0.1", "{PORT}"]).stdin(input)
 }
 
-#[cfg(feature = "udp")]
 fn udp() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -1243,7 +1154,6 @@ fn udp() -> Vec<EvalCase> {
 // probe output for the content checks.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "prometheus")]
 fn promtool_scrape() -> Probe {
     Probe::client(
         "sh",
@@ -1255,7 +1165,6 @@ fn promtool_scrape() -> Probe {
     )
 }
 
-#[cfg(feature = "prometheus")]
 fn prometheus() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -1290,7 +1199,6 @@ fn prometheus() -> Vec<EvalCase> {
 // machine's own daemon is never consulted.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "docker")]
 fn docker_cli(args: &[&str]) -> Probe {
     let mut all = vec!["-H", "tcp://127.0.0.1:{PORT}"];
     all.extend_from_slice(args);
@@ -1300,7 +1208,6 @@ fn docker_cli(args: &[&str]) -> Probe {
         .env("DOCKER_CONFIG", "/tmp/netget-eval-docker-config")
 }
 
-#[cfg(feature = "docker")]
 fn docker() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -1334,7 +1241,6 @@ fn docker() -> Vec<EvalCase> {
 // path so no token helper from the operator's own config is read.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "vault")]
 fn vault_cli(args: &[&str]) -> Probe {
     Probe::client("vault", args)
         .env("VAULT_ADDR", "http://127.0.0.1:{PORT}")
@@ -1342,7 +1248,6 @@ fn vault_cli(args: &[&str]) -> Probe {
         .env("HOME", "/tmp/netget-eval-vault-home")
 }
 
-#[cfg(feature = "vault")]
 fn vault() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -1377,7 +1282,6 @@ fn vault() -> Vec<EvalCase> {
 // read, and --non-interactive keeps it from waiting on a terminal.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "bolt")]
 fn bolt_shell(query: &str) -> Probe {
     Probe::client(
         "cypher-shell",
@@ -1401,7 +1305,6 @@ fn bolt_shell(query: &str) -> Probe {
     .until_exit()
 }
 
-#[cfg(feature = "bolt")]
 fn bolt() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -1444,7 +1347,6 @@ fn bolt() -> Vec<EvalCase> {
 // about: every extra command is another model call inside the probe's 240s.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "smtp")]
 const SMTPLIB_PROBE: &str = r#"import sys, smtplib
 port, mode = int(sys.argv[1]), sys.argv[2]
 def text(msg):
@@ -1465,12 +1367,10 @@ except Exception as e:
     print(type(e).__name__, e)
 "#;
 
-#[cfg(feature = "smtp")]
 fn smtp_probe(mode: &str, recipient: &str) -> Probe {
     Probe::client("python3", &["-c", SMTPLIB_PROBE, "{PORT}", mode, recipient]).until_exit()
 }
 
-#[cfg(feature = "smtp")]
 fn smtp() -> Vec<EvalCase> {
     const DOMAIN_POLICY: &str = "Accept mail addressed to anyone at example.com. Refuse mail \
                                  for any other domain.";
@@ -1501,7 +1401,6 @@ fn smtp() -> Vec<EvalCase> {
     ]
 }
 
-#[cfg(feature = "pop3")]
 const POPLIB_PROBE: &str = r#"import sys, poplib
 port, mode = int(sys.argv[1]), sys.argv[2]
 def text(b):
@@ -1523,12 +1422,10 @@ except Exception as e:
     print(type(e).__name__, e)
 "#;
 
-#[cfg(feature = "pop3")]
 fn pop3_probe(mode: &str) -> Probe {
     Probe::client("python3", &["-c", POPLIB_PROBE, "{PORT}", mode]).until_exit()
 }
 
-#[cfg(feature = "pop3")]
 fn pop3() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -1549,7 +1446,6 @@ fn pop3() -> Vec<EvalCase> {
     ]
 }
 
-#[cfg(feature = "imap")]
 const IMAPLIB_PROBE: &str = r#"import sys, imaplib
 port, mode = int(sys.argv[1]), sys.argv[2]
 def text(b):
@@ -1571,12 +1467,10 @@ except Exception as e:
     print(type(e).__name__, e)
 "#;
 
-#[cfg(feature = "imap")]
 fn imap_probe(mode: &str) -> Probe {
     Probe::client("python3", &["-c", IMAPLIB_PROBE, "{PORT}", mode]).until_exit()
 }
 
-#[cfg(feature = "imap")]
 fn imap() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -1598,7 +1492,6 @@ fn imap() -> Vec<EvalCase> {
     ]
 }
 
-#[cfg(feature = "nntp")]
 const NNTPLIB_PROBE: &str = r#"import sys, nntplib
 port, mode, arg = int(sys.argv[1]), sys.argv[2], sys.argv[3]
 try:
@@ -1617,14 +1510,12 @@ except Exception as e:
     print(type(e).__name__, e)
 "#;
 
-#[cfg(feature = "nntp")]
 fn nntp_probe(mode: &str, arg: &str) -> Probe {
     // nntplib reads the greeting and then issues CAPABILITIES before the command
     // under test, so every case is at least three model calls.
     Probe::client("python3", &["-c", NNTPLIB_PROBE, "{PORT}", mode, arg]).until_exit()
 }
 
-#[cfg(feature = "nntp")]
 fn nntp() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -1666,7 +1557,6 @@ fn nntp() -> Vec<EvalCase> {
 // timeout.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "memcached")]
 const PYMEMCACHE_PROBE: &str = r#"import sys
 from pymemcache.client.base import Client
 c = Client(('127.0.0.1', int(sys.argv[1])), connect_timeout=30, timeout=230)
@@ -1683,12 +1573,10 @@ except Exception as e:
     print(type(e).__name__, e)
 "#;
 
-#[cfg(feature = "memcached")]
 fn memcached_probe(mode: &str, key: &str) -> Probe {
     Probe::client("python3", &["-c", PYMEMCACHE_PROBE, "{PORT}", mode, key])
 }
 
-#[cfg(feature = "memcached")]
 fn memcached() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -1724,7 +1612,6 @@ fn memcached() -> Vec<EvalCase> {
 // model mid-case. `-W 230` bounds the whole session.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "mqtt")]
 fn mosquitto_sub(client_id: &str, topic: &str) -> Probe {
     Probe::client(
         "mosquitto_sub",
@@ -1750,7 +1637,6 @@ fn mosquitto_sub(client_id: &str, topic: &str) -> Probe {
     )
 }
 
-#[cfg(feature = "mqtt")]
 fn mqtt() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -1783,7 +1669,6 @@ fn mqtt() -> Vec<EvalCase> {
 // (measured: still waiting after 3 minutes against a silent listener).
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "coap")]
 fn coap_probe(path: &str) -> Probe {
     let uri = format!("coap://127.0.0.1:{{PORT}}{}", path);
     Probe::client(
@@ -1792,7 +1677,6 @@ fn coap_probe(path: &str) -> Probe {
     )
 }
 
-#[cfg(feature = "coap")]
 fn coap() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -1822,7 +1706,6 @@ fn coap() -> Vec<EvalCase> {
 // retries=0` makes it wait once and never resend.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "modbus")]
 const PYMODBUS_PROBE: &str = r#"import sys
 from pymodbus.client import ModbusTcpClient
 c = ModbusTcpClient('127.0.0.1', port=int(sys.argv[1]), timeout=230, retries=0)
@@ -1841,12 +1724,10 @@ finally:
     c.close()
 "#;
 
-#[cfg(feature = "modbus")]
 fn modbus_probe(address: &str, count: &str) -> Probe {
     Probe::client("python3", &["-c", PYMODBUS_PROBE, "{PORT}", address, count])
 }
 
-#[cfg(feature = "modbus")]
 fn modbus() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -1874,7 +1755,6 @@ fn modbus() -> Vec<EvalCase> {
 // does not depend on installed MIBs; `-t 230 -r 0` waits once and never resends.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "snmp")]
 fn snmpget(oids: &[&str]) -> Probe {
     let mut args = vec![
         "-On",
@@ -1892,12 +1772,9 @@ fn snmpget(oids: &[&str]) -> Probe {
     Probe::client("snmpget", &args)
 }
 
-#[cfg(feature = "snmp")]
 const SYS_DESCR: &str = "1.3.6.1.2.1.1.1.0";
-#[cfg(feature = "snmp")]
 const SYS_NAME: &str = "1.3.6.1.2.1.1.5.0";
 
-#[cfg(feature = "snmp")]
 fn snmp() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -1927,7 +1804,6 @@ fn snmp() -> Vec<EvalCase> {
 // `-vv` prints the request before it is answered, so this is `until_exit()`.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "sip")]
 fn sipsak_probe() -> Probe {
     Probe::client(
         "sipsak",
@@ -1936,7 +1812,6 @@ fn sipsak_probe() -> Probe {
     .until_exit()
 }
 
-#[cfg(feature = "sip")]
 fn sip() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -1968,7 +1843,6 @@ fn sip() -> Vec<EvalCase> {
 // before the first message is handled.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "websocket")]
 fn websocat_probe(send: Option<&str>) -> Probe {
     let probe = Probe {
         hold_stdin: true,
@@ -1980,7 +1854,6 @@ fn websocat_probe(send: Option<&str>) -> Probe {
     }
 }
 
-#[cfg(feature = "websocket")]
 fn websocket() -> Vec<EvalCase> {
     vec![
         EvalCase::new(
@@ -2010,10 +1883,8 @@ fn websocket() -> Vec<EvalCase> {
 
 /// The key the eval's notes are signed with. Any valid secp256k1 secret works;
 /// this one is fixed so a run is reproducible.
-#[cfg(feature = "nostr")]
 const NOSTR_EVAL_KEY: &str = "7f7ff03d123792d6ac594bfa67bf6d0c0ab55b6b1fdb6249303fe861f1ccba9a";
 
-#[cfg(feature = "nostr")]
 fn nak_publish(content: &str) -> Probe {
     Probe::client(
         "nak",
@@ -2029,7 +1900,6 @@ fn nak_publish(content: &str) -> Probe {
     .until_exit()
 }
 
-#[cfg(feature = "nostr")]
 fn nostr() -> Vec<EvalCase> {
     vec![
         EvalCase::new(

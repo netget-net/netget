@@ -22,7 +22,6 @@
 //! the upstream release tarball from https://github.com/prometheus/prometheus/releases (the
 //! `prometheus` apt package's promtool is too old to lint OpenMetrics-era rules).
 
-#![cfg(feature = "prometheus")]
 
 use netget::cli::management::ServerForm;
 use netget::state::app_state::AppState;

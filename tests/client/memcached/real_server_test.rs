@@ -21,7 +21,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features memcached --test client -- memcached::real_server_test --test-threads=100
 
-#![cfg(all(test, feature = "memcached"))]
 
 use crate::helpers::real_server::{missing_binary, run_tool, InstallHint, RealServer};
 use crate::helpers::*;

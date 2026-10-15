@@ -12,7 +12,6 @@
 //! the client then never read the reply and the `at_most` rule quietly recorded 0. Requiring
 //! exactly one call is what makes the reply-reading path observable.
 
-#[cfg(all(test, feature = "nntp"))]
 mod nntp_client_tests {
     use crate::helpers::*;
     use std::time::Duration;

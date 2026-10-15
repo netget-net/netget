@@ -19,7 +19,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features tcp,http \
 //!       --test llm_concurrency_default_test -- --test-threads=100
 
-#![cfg(all(feature = "tcp", feature = "http"))]
 // `mod helpers` compiles the whole shared E2E harness into this test binary,
 // which uses a small slice of it. Same situation as `tests/server.rs`; silence
 // the noise rather than adding ~60 warnings to the lint job's output.

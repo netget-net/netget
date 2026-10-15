@@ -18,7 +18,6 @@
 //! This test is **not** `#[ignore]`d and does **not** skip when libcoap is missing —
 //! see `require_coap_client`.
 
-#![cfg(feature = "coap")]
 
 use crate::server::helpers::*;
 use std::time::Duration;

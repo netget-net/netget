@@ -11,7 +11,6 @@
 //! and a close, which is IRC's own way of saying "this link is over, here is why" and is what
 //! unblocks a client mid-registration.
 
-#![cfg(feature = "irc")]
 
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;

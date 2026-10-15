@@ -5,7 +5,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features nsq --test server -- nsq::wire --test-threads=100
 
-#![cfg(feature = "nsq")]
 
 use netget::server::nsq::wire::{self, Command};
 use proptest::prelude::*;

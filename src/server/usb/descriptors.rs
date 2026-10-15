@@ -72,7 +72,7 @@ pub fn build_device_descriptor(
 /// - Byte 0: Modifier keys (Ctrl, Shift, Alt, GUI)
 /// - Byte 1: Reserved
 /// - Bytes 2-7: Up to 6 simultaneous key presses
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 pub fn build_hid_keyboard_report_descriptor() -> Vec<u8> {
     vec![
         0x05, 0x01, // Usage Page (Generic Desktop)
@@ -117,7 +117,7 @@ pub fn build_hid_keyboard_report_descriptor() -> Vec<u8> {
 
 /// Build a complete HID keyboard configuration descriptor
 /// Includes: Configuration, Interface, HID, and Endpoint descriptors
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 pub fn build_hid_keyboard_config_descriptor() -> Vec<u8> {
     let mut desc = Vec::new();
 
@@ -233,13 +233,13 @@ pub fn build_language_id_descriptor() -> Vec<u8> {
 
 /// HID keyboard input report builder
 /// 8 bytes: [modifiers, reserved, key1, key2, key3, key4, key5, key6]
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 pub struct KeyboardReport {
     pub modifiers: u8, // Bit flags for Ctrl, Shift, Alt, GUI
     pub keys: [u8; 6], // Up to 6 simultaneous key presses
 }
 
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 impl KeyboardReport {
     /// Create empty keyboard report (no keys pressed)
     pub fn new() -> Self {
@@ -264,7 +264,7 @@ impl KeyboardReport {
     }
 }
 
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 impl Default for KeyboardReport {
     fn default() -> Self {
         Self::new()
@@ -272,7 +272,7 @@ impl Default for KeyboardReport {
 }
 
 /// HID keyboard modifier key bit positions
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 pub mod keyboard_modifiers {
     pub const LEFT_CTRL: u8 = 0x01;
     pub const LEFT_SHIFT: u8 = 0x02;
@@ -286,7 +286,7 @@ pub mod keyboard_modifiers {
 
 /// HID keyboard usage codes (scan codes)
 /// These are the values that go in the key array (bytes 2-7)
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 pub mod keyboard_usage {
     pub const NONE: u8 = 0x00;
     pub const ERROR_ROLLOVER: u8 = 0x01;
@@ -359,7 +359,7 @@ pub mod keyboard_usage {
 
 /// Helper to convert character to HID keyboard usage code and modifiers
 /// Returns (usage_code, needs_shift)
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 pub fn char_to_usage(ch: char) -> Option<(u8, bool)> {
     match ch {
         'a'..='z' => Some((keyboard_usage::A + (ch as u8 - b'a'), false)),
@@ -415,7 +415,7 @@ pub fn char_to_usage(ch: char) -> Option<(u8, bool)> {
 /// - Byte 1: X movement (signed, relative)
 /// - Byte 2: Y movement (signed, relative)
 /// - Byte 3: Wheel movement (signed, vertical scroll)
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 pub fn build_hid_mouse_report_descriptor() -> Vec<u8> {
     vec![
         0x05, 0x01, // Usage Page (Generic Desktop)
@@ -459,7 +459,7 @@ pub fn build_hid_mouse_report_descriptor() -> Vec<u8> {
 
 /// Build a complete HID mouse configuration descriptor
 /// Includes: Configuration, Interface, HID, and Endpoint descriptors
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 pub fn build_hid_mouse_config_descriptor() -> Vec<u8> {
     let mut desc = Vec::new();
 
@@ -525,7 +525,7 @@ pub fn build_hid_mouse_config_descriptor() -> Vec<u8> {
 
 /// HID mouse input report builder
 /// 4 bytes: [buttons, x, y, wheel]
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 pub struct MouseReport {
     pub buttons: u8, // Bit 0: left, Bit 1: right, Bit 2: middle
     pub x: i8,       // X movement (-127 to 127)
@@ -533,7 +533,7 @@ pub struct MouseReport {
     pub wheel: i8,   // Wheel movement (-127 to 127)
 }
 
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 impl MouseReport {
     /// Create empty mouse report (no movement, no buttons)
     pub fn new() -> Self {
@@ -551,7 +551,7 @@ impl MouseReport {
     }
 }
 
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 impl Default for MouseReport {
     fn default() -> Self {
         Self::new()
@@ -559,7 +559,7 @@ impl Default for MouseReport {
 }
 
 /// HID mouse button bit positions
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 pub mod mouse_buttons {
     pub const LEFT: u8 = 0x01;
     pub const RIGHT: u8 = 0x02;
@@ -572,7 +572,7 @@ pub mod mouse_buttons {
 
 /// FIDO HID report descriptor (CTAPHID protocol)
 /// Uses 64-byte input and output reports for CTAPHID transport
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub const FIDO_HID_REPORT_DESCRIPTOR: &[u8] = &[
     0x06, 0xD0, 0xF1, // Usage Page (FIDO Alliance)
     0x09, 0x01, // Usage (U2F Authenticator Device)
@@ -596,7 +596,7 @@ pub const FIDO_HID_REPORT_DESCRIPTOR: &[u8] = &[
 
 /// Build a complete FIDO2 HID configuration descriptor
 /// Includes: Configuration, Interface, HID, and Endpoint descriptors
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub fn build_fido2_hid_config_descriptor() -> Vec<u8> {
     let mut desc = Vec::new();
 
@@ -674,7 +674,7 @@ pub fn build_fido2_hid_config_descriptor() -> Vec<u8> {
 // ============================================================================
 
 /// CDC ACM descriptor subtypes
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 pub mod cdc_descriptor_subtype {
     pub const HEADER: u8 = 0x00;
     pub const CALL_MANAGEMENT: u8 = 0x01;
@@ -684,7 +684,7 @@ pub mod cdc_descriptor_subtype {
 
 /// Build CDC ACM configuration descriptor
 /// CDC ACM uses two interfaces: Communication (control) and Data (bulk I/O)
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 pub fn build_cdc_acm_config_descriptor() -> Vec<u8> {
     let mut desc = Vec::new();
 
@@ -805,7 +805,7 @@ pub fn build_cdc_acm_config_descriptor() -> Vec<u8> {
 
 /// CDC ACM Line Coding structure
 /// Used in SET_LINE_CODING and GET_LINE_CODING requests
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Debug, Clone, Copy)]
 pub struct LineCoding {
     pub baud_rate: u32, // Bits per second
@@ -814,7 +814,7 @@ pub struct LineCoding {
     pub data_bits: u8,  // 5, 6, 7, 8, or 16
 }
 
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 impl LineCoding {
     /// Create default line coding (115200 8N1)
     pub fn default_115200_8n1() -> Self {
@@ -869,14 +869,14 @@ impl LineCoding {
 
 /// CDC ACM Control Line State
 /// DTR (Data Terminal Ready) and RTS (Request To Send)
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Debug, Clone, Copy)]
 pub struct ControlLineState {
     pub dtr: bool, // Data Terminal Ready
     pub rts: bool, // Request To Send
 }
 
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 impl ControlLineState {
     pub fn from_value(value: u16) -> Self {
         Self {
@@ -903,7 +903,7 @@ impl ControlLineState {
 
 /// Build USB Mass Storage Class configuration descriptor
 /// MSC uses Bulk-Only Transport (BOT) with two bulk endpoints (IN + OUT)
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 pub fn build_msc_config_descriptor() -> Vec<u8> {
     let mut desc = Vec::new();
 
@@ -965,7 +965,7 @@ pub fn build_msc_config_descriptor() -> Vec<u8> {
 
 /// Command Block Wrapper (CBW) for Bulk-Only Transport
 /// Size: Exactly 31 bytes
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]
 pub struct CommandBlockWrapper {
@@ -978,7 +978,7 @@ pub struct CommandBlockWrapper {
     pub cb: [u8; 16],              // SCSI command block
 }
 
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 impl CommandBlockWrapper {
     pub const SIGNATURE: u32 = 0x43425355; // "USBC" in little-endian
     pub const SIZE: usize = 31;
@@ -1024,7 +1024,7 @@ impl CommandBlockWrapper {
 
 /// Command Status Wrapper (CSW) for Bulk-Only Transport
 /// Size: Exactly 13 bytes
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]
 pub struct CommandStatusWrapper {
@@ -1034,7 +1034,7 @@ pub struct CommandStatusWrapper {
     pub status: u8,        // 0x00=success, 0x01=fail, 0x02=phase_error
 }
 
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 impl CommandStatusWrapper {
     pub const SIGNATURE: u32 = 0x53425355; // "USBS" in little-endian
     pub const SIZE: usize = 13;
@@ -1063,7 +1063,7 @@ impl CommandStatusWrapper {
 }
 
 /// SCSI command opcodes (subset)
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 pub mod scsi_opcode {
     pub const TEST_UNIT_READY: u8 = 0x00;
     pub const REQUEST_SENSE: u8 = 0x03;
@@ -1078,7 +1078,7 @@ pub mod scsi_opcode {
 }
 
 /// SCSI sense key codes
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 pub mod scsi_sense_key {
     pub const NO_SENSE: u8 = 0x00;
     pub const RECOVERED_ERROR: u8 = 0x01;

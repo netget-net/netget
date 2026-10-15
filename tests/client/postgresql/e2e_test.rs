@@ -3,7 +3,6 @@
 //! These tests verify PostgreSQL client functionality by spawning the actual NetGet binary
 //! and testing client behavior as a black-box.
 
-#[cfg(all(test, feature = "postgresql"))]
 mod postgresql_client_tests {
     use crate::helpers::*;
 

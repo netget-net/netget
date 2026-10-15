@@ -36,40 +36,40 @@
 //! entries, above it with 32-bit ones — so a volume that misses it is not "a small FAT16", it is
 //! a volume the host decodes with the wrong entry width.
 
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use anyhow::{bail, Result};
 
 /// Bytes per sector. Fixed: `READ CAPACITY(10)` reports it and the BPB repeats it.
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 pub const BYTES_PER_SECTOR: usize = 512;
 
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 const SECTORS_PER_CLUSTER: u8 = 1;
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 const RESERVED_SECTORS: u16 = 1;
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 const NUM_FATS: u8 = 2;
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 const ROOT_ENTRIES: u16 = 512;
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 const FAT_SECTORS: u16 = 32;
 
 /// Default volume size in sectors: 8192 * 512 = 4 MiB, which gives 8095 data clusters.
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 pub const DEFAULT_TOTAL_SECTORS: u16 = 8192;
 
 /// Root directory occupies 512 entries of 32 bytes.
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 const ROOT_DIR_SECTORS: u32 = (ROOT_ENTRIES as u32 * 32).div_ceil(BYTES_PER_SECTOR as u32);
 
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 const ROOT_DIR_LBA: u32 = RESERVED_SECTORS as u32 + (NUM_FATS as u32 * FAT_SECTORS as u32);
 
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 const DATA_START_LBA: u32 = ROOT_DIR_LBA + ROOT_DIR_SECTORS;
 
 /// One file the model asked for.
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Debug, Clone)]
 pub struct FileSpec {
     /// 8.3 name. Case is normalised to upper, as FAT stores it.
@@ -80,7 +80,7 @@ pub struct FileSpec {
 }
 
 /// Where a cluster's data lives.
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 pub fn cluster_lba(cluster: u16) -> u32 {
     DATA_START_LBA + (cluster as u32 - 2) * SECTORS_PER_CLUSTER as u32
 }
@@ -89,7 +89,7 @@ pub fn cluster_lba(cluster: u16) -> u32 {
 ///
 /// `total_sectors` sizes the volume; `volume_label` is the 11-character label a host shows.
 /// Files are allocated consecutive clusters from cluster 2, in the order given.
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 pub fn build_volume(files: &[FileSpec], total_sectors: u16, volume_label: &str) -> Result<Vec<u8>> {
     if files.len() > ROOT_ENTRIES as usize {
         bail!(
@@ -199,7 +199,7 @@ pub fn build_volume(files: &[FileSpec], total_sectors: u16, volume_label: &str) 
     Ok(image)
 }
 
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 fn write_boot_sector(image: &mut [u8], total_sectors: u16, volume_label: &str) {
     let bs = &mut image[..BYTES_PER_SECTOR];
 
@@ -233,7 +233,7 @@ fn write_boot_sector(image: &mut [u8], total_sectors: u16, volume_label: &str) {
 }
 
 /// An 11-byte, space-padded, upper-case volume label.
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 fn encode_label(label: &str) -> [u8; 11] {
     let mut out = [b' '; 11];
     for (slot, byte) in out.iter_mut().zip(
@@ -251,7 +251,7 @@ fn encode_label(label: &str) -> [u8; 11] {
 ///
 /// Rejects rather than truncates. A model that asks for `configuration.json` and silently gets
 /// `CONFIGUR.JSO` has been lied to, and the file it then tells the user about does not exist.
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 fn encode_8_3(name: &str) -> Result<[u8; 11]> {
     let upper = name.trim().to_ascii_uppercase();
     let (base, ext) = match upper.rsplit_once('.') {

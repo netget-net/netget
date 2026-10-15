@@ -27,7 +27,6 @@
 //! - `test_websocket_handshake_backend_failure_is_tagged_fail_closed`: 1 (`open_server`) plus
 //!   one deliberately unanswerable `websocket_handshake`, which the repair loop retries
 
-#![cfg(feature = "websocket")]
 
 use crate::server::helpers::*;
 use std::time::Duration;

@@ -17,7 +17,6 @@
 //!   answered with **no** LLM call, and a malformed frame producing `-ERR` plus a hang-up;
 //! * the fail-closed path, where the backend is unreachable and the peer must get a
 //!   category rather than netget's internals.
-#[cfg(all(test, feature = "nats"))]
 mod nats_e2e_test {
     use crate::helpers::{start_netget_server, E2EResult, NetGetConfig};
     use netget::server::nats::{parse_frame, subject_matches, Frame, FrameError};

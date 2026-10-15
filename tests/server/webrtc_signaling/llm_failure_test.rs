@@ -22,7 +22,6 @@
 //! Nothing here may be answered with a *successful-looking* frame: an `error` is the only
 //! thing the server may invent on the model's behalf.
 
-#[cfg(all(test, feature = "webrtc"))]
 mod webrtc_signaling_llm_failure_tests {
     use crate::helpers::*;
     use futures::{SinkExt, StreamExt};

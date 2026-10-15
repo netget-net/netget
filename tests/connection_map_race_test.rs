@@ -29,12 +29,6 @@
 //!   --test connection_map_race_test -- --test-threads=100
 //! ```
 
-#![cfg(any(
-    feature = "tcp",
-    feature = "tls",
-    feature = "ssh-agent",
-    feature = "bitcoin"
-))]
 
 use netget::scripting::{EventHandler, EventHandlerConfig, EventHandlerType, EventPattern};
 use netget::state::app_state::AppState;
@@ -83,7 +77,6 @@ async fn tracked_connections(state: &Arc<AppState>, server_id: ServerId) -> usiz
 // TCP
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "tcp")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcp_payload_written_before_accept_is_answered() {
     use netget::llm::ollama_client::OllamaClient;
@@ -174,7 +167,6 @@ async fn tcp_payload_written_before_accept_is_answered() {
 /// `handle_data_with_actions` re-acquires the connection lock after its state check; the reader
 /// task removes the connection on EOF in between, and the merge step used to `unwrap()` the
 /// resulting `None`. A panicked socket task is silent — the server keeps reporting `Running`.
-#[cfg(feature = "tcp")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcp_write_then_immediate_close_does_not_panic_a_task() {
     use netget::llm::ollama_client::OllamaClient;
@@ -247,11 +239,9 @@ async fn tcp_write_then_immediate_close_does_not_panic_a_task() {
 // ---------------------------------------------------------------------------
 
 /// Certificate verifier that accepts anything — the server presents a self-signed cert.
-#[cfg(feature = "tls")]
 #[derive(Debug)]
 struct NoCertificateVerification;
 
-#[cfg(feature = "tls")]
 impl rustls::client::danger::ServerCertVerifier for NoCertificateVerification {
     fn verify_server_cert(
         &self,
@@ -295,7 +285,6 @@ impl rustls::client::danger::ServerCertVerifier for NoCertificateVerification {
 /// application data sent right behind the client's `Finished` is already buffered inside
 /// rustls when the reader task makes its first `read()` — it returns data without ever waiting
 /// on the I/O driver, while the registering task is still queued.
-#[cfg(feature = "tls")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tls_payload_written_at_handshake_completion_is_answered() {
     use netget::llm::ollama_client::OllamaClient;
@@ -402,7 +391,7 @@ async fn tls_payload_written_at_handshake_completion_is_answered() {
 /// The agent protocol is a strict request/response sequence, so a dropped request is not just
 /// slow — the frame has already been consumed from the read buffer, the client is blocked on a
 /// reply that will never come, and nothing retries. `ssh-add -l` hangs.
-#[cfg(all(unix, feature = "ssh-agent"))]
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn ssh_agent_request_written_before_accept_is_answered() {
     use netget::llm::ollama_client::OllamaClient;
@@ -515,7 +504,6 @@ async fn ssh_agent_request_written_before_accept_is_answered() {
 ///
 /// The insert lived inside `handle_connection_opened`, spawned alongside the reader task; a
 /// miss in `handle_data_with_actions` returned with no event, no queue and no log at all.
-#[cfg(feature = "bitcoin")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn bitcoin_version_written_before_accept_is_answered() {
     use bitcoin::consensus::{Decodable, Encodable};

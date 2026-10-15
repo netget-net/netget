@@ -8,7 +8,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features amqp --test server -- amqp::codec --test-threads=100
 
-#![cfg(feature = "amqp")]
 
 use netget::server::amqp::codec::Decoder;
 use serde_json::Value;

@@ -19,7 +19,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features smtp --test client -- smtp::command_channel --test-threads=100
 
-#![cfg(feature = "smtp")]
 
 use std::sync::Arc;
 use std::time::Duration;

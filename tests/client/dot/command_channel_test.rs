@@ -10,7 +10,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features dot --test client -- dot::command_channel --test-threads=100
 
-#![cfg(feature = "dot")]
 
 use std::time::Duration;
 

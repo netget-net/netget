@@ -45,7 +45,7 @@ npx @smotana/netget
 
 ## Notes
 
-- Prebuilt binaries use a portable feature set (no BLE/NFC/packet-capture on Linux, no SMB client). Build from source for `all-protocols`: https://github.com/smotanacom/netget
+- Prebuilt binaries need no system library, so on Linux and Windows they leave out the protocols that link one (packet capture, Bluetooth LE, the NFC client, USB devices, the SMB client); macOS ships those libraries and its binaries include them. For every protocol everywhere: `cargo install --locked netget-tool` (see https://github.com/smotanacom/netget).
 - Fallback downloads require the release's `SHA256SUMS`; the matching SHA-256 is
   verified while streaming before extracting the expected executable. Missing or
   ambiguous manifests and mismatches fail closed. Older releases without a manifest

@@ -25,7 +25,6 @@
 //! spawned, and credentials, region, profile and the EC2 metadata service overridden in the
 //! child's environment.
 
-#![cfg(all(test, feature = "s3"))]
 
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use serde_json::json;

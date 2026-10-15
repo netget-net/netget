@@ -24,7 +24,6 @@
 //! maturity ratings resting on nothing. `dig` ships in the macOS base system and in the
 //! `bind9-dnsutils` package present on the GitHub Ubuntu runner images.
 
-#![cfg(feature = "dns")]
 
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use tokio::process::Command;

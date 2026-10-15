@@ -22,7 +22,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features bolt --test server -- bolt::real_client --test-threads=100
 
-#![cfg(feature = "bolt")]
 
 use super::common;
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};

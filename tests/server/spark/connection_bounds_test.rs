@@ -15,7 +15,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features spark --test server -- \
 //!       spark::connection_bounds --test-threads=100
 
-#![cfg(all(test, feature = "spark"))]
 
 use std::time::Duration;
 

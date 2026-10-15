@@ -10,7 +10,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features whois --test server -- whois::record_fields --test-threads=100
 
-#![cfg(feature = "whois")]
 
 use netget::llm::actions::protocol_trait::{ActionResult, Server};
 use netget::server::whois::actions::{WhoisProtocol, MAX_EXTRA_FIELDS};

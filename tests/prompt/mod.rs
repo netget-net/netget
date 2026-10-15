@@ -150,27 +150,21 @@ async fn create_test_state_with_proxy() -> Arc<AppState> {
     state
 }
 
-#[cfg(all(
-    feature = "tcp",
-    feature = "http",
-    feature = "proxy",
-    feature = "ssh",
-    feature = "sqlite"
-))]
+#[cfg(all(unix, feature = "sqlite"))]
 #[tokio::test]
 async fn test_user_input_prompt_proxy_server() {
     let state = create_test_state_with_proxy().await;
     let user_input = "enable request filtering";
 
     // Get proxy async actions
-    #[cfg(feature = "proxy")]
+    #[cfg(unix)]
     let protocol_actions = {
         use netget::server::ProxyProtocol;
         let protocol = ProxyProtocol::new();
         protocol.get_async_actions(&state)
     };
 
-    #[cfg(not(feature = "proxy"))]
+    #[cfg(windows)]
     let protocol_actions = vec![];
 
     let system_prompt =
@@ -228,7 +222,7 @@ async fn test_user_input_prompt_proxy_server() {
     //
     // Asserting their absence keeps the deletion from silently coming back, which asserting
     // their presence obviously could not.
-    #[cfg(feature = "proxy")]
+    #[cfg(unix)]
     {
         for gone in [
             "configure_certificate",
@@ -247,13 +241,7 @@ async fn test_user_input_prompt_proxy_server() {
     }
 }
 
-#[cfg(all(
-    feature = "tcp",
-    feature = "http",
-    feature = "proxy",
-    feature = "ssh",
-    feature = "sqlite"
-))]
+#[cfg(all(unix, feature = "sqlite"))]
 #[tokio::test]
 async fn test_user_input_prompt() {
     // Create state WITHOUT any servers to trigger base_stack documentation
@@ -329,13 +317,7 @@ async fn test_user_input_prompt() {
     );
 }
 
-#[cfg(all(
-    feature = "tcp",
-    feature = "http",
-    feature = "proxy",
-    feature = "ssh",
-    feature = "sqlite"
-))]
+#[cfg(all(unix, feature = "sqlite"))]
 #[tokio::test]
 async fn test_user_input_prompt_after_docs_read() {
     // Create state and mark protocols as documented
@@ -416,13 +398,7 @@ async fn test_user_input_prompt_after_docs_read() {
     );
 }
 
-#[cfg(all(
-    feature = "tcp",
-    feature = "http",
-    feature = "proxy",
-    feature = "ssh",
-    feature = "sqlite"
-))]
+#[cfg(all(unix, feature = "sqlite"))]
 #[tokio::test]
 async fn test_user_input_prompt_no_scripting() {
     // Create state WITHOUT any servers to trigger base_stack documentation
@@ -486,13 +462,7 @@ async fn test_user_input_prompt_no_scripting() {
     );
 }
 
-#[cfg(all(
-    feature = "tcp",
-    feature = "http",
-    feature = "proxy",
-    feature = "ssh",
-    feature = "sqlite"
-))]
+#[cfg(all(unix, feature = "sqlite"))]
 #[tokio::test]
 async fn test_user_input_prompt_without_web_search() {
     // Create state WITHOUT any servers to trigger base_stack documentation
@@ -546,13 +516,7 @@ async fn test_user_input_prompt_without_web_search() {
     );
 }
 
-#[cfg(all(
-    feature = "tcp",
-    feature = "http",
-    feature = "proxy",
-    feature = "ssh",
-    feature = "sqlite"
-))]
+#[cfg(all(unix, feature = "sqlite"))]
 #[tokio::test]
 async fn test_network_event_prompt_for_proxy() {
     let state = create_test_state_with_proxy().await;
@@ -560,7 +524,7 @@ async fn test_network_event_prompt_for_proxy() {
     let event_description = "Intercepted HTTP request:\nGET https://example.com/api/data\nHeaders:\n  User-Agent: Mozilla/5.0\n  Accept: application/json";
 
     // Get proxy sync actions (with context)
-    #[cfg(feature = "proxy")]
+    #[cfg(unix)]
     let all_actions = {
         use netget::llm::actions::get_network_event_common_actions;
 
@@ -572,7 +536,7 @@ async fn test_network_event_prompt_for_proxy() {
         actions
     };
 
-    #[cfg(not(feature = "proxy"))]
+    #[cfg(windows)]
     let all_actions = {
         use netget::llm::actions::get_network_event_common_actions;
         get_network_event_common_actions()
@@ -601,7 +565,7 @@ async fn test_network_event_prompt_for_proxy() {
     assert!(prompt.contains("connections: 0"));
     assert!(!prompt.contains("Available Base Stacks"));
 
-    #[cfg(feature = "proxy")]
+    #[cfg(unix)]
     {
         assert!(prompt.contains("handle_request_pass"));
         assert!(prompt.contains("handle_request_block"));
@@ -609,13 +573,7 @@ async fn test_network_event_prompt_for_proxy() {
     }
 }
 
-#[cfg(all(
-    feature = "tcp",
-    feature = "http",
-    feature = "proxy",
-    feature = "ssh",
-    feature = "sqlite"
-))]
+#[cfg(all(unix, feature = "sqlite"))]
 #[tokio::test]
 async fn test_retry_mechanism_prompt() {
     // Test that retry mechanism includes previous error in prompt
@@ -716,7 +674,6 @@ async fn test_protocol_documentation_prompt() {
     let _state = Arc::new(AppState::new());
 
     // Create an HTTP server to get protocol-specific documentation
-    #[cfg(feature = "http")]
     {
         use netget::server::HttpProtocol;
 
@@ -748,7 +705,6 @@ async fn test_protocol_documentation_prompt() {
         assert!(doc.contains("E2E Testing:"));
     }
 
-    #[cfg(feature = "ssh")]
     {
         use netget::server::SshProtocol;
 
@@ -783,7 +739,6 @@ async fn test_protocol_documentation_prompt() {
 
 /// Test that read_documentation with multiple protocols includes examples for ALL protocols
 #[tokio::test]
-#[cfg(all(feature = "http", feature = "ssh", feature = "dns"))]
 async fn test_multi_protocol_documentation_examples() {
     use netget::llm::actions::tools::{execute_tool, ToolAction};
     use netget::state::app_state::WebSearchMode;
@@ -834,13 +789,7 @@ async fn test_multi_protocol_documentation_examples() {
     );
 }
 
-#[cfg(all(
-    feature = "tcp",
-    feature = "http",
-    feature = "proxy",
-    feature = "ssh",
-    feature = "sqlite"
-))]
+#[cfg(all(unix, feature = "sqlite"))]
 #[tokio::test]
 async fn test_feedback_prompt_server() {
     let state = Arc::new(AppState::new());
@@ -947,13 +896,7 @@ async fn test_feedback_prompt_server() {
     assert!(prompt.contains("update_instruction") || prompt.contains("Available"));
 }
 
-#[cfg(all(
-    feature = "tcp",
-    feature = "http",
-    feature = "proxy",
-    feature = "ssh",
-    feature = "sqlite"
-))]
+#[cfg(all(unix, feature = "sqlite"))]
 #[tokio::test]
 async fn test_feedback_prompt_client() {
     let state = Arc::new(AppState::new());

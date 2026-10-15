@@ -6,7 +6,7 @@
 //! what it is: an independent reading of the USB HID 1.11 item encoding, written so that a
 //! malformed report map fails here rather than on a stranger's host.
 
-#![cfg(all(test, feature = "bluetooth-ble-presenter"))]
+#![cfg(all(unix, feature = "bluetooth"))]
 
 use netget::llm::actions::protocol_trait::Protocol;
 use netget::server::bluetooth_ble_presenter::actions::BluetoothBlePresenterProtocol;

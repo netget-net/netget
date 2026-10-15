@@ -1,4 +1,3 @@
-#![cfg(feature = "gnmi")]
 mod helpers;
 use bytes::{Buf, BufMut, Bytes};
 use helpers::gnmi_peer as peer;

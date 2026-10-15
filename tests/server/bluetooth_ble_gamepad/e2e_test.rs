@@ -1,6 +1,6 @@
 //! End-to-end Bluetooth LE Gamepad Service tests for NetGet
 
-#![cfg(all(test, feature = "bluetooth-ble-gamepad"))]
+#![cfg(all(unix, feature = "bluetooth"))]
 
 use crate::helpers::{self, E2EResult, NetGetConfig};
 use std::time::Duration;

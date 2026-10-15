@@ -10,7 +10,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features tcp --test client_event_routing_test -- --test-threads=100
 
-#![cfg(feature = "tcp")]
 
 use std::time::Duration;
 

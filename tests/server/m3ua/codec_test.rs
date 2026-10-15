@@ -17,7 +17,7 @@
 //! So a two-octet value yields a **length field of 6** in a parameter that occupies **8 octets**.
 //! Both numbers appear in the same assertion below on purpose.
 
-#[cfg(all(test, feature = "m3ua"))]
+#[cfg(unix)]
 mod m3ua_codec_test {
     use netget::server::m3ua::codec;
 

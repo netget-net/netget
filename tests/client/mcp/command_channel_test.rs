@@ -8,7 +8,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features mcp --test client -- mcp::command_channel --test-threads=100
 
-#![cfg(feature = "mcp")]
 
 use std::sync::Arc;
 use std::time::Duration;

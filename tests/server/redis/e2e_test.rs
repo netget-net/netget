@@ -3,7 +3,6 @@
 //! These tests verify Redis server functionality using mock LLM responses.
 //! Test strategy: Mock Redis RESP protocol responses, < 10 LLM calls total.
 
-#[cfg(all(test, feature = "redis"))]
 mod redis_server_tests {
     use crate::helpers::*;
     use redis::AsyncCommands;

@@ -19,7 +19,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features gearman --test server -- gearman::real_client --test-threads=100
 
-#![cfg(feature = "gearman")]
 
 use super::common::{self, manual_handler, req, worker_handler, Chunk, Peer, Recorder};
 use crate::helpers::pcap_oracle::PcapOracle;

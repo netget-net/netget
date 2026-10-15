@@ -20,7 +20,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features tcp \
 //!       --test stop_server_stops_connections_test -- --test-threads=100
 
-#![cfg(feature = "tcp")]
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -292,7 +291,6 @@ async fn stopping_a_server_releases_its_port() {
 /// Telnet is the case the dashboard cares about most: a peer parked on a manual question sits
 /// idle for minutes by design, which is exactly the state in which a detached reader is
 /// invisible — the operator sees a stopped instance and a live session at the same time.
-#[cfg(feature = "telnet")]
 #[tokio::test(flavor = "multi_thread")]
 async fn stopping_a_telnet_server_disconnects_a_live_peer() {
     stopping_disconnects_a_peer_of("Telnet", b"").await;
@@ -302,7 +300,6 @@ async fn stopping_a_telnet_server_disconnects_a_live_peer() {
 ///
 /// Its own `FIRST_QUERY_READ_TIMEOUT` is 30s, comfortably longer than this test's 10s deadline,
 /// so a pass here is the stop doing the work rather than the protocol timing the peer out.
-#[cfg(feature = "whois")]
 #[tokio::test(flavor = "multi_thread")]
 async fn stopping_a_whois_server_disconnects_a_live_peer() {
     stopping_disconnects_a_peer_of("WHOIS", b"").await;
@@ -310,7 +307,6 @@ async fn stopping_a_whois_server_disconnects_a_live_peer() {
 
 /// DICT greets first and then waits for a command, so the peer holds an idle, greeted
 /// connection — the state its 300-second first-command bound would otherwise cover.
-#[cfg(feature = "dict")]
 #[tokio::test(flavor = "multi_thread")]
 async fn stopping_a_dict_server_disconnects_a_live_peer() {
     stopping_disconnects_a_peer_of("DICT", b"").await;
@@ -318,7 +314,6 @@ async fn stopping_a_dict_server_disconnects_a_live_peer() {
 
 /// Beanstalkd is client-speaks-first; a connected peer that has sent nothing is held by a task
 /// waiting on its first command line for up to 300 seconds.
-#[cfg(feature = "beanstalkd")]
 #[tokio::test(flavor = "multi_thread")]
 async fn stopping_a_beanstalkd_server_disconnects_a_live_peer() {
     stopping_disconnects_a_peer_of("Beanstalkd", b"").await;
@@ -326,7 +321,6 @@ async fn stopping_a_beanstalkd_server_disconnects_a_live_peer() {
 
 /// A Zabbix sender that has connected and sent half a header is held by a task waiting for
 /// the rest of it; the stop must end it rather than the read deadline.
-#[cfg(feature = "zabbix")]
 #[tokio::test(flavor = "multi_thread")]
 async fn stopping_a_zabbix_server_disconnects_a_live_peer() {
     stopping_disconnects_a_peer_of("Zabbix", b"ZBXD").await;
@@ -334,7 +328,6 @@ async fn stopping_a_zabbix_server_disconnects_a_live_peer() {
 
 /// A Gearman client that has connected and sent nothing is held by a task waiting on its first
 /// packet or admin line for up to 300 seconds.
-#[cfg(feature = "gearman")]
 #[tokio::test(flavor = "multi_thread")]
 async fn stopping_a_gearman_server_disconnects_a_live_peer() {
     stopping_disconnects_a_peer_of("Gearman", b"").await;
@@ -342,7 +335,6 @@ async fn stopping_a_gearman_server_disconnects_a_live_peer() {
 
 /// An NSQ client that has sent the V2 magic and no command is held by a task waiting for its
 /// first command for two heartbeat intervals (60 seconds by default).
-#[cfg(feature = "nsq")]
 #[tokio::test(flavor = "multi_thread")]
 async fn stopping_an_nsq_server_disconnects_a_live_peer() {
     stopping_disconnects_a_peer_of("NSQ", b"  V2").await;
@@ -350,7 +342,6 @@ async fn stopping_an_nsq_server_disconnects_a_live_peer() {
 
 /// An OTLP export whose body has not finished arriving is held by hyper reading it, under the
 /// two-minute idle bound; the stop must end it rather than that deadline.
-#[cfg(feature = "otlp")]
 #[tokio::test(flavor = "multi_thread")]
 async fn stopping_an_otlp_server_disconnects_a_live_peer() {
     stopping_disconnects_a_peer_of(
@@ -364,7 +355,6 @@ async fn stopping_an_otlp_server_disconnects_a_live_peer() {
 /// A Bolt client that has sent the magic and not yet its version proposals is held by a task
 /// waiting on the rest of the 20-byte handshake for up to 30 seconds; the stop must end it
 /// rather than that deadline.
-#[cfg(feature = "bolt")]
 #[tokio::test(flavor = "multi_thread")]
 async fn stopping_a_bolt_server_disconnects_a_live_peer() {
     stopping_disconnects_a_peer_of("Bolt", &[0x60, 0x60, 0xB0, 0x17]).await;
@@ -372,7 +362,6 @@ async fn stopping_a_bolt_server_disconnects_a_live_peer() {
 
 /// A Gemini peer that has connected and not yet started its TLS handshake is held by a task
 /// waiting on the ClientHello; the stop must end it rather than the handshake deadline.
-#[cfg(feature = "gemini")]
 #[tokio::test(flavor = "multi_thread")]
 async fn stopping_a_gemini_server_disconnects_a_live_peer() {
     stopping_disconnects_a_peer_of("Gemini", b"").await;
@@ -380,7 +369,6 @@ async fn stopping_a_gemini_server_disconnects_a_live_peer() {
 
 /// A Nostr peer that has sent half an HTTP request head is held by a task waiting on the rest
 /// for up to 30 seconds; the stop must end it rather than that deadline.
-#[cfg(feature = "nostr")]
 #[tokio::test(flavor = "multi_thread")]
 async fn stopping_a_nostr_relay_disconnects_a_live_peer() {
     stopping_disconnects_a_peer_of("Nostr", b"GET / HTTP/1.1\r\nHost: localhost\r\n").await;
@@ -391,7 +379,6 @@ async fn stopping_a_nostr_relay_disconnects_a_live_peer() {
 /// The task here is hyper's `serve_connection`, not a read loop netget wrote, so this is the
 /// evidence for the whole hyper-based family — around thirty protocols share the shape and were
 /// converted by the same mechanical edit.
-#[cfg(feature = "http")]
 #[tokio::test(flavor = "multi_thread")]
 async fn stopping_an_http_server_disconnects_a_live_peer() {
     stopping_disconnects_a_peer_of("HTTP", b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n").await;

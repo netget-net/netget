@@ -15,7 +15,6 @@
 //!
 //! `parse_snmp_message` therefore screens the datagram's TLV structure before rasn sees it.
 
-#![cfg(feature = "snmp")]
 
 use netget::server::snmp::SnmpServer;
 

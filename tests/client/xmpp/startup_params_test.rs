@@ -12,7 +12,7 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features xmpp --test client -- xmpp::startup_params --test-threads=100
 
-#![cfg(feature = "xmpp")]
+#![cfg(unix)]
 
 use std::time::Duration;
 

@@ -17,7 +17,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features svn --test server -- svn::framing
 
-#![cfg(feature = "svn")]
 
 use std::time::Duration;
 

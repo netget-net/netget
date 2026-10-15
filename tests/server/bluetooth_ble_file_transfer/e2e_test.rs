@@ -1,6 +1,6 @@
 //! End-to-end Bluetooth LE File Transfer Service tests for NetGet
 
-#![cfg(all(test, feature = "bluetooth-ble-file-transfer"))]
+#![cfg(all(unix, feature = "bluetooth"))]
 
 use crate::helpers::{self, E2EResult, NetGetConfig};
 use std::time::Duration;

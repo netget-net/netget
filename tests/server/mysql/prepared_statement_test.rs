@@ -10,7 +10,6 @@
 //! So the protocol's own advertised example — `columns: [{"name": "id", "type": "INT"}]` —
 //! is exactly the shape that has to work here.
 
-#![cfg(feature = "mysql")]
 
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use mysql_async::prelude::*;

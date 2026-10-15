@@ -8,12 +8,6 @@
 //!
 //! The test validates that all components work together correctly.
 
-#[cfg(all(
-    test,
-    feature = "torrent-tracker",
-    feature = "torrent-dht",
-    feature = "torrent-peer"
-))]
 mod tests {
     use super::super::helpers::BitTorrentTestNetwork;
     use super::super::torrent_builder::{TorrentBuilder, TorrentInfo};

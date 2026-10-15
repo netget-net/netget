@@ -1,4 +1,4 @@
-#[cfg(all(test, feature = "igmp"))]
+#[cfg(unix)]
 mod command_channel_test;
-#[cfg(all(test, feature = "igmp"))]
+#[cfg(unix)]
 mod e2e_test;

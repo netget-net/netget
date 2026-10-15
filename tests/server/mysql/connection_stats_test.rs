@@ -9,7 +9,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features mysql --test server -- mysql::connection_stats --test-threads=100
 
-#![cfg(feature = "mysql")]
 
 use std::time::Duration;
 

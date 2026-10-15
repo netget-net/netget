@@ -1,7 +1,6 @@
 //! The activity feed: snapshot diffs become exact events, each emitted once;
 //! status lines are routed between the feed and the chat.
 
-#![cfg(feature = "tcp")]
 
 use netget::state::app_state::AccessLogEntry;
 use netget::state::client::ClientStatus;

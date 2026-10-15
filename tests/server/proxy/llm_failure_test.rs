@@ -13,7 +13,7 @@
 //! The assertion that matters is not the status code the client sees. It is that the target
 //! server was never contacted at all.
 
-#![cfg(feature = "proxy")]
+#![cfg(unix)]
 
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::sync::atomic::{AtomicUsize, Ordering};

@@ -5,7 +5,7 @@
 //! whose topics array declares 0x7fffffff entries asked for ~144 GiB before reading its
 //! first (absent) element. That is an allocator failure, which aborts the whole process:
 //! not a panic, so nothing caught it and the broker stayed "Running" in no one's memory.
-//! vendor/kafka-protocol carries the bound; this test drives the bytes at a real broker.
+//! The netget-kafka-protocol fork carries the bound; this test drives the bytes at a real broker.
 //!
 //! The same lever existed one layer down, in the record batch every Produce request carries
 //! and every Fetch response hands the client: a batch's `record_count` and a record's header
@@ -21,7 +21,6 @@
 //! Run with:
 //!   cargo test --no-default-features --features kafka --test server -- kafka::declared_array_length
 
-#![cfg(feature = "kafka")]
 
 use std::time::Duration;
 

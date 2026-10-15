@@ -9,7 +9,6 @@
 //! `POST /metrics` and an unknown path are served without the model, and `expect_calls` on the
 //! scrape rule is what proves it.
 
-#![cfg(feature = "prometheus")]
 
 use crate::server::helpers::{self, E2EResult, NetGetConfig};
 use serde_json::json;

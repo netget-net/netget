@@ -6,7 +6,6 @@
 //! itself is byte-checked, and interop with a real client (ffmpeg/ffprobe) is exercised through
 //! the RTSP suite. Localhost only.
 
-#![cfg(feature = "rtp")]
 
 use crate::server::helpers::*;
 use std::net::SocketAddr;

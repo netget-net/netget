@@ -21,7 +21,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features coap --test client -- coap::real_server_test --test-threads=100
 
-#![cfg(all(test, feature = "coap"))]
 
 use crate::helpers::real_server::{run_tool, InstallHint, RealServer};
 use crate::helpers::*;

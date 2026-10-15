@@ -3,7 +3,6 @@
 //! These tests spawn the NetGet binary and test LDAP protocol operations
 //! using real LDAP client (async API).
 
-#[cfg(all(test, feature = "ldap", feature = "ldap"))]
 mod e2e_ldap {
     use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
     use ldap3::{LdapConnAsync, Scope, SearchEntry};

@@ -13,7 +13,6 @@
 //! * a reply after the tagged completion is dropped, logged
 //!   `decision=duplicate_response_dropped`.
 
-#![cfg(feature = "imap")]
 
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;

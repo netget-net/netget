@@ -23,8 +23,8 @@
 //!
 //! # The third hole, which is what actually broke the build
 //!
-//! The blocking `Test` job compiles the whole `server` test binary for `CI_FEATURES`, so it
-//! **runs** every real-client test belonging to those protocols — whether or not the job
+//! The blocking `Test` job runs the `CI_PROTOCOL_TESTS` suites of the `server` and `client`
+//! test binaries, so it **runs** every real-client test belonging to those protocols — whether or not the job
 //! installs the client. On 22 September 2026 it ran `server::dns::kdig_test` and
 //! `server::redis::real_client_test` with neither `kdig` nor `redis-cli` present, and those
 //! tests hard-fail rather than skip (correctly: a `SKIP` that returns success is a silent pass).
@@ -300,26 +300,38 @@ fn every_real_client_test_is_named_in_the_ci_evidence_loop() {
 
 /// The blocking `Test` job must install every client the protocols it compiles will drive.
 ///
-/// This is the one that broke the build. `Test` compiles the whole `server` test binary for
-/// `CI_FEATURES`, so every real-client test of those protocols *runs* there, hard-failing when
+/// This is the one that broke the build. `Test` runs the `CI_PROTOCOL_TESTS` suites, so every
+/// real-client test of those protocols *runs* there, hard-failing when
 /// its binary is absent. `registry-audit` having the binary is no help: that job is
 /// `continue-on-error`, so a green PR says nothing about it.
 #[test]
 fn ci_feature_clients_are_installed() {
     let text = workflow();
 
-    let features: BTreeSet<String> = text
+    // `CI_PROTOCOL_TESTS: >-` folds the module filters that follow it, one indentation deeper:
+    // `server::tcp:: … client::redis::`. Each names a suite the job runs.
+    let start = text
+        .find("CI_PROTOCOL_TESTS: >-\n")
+        .expect("ci.yml no longer defines CI_PROTOCOL_TESTS");
+    let filters: Vec<&str> = text[start..]
         .lines()
-        .find_map(|l| l.trim().strip_prefix("CI_FEATURES:"))
-        .expect("ci.yml no longer defines CI_FEATURES")
-        .trim()
-        .split(',')
-        .map(|f| f.trim().to_string())
-        .filter(|f| !f.is_empty())
+        .skip(1)
+        .take_while(|l| l.starts_with("    "))
+        .flat_map(|l| l.split_whitespace())
+        .collect();
+    // A suite is named as `real_client_tests` names it: `<p>` for a server, `client/<p>`.
+    let features: BTreeSet<String> = filters
+        .iter()
+        .filter_map(|f| {
+            let f = f.trim_end_matches("::");
+            f.strip_prefix("server::")
+                .map(str::to_string)
+                .or_else(|| f.strip_prefix("client::").map(|p| format!("client/{p}")))
+        })
         .collect();
     assert!(
         features.len() >= 5,
-        "CI_FEATURES parsed as {features:?}, which is not a feature list — the parse is broken"
+        "CI_PROTOCOL_TESTS parsed as {features:?}, which is not a suite list — the parse is broken"
     );
 
     // The `test:` job's own YAML block, so a binary named only in `registry-audit`'s apt line
@@ -327,9 +339,15 @@ fn ci_feature_clients_are_installed() {
     let job_start = text
         .find("\n  test:\n")
         .expect("ci.yml no longer has a job named `test`");
+    // The next job starts at the next two-space-indented key.
     let job_end = text[job_start + 1..]
-        .find("\n  single-feature:")
-        .map(|i| i + job_start + 1)
+        .match_indices("\n  ")
+        .find(|(i, _)| {
+            let rest = &text[job_start + 1 + i + 3..];
+            rest.starts_with(|c: char| c.is_ascii_lowercase())
+                && rest.split('\n').next().is_some_and(|l| l.trim_end().ends_with(':'))
+        })
+        .map(|(i, _)| i + job_start + 1)
         .unwrap_or(text.len());
     // Comment lines are stripped, and that is not fussiness: the step documents each binary
     // in a `#   kdig  knot-dnsutils  …` table, so a substring search over the raw block matches
@@ -349,13 +367,8 @@ fn ci_feature_clients_are_installed() {
 
     let mut missing = Vec::new();
     for (name, bins) in real_client_tests() {
-        // A client suite's directory is named for its feature, as a server suite's is.
-        let protocol = name
-            .split("::")
-            .next()
-            .unwrap()
-            .trim_start_matches("client/");
-        if !features.contains(protocol) {
+        let suite = name.split("::").next().unwrap();
+        if !features.contains(suite) {
             continue;
         }
         for bin in bins {
@@ -371,10 +384,10 @@ fn ci_feature_clients_are_installed() {
 
     assert!(
         missing.is_empty(),
-        "the blocking `Test` job compiles CI_FEATURES, which makes these tests RUN there, and \
+        "the blocking `Test` job runs the CI_PROTOCOL_TESTS suites, which makes these tests RUN there, and \
          they hard-fail rather than skip when their binary is absent — but the job never \
          installs it:\n\n  {}\n\n\
-         Add it to the \"install the third-party clients the CI_FEATURES tests drive\" step. \
+         Add it to the \"install the third-party clients the CI_PROTOCOL_TESTS suites drive\" step. \
          Do NOT filter the test out of the job instead: a hard-fail gate exists so nobody can \
          quietly run a suite without the client, and a `--skip` list is one more hand-maintained \
          list to go stale.",

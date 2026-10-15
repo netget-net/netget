@@ -19,7 +19,7 @@
 //!   ./cargo-isolated.sh test --no-default-features --features usb-serial \
 //!       --test server -- usb_serial::line_coding --test-threads=100
 
-#![cfg(feature = "usb-serial")]
+#![cfg(all(unix, feature = "libusb"))]
 
 use netget::server::usb::descriptors::LineCoding;
 

@@ -4,7 +4,6 @@
 //! using raw TCP socket communication to send SMB2 packets, each framed with the Direct TCP
 //! transport header (MS-SMB2 2.1) a real client writes on port 445.
 
-#![cfg(all(test, feature = "smb"))]
 
 use crate::server::helpers::{start_netget_server, E2EResult};
 

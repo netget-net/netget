@@ -5,7 +5,7 @@
 //! the model puts on the terminal and typing input back. No NetGet-against-NetGet.
 //!
 //! Platform: Unix/Linux/macOS only.
-#![cfg(all(feature = "pty", unix))]
+#![cfg(unix)]
 
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use std::io::{Read, Write};

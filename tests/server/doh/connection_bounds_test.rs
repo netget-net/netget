@@ -42,7 +42,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features doh --test server -- doh::connection_bounds --test-threads=100
 
-#![cfg(feature = "doh")]
 
 use std::sync::Arc;
 use std::time::Duration;

@@ -14,49 +14,49 @@
 //! The separate `usb` feature is the USB *client* (`nusb`) in `src/client/usb`,
 //! not a server, and does not build anything in this module.
 
-#[cfg(feature = "usb-common")]
+#[cfg(all(unix, feature = "libusb"))]
 pub mod common;
 
-#[cfg(feature = "usb-common")]
+#[cfg(all(unix, feature = "libusb"))]
 pub mod descriptors;
 
 /// The USB/IP message screen every USB server runs the `usbip` crate behind.
-#[cfg(feature = "usb-common")]
+#[cfg(all(unix, feature = "libusb"))]
 pub mod guard;
 
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 pub mod keyboard;
 
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 pub mod mouse;
 
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 pub mod serial;
 
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 pub mod msc;
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub mod fido2;
 
-#[cfg(feature = "usb-smartcard")]
+#[cfg(all(unix, feature = "libusb"))]
 pub mod smartcard;
 
 // Re-export protocol implementations
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 pub use keyboard::UsbKeyboardProtocol;
 
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 pub use mouse::UsbMouseProtocol;
 
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 pub use serial::actions::UsbSerialProtocol;
 
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 pub use msc::UsbMscProtocol;
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub use fido2::actions::UsbFido2Protocol;
 
-#[cfg(feature = "usb-smartcard")]
+#[cfg(all(unix, feature = "libusb"))]
 pub use smartcard::actions::UsbSmartCardProtocol;

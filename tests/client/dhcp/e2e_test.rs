@@ -7,7 +7,6 @@
 //! NOTE: DHCP client requires binding to port 68, which may need elevated privileges.
 //! These tests may fail on systems without sufficient permissions.
 
-#[cfg(all(test, feature = "dhcp"))]
 mod dhcp_client_tests {
     use crate::helpers::*;
     use std::time::Duration;

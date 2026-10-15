@@ -6,7 +6,6 @@
 //! `MAX_CHANNEL_BYTES`, `MAX_MESSAGE_BYTES`, `MAX_SUBSCRIPTIONS_PER_CONNECTION`,
 //! `MAX_PATTERNS_PER_SERVER`, `MAX_SUBSCRIPTIONS_PER_SERVER` and
 //! `SUBSCRIBER_OUTPUT_LIMIT_BYTES` (the slow-consumer disconnect).
-#![cfg(all(test, feature = "redis"))]
 
 use netget::cli::management::ServerForm;
 use netget::client::redis::resp::{encode_command, read_reply, Reply};

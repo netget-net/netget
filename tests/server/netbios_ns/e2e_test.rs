@@ -14,7 +14,6 @@
 //! `nmblookup` is hard-wired to UDP port 137 and offers no way to change it, so driving it
 //! against a NetGet server needs a privileged run.
 
-#![cfg(feature = "netbios-ns")]
 
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use netget::server::netbios_ns::packet::{self, NodeType};

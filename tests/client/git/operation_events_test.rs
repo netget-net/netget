@@ -15,7 +15,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features git \
 //!       --test client -- git::operation_events --test-threads=100
 
-#![cfg(feature = "git")]
 
 use std::time::Duration;
 

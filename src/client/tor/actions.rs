@@ -216,7 +216,7 @@ pub static TOR_CLIENT_DATA_RECEIVED_EVENT: LazyLock<EventType> = LazyLock::new(|
 });
 
 /// Tor bootstrap complete event (directory consensus downloaded)
-#[cfg(feature = "tor")]
+#[cfg(unix)]
 pub static TOR_BOOTSTRAP_COMPLETE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "tor_bootstrap_complete",
@@ -297,7 +297,7 @@ impl Protocol for TorClientProtocol {
                 }),
                 log_template: None,
             },
-            #[cfg(feature = "tor")]
+            #[cfg(unix)]
             ActionDefinition {
                 name: "get_consensus_info".to_string(),
                 description: "Get network consensus metadata (relay count, validity times)"
@@ -308,7 +308,7 @@ impl Protocol for TorClientProtocol {
                 }),
                 log_template: None,
             },
-            #[cfg(feature = "tor")]
+            #[cfg(unix)]
             ActionDefinition {
                 name: "list_relays".to_string(),
                 description: "List relays from the Tor network consensus".to_string(),
@@ -324,7 +324,7 @@ impl Protocol for TorClientProtocol {
                 }),
                 log_template: None,
             },
-            #[cfg(feature = "tor")]
+            #[cfg(unix)]
             ActionDefinition {
                 name: "search_relays".to_string(),
                 description: "Search for relays matching criteria (flags, nickname pattern)"
@@ -541,7 +541,7 @@ impl Client for TorClientProtocol {
             "wait_for_more" => Ok(ClientActionResult::WaitForMore),
 
             // Directory query actions (processed async in connect loop)
-            #[cfg(feature = "tor")]
+            #[cfg(unix)]
             "get_consensus_info" | "list_relays" | "search_relays" => {
                 Ok(ClientActionResult::Custom {
                     name: action_type.to_string(),

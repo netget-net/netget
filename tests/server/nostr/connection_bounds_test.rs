@@ -15,7 +15,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features nostr --test server -- nostr::connection_bounds --test-threads=100
 
-#![cfg(feature = "nostr")]
 
 use super::common::{self, event_frame, note, relay_handlers, Peer, Read};
 use futures::SinkExt;

@@ -139,7 +139,6 @@ async fn binary_frame_deadline_excludes_idle_and_completed_event_handling() {
     assert_eq!(reader.read_u8().await.unwrap(), 7);
 }
 
-#[cfg(feature = "pop3")]
 #[tokio::test]
 async fn pop3_framing_tracks_each_written_command_not_status_wording() {
     use netget::client::pop3::CommandWriter;
@@ -182,7 +181,6 @@ async fn pop3_framing_tracks_each_written_command_not_status_wording() {
     assert_eq!(sent, b"USER alice");
 }
 
-#[cfg(feature = "pop3")]
 #[tokio::test]
 async fn pop3_interrupted_write_poisoning_prevents_wrong_response_correlation() {
     use netget::client::pop3::CommandWriter;
@@ -197,7 +195,6 @@ async fn pop3_interrupted_write_poisoning_prevents_wrong_response_correlation() 
     assert!(writer.next_response_is_multiline("+OK").is_err());
 }
 
-#[cfg(feature = "vnc")]
 #[test]
 fn vnc_des_matches_independent_openssl_fixture_and_password_truncation() {
     use netget::client::vnc::vnc_auth_response;
@@ -217,7 +214,6 @@ fn vnc_des_matches_independent_openssl_fixture_and_password_truncation() {
     );
 }
 
-#[cfg(feature = "vnc")]
 #[test]
 fn vnc_actions_reject_values_before_custom_results_can_truncate_them() {
     use netget::llm::actions::client_trait::Client;
@@ -230,7 +226,7 @@ fn vnc_actions_reject_values_before_custom_results_can_truncate_them() {
     }
 }
 
-#[cfg(all(feature = "ssh-agent", unix))]
+#[cfg(unix)]
 #[tokio::test]
 async fn injected_agent_request_writes_a_framed_packet_and_reports_actual_bytes() {
     use netget::{
@@ -278,7 +274,7 @@ async fn injected_agent_request_writes_a_framed_packet_and_reports_actual_bytes(
     .is_err());
 }
 
-#[cfg(all(feature = "ssh-agent", unix))]
+#[cfg(unix)]
 #[tokio::test]
 async fn agent_partial_body_deadline_survives_cancelled_next_calls() {
     use futures::StreamExt;
@@ -299,7 +295,7 @@ async fn agent_partial_body_deadline_survives_cancelled_next_calls() {
     assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
 }
 
-#[cfg(all(feature = "ssh-agent", unix))]
+#[cfg(unix)]
 #[tokio::test]
 async fn agent_expired_deadline_rejects_a_body_completed_between_polls() {
     use futures::StreamExt;
@@ -319,7 +315,7 @@ async fn agent_expired_deadline_rejects_a_body_completed_between_polls() {
     assert!(reader.next().await.is_none());
 }
 
-#[cfg(all(feature = "ssh-agent", unix))]
+#[cfg(unix)]
 #[tokio::test]
 async fn agent_incomplete_writes_close_and_poison_the_transport() {
     use netget::client::ssh_agent::{AgentWriter, SshAgentClient};
@@ -366,7 +362,7 @@ async fn agent_incomplete_writes_close_and_poison_the_transport() {
     }
 }
 
-#[cfg(all(feature = "ssh-agent", unix))]
+#[cfg(unix)]
 #[tokio::test]
 async fn agent_write_deadline_covers_lock_wait_without_poisoning_an_untouched_transport() {
     use netget::client::ssh_agent::{AgentWriter, SshAgentClient};
@@ -399,7 +395,6 @@ async fn agent_write_deadline_covers_lock_wait_without_poisoning_an_untouched_tr
     assert_eq!(frame, [0, 0, 0, 1, 11]);
 }
 
-#[cfg(feature = "torrent-peer")]
 #[tokio::test]
 async fn peer_partial_headers_have_an_absolute_deadline() {
     let (mut reader, mut peer) = tokio::io::duplex(64);
@@ -416,7 +411,7 @@ async fn peer_partial_headers_have_an_absolute_deadline() {
     );
 }
 
-#[cfg(feature = "smb-client")]
+#[cfg(all(unix, feature = "libsmbclient"))]
 #[test]
 fn smb_buffered_file_read_refuses_oversize_without_returning_partial_success() {
     use netget::client::smb::{read_file_bounded, MAX_FILE_BYTES};
@@ -428,7 +423,6 @@ fn smb_buffered_file_read_refuses_oversize_without_returning_partial_success() {
     .is_err());
 }
 
-#[cfg(feature = "webrtc")]
 #[tokio::test]
 async fn aborted_client_owner_closes_the_webrtc_peer() {
     use std::sync::Arc;

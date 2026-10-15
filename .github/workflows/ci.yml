@@ -26,76 +26,34 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # Representative subset covering TCP/UDP transports, an LLM-facing binary
-  # protocol (dns), the http/https stack, a line-based protocol (redis) and
-  # an MCP integration surface (mcp-stdio). Deliberately not --all-features:
-  # that's 3+ min / 3GB+ RAM and needs system libs (protoc, libpcap, dbus,
-  # libusb, pcsclite) this workflow does not install.
-  #
-  # `finger` is here for one reason and it is not coverage of Finger: it is the only
-  # **Experimental** protocol in this set. `min_stability_test`'s refusal half asks the
-  # registry for an Experimental protocol and fails when none is compiled, and every other
-  # feature here has been promoted to Beta or Stable - so the min-stability gate's refusal
-  # path had silently stopped being exercised by the blocking job. Keep at least one
-  # Experimental feature in this list; if `finger` is ever promoted, add another.
-  CI_FEATURES: tcp,http,dns,udp,redis,mcp-stdio,finger
+  # Protocols are not Cargo features: every protocol compiles in every build. CI_FEATURES is
+  # the capability features the blocking jobs build with - no system library (libpcap, dbus,
+  # libusb, pcsclite, libsmbclient) and no embedded llama.cpp, so the runner installs nothing
+  # to compile. The system-library protocols are built by registry-audit, which installs them.
+  CI_FEATURES: mcp-stdio,mcp-http,sqlite
   # CI_FEATURES plus terminal-snapshot, used for the blocking clippy run only.
   # terminal-snapshot gates tests/terminal_snapshot/, which is where the
   # clippy::zombie_processes violation lived that leaked a live `netget` process on
   # every run. Without the feature that whole file is invisible to the gate.
-  LINT_FEATURES: tcp,http,dns,udp,redis,mcp-stdio,finger,terminal-snapshot
-  # Everything the runner can build without a system library, for the advisory
-  # wide-feature clippy job. `dist` is the Linux release feature set (release.yml
-  # builds it for x86_64-unknown-linux-gnu), so it is known to compile here.
-  # Excluded on purpose: bluetooth-ble* (dbus), usb-* (libusb), nfc* (pcsclite),
-  # etcd/grpc/kubernetes/zookeeper (protoc), datalink/arp/isis (libpcap),
-  # kafka, smb-client (libsmbclient), embedded-llm (huge).
-  WIDE_FEATURES: >-
-    dist,terminal-snapshot,tcp,socket_file,http,http2,http3,dns,dot,doh,dhcp,bootp,
-    udp,redis,tls,proxy,http_proxy,sqlite,quic,telnet,ldap,syslog,ntp,socks5,mqtt,
-    smtp,imap,pop3,nntp,irc,xmpp,ssh,ssh-agent,svn,whois,snmp,igmp,stun,turn,sip,
-    mysql,mssql,postgresql,mongodb,mongodb-server,elasticsearch,couchdb,cassandra,
-    s3,sqs,dynamo,dynamodb,npm,pypi,maven,openai,ollama,oauth2,openidconnect,
-    jsonrpc,saml,saml-idp,saml-sp,wireguard,ipsec,bgp,rip,bitcoin,mcp,mcp-stdio,
-    mcp-http,xmlrpc,tor,vnc,openapi,openid,git,mercurial,torrent-tracker,
-    torrent-dht,torrent-peer,webdav,nfs,smb,mdns,ipp,rss,dc,webrtc,amqp
-  # The standalone-build check's feature list, in two halves for readability only - the
-  # `single-feature` matrix concatenates them and checks all 133 on every event. They were
-  # once two *gates*, one blocking and one dispatch-only; that is what left 109 features
-  # unchecked, and it is gone. Keep both lists sorted into the shape they have: the
-  # matrix slices CORE+REST contiguously, so related features stay in one shard and that
-  # shard builds their shared dependencies once.
+  LINT_FEATURES: mcp-stdio,mcp-http,sqlite,terminal-snapshot
+  # The protocol suites the blocking `test` job runs out of tests/server and tests/client.
+  # Every protocol's suite compiles there; only these run, because the others drive
+  # third-party binaries this job does not install (registry-audit does).
   #
-  # Space-separated, one feature per loop iteration. Together they are the complete set of
-  # features verified to build with `--no-default-features --features <f> --tests` and
-  # nothing else - see the long comment on the `single-feature` job for what that catches
-  # and what is excluded.
-  #
-  # CORE is the transports and the protocols most likely to be touched, plus one
-  # representative of each dependency shape that has broken before (h2, quinn+rustls,
-  # tungstenite, rasn, rusqlite, rmcp). It is checked no harder than REST now; it is
-  # simply first, so shard 1 fails fastest on the features most likely to break.
-  SINGLE_FEATURE_CORE: >-
-    tcp udp dns http http2 redis tls telnet ftp ldap syslog ntp tftp socks5 mqtt quic
-    websocket smtp imap postgresql snmp whois sqlite mcp-stdio
-  # The other 109. Checked by the same matrix, on the same events, to the same standard.
-  SINGLE_FEATURE_REST: >-
-    socket_file named_pipe pty stdio pypi maven icmp ndp dhcpv6 tuntap rawip gtp m3ua
-    vrrp hsrp wol dc dot doq doh dhcp bootp nfc nats stomp ident gopher finger dict gemini beanstalkd zabbix gearman nsq nut statsd graphite gelf fluent-forward influxdb loki ipfix sflow netflow-v9 ssdp llmnr
-    netbios-ns igmp ssh ssh-agent svn irc xmpp mdns mysql mssql snowflake db2 ipp
-    mongodb-server mongodb memcached radius rss proxy http_proxy webdav nfs cassandra
-    smb stun turn webrtc sip rtp rtsp hls pop3 nntp modbus coap amqp elasticsearch
-    couchdb yarn spark dynamo dynamodb s3 sqs npm oci-registry openai ollama oauth2
-    jsonrpc saml-idp saml-sp saml wireguard openvpn ipsec bgp ospf rip bitcoin nostr mcp
-    zookeeper xmlrpc tor vnc reverse-shell rdp openapi openid openidconnect kubernetes
-    kubernetes-server prometheus prometheus-remote-write otlp docker vault bolt git mercurial kafka http3 torrent-tracker torrent-dht
-    torrent-peer mcp-http
+  # `finger` is here for one reason and it is not coverage of Finger: it is the only
+  # **Experimental** protocol in this set. `min_stability_test`'s refusal half asks the
+  # registry for an Experimental protocol and fails when none is compiled - that half now
+  # always has one, but finger's suite still keeps an Experimental protocol under test here.
+  CI_PROTOCOL_TESTS: >-
+    server::tcp:: server::http:: server::dns:: server::udp:: server::redis:: server::finger::
+    client::tcp:: client::http:: client::dns:: client::udp:: client::redis:: client::finger::
 
 jobs:
   lint:
     name: Lint
     runs-on: ubuntu-22.04
-    timeout-minutes: 20
+    # Every protocol compiles now, so a cold cache is a full build.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -150,26 +108,15 @@ jobs:
           echo "::notice::Full clippy (default lints, --all-targets) is advisory-only today; only correctness/suspicious are enforced above."
           cargo clippy --locked --no-default-features --features "$LINT_FEATURES" --all-targets
 
-  # ADVISORY, deliberately. Clippy is feature-sensitive in a way `cargo fmt` is not,
-  # because it compiles: at --all-features the lib alone emits ~495 warnings against
-  # ~50 for CI_FEATURES, and the correctness/suspicious gate above only ever sees the
-  # 6 protocols CI_FEATURES enables out of 116.
-  #
-  # Why not blocking:
-  #   * --all-features is not achievable here at all - it needs protoc, libpcap, dbus,
-  #     libusb and pcsclite, none of which this workflow installs.
-  #   * WIDE_FEATURES avoids all of those, but it is a large set that no job has ever
-  #     built before, and a gate whose first act is to redden master on ~500 pre-existing
-  #     style warnings teaches people to ignore it. The correctness/suspicious subset may
-  #     well be clean; when a run here proves that over several PRs, move the
-  #     `-D clippy::correctness -D clippy::suspicious` invocation into the blocking
-  #     `lint` job and delete this note.
-  # Until then this exists so the number is visible instead of unknown.
+  # ADVISORY, deliberately. The blocking `lint` job already sees every protocol except the
+  # ones behind a system-library feature (libpcap, bluetooth, pcsc, libusb, libsmbclient);
+  # this run adds those, with their libraries installed. It is advisory because it is the
+  # only place the ~50 style warnings on those protocols are counted, and a gate whose first
+  # act is to redden master on pre-existing style warnings teaches people to ignore it.
   clippy-wide:
-    name: Clippy (wide feature set, advisory)
-    # Only on a manual run of this workflow. Its warnings are style rather than defects, it
-    # cannot fail the build, and over every protocol it no longer finishes inside its budget,
-    # so on every push it held a runner for its whole timeout and reported nothing.
+    name: Clippy (default features, advisory)
+    # Only on a manual run of this workflow. Its warnings are style rather than defects and it
+    # cannot fail the build. It is the one clippy run over the system-library protocols.
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-22.04
     timeout-minutes: 90
@@ -185,17 +132,16 @@ jobs:
         with:
           key: clippy-wide
 
-      - name: Install protobuf compiler for the wide feature build
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      - name: "cargo clippy (advisory: wide feature set)"
-        continue-on-error: true
-        shell: bash
+      - name: Install the system libraries the default features link
         run: |
-          FEATURES="$(echo "$WIDE_FEATURES" | tr -d ' \n')"
-          echo "::notice::Advisory only. Features: $FEATURES"
-          cargo clippy --locked --no-default-features --features "$FEATURES" --all-targets \
-            -- -D clippy::correctness -D clippy::suspicious
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libpcap-dev libdbus-1-dev libusb-1.0-0-dev libpcsclite-dev libsmbclient-dev libltdl-dev cmake
+
+      - name: "cargo clippy (advisory: default features)"
+        continue-on-error: true
+        run: |
+          cargo clippy --locked --all-targets -- -D clippy::correctness -D clippy::suspicious
 
   # ADVISORY, deliberately. These test binaries walk the protocol REGISTRIES rather
   # than any one protocol, so what they actually cover is decided entirely by which
@@ -231,11 +177,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ratchets-tcp
+          key: ratchets
 
       - name: cargo test (source-reading ratchets)
         run: |
-          cargo test --locked --no-default-features --features tcp --no-fail-fast \
+          cargo test --locked --no-default-features --no-fail-fast \
             --test affirmative_default_drift_test \
             --test audit_ci_coverage_test \
             --test client_event_wiring_test \
@@ -1237,7 +1183,7 @@ jobs:
           set -o pipefail
           python3 -c 'import smbprotocol, smbclient'
           mkdir -p evidence-results
-          cargo test --locked --no-default-features --features smb \
+          cargo test --locked --no-default-features \
             --lib --test server -- smb:: --test-threads=32 --nocapture \
             2>&1 | tee evidence-results/smb.log
           grep -Eq '^test result: ok\. [1-9][0-9]* passed;' evidence-results/smb.log
@@ -1298,7 +1244,7 @@ jobs:
       # `tests/ci_feature_clients_are_installed` (in tests/real_client_evidence_is_run_test.rs)
       # derives this list from the test sources and fails the build if it drifts - which is how
       # kdig and redis-cli came to be missing here in the first place.
-      - name: install the third-party clients the CI_FEATURES tests drive
+      - name: install the third-party clients the CI_PROTOCOL_TESTS suites drive
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -1355,160 +1301,17 @@ jobs:
             print "resp dissector present"
           }'
 
-      - name: cargo test
+      - name: cargo test (every target but the protocol suites)
         run: |
-          cargo test --locked --no-default-features --features "$CI_FEATURES" \
+          targets=$(for f in tests/*.rs; do n=$(basename "$f" .rs); case "$n" in server|client) ;; *) printf -- '--test %s ' "$n" ;; esac; done)
+          cargo test --locked --no-default-features --features "$CI_FEATURES" $targets \
             -- --test-threads=100
 
-  single-feature:
-    name: Single-feature build (shard ${{ matrix.shard }}/4)
-    # Manual runs only (Actions → Run workflow): too heavy for every push.
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-22.04
-    # 45, not 30: a shard is ~34 features at ~25s each (~14 min) once its cache is warm,
-    # but the first run after a cache key changes compiles that shard's whole dependency
-    # graph cold. The shards run in parallel, so the headroom costs wall-clock only in the
-    # case where it is actually needed.
-    timeout-minutes: 45
-    strategy:
-      # Every shard reports. Without this one broken feature cancels the other three and
-      # the run tells you about one failure when there may be four.
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4]
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      # One cache per shard: each shard builds a different quarter of the feature list, so
-      # a shared entry would thrash. Four entries replace the two this job used to need
-      # (`single-feature` + the deleted `single-feature-full`), a net +2 against the
-      # repository's 10 GB cache budget.
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: single-feature-${{ matrix.shard }}
-
-      # Guards a class of breakage that no other job in this file can catch.
-      #
-      # A protocol whose Cargo.toml feature under-declares its dependencies still
-      # compiles under --all-features or under any multi-feature set that happens to
-      # pull the missing crate in for some *other* protocol. It only fails when built
-      # alone - which is exactly how a user running
-      # `--no-default-features --features <protocol>` builds it, and what the "use
-      # minimal features" workflow in CLAUDE.md does all day.
-      #
-      # `--tests` is deliberate and not decoration: `cargo check` alone compiles the
-      # lib and skips every test target, so a test file that no longer compiles under
-      # a narrow feature set contributes nothing and fails silently rather than
-      # visibly. Three test targets were found in exactly that state (stale arity
-      # after a parameter was added, an E0282 on an all-feature-gated vec).
-      #
-      # WHY A SHARDED MATRIX, AND WHY IT BLOCKS. All 133 features are checked here, on
-      # every PR and every push. This used to be two jobs: a blocking one over
-      # SINGLE_FEATURE_CORE (24 features) and a `single-feature-full` over all 133 gated
-      # behind `if: github.event_name == 'workflow_dispatch'`. Nothing dispatches itself,
-      # so the other 109 features had no automatic compile coverage at all - and in
-      # September 2026 `tor` was found not to compile AT ALL (src/server/tor_relay/mod.rs
-      # named rustls' `aws_lc_rs` provider while Cargo.toml pins rustls to `ring`), for an
-      # unknown length of time, with every CI run green throughout. A gate nobody triggers
-      # is not a gate.
-      #
-      # The numbers, measured rather than assumed. The old 24-feature job took 9-12 min on
-      # this runner with a warm cache - ~25s per feature, near enough constant because each
-      # iteration recompiles the lib plus ~170 test targets whatever the feature is. 133 of
-      # those is ~55 min, which is why one job never fitted the 30-minute timeout. Four
-      # shards of ~34 are ~14 min each and run in parallel, so the wall-clock cost to a PR
-      # is roughly what the 24-feature job already cost, and the whole list is covered.
-      #
-      # What it costs, stated plainly: ~4x the runner-minutes this job used to burn (~10
-      # min -> ~60), and 3 more concurrent jobs (11 in a PR run, against the 20-job limit
-      # for a public repository). The repository is public, so those minutes are free; the
-      # only real budget it spends is the Actions cache, see the cache step below.
-      #
-      # REJECTED, and why. (1) Folding SINGLE_FEATURE_REST into one unsharded job: ~55 min
-      # against a 30-minute timeout - it does not fit, which is the whole reason for the
-      # old split. (2) A nightly `schedule:` trigger: no workflow in this repository is on
-      # a cron, and the dispatch-only ones (fuzz, nightly-soak, nightly-eval) are searches
-      # and measurements, where a nightly cadence is the right shape. This is a gate - it
-      # answers yes or no about the commit in front of it - so it belongs on the commit,
-      # not on the clock. Nightly would also have caught `tor`, a day late and on master
-      # rather than on the PR that broke it.
-      #
-      # Every feature in either list was verified to build standalone. Keep it that way:
-      # add a protocol only after checking it, and only if it needs no system library
-      # this runner lacks.
-      #
-      # WHY THIS JOB INSTALLS NO SYSTEM LIBRARIES, unlike registry-audit. The excluded
-      # features are not merely "unbuilt here" - they are unverifiable:
-      #   * libpcap    - datalink, arp, isis, lldp, cdp, stp, eapol. Note this is SEVEN
-      #                  features, not the three CLAUDE.md's table names: lldp, cdp, stp
-      #                  and eapol all carry `dep:pcap` too. Derive the set from
-      #                  Cargo.toml, not from that table.
-      #   * dbus/bluer - the 18 bluetooth-ble* features. Verifying these on a developer
-      #                  machine proves nothing: ble-peripheral-rust uses CoreBluetooth on
-      #                  macOS and bluer/D-Bus on Linux, so the code that would compile in
-      #                  CI is code no local build ever sees.
-      #   * pcsclite   - nfc-client (plain `nfc` needs none and IS checked)
-      #   * protoc     - grpc, etcd (build.rs compiles the etcd protos). NOT zookeeper:
-      #                  CLAUDE.md's table lists it under protoc and that has never been
-      #                  true - zookeeper-async pulls no protobuf build step, it is in
-      #                  SINGLE_FEATURE_REST, and it builds standalone.
-      #   * libusb     - the 7 usb* features, per CLAUDE.md
-      #   * libsmbclient - smb-client
-      #   * Linux-only - `can` (socketcan) cannot be built on a macOS dev machine at all
-      # Adding an apt step would let some of those compile, but this job's rule is that a
-      # feature is listed only after somebody built it, and for these nobody can. They are
-      # not unwatched: registry-audit builds --all-features with those libraries. What it
-      # cannot see is an under-declared *feature*, so that gap is real and stated here
-      # rather than papered over with an install step and an unverified list.
-      - name: cargo check --tests, one protocol feature at a time
-        shell: bash
-        env:
-          SHARD: ${{ matrix.shard }}
-          SHARDS: "4"
+      - name: cargo test (the CI_PROTOCOL_TESTS suites)
         run: |
-          set -uo pipefail
-          ALL="$SINGLE_FEATURE_CORE $SINGLE_FEATURE_REST"
-          total=$(echo $ALL | wc -w | tr -d ' ')
-          # Contiguous slices, not round-robin. Per-feature cost is dominated by a constant
-          # (the lib plus ~170 test targets recompile every time), so equal counts are
-          # already balanced; what differs between features is their dependency graph, and
-          # neighbours in these lists are related (the aws trio, the torrent trio, the saml
-          # trio). Keeping them in one shard is what lets that shard build those deps once.
-          FEATURES=$(echo $ALL | tr ' ' '\n' \
-            | awk -v s="$SHARD" -v n="$SHARDS" -v t="$total" \
-                'BEGIN { per = int((t + n - 1) / n) } NR > (s-1)*per && NR <= s*per')
-          count=$(echo $FEATURES | wc -w | tr -d ' ')
-          echo "::notice::Shard $SHARD/$SHARDS: checking $count of $total features standalone."
-          status=0
-          failed=""
-          n=0
-          for f in $FEATURES; do
-            n=$((n + 1))
-            echo "::group::[$n/$count] cargo check --tests --features $f"
-            if cargo check --locked --no-default-features --features "$f" --tests; then
-              echo "OK: $f builds standalone"
-            else
-              echo "::error::Feature '$f' does not build standalone (--no-default-features --features $f --tests)."
-              failed="$failed $f"
-              status=1
-            fi
-            echo "::endgroup::"
-          done
-          if [ "$status" != "0" ]; then
-            echo "::error::Under-declared feature(s):$failed"
-            echo "Each listed feature builds under --all-features but not on its own, which means"
-            echo "its Cargo.toml entry is missing a dependency that another feature happens to"
-            echo "supply. Add the missing optional dep to that feature's list in Cargo.toml."
-          fi
-          exit $status
+          cargo test --locked --no-default-features --features "$CI_FEATURES" \
+            --test server --test client -- $CI_PROTOCOL_TESTS --test-threads=100
 
-  # The browser build (crates/netget-web): the netget library for wasm32-unknown-unknown with
-  # the tokio/crossterm shims, bindings, and a headless Node run of the bundle that starts a
-  # server, connects over the virtual network and round-trips a request through the LLM
-  # bridge. Blocking: the whole point of the shims is that protocol code compiles unchanged
-  # for the web, and only a build on that target can show it still does.
   wasm-web:
     name: Browser build
     runs-on: ubuntu-22.04
@@ -1572,7 +1375,7 @@ jobs:
       NETGET_USE_OLLAMA: '0'
       CARGO_PROFILE_TEST_DEBUG: '0'
       CARGO_BUILD_JOBS: '2'
-      AUDIT_CPU_FEATURES: tcp,http,dns,udp,redis,mcp-stdio,mcp-http,finger,tls,dot,pty,vnc,torrent-peer,proxy,ssh-agent,webrtc,ftp,nntp,pop3,http_proxy,sqlite,quic,grpc,ipp,torrent-dht,usb-fido2,terminal-snapshot
+      AUDIT_CPU_FEATURES: mcp-stdio,mcp-http,sqlite,terminal-snapshot
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -1705,7 +1508,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          key: windows-resource-checks-tcp-http
+          key: windows-resource-checks
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -1713,7 +1516,7 @@ jobs:
       # descendant termination on normal drop and abrupt owner termination.
       - name: Native Windows configuration and concurrency regressions
         run: >-
-          cargo test --locked --no-default-features --features tcp,http
+          cargo test --locked --no-default-features
           --test core_followup_test --test llm_rate_limiter_test --test llm_config_test
           --test process_group_windows_test
       - name: Native Windows package launcher and archive fixtures

@@ -3,7 +3,6 @@
 //! These tests spawn the actual NetGet binary with Ollama API prompts
 //! and validate the responses using HTTP clients.
 
-#![cfg(all(test, feature = "ollama"))]
 
 use crate::server::helpers::{self, E2EResult, NetGetConfig};
 use serde_json::Value;

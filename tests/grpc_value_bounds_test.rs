@@ -1,5 +1,4 @@
 //! In-memory schema/value fixtures only: no protoc, model, socket, or external peer.
-#![cfg(feature = "grpc")]
 
 use anyhow::Result;
 use netget::server::grpc::value_codec::{

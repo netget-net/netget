@@ -29,7 +29,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features torrent-tracker --test server -- torrent_tracker::connection_bounds --test-threads=100
 
-#![cfg(feature = "torrent-tracker")]
 
 use std::time::Duration;
 

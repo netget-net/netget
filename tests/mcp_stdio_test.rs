@@ -7,7 +7,7 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features mcp-stdio,tcp --test mcp_stdio_test -- --test-threads=100
 
-#![cfg(all(feature = "mcp-stdio", feature = "tcp"))]
+#![cfg(feature = "mcp-stdio")]
 
 use netget::cli::Args;
 use netget::mcp_stdio::tools::NetGetMcpService;
@@ -346,7 +346,7 @@ async fn protocol_docs_describe_the_mcp_surface() {
     );
 
     // redis does have one, and its docs name it whether or not it is free right now.
-    if cfg!(feature = "redis") {
+    if true {
         let redis = call(
             &client,
             "get_protocol_docs",

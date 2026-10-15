@@ -3,7 +3,6 @@
 //! These tests verify RSS server functionality by starting NetGet with RSS prompts
 //! and using reqwest HTTP client to fetch and parse RSS feeds.
 
-#![cfg(feature = "rss")]
 
 use crate::server::helpers::*;
 use std::time::Duration;

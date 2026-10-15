@@ -12,7 +12,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features udp --test client -- udp::command_channel --test-threads=100
 
-#![cfg(feature = "udp")]
 
 use std::time::Duration;
 

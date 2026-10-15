@@ -13,7 +13,6 @@
 //! `source_last_seq: "0"`. That is the OAuth2 fail-open shape: a model that meant to say
 //! nothing said yes, and a peer stored a checkpoint for a replication that never ran.
 
-#![cfg(all(test, feature = "couchdb"))]
 
 use crate::server::helpers::*;
 use ::netget::llm::actions::protocol_trait::Server;

@@ -12,7 +12,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features tftp --test client -- tftp::command_channel --test-threads=100
 
-#![cfg(feature = "tftp")]
 
 use std::time::Duration;
 

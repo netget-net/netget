@@ -12,7 +12,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features db2 --test server -- db2::peer_inject --test-threads=100
 
-#![cfg(feature = "db2")]
 
 use std::time::Duration;
 

@@ -23,7 +23,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features webrtc --test server -- webrtc::inbound_limit --test-threads=100
 
-#![cfg(feature = "webrtc")]
 
 use netget::server::webrtc::SIGNALLING_MAX_MESSAGE_BYTES;
 use tokio::io::AsyncWriteExt;

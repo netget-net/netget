@@ -17,15 +17,12 @@ fn get_tested_protocols() -> HashSet<String> {
     let mut tested = HashSet::new();
 
     // TCP example tests
-    #[cfg(feature = "tcp")]
     tested.insert("TCP".to_string());
 
     // DNS example tests
-    #[cfg(feature = "dns")]
     tested.insert("DNS".to_string());
 
     // HTTP example tests
-    #[cfg(feature = "http")]
     tested.insert("HTTP".to_string());
 
     tested
@@ -204,11 +201,8 @@ fn example_test_core_protocols_have_tests() {
     // that enables none of them the vec is empty and its element type cannot be
     // inferred (E0282). That is not hypothetical — `--features telnet` alone hits it.
     let core_protocols: Vec<&str> = vec![
-        #[cfg(feature = "tcp")]
         "TCP",
-        #[cfg(feature = "http")]
         "HTTP",
-        #[cfg(feature = "dns")]
         "DNS",
     ];
 

@@ -20,7 +20,7 @@
 //!   ./cargo-isolated.sh test --no-default-features --features mcp-stdio,tcp \
 //!       --test mcp_stop_cleanup_test -- --test-threads=100
 
-#![cfg(all(feature = "mcp-stdio", feature = "tcp"))]
+#![cfg(feature = "mcp-stdio")]
 
 use netget::cli::Args;
 use netget::mcp_stdio::tools::NetGetMcpService;

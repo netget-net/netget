@@ -10,7 +10,6 @@
 //! request it never saw — and it is why the cap returns a distinct 413 rather than an empty
 //! body.
 
-#![cfg(all(test, feature = "openapi"))]
 
 use crate::server::helpers::{self, E2EResult, NetGetConfig};
 

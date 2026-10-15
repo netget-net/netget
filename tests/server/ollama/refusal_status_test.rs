@@ -12,7 +12,6 @@
 //! builds refusals. An unusable value falls back to 400 rather than failing the request, so
 //! the refusal itself always survives.
 
-#![cfg(all(test, feature = "ollama"))]
 
 use netget::server::ollama::model_error_response as refusal;
 use serde_json::json;

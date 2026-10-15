@@ -23,7 +23,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features modbus,tcp --test server -- modbus::connection_bounds --test-threads=100
 
-#![cfg(feature = "modbus")]
 
 use std::time::Duration;
 

@@ -11,7 +11,6 @@
 //! `xid` is the same cast on a correlation identifier. A client matches replies by xid alone,
 //! so a wrapped one answers whichever request happened to carry the truncated value.
 
-#![cfg(all(test, feature = "zookeeper"))]
 
 use netget::llm::actions::protocol_trait::{ActionResult, Server};
 use netget::server::zookeeper::actions::ZookeeperProtocol;

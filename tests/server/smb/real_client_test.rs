@@ -28,7 +28,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features smb --test server -- smb::real_client --test-threads=100
 
-#![cfg(feature = "smb")]
 
 use std::sync::Arc;
 use std::time::Duration;

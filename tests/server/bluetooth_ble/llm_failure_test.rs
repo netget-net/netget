@@ -28,7 +28,7 @@
 //! place — `call_llm` returning `Err` — and it needs no mock harness, which cannot be used here
 //! because starting the netget binary with a BLE server needs the adapter these tests avoid.
 
-#![cfg(all(test, feature = "bluetooth-ble"))]
+#![cfg(all(unix, feature = "bluetooth"))]
 
 use ble_peripheral_rust::gatt::peripheral_event::{
     PeripheralEvent, PeripheralRequest, RequestResponse,

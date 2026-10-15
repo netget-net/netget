@@ -11,7 +11,7 @@
 //! The tests are designed to work with mock LLM responses by default.
 //! Use --use-ollama flag to test with real Ollama.
 
-#![cfg(all(test, feature = "isis"))]
+#![cfg(all(unix, feature = "libpcap"))]
 
 use crate::helpers::netget::start_netget;
 use crate::helpers::{E2EResult, NetGetConfig};

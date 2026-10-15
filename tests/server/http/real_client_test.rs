@@ -23,7 +23,6 @@
 //! `couchdb` or `openapi`. Here HTTP **is** the protocol, so an independent HTTP implementation
 //! is exactly the right peer, and these two are as independent as it gets.
 
-#![cfg(all(test, feature = "http"))]
 
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use serde_json::json;

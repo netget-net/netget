@@ -12,7 +12,7 @@
 //!     --test client -- client::datalink::action_test --test-threads=100
 //! ```
 
-#![cfg(feature = "datalink")]
+#![cfg(all(unix, feature = "libpcap"))]
 
 use netget::client::datalink::actions::{
     DataLinkClientProtocol, ETHERTYPE_NAMES, MAX_ETHERNET_FRAME_BYTES, MIN_ETHERNET_FRAME_BYTES,

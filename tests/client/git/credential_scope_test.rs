@@ -22,7 +22,6 @@
 //! Run with:
 //!   cargo test --no-default-features --features git --test client -- client::git::credential_scope
 
-#![cfg(feature = "git")]
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;

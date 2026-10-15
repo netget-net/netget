@@ -17,20 +17,20 @@
 //! | Data | SW1 (1) | SW2 (1) |
 //! ```
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use anyhow::{bail, Context, Result};
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use ring::rand::SecureRandom;
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use ring::signature::{EcdsaKeyPair, KeyPair, ECDSA_P256_SHA256_FIXED_SIGNING};
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use tracing::{debug, warn};
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::server::usb::fido2::approval::{ApprovalDetails, OperationType, UserPresence};
 
 /// What processing one U2F command produced. Mirrors `Ctap2Outcome`.
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub enum U2fOutcome {
     /// Encoded U2F response (data + status word), ready for CTAPHID framing.
     Response(Vec<u8>),
@@ -39,7 +39,7 @@ pub enum U2fOutcome {
 }
 
 /// U2F command codes (INS byte)
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum U2fCommand {
@@ -48,7 +48,7 @@ pub enum U2fCommand {
     Version = 0x03,
 }
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 impl U2fCommand {
     pub fn from_u8(value: u8) -> Option<Self> {
         match value {
@@ -61,25 +61,25 @@ impl U2fCommand {
 }
 
 /// U2F authentication control byte (P1)
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub const U2F_AUTH_ENFORCE: u8 = 0x03; // Enforce user presence
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub const U2F_AUTH_CHECK_ONLY: u8 = 0x07; // Check only (don't sign)
 
 /// U2F status words
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub const SW_NO_ERROR: u16 = 0x9000;
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub const SW_CONDITIONS_NOT_SATISFIED: u16 = 0x6985;
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub const SW_WRONG_DATA: u16 = 0x6a80;
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub const SW_WRONG_LENGTH: u16 = 0x6700;
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub const SW_INS_NOT_SUPPORTED: u16 = 0x6d00;
 
 /// U2F APDU request
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Debug)]
 pub struct U2fRequest {
     pub cla: u8,
@@ -89,7 +89,7 @@ pub struct U2fRequest {
     pub data: Vec<u8>,
 }
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 impl U2fRequest {
     /// Parse U2F APDU request
     pub fn parse(data: &[u8]) -> Result<Self> {
@@ -132,13 +132,13 @@ impl U2fRequest {
 }
 
 /// U2F response builder
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub struct U2fResponse {
     data: Vec<u8>,
     sw: u16,
 }
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 impl U2fResponse {
     pub fn success(data: Vec<u8>) -> Self {
         Self {
@@ -163,7 +163,7 @@ impl U2fResponse {
 }
 
 /// U2F credential storage (simplified in-memory version)
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub struct U2fCredentialStore {
     /// Stored credentials (keyed by application parameter)
     credentials: std::collections::HashMap<Vec<u8>, Credential>,
@@ -171,7 +171,7 @@ pub struct U2fCredentialStore {
     rng: ring::rand::SystemRandom,
 }
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Clone)]
 struct Credential {
     /// PKCS#8 private key document
@@ -185,7 +185,7 @@ struct Credential {
     counter: u32,
 }
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 impl U2fCredentialStore {
     pub fn new() -> Self {
         Self {
@@ -361,7 +361,7 @@ impl U2fCredentialStore {
     }
 }
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 impl Default for U2fCredentialStore {
     fn default() -> Self {
         Self::new()
@@ -369,12 +369,12 @@ impl Default for U2fCredentialStore {
 }
 
 /// U2F protocol handler
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub struct U2fHandler {
     store: U2fCredentialStore,
 }
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 impl U2fHandler {
     pub fn new() -> Self {
         Self {
@@ -556,7 +556,7 @@ impl U2fHandler {
     }
 }
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 impl Default for U2fHandler {
     fn default() -> Self {
         Self::new()

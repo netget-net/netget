@@ -15,7 +15,6 @@
 //!   --test event_handler_llm_instruction_test -- --test-threads=100
 //! ```
 
-#![cfg(feature = "tcp")]
 
 mod helpers;
 

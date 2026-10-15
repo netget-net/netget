@@ -18,7 +18,6 @@
 //! `open_server`, client mock answers `open_client`, and each mocks the protocol event its
 //! assertion depends on.
 
-#[cfg(all(test, feature = "udp"))]
 mod udp_client_tests {
     use crate::helpers::*;
     use std::time::Duration;

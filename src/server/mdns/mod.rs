@@ -7,45 +7,45 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
-#[cfg(feature = "mdns")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::llm::action_helper::call_llm;
-#[cfg(feature = "mdns")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::llm::ollama_client::OllamaClient;
-#[cfg(feature = "mdns")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::logging::emit::Log;
-#[cfg(feature = "mdns")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::protocol::Event;
-#[cfg(feature = "mdns")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::server::MdnsProtocol;
-#[cfg(feature = "mdns")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::state::app_state::AppState;
 use crate::{console_error, console_info};
-#[cfg(feature = "mdns")]
+#[cfg(not(target_arch = "wasm32"))]
 use actions::MDNS_SERVER_STARTUP_EVENT;
 
 /// Port advertised in the SRV record when neither the service definition nor
 /// the server's own listen address names one.
-#[cfg(feature = "mdns")]
+#[cfg(not(target_arch = "wasm32"))]
 const DEFAULT_ADVERTISED_PORT: u16 = 8080;
 
 /// The IPv4 multicast group and port mDNS announces on (RFC 6762).
 ///
 /// Reported as *information*, never as this server's endpoint: joining a group is not
 /// binding it, and nobody owns it. See the return value of `spawn_with_llm_actions`.
-#[cfg(feature = "mdns")]
+#[cfg(not(target_arch = "wasm32"))]
 const MDNS_GROUP: &str = "224.0.0.251:5353";
 
 /// Port component of the "this protocol binds no listening socket" placeholder address.
 ///
 /// `server_startup::is_bound_addr` treats port 0 as exactly that — the OS never resolves a
 /// real bind to port 0 — and declines to advertise an endpoint for it.
-#[cfg(feature = "mdns")]
+#[cfg(not(target_arch = "wasm32"))]
 const NO_LISTENING_SOCKET_PORT: u16 = 0;
 
 /// mDNS server that advertises services based on LLM instructions
 pub struct MdnsServer;
 
-#[cfg(feature = "mdns")]
+#[cfg(not(target_arch = "wasm32"))]
 impl MdnsServer {
     /// Spawn mDNS server with integrated LLM actions
     pub async fn spawn_with_llm_actions(
@@ -411,10 +411,10 @@ impl MdnsServer {
 }
 
 /// Shuts the mDNS daemon down when the owning task is dropped or aborted.
-#[cfg(feature = "mdns")]
+#[cfg(not(target_arch = "wasm32"))]
 struct DaemonGuard(mdns_sd::ServiceDaemon);
 
-#[cfg(feature = "mdns")]
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for DaemonGuard {
     fn drop(&mut self) {
         match self.0.shutdown() {
@@ -424,7 +424,7 @@ impl Drop for DaemonGuard {
     }
 }
 
-#[cfg(feature = "mdns")]
+#[cfg(not(target_arch = "wasm32"))]
 fn get_local_ip() -> Option<String> {
     use std::net::UdpSocket;
 
@@ -442,7 +442,7 @@ fn get_local_ip() -> Option<String> {
     None
 }
 
-#[cfg(feature = "mdns")]
+#[cfg(not(target_arch = "wasm32"))]
 fn register_service(
     mdns: &mdns_sd::ServiceDaemon,
     service_type: &str,
@@ -495,7 +495,7 @@ fn register_service(
     }
 }
 
-#[cfg(not(feature = "mdns"))]
+#[cfg(target_arch = "wasm32")]
 impl MdnsServer {
     pub async fn spawn_with_llm_actions(
         _listen_addr: SocketAddr,

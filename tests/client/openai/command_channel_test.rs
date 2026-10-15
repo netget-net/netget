@@ -10,7 +10,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features openai --test client -- openai::command_channel --test-threads=100
 
-#![cfg(feature = "openai")]
 
 use std::sync::Arc;
 use std::time::Duration;

@@ -9,7 +9,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features etcd --test client -- etcd::command_channel --test-threads=100
 
-#![cfg(feature = "etcd")]
 
 use std::time::Duration;
 

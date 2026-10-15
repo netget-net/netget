@@ -9,7 +9,7 @@
 //!   ./cargo-isolated.sh test --no-default-features --features tuntap \
 //!       --test server -- server::tuntap::packet_test --test-threads=100
 
-#[cfg(all(test, feature = "tuntap"))]
+#[cfg(unix)]
 mod tests {
     use netget::server::tuntap::packet::{
         build_packet, checksum16, decode, ip_protocol_name, parse_mac, tcp_flag_bits,

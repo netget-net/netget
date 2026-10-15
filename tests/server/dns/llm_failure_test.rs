@@ -11,7 +11,6 @@
 //! transaction ID echoed, and the question section repeated - all three are required or a real
 //! stub resolver discards the packet and we are back to silence.
 
-#![cfg(feature = "dns")]
 
 use crate::helpers::pcap_oracle::PcapOracle;
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};

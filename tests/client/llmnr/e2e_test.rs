@@ -33,7 +33,6 @@
 //! has had a chance to speak — a fixed wait that is too short would present as "the querier
 //! ignored a valid answer", which is a product bug, not a timing one.
 
-#![cfg(feature = "llmnr")]
 
 use crate::helpers::{self, E2EResult, NetGetConfig};
 use hickory_proto::op::{Header, Message as DnsMessage, MessageType, OpCode, Query};

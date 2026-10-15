@@ -23,7 +23,6 @@
 //! The peer is a plain UDP socket, so nothing depends on server behaviour, and the client's LLM
 //! points at a closed port so no model is involved.
 
-#![cfg(feature = "sip")]
 
 use std::time::Duration;
 

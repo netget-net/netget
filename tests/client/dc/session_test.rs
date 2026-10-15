@@ -14,7 +14,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features dc --test client -- dc::session_test --test-threads=100
 
-#![cfg(feature = "dc")]
 
 use std::time::{Duration, Instant};
 

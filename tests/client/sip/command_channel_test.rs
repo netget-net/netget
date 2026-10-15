@@ -10,7 +10,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features sip --test client -- sip::command_channel --test-threads=100
 
-#![cfg(feature = "sip")]
 
 use std::time::Duration;
 

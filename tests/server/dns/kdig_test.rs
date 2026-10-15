@@ -23,7 +23,6 @@
 //! presentation writer, so the rdata assertions here are a second independent reading of the
 //! same bytes.
 
-#![cfg(feature = "dns")]
 
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use tokio::process::Command;

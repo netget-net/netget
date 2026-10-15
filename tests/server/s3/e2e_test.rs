@@ -13,7 +13,6 @@
 //! `CARGO_BIN_EXE_netget`, which is the binary cargo built for *this* test with *these*
 //! features (`tests/helpers/common.rs`).
 
-#[cfg(feature = "s3")]
 mod tests {
     use crate::helpers::retry;
     use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};

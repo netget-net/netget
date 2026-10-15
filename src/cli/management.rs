@@ -152,18 +152,6 @@ pub(crate) fn validate_server_startup_params(
     protocol: &str,
 ) -> Result<()> {
     validate_params_declared(params, schema, protocol)?;
-    #[cfg(any(
-        feature = "dot",
-        feature = "doh",
-        feature = "http",
-        feature = "http2",
-        feature = "quic",
-        feature = "smtp",
-        feature = "pop3",
-        feature = "tls",
-        feature = "kubernetes-server",
-        feature = "gemini"
-    ))]
     {
         let names: std::collections::HashSet<_> = schema.iter().map(|p| p.name.as_str()).collect();
         if [

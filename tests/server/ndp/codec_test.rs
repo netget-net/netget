@@ -32,7 +32,7 @@
 //!   ./cargo-isolated.sh test --no-default-features --features ndp \
 //!       --test server ndp::codec_test -- --test-threads=100
 
-#![cfg(all(test, feature = "ndp"))]
+#![cfg(unix)]
 
 use netget::server::ndp::codec::{
     self, NdpMessage, NdpOption, PrefixInformation, RouterAdvertisement, SendRequest,

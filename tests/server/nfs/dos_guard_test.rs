@@ -15,7 +15,7 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features nfs --test server -- server::nfs::dos_guard --test-threads=100
 
-#![cfg(feature = "nfs")]
+#![cfg(unix)]
 
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use super::test::{xdr_opaque, RpcClient, Xdr, MOUNTPROC3_MNT, MOUNT_PROGRAM, MOUNT_V3};

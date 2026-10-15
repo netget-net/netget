@@ -13,7 +13,6 @@
 //!
 //! Total LLM call budget across the file: 15 (5 server + 4 client + 3 + 3, see each test).
 
-#[cfg(all(test, feature = "mcp"))]
 mod mcp_client_tests {
     use crate::helpers::*;
 

@@ -24,7 +24,6 @@
 //!   classification is exercised directly instead of being faked with an assertion that proves
 //!   nothing.
 
-#![cfg(all(test, feature = "etcd"))]
 
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;

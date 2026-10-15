@@ -250,7 +250,6 @@ async fn create_and_remove_pipe_via_action() {
 // End-to-end: HTTP access event -> TCP sink
 // ---------------------------------------------------------------------------
 
-#[cfg(all(feature = "http", feature = "tcp"))]
 #[tokio::test]
 async fn http_access_event_pipes_into_tcp_server() {
     use netget::llm::ollama_client::OllamaClient;

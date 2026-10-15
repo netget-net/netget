@@ -3,7 +3,6 @@
 //! These tests spawn the actual NetGet binary with HTTP prompts
 //! and validate the responses using real HTTP clients.
 
-#![cfg(feature = "http")]
 
 // Helper module imported from parent
 

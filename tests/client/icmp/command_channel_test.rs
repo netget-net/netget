@@ -20,7 +20,7 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features icmp --test client -- icmp::command_channel --test-threads=100
 
-#![cfg(feature = "icmp")]
+#![cfg(unix)]
 
 use std::time::Duration;
 

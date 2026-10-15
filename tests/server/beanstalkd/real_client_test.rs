@@ -21,7 +21,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features beanstalkd --test server -- beanstalkd::real_client --test-threads=100
 
-#![cfg(feature = "beanstalkd")]
 
 use super::common::{self, queue_handler, RESERVED_BODY_PREFIX, RESERVED_BODY_SUFFIX};
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};

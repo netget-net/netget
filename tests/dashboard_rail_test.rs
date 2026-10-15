@@ -3,7 +3,6 @@
 //! their requests, rules, config, send), and the throughput arithmetic behind
 //! the sparklines.
 
-#![cfg(feature = "tcp")]
 
 use std::collections::HashMap;
 

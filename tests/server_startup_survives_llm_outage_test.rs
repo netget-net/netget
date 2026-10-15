@@ -23,7 +23,7 @@
 //!     --test server_startup_survives_llm_outage_test -- --test-threads=100
 //! ```
 
-#![cfg(any(feature = "nfc", feature = "usb-smartcard", feature = "bluetooth-ble"))]
+#![cfg(unix)]
 
 #[allow(unused_imports)]
 use netget::state::app_state::AppState;
@@ -123,7 +123,7 @@ fn assert_listening(protocol: &str, started: &Started) {
 
 /// NFC keeps its built-in tag defaults when the configuration call fails, so it is fully
 /// usable: every reader APDU goes through `call_llm` separately and fails closed on its own.
-#[cfg(feature = "nfc")]
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn nfc_starts_and_listens_with_the_llm_unreachable() {
     let started = start_with_no_llm("nfc").await;
@@ -132,7 +132,7 @@ async fn nfc_starts_and_listens_with_the_llm_unreachable() {
 
 /// Same for the USB smart card reader: `DEFAULT_ATR` and a card inserted are already in place
 /// before the configuration call, so the reader is exportable over USB/IP regardless.
-#[cfg(feature = "usb-smartcard")]
+#[cfg(all(unix, feature = "libusb"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn usb_smartcard_starts_and_listens_with_the_llm_unreachable() {
     let started = start_with_no_llm("usb-smartcard").await;
@@ -146,7 +146,7 @@ async fn usb_smartcard_starts_and_listens_with_the_llm_unreachable() {
 ///
 /// It **has** been run: on macOS with a powered adapter it passes (`--ignored`), reaching
 /// `Running` with no endpoint reported. It stays `#[ignore]`d because CI has no adapter.
-#[cfg(feature = "bluetooth-ble")]
+#[cfg(all(unix, feature = "bluetooth"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "needs a powered Bluetooth adapter; run with --ignored"]
 async fn bluetooth_ble_starts_with_the_llm_unreachable() {

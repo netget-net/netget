@@ -8,7 +8,6 @@
 //! key is needed and none could be used. The `api_key` values below are dummies present
 //! only because the protocol declares the parameter required.
 
-#[cfg(all(test, feature = "openai"))]
 mod openai_client_tests {
     use crate::helpers::*;
     use std::time::Duration;

@@ -17,7 +17,6 @@
 //! `brew install hashicorp/tap/vault` (macOS) or HashiCorp's apt repository / release zip
 //! (Linux).
 
-#![cfg(feature = "vault")]
 
 use netget::cli::management::ServerForm;
 use netget::state::app_state::AppState;

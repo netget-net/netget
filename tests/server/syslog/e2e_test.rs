@@ -3,7 +3,6 @@
 //! These tests verify Syslog server functionality by starting NetGet with Syslog prompts
 //! and using the `logger` command (built-in on Linux/macOS) or raw UDP sockets to send messages.
 
-#![cfg(feature = "syslog")]
 
 use crate::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::net::{SocketAddr, UdpSocket};

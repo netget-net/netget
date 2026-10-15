@@ -35,7 +35,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features openai --test server -- \
 //!       openai::connection_bounds --test-threads=100
 
-#![cfg(feature = "openai")]
 
 use std::time::Duration;
 

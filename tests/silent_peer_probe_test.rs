@@ -331,7 +331,6 @@ fn assert_reach(protocol: &str, expected: Reach, obs: &Observation, why: &str) {
 // go on passing on a tree where every client had become silent.
 // ===========================================================================================
 
-#[cfg(feature = "tcp")]
 #[tokio::test]
 async fn tcp_client_is_connected_and_silent() {
     let obs = probe("tcp", None).await;
@@ -344,7 +343,6 @@ async fn tcp_client_is_connected_and_silent() {
     );
 }
 
-#[cfg(feature = "telnet")]
 #[tokio::test]
 async fn telnet_client_is_connected_and_silent() {
     let obs = probe("telnet", None).await;
@@ -356,7 +354,6 @@ async fn telnet_client_is_connected_and_silent() {
     );
 }
 
-#[cfg(feature = "redis")]
 #[tokio::test]
 async fn redis_client_is_connected_and_silent() {
     let obs = probe("redis", None).await;
@@ -369,7 +366,6 @@ async fn redis_client_is_connected_and_silent() {
     );
 }
 
-#[cfg(feature = "ftp")]
 #[tokio::test]
 async fn ftp_client_is_connected_and_silent() {
     let obs = probe("ftp", None).await;
@@ -381,7 +377,6 @@ async fn ftp_client_is_connected_and_silent() {
     );
 }
 
-#[cfg(feature = "nntp")]
 #[tokio::test]
 async fn nntp_client_is_connected_and_silent() {
     let obs = probe("nntp", None).await;
@@ -393,7 +388,6 @@ async fn nntp_client_is_connected_and_silent() {
     );
 }
 
-#[cfg(feature = "pop3")]
 #[tokio::test]
 async fn pop3_client_is_connected_and_silent() {
     let obs = probe("pop3", None).await;
@@ -405,7 +399,6 @@ async fn pop3_client_is_connected_and_silent() {
     );
 }
 
-#[cfg(feature = "torrent-peer")]
 #[tokio::test]
 async fn torrent_peer_client_is_connected_and_silent() {
     let obs = probe("torrent_peer", None).await;
@@ -421,7 +414,6 @@ async fn torrent_peer_client_is_connected_and_silent() {
 // Speaks inside connect() — exempt because the first byte arrives before anyone is waited on.
 // ===========================================================================================
 
-#[cfg(feature = "postgresql")]
 #[tokio::test]
 async fn postgresql_client_speaks_inside_connect() {
     let obs = probe("postgresql", None).await;
@@ -433,7 +425,6 @@ async fn postgresql_client_speaks_inside_connect() {
     );
 }
 
-#[cfg(feature = "mssql")]
 #[tokio::test]
 async fn mssql_client_speaks_inside_connect() {
     let obs = probe("mssql", None).await;
@@ -445,7 +436,6 @@ async fn mssql_client_speaks_inside_connect() {
     );
 }
 
-#[cfg(feature = "cassandra")]
 #[tokio::test]
 async fn cassandra_client_speaks_inside_connect() {
     let obs = probe("cassandra", None).await;
@@ -457,7 +447,6 @@ async fn cassandra_client_speaks_inside_connect() {
     );
 }
 
-#[cfg(feature = "mongodb")]
 #[tokio::test]
 async fn mongodb_client_speaks_inside_connect() {
     let obs = probe("mongodb", None).await;
@@ -469,7 +458,6 @@ async fn mongodb_client_speaks_inside_connect() {
     );
 }
 
-#[cfg(feature = "tls")]
 #[tokio::test]
 async fn tls_client_speaks_inside_connect_but_only_the_handshake() {
     let obs = probe("tls", None).await;
@@ -481,7 +469,6 @@ async fn tls_client_speaks_inside_connect_but_only_the_handshake() {
     );
 }
 
-#[cfg(feature = "couchdb")]
 #[tokio::test]
 async fn couchdb_client_speaks_inside_connect() {
     let obs = probe("couchdb", None).await;
@@ -497,7 +484,6 @@ async fn couchdb_client_speaks_inside_connect() {
 // Lazy — exempt because no socket exists until an operation is issued.
 // ===========================================================================================
 
-#[cfg(feature = "elasticsearch")]
 #[tokio::test]
 async fn elasticsearch_client_is_lazy() {
     let obs = probe("elasticsearch", None).await;
@@ -510,7 +496,6 @@ async fn elasticsearch_client_is_lazy() {
     );
 }
 
-#[cfg(feature = "s3")]
 #[tokio::test]
 async fn s3_client_is_lazy() {
     let obs = probe("s3", None).await;
@@ -522,7 +507,6 @@ async fn s3_client_is_lazy() {
     );
 }
 
-#[cfg(feature = "sqs")]
 #[tokio::test]
 async fn sqs_client_is_lazy() {
     let obs = probe(
@@ -543,7 +527,7 @@ async fn sqs_client_is_lazy() {
     );
 }
 
-#[cfg(feature = "smb-client")]
+#[cfg(all(unix, feature = "libsmbclient"))]
 #[tokio::test]
 async fn smb_client_is_lazy() {
     let obs = probe("smb", None).await;
@@ -556,7 +540,6 @@ async fn smb_client_is_lazy() {
     );
 }
 
-#[cfg(feature = "etcd")]
 #[tokio::test]
 async fn etcd_client_is_lazy() {
     let obs = probe("etcd", None).await;

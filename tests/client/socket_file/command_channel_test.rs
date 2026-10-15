@@ -7,7 +7,7 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features socket_file --test client -- socket_file::command_channel --test-threads=100
 
-#![cfg(all(feature = "socket_file", unix))]
+#![cfg(unix)]
 
 use std::time::Duration;
 

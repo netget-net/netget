@@ -8,7 +8,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features amqp --test client -- amqp::command_channel --test-threads=100
 
-#![cfg(feature = "amqp")]
 
 use std::time::Duration;
 

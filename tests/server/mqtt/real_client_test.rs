@@ -25,7 +25,6 @@
 //! This test is **not** `#[ignore]`d and does **not** skip when mosquitto is
 //! missing — see `require_binary`.
 
-#![cfg(feature = "mqtt")]
 
 use crate::server::helpers::*;
 use std::process::Stdio;

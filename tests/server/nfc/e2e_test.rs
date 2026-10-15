@@ -6,7 +6,7 @@
 //! real client on the real socket, asserting the response APDU **bytes**. No
 //! reader, no vpcd daemon, no PC/SC.
 
-#[cfg(all(test, feature = "nfc"))]
+#[cfg(unix)]
 mod tests {
     use crate::helpers::*;
     use std::time::Duration;

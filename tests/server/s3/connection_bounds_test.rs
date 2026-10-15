@@ -15,7 +15,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features s3 --test server -- \
 //!       s3::connection_bounds --test-threads=100
 
-#![cfg(all(test, feature = "s3"))]
 
 use std::time::Duration;
 

@@ -15,7 +15,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features pypi --test server -- \
 //!       pypi::connection_bounds --test-threads=100
 
-#![cfg(all(test, feature = "pypi"))]
 
 use std::time::Duration;
 

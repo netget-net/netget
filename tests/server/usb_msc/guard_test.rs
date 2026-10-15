@@ -16,7 +16,7 @@
 //! would satisfy every other assertion here — so the last thing each test does is enumerate
 //! the device over a fresh connection.
 
-#[cfg(all(test, feature = "usb-msc"))]
+#[cfg(all(unix, feature = "libusb"))]
 mod usb_msc_guard {
     use crate::helpers::server::NetGetServer;
     use crate::helpers::usbip_client::UsbIpClient;

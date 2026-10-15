@@ -11,7 +11,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features http --test client -- http::command_channel --test-threads=100
 
-#![cfg(feature = "http")]
 
 use std::time::Duration;
 

@@ -26,7 +26,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features bgp \
 //!       --test client -- --test-threads=100 bgp
 
-#[cfg(all(test, feature = "bgp"))]
 mod bgp_client_hold_timer_tests {
     use netget::client::bgp::{BgpClient, BgpClientProtocol};
     use netget::llm::actions::Protocol;

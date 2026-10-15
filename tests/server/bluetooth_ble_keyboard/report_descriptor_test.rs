@@ -4,7 +4,7 @@
 //! report map — the base stack carries it as an opaque byte string — so without these the
 //! first thing to validate the descriptor is a real host, on a real machine, after shipping.
 
-#![cfg(all(test, feature = "bluetooth-ble-keyboard"))]
+#![cfg(all(unix, feature = "bluetooth"))]
 
 use netget::llm::actions::protocol_trait::Protocol;
 use netget::server::bluetooth_ble_keyboard::actions::BluetoothBleKeyboardProtocol;

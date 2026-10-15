@@ -1,5 +1,4 @@
 //! Startup ownership survives errors/cancellation before a caller receives its ID.
-#![cfg(feature = "vnc")]
 
 use netget::cli::management::ClientForm;
 use netget::llm::OllamaClient;

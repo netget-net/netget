@@ -17,7 +17,6 @@
 //! fails and the loop tolerates it. Actions are injected through `AppState::send_to_client`,
 //! the same path the dashboard uses.
 
-#![cfg(feature = "saml")]
 
 use std::time::Duration;
 

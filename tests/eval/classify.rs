@@ -656,7 +656,6 @@ pub fn classify(
 /// were broken at once — a case-sensitive registry lookup and a JSON parse of a
 /// Debug-formatted line — so the diagnosis never fired on any run. The line
 /// copies `send_smtp_greeting`'s current example, so this follows the example.
-#[cfg(feature = "smtp")]
 #[test]
 fn copied_example_is_found_in_the_executor_debug_line() {
     let line = r#"2026-09-26T21:18:45.444061Z DEBUG Executing action 0: Object {"type": String("send_smtp_greeting"), "hostname": String("mx.example.invalid"), "message": String("ESMTP")}"#.to_string();

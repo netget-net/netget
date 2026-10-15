@@ -1,4 +1,3 @@
-#![cfg(feature = "grpc-web")]
 
 #[test]
 fn initial_http_header_count_and_aggregate_exact_plus_one() {

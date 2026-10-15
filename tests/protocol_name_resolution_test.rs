@@ -21,7 +21,7 @@
 //! the reason. Resolution is now longest-matching-keyword-wins with a name
 //! tie-break, which is specificity-ordered and identical on every run.
 
-#![cfg(all(feature = "ssh", feature = "ssh-agent", unix))]
+#![cfg(unix)]
 
 use netget::protocol::client_registry::CLIENT_REGISTRY;
 

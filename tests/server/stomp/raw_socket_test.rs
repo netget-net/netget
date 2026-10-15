@@ -18,7 +18,6 @@
 //!
 //! LLM budget: 3 calls across two tests.
 
-#[cfg(all(test, feature = "stomp"))]
 mod stomp_raw_socket_test {
     use crate::helpers::{start_netget_server, E2EResult, NetGetConfig};
     use std::time::Duration;

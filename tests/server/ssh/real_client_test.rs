@@ -100,7 +100,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features ssh \
 //!       --test server -- server::ssh::real_client --test-threads=8
 
-#![cfg(all(test, feature = "ssh"))]
 
 use crate::helpers::{self, E2EResult, NetGetConfig};
 use std::path::{Path, PathBuf};

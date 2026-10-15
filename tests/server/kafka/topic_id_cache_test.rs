@@ -5,7 +5,6 @@
 //! a handler), so the table is bounded twice: a name over Kafka's own 249-byte limit is not
 //! described and not remembered, and past `MAX_KNOWN_TOPIC_IDS` the oldest id is forgotten —
 //! one, not the whole table.
-#![cfg(all(test, feature = "kafka"))]
 
 use netget::cli::management::ServerForm;
 use netget::server::kafka::{topic_id, TopicIds, MAX_KNOWN_TOPIC_IDS, MAX_TOPIC_NAME_LEN};

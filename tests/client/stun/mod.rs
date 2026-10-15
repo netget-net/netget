@@ -1,5 +1,5 @@
-#[cfg(all(test, feature = "stun"))]
+#[cfg(unix)]
 mod e2e_test;
 
-#[cfg(all(test, feature = "stun"))]
+#[cfg(unix)]
 mod command_channel_test;

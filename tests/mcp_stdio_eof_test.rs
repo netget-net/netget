@@ -11,7 +11,7 @@
 //! (the control) rather than only when a race goes the wrong way, and the wrapped one keeps it
 //! because waiting for the answer is what lets the handler run.
 
-#![cfg(all(feature = "mcp-stdio", feature = "tcp"))]
+#![cfg(feature = "mcp-stdio")]
 
 use clap::Parser;
 use netget::cli::Args;

@@ -7,7 +7,6 @@
 //! - Local SMTP server (mailhog, fakesmtp, or Python's smtp debugging server)
 //! - For testing, use: `python3 -m smtpd -n -c DebuggingServer localhost:1025`
 
-#[cfg(all(test, feature = "smtp"))]
 mod smtp_client_tests {
     use crate::helpers::*;
     use std::process::{Command, Stdio};

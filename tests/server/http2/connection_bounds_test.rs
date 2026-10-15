@@ -29,7 +29,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features http2 --test server -- \
 //!       http2::connection_bounds --test-threads=100
 
-#![cfg(all(test, feature = "http2"))]
 
 use std::time::Duration;
 

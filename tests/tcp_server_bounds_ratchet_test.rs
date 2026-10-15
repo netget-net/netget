@@ -34,6 +34,9 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features tcp --test tcp_server_bounds_ratchet_test -- --test-threads=100
 
+#[path = "helpers/fork_source.rs"]
+mod fork_source;
+
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -266,10 +269,11 @@ fn every_tcp_accept_loop_goes_through_the_shared_connection_cap() {
     for (name, source) in tcp_servers() {
         let has_cap = source.contains("accept_bounded")
             || (name == "opcua" && source.contains("server.run_with(listener)") && {
-                // The external stack owns its accept loop. Verify the real bounded vendored loop,
-                // rather than exempting this protocol from the connection-cap ratchet.
-                let adapter = std::fs::read_to_string("vendor/async-opcua-server/src/server.rs")
-                    .expect("OPC UA adapter source");
+                // The external stack owns its accept loop. Verify the real bounded loop in
+                // NetGet's fork (netget-async-opcua-server), rather than exempting this protocol
+                // from the connection-cap ratchet.
+                let adapter =
+                    fork_source::read_fork("netget-async-opcua-server", "src/server.rs");
                 adapter.contains("self.connections.len() < 256")
                     && adapter.contains("if accepting =>")
             });

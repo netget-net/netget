@@ -16,7 +16,7 @@
 //! nothing to do with IGMP. Port these to `tokio::net::UdpSocket` (as
 //! `tests/server/sip/e2e_test.rs` now does) before expecting them to pass.
 
-#[cfg(all(test, feature = "igmp"))]
+#[cfg(unix)]
 mod e2e_igmp {
     use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
     use std::net::{Ipv4Addr, UdpSocket};

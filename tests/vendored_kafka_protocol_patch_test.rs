@@ -1,8 +1,9 @@
-//! The vendored kafka-protocol is the one Cargo builds, still carries its patches, and the
-//! patches do what they are for. See vendor/kafka-protocol/README.netget.md.
+//! NetGet's kafka-protocol fork (`netget-kafka-protocol`, github.com/netget-net/kafka-protocol-rs)
+//! is the one Cargo builds, still carries its patches, and the patches do what they are for.
+//! The fork's NETGET.md lists every change.
 //!
 //! `every_decode_allocation_in_the_crate_is_bounded_by_the_bytes_present` is the ratchet:
-//! it reads every `.rs` file under the vendored `src/` and fails on any `with_capacity`,
+//! it reads every `.rs` file under the fork's `src/` and fails on any `with_capacity`,
 //! `reserve`, `vec![0; …]` or `resize` it cannot classify as bounded, so an upgrade that
 //! brings a new peer-sized allocation in has to be looked at rather than inherited.
 //!
@@ -10,97 +11,34 @@
 //! array declaring 0x7fffffff entries calls `Vec::with_capacity` for ~144 GiB and the test
 //! binary aborts with "memory allocation of … bytes failed" rather than failing.
 
+#[path = "helpers/fork_source.rs"]
+mod fork_source;
+
+use fork_source::{assert_fork_is_built, fork_dir, read_fork};
 use std::fs;
 use std::path::Path;
 
-fn read(rel: &str) -> String {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
-    fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
-}
-
-/// Every `[[package]]` entry in Cargo.lock named `name`: (version, source line if any).
-fn locked_packages(lock: &str, name: &str) -> Vec<(String, Option<String>)> {
-    lock.split("[[package]]")
-        .skip(1)
-        .filter_map(|entry| {
-            let field = |key: &str| {
-                entry.lines().find_map(|l| {
-                    l.strip_prefix(&format!("{key} = "))
-                        .map(|v| v.trim_matches('"').to_string())
-                })
-            };
-            (field("name")? == name).then(|| (field("version").unwrap(), field("source")))
-        })
-        .collect()
-}
+const FORK: &str = "netget-kafka-protocol";
 
 #[test]
-fn kafka_protocol_patch_preserves_pinned_version_license_and_provenance() {
-    let manifest = read("vendor/kafka-protocol/Cargo.toml");
-    assert!(manifest.contains("name = \"kafka-protocol\""));
+fn kafka_protocol_fork_keeps_its_version_and_licenses() {
+    let manifest = read_fork(FORK, "Cargo.toml");
+    assert!(manifest.contains("name = \"netget-kafka-protocol\""));
     assert!(manifest.contains("version = \"0.14.1\""));
     assert!(manifest.contains("license = \"MIT/Apache-2.0\""));
     for license in ["LICENSE-APACHE", "LICENSE-MIT"] {
-        assert!(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("vendor/kafka-protocol")
-                .join(license)
-                .is_file(),
-            "{license} missing"
-        );
+        assert!(fork_dir(FORK).join(license).is_file(), "{license} missing");
     }
-    let provenance: serde_json::Value =
-        serde_json::from_str(&read("vendor/kafka-protocol/.cargo_vcs_info.json")).unwrap();
-    assert_eq!(
-        provenance["git"]["sha1"],
-        "838fec2967d76bffb8bae96fe2a4acfe47bfa73e"
-    );
 }
 
 #[test]
-fn cargo_builds_the_vendored_kafka_protocol() {
-    let root = read("Cargo.toml");
-    let patch = root
-        .split("[patch.crates-io]")
-        .nth(1)
-        .map(|rest| rest.split("\n[").next().unwrap_or(rest))
-        .unwrap_or("");
-    assert!(
-        patch
-            .lines()
-            .any(|l| l.trim() == r#"kafka-protocol = { path = "vendor/kafka-protocol" }"#),
-        "Cargo.toml's [patch.crates-io] must point kafka-protocol at vendor/kafka-protocol"
-    );
-
-    let lock = read("Cargo.lock");
-    let locked = locked_packages(&lock, "kafka-protocol");
-    assert!(
-        !locked.is_empty(),
-        "Cargo.lock has no kafka-protocol at all"
-    );
-    for (version, source) in &locked {
-        assert!(
-            source.is_none() && version == "0.14.1",
-            "Cargo.lock resolves kafka-protocol {version} from {}: the array-allocation patch \
-             is not the crate being built (vendor/kafka-protocol/README.netget.md)",
-            source.as_deref().unwrap_or("a path")
-        );
-    }
-    let unused = lock.split("[[patch.unused]]").skip(1).any(|entry| {
-        entry
-            .lines()
-            .take_while(|l| !l.starts_with("[["))
-            .any(|l| l.trim() == r#"name = "kafka-protocol""#)
-    });
-    assert!(
-        !unused,
-        "Cargo.lock lists vendor/kafka-protocol under [[patch.unused]]"
-    );
+fn cargo_builds_the_kafka_protocol_fork() {
+    assert_fork_is_built("kafka-protocol", "0.14.1");
 }
 
 #[test]
 fn both_array_decoders_bound_their_preallocation_by_the_bytes_remaining() {
-    let types = read("vendor/kafka-protocol/src/protocol/types.rs");
+    let types = read_fork(FORK, "src/protocol/types.rs");
     assert!(
         types.contains("Vec::with_capacity((n as usize).min(buf.remaining()))"),
         "Array<E>::decode lost its bound"
@@ -121,7 +59,7 @@ fn both_array_decoders_bound_their_preallocation_by_the_bytes_remaining() {
 
 #[test]
 fn record_batch_counts_are_bounded_by_the_bytes_remaining() {
-    let records = read("vendor/kafka-protocol/src/records.rs");
+    let records = read_fork(FORK, "src/records.rs");
     assert!(
         records.contains("records.reserve(batch_decode_info.record_count.min(buf.remaining()))"),
         "RecordBatchDecoder::decode_new_records lost its bound: a ~61-byte batch declaring \
@@ -140,7 +78,7 @@ fn record_batch_counts_are_bounded_by_the_bytes_remaining() {
 
 #[test]
 fn declared_byte_lengths_are_checked_before_they_are_zero_filled() {
-    let types = read("vendor/kafka-protocol/src/protocol/types.rs");
+    let types = read_fork(FORK, "src/protocol/types.rs");
     let lines: Vec<&str> = types.lines().collect();
     let fills: Vec<usize> = (0..lines.len())
         .filter(|&i| lines[i].contains("vec![0;"))
@@ -160,7 +98,7 @@ fn declared_byte_lengths_are_checked_before_they_are_zero_filled() {
         );
     }
 
-    let snappy = read("vendor/kafka-protocol/src/compression/snappy.rs");
+    let snappy = read_fork(FORK, "src/compression/snappy.rs");
     let guard = snappy
         .find("actual_len > buf.len().saturating_mul(32)")
         .expect("the snappy decompressor lost its declared-length ceiling");
@@ -173,7 +111,7 @@ fn declared_byte_lengths_are_checked_before_they_are_zero_filled() {
     );
 }
 
-/// Every allocation-sizing call in the vendored crate, classified. A line that matches the
+/// Every allocation-sizing call in the fork, classified. A line that matches the
 /// pattern and none of the known shapes fails the test, so a new site is looked at.
 #[test]
 fn every_decode_allocation_in_the_crate_is_bounded_by_the_bytes_present() {
@@ -187,7 +125,7 @@ fn every_decode_allocation_in_the_crate_is_bounded_by_the_bytes_present() {
             }
         }
     }
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("vendor/kafka-protocol/src");
+    let root = fork_dir(FORK).join("src");
     let mut files = Vec::new();
     walk(&root, &mut files);
     assert!(files.len() > 100, "walked only {} files", files.len());
@@ -234,13 +172,13 @@ fn every_decode_allocation_in_the_crate_is_bounded_by_the_bytes_present() {
     }
     assert!(
         unclassified.is_empty(),
-        "allocation sized by something other than the bytes present — bound it (see \
-         vendor/kafka-protocol/README.netget.md) or, if the size is our own, classify it here:\n{}",
+        "allocation sized by something other than the bytes present — bound it in the fork \
+         (github.com/netget-net/kafka-protocol-rs, NETGET.md) or, if the size is our own, \
+         classify it here:\n{}",
         unclassified.join("\n")
     );
 }
 
-#[cfg(feature = "kafka")]
 mod decode {
     use bytes::Bytes;
     use kafka_protocol::messages::{FetchRequest, MetadataRequest, ProduceRequest};

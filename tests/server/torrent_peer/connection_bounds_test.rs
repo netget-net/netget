@@ -36,7 +36,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features torrent-peer --test server -- \
 //!       torrent_peer::connection_bounds --test-threads=100
 
-#![cfg(feature = "torrent-peer")]
 
 use std::time::Duration;
 

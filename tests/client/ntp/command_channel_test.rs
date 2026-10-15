@@ -13,7 +13,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features ntp --test client -- ntp::command_channel --test-threads=100
 
-#![cfg(feature = "ntp")]
 
 use std::time::Duration;
 

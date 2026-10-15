@@ -69,7 +69,7 @@ echo -e "${BLUE}║              Protocol Examples Tests                        
 echo -e "${BLUE}╚════════════════════════════════════════════════════════════════╝${NC}"
 echo
 
-# Use all features by default
+# Every protocol is compiled in; --all-features adds the system-library ones too.
 FEATURE_FLAGS="--all-features"
 echo -e "${BLUE}Feature flags: ${FEATURE_FLAGS}${NC}"
 echo
@@ -126,8 +126,8 @@ if [ "$STATIC_ONLY" = false ]; then
 
         for protocol in "${PROTOCOLS[@]}"; do
             echo -e "${BLUE}Testing protocol: $protocol${NC}"
-            if ./cargo-isolated.sh test --no-default-features --features "$protocol" \
-                example_test -- --test-threads=100 --nocapture; then
+            if ./cargo-isolated.sh test --test examples -- "${protocol}_examples_test" \
+                --test-threads=100 --nocapture; then
                 echo -e "${GREEN}✓ $protocol example tests passed${NC}"
                 PASSED_TESTS+=("$protocol E2E")
             else

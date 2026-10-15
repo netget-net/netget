@@ -11,7 +11,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features modbus --test client -- modbus::unanswered_test --test-threads=100
 
-#![cfg(all(test, feature = "modbus"))]
 
 use crate::helpers::*;
 use serde_json::json;

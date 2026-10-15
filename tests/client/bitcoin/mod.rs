@@ -6,14 +6,11 @@
 // into this build` — which reads exactly like the target-directory contention artefact the
 // root CLAUDE.md warns about, and is not. Gating on both makes the requirement true at compile
 // time instead of discovering it in a test log.
-#[cfg(all(test, feature = "bitcoin", feature = "http"))]
 mod e2e_test;
 
 // `command_channel_test` stands up its own `tokio::net::TcpListener` and writes the HTTP
 // response by hand, so it needs nothing but `bitcoin`.
-#[cfg(all(test, feature = "bitcoin"))]
 mod command_channel_test;
 
 // `rpc_auth_test` stands up its own raw TCP stub node, so it needs nothing but `bitcoin`.
-#[cfg(all(test, feature = "bitcoin"))]
 mod rpc_auth_test;

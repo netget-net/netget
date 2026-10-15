@@ -10,7 +10,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features nsq --test server -- nsq::llm_failure --test-threads=100
 
-#![cfg(feature = "nsq")]
 
 use super::common::{self, static_handler, Peer};
 use netget::cli::management::ServerForm;

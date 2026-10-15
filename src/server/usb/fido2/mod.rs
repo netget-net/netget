@@ -58,61 +58,61 @@ pub mod ctap2;
 pub mod ctaphid;
 pub mod u2f;
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use anyhow::Result;
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use std::collections::HashMap;
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use std::net::SocketAddr;
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use std::sync::{Arc, Mutex};
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use tokio::sync::mpsc;
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use tracing::{debug, error, info, warn};
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::console_error;
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::llm::action_helper::call_llm;
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::llm::ollama_client::OllamaClient;
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::protocol::Event;
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::server::accept_bounded::{accept_bounded, ConnectionLimiter};
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::server::connection::ConnectionId;
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::server::usb::guard::{MAX_USBIP_CONNECTIONS, USBIP_NO_REFUSAL};
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::state::app_state::AppState;
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::server::usb::descriptors::FIDO_HID_REPORT_DESCRIPTOR;
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use actions::{
     UsbFido2Protocol, FIDO2_AUTHENTICATE_REQUEST_EVENT, FIDO2_DEVICE_ATTACHED_EVENT,
     FIDO2_DEVICE_DETACHED_EVENT, FIDO2_REGISTER_REQUEST_EVENT,
 };
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use approval::{
     ApprovalConfig, ApprovalDecision, ApprovalDetails, ApprovalManager, OperationType, UserPresence,
 };
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use ctap2::{Ctap2Handler, Ctap2Outcome};
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use ctaphid::{CtapHidCommand, CtapHidHandler, CtapHidPacket, KeepaliveStatus};
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use u2f::{U2fHandler, U2fOutcome};
 
 /// USB FIDO2 Security Key server
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub struct UsbFido2Server;
 
 /// A CTAP command parked waiting for a user-presence decision.
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 struct ParkedCommand {
     cid: u32,
     cmd: CtapHidCommand,
@@ -123,7 +123,7 @@ struct ParkedCommand {
 }
 
 /// FIDO2 USB/IP HID handler
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub struct Fido2HidHandler {
     /// CTAPHID protocol handler
     ctaphid: CtapHidHandler,
@@ -143,7 +143,7 @@ pub struct Fido2HidHandler {
     support_fido2: bool,
 }
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 impl Fido2HidHandler {
     pub fn new(support_u2f: bool, support_fido2: bool) -> Self {
         Self {
@@ -433,7 +433,7 @@ impl Fido2HidHandler {
     }
 }
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 /// Opaque on purpose.
 ///
 /// `usbip::UsbInterfaceHandler` requires `Debug` as of 0.9. Deriving it would pull the CTAPHID,
@@ -446,7 +446,7 @@ impl std::fmt::Debug for Fido2HidHandler {
     }
 }
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 impl usbip::UsbInterfaceHandler for Fido2HidHandler {
     fn handle_urb(
         &mut self,
@@ -619,16 +619,16 @@ impl usbip::UsbInterfaceHandler for Fido2HidHandler {
 /// lookup was "first value in the map" — with two FIDO2 servers running, actions aimed at one
 /// resolved approvals on the other, and the map was never cleaned up.
 /// The handler `usbip` holds for one attached host, as this module shares it.
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 type SharedHandler = Arc<Mutex<Box<dyn usbip::UsbInterfaceHandler + Send>>>;
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub struct Fido2ServerHandle {
     pub approvals: Arc<ApprovalManager>,
     handlers: Mutex<HashMap<ConnectionId, SharedHandler>>,
 }
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 impl Fido2ServerHandle {
     fn new(approvals: Arc<ApprovalManager>) -> Self {
         Self {
@@ -665,7 +665,7 @@ impl Fido2ServerHandle {
     }
 }
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 impl UsbFido2Server {
     /// Spawn the USB FIDO2 server with LLM integration.
     ///

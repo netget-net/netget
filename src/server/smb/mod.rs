@@ -302,7 +302,6 @@ const RELATED_FILE_ID: [u8; 16] = [0xFF; 16];
 
 impl SmbServer {
     /// Spawn SMB server with integrated LLM actions
-    #[cfg(feature = "smb")]
     pub async fn spawn_with_llm_actions(
         listen_addr: SocketAddr,
         llm_client: OllamaClient,
@@ -398,20 +397,8 @@ impl SmbServer {
     }
 
     /// Spawn SMB server without the smb feature (fallback)
-    #[cfg(not(feature = "smb"))]
-    pub async fn spawn_with_llm_actions(
-        _listen_addr: SocketAddr,
-        _llm_client: OllamaClient,
-        _app_state: Arc<AppState>,
-        _status_tx: mpsc::UnboundedSender<String>,
-        _server_id: ServerId,
-        _deadlines: Deadlines,
-    ) -> Result<SocketAddr> {
-        Err(anyhow!("SMB feature not enabled"))
-    }
 
     /// Handle a single SMB connection
-    #[cfg(feature = "smb")]
     #[allow(clippy::too_many_arguments)]
     async fn handle_connection(
         stream: TcpStream,
@@ -527,7 +514,6 @@ impl SmbServer {
     /// itself carries no length, so this frame is the only thing that says where one request
     /// ends — every request is read whole before anything is decided about it, which is what
     /// keeps the stream in step when a request is refused.
-    #[cfg(feature = "smb")]
     async fn run_smb_session<R, W>(
         reader: &mut SmbReader<R>,
         write_half: &Arc<Mutex<W>>,
@@ -674,7 +660,6 @@ impl SmbServer {
     /// linked by `NextCommand` (MS-SMB2 3.3.5.2.7); the responses are chained the same way.
     ///
     /// `None` means the frame is not SMB2 at all and the connection should close.
-    #[cfg(feature = "smb")]
     async fn process_frame(
         frame: &[u8],
         peer_addr: SocketAddr,
@@ -789,7 +774,6 @@ impl SmbServer {
 
     /// Answer one SMB2 request. `message` is the request's header and body, and nothing past
     /// it. `Ok(None)` is the one command that gets no response (CANCEL).
-    #[cfg(feature = "smb")]
     async fn handle_request(
         req: &RequestHeader,
         message: &[u8],
@@ -981,7 +965,6 @@ impl SmbServer {
     /// `STATUS_MORE_PROCESSING_REQUIRED` without asking anyone, then an AUTHENTICATE naming the
     /// user, which is what the model decides on. A SESSION_SETUP with an empty security buffer
     /// is a one-step guest login, decided the same way.
-    #[cfg(feature = "smb")]
     async fn session_setup(
         req: &RequestHeader,
         message: &[u8],
@@ -1112,7 +1095,6 @@ impl SmbServer {
 
     /// Ask the model whether `username` may log in, and answer the SESSION_SETUP accordingly.
     /// `pending` is the session an NTLMSSP exchange already allocated; `None` allocates one.
-    #[cfg(feature = "smb")]
     #[allow(clippy::too_many_arguments)]
     async fn decide_login(
         req: &RequestHeader,
@@ -1249,7 +1231,6 @@ impl SmbServer {
     /// the share is only a name for the root of the tree the model invents, and admission was
     /// decided at SESSION_SETUP. `IPC$` connects as a pipe share, and every operation on it is
     /// refused, because no named pipe is implemented.
-    #[cfg(feature = "smb")]
     async fn tree_connect(
         req: &RequestHeader,
         message: &[u8],
@@ -1328,7 +1309,6 @@ impl SmbServer {
     }
 
     /// CREATE (MS-SMB2 3.3.5.9): the model decides whether the path opens, and as what.
-    #[cfg(feature = "smb")]
     async fn create(
         req: &RequestHeader,
         message: &[u8],
@@ -1510,7 +1490,6 @@ impl SmbServer {
 
     /// READ (MS-SMB2 3.3.5.12): the model supplies the whole file; the server answers the
     /// range the client asked for.
-    #[cfg(feature = "smb")]
     async fn read(
         req: &RequestHeader,
         body: &[u8],
@@ -1626,7 +1605,6 @@ impl SmbServer {
     }
 
     /// WRITE (MS-SMB2 3.3.5.13): the model authorises the write; nothing is stored.
-    #[cfg(feature = "smb")]
     async fn write(
         req: &RequestHeader,
         message: &[u8],
@@ -1735,7 +1713,6 @@ impl SmbServer {
 
     /// QUERY_INFO (MS-SMB2 3.3.5.20). File-system classes and every class that does not need
     /// the file's size are answered from the handle; the size is the model's.
-    #[cfg(feature = "smb")]
     async fn query_info(
         req: &RequestHeader,
         body: &[u8],
@@ -1865,7 +1842,6 @@ impl SmbServer {
     /// QUERY_DIRECTORY (MS-SMB2 3.3.5.18). The first call of an enumeration asks the model for
     /// the listing; the entries are handed out across as many calls as the client's buffer
     /// needs, and the call after the last entry answers `STATUS_NO_MORE_FILES`.
-    #[cfg(feature = "smb")]
     async fn query_directory(
         req: &RequestHeader,
         message: &[u8],
@@ -2059,7 +2035,6 @@ impl SmbServer {
     }
 
     /// Consult the LLM for SMB file system operations
-    #[cfg(feature = "smb")]
     async fn consult_llm(
         ctx: &Ctx<'_>,
         operation: &str,

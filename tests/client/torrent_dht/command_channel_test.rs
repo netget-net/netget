@@ -10,7 +10,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features torrent-dht --test client -- torrent_dht::command_channel --test-threads=100
 
-#![cfg(feature = "torrent-dht")]
 
 use std::time::Duration;
 

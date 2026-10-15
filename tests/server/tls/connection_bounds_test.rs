@@ -37,7 +37,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features tls --test server -- \
 //!       tls::connection_bounds --test-threads=100
 
-#![cfg(feature = "tls")]
 
 use std::sync::Arc;
 use std::time::Duration;

@@ -3,7 +3,6 @@
 //! This test spawns a single NetGet DoH server with a Python script
 //! and validates multiple query types against the same server instance.
 
-#![cfg(feature = "doh")]
 
 use super::super::super::helpers::{self, E2EResult};
 use hickory_proto::op::{Message as DnsMessage, Query};

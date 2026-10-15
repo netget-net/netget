@@ -105,7 +105,6 @@
 //!     --test connection_soak_test -- --ignored --test-threads=1 --nocapture
 //! ```
 
-#![cfg(feature = "tcp")]
 
 use std::time::Duration;
 
@@ -685,7 +684,6 @@ async fn tcp_serves_ten_thousand_connections_without_growing() {
 
 /// hyper owns the connection here, so NetGet's tracking and the library's lifetime have to agree.
 /// `CLAUDE.md` records `serve_connection` as the shape roughly thirty protocols share.
-#[cfg(feature = "http")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "soak: ~25s, paced to outlast the 10s connection-retention window, and it fills the \
             ephemeral port range with TIME_WAIT so it cannot share a --test-threads=100 run; \
@@ -699,7 +697,6 @@ async fn http_serves_ten_thousand_connections_without_growing() {
 }
 
 /// A session protocol with its own framing and per-connection state machine.
-#[cfg(feature = "redis")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "soak: ~25s, paced to outlast the 10s connection-retention window, and it fills the \
             ephemeral port range with TIME_WAIT so it cannot share a --test-threads=100 run; \
@@ -728,7 +725,6 @@ async fn redis_serves_ten_thousand_connections_without_growing() {
 /// nothing had yet tried to reap had grown — which is true of a leaking server too. At 400/s the
 /// run lasts ~25 s, the sweep fires repeatedly, and the same steady-state assertions the stream
 /// soaks use apply unchanged.
-#[cfg(feature = "dns")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "soak: 10k datagrams paced to outlast the 10s idle sweep takes ~25s, too slow for the \
             normal suite; nightly-soak.yml runs it"]
@@ -816,7 +812,6 @@ async fn dns_sweeps_ten_thousand_datagrams_back_to_zero() {
 ///
 /// Hand-built rather than taken from a crate so this test's traffic is an independent reading of
 /// RFC 1035 rather than whatever NetGet's own encoder produces.
-#[cfg(feature = "dns")]
 fn dns_query(id: u16) -> Vec<u8> {
     let mut q = Vec::with_capacity(38);
     q.extend_from_slice(&id.to_be_bytes());
@@ -833,7 +828,6 @@ fn dns_query(id: u16) -> Vec<u8> {
     q
 }
 
-#[cfg(feature = "dns")]
 async fn assert_stops_and_releases_udp(state: &AppState, id: ServerId, port: u16, protocol: &str) {
     state.remove_server(id).await;
     let freed = wait_until(Duration::from_secs(10), || async {

@@ -8,7 +8,6 @@
 //! `-32601 + 2^32` is the worked example: it is a perfectly ordinary integer in the model's
 //! answer and becomes `-32601`, "method not found", on the wire.
 
-#![cfg(all(test, feature = "mcp"))]
 
 use netget::llm::actions::protocol_trait::{ActionResult, Server};
 use netget::server::mcp::actions::McpProtocol;

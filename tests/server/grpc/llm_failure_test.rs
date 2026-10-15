@@ -33,7 +33,6 @@
 //! distinguish "the model answered" from "the model said nothing usable" or "the model could not
 //! be reached".
 
-#![cfg(all(test, feature = "grpc"))]
 
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;

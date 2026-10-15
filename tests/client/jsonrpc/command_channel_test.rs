@@ -8,7 +8,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features jsonrpc --test client -- jsonrpc::command_channel --test-threads=100
 
-#![cfg(feature = "jsonrpc")]
 
 use std::time::Duration;
 

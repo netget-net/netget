@@ -10,7 +10,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features otlp --test server -- otlp::llm_failure --test-threads=100
 
-#![cfg(feature = "otlp")]
 
 use super::common::{self, post, static_handler, traces_json, traces_protobuf, JSON, PROTOBUF};
 use netget::server::otlp::codec::RpcStatus;

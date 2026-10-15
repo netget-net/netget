@@ -24,7 +24,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features gemini --test server -- gemini::real_client --test-threads=100
 
-#![cfg(feature = "gemini")]
 
 use super::common::{self, capsule_handler, Chunk, Recorder, HOME_PAGE};
 use crate::helpers::pcap_oracle::PcapOracle;

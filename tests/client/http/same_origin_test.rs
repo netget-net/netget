@@ -16,7 +16,6 @@
 //! Run with:
 //!   cargo test --no-default-features --features http,webdav --test client -- http::same_origin
 
-#![cfg(feature = "http")]
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -369,7 +368,6 @@ async fn the_http_client_never_sends_the_operators_headers_to_another_host() {
     .await;
 }
 
-#[cfg(feature = "webdav")]
 #[tokio::test]
 async fn the_webdav_client_never_sends_the_share_credential_to_another_host() {
     assert_never_reaches_foreign_host(

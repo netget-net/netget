@@ -13,7 +13,6 @@
 //! `CommonState::send_fatal_alert` `pub(crate)`; close_notify is the strongest in-spec signal
 //! reachable through its public API.)
 
-#![cfg(feature = "tls")]
 
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use rustls::{ClientConfig, RootCertStore};

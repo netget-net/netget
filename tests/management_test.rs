@@ -7,7 +7,6 @@
 //! No LLM is involved: every server uses a *static* event handler, so requests are
 //! answered deterministically in-process. Everything binds to 127.0.0.1 only.
 
-#![cfg(feature = "http")]
 
 use std::io::{Read, Write};
 use std::net::TcpStream;

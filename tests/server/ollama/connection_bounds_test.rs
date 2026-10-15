@@ -34,7 +34,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features ollama --test server -- \
 //!       ollama::connection_bounds --test-threads=100
 
-#![cfg(feature = "ollama")]
 
 use std::time::Duration;
 

@@ -21,7 +21,6 @@
 //! circular-evidence class the root `CLAUDE.md` names for `webrtc_signaling` and `websocket`.
 //!
 //! LLM call budget: 13 across the whole file (0 + 3 + 3 + 5 + 2). The parser test makes none.
-#[cfg(all(test, feature = "nats"))]
 mod nats_client_e2e_test {
     use crate::helpers::{start_netget_client, start_netget_server, E2EResult, NetGetConfig};
     use netget::client::nats::{

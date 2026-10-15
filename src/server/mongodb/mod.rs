@@ -17,11 +17,9 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info, trace, warn};
 
-#[cfg(feature = "mongodb-server")]
 use crate::utils::bson_depth::{
     scan_bson_document, scan_bson_document_with_limit, BsonScan, MAX_BSON_DEPTH,
 };
-#[cfg(feature = "mongodb-server")]
 use bson::{doc, Bson, Document};
 
 /// Largest MongoDB wire message we will accept.
@@ -794,18 +792,12 @@ impl MongodbHandler {
     }
 
     /// Parse OP_MSG body (MongoDB 3.6+ wire protocol)
-    #[cfg(feature = "mongodb-server")]
     fn parse_op_msg(&self, body: &[u8]) -> Result<ParsedOpMsg> {
         parse_op_msg_sections(body)
     }
 
-    #[cfg(not(feature = "mongodb-server"))]
-    fn parse_op_msg(&self, _body: &[u8]) -> Result<ParsedOpMsg> {
-        Err(anyhow::anyhow!("MongoDB server feature not enabled"))
-    }
 
     /// Encode OP_MSG response
-    #[cfg(feature = "mongodb-server")]
     fn encode_op_msg_response(&self, request_id: i32, doc: Document) -> Result<Vec<u8>> {
         let mut body = vec![0u8; 5]; // flagBits (4) + section kind (1)
         body[4] = 0; // Section kind 0 (body)
@@ -830,13 +822,8 @@ impl MongodbHandler {
         Ok(message)
     }
 
-    #[cfg(not(feature = "mongodb-server"))]
-    fn encode_op_msg_response(&self, _request_id: i32, _doc: Document) -> Result<Vec<u8>> {
-        Err(anyhow::anyhow!("MongoDB server feature not enabled"))
-    }
 
     /// Convert BSON to JSON
-    #[cfg(feature = "mongodb-server")]
     fn bson_to_json(&self, bson_opt: Option<&Bson>) -> serde_json::Value {
         match bson_opt {
             Some(bson) => bson.clone().into_relaxed_extjson(),
@@ -844,13 +831,8 @@ impl MongodbHandler {
         }
     }
 
-    #[cfg(not(feature = "mongodb-server"))]
-    fn bson_to_json(&self, _bson_opt: Option<&Bson>) -> serde_json::Value {
-        serde_json::Value::Null
-    }
 
     /// Convert JSON action to BSON document for response
-    #[cfg(feature = "mongodb-server")]
     fn json_to_bson_doc(&self, json: &serde_json::Value, namespace: &str) -> Result<Document> {
         let action_type = json
             .get("type")
@@ -920,41 +902,31 @@ impl MongodbHandler {
         }
     }
 
-    #[cfg(not(feature = "mongodb-server"))]
-    fn json_to_bson_doc(&self, _json: &serde_json::Value, _namespace: &str) -> Result<Document> {
-        Err(anyhow::anyhow!("MongoDB server feature not enabled"))
-    }
 }
 
 /// MongoDB `InternalError`: "an internal server error occurred". Paired with `ok: 0`, which is
 /// what makes a driver raise rather than return a result.
-#[cfg(feature = "mongodb-server")]
 const MONGODB_INTERNAL_ERROR: i32 = 1;
 
 /// MongoDB `TemporarilyUnavailable` (6.0+): the server is saturated and the same request may
 /// succeed later. Used for [`crate::utils::WireFailure::Overloaded`] so a client backs off
 /// instead of recording a permanent fault. Unlike the driver-retryable codes it does not
 /// assert anything about replica-set topology.
-#[cfg(feature = "mongodb-server")]
 const MONGODB_TEMPORARILY_UNAVAILABLE: i32 = 365;
 
 /// MongoDB `Overflow`: the code its own BSON validator raises for a document nested past its
 /// depth limit, which is exactly the refusal this server makes.
-#[cfg(feature = "mongodb-server")]
 const MONGODB_OVERFLOW: i32 = 15;
 
 /// The `errmsg` for a command document refused by [`scan_bson_document`] — MongoDB's own
 /// wording for the same refusal, and a constant: nothing from the peer's bytes is echoed.
-#[cfg(feature = "mongodb-server")]
 const BSON_TOO_DEEP_ERRMSG: &str = "BSONObj exceeded maximum nested object depth";
 
 /// OP_MSG `flagBits` bit 0: a CRC-32C of the message follows the last section.
-#[cfg(feature = "mongodb-server")]
 const OP_MSG_CHECKSUM_PRESENT: u32 = 1;
 
 /// OP_MSG `flagBits` bits 0-15 are *required*: a receiver must refuse a message carrying one it
 /// does not understand. Bit 0 is the only one defined, and it is handled.
-#[cfg(feature = "mongodb-server")]
 const OP_MSG_UNKNOWN_REQUIRED_FLAGS: u32 = 0xFFFE;
 
 /// Decode an OP_MSG body — `flagBits`, then sections — into one command document.
@@ -980,7 +952,6 @@ const OP_MSG_UNKNOWN_REQUIRED_FLAGS: u32 = 0xFFFE;
 ///
 /// A checksum, when present, is stripped and not verified: NetGet does not implement CRC-32C,
 /// and drivers set the bit only when asked to.
-#[cfg(feature = "mongodb-server")]
 fn parse_op_msg_sections(body: &[u8]) -> Result<ParsedOpMsg> {
     if body.len() < 5 {
         return Err(anyhow::anyhow!("OP_MSG body too short"));
@@ -1104,14 +1075,12 @@ fn parse_op_msg_sections(body: &[u8]) -> Result<ParsedOpMsg> {
 /// What an OP_MSG held.
 enum ParsedOpMsg {
     /// A decoded command document.
-    #[cfg(feature = "mongodb-server")]
     Command(Document),
     /// Nested past [`crate::utils::bson_depth::MAX_BSON_DEPTH`]; never decoded.
     TooDeep { limit: usize },
 }
 
 /// Build a MongoDB command-failure document.
-#[cfg(feature = "mongodb-server")]
 fn mongodb_error_doc(code: i32, message: &str) -> Document {
     doc! { "ok": 0, "code": code, "errmsg": message }
 }
@@ -1120,7 +1089,6 @@ fn mongodb_error_doc(code: i32, message: &str) -> Document {
 ///
 /// A MongoDB driver refuses to use a server that does not advertise a wire-version range it
 /// supports, so these fields cannot be left to the model. Wire version 17 is MongoDB 6.0.
-#[cfg(feature = "mongodb-server")]
 fn hello_response(connection_id: u32) -> Document {
     doc! {
         "ok": 1,

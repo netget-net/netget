@@ -22,7 +22,7 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features turn --test client -- turn::response_parsing --test-threads=100
 
-#![cfg(feature = "turn")]
+#![cfg(unix)]
 
 use std::net::SocketAddr;
 use std::time::Duration;

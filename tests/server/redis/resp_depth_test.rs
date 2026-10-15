@@ -23,7 +23,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features redis --test server -- server::redis::resp_depth --test-threads=100
 
-#![cfg(feature = "redis")]
 
 use std::time::Duration;
 

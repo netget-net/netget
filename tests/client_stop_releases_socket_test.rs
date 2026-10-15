@@ -100,7 +100,6 @@ async fn remove_client_aborts_every_registered_task() {
 /// End-to-end: a real TCP client's read loop dies with the client, releasing the
 /// connection. Before the fix the loop outlived `remove_client` and the peer never
 /// saw the connection close.
-#[cfg(feature = "tcp")]
 #[tokio::test]
 async fn stopping_tcp_client_closes_its_connection() {
     use netget::client::tcp::TcpClient;

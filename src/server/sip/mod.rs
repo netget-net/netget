@@ -238,7 +238,6 @@ impl SipServer {
                                         // advertised media address. This is what makes a SIP INVITE
                                         // result in RTP actually arriving, rather than a 200 OK with
                                         // an SDP that points at nothing.
-                                        #[cfg(feature = "rtp")]
                                         {
                                             // No `unwrap_or(200)`: a missing status_code was answered
                                             // 500 above, and treating it as 200 here would stream
@@ -625,7 +624,6 @@ impl SipServer {
     /// `duration_ms`) — the model describes what the call carries, and the shared media engine
     /// (`crate::server::rtp::media`) owns the samples and RTP framing. A fresh ephemeral UDP
     /// socket is used because RTP must not share the SIP signaling port.
-    #[cfg(feature = "rtp")]
     async fn stream_invite_media(
         caller_sdp: Option<&str>,
         caller_addr: SocketAddr,
@@ -736,7 +734,6 @@ fn is_sip_response_action(action: &serde_json::Value) -> bool {
 ///
 /// Reads the `c=IN IP4 <ip>` connection line and the first `m=audio <port> ...` line. Returns
 /// None if either is missing or unparseable.
-#[cfg(feature = "rtp")]
 fn parse_sdp_audio_target(sdp: &str) -> Option<(std::net::IpAddr, u16)> {
     let mut ip: Option<std::net::IpAddr> = None;
     let mut port: Option<u16> = None;

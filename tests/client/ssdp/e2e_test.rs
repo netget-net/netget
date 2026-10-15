@@ -24,7 +24,6 @@
 //! rather than a testing-only shortcut, and it is what `send_msearch`'s `target` parameter
 //! exists for.
 
-#![cfg(feature = "ssdp")]
 
 use crate::helpers::{self, E2EResult, NetGetConfig};
 use netget::client::ssdp::{max_age_of, render_msearch, SsdpClientProtocol};

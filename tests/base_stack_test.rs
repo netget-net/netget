@@ -1,7 +1,6 @@
 use netget::protocol::server_registry::registry;
 
 #[test]
-#[cfg(feature = "http")]
 fn test_parse_http_stack() {
     assert_eq!(
         registry().parse_from_str("http stack"),
@@ -18,7 +17,6 @@ fn test_parse_http_stack() {
 }
 
 #[test]
-#[cfg(feature = "tcp")]
 fn test_parse_tcp_stack() {
     assert_eq!(registry().parse_from_str("tcp"), Some("TCP".to_string()));
     assert_eq!(
@@ -33,7 +31,6 @@ fn test_parse_tcp_stack() {
 /// for an FTP server silently got a raw TCP socket. This test is gated on the `ftp` feature
 /// rather than `tcp` because with only `tcp` compiled there is nothing for "ftp" to resolve to.
 #[test]
-#[cfg(feature = "ftp")]
 fn test_parse_ftp_stack() {
     assert_eq!(registry().parse_from_str("ftp"), Some("FTP".to_string()));
     assert_eq!(
@@ -43,7 +40,6 @@ fn test_parse_ftp_stack() {
 }
 
 #[test]
-#[cfg(feature = "udp")]
 fn test_parse_udp_stack() {
     assert_eq!(registry().parse_from_str("udp"), Some("UDP".to_string()));
     assert_eq!(
@@ -53,7 +49,6 @@ fn test_parse_udp_stack() {
 }
 
 #[test]
-#[cfg(feature = "dns")]
 fn test_parse_dns_stack() {
     assert_eq!(registry().parse_from_str("dns"), Some("DNS".to_string()));
     assert_eq!(
@@ -67,7 +62,6 @@ fn test_parse_dns_stack() {
 }
 
 #[test]
-#[cfg(feature = "dhcp")]
 fn test_parse_dhcp_stack() {
     assert_eq!(registry().parse_from_str("dhcp"), Some("DHCP".to_string()));
     assert_eq!(
@@ -77,7 +71,6 @@ fn test_parse_dhcp_stack() {
 }
 
 #[test]
-#[cfg(feature = "ntp")]
 fn test_parse_ntp_stack() {
     assert_eq!(registry().parse_from_str("ntp"), Some("NTP".to_string()));
     assert_eq!(
@@ -87,7 +80,6 @@ fn test_parse_ntp_stack() {
 }
 
 #[test]
-#[cfg(feature = "snmp")]
 fn test_parse_snmp_stack() {
     assert_eq!(registry().parse_from_str("snmp"), Some("SNMP".to_string()));
     assert_eq!(
@@ -97,7 +89,6 @@ fn test_parse_snmp_stack() {
 }
 
 #[test]
-#[cfg(feature = "ssh")]
 fn test_parse_ssh_stack() {
     assert_eq!(registry().parse_from_str("ssh"), Some("SSH".to_string()));
     assert_eq!(
@@ -111,7 +102,6 @@ fn test_parse_ssh_stack() {
 }
 
 #[test]
-#[cfg(feature = "irc")]
 fn test_parse_irc_stack() {
     assert_eq!(registry().parse_from_str("irc"), Some("IRC".to_string()));
     assert_eq!(
@@ -125,7 +115,6 @@ fn test_parse_irc_stack() {
 }
 
 #[test]
-#[cfg(feature = "telnet")]
 fn test_parse_telnet_stack() {
     assert_eq!(
         registry().parse_from_str("telnet"),
@@ -138,7 +127,6 @@ fn test_parse_telnet_stack() {
 }
 
 #[test]
-#[cfg(feature = "smtp")]
 fn test_parse_smtp_stack() {
     assert_eq!(registry().parse_from_str("smtp"), Some("SMTP".to_string()));
     assert_eq!(
@@ -152,7 +140,6 @@ fn test_parse_smtp_stack() {
 }
 
 #[test]
-#[cfg(feature = "mdns")]
 fn test_parse_mdns_stack() {
     assert_eq!(registry().parse_from_str("mdns"), Some("mDNS".to_string()));
     assert_eq!(
@@ -166,7 +153,7 @@ fn test_parse_mdns_stack() {
 }
 
 #[test]
-#[cfg(feature = "proxy")]
+#[cfg(unix)]
 fn test_parse_proxy_stack() {
     assert_eq!(
         registry().parse_from_str("proxy"),
@@ -180,7 +167,6 @@ fn test_parse_proxy_stack() {
 }
 
 #[test]
-#[cfg(feature = "webdav")]
 fn test_parse_webdav_stack() {
     assert_eq!(
         registry().parse_from_str("webdav"),
@@ -197,7 +183,7 @@ fn test_parse_webdav_stack() {
 }
 
 #[test]
-#[cfg(feature = "nfs")]
+#[cfg(unix)]
 fn test_parse_nfs_stack() {
     assert_eq!(registry().parse_from_str("nfs"), Some("NFS".to_string()));
     assert_eq!(
@@ -211,7 +197,6 @@ fn test_parse_nfs_stack() {
 }
 
 #[test]
-#[cfg(feature = "sip")]
 fn test_parse_sip_all_keywords() {
     // Test that ALL keywords defined by SIP protocol are recognized
     // This verifies that parse_from_str checks all keywords, not just hardcoded ones
@@ -238,7 +223,6 @@ fn test_parse_sip_all_keywords() {
 ///   2. "dynamodb" never matched the bare "dynamo" keyword (the "db" broke the word
 ///      boundary), so DynamoDB requests resolved to nothing.
 #[test]
-#[cfg(feature = "s3")]
 fn test_parse_s3_stack() {
     assert_eq!(registry().parse_from_str("s3"), Some("S3".to_string()));
     assert_eq!(
@@ -253,7 +237,6 @@ fn test_parse_s3_stack() {
 }
 
 #[test]
-#[cfg(feature = "sqs")]
 fn test_parse_sqs_stack() {
     assert_eq!(registry().parse_from_str("sqs"), Some("SQS".to_string()));
     assert_eq!(
@@ -267,7 +250,6 @@ fn test_parse_sqs_stack() {
 }
 
 #[test]
-#[cfg(feature = "dynamo")]
 fn test_parse_dynamo_stack() {
     assert_eq!(
         registry().parse_from_str("dynamo"),
@@ -287,7 +269,6 @@ fn test_parse_dynamo_stack() {
 /// The AWS services must beat the generic HTTP stack even when the instruction also
 /// mentions HTTP, since they are all HTTP underneath.
 #[test]
-#[cfg(all(feature = "s3", feature = "http"))]
 fn test_s3_beats_http() {
     assert_eq!(
         registry().parse_from_str("an S3 bucket served over http"),
@@ -297,7 +278,6 @@ fn test_s3_beats_http() {
 
 /// AMQP must still resolve from its own names now that it no longer claims "queue".
 #[test]
-#[cfg(feature = "amqp")]
 fn test_parse_amqp_stack() {
     assert_eq!(registry().parse_from_str("amqp"), Some("AMQP".to_string()));
     assert_eq!(
@@ -309,7 +289,6 @@ fn test_parse_amqp_stack() {
 /// "queue" was claimed by both AMQP and SQS. After the fix neither claims the bare word,
 /// so it must not appear in the overlap report.
 #[test]
-#[cfg(all(feature = "amqp", feature = "sqs"))]
 fn test_queue_keyword_no_longer_overlaps() {
     let overlaps = registry().get_keyword_overlaps();
     assert!(
@@ -344,28 +323,24 @@ fn test_stack_name_as_keyword() {
     // This verifies that build_keyword_map() correctly adds stack_name() as a keyword
 
     // Test various protocols with their full stack names (feature-gated)
-    #[cfg(feature = "http")]
     assert_eq!(
         registry().parse_from_str("ETH>IP>TCP>HTTP"),
         Some("HTTP".to_string()),
         "Full HTTP stack name should be recognized"
     );
 
-    #[cfg(feature = "dns")]
     assert_eq!(
         registry().parse_from_str("eth>ip>udp>dns"), // Test case-insensitivity
         Some("DNS".to_string()),
         "DNS stack name should be recognized (case-insensitive)"
     );
 
-    #[cfg(feature = "ssh")]
     assert_eq!(
         registry().parse_from_str("ETH>IP>TCP>SSH"),
         Some("SSH".to_string()),
         "Full SSH stack name should be recognized"
     );
 
-    #[cfg(feature = "smtp")]
     assert_eq!(
         registry().parse_from_str("ETH>IP>TCP>SMTP"),
         Some("SMTP".to_string()),

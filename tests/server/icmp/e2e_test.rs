@@ -1,4 +1,4 @@
-#[cfg(all(test, feature = "icmp"))]
+#[cfg(unix)]
 mod tests {
     use crate::server::helpers::*;
     use pnet::packet::icmp::echo_request::MutableEchoRequestPacket;

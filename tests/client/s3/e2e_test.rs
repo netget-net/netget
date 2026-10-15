@@ -10,7 +10,6 @@
 //! **Note:** These tests are currently minimal and require a running S3-compatible
 //! service for full E2E validation. See CLAUDE.md for test setup instructions.
 
-#[cfg(all(test, feature = "s3"))]
 mod s3_client_tests {
     use crate::helpers::*;
     use std::time::Duration;

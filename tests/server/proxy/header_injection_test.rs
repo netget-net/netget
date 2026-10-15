@@ -15,7 +15,7 @@
 //! forwards it with one `Content-Length` and no `Transfer-Encoding` — both headers together
 //! are the CL.TE request-smuggling desync — and refuses a chunked body it cannot decode.
 
-#![cfg(all(test, feature = "proxy"))]
+#![cfg(unix)]
 
 use netget::llm::actions::protocol_trait::{ActionResult, Server};
 use netget::server::proxy::actions::ProxyProtocol;

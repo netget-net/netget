@@ -20,7 +20,6 @@
 //! request deliberately matches no mock rule so the mock backend answers HTTP 500 and
 //! `call_llm` returns `Err` — the branch under test.
 
-#![cfg(feature = "jsonrpc")]
 
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 

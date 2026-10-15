@@ -16,7 +16,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features ldap --test client -- ldap::command_channel --test-threads=100
 
-#![cfg(feature = "ldap")]
 
 use std::time::Duration;
 

@@ -1,2 +1,2 @@
-#[cfg(all(test, feature = "wireguard"))]
+#[cfg(unix)]
 pub mod e2e_test;

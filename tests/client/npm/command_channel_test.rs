@@ -12,7 +12,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features npm --test client -- npm::command_channel --test-threads=100
 
-#![cfg(all(test, feature = "npm"))]
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

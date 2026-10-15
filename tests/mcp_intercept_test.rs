@@ -17,7 +17,7 @@
 //!   ./cargo-isolated.sh test --no-default-features --features mcp-stdio,tcp \
 //!       --test mcp_intercept_test -- --test-threads=100
 
-#![cfg(all(feature = "mcp-stdio", feature = "tcp"))]
+#![cfg(feature = "mcp-stdio")]
 
 use std::time::Duration;
 

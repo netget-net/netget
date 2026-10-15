@@ -16,7 +16,6 @@
 //! embedded in an LLM prompt, so an unbounded one is a memory exhaustion with no upside;
 //! over the cap the server answers 413 and spends no LLM call at all.
 
-#![cfg(all(test, feature = "http"))]
 
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use std::time::Duration;

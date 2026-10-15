@@ -21,7 +21,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features redis --test client -- redis::real_server_test --test-threads=100
 
-#![cfg(all(test, feature = "redis"))]
 
 use crate::helpers::real_server::{run_tool, InstallHint, RealServer};
 use crate::helpers::*;

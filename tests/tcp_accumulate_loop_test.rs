@@ -9,7 +9,6 @@
 //! This drives the real server with a static handler (no model involved) and a
 //! client that writes twice in quick succession, which is what fills the queue.
 
-#![cfg(feature = "tcp")]
 
 use std::io::{Read, Write};
 use std::net::TcpStream;

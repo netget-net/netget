@@ -1,5 +1,4 @@
 //! Easy action execution preserves the regular startup contract. Local sockets only.
-#![cfg(all(feature = "tcp", feature = "http"))]
 use netget::cli::easy_startup::{execute_easy_startup_action, EasyUnderlyingId};
 use netget::state::AppState;
 use serde_json::json;

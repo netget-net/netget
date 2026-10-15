@@ -6,17 +6,6 @@ pub mod accept_bounded;
 pub mod connection;
 pub mod peer_support;
 // server_trait requires async-trait, so only compile when features that provide it are enabled
-#[cfg(any(
-    feature = "tcp",
-    feature = "ssh",
-    feature = "mysql",
-    feature = "postgresql",
-    feature = "redis",
-    feature = "cassandra",
-    feature = "grpc",
-    feature = "mcp",
-    feature = "vnc"
-))]
 pub mod server_trait;
 pub mod socket_helpers;
 
@@ -30,1445 +19,1207 @@ pub mod socket_helpers;
 // could not reach `build_safe_response` and each carried its own local copy of
 // it. Protocols that reach it by enabling `http` transitively (`openapi`,
 // `mercurial`, `pypi`) need no entry here.
-#[cfg(any(
-    feature = "http",
-    feature = "http2",
-    feature = "oauth2",
-    feature = "openid",
-    feature = "saml-idp",
-    feature = "saml-sp"
-))]
 pub mod http_common;
 
 // TLS certificate management for DoT, DoH, HTTP, HTTP/2, QUIC, SMTP, POP3 and TLS protocols.
 // Keep this list in sync with the protocols that actually call into it: POP3's TLS session
 // path is fully implemented and its spawn already takes the config, but it was missing here,
 // so POP3S could not be built at all.
-#[cfg(any(
-    feature = "dot",
-    feature = "doq",
-    feature = "doh",
-    feature = "http",
-    feature = "http2",
-    feature = "quic",
-    feature = "http3",
-    feature = "smtp",
-    feature = "pop3",
-    feature = "tls",
-    feature = "kubernetes-server",
-    feature = "gemini",
-    feature = "acme",
-    feature = "jmap",
-    feature = "epp"
-))]
 pub mod tls_cert_manager;
 
-#[cfg(feature = "tcp")]
 pub mod tcp;
-#[cfg(feature = "tcp")]
 pub use tcp::actions::TcpProtocol;
-#[cfg(feature = "tcp")]
 pub use tcp::TcpServer;
 
-#[cfg(all(feature = "socket_file", unix))]
+#[cfg(unix)]
 pub mod socket_file;
-#[cfg(all(feature = "socket_file", unix))]
+#[cfg(unix)]
 pub use socket_file::actions::SocketFileProtocol;
-#[cfg(all(feature = "socket_file", unix))]
+#[cfg(unix)]
 pub use socket_file::SocketFileServer;
 
-#[cfg(all(feature = "named_pipe", unix))]
+#[cfg(unix)]
 pub mod named_pipe;
-#[cfg(all(feature = "named_pipe", unix))]
+#[cfg(unix)]
 pub use named_pipe::actions::NamedPipeProtocol;
-#[cfg(all(feature = "named_pipe", unix))]
+#[cfg(unix)]
 pub use named_pipe::NamedPipeServer;
 
-#[cfg(all(feature = "pty", unix))]
+#[cfg(unix)]
 pub mod pty;
-#[cfg(all(feature = "pty", unix))]
+#[cfg(unix)]
 pub use pty::actions::PtyProtocol;
-#[cfg(all(feature = "pty", unix))]
+#[cfg(unix)]
 pub use pty::PtyServer;
 
-#[cfg(all(feature = "stdio", unix))]
+#[cfg(unix)]
 pub mod stdio;
-#[cfg(all(feature = "stdio", unix))]
+#[cfg(unix)]
 pub use stdio::actions::StdioProtocol;
-#[cfg(all(feature = "stdio", unix))]
+#[cfg(unix)]
 pub use stdio::StdioServer;
 
-#[cfg(feature = "http")]
 pub mod http;
-#[cfg(feature = "http")]
 pub use http::actions::HttpProtocol;
-#[cfg(feature = "http")]
 pub use http::HttpServer;
 
-#[cfg(feature = "http2")]
 pub mod http2;
-#[cfg(feature = "http2")]
 pub use http2::actions::Http2Protocol;
-#[cfg(feature = "http2")]
 pub use http2::H2Server;
 
-#[cfg(feature = "pypi")]
 pub mod pypi;
-#[cfg(feature = "pypi")]
 pub use pypi::actions::PypiProtocol;
-#[cfg(feature = "pypi")]
 pub use pypi::PypiServer;
 
-#[cfg(feature = "maven")]
 pub mod maven;
-#[cfg(feature = "maven")]
 pub use maven::actions::MavenProtocol;
-#[cfg(feature = "maven")]
 pub use maven::MavenServer;
 
-#[cfg(feature = "datalink")]
+#[cfg(all(unix, feature = "libpcap"))]
 pub mod datalink;
-#[cfg(feature = "datalink")]
+#[cfg(all(unix, feature = "libpcap"))]
 pub use datalink::actions::DataLinkProtocol;
-#[cfg(feature = "datalink")]
+#[cfg(all(unix, feature = "libpcap"))]
 pub use datalink::DataLinkServer;
 
-#[cfg(feature = "arp")]
+#[cfg(all(unix, feature = "libpcap"))]
 pub mod arp;
-#[cfg(feature = "arp")]
+#[cfg(all(unix, feature = "libpcap"))]
 pub use arp::actions::ArpProtocol;
-#[cfg(feature = "arp")]
+#[cfg(all(unix, feature = "libpcap"))]
 pub use arp::ArpServer;
 
-#[cfg(feature = "icmp")]
+#[cfg(unix)]
 pub mod icmp;
-#[cfg(feature = "icmp")]
+#[cfg(unix)]
 pub use icmp::actions::IcmpProtocol;
-#[cfg(feature = "icmp")]
+#[cfg(unix)]
 pub use icmp::IcmpServer;
 
-#[cfg(feature = "dc")]
 pub mod dc;
-#[cfg(feature = "dc")]
 pub use dc::actions::DcProtocol;
-#[cfg(feature = "dc")]
 pub use dc::DcServer;
 
-#[cfg(feature = "udp")]
 pub mod udp;
-#[cfg(feature = "udp")]
 pub use udp::actions::UdpProtocol;
-#[cfg(feature = "udp")]
 pub use udp::{SharedUdpSocket, UdpPeerMap, UdpServer};
 
-#[cfg(feature = "dns")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod dns;
-#[cfg(feature = "dns")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use dns::actions::DnsProtocol;
-#[cfg(feature = "dns")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use dns::DnsServer;
 
-#[cfg(feature = "dot")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod dot;
-#[cfg(feature = "dot")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use dot::actions::DotProtocol;
-#[cfg(feature = "dot")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use dot::DotServer;
 
-#[cfg(feature = "doh")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod doh;
-#[cfg(feature = "doh")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use doh::actions::DohProtocol;
-#[cfg(feature = "doh")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use doh::DohServer;
 
-#[cfg(feature = "dhcp")]
 pub mod dhcp;
-#[cfg(feature = "dhcp")]
 pub use dhcp::actions::DhcpProtocol;
-#[cfg(feature = "dhcp")]
 pub use dhcp::DhcpServer;
 
-#[cfg(feature = "bootp")]
 pub mod bootp;
-#[cfg(feature = "bootp")]
 pub use bootp::actions::BootpProtocol;
-#[cfg(feature = "bootp")]
 pub use bootp::BootpServer;
 
-#[cfg(feature = "ntp")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod ntp;
-#[cfg(feature = "ntp")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use ntp::actions::NtpProtocol;
-#[cfg(feature = "ntp")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use ntp::NtpServer;
 
-#[cfg(feature = "tftp")]
 pub mod tftp;
-#[cfg(feature = "tftp")]
 pub use tftp::actions::TftpProtocol;
-#[cfg(feature = "tftp")]
 pub use tftp::TftpServer;
 
-#[cfg(feature = "whois")]
 pub mod whois;
-#[cfg(feature = "whois")]
 pub use whois::actions::WhoisProtocol;
-#[cfg(feature = "whois")]
 pub use whois::WhoisServer;
-#[cfg(feature = "ndp")]
+#[cfg(unix)]
 pub mod ndp;
-#[cfg(feature = "ndp")]
+#[cfg(unix)]
 pub use ndp::actions::NdpProtocol;
-#[cfg(feature = "ndp")]
+#[cfg(unix)]
 pub use ndp::NdpServer;
-#[cfg(feature = "dhcpv6")]
 pub mod dhcpv6;
-#[cfg(feature = "dhcpv6")]
 pub use dhcpv6::actions::Dhcpv6Protocol;
-#[cfg(feature = "dhcpv6")]
 pub use dhcpv6::Dhcpv6Server;
-#[cfg(feature = "tuntap")]
+#[cfg(unix)]
 pub mod tuntap;
-#[cfg(feature = "tuntap")]
+#[cfg(unix)]
 pub use tuntap::actions::TunTapProtocol;
-#[cfg(feature = "tuntap")]
+#[cfg(unix)]
 pub use tuntap::TunTapServer;
-#[cfg(feature = "rawip")]
+#[cfg(unix)]
 pub mod rawip;
-#[cfg(feature = "rawip")]
+#[cfg(unix)]
 pub use rawip::actions::RawIpProtocol;
-#[cfg(feature = "rawip")]
+#[cfg(unix)]
 pub use rawip::RawIpServer;
-#[cfg(feature = "gtp")]
 pub mod gtp;
-#[cfg(feature = "gtp")]
 pub use gtp::actions::GtpProtocol;
-#[cfg(feature = "gtp")]
 pub use gtp::GtpServer;
-#[cfg(feature = "m3ua")]
+#[cfg(unix)]
 pub mod m3ua;
-#[cfg(feature = "m3ua")]
+#[cfg(unix)]
 pub use m3ua::actions::M3uaProtocol;
-#[cfg(feature = "m3ua")]
+#[cfg(unix)]
 pub use m3ua::M3uaServer;
-#[cfg(feature = "can")]
+#[cfg(unix)]
 pub mod can;
-#[cfg(feature = "ngap")]
+#[cfg(unix)]
 pub mod ngap;
-#[cfg(feature = "can")]
+#[cfg(unix)]
 pub use can::actions::CanProtocol;
-#[cfg(feature = "can")]
+#[cfg(unix)]
 pub use can::CanServer;
-#[cfg(feature = "lldp")]
+#[cfg(all(unix, feature = "libpcap"))]
 pub mod lldp;
-#[cfg(feature = "lldp")]
+#[cfg(all(unix, feature = "libpcap"))]
 pub use lldp::actions::LldpProtocol;
-#[cfg(feature = "lldp")]
+#[cfg(all(unix, feature = "libpcap"))]
 pub use lldp::LldpServer;
-#[cfg(feature = "cdp")]
+#[cfg(all(unix, feature = "libpcap"))]
 pub mod cdp;
-#[cfg(feature = "cdp")]
+#[cfg(all(unix, feature = "libpcap"))]
 pub use cdp::actions::CdpProtocol;
-#[cfg(feature = "cdp")]
+#[cfg(all(unix, feature = "libpcap"))]
 pub use cdp::CdpServer;
-#[cfg(feature = "stp")]
+#[cfg(all(unix, feature = "libpcap"))]
 pub mod stp;
-#[cfg(feature = "stp")]
+#[cfg(all(unix, feature = "libpcap"))]
 pub use stp::actions::StpProtocol;
-#[cfg(feature = "stp")]
+#[cfg(all(unix, feature = "libpcap"))]
 pub use stp::StpServer;
-#[cfg(feature = "vrrp")]
+#[cfg(unix)]
 pub mod vrrp;
-#[cfg(feature = "vrrp")]
+#[cfg(unix)]
 pub use vrrp::actions::VrrpProtocol;
-#[cfg(feature = "vrrp")]
+#[cfg(unix)]
 pub use vrrp::VrrpServer;
-#[cfg(feature = "hsrp")]
 pub mod hsrp;
-#[cfg(feature = "hsrp")]
 pub use hsrp::actions::HsrpProtocol;
-#[cfg(feature = "hsrp")]
 pub use hsrp::HsrpServer;
-#[cfg(feature = "eapol")]
+#[cfg(all(unix, feature = "libpcap"))]
 pub mod eapol;
-#[cfg(feature = "eapol")]
+#[cfg(all(unix, feature = "libpcap"))]
 pub use eapol::actions::EapolProtocol;
-#[cfg(feature = "eapol")]
+#[cfg(all(unix, feature = "libpcap"))]
 pub use eapol::EapolServer;
-#[cfg(feature = "wol")]
 pub mod wol;
-#[cfg(feature = "wol")]
 pub use wol::actions::WolProtocol;
-#[cfg(feature = "wol")]
 pub use wol::WolServer;
-#[cfg(feature = "nats")]
 pub mod nats;
-#[cfg(feature = "nats")]
 pub use nats::actions::NatsProtocol;
-#[cfg(feature = "nats")]
 pub use nats::NatsServer;
-#[cfg(feature = "stomp")]
 pub mod stomp;
-#[cfg(feature = "stomp")]
 pub use stomp::actions::StompProtocol;
-#[cfg(feature = "stomp")]
 pub use stomp::StompServer;
-#[cfg(feature = "ident")]
 pub mod ident;
-#[cfg(feature = "ident")]
 pub use ident::actions::IdentProtocol;
-#[cfg(feature = "ident")]
 pub use ident::IdentServer;
-#[cfg(feature = "gemini")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod gemini;
-#[cfg(feature = "gemini")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use gemini::actions::GeminiProtocol;
-#[cfg(feature = "gemini")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use gemini::GeminiServer;
-#[cfg(feature = "dict")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod dict;
-#[cfg(feature = "dict")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use dict::actions::DictProtocol;
-#[cfg(feature = "dict")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use dict::DictServer;
-#[cfg(feature = "beanstalkd")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod beanstalkd;
-#[cfg(feature = "beanstalkd")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use beanstalkd::actions::BeanstalkdProtocol;
-#[cfg(feature = "beanstalkd")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use beanstalkd::BeanstalkdServer;
-#[cfg(feature = "zabbix")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod zabbix;
-#[cfg(feature = "zabbix")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use zabbix::actions::ZabbixProtocol;
-#[cfg(feature = "zabbix")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use zabbix::ZabbixServer;
-#[cfg(feature = "gearman")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod gearman;
-#[cfg(feature = "gearman")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use gearman::actions::GearmanProtocol;
-#[cfg(feature = "gearman")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use gearman::GearmanServer;
-#[cfg(feature = "nsq")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod nsq;
-#[cfg(feature = "nsq")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use nsq::actions::NsqProtocol;
-#[cfg(feature = "nsq")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use nsq::NsqServer;
-#[cfg(feature = "gopher")]
 pub mod gopher;
-#[cfg(feature = "gopher")]
 pub use gopher::actions::GopherProtocol;
-#[cfg(feature = "gopher")]
 pub use gopher::GopherServer;
-#[cfg(feature = "finger")]
 pub mod finger;
-#[cfg(feature = "finger")]
 pub use finger::actions::FingerProtocol;
-#[cfg(feature = "finger")]
 pub use finger::FingerServer;
-#[cfg(feature = "ssdp")]
 pub mod ssdp;
-#[cfg(feature = "ssdp")]
 pub use ssdp::actions::SsdpProtocol;
-#[cfg(feature = "ssdp")]
 pub use ssdp::SsdpServer;
-#[cfg(feature = "llmnr")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod llmnr;
-#[cfg(feature = "llmnr")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use llmnr::actions::LlmnrProtocol;
-#[cfg(feature = "llmnr")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use llmnr::LlmnrServer;
-#[cfg(feature = "netbios-ns")]
 pub mod netbios_ns;
-#[cfg(feature = "netbios-ns")]
 pub use netbios_ns::actions::NetbiosNsProtocol;
-#[cfg(feature = "netbios-ns")]
 pub use netbios_ns::NetbiosNsServer;
 
-#[cfg(feature = "snmp")]
 pub mod snmp;
-#[cfg(feature = "snmp")]
 pub use snmp::actions::SnmpProtocol;
-#[cfg(feature = "snmp")]
 pub use snmp::SnmpServer;
 
-#[cfg(feature = "igmp")]
+#[cfg(unix)]
 pub mod igmp;
-#[cfg(feature = "igmp")]
+#[cfg(unix)]
 pub use igmp::actions::IgmpProtocol;
-#[cfg(feature = "igmp")]
+#[cfg(unix)]
 pub use igmp::IgmpServer;
 
-#[cfg(feature = "syslog")]
 pub mod syslog;
-#[cfg(feature = "syslog")]
 pub use syslog::actions::SyslogProtocol;
-#[cfg(feature = "syslog")]
 pub use syslog::SyslogServer;
 
-#[cfg(feature = "ssh")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod ssh;
-#[cfg(feature = "ssh")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use ssh::actions::SshProtocol;
-#[cfg(feature = "ssh")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use ssh::sftp_handler::LlmSftpHandler;
-#[cfg(feature = "ssh")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use ssh::SshServer;
 
-#[cfg(all(feature = "ssh-agent", unix))]
+#[cfg(unix)]
 pub mod ssh_agent;
-#[cfg(all(feature = "ssh-agent", unix))]
+#[cfg(unix)]
 pub use ssh_agent::actions::SshAgentProtocol;
-#[cfg(all(feature = "ssh-agent", unix))]
+#[cfg(unix)]
 pub use ssh_agent::SshAgentServer;
 
-#[cfg(feature = "svn")]
 pub mod svn;
-#[cfg(feature = "svn")]
 pub use svn::actions::SvnProtocol;
-#[cfg(feature = "svn")]
 pub use svn::SvnServer;
 
-#[cfg(feature = "irc")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod irc;
-#[cfg(feature = "irc")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use irc::actions::IrcProtocol;
-#[cfg(feature = "irc")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use irc::IrcServer;
 
-#[cfg(feature = "xmpp")]
+#[cfg(unix)]
 pub mod xmpp;
-#[cfg(feature = "xmpp")]
+#[cfg(unix)]
 pub use xmpp::actions::XmppProtocol;
-#[cfg(feature = "xmpp")]
+#[cfg(unix)]
 pub use xmpp::XmppServer;
 
-#[cfg(feature = "telnet")]
 pub mod telnet;
-#[cfg(feature = "telnet")]
 pub use telnet::actions::TelnetProtocol;
-#[cfg(feature = "telnet")]
 pub use telnet::TelnetServer;
 
-#[cfg(feature = "smtp")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod smtp;
-#[cfg(feature = "smtp")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use smtp::actions::SmtpProtocol;
-#[cfg(feature = "smtp")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use smtp::SmtpServer;
 
-#[cfg(feature = "ftp")]
 pub mod ftp;
-#[cfg(feature = "ftp")]
 pub use ftp::actions::FtpProtocol;
-#[cfg(feature = "ftp")]
 pub use ftp::FtpServer;
 
-#[cfg(feature = "mdns")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod mdns;
-#[cfg(feature = "mdns")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use mdns::actions::MdnsProtocol;
-#[cfg(feature = "mdns")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use mdns::MdnsServer;
 
-#[cfg(feature = "mysql")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod mysql;
-#[cfg(feature = "mysql")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use mysql::actions::MysqlProtocol;
-#[cfg(feature = "mysql")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use mysql::MysqlServer;
 
-#[cfg(feature = "snowflake")]
 pub mod snowflake;
-#[cfg(feature = "snowflake")]
 pub use snowflake::actions::SnowflakeProtocol;
-#[cfg(feature = "snowflake")]
 pub use snowflake::SnowflakeServer;
 
-#[cfg(feature = "db2")]
 pub mod db2;
-#[cfg(feature = "db2")]
 pub use db2::actions::Db2Protocol;
-#[cfg(feature = "db2")]
 pub use db2::Db2Server;
 
-#[cfg(feature = "mongodb-server")]
 pub mod mongodb;
-#[cfg(feature = "mongodb-server")]
 pub use mongodb::actions::MongodbProtocol;
-#[cfg(feature = "mongodb-server")]
 pub use mongodb::MongodbServer;
 
-#[cfg(feature = "mssql")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod mssql;
-#[cfg(feature = "mssql")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use mssql::actions::MssqlProtocol;
-#[cfg(feature = "mssql")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use mssql::MssqlServer;
 
-#[cfg(feature = "ipp")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod ipp;
-#[cfg(feature = "ipp")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use ipp::actions::IppProtocol;
-#[cfg(feature = "ipp")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use ipp::IppServer;
 
-#[cfg(feature = "postgresql")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod postgresql;
-#[cfg(feature = "postgresql")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use postgresql::actions::PostgresqlProtocol;
-#[cfg(feature = "postgresql")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use postgresql::PostgresqlServer;
 
-#[cfg(feature = "memcached")]
 pub mod memcached;
-#[cfg(feature = "memcached")]
 pub use memcached::actions::MemcachedProtocol;
-#[cfg(feature = "memcached")]
 pub use memcached::MemcachedServer;
 
-#[cfg(feature = "radius")]
 pub mod radius;
-#[cfg(feature = "radius")]
 pub use radius::actions::RadiusProtocol;
-#[cfg(feature = "radius")]
 pub use radius::RadiusServer;
 
-#[cfg(feature = "redis")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod redis;
-#[cfg(feature = "redis")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use redis::actions::RedisProtocol;
-#[cfg(feature = "redis")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use redis::RedisServer;
 
-#[cfg(feature = "rss")]
 pub mod rss;
-#[cfg(feature = "rss")]
 pub use rss::actions::RssProtocol;
-#[cfg(feature = "rss")]
 pub use rss::RssServer;
 
-#[cfg(feature = "cassandra")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod cassandra;
-#[cfg(feature = "cassandra")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use cassandra::actions::CassandraProtocol;
-#[cfg(feature = "cassandra")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use cassandra::CassandraServer;
 
-#[cfg(feature = "proxy")]
+#[cfg(unix)]
 pub mod proxy;
-#[cfg(feature = "proxy")]
+#[cfg(unix)]
 pub use proxy::actions::ProxyProtocol;
-#[cfg(feature = "proxy")]
+#[cfg(unix)]
 pub use proxy::filter::{
     CertificateMode, FilterMode, FullRequestInfo, FullResponseInfo, HttpsConnectionAction,
     HttpsConnectionInfo, ProxyFilterConfig, RequestAction, RequestFilter, ResponseAction,
     ResponseFilter,
 };
-#[cfg(feature = "proxy")]
+#[cfg(unix)]
 pub use proxy::ProxyServer;
 
-#[cfg(feature = "socks5")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod socks5;
-#[cfg(feature = "socks5")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use socks5::actions::Socks5Protocol;
-#[cfg(feature = "socks5")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use socks5::filter::{FilterMode as Socks5FilterMode, Socks5FilterConfig};
-#[cfg(feature = "socks5")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use socks5::Socks5Server;
 
-#[cfg(feature = "webdav")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod webdav;
-#[cfg(feature = "webdav")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use webdav::actions::WebDavProtocol;
-#[cfg(feature = "webdav")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use webdav::WebDavServer;
 
-#[cfg(feature = "nfs")]
+#[cfg(unix)]
 pub mod nfs;
-#[cfg(feature = "nfs")]
+#[cfg(unix)]
 pub use nfs::actions::NfsProtocol;
-#[cfg(feature = "nfs")]
+#[cfg(unix)]
 pub use nfs::NfsServer;
 
-#[cfg(feature = "nfc")]
+#[cfg(unix)]
 pub mod nfc;
-#[cfg(feature = "nfc")]
+#[cfg(unix)]
 pub use nfc::actions::NfcServerProtocol;
-#[cfg(feature = "nfc")]
+#[cfg(unix)]
 pub use nfc::NfcServer;
 
-#[cfg(feature = "smb")]
 pub mod smb;
-#[cfg(feature = "smb")]
 pub use smb::actions::SmbProtocol;
-#[cfg(feature = "smb")]
 pub use smb::SmbServer;
 
-#[cfg(feature = "stun")]
+#[cfg(unix)]
 pub mod stun;
-#[cfg(feature = "stun")]
+#[cfg(unix)]
 pub use stun::actions::StunProtocol;
-#[cfg(feature = "stun")]
+#[cfg(unix)]
 pub use stun::StunServer;
 
-#[cfg(feature = "turn")]
+#[cfg(unix)]
 pub mod turn;
-#[cfg(feature = "turn")]
+#[cfg(unix)]
 pub use turn::actions::TurnProtocol;
-#[cfg(feature = "turn")]
+#[cfg(unix)]
 pub use turn::TurnServer;
 
-#[cfg(feature = "webrtc")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod webrtc;
-#[cfg(feature = "webrtc")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use webrtc::actions::WebRtcProtocol;
-#[cfg(feature = "webrtc")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use webrtc::{WebRtcServer, WebRtcServerData};
 
-#[cfg(feature = "websocket")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod websocket;
-#[cfg(feature = "websocket")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use websocket::actions::WebSocketProtocol;
-#[cfg(feature = "websocket")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use websocket::WebSocketServer;
 
-#[cfg(feature = "webrtc")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod webrtc_signaling;
-#[cfg(feature = "webrtc")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use webrtc_signaling::actions::WebRtcSignalingProtocol;
-#[cfg(feature = "webrtc")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use webrtc_signaling::{WebRtcSignalingServer, WebRtcSignalingServerData};
 
-#[cfg(feature = "sip")]
 pub mod sip;
-#[cfg(feature = "sip")]
 pub use sip::actions::SipProtocol;
-#[cfg(feature = "sip")]
 pub use sip::SipServer;
 
-#[cfg(feature = "rtp")]
 pub mod rtp;
-#[cfg(feature = "rtp")]
 pub use rtp::actions::RtpProtocol;
-#[cfg(feature = "rtp")]
 pub use rtp::RtpServer;
 
-#[cfg(feature = "rtsp")]
 pub mod rtsp;
-#[cfg(feature = "rtsp")]
 pub use rtsp::actions::RtspProtocol;
-#[cfg(feature = "rtsp")]
 pub use rtsp::RtspServer;
 
-#[cfg(feature = "hls")]
 pub mod hls;
-#[cfg(feature = "hls")]
 pub use hls::actions::HlsProtocol;
-#[cfg(feature = "hls")]
 pub use hls::HlsServer;
 
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod ldap;
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use ldap::actions::LdapProtocol;
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use ldap::LdapServer;
 
-#[cfg(feature = "imap")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod imap;
-#[cfg(feature = "imap")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use imap::actions::ImapProtocol;
-#[cfg(feature = "imap")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use imap::ImapServer;
 
-#[cfg(feature = "pop3")]
 pub mod pop3;
-#[cfg(feature = "pop3")]
 pub use pop3::actions::Pop3Protocol;
-#[cfg(feature = "pop3")]
 pub use pop3::Pop3Server;
 
-#[cfg(feature = "nntp")]
 pub mod nntp;
-#[cfg(feature = "nntp")]
 pub use nntp::actions::NntpProtocol;
-#[cfg(feature = "nntp")]
 pub use nntp::NntpServer;
 
-#[cfg(feature = "managesieve")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod managesieve;
-#[cfg(feature = "mqtt")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod mqtt;
-#[cfg(feature = "mqtt_sn")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod mqtt_sn;
-#[cfg(feature = "nbd")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod nbd;
-#[cfg(feature = "mqtt")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use mqtt::actions::MqttProtocol;
-#[cfg(feature = "mqtt")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use mqtt::MqttServer;
 
-#[cfg(feature = "modbus")]
 pub mod modbus;
-#[cfg(feature = "modbus")]
 pub use modbus::actions::ModbusProtocol;
-#[cfg(feature = "modbus")]
 pub use modbus::ModbusServer;
 
-#[cfg(feature = "coap")]
 pub mod coap;
-#[cfg(feature = "coap")]
 pub use coap::actions::CoapProtocol;
-#[cfg(feature = "coap")]
 pub use coap::CoapServer;
 
-#[cfg(feature = "amqp")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod amqp;
-#[cfg(feature = "amqp")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use amqp::actions::AmqpProtocol;
-#[cfg(feature = "amqp")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use amqp::AmqpServer;
 
-#[cfg(feature = "elasticsearch")]
 pub mod elasticsearch;
-#[cfg(feature = "elasticsearch")]
 pub use elasticsearch::actions::ElasticsearchProtocol;
-#[cfg(feature = "elasticsearch")]
 pub use elasticsearch::ElasticsearchServer;
 
-#[cfg(feature = "couchdb")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod couchdb;
-#[cfg(feature = "couchdb")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use couchdb::actions::CouchDbProtocol;
-#[cfg(feature = "couchdb")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use couchdb::CouchDbServer;
 
-#[cfg(feature = "yarn")]
 pub mod yarn;
-#[cfg(feature = "yarn")]
 pub use yarn::actions::YarnProtocol;
-#[cfg(feature = "yarn")]
 pub use yarn::YarnServer;
 
-#[cfg(feature = "spark")]
 pub mod spark;
-#[cfg(feature = "spark")]
 pub use spark::actions::SparkProtocol;
-#[cfg(feature = "spark")]
 pub use spark::SparkServer;
 
-#[cfg(feature = "dynamo")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod dynamo;
-#[cfg(feature = "dynamo")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use dynamo::actions::DynamoProtocol;
-#[cfg(feature = "dynamo")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use dynamo::DynamoServer;
 
-#[cfg(feature = "s3")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod s3;
-#[cfg(feature = "s3")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use s3::actions::S3Protocol;
-#[cfg(feature = "s3")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use s3::S3Server;
 
-#[cfg(feature = "sqs")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod sqs;
-#[cfg(feature = "sqs")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use sqs::actions::SqsProtocol;
-#[cfg(feature = "sqs")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use sqs::SqsServer;
 
-#[cfg(feature = "npm")]
 pub mod npm;
-#[cfg(feature = "npm")]
 pub use npm::actions::NpmProtocol;
-#[cfg(feature = "npm")]
 pub use npm::NpmServer;
 
-#[cfg(feature = "oci-registry")]
 pub mod oci_registry;
-#[cfg(feature = "oci-registry")]
 pub use oci_registry::actions::OciRegistryProtocol;
-#[cfg(feature = "oci-registry")]
 pub use oci_registry::OciRegistryServer;
 
 // Kubernetes API server. Gated on `kubernetes-server`, NOT on the `kubernetes` client
 // feature: the server is JSON-only and pulls in neither kube nor k8s-openapi.
-#[cfg(feature = "kubernetes-server")]
 pub mod kubernetes;
-#[cfg(feature = "kubernetes-server")]
 pub use kubernetes::actions::KubernetesProtocol;
-#[cfg(feature = "kubernetes-server")]
 pub use kubernetes::KubernetesServer;
 
-#[cfg(feature = "prometheus")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod prometheus;
-#[cfg(feature = "prometheus")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use prometheus::actions::PrometheusProtocol;
-#[cfg(feature = "prometheus")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use prometheus::PrometheusServer;
-#[cfg(feature = "otlp")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod otlp;
-#[cfg(feature = "otlp")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use otlp::actions::OtlpProtocol;
-#[cfg(feature = "otlp")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use otlp::OtlpServer;
 
-#[cfg(feature = "docker")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod docker;
-#[cfg(feature = "docker")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use docker::actions::DockerProtocol;
-#[cfg(feature = "docker")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use docker::DockerServer;
 
-#[cfg(feature = "vault")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod vault;
-#[cfg(feature = "vault")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use vault::actions::VaultProtocol;
-#[cfg(feature = "vault")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use vault::VaultServer;
 
-#[cfg(feature = "bolt")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod bolt;
-#[cfg(feature = "bolt")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use bolt::actions::BoltProtocol;
-#[cfg(feature = "bolt")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use bolt::BoltServer;
 
-#[cfg(feature = "openai")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod openai;
-#[cfg(feature = "openai")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use openai::actions::OpenAiProtocol;
-#[cfg(feature = "openai")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use openai::OpenAiServer;
 
-#[cfg(feature = "ollama")]
 pub mod ollama;
-#[cfg(feature = "ollama")]
 pub use ollama::actions::OllamaProtocol;
-#[cfg(feature = "ollama")]
 pub use ollama::OllamaServer;
 
-#[cfg(feature = "oauth2")]
 pub mod oauth2;
-#[cfg(feature = "oauth2")]
 pub use oauth2::actions::OAuth2Protocol;
-#[cfg(feature = "oauth2")]
 pub use oauth2::OAuth2Server;
 
-#[cfg(feature = "jsonrpc")]
 pub mod jsonrpc;
-#[cfg(feature = "jsonrpc")]
 pub use jsonrpc::actions::JsonRpcProtocol;
-#[cfg(feature = "jsonrpc")]
 pub use jsonrpc::JsonRpcServer;
 
-#[cfg(feature = "wireguard")]
+#[cfg(unix)]
 pub mod wireguard;
-#[cfg(feature = "wireguard")]
+#[cfg(unix)]
 pub use wireguard::actions::WireguardProtocol;
-#[cfg(feature = "wireguard")]
+#[cfg(unix)]
 pub use wireguard::WireguardServer;
 
-#[cfg(feature = "openvpn")]
+#[cfg(unix)]
 pub mod openvpn;
-#[cfg(feature = "openvpn")]
+#[cfg(unix)]
 pub use openvpn::actions::OpenvpnProtocol;
-#[cfg(feature = "openvpn")]
+#[cfg(unix)]
 pub use openvpn::OpenvpnServer;
 
-#[cfg(feature = "ipsec")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod ipsec;
-#[cfg(feature = "ipsec")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use ipsec::actions::IpsecProtocol;
-#[cfg(feature = "ipsec")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use ipsec::IpsecServer;
 
-#[cfg(feature = "bgp")]
 pub mod bgp;
-#[cfg(feature = "bgp")]
 pub use bgp::actions::BgpProtocol;
-#[cfg(feature = "bgp")]
 pub use bgp::BgpServer;
 
-#[cfg(feature = "ospf")]
+#[cfg(unix)]
 pub mod ospf;
-#[cfg(feature = "ospf")]
+#[cfg(unix)]
 pub use ospf::actions::OspfProtocol;
-#[cfg(feature = "ospf")]
+#[cfg(unix)]
 pub use ospf::OspfServer;
 
-#[cfg(feature = "isis")]
+#[cfg(all(unix, feature = "libpcap"))]
 pub mod isis;
-#[cfg(feature = "isis")]
+#[cfg(all(unix, feature = "libpcap"))]
 pub use isis::actions::IsisProtocol;
-#[cfg(feature = "isis")]
+#[cfg(all(unix, feature = "libpcap"))]
 pub use isis::IsisServer;
 
-#[cfg(feature = "rip")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod rip;
-#[cfg(feature = "rip")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use rip::actions::RipProtocol;
-#[cfg(feature = "rip")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use rip::RipServer;
 
-#[cfg(feature = "bitcoin")]
 pub mod bitcoin;
-#[cfg(feature = "devp2p")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod devp2p;
-#[cfg(feature = "bitcoin")]
 pub use bitcoin::actions::BitcoinProtocol;
-#[cfg(feature = "bitcoin")]
 pub use bitcoin::BitcoinServer;
-#[cfg(feature = "nostr")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod nostr;
-#[cfg(feature = "nostr")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use nostr::actions::NostrProtocol;
-#[cfg(feature = "nostr")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use nostr::NostrServer;
 
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod mcp;
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use mcp::actions::McpProtocol;
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use mcp::McpServer;
 
-#[cfg(feature = "connect_rpc")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod connect_rpc;
-#[cfg(feature = "gnmi")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod gnmi;
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod grpc;
-#[cfg(feature = "grpc-web")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod grpc_web;
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use grpc::actions::GrpcProtocol;
-#[cfg(feature = "grpc")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use grpc::GrpcServer;
 
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod etcd;
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use etcd::actions::EtcdProtocol;
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use etcd::EtcdServer;
 
-#[cfg(feature = "xmlrpc")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod xmlrpc;
-#[cfg(feature = "xmlrpc")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use xmlrpc::actions::XmlRpcProtocol;
-#[cfg(feature = "xmlrpc")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use xmlrpc::XmlRpcServer;
 
-#[cfg(feature = "zookeeper")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod zookeeper;
-#[cfg(feature = "zookeeper")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use zookeeper::actions::ZookeeperProtocol;
-#[cfg(feature = "zookeeper")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use zookeeper::ZookeeperServer;
 
-#[cfg(feature = "tor")]
+#[cfg(unix)]
 pub mod tor_relay;
-#[cfg(feature = "tor")]
+#[cfg(unix)]
 pub use tor_relay::actions::TorRelayProtocol;
-#[cfg(feature = "tor")]
+#[cfg(unix)]
 pub use tor_relay::TorRelayServer;
 
-#[cfg(feature = "vnc")]
 pub mod vnc;
-#[cfg(feature = "vnc")]
 pub use vnc::actions::VncProtocol;
-#[cfg(feature = "vnc")]
 pub use vnc::VncServer;
 
-#[cfg(feature = "reverse-shell")]
 pub mod reverse_shell;
-#[cfg(feature = "reverse-shell")]
 pub use reverse_shell::actions::ReverseShellProtocol;
-#[cfg(feature = "reverse-shell")]
 pub use reverse_shell::ReverseShellServer;
 
-#[cfg(feature = "rdp")]
 pub mod rdp;
-#[cfg(feature = "spice")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod spice;
-#[cfg(feature = "rdp")]
 pub use rdp::actions::RdpProtocol;
-#[cfg(feature = "rdp")]
 pub use rdp::RdpServer;
 
-#[cfg(feature = "openapi")]
 pub mod openapi;
-#[cfg(feature = "openapi")]
 pub use openapi::actions::OpenApiProtocol;
-#[cfg(feature = "openapi")]
 pub use openapi::OpenApiServer;
 
-#[cfg(feature = "openid")]
 pub mod openid;
-#[cfg(feature = "openid")]
 pub use openid::actions::OpenIdProtocol;
-#[cfg(feature = "openid")]
 pub use openid::OpenIdServer;
 
-#[cfg(feature = "git")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod git;
-#[cfg(feature = "git")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use git::actions::GitProtocol;
-#[cfg(feature = "git")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use git::GitServer;
 
-#[cfg(feature = "mercurial")]
 pub mod mercurial;
-#[cfg(feature = "mercurial")]
 pub use mercurial::actions::MercurialProtocol;
-#[cfg(feature = "mercurial")]
 pub use mercurial::MercurialServer;
 
-#[cfg(feature = "kafka")]
 pub mod kafka;
-#[cfg(feature = "kafka")]
 pub use kafka::actions::KafkaProtocol;
-#[cfg(feature = "kafka")]
 pub use kafka::KafkaServer;
 
 // Raw QUIC stream server (RFC 9000/9001). Deliberately not HTTP/3 - the HTTP/3
 // *client* lives at src/client/http3/ behind the separate `http3` feature.
-#[cfg(feature = "quic")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod quic;
-#[cfg(feature = "quic")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use quic::actions::QuicProtocol;
-#[cfg(feature = "quic")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use quic::QuicServer;
 
-#[cfg(feature = "torrent-tracker")]
 pub mod torrent_tracker;
-#[cfg(feature = "torrent-tracker")]
 pub use torrent_tracker::actions::TorrentTrackerProtocol;
-#[cfg(feature = "torrent-tracker")]
 pub use torrent_tracker::TorrentTrackerServer;
 
-#[cfg(feature = "torrent-dht")]
 pub mod torrent_dht;
-#[cfg(feature = "torrent-dht")]
 pub use torrent_dht::actions::TorrentDhtProtocol;
-#[cfg(feature = "torrent-dht")]
 pub use torrent_dht::TorrentDhtServer;
 
-#[cfg(feature = "torrent-peer")]
 pub mod torrent_peer;
-#[cfg(feature = "torrent-peer")]
 pub use torrent_peer::actions::TorrentPeerProtocol;
-#[cfg(feature = "torrent-peer")]
 pub use torrent_peer::TorrentPeerServer;
 
-#[cfg(feature = "tls")]
 pub mod tls;
-#[cfg(feature = "tls")]
 pub use tls::actions::TlsProtocol;
-#[cfg(feature = "tls")]
 pub use tls::TlsServer;
 
-#[cfg(feature = "saml-idp")]
 pub mod saml_idp;
-#[cfg(feature = "saml-idp")]
 pub use saml_idp::actions::SamlIdpProtocol;
-#[cfg(feature = "saml-idp")]
 pub use saml_idp::SamlIdpServer;
 
-#[cfg(feature = "saml-sp")]
 pub mod saml_sp;
-#[cfg(feature = "saml-sp")]
 pub use saml_sp::actions::SamlSpProtocol;
-#[cfg(feature = "saml-sp")]
 pub use saml_sp::SamlSpServer;
 
-#[cfg(feature = "usb-common")]
+#[cfg(all(unix, feature = "libusb"))]
 pub mod usb;
 
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 pub use usb::keyboard::UsbKeyboardServer;
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 pub use usb::UsbKeyboardProtocol;
 
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 pub use usb::mouse::UsbMouseServer;
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 pub use usb::UsbMouseProtocol;
 
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 pub use usb::serial::UsbSerialServer;
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 pub use usb::UsbSerialProtocol;
 
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 pub use usb::msc::UsbMscServer;
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 pub use usb::UsbMscProtocol;
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub use usb::fido2::UsbFido2Server;
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub use usb::UsbFido2Protocol;
 
-#[cfg(feature = "usb-smartcard")]
+#[cfg(all(unix, feature = "libusb"))]
 pub use usb::smartcard::UsbSmartCardServer;
-#[cfg(feature = "usb-smartcard")]
+#[cfg(all(unix, feature = "libusb"))]
 pub use usb::UsbSmartCardProtocol;
 
-#[cfg(feature = "bluetooth-ble")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub mod bluetooth_ble;
-#[cfg(feature = "bluetooth-ble")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub use bluetooth_ble::actions::BluetoothBleProtocol;
-#[cfg(feature = "bluetooth-ble")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub use bluetooth_ble::BluetoothBle;
 
-#[cfg(feature = "bluetooth-ble-keyboard")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub mod bluetooth_ble_keyboard;
-#[cfg(feature = "bluetooth-ble-keyboard")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub use bluetooth_ble_keyboard::actions::BluetoothBleKeyboardProtocol;
-#[cfg(feature = "bluetooth-ble-keyboard")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub use bluetooth_ble_keyboard::BluetoothBleKeyboard;
 
-#[cfg(feature = "bluetooth-ble-mouse")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub mod bluetooth_ble_mouse;
-#[cfg(feature = "bluetooth-ble-mouse")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub use bluetooth_ble_mouse::actions::BluetoothBleMouseProtocol;
-#[cfg(feature = "bluetooth-ble-mouse")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub use bluetooth_ble_mouse::BluetoothBleMouse;
 
-#[cfg(feature = "bluetooth-ble-beacon")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub mod bluetooth_ble_beacon;
-#[cfg(feature = "bluetooth-ble-beacon")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub use bluetooth_ble_beacon::actions::BluetoothBleBeaconProtocol;
-#[cfg(feature = "bluetooth-ble-beacon")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub use bluetooth_ble_beacon::BluetoothBleBeacon;
 
-#[cfg(feature = "bluetooth-ble-remote")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub mod bluetooth_ble_remote;
-#[cfg(feature = "bluetooth-ble-remote")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub use bluetooth_ble_remote::actions::BluetoothBleRemoteProtocol;
-#[cfg(feature = "bluetooth-ble-remote")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub use bluetooth_ble_remote::BluetoothBleRemote;
 
-#[cfg(feature = "bluetooth-ble-battery")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub mod bluetooth_ble_battery;
-#[cfg(feature = "bluetooth-ble-battery")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub use bluetooth_ble_battery::actions::BluetoothBleBatteryProtocol;
-#[cfg(feature = "bluetooth-ble-battery")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub use bluetooth_ble_battery::BluetoothBleBattery;
 
-#[cfg(feature = "bluetooth-ble-heart-rate")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub mod bluetooth_ble_heart_rate;
-#[cfg(feature = "bluetooth-ble-heart-rate")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub use bluetooth_ble_heart_rate::actions::BluetoothBleHeartRateProtocol;
-#[cfg(feature = "bluetooth-ble-heart-rate")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub use bluetooth_ble_heart_rate::BluetoothBleHeartRate;
 
-#[cfg(feature = "bluetooth-ble-thermometer")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub mod bluetooth_ble_thermometer;
-#[cfg(feature = "bluetooth-ble-thermometer")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub use bluetooth_ble_thermometer::actions::BluetoothBleThermometerProtocol;
-#[cfg(feature = "bluetooth-ble-thermometer")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub use bluetooth_ble_thermometer::BluetoothBleThermometer;
 
-#[cfg(feature = "bluetooth-ble-environmental")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub mod bluetooth_ble_environmental;
-#[cfg(feature = "bluetooth-ble-environmental")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub use bluetooth_ble_environmental::actions::BluetoothBleEnvironmentalProtocol;
-#[cfg(feature = "bluetooth-ble-environmental")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub use bluetooth_ble_environmental::BluetoothBleEnvironmental;
 
-#[cfg(feature = "bluetooth-ble-proximity")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub mod bluetooth_ble_proximity;
-#[cfg(feature = "bluetooth-ble-proximity")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub use bluetooth_ble_proximity::actions::BluetoothBleProximityProtocol;
-#[cfg(feature = "bluetooth-ble-proximity")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub use bluetooth_ble_proximity::BluetoothBleProximity;
 
-#[cfg(feature = "bluetooth-ble-gamepad")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub mod bluetooth_ble_gamepad;
-#[cfg(feature = "bluetooth-ble-gamepad")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub use bluetooth_ble_gamepad::actions::BluetoothBleGamepadProtocol;
-#[cfg(feature = "bluetooth-ble-gamepad")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub use bluetooth_ble_gamepad::BluetoothBleGamepad;
 
-#[cfg(feature = "bluetooth-ble-presenter")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub mod bluetooth_ble_presenter;
-#[cfg(feature = "bluetooth-ble-presenter")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub use bluetooth_ble_presenter::actions::BluetoothBlePresenterProtocol;
-#[cfg(feature = "bluetooth-ble-presenter")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub use bluetooth_ble_presenter::BluetoothBlePresenter;
 
-#[cfg(feature = "bluetooth-ble-file-transfer")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub mod bluetooth_ble_file_transfer;
-#[cfg(feature = "bluetooth-ble-file-transfer")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub use bluetooth_ble_file_transfer::actions::BluetoothBleFileTransferProtocol;
-#[cfg(feature = "bluetooth-ble-file-transfer")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub use bluetooth_ble_file_transfer::BluetoothBleFileTransfer;
 
-#[cfg(feature = "bluetooth-ble-data-stream")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub mod bluetooth_ble_data_stream;
-#[cfg(feature = "bluetooth-ble-data-stream")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub use bluetooth_ble_data_stream::actions::BluetoothBleDataStreamProtocol;
-#[cfg(feature = "bluetooth-ble-data-stream")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub use bluetooth_ble_data_stream::BluetoothBleDataStream;
 
-#[cfg(feature = "bluetooth-ble-cycling")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub mod bluetooth_ble_cycling;
-#[cfg(feature = "bluetooth-ble-cycling")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub use bluetooth_ble_cycling::actions::BluetoothBleCyclingProtocol;
-#[cfg(feature = "bluetooth-ble-cycling")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub use bluetooth_ble_cycling::BluetoothBleCycling;
 
-#[cfg(feature = "bluetooth-ble-running")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub mod bluetooth_ble_running;
-#[cfg(feature = "bluetooth-ble-running")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub use bluetooth_ble_running::actions::BluetoothBleRunningProtocol;
-#[cfg(feature = "bluetooth-ble-running")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub use bluetooth_ble_running::BluetoothBleRunning;
 
-#[cfg(feature = "bluetooth-ble-weight-scale")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub mod bluetooth_ble_weight_scale;
-#[cfg(feature = "bluetooth-ble-weight-scale")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub use bluetooth_ble_weight_scale::actions::BluetoothBleWeightScaleProtocol;
-#[cfg(feature = "bluetooth-ble-weight-scale")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub use bluetooth_ble_weight_scale::BluetoothBleWeightScale;
 
 pub use connection::{Connection, ConnectionId};
 
-#[cfg(feature = "doq")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod doq;
-#[cfg(feature = "nut")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod nut;
-#[cfg(feature = "statsd")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod statsd;
 
-#[cfg(feature = "graphite")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod graphite;
 
-#[cfg(feature = "gelf")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod gelf;
 
-#[cfg(feature = "http3")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod http3;
-#[cfg(feature = "http3")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use http3::actions::Http3Protocol;
-#[cfg(feature = "fluent-forward")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod fluent_forward;
 
-#[cfg(feature = "influxdb")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod influxdb;
 
-#[cfg(feature = "ipfix")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod ipfix;
 
-#[cfg(feature = "sflow")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod sflow;
 
-#[cfg(feature = "loki")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod loki;
 
-#[cfg(feature = "prometheus-remote-write")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod prometheus_remote_write;
 
-#[cfg(feature = "netflow-v9")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod netflow_v9;
 
-#[cfg(feature = "a2a")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod a2a;
-#[cfg(feature = "acme")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod acme;
-#[cfg(feature = "amqp1")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod amqp1;
-#[cfg(feature = "bmp")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod bmp;
-#[cfg(feature = "caldav")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod caldav;
-#[cfg(feature = "carddav")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod carddav;
-#[cfg(any(feature = "caldav", feature = "carddav"))]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod dav_common;
-#[cfg(feature = "dicom")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod dicom;
-#[cfg(feature = "fastcgi")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod fastcgi;
-#[cfg(feature = "fix")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod fix;
-#[cfg(feature = "graphql")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod graphql;
-#[cfg(feature = "hl7")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod hl7;
-#[cfg(feature = "icap")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod icap;
-#[cfg(feature = "netconf")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod netconf;
-#[cfg(feature = "ocpp")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod ocpp;
-#[cfg(feature = "rdap")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod rdap;
-#[cfg(feature = "redfish")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod redfish;
-#[cfg(feature = "rpki_rtr")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod rpki_rtr;
-#[cfg(feature = "rtmp")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod rtmp;
-#[cfg(feature = "scim")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod scim;
-#[cfg(feature = "socketio")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod socketio;
-#[cfg(feature = "srt")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod srt;
-#[cfg(feature = "tacacs")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod tacacs;
-#[cfg(feature = "thrift")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod thrift;
-#[cfg(feature = "wamp")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod wamp;
 
-#[cfg(feature = "a2s")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod a2s;
-#[cfg(feature = "activitypub")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod activitypub;
-#[cfg(feature = "anthropic")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod anthropic;
-#[cfg(feature = "bfd")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod bfd;
-#[cfg(feature = "capnp-rpc")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod capnp_rpc;
-#[cfg(feature = "clickhouse")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod clickhouse;
-#[cfg(feature = "consul")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod consul;
-#[cfg(feature = "dbus")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod dbus;
-#[cfg(feature = "diameter")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod diameter;
-#[cfg(feature = "epp")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod epp;
-#[cfg(feature = "guacamole")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod guacamole;
-#[cfg(feature = "inetd")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod inetd;
-#[cfg(feature = "jmap")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod jmap;
-#[cfg(feature = "kerberos")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod kerberos;
-#[cfg(feature = "knx")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod knx;
-#[cfg(feature = "libp2p")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod libp2p;
-#[cfg(feature = "lmtp")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod lmtp;
-#[cfg(feature = "lpd")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod lpd;
-#[cfg(feature = "lwm2m")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod lwm2m;
-#[cfg(feature = "matrix")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod matrix;
-#[cfg(feature = "milter")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod milter;
-#[cfg(feature = "minecraft")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod minecraft;
-#[cfg(feature = "msgpack-rpc")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod msgpack_rpc;
-#[cfg(feature = "ninep")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod ninep;
-#[cfg(feature = "onvif")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod onvif;
-#[cfg(feature = "pfcp")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod pfcp;
-#[cfg(feature = "pulsar")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod pulsar;
-#[cfg(feature = "radsec")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod radsec;
-#[cfg(feature = "rcon")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod rcon;
-#[cfg(feature = "restconf")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod restconf;
-#[cfg(feature = "rsync")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod rsync;
-#[cfg(feature = "smpp")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod smpp;
-#[cfg(feature = "sse")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod sse;
-#[cfg(feature = "stratum")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod stratum;
-#[cfg(feature = "stratum-v2")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod stratum_v2;
-#[cfg(feature = "sunrpc")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod sunrpc;
-#[cfg(feature = "tr069")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod tr069;
-#[cfg(feature = "vxlan")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod vxlan;
-#[cfg(feature = "webtransport")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod webtransport;
-#[cfg(feature = "wsdiscovery")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod wsdiscovery;
-#[cfg(feature = "zenoh")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod zenoh;
-#[cfg(feature = "zeromq")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod zeromq;
-#[cfg(feature = "zipkin")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod zipkin;
 
-#[cfg(feature = "s7comm")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod s7comm;
 
-#[cfg(any(
-    feature = "s7comm",
-    feature = "ethernet_ip",
-    feature = "dnp3",
-    feature = "iec104",
-    feature = "bacnet",
-    feature = "opcua"
-))]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod ics_support;
 
-#[cfg(feature = "ethernet_ip")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod ethernet_ip;
 
-#[cfg(feature = "dnp3")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod dnp3;
 
-#[cfg(feature = "iec104")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod iec104;
 
-#[cfg(feature = "bacnet")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod bacnet;
 
-#[cfg(feature = "opcua")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod opcua;
 
-#[cfg(any(
-    feature = "dc_peer",
-    feature = "adc",
-    feature = "adc_peer",
-    feature = "soulseek",
-    feature = "gnutella",
-    feature = "nntp"
-))]
 pub mod p2p_support;
 
-#[cfg(feature = "dc_peer")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod dc_peer;
 
-#[cfg(feature = "adc")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod adc;
 
-#[cfg(feature = "adc_peer")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod adc_peer;
 
-#[cfg(feature = "soulseek")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod soulseek;
 
-#[cfg(feature = "soulseek_peer")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod soulseek_peer;
 
-#[cfg(feature = "gnutella")]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod gnutella;

@@ -7,7 +7,6 @@
 //! decide that. The mock's `rip_request` rule has `expect_calls(0)`: if the request path ever
 //! reaches the LLM, that rule fires and `verify_mocks()` fails.
 
-#![cfg(feature = "rip")]
 
 use crate::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use tokio::net::UdpSocket;

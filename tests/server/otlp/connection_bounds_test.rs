@@ -10,7 +10,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features otlp --test server -- \
 //!       otlp::connection_bounds --test-threads=100
 
-#![cfg(all(test, feature = "otlp"))]
 
 use super::common::{self, gzip, post, static_handler, GZIP, PROTOBUF};
 use crate::helpers::http_bounds::{assert_connection_cap, assert_read_deadlines, HttpBoundsCase};

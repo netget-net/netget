@@ -2,7 +2,6 @@
 //!
 //! These tests use mock LLM responses to validate OpenAPI server functionality.
 
-#![cfg(feature = "openapi")]
 
 use crate::helpers::*;
 use serde_json::Value;

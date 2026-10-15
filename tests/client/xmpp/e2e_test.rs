@@ -1,6 +1,6 @@
 //! XMPP client E2E tests
 
-#![cfg(all(test, feature = "xmpp"))]
+#![cfg(unix)]
 
 use anyhow::Result;
 use std::sync::Arc;

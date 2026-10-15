@@ -22,7 +22,6 @@ use actions::{TELNET_CONNECTION_OPENED_EVENT, TELNET_MESSAGE_RECEIVED_EVENT};
 /// Slicing `&text[..max]` directly panics when the boundary lands inside a multi-byte
 /// character, and both the received line and the handler's response are attacker- or
 /// model-controlled, so that panic is reachable from the network.
-#[cfg(feature = "telnet")]
 fn preview(text: &str, max: usize) -> String {
     if text.len() <= max {
         return text.to_string();
@@ -40,7 +39,6 @@ fn preview(text: &str, max: usize) -> String {
 /// existed an unauthenticated peer could hold the connection open and stream gigabytes with
 /// no `\n` among them, and the server buffered every byte. Nothing authenticates before this
 /// loop, and telnet is the protocol an operator is most likely to point at a real device.
-#[cfg(feature = "telnet")]
 pub const MAX_LINE_BYTES: usize = 8192;
 
 /// How long to wait for the first line from a peer that has only connected.
@@ -74,14 +72,12 @@ pub const MAX_LINE_BYTES: usize = 8192;
 ///
 /// The banner itself sits outside the deadline by construction — it is generated and written
 /// before this loop starts, so however long the model takes, the clock below has not started.
-#[cfg(feature = "telnet")]
 const FIRST_LINE_READ_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// The two read deadlines for one connection, resolved from the server's startup parameters.
 ///
 /// Carried as one value so threading them from `spawn_with_llm_actions` into the connection
 /// task costs one argument rather than two.
-#[cfg(feature = "telnet")]
 #[derive(Clone, Copy)]
 struct ReadDeadlines {
     /// [`FIRST_LINE_READ_TIMEOUT`], or this server's `first_byte_timeout_secs`.
@@ -90,7 +86,6 @@ struct ReadDeadlines {
     idle: Duration,
 }
 
-#[cfg(feature = "telnet")]
 impl ReadDeadlines {
     fn resolve(first_byte_secs: Option<u64>, idle_secs: Option<u64>) -> Self {
         Self {
@@ -117,7 +112,6 @@ impl ReadDeadlines {
 ///
 /// Overridable per server with `idle_timeout_secs`, for the same reason the first bound is:
 /// the right value is a property of who is on the other end, and only the operator knows that.
-#[cfg(feature = "telnet")]
 const IDLE_BETWEEN_LINES_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Concurrent connections this server admits.
@@ -125,7 +119,6 @@ const IDLE_BETWEEN_LINES_TIMEOUT: Duration = Duration::from_secs(600);
 /// [`crate::server::accept_bounded::DEFAULT_MAX_CONNECTIONS`]. Each connection may buffer up to
 /// [`MAX_LINE_BYTES`], so this is the multiplier that turns that per-connection bound into a
 /// total one.
-#[cfg(feature = "telnet")]
 const MAX_CONNECTIONS: usize = crate::server::accept_bounded::DEFAULT_MAX_CONNECTIONS;
 
 /// What a peer over [`MAX_CONNECTIONS`] is told before the socket closes.
@@ -134,10 +127,8 @@ const MAX_CONNECTIONS: usize = crate::server::accept_bounded::DEFAULT_MAX_CONNEC
 /// protocol-appropriate refusal is the same plain notice line this file already writes when a
 /// line runs past [`MAX_LINE_BYTES`]: fixed text, on its own line, with nothing interpolated
 /// into it. A terminal prints it; no client can mistake it for a prompt or a login success.
-#[cfg(feature = "telnet")]
 const CONNECTION_CAP_REFUSAL: &[u8] = b"\r\n[netget] too many connections\r\n";
 
-#[cfg(feature = "telnet")]
 mod iac {
     pub const IAC: u8 = 255;
     pub const SE: u8 = 240;
@@ -152,7 +143,6 @@ mod iac {
 /// what makes "can option negotiation be driven into unbounded state?" answerable: it cannot.
 /// A subnegotiation that never sends `IAC SE` discards bytes as they arrive rather than
 /// accumulating them, and no arm can panic.
-#[cfg(feature = "telnet")]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum IacState {
     /// Ordinary data.
@@ -168,7 +158,6 @@ enum IacState {
 }
 
 /// What one attempt to read a line produced.
-#[cfg(feature = "telnet")]
 enum LineRead {
     /// A line with its terminator stripped, and the wire bytes it consumed.
     Line(Vec<u8>, usize),
@@ -203,7 +192,6 @@ enum LineRead {
 /// Negotiation is still **not answered**: options are recognised only well enough to be
 /// skipped, so a real client gets no reply to its offers and stays in its default line mode,
 /// which is the mode this server can serve.
-#[cfg(feature = "telnet")]
 struct TelnetLineReader<R> {
     reader: R,
     /// Data bytes received and not yet returned as a line.
@@ -212,7 +200,6 @@ struct TelnetLineReader<R> {
     state: IacState,
 }
 
-#[cfg(feature = "telnet")]
 impl<R: tokio::io::AsyncRead + Unpin> TelnetLineReader<R> {
     fn new(reader: R) -> Self {
         Self {
@@ -311,7 +298,6 @@ impl<R: tokio::io::AsyncRead + Unpin> TelnetLineReader<R> {
 /// Telnet server that forwards messages to LLM
 pub struct TelnetServer;
 
-#[cfg(feature = "telnet")]
 impl TelnetServer {
     /// Spawn Telnet server with integrated LLM actions
     #[allow(clippy::too_many_arguments)]
@@ -852,22 +838,6 @@ impl TelnetServer {
     }
 }
 
-#[cfg(not(feature = "telnet"))]
-impl TelnetServer {
-    #[allow(clippy::too_many_arguments)]
-    pub async fn spawn_with_llm_actions(
-        _listen_addr: SocketAddr,
-        _llm_client: OllamaClient,
-        _app_state: Arc<AppState>,
-        _status_tx: mpsc::UnboundedSender<String>,
-        _server_id: crate::state::ServerId,
-        _send_first: bool,
-        _first_byte_timeout_secs: Option<u64>,
-        _idle_timeout_secs: Option<u64>,
-    ) -> Result<SocketAddr> {
-        anyhow::bail!("Telnet feature not enabled")
-    }
-}
 
 /// The line to print when the LLM backend fails.
 ///
@@ -881,7 +851,6 @@ impl TelnetServer {
 ///
 /// CRLF because a raw Telnet client is usually in a mode where a bare LF does not return the
 /// carriage, which would leave the message stair-stepping across the terminal.
-#[cfg(feature = "telnet")]
 fn telnet_failure_notice(err: &anyhow::Error) -> String {
     format!(
         "\r\n[netget] {}\r\n",

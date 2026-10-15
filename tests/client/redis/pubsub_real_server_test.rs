@@ -18,7 +18,6 @@
 //!
 //! LLM calls: 8 per RESP2 run (connect, two subscribe confirmations, three messages, two
 //! unsubscribe confirmations) and 10 on RESP3, where each publish's own `:1` is a reply too.
-#![cfg(all(test, feature = "redis"))]
 
 use crate::helpers::common::E2EResult;
 use crate::helpers::mock_builder::MockLlmBuilder;

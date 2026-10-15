@@ -16,7 +16,6 @@
 //!
 //! Every peer is required. `NETGET_KAFKA_PEERS` names the directory
 //! `tests/server/kafka/install_peers.py` filled; the tests fail rather than skip without it.
-#![cfg(all(test, feature = "kafka"))]
 
 use netget::cli::management::ServerForm;
 use netget::state::app_state::AppState;

@@ -16,7 +16,7 @@
 //!
 //! Test strategy: mock model, < 10 LLM calls total.
 
-#[cfg(all(test, feature = "datalink"))]
+#[cfg(all(unix, feature = "libpcap"))]
 mod datalink_client_tests {
     use crate::helpers::*;
     use ::netget::privilege::SystemCapabilities;

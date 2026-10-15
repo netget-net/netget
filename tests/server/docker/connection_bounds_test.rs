@@ -9,7 +9,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features docker --test server -- \
 //!       docker::connection_bounds --test-threads=100
 
-#![cfg(all(test, feature = "docker"))]
 
 use crate::helpers::http_bounds::{assert_connection_cap, assert_read_deadlines, HttpBoundsCase};
 use crate::server::helpers::E2EResult;

@@ -1,6 +1,5 @@
 //! OAuth2 client E2E tests
 
-#![cfg(all(test, feature = "oauth2"))]
 
 use netget::cli::client_startup::start_client_by_id;
 use netget::llm::OllamaClient;
@@ -11,7 +10,6 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration};
 
-#[cfg(feature = "mcp")]
 use axum::{extract::Form, response::Json, routing::post, Router};
 
 /// Helper to create a test OAuth2 client instance
@@ -64,13 +62,7 @@ async fn test_oauth2_client_initialization() {
 #[ignore = "Requires Ollama to be running"]
 async fn test_oauth2_password_flow() {
     // Skip if mcp feature (which provides axum) is not enabled
-    #[cfg(not(feature = "mcp"))]
-    {
-        println!("Skipping test - requires mcp feature for axum mock server");
-        return;
-    }
 
-    #[cfg(feature = "mcp")]
     {
         // Start mock OAuth2 server
         let mock_server = start_mock_oauth_server().await;
@@ -117,13 +109,7 @@ async fn test_oauth2_password_flow() {
 #[tokio::test]
 #[ignore = "Requires Ollama to be running"]
 async fn test_oauth2_client_credentials_flow() {
-    #[cfg(not(feature = "mcp"))]
-    {
-        println!("Skipping test - requires mcp feature for axum mock server");
-        return;
-    }
 
-    #[cfg(feature = "mcp")]
     {
         let mock_server = start_mock_oauth_server().await;
         let token_url = format!("{}/oauth/token", mock_server);
@@ -172,13 +158,7 @@ async fn test_oauth2_client_credentials_flow() {
 #[tokio::test]
 #[ignore = "Requires Ollama to be running"]
 async fn test_oauth2_token_refresh() {
-    #[cfg(not(feature = "mcp"))]
-    {
-        println!("Skipping test - requires mcp feature for axum mock server");
-        return;
-    }
 
-    #[cfg(feature = "mcp")]
     {
         let mock_server = start_mock_oauth_server().await;
         let token_url = format!("{}/oauth/token", mock_server);
@@ -228,13 +208,7 @@ async fn test_oauth2_token_refresh() {
 #[tokio::test]
 #[ignore = "Requires Ollama to be running"]
 async fn test_oauth2_error_handling() {
-    #[cfg(not(feature = "mcp"))]
-    {
-        println!("Skipping test - requires mcp feature for axum mock server");
-        return;
-    }
 
-    #[cfg(feature = "mcp")]
     {
         let mock_server = start_mock_oauth_server_with_errors().await;
         let token_url = format!("{}/oauth/token", mock_server);
@@ -287,7 +261,6 @@ async fn test_oauth2_error_handling() {
 }
 
 // Helper functions
-#[cfg(feature = "mcp")]
 async fn start_mock_oauth_server() -> String {
     use std::net::TcpListener;
 
@@ -316,7 +289,6 @@ async fn start_mock_oauth_server() -> String {
     format!("http://127.0.0.1:{}", port)
 }
 
-#[cfg(feature = "mcp")]
 async fn start_mock_oauth_server_with_errors() -> String {
     use std::net::TcpListener;
 
@@ -341,7 +313,6 @@ async fn start_mock_oauth_server_with_errors() -> String {
     format!("http://127.0.0.1:{}", port)
 }
 
-#[cfg(feature = "mcp")]
 async fn handle_token_request(
     Form(params): Form<std::collections::HashMap<String, String>>,
 ) -> Json<serde_json::Value> {
@@ -379,7 +350,6 @@ async fn handle_token_request(
     }
 }
 
-#[cfg(feature = "mcp")]
 async fn handle_token_request_with_errors(
     Form(_params): Form<std::collections::HashMap<String, String>>,
 ) -> (axum::http::StatusCode, Json<serde_json::Value>) {

@@ -18,7 +18,7 @@
 //! worse than a pointer that does not move. The failure is dual-logged at ERROR so an operator
 //! can tell a stalled model from a mouse nobody is using.
 
-#[cfg(all(test, feature = "usb-mouse"))]
+#[cfg(all(unix, feature = "libusb"))]
 mod usb_mouse_llm_failure {
     use crate::helpers::usbip_client::UsbIpClient;
     use crate::helpers::*;

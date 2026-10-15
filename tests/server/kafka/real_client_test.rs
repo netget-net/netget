@@ -24,7 +24,6 @@
 //! This test is **not** `#[ignore]`d and does **not** skip when kcat is missing —
 //! see `require_kcat`.
 
-#![cfg(feature = "kafka")]
 
 use crate::server::helpers::*;
 use serde_json::json;

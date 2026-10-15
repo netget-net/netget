@@ -13,7 +13,6 @@
 //! first waits for the server's own `decision=` line, so it never passes merely because the
 //! server had not got round to answering yet.
 
-#![cfg(feature = "llmnr")]
 
 use crate::helpers::{self, E2EResult, NetGetConfig};
 use hickory_proto::op::{Message as DnsMessage, MessageType, OpCode, Query, ResponseCode};

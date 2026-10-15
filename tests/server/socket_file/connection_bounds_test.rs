@@ -29,7 +29,7 @@
 //!   ./cargo-isolated.sh test --no-default-features --features socket_file --test server -- \
 //!       socket_file::connection_bounds_test --test-threads=100
 
-#![cfg(all(test, feature = "socket_file", unix))]
+#![cfg(unix)]
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;

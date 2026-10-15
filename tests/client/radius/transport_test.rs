@@ -11,7 +11,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features radius --test client -- radius::transport_test --test-threads=100
 
-#![cfg(all(test, feature = "radius"))]
 
 use crate::helpers::mock_builder::MockLlmBuilder;
 use crate::helpers::*;

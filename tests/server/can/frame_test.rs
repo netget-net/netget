@@ -14,7 +14,7 @@
 //!   ./cargo-isolated.sh test --no-default-features --features can --test server can::frame \
 //!       -- --test-threads=100
 
-#![cfg(all(test, feature = "can"))]
+#![cfg(unix)]
 
 use netget::server::can::frame::{
     dlc_for_len, len_for_dlc, BusState, CanFrame, CANFD_BRS, CANFD_ESI, CANFD_FDF, CANFD_MTU,

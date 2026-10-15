@@ -11,15 +11,15 @@
 //! authority on what a CDC ACM interface looks like on the wire) while the URB handling is
 //! implemented here.
 
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::server::usb::descriptors::{ControlLineState, LineCoding};
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 use tokio::sync::mpsc;
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 use tracing::{debug, trace, warn};
 
 /// CDC class-specific requests (CDC PSTN 1.2, table 13).
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 mod cdc_request {
     pub const SET_LINE_CODING: u8 = 0x20;
     pub const GET_LINE_CODING: u8 = 0x21;
@@ -28,7 +28,7 @@ mod cdc_request {
 }
 
 /// `bmRequestType` values for class requests addressed to an interface.
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 mod request_type {
     /// Host-to-device, class, interface.
     pub const CLASS_INTERFACE_OUT: u8 = 0b0010_0001;
@@ -37,7 +37,7 @@ mod request_type {
 }
 
 /// CDC class-specific notifications (CDC PSTN 1.2, table 30), sent on the interrupt IN endpoint.
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 mod cdc_notification {
     /// `bmRequestType` for a device-to-host class notification about an interface.
     pub const REQUEST_TYPE: u8 = 0b1010_0001;
@@ -53,14 +53,14 @@ mod cdc_notification {
 /// The model fills this buffer and the host drains it, so with no cap the model's pace decides
 /// how much memory a port holds and a host that never polls never gives any of it back.
 /// 64 KiB is several seconds of traffic at 115200 baud, the port's own default line rate.
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 const MAX_TX_BUFFER: usize = 64 * 1024;
 
 /// A virtual CDC ACM serial port.
 ///
 /// `Debug` is required by `usbip::UsbInterfaceHandler` as of 0.9. It is derived: the only
 /// buffered content is bytes the LLM asked to send, which are already logged at TRACE.
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Debug)]
 pub struct UsbCdcAcmSerialHandler {
     /// Device-to-host bytes, drained by bulk IN URBs.
@@ -79,7 +79,7 @@ pub struct UsbCdcAcmSerialHandler {
     notifications: std::collections::VecDeque<Vec<u8>>,
 }
 
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 impl UsbCdcAcmSerialHandler {
     pub fn new(rx_tx: mpsc::UnboundedSender<Vec<u8>>) -> Self {
         Self {
@@ -234,7 +234,7 @@ impl UsbCdcAcmSerialHandler {
     }
 }
 
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 impl usbip::UsbInterfaceHandler for UsbCdcAcmSerialHandler {
     fn handle_urb(
         &mut self,

@@ -32,7 +32,6 @@
 //! `check_bencode_structure` call in `src/server/torrent_dht/mod.rs::parse_krpc_message` —
 //! the second query then times out, because there is no longer a process to answer it.
 
-#![cfg(all(test, feature = "torrent-dht"))]
 
 use crate::helpers::*;
 use ::netget::utils::bencode::{

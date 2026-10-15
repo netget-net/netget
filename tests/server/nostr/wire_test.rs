@@ -9,7 +9,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features nostr --test server -- nostr::wire --test-threads=100
 
-#![cfg(feature = "nostr")]
 
 use super::common::{author, note, AUTHOR_PUBKEY, RELAY_SECRET};
 use netget::server::nostr::wire::{

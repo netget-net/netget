@@ -22,7 +22,7 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features isis --test client -- isis::command_channel --test-threads=100
 
-#![cfg(feature = "isis")]
+#![cfg(all(unix, feature = "libpcap"))]
 
 use std::time::Duration;
 

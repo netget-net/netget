@@ -15,7 +15,6 @@
 //! round-tripped through the server's own codec, which would prove only that the codec agrees
 //! with itself. If a field moves, these literals fail.
 
-#![cfg(feature = "hsrp")]
 
 use crate::helpers::{self, E2EResult, NetGetConfig};
 use std::time::Duration;

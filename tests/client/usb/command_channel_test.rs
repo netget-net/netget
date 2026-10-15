@@ -19,7 +19,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features usb --test client -- usb::command_channel --test-threads=100
 
-#![cfg(feature = "usb")]
 
 use std::time::Duration;
 

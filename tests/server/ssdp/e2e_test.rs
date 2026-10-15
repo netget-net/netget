@@ -15,7 +15,6 @@
 //! `Experimental` rather than `Beta`. See `tests/server/ssdp/CLAUDE.md` for what was
 //! surveyed and why none of it can be pointed at a unicast loopback address.
 
-#![cfg(feature = "ssdp")]
 
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use netget::llm::actions::protocol_trait::{ActionResult, Server};

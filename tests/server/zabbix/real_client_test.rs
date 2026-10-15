@@ -17,7 +17,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features zabbix --test server -- zabbix::real_client --test-threads=100
 
-#![cfg(feature = "zabbix")]
 
 use super::common::{self, trapper_handler, Chunk, Recorder};
 use crate::helpers::pcap_oracle::PcapOracle;

@@ -9,7 +9,7 @@
 //! no amount of privilege would have made it pass. Answering ARP is `src/server/arp/`'s job and
 //! `tests/server/arp/e2e_test.rs` covers it. Replaced below by assertions that can fail.
 
-#![cfg(feature = "datalink")]
+#![cfg(all(unix, feature = "libpcap"))]
 
 use super::super::super::helpers::E2EResult;
 use netget::llm::actions::protocol_trait::Protocol;

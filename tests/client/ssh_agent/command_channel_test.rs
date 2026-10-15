@@ -18,7 +18,7 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features ssh-agent --test client -- ssh_agent::command_channel --test-threads=100
 
-#![cfg(all(feature = "ssh-agent", unix))]
+#![cfg(unix)]
 
 use std::time::Duration;
 

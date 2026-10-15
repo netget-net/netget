@@ -213,7 +213,6 @@ const NOT_PROBED: &[(&str, &str)] = &[
          protobuf definition, and there is no default one to invent here. Its MAX_REQUEST_BYTES is \
          therefore unprobed by this file; `tests/server/grpc/` is where it has to be checked.",
     ),
-    #[cfg(feature = "grpc-web")]
     (
         "grpc-web",
         "requires proto_schema and a binary gRPC-Web request to a declared RPC; this probe's \
@@ -224,7 +223,6 @@ const NOT_PROBED: &[(&str, &str)] = &[
          over_cap_upload_closes_without_waiting_for_declared_eof separately proves an unfinished \
          over-cap upload closes without an unlimited drain.",
     ),
-    #[cfg(feature = "connect_rpc")]
     (
         "ConnectRPC",
         "will not start without a `proto_schema` startup parameter, like grpc. \
@@ -232,7 +230,6 @@ const NOT_PROBED: &[(&str, &str)] = &[
          accepts the exact MAX_MESSAGE_BYTES message and refuses one byte more, plain and gzip, \
          through an independent peer.",
     ),
-    #[cfg(feature = "capnp-rpc")]
     (
         "Cap'n Proto RPC",
         "will not start without `schema` and `interface` startup parameters, and there is no \
@@ -521,7 +518,6 @@ async fn probe_protocol(name: &str, bound: usize, stack: &'static str, streaming
 ///
 /// It is gated on `tcp` because it needs one protocol whose small-input behaviour is known.
 /// At a feature set without it the sweep still runs, and this is what it loses.
-#[cfg(feature = "tcp")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_probe_harness_can_see_a_model_call() {
     let mock = MockOllamaServer::start(

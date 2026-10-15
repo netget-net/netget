@@ -20,55 +20,31 @@
 // ---------------------------------------------------------------------------
 // Wire suites — gated on the protocol being compiled in.
 // ---------------------------------------------------------------------------
-#[cfg(feature = "couchdb")]
 pub mod couchdb;
-#[cfg(feature = "dns")]
 pub mod dns;
-#[cfg(feature = "elasticsearch")]
 pub mod elasticsearch;
-#[cfg(feature = "ftp")]
 pub mod ftp;
-#[cfg(feature = "http")]
 pub mod http;
-#[cfg(feature = "imap")]
 pub mod imap;
-#[cfg(feature = "irc")]
 pub mod irc;
-#[cfg(feature = "jsonrpc")]
 pub mod jsonrpc;
-#[cfg(feature = "memcached")]
 pub mod memcached;
-#[cfg(feature = "nntp")]
 pub mod nntp;
-#[cfg(feature = "ntp")]
 pub mod ntp;
-#[cfg(feature = "openai")]
 pub mod openai;
-#[cfg(feature = "pop3")]
 pub mod pop3;
-#[cfg(feature = "redis")]
 pub mod redis;
-#[cfg(feature = "rss")]
 pub mod rss;
-#[cfg(feature = "rtsp")]
 pub mod rtsp;
-#[cfg(feature = "sip")]
 pub mod sip;
-#[cfg(feature = "smtp")]
 pub mod smtp;
-#[cfg(feature = "socks5")]
 pub mod socks5;
-#[cfg(feature = "stun")]
+#[cfg(unix)]
 pub mod stun;
-#[cfg(feature = "tcp")]
 pub mod tcp;
-#[cfg(feature = "telnet")]
 pub mod telnet;
-#[cfg(feature = "udp")]
 pub mod udp;
-#[cfg(feature = "whois")]
 pub mod whois;
-#[cfg(feature = "xmlrpc")]
 pub mod xmlrpc;
 
 // ---------------------------------------------------------------------------

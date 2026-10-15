@@ -15,7 +15,7 @@
 //!   ./cargo-isolated.sh test --no-default-features --features mcp-stdio,tcp \
 //!       --test mcp_startup_config_test -- --test-threads=100
 
-#![cfg(all(feature = "mcp-stdio", feature = "tcp"))]
+#![cfg(feature = "mcp-stdio")]
 
 use clap::Parser;
 use netget::cli::Args;

@@ -2,7 +2,7 @@
 
 **LLM-Controlled Network Protocol Server & Client**
 
-NetGet is a Rust CLI application exposing 281 network protocols as Cargo features, with server and client roles controlled by an LLM (via Ollama). Instead of hardcoding protocol logic, NetGet provides the network stack while the LLM constructs raw protocol datagrams or high-level responses based on natural language instructions.
+NetGet is a Rust CLI application exposing 281 network protocols, with server and client roles controlled by an LLM (via Ollama). Instead of hardcoding protocol logic, NetGet provides the network stack while the LLM constructs raw protocol datagrams or high-level responses based on natural language instructions.
 
 ```bash
 # Start a MySQL server that reads schema from files
@@ -114,19 +114,42 @@ npm i -g @smotana/netget
 netget
 ```
 
-Prebuilt binaries cover macOS (arm64/x64), Linux (x64/arm64 glibc, x64 musl), and Windows x64, built with a portable feature set (no Bluetooth/NFC/packet-capture on Linux, no SMB client). Tarballs are also on [GitHub Releases](https://github.com/smotanacom/netget/releases).
+Prebuilt binaries cover macOS (arm64/x64), Linux (x64/arm64 glibc, x64 musl), and Windows x64. They need no system library: on Linux and Windows they leave out the few protocols that link one (packet capture, Bluetooth LE, the NFC client, USB devices, the SMB client); macOS ships those libraries, so its binaries include them. Tarballs are also on [GitHub Releases](https://github.com/smotanacom/netget/releases).
 
-**Option 2: Build from source (all protocols)**
+**Option 2: cargo (every protocol)**
+
+The crate is `netget-tool` (crates.io's `netget` is an unrelated project); the command it installs is `netget`. Every protocol is compiled in — there are no per-protocol features. The default build links five system libraries and builds llama.cpp, so install those first:
+
+```bash
+# macOS (libpcap, PC/SC and CoreBluetooth ship with the OS)
+brew install samba libusb pkgconf cmake
+
+# Debian / Ubuntu
+sudo apt-get install build-essential pkg-config cmake libssl-dev libltdl-dev \
+    libpcap-dev libdbus-1-dev libusb-1.0-0-dev libpcsclite-dev libsmbclient-dev
+
+# Fedora
+sudo dnf install gcc gcc-c++ make pkgconf-pkg-config cmake openssl-devel libtool-ltdl-devel \
+    libpcap-devel dbus-devel libusb1-devel pcsc-lite-devel libsmbclient-devel
+
+# Arch
+sudo pacman -S --needed base-devel cmake openssl libpcap dbus libusb pcsclite smbclient
+
+cargo install --locked netget-tool
+```
+
+Without those libraries, leave out the protocols that need them (and the embedded llama.cpp):
+
+```bash
+cargo install --locked netget-tool --no-default-features --features mcp-stdio,mcp-http,sqlite
+```
+
+**Option 3: Build from source**
 
 ```bash
 git clone https://github.com/smotanacom/netget.git
 cd netget
-
-# Build specific protocols (fast: 10-30s)
-./cargo-isolated.sh build --release --no-default-features --features tcp,http,ssh,mysql
-
-# Or build all protocols (slow: 1-2 min, requires system dependencies)
-./cargo-isolated.sh build --release --all-features
+cargo build --release          # same system libraries as Option 2
 ```
 
 ### Run Your First Server
@@ -191,7 +214,7 @@ NetGet uses an event-driven architecture where all network events flow through a
 1. **Decentralized Protocol Registry**: Each protocol implements traits independently (no central switch statements except in startup)
 2. **Dual Logging**: All logs go to both tracing macros (→ `netget.log`) and status channel (→ TUI)
 3. **State Machine**: Per-connection state (Idle → Processing → Accumulating) prevents concurrent LLM calls
-4. **Feature Gating**: Every protocol is optional and feature-gated for fast compilation
+4. **Every Protocol In Every Build**: No per-protocol Cargo features; only the platform (browser, Windows) and five system-library features decide what is compiled
 5. **No Protocol Storage**: Protocols don't store data—LLM returns everything via actions/scripts/static responses
 
 ## Usage Examples
@@ -326,11 +349,10 @@ Quickest path — npm prebuilt binary:
 claude mcp add netget -- npx -y @smotana/netget --mcp
 ```
 
-Or build from source with the `mcp-stdio` feature:
+Or build from source (`mcp-stdio` is a default feature):
 
 ```bash
-# Build with the mcp-stdio feature (plus the protocols you want available)
-./cargo-isolated.sh build --release --no-default-features --features mcp-stdio,tcp,http,dns
+./cargo-isolated.sh build --release
 
 # Run as an MCP server over stdin/stdout
 netget --mcp
@@ -354,8 +376,8 @@ Claude Desktop config (`claude_desktop_config.json`):
 ### HTTP transport (remote / web clients)
 
 ```bash
-# Build with the mcp-http feature
-./cargo-isolated.sh build --release --no-default-features --features mcp-http,tcp,http,dns
+# mcp-http is a default feature
+./cargo-isolated.sh build --release
 
 # Serve MCP over HTTP/SSE (bind address from --listen-addr, default 127.0.0.1)
 netget --mcp-http 8080          # endpoint: http://127.0.0.1:8080/mcp
@@ -400,11 +422,11 @@ Tests protocol parsing, registry, metadata, and core utilities.
 ollama serve
 ollama pull qwen3-coder:30b
 
-# Run E2E tests for specific protocol (fast)
-./cargo-isolated.sh test --no-default-features --features tcp --test server -- server::tcp::e2e_test
+# Run one protocol's E2E tests (every protocol is compiled in; select by module path)
+./cargo-isolated.sh test --test server -- server::tcp::e2e_test
 
-# Run all E2E tests for a protocol (server + client)
-./cargo-isolated.sh test --no-default-features --features http
+# Run all of a protocol's tests (server + client)
+./cargo-isolated.sh test --test server --test client -- server::http:: client::http::
 ```
 
 **E2E Test Philosophy**:
@@ -425,63 +447,50 @@ ollama pull qwen3-coder:30b
 
 ### System Dependencies
 
-Most protocols are pure Rust with no system dependencies. Exceptions:
+Every protocol is compiled into every build; there are no per-protocol Cargo features. Five
+features link a system library (all on by default, Unix only), and `embedded-llm` builds
+llama.cpp:
 
-**Bluetooth BLE** (requires D-Bus):
-```bash
-# Ubuntu/Debian
-sudo apt-get install libdbus-1-dev pkg-config
+| Feature | Library | Protocols |
+|---|---|---|
+| `libpcap` | libpcap (ships with macOS) | arp, datalink, isis, lldp, cdp, stp, eapol |
+| `bluetooth` | D-Bus/BlueZ on Linux; CoreBluetooth on macOS | bluetooth-ble* |
+| `pcsc` | pcsclite (ships with macOS) | the NFC client |
+| `libusb` | libusb | the usb-* virtual devices |
+| `libsmbclient` | libsmbclient (Homebrew `samba`) | the SMB client |
+| `embedded-llm` | cmake and a C++ compiler | in-process llama.cpp |
 
-# Fedora/RHEL
-sudo dnf install dbus-devel pkgconf-pkg-config
-```
-
-**SMB Client** (requires libsmbclient):
-```bash
-# Ubuntu/Debian
-sudo apt-get install libsmbclient-dev
-
-# macOS
-brew install samba
-```
+The install commands for each platform are under Installation above.
 
 ### Build Strategies
 
-**Fast Development** (10-30s, recommended):
 ```bash
-# Single protocol
-./cargo-isolated.sh build --no-default-features --features tcp
+# Everything (needs the libraries above)
+./cargo-isolated.sh build
 
-# Multiple related protocols
-./cargo-isolated.sh build --no-default-features --features tcp,http,dns,mysql
+# Everything that needs no system library
+./cargo-isolated.sh build --no-default-features --features mcp-stdio,mcp-http,sqlite
 ```
 
-**Full Build** (1-2 min, requires all system dependencies):
+**Claude Code for Web** has none of the five libraries:
 ```bash
-./cargo-isolated.sh build --all-features
-```
-
-**Claude Code for Web** (skip bluetooth-ble):
-```bash
-# Check if running in web environment
 ./am_i_claude_code_for_web.sh
-
-# Use explicit features (safe in all environments)
-./cargo-isolated.sh build --no-default-features --features tcp,http,dns
+./cargo-isolated.sh build --no-default-features --features mcp-stdio,mcp-http,sqlite
 ```
 
 ### Build Performance Notes
 
 - **sccache**: NetGet uses sccache for caching compiled artifacts
-- **Feature gating**: Each protocol is optional—only compile what you need
+- **No per-protocol features**: every build compiles every protocol; narrow test runs with
+  filters (`--test server -- server::tcp::`), not features
 - **Isolated builds**: `./cargo-isolated.sh` uses session-specific target directory to avoid conflicts
 - **Parallel builds**: Multiple instances can build concurrently; `./cargo-isolated.sh` serialises access to the shared `target/`
 
 ### Cargo Isolated Scripts
 
 ```bash
-./cargo-isolated.sh build --features tcp      # Build with isolated target dir
-./cargo-isolated.sh test --features http      # Test with isolation
+./cargo-isolated.sh build                     # Build with isolated target dir
+./cargo-isolated.sh test --test server -- server::http::   # Test one protocol
 ./cargo-isolated.sh run -- --debug            # Run with debug logging
 ./cargo-isolated.sh --print-last              # View last build/test output
 ./cargo-isolated-kill.sh                      # Kill all isolated builds (not system cargo!)
@@ -559,13 +568,13 @@ Build/test logging is automatic. Analyze all errors before rebuilding:
 
 ```bash
 # Build and pipe last 50 lines
-./cargo-isolated.sh build --features tcp | tail -50
+./cargo-isolated.sh build | tail -50
 
 # Analyze ALL errors from saved log
 ./cargo-isolated.sh --print-last | grep "error\[E"
 
 # Fix ALL issues at once, then rebuild once
-./cargo-isolated.sh build --features tcp | tail -50
+./cargo-isolated.sh build | tail -50
 ```
 
 This saves 10-20 minutes per development cycle vs fixing one error at a time.
@@ -605,13 +614,9 @@ Error: Address already in use
 ```
 error: failed to run custom build command for `dbus`
 ```
-**Fix**: Install system dependencies (see Building section) or use `--no-default-features` with explicit protocol features to skip protocols requiring system libraries.
-
-### Bluetooth BLE in Claude Code for Web
-**Fix**: Never use `--all-features` in web environment. Use explicit features instead:
-```bash
-./cargo-isolated.sh build --no-default-features --features tcp,http,dns
-```
+**Fix**: Install the system libraries (see Installation), or build without them:
+`--no-default-features --features mcp-stdio,mcp-http,sqlite` leaves out only the protocols
+that link one.
 
 ## Performance Considerations
 

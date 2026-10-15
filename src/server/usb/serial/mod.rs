@@ -16,23 +16,23 @@
 
 pub mod actions;
 
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 pub mod handler;
 
 // Re-export protocol struct for registration
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 pub use actions::UsbSerialProtocol;
 
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 use anyhow::Result;
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 use tokio::sync::{mpsc, Mutex};
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 use tracing::{debug, error, info, warn};
 
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::{
     console_error,
     llm::action_helper::call_llm,
@@ -44,7 +44,7 @@ use crate::{
     state::app_state::AppState,
 };
 
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 use actions::{
     USB_SERIAL_ATTACHED_EVENT, USB_SERIAL_DATA_RECEIVED_EVENT, USB_SERIAL_DETACHED_EVENT,
 };
@@ -57,25 +57,25 @@ use actions::{
 /// `from_utf8_lossy` and a third into the event JSON, all of which the model then has to read.
 /// 8 KiB is well past any line a serial peer sends in one go; the remainder is reported to the
 /// host as a CDC overrun, which is exactly what a real port says when its receive buffer fills.
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 const MAX_EVENT_BYTES: usize = 8 * 1024;
 
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Debug, Clone, PartialEq)]
 enum ConnectionState {
     Idle,
     Processing,
 }
 
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 struct ConnectionData {
     state: ConnectionState,
 }
 
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 pub struct UsbSerialServer;
 
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 impl UsbSerialServer {
     pub async fn spawn_with_llm_actions(
         listen_addr: SocketAddr,

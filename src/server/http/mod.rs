@@ -472,12 +472,11 @@ async fn handle_http_request_inner(
     // Only the h2c upgrade below needs this, and only when that feature is compiled: the
     // upgraded connection outlives the HTTP/1 task that accepted it, so without carrying the
     // permit across, an upgrade would quietly hand the slot back while the peer was still on it.
-    #[cfg_attr(not(feature = "http2"), allow(unused_variables))] connection_permit: Arc<
+    connection_permit: Arc<
         crate::server::accept_bounded::ConnectionPermit,
     >,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
     // Check for HTTP/2 upgrade request (h2c) - only when http2 feature is enabled
-    #[cfg(feature = "http2")]
     {
         if let Some(upgrade_header) = req.headers().get(hyper::header::UPGRADE) {
             if let Ok(upgrade_value) = upgrade_header.to_str() {
@@ -570,29 +569,6 @@ async fn handle_http_request_inner(
     }
 
     // If http2 feature is not enabled, reject upgrade requests
-    #[cfg(not(feature = "http2"))]
-    {
-        if let Some(upgrade_header) = req.headers().get(hyper::header::UPGRADE) {
-            if let Ok(upgrade_value) = upgrade_header.to_str() {
-                if upgrade_value.contains("h2c") {
-                    Log::new(Some(&status_tx)).info(format!(
-                        "HTTP h2c upgrade on connection {} decision=protocol_error: not \
-                         supported (http2 feature disabled, no LLM call)",
-                        connection_id
-                    ));
-
-                    let response = Response::builder()
-                        .status(501) // Not Implemented
-                        .body(Full::new(Bytes::from(
-                            "HTTP/2 upgrade not supported. Server built without http2 feature.",
-                        )))
-                        .unwrap();
-
-                    return Ok(response);
-                }
-            }
-        }
-    }
 
     // Use shared request extraction logic. A body over the shared cap is refused with
     // 413 here rather than being truncated: a truncated body handed to the model looks
@@ -812,7 +788,6 @@ async fn handle_http_request_inner(
 }
 
 /// Handle an upgraded h2c connection (only available with http2 feature)
-#[cfg(feature = "http2")]
 #[allow(clippy::too_many_arguments)]
 async fn handle_upgraded_h2c_connection<T>(
     io: T,

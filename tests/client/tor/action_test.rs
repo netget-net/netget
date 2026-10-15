@@ -15,7 +15,7 @@
 //!     --test client -- client::tor::action_test --test-threads=100
 //! ```
 
-#![cfg(feature = "tor")]
+#![cfg(unix)]
 
 use netget::client::tor::actions::{inbound_event_fields, TorClientProtocol};
 use netget::llm::actions::client_trait::{Client, ClientActionResult};

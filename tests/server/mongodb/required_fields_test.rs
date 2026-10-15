@@ -17,7 +17,6 @@
 //! example, which carries every field, so it can only find a *wrong* field, never a missing
 //! one.
 
-#![cfg(all(test, feature = "mongodb-server", feature = "mongodb"))]
 
 use netget::llm::actions::protocol_trait::Server;
 use netget::server::connection::ConnectionId;

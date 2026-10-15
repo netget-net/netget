@@ -3,7 +3,6 @@
 //! This test spawns a NetGet Mercurial server and validates protocol operations
 //! using reqwest HTTP client to test the wire protocol endpoints.
 
-#![cfg(all(test, feature = "mercurial"))]
 
 use super::super::helpers::{self, E2EResult, NetGetConfig};
 

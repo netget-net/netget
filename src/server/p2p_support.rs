@@ -578,5 +578,5 @@ pub fn base32(bytes: &[u8]) -> String {
     text
 }
 
-#[cfg(any(feature = "dc_peer", feature = "adc_peer"))]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod files;

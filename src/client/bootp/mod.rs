@@ -20,7 +20,6 @@ use crate::state::app_state::AppState;
 use crate::state::client_handles::{ClientCommand, ClientSendOutcome};
 use crate::state::{AccessLogOwner, ClientId, ClientStatus};
 
-#[cfg(feature = "bootp")]
 use dhcproto::v4;
 
 /// Connection state for LLM processing
@@ -511,7 +510,6 @@ impl BootpClient {
 
     /// Build a BOOTP request message
     fn build_bootp_request(client_mac: &[u8; 6]) -> Result<Vec<u8>> {
-        #[cfg(feature = "bootp")]
         {
             let mut msg = v4::Message::new(
                 Ipv4Addr::UNSPECIFIED, // ciaddr (client IP)
@@ -530,15 +528,10 @@ impl BootpClient {
             msg.to_vec().context("Failed to encode BOOTP request")
         }
 
-        #[cfg(not(feature = "bootp"))]
-        {
-            Err(anyhow::anyhow!("BOOTP feature not enabled"))
-        }
     }
 
     /// Parse a BOOTP reply message
     fn parse_bootp_reply(data: &[u8]) -> Result<BootpReply> {
-        #[cfg(feature = "bootp")]
         {
             use dhcproto::decoder::Decoder;
             use dhcproto::Decodable;
@@ -566,9 +559,5 @@ impl BootpClient {
             })
         }
 
-        #[cfg(not(feature = "bootp"))]
-        {
-            Err(anyhow::anyhow!("BOOTP feature not enabled"))
-        }
     }
 }

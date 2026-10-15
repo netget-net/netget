@@ -5,7 +5,7 @@ use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 use tokio::sync::RwLock;
 
 /// GPU stats come from `gfxinfo`, and **not on macOS** — see `get_stats`.
-#[cfg(all(feature = "gpu", not(target_os = "macos")))]
+#[cfg(any(all(unix, feature = "gpu", not(target_os = "macos")), all(not(unix), feature = "gpu")))]
 use gfxinfo::active_gpu;
 
 /// System statistics (CPU, memory, GPU)
@@ -133,7 +133,7 @@ impl SystemStatsMonitor {
         let system = self.system.read().await;
 
         // Get GPU stats if available (NVIDIA, AMD, Intel — not macOS, see below)
-        #[cfg(all(feature = "gpu", not(target_os = "macos")))]
+        #[cfg(any(all(unix, feature = "gpu", not(target_os = "macos")), all(not(unix), feature = "gpu")))]
         let (gpu_usage, gpu_memory_used, gpu_memory_total) = {
             // active_gpu() returns Result<Box<dyn Gpu>, _>
             match active_gpu() {
@@ -193,7 +193,7 @@ impl SystemStatsMonitor {
         // Reporting `N/A` on macOS is what the operator saw anyway on the machines where the
         // stat was unsupported, so nothing is lost that was working. Linux and Windows still get
         // real numbers. Revisit if `gfxinfo` fixes the double release.
-        #[cfg(any(not(feature = "gpu"), target_os = "macos"))]
+        #[cfg(any(all(unix, any(not(feature = "gpu"), target_os = "macos")), all(not(unix), not(feature = "gpu"))))]
         let (gpu_usage, gpu_memory_used, gpu_memory_total) = (None, None, None);
 
         SystemStats {

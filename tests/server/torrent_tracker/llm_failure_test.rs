@@ -19,7 +19,6 @@
 //! 3. That text carries **nothing** from the error: no backend URL, no model name, no path,
 //!    no `anyhow` chain. It is the fixed `WireFailure` category.
 
-#![cfg(all(test, feature = "torrent-tracker"))]
 
 use crate::helpers::*;
 use std::time::Duration;

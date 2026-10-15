@@ -104,7 +104,7 @@ pub(crate) struct DeadlineGuard {
 impl DeadlineGuard {
     /// HTTP/1 can continue draining an unfinished request after a timeout response
     /// reaches body EOS. Its expired hard timer must still cancel that connection owner.
-    #[cfg(any(feature = "grpc-web", feature = "connect_rpc"))]
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn retain_expired(mut self) -> Self {
         self.retain_expired = true;
         self
@@ -307,13 +307,13 @@ impl tonic::server::StreamingService<DynamicMessage> for Handler {
                     },
                 );
             }
-            #[cfg(feature = "connect_rpc")]
+            #[cfg(not(target_arch = "wasm32"))]
             let http_metadata = request
                 .extensions()
                 .get::<crate::server::connect_rpc::wire::RpcMetadata>()
                 .cloned();
             let state = Controller {
-                #[cfg(feature = "connect_rpc")]
+                #[cfg(not(target_arch = "wasm32"))]
                 http_metadata,
                 service,
                 connection,
@@ -344,7 +344,7 @@ impl tonic::server::StreamingService<DynamicMessage> for Handler {
 }
 
 struct Controller {
-    #[cfg(feature = "connect_rpc")]
+    #[cfg(not(target_arch = "wasm32"))]
     http_metadata: Option<crate::server::connect_rpc::wire::RpcMetadata>,
     service: Arc<DynamicGrpcService>,
     connection: crate::server::connection::ConnectionId,
@@ -375,7 +375,7 @@ impl Controller {
             return Err(Status::resource_exhausted("stream exceeds event limit"));
         }
         self.event_count += 1;
-        #[cfg(feature = "connect_rpc")]
+        #[cfg(not(target_arch = "wasm32"))]
         let kind = if self.http_metadata.is_some() {
             crate::server::connect_rpc::actions::event_type(&kind.id).unwrap_or(kind)
         } else {
@@ -390,7 +390,7 @@ impl Controller {
                 "expected_response_schema": DynamicGrpcService::build_message_schema(&self.method.output()),
             }),
         );
-        #[cfg(feature = "connect_rpc")]
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(metadata) = &self.http_metadata {
             event.data["metadata"] = metadata.request.clone();
         }
@@ -465,7 +465,7 @@ impl Controller {
         for action in actions {
             match action {
                 crate::llm::ActionResult::Custom { name, data } => match name.as_str() {
-                    #[cfg(feature = "connect_rpc")]
+                    #[cfg(not(target_arch = "wasm32"))]
                     "connect_rpc_metadata" => {
                         usable = true;
                         self.http_metadata

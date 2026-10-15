@@ -9,7 +9,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features reverse-shell --test server -- reverse_shell::peer_inject --test-threads=100
 
-#![cfg(feature = "reverse-shell")]
 
 use std::time::Duration;
 

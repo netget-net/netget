@@ -14,7 +14,6 @@
 //!
 //! See `src/server/tftp/CLAUDE.md`, "Failure behaviour".
 
-#![cfg(all(test, feature = "tftp"))]
 
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
