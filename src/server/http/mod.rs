@@ -469,15 +469,12 @@ async fn handle_http_request_inner(
     status_tx: mpsc::UnboundedSender<String>,
     protocol: Arc<HttpProtocol>,
     filter: Arc<crate::server::http_common::handler::RequestFilter>,
-    // Only the h2c upgrade below needs this, and only when that feature is compiled: the
+    // Only the h2c upgrade below needs this: the
     // upgraded connection outlives the HTTP/1 task that accepted it, so without carrying the
     // permit across, an upgrade would quietly hand the slot back while the peer was still on it.
-    #[cfg_attr(not(feature = "http2"), allow(unused_variables))] connection_permit: Arc<
-        crate::server::accept_bounded::ConnectionPermit,
-    >,
+    connection_permit: Arc<crate::server::accept_bounded::ConnectionPermit>,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
-    // Check for HTTP/2 upgrade request (h2c) - only when http2 feature is enabled
-    #[cfg(feature = "http2")]
+    // Check for an HTTP/2 upgrade request (h2c)
     {
         if let Some(upgrade_header) = req.headers().get(hyper::header::UPGRADE) {
             if let Ok(upgrade_value) = upgrade_header.to_str() {
@@ -561,31 +558,6 @@ async fn handle_http_request_inner(
                         .header(hyper::header::UPGRADE, "h2c")
                         .header(hyper::header::CONNECTION, "Upgrade")
                         .body(Full::new(Bytes::new()))
-                        .unwrap();
-
-                    return Ok(response);
-                }
-            }
-        }
-    }
-
-    // If http2 feature is not enabled, reject upgrade requests
-    #[cfg(not(feature = "http2"))]
-    {
-        if let Some(upgrade_header) = req.headers().get(hyper::header::UPGRADE) {
-            if let Ok(upgrade_value) = upgrade_header.to_str() {
-                if upgrade_value.contains("h2c") {
-                    Log::new(Some(&status_tx)).info(format!(
-                        "HTTP h2c upgrade on connection {} decision=protocol_error: not \
-                         supported (http2 feature disabled, no LLM call)",
-                        connection_id
-                    ));
-
-                    let response = Response::builder()
-                        .status(501) // Not Implemented
-                        .body(Full::new(Bytes::from(
-                            "HTTP/2 upgrade not supported. Server built without http2 feature.",
-                        )))
                         .unwrap();
 
                     return Ok(response);
@@ -812,7 +784,6 @@ async fn handle_http_request_inner(
 }
 
 /// Handle an upgraded h2c connection (only available with http2 feature)
-#[cfg(feature = "http2")]
 #[allow(clippy::too_many_arguments)]
 async fn handle_upgraded_h2c_connection<T>(
     io: T,

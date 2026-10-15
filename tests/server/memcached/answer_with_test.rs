@@ -11,8 +11,6 @@
 //!   `decision=unrequested_key_dropped`, so the reply is the miss the instruction meant;
 //! * a second reply to one command is dropped, logged `decision=duplicate_response_dropped`.
 
-#![cfg(feature = "memcached")]
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};

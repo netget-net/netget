@@ -16,8 +16,6 @@
 //! So what is asserted here is the pair: nothing on the wire, and a loud, specific log line
 //! saying why. A silent drop with no log would be indistinguishable from the defect.
 
-#![cfg(feature = "udp")]
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 use tokio::net::UdpSocket;

@@ -27,8 +27,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features finger --test server -- finger::connection_bounds --test-threads=100
 
-#![cfg(feature = "finger")]
-
 use std::time::Duration;
 
 use netget::cli::management::ServerForm;

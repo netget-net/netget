@@ -22,7 +22,7 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features wireguard --test client -- wireguard::command_channel --test-threads=100
 
-#![cfg(feature = "wireguard")]
+#![cfg(unix)]
 
 use std::time::Duration;
 

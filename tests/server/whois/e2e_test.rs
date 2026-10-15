@@ -14,7 +14,6 @@
 //! - It reads until EOF. RFC 3912 has the server close as soon as its output is finished,
 //!   but this server keeps the connection open, so the handler must answer with
 //!   `close_connection` or `whois(1)` blocks forever.
-#[cfg(all(test, feature = "whois"))]
 mod whois_e2e_test {
     use crate::helpers::pcap_oracle::PcapOracle;
     use crate::helpers::{start_netget_server, E2EResult, NetGetConfig};

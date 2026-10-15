@@ -1,7 +1,6 @@
 //! CPU-only regressions for the remaining IPP, DHT and FIDO2 recursive-decoder exceptions.
 //! No sockets, model calls, USB enumeration, or device handles are used.
 
-#[cfg(feature = "ipp")]
 mod ipp {
     use netget::llm::actions::protocol_trait::{ActionResult, Server};
     use netget::server::ipp::actions::{validate_attributes, IppProtocol, MAX_IPP_ATTRIBUTE_DEPTH};
@@ -104,7 +103,6 @@ mod ipp {
     }
 }
 
-#[cfg(feature = "torrent-dht")]
 mod dht {
     use netget::server::torrent_dht::{TorrentDhtServer, MAX_DHT_VALUE_DEPTH};
     use serde_bencode::value::Value;
@@ -185,7 +183,7 @@ mod dht {
     }
 }
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 mod fido {
     use netget::server::usb::fido2::approval::{ApprovalDecision, ApprovalDetails};
     use netget::server::usb::fido2::ctaphid::MAX_MESSAGE_SIZE;

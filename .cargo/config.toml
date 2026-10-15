@@ -9,16 +9,16 @@
 #   1. Install Android NDK: https://developer.android.com/ndk/downloads
 #   2. Set ANDROID_NDK_HOME environment variable
 #   3. Uncomment and update the paths below with your NDK location
-#   4. Build with: cargo build --target aarch64-linux-android --no-default-features --features android-termux
+#   4. Build with: cargo build --target aarch64-linux-android --no-default-features --features mcp-stdio,sqlite,libpcap
 #
 # Option 2: Using `cross` tool (easiest for cross-compilation, requires Docker)
 #   1. Install: cargo install cross
-#   2. Build with: cross build --target aarch64-linux-android --no-default-features --features android-termux
+#   2. Build with: cross build --target aarch64-linux-android --no-default-features --features mcp-stdio,sqlite,libpcap
 #
 # Option 3: Build directly in Termux on Android device (RECOMMENDED, no NDK needed)
 #   1. Install Termux from F-Droid
 #   2. Install packages: pkg install rust clang binutils git make perl
-#   3. Build NATIVELY (no --target flag): cargo build --release --no-default-features --features android-termux
+#   3. Build NATIVELY (no --target flag): cargo build --release --no-default-features --features mcp-stdio,sqlite,libpcap
 #   4. Cargo automatically detects Android and builds natively - no NDK paths needed!
 
 # ============================================================================

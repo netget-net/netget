@@ -13,7 +13,6 @@
 //! `CARGO_BIN_EXE_netget`, which is the binary cargo built for *this* test with *these*
 //! features (`tests/helpers/common.rs`).
 
-#[cfg(feature = "dynamo")]
 mod tests {
     use crate::helpers::{retry, with_aws_sdk_timeout};
     use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};

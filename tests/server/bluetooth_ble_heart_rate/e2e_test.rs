@@ -3,7 +3,7 @@
 //! These tests spawn the actual NetGet binary with BLE GATT Heart Rate Service prompts
 //! and validate basic server functionality.
 
-#![cfg(all(test, feature = "bluetooth-ble-heart-rate"))]
+#![cfg(all(unix, feature = "bluetooth"))]
 
 use crate::helpers::{self, E2EResult, NetGetConfig};
 use std::time::Duration;

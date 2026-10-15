@@ -72,8 +72,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features ldap \
 //!       --test server -- server::ldap::real_client --test-threads=8
 
-#![cfg(all(test, feature = "ldap"))]
-
 use crate::helpers::{self, E2EResult, NetGetConfig};
 use std::collections::BTreeMap;
 use std::process::Stdio;

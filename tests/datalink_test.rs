@@ -1,8 +1,8 @@
-#[cfg(feature = "datalink")]
+#[cfg(all(unix, feature = "libpcap"))]
 use netget::server::datalink::DataLinkServer;
 
 #[test]
-#[cfg(feature = "datalink")]
+#[cfg(all(unix, feature = "libpcap"))]
 fn test_list_devices() {
     // This should work on any system with pcap installed
     let devices = DataLinkServer::list_devices();

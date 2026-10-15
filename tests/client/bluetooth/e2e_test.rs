@@ -8,7 +8,7 @@
 //! - BLE peripheral device with known services (e.g., Nordic nRF52 dev kit, ESP32, or fitness tracker)
 //! - Ollama running locally
 
-#![cfg(all(test, feature = "bluetooth-ble-client"))]
+#![cfg(all(unix, feature = "bluetooth"))]
 
 use std::time::Duration;
 use tokio::time::sleep;

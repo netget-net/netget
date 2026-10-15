@@ -11,7 +11,7 @@ handler's JSON is encoded back to protobuf.
 - **prost-reflect** 0.14 — `DescriptorPool` / `DynamicMessage`, so no code generation.
 - **prost** 0.13, **prost-types** — `FileDescriptorSet` decode, message encode.
 - **hyper** 1.x routes HTTP/2. **tonic** 0.12.3 owns streaming and reflection framing, gzip, decoding and trailers. Legacy unary framing remains local.
-- The local tonic patch preserves upstream version/license and caps gzip expansion before allocation (`vendor/tonic/README.netget.md`).
+- The local tonic patch preserves upstream version/license and caps gzip expansion before allocation (the `netget-tonic` fork, github.com/netget-net/tonic (NETGET.md)).
 - **protoc** — required on `PATH` unless a pre-built `FileDescriptorSet` is supplied.
 
 ## Schema input

@@ -11,8 +11,6 @@
 //! Two tests, deliberately a pair: one drives the backend into failure and one has the model
 //! refuse. Either alone would pass against a server that tagged every outcome identically.
 
-#![cfg(all(test, feature = "webdav"))]
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 

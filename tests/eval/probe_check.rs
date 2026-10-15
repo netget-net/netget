@@ -131,7 +131,6 @@ where
 // beanstalkd — greenstalk
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "beanstalkd")]
 #[tokio::test]
 async fn beanstalkd_accept_a_job_reaches_the_model() -> E2EResult<()> {
     check_case("beanstalkd/accept-a-job", |mock| {
@@ -146,7 +145,6 @@ async fn beanstalkd_accept_a_job_reaches_the_model() -> E2EResult<()> {
     .await
 }
 
-#[cfg(feature = "beanstalkd")]
 #[tokio::test]
 async fn beanstalkd_hand_out_a_job_reaches_the_model() -> E2EResult<()> {
     check_case("beanstalkd/hand-out-a-job", |mock| {
@@ -163,7 +161,6 @@ async fn beanstalkd_hand_out_a_job_reaches_the_model() -> E2EResult<()> {
     .await
 }
 
-#[cfg(feature = "beanstalkd")]
 #[tokio::test]
 async fn beanstalkd_queue_statistics_reaches_the_model() -> E2EResult<()> {
     check_case("beanstalkd/queue-statistics", |mock| {
@@ -183,7 +180,6 @@ async fn beanstalkd_queue_statistics_reaches_the_model() -> E2EResult<()> {
 // gemini — ignition
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "gemini")]
 #[tokio::test]
 async fn gemini_home_page_waits_for_the_model() -> E2EResult<()> {
     check_case("gemini/home-page", |mock| {
@@ -202,7 +198,6 @@ async fn gemini_home_page_waits_for_the_model() -> E2EResult<()> {
     .await
 }
 
-#[cfg(feature = "gemini")]
 #[tokio::test]
 async fn gemini_ask_for_input_waits_for_the_model() -> E2EResult<()> {
     check_case("gemini/ask-for-input", |mock| {
@@ -219,7 +214,6 @@ async fn gemini_ask_for_input_waits_for_the_model() -> E2EResult<()> {
     .await
 }
 
-#[cfg(feature = "gemini")]
 #[tokio::test]
 async fn gemini_not_found_waits_for_the_model() -> E2EResult<()> {
     check_case("gemini/not-found", |mock| {
@@ -240,7 +234,6 @@ async fn gemini_not_found_waits_for_the_model() -> E2EResult<()> {
 // zabbix — zabbix_sender
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "zabbix")]
 #[tokio::test]
 async fn zabbix_accept_known_host_waits_for_the_model() -> E2EResult<()> {
     check_case("zabbix/accept-known-host", |mock| {
@@ -255,7 +248,6 @@ async fn zabbix_accept_known_host_waits_for_the_model() -> E2EResult<()> {
     .await
 }
 
-#[cfg(feature = "zabbix")]
 #[tokio::test]
 async fn zabbix_reject_unknown_host_waits_for_the_model() -> E2EResult<()> {
     check_case("zabbix/reject-unknown-host", |mock| {
@@ -274,7 +266,6 @@ async fn zabbix_reject_unknown_host_waits_for_the_model() -> E2EResult<()> {
 // docker — the docker CLI
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "docker")]
 #[tokio::test]
 async fn docker_ps_running_container_waits_for_the_model() -> E2EResult<()> {
     check_case("docker/ps-running-container", |mock| {
@@ -294,7 +285,6 @@ async fn docker_ps_running_container_waits_for_the_model() -> E2EResult<()> {
     .await
 }
 
-#[cfg(feature = "docker")]
 #[tokio::test]
 async fn docker_ps_all_includes_stopped_waits_for_the_model() -> E2EResult<()> {
     check_case("docker/ps-all-includes-stopped", |mock| {
@@ -315,7 +305,6 @@ async fn docker_ps_all_includes_stopped_waits_for_the_model() -> E2EResult<()> {
     .await
 }
 
-#[cfg(feature = "docker")]
 #[tokio::test]
 async fn docker_inspect_missing_waits_for_the_model() -> E2EResult<()> {
     check_case("docker/inspect-missing", |mock| {
@@ -347,7 +336,6 @@ async fn docker_inspect_missing_waits_for_the_model() -> E2EResult<()> {
 
 /// The login every bolt case needs first. One or two: the Java driver's pool
 /// sometimes opens a second connection, and each logs in.
-#[cfg(feature = "bolt")]
 fn accept_bolt_login(mock: MockLlmBuilder) -> MockLlmBuilder {
     mock.on_event("bolt_authenticate")
         .respond_with_actions(serde_json::json!([{"type": "accept_bolt_login"}]))
@@ -357,7 +345,6 @@ fn accept_bolt_login(mock: MockLlmBuilder) -> MockLlmBuilder {
         .and()
 }
 
-#[cfg(feature = "bolt")]
 #[tokio::test]
 async fn bolt_people_by_name_waits_for_the_model() -> E2EResult<()> {
     check_case("bolt/people-by-name", |mock| {
@@ -375,7 +362,6 @@ async fn bolt_people_by_name_waits_for_the_model() -> E2EResult<()> {
     .await
 }
 
-#[cfg(feature = "bolt")]
 #[tokio::test]
 async fn bolt_count_waits_for_the_model() -> E2EResult<()> {
     check_case("bolt/count", |mock| {
@@ -393,7 +379,6 @@ async fn bolt_count_waits_for_the_model() -> E2EResult<()> {
     .await
 }
 
-#[cfg(feature = "bolt")]
 #[tokio::test]
 async fn bolt_syntax_error_waits_for_the_model() -> E2EResult<()> {
     check_case("bolt/syntax-error", |mock| {
@@ -419,7 +404,6 @@ async fn bolt_syntax_error_waits_for_the_model() -> E2EResult<()> {
 /// recipient only at example.com: one rule on `smtp_command`, branching on the
 /// command, because the greeting and every command are the same event. EHLO is
 /// answered by NetGet and never reaches the model.
-#[cfg(feature = "smtp")]
 fn answer_smtp(mock: MockLlmBuilder, calls: usize) -> MockLlmBuilder {
     mock.on_event("smtp_command")
         .respond_with_actions_from_event(|event| {
@@ -446,20 +430,17 @@ fn answer_smtp(mock: MockLlmBuilder, calls: usize) -> MockLlmBuilder {
         .and()
 }
 
-#[cfg(feature = "smtp")]
 #[tokio::test]
 async fn smtp_named_banner_waits_for_the_model() -> E2EResult<()> {
     check_case("smtp/named-banner", |mock| answer_smtp(mock, 1)).await
 }
 
-#[cfg(feature = "smtp")]
 #[tokio::test]
 async fn smtp_accept_local_domain_waits_for_the_model() -> E2EResult<()> {
     // Greeting, MAIL, RCPT - EHLO is NetGet's own.
     check_case("smtp/accept-local-domain", |mock| answer_smtp(mock, 3)).await
 }
 
-#[cfg(feature = "smtp")]
 #[tokio::test]
 async fn smtp_refuse_other_domain_waits_for_the_model() -> E2EResult<()> {
     check_case("smtp/refuse-other-domain", |mock| answer_smtp(mock, 3)).await
@@ -469,7 +450,6 @@ async fn smtp_refuse_other_domain_waits_for_the_model() -> E2EResult<()> {
 // pop3 — poplib
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "pop3")]
 fn answer_pop3(mock: MockLlmBuilder) -> MockLlmBuilder {
     // Greeting, USER, PASS, then STAT or RETR.
     mock.on_event("pop3_command")
@@ -497,13 +477,11 @@ fn answer_pop3(mock: MockLlmBuilder) -> MockLlmBuilder {
         .and()
 }
 
-#[cfg(feature = "pop3")]
 #[tokio::test]
 async fn pop3_message_count_waits_for_the_model() -> E2EResult<()> {
     check_case("pop3/message-count", answer_pop3).await
 }
 
-#[cfg(feature = "pop3")]
 #[tokio::test]
 async fn pop3_message_subject_waits_for_the_model() -> E2EResult<()> {
     check_case("pop3/message-subject", answer_pop3).await
@@ -516,7 +494,6 @@ async fn pop3_message_subject_waits_for_the_model() -> E2EResult<()> {
 /// Greeting, LOGIN, and one rule for `imap_command` branching on the command.
 /// imaplib issues CAPABILITY on its own before LOGIN; NetGet answers it from the
 /// greeting's list, so the model sees only the command under test.
-#[cfg(feature = "imap")]
 fn answer_imap(mock: MockLlmBuilder) -> MockLlmBuilder {
     mock.on_event("imap_connection")
         .respond_with_actions(serde_json::json!([{
@@ -572,13 +549,11 @@ fn answer_imap(mock: MockLlmBuilder) -> MockLlmBuilder {
         .and()
 }
 
-#[cfg(feature = "imap")]
 #[tokio::test]
 async fn imap_list_folders_waits_for_the_model() -> E2EResult<()> {
     check_case("imap/list-folders", answer_imap).await
 }
 
-#[cfg(feature = "imap")]
 #[tokio::test]
 async fn imap_inbox_count_waits_for_the_model() -> E2EResult<()> {
     check_case("imap/inbox-count", answer_imap).await
@@ -590,7 +565,6 @@ async fn imap_inbox_count_waits_for_the_model() -> E2EResult<()> {
 
 /// Greeting, then the command under test. nntplib sends CAPABILITIES on connect;
 /// NetGet answers it, so it never reaches the model.
-#[cfg(feature = "nntp")]
 fn answer_nntp(mock: MockLlmBuilder) -> MockLlmBuilder {
     mock.on_event("nntp_command_received")
         .respond_with_actions_from_event(|event| {
@@ -630,19 +604,16 @@ fn answer_nntp(mock: MockLlmBuilder) -> MockLlmBuilder {
         .and()
 }
 
-#[cfg(feature = "nntp")]
 #[tokio::test]
 async fn nntp_group_article_count_waits_for_the_model() -> E2EResult<()> {
     check_case("nntp/group-article-count", answer_nntp).await
 }
 
-#[cfg(feature = "nntp")]
 #[tokio::test]
 async fn nntp_list_groups_waits_for_the_model() -> E2EResult<()> {
     check_case("nntp/list-groups", answer_nntp).await
 }
 
-#[cfg(feature = "nntp")]
 #[tokio::test]
 async fn nntp_unknown_group_waits_for_the_model() -> E2EResult<()> {
     check_case("nntp/unknown-group", answer_nntp).await
@@ -652,7 +623,6 @@ async fn nntp_unknown_group_waits_for_the_model() -> E2EResult<()> {
 // memcached — pymemcache
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "memcached")]
 fn answer_memcached_get(mock: MockLlmBuilder) -> MockLlmBuilder {
     mock.on_event("memcached_get")
         .respond_with_actions_from_event(|event| {
@@ -671,19 +641,16 @@ fn answer_memcached_get(mock: MockLlmBuilder) -> MockLlmBuilder {
         .and()
 }
 
-#[cfg(feature = "memcached")]
 #[tokio::test]
 async fn memcached_get_value_waits_for_the_model() -> E2EResult<()> {
     check_case("memcached/get-value", answer_memcached_get).await
 }
 
-#[cfg(feature = "memcached")]
 #[tokio::test]
 async fn memcached_missing_key_waits_for_the_model() -> E2EResult<()> {
     check_case("memcached/missing-key", answer_memcached_get).await
 }
 
-#[cfg(feature = "memcached")]
 #[tokio::test]
 async fn memcached_stats_version_waits_for_the_model() -> E2EResult<()> {
     check_case("memcached/stats-version", |mock| {
@@ -703,7 +670,6 @@ async fn memcached_stats_version_waits_for_the_model() -> E2EResult<()> {
 // mqtt — mosquitto_sub
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "mqtt")]
 #[tokio::test]
 async fn mqtt_retained_message_waits_for_the_model() -> E2EResult<()> {
     check_case("mqtt/retained-message", |mock| {
@@ -730,7 +696,6 @@ async fn mqtt_retained_message_waits_for_the_model() -> E2EResult<()> {
     .await
 }
 
-#[cfg(feature = "mqtt")]
 #[tokio::test]
 async fn mqtt_refuse_client_id_waits_for_the_model() -> E2EResult<()> {
     check_case("mqtt/refuse-client-id", |mock| {
@@ -748,7 +713,6 @@ async fn mqtt_refuse_client_id_waits_for_the_model() -> E2EResult<()> {
 // coap — coap-client
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "coap")]
 fn answer_coap(mock: MockLlmBuilder) -> MockLlmBuilder {
     mock.on_event("coap_request")
         .respond_with_actions_from_event(|event| {
@@ -766,13 +730,11 @@ fn answer_coap(mock: MockLlmBuilder) -> MockLlmBuilder {
         .and()
 }
 
-#[cfg(feature = "coap")]
 #[tokio::test]
 async fn coap_text_resource_waits_for_the_model() -> E2EResult<()> {
     check_case("coap/text-resource", answer_coap).await
 }
 
-#[cfg(feature = "coap")]
 #[tokio::test]
 async fn coap_not_found_waits_for_the_model() -> E2EResult<()> {
     check_case("coap/not-found", answer_coap).await
@@ -782,7 +744,6 @@ async fn coap_not_found_waits_for_the_model() -> E2EResult<()> {
 // modbus — pymodbus
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "modbus")]
 fn answer_modbus(mock: MockLlmBuilder) -> MockLlmBuilder {
     mock.on_event("modbus_read_registers")
         .respond_with_actions_from_event(|event| {
@@ -803,13 +764,11 @@ fn answer_modbus(mock: MockLlmBuilder) -> MockLlmBuilder {
         .and()
 }
 
-#[cfg(feature = "modbus")]
 #[tokio::test]
 async fn modbus_holding_registers_waits_for_the_model() -> E2EResult<()> {
     check_case("modbus/holding-registers", answer_modbus).await
 }
 
-#[cfg(feature = "modbus")]
 #[tokio::test]
 async fn modbus_illegal_address_waits_for_the_model() -> E2EResult<()> {
     check_case("modbus/illegal-address", answer_modbus).await
@@ -819,7 +778,6 @@ async fn modbus_illegal_address_waits_for_the_model() -> E2EResult<()> {
 // snmp — snmpget
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "snmp")]
 fn answer_snmp(mock: MockLlmBuilder) -> MockLlmBuilder {
     mock.on_event("snmp_request")
         .respond_with_actions_from_event(|event| {
@@ -845,13 +803,11 @@ fn answer_snmp(mock: MockLlmBuilder) -> MockLlmBuilder {
         .and()
 }
 
-#[cfg(feature = "snmp")]
 #[tokio::test]
 async fn snmp_sysdescr_waits_for_the_model() -> E2EResult<()> {
     check_case("snmp/sysdescr", answer_snmp).await
 }
 
-#[cfg(feature = "snmp")]
 #[tokio::test]
 async fn snmp_sysdescr_and_sysname_waits_for_the_model() -> E2EResult<()> {
     check_case("snmp/sysdescr-and-sysname", answer_snmp).await
@@ -863,7 +819,6 @@ async fn snmp_sysdescr_and_sysname_waits_for_the_model() -> E2EResult<()> {
 
 /// sipsak's first resend comes at T1 = 10s, after the mocked 5s answer, so the
 /// model is asked once; the second allowance covers a resend under load.
-#[cfg(feature = "sip")]
 fn answer_sip(mock: MockLlmBuilder, status: u16, reason: &str) -> MockLlmBuilder {
     mock.on_event("sip_options")
         .respond_with_actions(serde_json::json!([{
@@ -878,13 +833,11 @@ fn answer_sip(mock: MockLlmBuilder, status: u16, reason: &str) -> MockLlmBuilder
         .and()
 }
 
-#[cfg(feature = "sip")]
 #[tokio::test]
 async fn sip_available_waits_for_the_model() -> E2EResult<()> {
     check_case("sip/available", |mock| answer_sip(mock, 200, "OK")).await
 }
 
-#[cfg(feature = "sip")]
 #[tokio::test]
 async fn sip_busy_waits_for_the_model() -> E2EResult<()> {
     check_case("sip/busy", |mock| answer_sip(mock, 486, "Busy Here")).await
@@ -894,7 +847,6 @@ async fn sip_busy_waits_for_the_model() -> E2EResult<()> {
 // websocket — websocat
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "websocket")]
 fn accept_websocket(mock: MockLlmBuilder) -> MockLlmBuilder {
     mock.on_event("websocket_handshake")
         .respond_with_actions(serde_json::json!([{"type": "accept_websocket"}]))
@@ -903,7 +855,6 @@ fn accept_websocket(mock: MockLlmBuilder) -> MockLlmBuilder {
         .and()
 }
 
-#[cfg(feature = "websocket")]
 #[tokio::test]
 async fn websocket_echo_waits_for_the_model() -> E2EResult<()> {
     check_case("websocket/echo", |mock| {
@@ -927,7 +878,6 @@ async fn websocket_echo_waits_for_the_model() -> E2EResult<()> {
     .await
 }
 
-#[cfg(feature = "websocket")]
 #[tokio::test]
 async fn websocket_greeting_waits_for_the_model() -> E2EResult<()> {
     check_case("websocket/greeting", |mock| {
@@ -947,7 +897,6 @@ async fn websocket_greeting_waits_for_the_model() -> E2EResult<()> {
 // nsq — nsq_tail and to_nsq
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "nsq")]
 #[tokio::test]
 async fn nsq_deliver_waiting_messages_waits_for_the_model() -> E2EResult<()> {
     check_case("nsq/deliver-waiting-messages", |mock| {
@@ -974,7 +923,6 @@ async fn nsq_deliver_waiting_messages_waits_for_the_model() -> E2EResult<()> {
     .await
 }
 
-#[cfg(feature = "nsq")]
 #[tokio::test]
 async fn nsq_accept_publish_waits_for_the_model() -> E2EResult<()> {
     check_case("nsq/accept-publish", |mock| {
@@ -987,7 +935,6 @@ async fn nsq_accept_publish_waits_for_the_model() -> E2EResult<()> {
     .await
 }
 
-#[cfg(feature = "nsq")]
 #[tokio::test]
 async fn nsq_refuse_closed_topic_waits_for_the_model() -> E2EResult<()> {
     check_case("nsq/refuse-closed-topic", |mock| {
@@ -1006,7 +953,6 @@ async fn nsq_refuse_closed_topic_waits_for_the_model() -> E2EResult<()> {
 // otlp — otel-cli
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "otlp")]
 fn answer_otlp(mock: MockLlmBuilder) -> MockLlmBuilder {
     mock.on_event("otlp_export")
         .respond_with_actions_from_event(|event| {
@@ -1021,19 +967,16 @@ fn answer_otlp(mock: MockLlmBuilder) -> MockLlmBuilder {
         .and()
 }
 
-#[cfg(feature = "otlp")]
 #[tokio::test]
 async fn otlp_accept_known_service_waits_for_the_model() -> E2EResult<()> {
     check_case("otlp/accept-known-service", answer_otlp).await
 }
 
-#[cfg(feature = "otlp")]
 #[tokio::test]
 async fn otlp_refuse_unknown_service_waits_for_the_model() -> E2EResult<()> {
     check_case("otlp/refuse-unknown-service", answer_otlp).await
 }
 
-#[cfg(feature = "otlp")]
 #[tokio::test]
 async fn otlp_refuse_debug_spans_waits_for_the_model() -> E2EResult<()> {
     check_case("otlp/refuse-debug-spans", answer_otlp).await
@@ -1043,7 +986,6 @@ async fn otlp_refuse_debug_spans_waits_for_the_model() -> E2EResult<()> {
 // nostr — nak
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "nostr")]
 #[tokio::test]
 async fn nostr_serve_notes_waits_for_the_model() -> E2EResult<()> {
     check_case("nostr/serve-notes", |mock| {
@@ -1062,7 +1004,6 @@ async fn nostr_serve_notes_waits_for_the_model() -> E2EResult<()> {
     .await
 }
 
-#[cfg(feature = "nostr")]
 #[tokio::test]
 async fn nostr_refuse_adverts_waits_for_the_model() -> E2EResult<()> {
     check_case("nostr/refuse-adverts", |mock| {
@@ -1078,7 +1019,6 @@ async fn nostr_refuse_adverts_waits_for_the_model() -> E2EResult<()> {
     .await
 }
 
-#[cfg(feature = "nostr")]
 #[tokio::test]
 async fn nostr_accept_film_note_waits_for_the_model() -> E2EResult<()> {
     check_case("nostr/accept-film-note", |mock| {

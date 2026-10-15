@@ -1,4 +1,3 @@
-#![cfg(feature = "connect_rpc")]
 use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, Response, StatusCode};
 use http_body_util::{BodyExt, StreamBody};

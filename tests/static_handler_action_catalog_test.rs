@@ -50,7 +50,6 @@ fn static_handler(pattern: &str, actions: serde_json::Value) -> Vec<serde_json::
 ///
 /// Revert `action_catalog_for_pattern` to `server_actions_for_pattern` for the client registry
 /// too and this fails with `Unknown action "disconnect"`.
-#[cfg(feature = "tcp")]
 #[test]
 fn static_handler_may_name_a_client_async_only_action() {
     let config = EventHandler::parse_event_handlers(static_handler(
@@ -70,7 +69,6 @@ fn static_handler_may_name_a_client_async_only_action() {
 /// Walks the whole path in-process — parse the configuration, store it on a client, dispatch
 /// the event through the same `try_execute_client_event_handler` the client's loop calls, and
 /// execute what comes back with the protocol's own executor.
-#[cfg(feature = "tcp")]
 #[tokio::test]
 async fn a_client_async_only_action_from_a_static_handler_executes() {
     use netget::llm::actions::client_trait::{Client, ClientActionResult};
@@ -194,7 +192,6 @@ fn every_client_action_the_model_sees_is_nameable_by_a_static_handler() {
 /// `close_connection` is in the server's async list only, and it is not the verb for this
 /// position: it takes a `connection_id` and acts on the server, where an event answer wants
 /// `close_this_connection`. The catalog must keep refusing it.
-#[cfg(feature = "tcp")]
 #[test]
 fn a_servers_async_only_action_is_still_refused_to_a_sync_event_handler() {
     let err = EventHandler::parse_event_handlers(static_handler(
@@ -218,7 +215,6 @@ fn a_servers_async_only_action_is_still_refused_to_a_sync_event_handler() {
 }
 
 /// The reported case, end to end through the parser: WHOIS's own static-mode startup example.
-#[cfg(feature = "whois")]
 #[test]
 fn the_whois_clients_own_static_startup_example_parses() {
     EventHandler::parse_event_handlers(vec![

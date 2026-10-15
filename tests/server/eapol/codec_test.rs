@@ -23,7 +23,7 @@
 //! `length` in an EAP packet covers the *whole* packet including its four-octet header, which
 //! is the field everyone gets wrong first.
 
-#![cfg(feature = "eapol")]
+#![cfg(all(unix, feature = "libpcap"))]
 
 use netget::server::eapol::codec::{self, CodecError, EapPacket, EapolFrame};
 

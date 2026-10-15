@@ -33,8 +33,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features redis --test server -- \
 //!       redis::connection_bounds --test-threads=100
 
-#![cfg(feature = "redis")]
-
 use std::time::Duration;
 
 use netget::cli::management::ServerForm;

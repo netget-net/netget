@@ -5,8 +5,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features dict --test server -- dict::peer_inject --test-threads=100
 
-#![cfg(feature = "dict")]
-
 use super::common::{self, Peer};
 use netget::state::app_state::AppState;
 use netget::state::client_handles::ClientSendOutcome;

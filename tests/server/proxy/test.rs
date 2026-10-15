@@ -3,7 +3,7 @@
 //! These tests spawn actual HTTP/HTTPS target servers and the NetGet proxy,
 //! then validate proxy behavior using real HTTP clients configured to route through the proxy.
 
-#![cfg(feature = "proxy")]
+#![cfg(unix)]
 
 // Helper module imported from parent
 

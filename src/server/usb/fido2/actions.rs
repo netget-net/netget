@@ -23,30 +23,30 @@
 //! `execute_action_with_state` + `AppState::server_handle` rather than a global map whose lookup
 //! was "first value".
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::llm::actions::{
     protocol_trait::{ActionResult, Protocol, Server},
     ActionDefinition, Parameter,
 };
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::protocol::log_template::LogTemplate;
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::protocol::EventType;
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::server::usb::fido2::Fido2ServerHandle;
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::state::app_state::AppState;
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use anyhow::{anyhow, Context, Result};
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use serde_json::json;
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use std::sync::LazyLock;
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use tracing::info;
 
 /// Approve the request the event named. Sync action: it answers an event.
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 fn approve_action() -> ActionDefinition {
     ActionDefinition {
         name: "approve_request".to_string(),
@@ -73,7 +73,7 @@ fn approve_action() -> ActionDefinition {
 ///
 /// Structurally distinct from saying nothing: silence also denies (after the timeout), but a
 /// `deny_request` denies *now* and is recorded as a decision rather than an absence.
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 fn deny_action() -> ActionDefinition {
     ActionDefinition {
         name: "deny_request".to_string(),
@@ -96,14 +96,14 @@ fn deny_action() -> ActionDefinition {
 }
 
 /// The two actions that answer an approval event.
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 fn decision_actions() -> Vec<ActionDefinition> {
     vec![approve_action(), deny_action()]
 }
 
 // Event type definitions
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub static FIDO2_DEVICE_ATTACHED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "fido2_device_attached",
@@ -141,7 +141,7 @@ pub static FIDO2_DEVICE_ATTACHED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     ])
 });
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub static FIDO2_REGISTER_REQUEST_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "fido2_register_request",
@@ -189,7 +189,7 @@ pub static FIDO2_REGISTER_REQUEST_EVENT: LazyLock<EventType> = LazyLock::new(|| 
     ])
 });
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub static FIDO2_AUTHENTICATE_REQUEST_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "fido2_authenticate_request",
@@ -234,7 +234,7 @@ pub static FIDO2_AUTHENTICATE_REQUEST_EVENT: LazyLock<EventType> = LazyLock::new
     ])
 });
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub static FIDO2_DEVICE_DETACHED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "fido2_device_detached",
@@ -254,11 +254,11 @@ pub static FIDO2_DEVICE_DETACHED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
 ///
 /// Stateless, like every other entry in the registry: the running server is reached through
 /// `AppState::server_handle::<Fido2ServerHandle>()`.
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Default)]
 pub struct UsbFido2Protocol;
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 impl UsbFido2Protocol {
     pub fn new() -> Self {
         Self
@@ -266,7 +266,7 @@ impl UsbFido2Protocol {
 }
 
 // Implement Protocol trait
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 impl Protocol for UsbFido2Protocol {
     fn get_startup_parameters(&self) -> Vec<crate::llm::actions::ParameterDefinition> {
         vec![
@@ -490,7 +490,7 @@ impl Protocol for UsbFido2Protocol {
 }
 
 // Implement Server trait
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 impl Server for UsbFido2Protocol {
     fn spawn(
         &self,
@@ -669,7 +669,7 @@ impl Server for UsbFido2Protocol {
 /// Small models routinely quote a numeric field as a string; rejecting `"1"` here would turn a
 /// correct decision into a failed action, and — because an unanswered request denies — silently
 /// convert an approval into a denial.
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 fn approval_id_of(action: &serde_json::Value) -> Result<u64> {
     match &action["approval_id"] {
         serde_json::Value::Number(n) => n

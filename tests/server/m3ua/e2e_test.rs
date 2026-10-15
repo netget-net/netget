@@ -16,7 +16,7 @@
 //! Messages are hand-built from RFC 4666 here rather than through `codec`, so the tests
 //! exercise the decoder against something NetGet did not encode.
 
-#[cfg(all(test, feature = "m3ua"))]
+#[cfg(unix)]
 mod m3ua_e2e_test {
     use crate::helpers::{start_netget_server, E2EResult, NetGetConfig};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};

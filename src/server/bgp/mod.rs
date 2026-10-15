@@ -44,30 +44,19 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, Notify};
 use tracing::{debug, error, info, trace, warn};
 
-#[cfg(feature = "bgp")]
 use crate::llm::action_helper::call_llm;
-#[cfg(feature = "bgp")]
 use crate::llm::actions::protocol_trait::ActionResult;
-#[cfg(feature = "bgp")]
 use crate::llm::ollama_client::OllamaClient;
-#[cfg(feature = "bgp")]
 use crate::logging::emit::Log;
-#[cfg(feature = "bgp")]
 use crate::protocol::Event;
-#[cfg(feature = "bgp")]
 use crate::server::BgpProtocol;
-#[cfg(feature = "bgp")]
 use crate::state::app_state::AppState;
-#[cfg(feature = "bgp")]
 use crate::state::server::BgpSessionState;
-#[cfg(feature = "bgp")]
 use crate::utils::WireFailure;
-#[cfg(feature = "bgp")]
 use actions::{
     BGP_ESTABLISHED_EVENT, BGP_MESSAGE_INTENT, BGP_NOTIFICATION_EVENT, BGP_OPEN_EVENT,
     BGP_UPDATE_EVENT,
 };
-#[cfg(feature = "bgp")]
 use netgauze_bgp_pkt::{capabilities::BgpCapability, BgpMessage};
 
 /// Hold time used unless the peer proposes something shorter, or startup overrides it.
@@ -136,7 +125,6 @@ static CONNECTION_CAP_REFUSAL: std::sync::LazyLock<Vec<u8>> = std::sync::LazyLoc
 /// BGP server that handles routing protocol sessions under LLM policy control.
 pub struct BgpServer;
 
-#[cfg(feature = "bgp")]
 impl BgpServer {
     /// Spawn the BGP listener.
     ///
@@ -256,7 +244,6 @@ impl BgpServer {
 }
 
 /// Operator-supplied identity for this speaker.
-#[cfg(feature = "bgp")]
 #[derive(Debug, Clone)]
 pub struct BgpConfig {
     pub local_as: u32,
@@ -264,7 +251,6 @@ pub struct BgpConfig {
     pub hold_time: u16,
 }
 
-#[cfg(feature = "bgp")]
 impl BgpConfig {
     /// Validate startup parameters up front.
     ///
@@ -320,7 +306,6 @@ impl BgpConfig {
     }
 }
 
-#[cfg(feature = "bgp")]
 async fn register_connection(
     app_state: &AppState,
     server_id: crate::state::ServerId,
@@ -352,7 +337,6 @@ async fn register_connection(
 }
 
 /// One BGP peering session.
-#[cfg(feature = "bgp")]
 struct BgpSession {
     connection_id: crate::server::connection::ConnectionId,
     server_id: crate::state::ServerId,
@@ -383,7 +367,6 @@ struct BgpSession {
 }
 
 /// Outcome of reading one framed message off the wire.
-#[cfg(feature = "bgp")]
 enum Incoming {
     Message(BgpMessage),
     /// Header was structurally invalid; the session must send this NOTIFICATION and close.
@@ -394,7 +377,6 @@ enum Incoming {
     Eof,
 }
 
-#[cfg(feature = "bgp")]
 #[allow(clippy::too_many_arguments)]
 async fn run_session(
     stream: tokio::net::TcpStream,
@@ -509,7 +491,6 @@ async fn run_session(
     result
 }
 
-#[cfg(feature = "bgp")]
 impl BgpSession {
     async fn run(
         &mut self,
@@ -1118,14 +1099,12 @@ impl BgpSession {
 /// alone is not enough: `notify_waiters` wakes tasks that are *already* waiting, so a signal
 /// raised while the read loop is inside an LLM call would be dropped and the session would hang
 /// until the peer closed the socket.
-#[cfg(feature = "bgp")]
 #[derive(Default)]
 struct Shutdown {
     flag: AtomicBool,
     notify: Notify,
 }
 
-#[cfg(feature = "bgp")]
 impl Shutdown {
     fn set(&self) {
         self.flag.store(true, Ordering::SeqCst);
@@ -1141,7 +1120,6 @@ impl Shutdown {
 /// server: either a non-empty server instruction was given, or an event handler is configured
 /// for `event_id`. When false the session applies its static default and never consults the
 /// model — for BGP that means the configured OPEN on the handshake and no route advertisement.
-#[cfg(feature = "bgp")]
 async fn operator_wants_dynamic(
     state: &AppState,
     server_id: crate::state::ServerId,
@@ -1163,7 +1141,6 @@ async fn operator_wants_dynamic(
 
 /// RFC 4271 section 4.2: the session runs on the smaller of the two proposed hold times, and a
 /// zero from either side turns the timers off entirely.
-#[cfg(feature = "bgp")]
 fn negotiate_hold(ours: u16, theirs: u16) -> u16 {
     if ours == 0 || theirs == 0 {
         0
@@ -1173,7 +1150,6 @@ fn negotiate_hold(ours: u16, theirs: u16) -> u16 {
 }
 
 /// What a handler's actions amounted to on the OPEN path.
-#[cfg(feature = "bgp")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SendOutcome {
     /// An OPEN was written, proposing this hold time; carry on to OpenConfirm.
@@ -1189,7 +1165,6 @@ enum SendOutcome {
     Failed(WireFailure),
 }
 
-#[cfg(feature = "bgp")]
 impl SendOutcome {
     /// The Cease subcode a failed handler earns. RFC 4486 separates a resource condition, which
     /// a peer damps and retries, from an outright rejection, which it does not — so a saturated
@@ -1207,7 +1182,6 @@ impl SendOutcome {
 /// Runs in its own task so keepalives continue while the read loop is inside an LLM call. Both
 /// were previously absent: nothing was sent unless the peer spoke first, and a peer that went
 /// silent held the socket forever.
-#[cfg(feature = "bgp")]
 #[allow(clippy::too_many_arguments)]
 async fn spawn_timers(
     hold_time: u16,
@@ -1260,7 +1234,6 @@ async fn spawn_timers(
 }
 
 /// `with_deadline` gave up before `fut` finished.
-#[cfg(feature = "bgp")]
 struct DeadlineExpired;
 
 /// Await `fut`, abandoning it after `limit` when one is given.
@@ -1268,7 +1241,6 @@ struct DeadlineExpired;
 /// A plain `tokio::time::timeout` cannot express "no limit", and the two cases differ per
 /// message here: only the pre-OPEN read is bounded from this loop, because after that the
 /// negotiated hold timer runs in its own task.
-#[cfg(feature = "bgp")]
 async fn with_deadline<F: std::future::Future>(
     limit: Option<std::time::Duration>,
     fut: F,
@@ -1287,7 +1259,6 @@ async fn with_deadline<F: std::future::Future>(
 /// cannot make the server reserve an arbitrary buffer, and `len - 19` cannot underflow.
 ///
 /// The second element is the number of octets consumed, for the connection's inbound counters.
-#[cfg(feature = "bgp")]
 async fn read_message(
     reader: &mut tokio::io::ReadHalf<tokio::net::TcpStream>,
     asn4: bool,
@@ -1334,7 +1305,6 @@ async fn read_message(
 /// deliberate teardown means: NOTIFICATION 6/2 (Cease / Administrative Shutdown) followed by the
 /// close, raised through the session's `Shutdown` so the read loop exits even if the peer never
 /// speaks again.
-#[cfg(feature = "bgp")]
 #[allow(clippy::too_many_arguments)]
 async fn spawn_peer_command_task(
     mut command_rx: mpsc::Receiver<crate::state::client_handles::ClientCommand>,
@@ -1413,7 +1383,6 @@ async fn spawn_peer_command_task(
 }
 
 /// Execute one injected action and queue whatever it encodes to.
-#[cfg(feature = "bgp")]
 async fn execute_injected_action(
     action: &serde_json::Value,
     protocol: &BgpProtocol,
@@ -1503,7 +1472,6 @@ async fn execute_injected_action(
 
 /// Recover the (code, subcode) pair from netgauze's typed NOTIFICATION so it can be reported
 /// numerically, the way RFC 4271 section 6 names it.
-#[cfg(feature = "bgp")]
 fn notification_codes(n: &netgauze_bgp_pkt::notification::BgpNotificationMessage) -> (u8, u8) {
     use netgauze_bgp_pkt::notification::*;
     match n {

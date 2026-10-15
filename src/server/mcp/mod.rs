@@ -30,28 +30,28 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::console_error;
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::llm::action_helper::call_llm;
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::llm::ollama_client::OllamaClient;
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::logging::emit::Log;
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::protocol::Event;
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::server::connection::ConnectionId;
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::server::McpProtocol;
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::state::app_state::AppState;
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::state::server::{ConnectionStatus, ProtocolConnectionInfo, ServerId};
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 use actions::{
     MCP_INITIALIZE_EVENT, MCP_PROMPTS_GET_EVENT, MCP_PROMPTS_LIST_EVENT, MCP_RESOURCES_LIST_EVENT,
     MCP_RESOURCES_READ_EVENT, MCP_TOOLS_CALL_EVENT, MCP_TOOLS_LIST_EVENT,
 };
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 use jsonrpc::RequestId;
 
 /// MCP server shared state
@@ -84,7 +84,7 @@ pub const MAX_REQUEST_BODY_BYTES: usize = 2 * 1024 * 1024;
 
 /// Message of the JSON-RPC error in the 413 for an over-limit body. Fixed: the peer's length
 /// goes to the log.
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 const BODY_TOO_LARGE_MESSAGE: &str = "request body too large";
 
 /// Largest slice of a request echoed onto the status channel.
@@ -92,22 +92,22 @@ const BODY_TOO_LARGE_MESSAGE: &str = "request body too large";
 /// The whole request used to be serialized onto `status_tx` on every call. That channel is
 /// unbounded with no backpressure (see the root CLAUDE.md), so a client posting bodies at
 /// axum's 2 MiB default limit could enqueue faster than the TUI drains.
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_TRACE_BYTES: usize = 4096;
 
 /// MCP revisions this server will echo back in an `initialize` reply.
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &["2024-11-05", "2025-03-26", "2025-06-18"];
 
 /// Implementation-defined JSON-RPC error code for "the backend is at capacity, retry".
 ///
 /// JSON-RPC 2.0 reserves -32000..=-32099 for server-defined errors. Reporting overload as
 /// -32603 (InternalError) would tell the caller the server is broken when it is only busy.
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 const MCP_SERVER_BUSY_CODE: i32 = -32000;
 
 /// Offered when the client asks for a revision not in the list above.
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 const DEFAULT_PROTOCOL_VERSION: &str = "2024-11-05";
 
 /// How long to wait for the peer's first byte after it connects.
@@ -116,7 +116,7 @@ const DEFAULT_PROTOCOL_VERSION: &str = "2024-11-05";
 /// the wire and the server says nothing before it. A peer that has connected and sent nothing
 /// has made no request, which is the state an unauthenticated flood lives in — and the one this
 /// server had no bound on at all.
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 const FIRST_REQUEST_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// How long to wait for a *further* request on a keep-alive connection.
@@ -130,11 +130,11 @@ const FIRST_REQUEST_READ_TIMEOUT: std::time::Duration = std::time::Duration::fro
 /// Crucially this bound applies **only while no request is outstanding** — see
 /// `relay_mcp_connection`. A request waiting on the model, or parked for a human at the
 /// dashboard (`src/state/intercepts.rs`, 300s by default), is not idle and is never timed out.
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 const IDLE_BETWEEN_REQUESTS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// Concurrent connections this server admits.
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_CONNECTIONS: usize = crate::server::accept_bounded::DEFAULT_MAX_CONNECTIONS;
 
 /// What a peer over [`MAX_CONNECTIONS`] is told before the socket closes.
@@ -145,7 +145,7 @@ const MAX_CONNECTIONS: usize = crate::server::accept_bounded::DEFAULT_MAX_CONNEC
 /// server already returns when the backend is overloaded.
 ///
 /// `Content-Length` is 82, which is the length of the JSON object on the last line.
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 const CONNECTION_CAP_REFUSAL: &[u8] = b"HTTP/1.1 503 Service Unavailable\r\n\
     Content-Type: application/json\r\nContent-Length: 82\r\nRetry-After: 5\r\n\
     Connection: close\r\n\r\n\
@@ -156,7 +156,7 @@ const CONNECTION_CAP_REFUSAL: &[u8] = b"HTTP/1.1 503 Service Unavailable\r\n\
 /// `mcp_error_response` is offered to the handler on every MCP event. Nothing used to consume
 /// its result, so the chosen `code` and `message` were dropped and the caller received either
 /// a generic `-32603` or - worse - a *success* reply such as `{"tools": []}`.
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 fn mcp_error_from_action(data: &Value) -> JsonRpcError {
     // i64 rather than i32: JSON-RPC codes are small, but `as i32` would wrap a large number
     // into a valid-looking code. Out-of-range values become InternalError.
@@ -198,7 +198,7 @@ fn mcp_error_from_action(data: &Value) -> JsonRpcError {
 /// `decision=fail_closed_llm_error_unavailable` (here), `decision=model_reject`
 /// (the handler chose `mcp_error`) and `decision=model_no_answer` (the handler ran but
 /// produced no usable action).
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 fn llm_failure_error(state: &McpServerState, method: &str, e: anyhow::Error) -> JsonRpcError {
     let failure = crate::utils::WireFailure::classify(&e);
     let decision = if failure.is_overloaded() {
@@ -229,7 +229,7 @@ fn llm_failure_error(state: &McpServerState, method: &str, e: anyhow::Error) -> 
 /// Log that the handler explicitly chose to fail this request (`mcp_error`).
 ///
 /// Distinct from a no-answer and from a backend failure: this one the model meant.
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 fn log_model_reject(state: &McpServerState, method: &str) {
     warn!(
         "MCP {} decision=model_reject: handler returned mcp_error",
@@ -243,7 +243,7 @@ fn log_model_reject(state: &McpServerState, method: &str) {
 
 /// Log that the handler ran without erroring but produced no usable action, so the
 /// hardcoded default below is what the caller receives.
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 fn log_model_no_answer(state: &McpServerState, method: &str, fallback: &str) {
     warn!(
         "MCP {} decision=model_no_answer: replying with {}",
@@ -261,7 +261,7 @@ fn log_model_no_answer(state: &McpServerState, method: &str, fallback: &str) {
 /// path used to pass `None` unconditionally, so a request whose `jsonrpc` field was missing or
 /// whose `method` was not a string came back with `"id": null` even though the id was sitting
 /// in the payload, leaving the client unable to match the error to its request.
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 fn recover_request_id(payload: &Value) -> Option<RequestId> {
     match payload.get("id")? {
         Value::String(s) => Some(RequestId::String(s.clone())),
@@ -273,7 +273,7 @@ fn recover_request_id(payload: &Value) -> Option<RequestId> {
 /// MCP server that handles Model Context Protocol over HTTP
 pub struct McpServer;
 
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 impl McpServer {
     /// Spawn MCP server with Axum on HTTP (default port 8000)
     pub async fn spawn_with_llm_actions(
@@ -345,7 +345,7 @@ impl McpServer {
 }
 
 /// Handle incoming JSON-RPC 2.0 requests
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 async fn handle_jsonrpc(
     AxumState(state): AxumState<McpServerState>,
     payload: Result<Json<Value>, JsonRejection>,
@@ -474,7 +474,7 @@ async fn handle_jsonrpc(
 }
 
 /// Handle initialize request - LLM declares capabilities
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 async fn handle_initialize(
     state: &McpServerState,
     params: Option<Value>,
@@ -489,7 +489,7 @@ async fn handle_initialize(
     result
 }
 
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 async fn handle_initialize_inner(
     state: &McpServerState,
     params: Option<Value>,
@@ -639,13 +639,13 @@ async fn handle_initialize_inner(
 }
 
 /// Handle ping request - simple health check
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 fn handle_ping() -> Result<Value, JsonRpcError> {
     Ok(serde_json::json!({}))
 }
 
 /// Handle resources/list request - LLM returns available resources
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 async fn handle_resources_list(state: &McpServerState) -> Result<Value, JsonRpcError> {
     Log::new(Some(&state.status_tx)).debug("MCP resources/list request");
 
@@ -702,7 +702,7 @@ async fn handle_resources_list(state: &McpServerState) -> Result<Value, JsonRpcE
 }
 
 /// Handle resources/read request - LLM returns resource content
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 async fn handle_resources_read(
     state: &McpServerState,
     params: Option<Value>,
@@ -772,7 +772,7 @@ async fn handle_resources_read(
 }
 
 /// Handle resources/subscribe request
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 async fn handle_resources_subscribe(
     _state: &McpServerState,
     params: Option<Value>,
@@ -790,7 +790,7 @@ async fn handle_resources_subscribe(
 }
 
 /// Handle resources/unsubscribe request
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 async fn handle_resources_unsubscribe(
     _state: &McpServerState,
     params: Option<Value>,
@@ -806,7 +806,7 @@ async fn handle_resources_unsubscribe(
 }
 
 /// Handle resources/templates/list request
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 async fn handle_resources_templates_list(_state: &McpServerState) -> Result<Value, JsonRpcError> {
     debug!("MCP resources/templates/list");
 
@@ -817,7 +817,7 @@ async fn handle_resources_templates_list(_state: &McpServerState) -> Result<Valu
 }
 
 /// Handle tools/list request - LLM returns available tools
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 async fn handle_tools_list(state: &McpServerState) -> Result<Value, JsonRpcError> {
     Log::new(Some(&state.status_tx)).debug("MCP tools/list request");
 
@@ -874,7 +874,7 @@ async fn handle_tools_list(state: &McpServerState) -> Result<Value, JsonRpcError
 }
 
 /// Handle tools/call request - LLM executes tool
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 async fn handle_tools_call(
     state: &McpServerState,
     params: Option<Value>,
@@ -947,7 +947,7 @@ async fn handle_tools_call(
 }
 
 /// Handle prompts/list request - LLM returns available prompts
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 async fn handle_prompts_list(state: &McpServerState) -> Result<Value, JsonRpcError> {
     Log::new(Some(&state.status_tx)).debug("MCP prompts/list request");
 
@@ -1004,7 +1004,7 @@ async fn handle_prompts_list(state: &McpServerState) -> Result<Value, JsonRpcErr
 }
 
 /// Handle prompts/get request - LLM returns prompt template
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 async fn handle_prompts_get(
     state: &McpServerState,
     params: Option<Value>,
@@ -1077,7 +1077,7 @@ async fn handle_prompts_get(
 }
 
 /// Handle logging/setLevel request
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 async fn handle_logging_set_level(
     state: &McpServerState,
     params: Option<Value>,
@@ -1096,7 +1096,7 @@ async fn handle_logging_set_level(
 }
 
 /// Handle completion/complete request - LLM provides completions
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 async fn handle_completion(
     _state: &McpServerState,
     _params: Option<Value>,
@@ -1116,13 +1116,13 @@ async fn handle_completion(
 }
 
 /// Handle initialized notification
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 async fn handle_initialized(state: &McpServerState) {
     Log::new(Some(&state.status_tx)).info("MCP client initialized");
 }
 
 /// Handle cancelled notification
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 async fn handle_cancelled(state: &McpServerState, params: Option<Value>) {
     if let Some(req_id) = params.as_ref().and_then(|p| p.get("requestId")) {
         Log::new(Some(&state.status_tx)).debug(format!("MCP cancelled: {:?}", req_id));
@@ -1130,7 +1130,7 @@ async fn handle_cancelled(state: &McpServerState, params: Option<Value>) {
 }
 
 /// Handle progress notification
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 async fn handle_progress(_state: &McpServerState, params: Option<Value>) {
     if let Some(progress) = params {
         trace!("MCP progress: {}", progress);
@@ -1142,7 +1142,7 @@ async fn handle_progress(_state: &McpServerState, params: Option<Value>) {
 ///
 /// Runs until the task is aborted, which `stop_server` does through
 /// `AppState::register_server_task`.
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 async fn serve_screened_mcp(
     listener: tokio::net::TcpListener,
     backend_addr: SocketAddr,
@@ -1189,7 +1189,7 @@ async fn serve_screened_mcp(
 /// or a request parked for a human at the dashboard for as long as they need, can never be
 /// timed out from under itself. Only a peer that has been answered and then says nothing, or
 /// that never said anything at all, is closed.
-#[cfg(feature = "mcp")]
+#[cfg(not(target_arch = "wasm32"))]
 async fn relay_mcp_connection(
     peer_stream: tokio::net::TcpStream,
     peer_addr: SocketAddr,

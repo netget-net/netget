@@ -7,7 +7,7 @@
 //! IMPORTANT: ARP tests require root privileges for packet capture and injection.
 //! Run tests with: sudo ./cargo-isolated.sh test --no-default-features --features arp --test client -- client::arp::e2e_test
 
-#[cfg(all(test, feature = "arp"))]
+#[cfg(all(unix, feature = "libpcap"))]
 mod arp_client_tests {
     use crate::helpers::*;
     use std::time::Duration;

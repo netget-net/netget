@@ -1,7 +1,5 @@
 //! MongoDB server E2E tests with mock LLM
 
-#![cfg(all(feature = "mongodb-server", feature = "mongodb"))]
-
 use crate::helpers::*;
 
 #[tokio::test]

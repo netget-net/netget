@@ -6,8 +6,6 @@
 //! token tells them apart, and for the registration path — where the client is waiting on 001
 //! — that is the difference between "we denied you" and "we never asked anyone".
 
-#![cfg(feature = "irc")]
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};

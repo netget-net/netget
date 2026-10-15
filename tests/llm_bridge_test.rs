@@ -593,7 +593,6 @@ async fn a_hosts_reasoning_reaches_the_dashboard_and_only_its_content_is_parsed(
 /// The browser's shape of the same thing: a server's network event is answered through the
 /// bridge with reasoning, and the reasoning arrives on the server's status channel — the one
 /// the dashboard drains — while the answer reaches the peer.
-#[cfg(feature = "tcp")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_network_events_reasoning_reaches_the_status_channel_the_dashboard_drains() {
     use netget::cli::management::ServerForm;
@@ -668,7 +667,6 @@ async fn a_network_events_reasoning_reaches_the_status_channel_the_dashboard_dra
 /// the page receives for the network event. It has no native tool schemas — the network-event
 /// path deliberately sends none — so `actions` is the only structured description of what the
 /// visitor may answer with.
-#[cfg(feature = "tcp")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_network_event_request_offers_the_events_actions_with_their_examples() {
     use netget::cli::management::ServerForm;

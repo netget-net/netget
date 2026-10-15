@@ -11,7 +11,6 @@
 //! reply that did not come from the responder, or was misparsed, leaves it uncalled and fails
 //! `verify_mocks`.
 
-#[cfg(all(test, feature = "ntp"))]
 mod ntp_client_tests {
     use crate::helpers::*;
     use std::net::SocketAddr;

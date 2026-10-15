@@ -14,8 +14,6 @@
 //! so there is nothing to correlate a tagged response to. RFC 3501 §7.1.5 makes `* BYE` the
 //! server's way of ending a session unilaterally.
 
-#![cfg(feature = "imap")]
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};

@@ -8,8 +8,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features nsq --test server -- nsq::answer_with --test-threads=100
 
-#![cfg(feature = "nsq")]
-
 use netget::server::nsq::actions::{
     deliver_answer_with, publish_answer_with, requeue_answer_with, subscribe_answer_with,
     NSQ_FINISH_EVENT, NSQ_PUBLISH_EVENT, NSQ_READY_EVENT, NSQ_REQUEUE_EVENT, NSQ_SUBSCRIBE_EVENT,

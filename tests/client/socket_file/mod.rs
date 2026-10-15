@@ -1,6 +1,6 @@
 //! Socket File client tests module
 
-#[cfg(all(test, feature = "socket_file", unix))]
+#[cfg(unix)]
 mod command_channel_test;
-#[cfg(all(test, feature = "socket_file", unix))]
+#[cfg(unix)]
 mod e2e_test;

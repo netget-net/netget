@@ -24,21 +24,21 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, error, trace, warn};
 
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::llm::action_helper::call_llm;
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::llm::ollama_client::OllamaClient;
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::llm::ActionResult;
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::logging::emit::Log;
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::protocol::Event;
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::server::LdapProtocol;
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::state::app_state::AppState;
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 use actions::{
     LDAP_ADD_EVENT, LDAP_BIND_EVENT, LDAP_DELETE_EVENT, LDAP_MODIFY_EVENT, LDAP_SEARCH_EVENT,
     LDAP_UNBIND_EVENT,
@@ -71,7 +71,7 @@ use actions::{
 /// at [`MAX_CONNECTIONS`], so the total exposure is the same 256 sockets it always was and only
 /// the dwell time changed. A listener genuinely exposed to strangers should set
 /// `first_byte_timeout_secs` back down; that is what the parameter is for.
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 const FIRST_MESSAGE_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// How long a peer that has already been answered may send nothing further.
@@ -87,7 +87,7 @@ const FIRST_MESSAGE_READ_TIMEOUT: std::time::Duration = std::time::Duration::fro
 /// Deliberately far longer than the first bound, and far longer than the 300-second default a
 /// `manual` rule gives a human to answer: "has said nothing at all" and "has gone quiet
 /// mid-session" are different claims and deserve different answers.
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 const IDLE_BETWEEN_MESSAGES_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(900);
 
 /// Concurrent connections this server admits.
@@ -95,7 +95,7 @@ const IDLE_BETWEEN_MESSAGES_TIMEOUT: std::time::Duration = std::time::Duration::
 /// Each admitted connection may buffer a message of up to [`MAX_LDAP_MESSAGE`] (1 MiB) before
 /// anything is authenticated, so the cap is what turns that per-connection bound into a total
 /// one.
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_CONNECTIONS: usize = crate::server::accept_bounded::DEFAULT_MAX_CONNECTIONS;
 
 /// What a peer over [`MAX_CONNECTIONS`] is told before the socket closes: LDAP's own
@@ -114,7 +114,7 @@ const MAX_CONNECTIONS: usize = crate::server::accept_bounded::DEFAULT_MAX_CONNEC
 /// `30 18` SEQUENCE(24) · `02 01 00` messageID 0 · `78 13` \[APPLICATION 24\] ExtendedResponse(19)
 /// · `0A 01 34` resultCode ENUMERATED 52 · `04 00` matchedDN "" · `04 00` diagnosticMessage ""
 /// · `8A 0A 2B 06 01 04 01 8B 3A 81 9C 44` responseName \[10\] = 1.3.6.1.4.1.1466.20036
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 const CONNECTION_CAP_REFUSAL: &[u8] = &[
     0x30, 0x18, 0x02, 0x01, 0x00, 0x78, 0x13, 0x0A, 0x01, 0x34, 0x04, 0x00, 0x04, 0x00, 0x8A, 0x0A,
     0x2B, 0x06, 0x01, 0x04, 0x01, 0x8B, 0x3A, 0x81, 0x9C, 0x44,
@@ -123,7 +123,7 @@ const CONNECTION_CAP_REFUSAL: &[u8] = &[
 /// LDAP server that handles directory operations with LLM
 pub struct LdapServer;
 
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 impl LdapServer {
     /// Spawn LDAP server with integrated LLM actions
     pub async fn spawn_with_llm_actions(
@@ -272,7 +272,7 @@ impl LdapServer {
     }
 }
 
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 struct LdapSession {
     stream: tokio::net::TcpStream,
     connection_id: crate::server::connection::ConnectionId,
@@ -289,7 +289,7 @@ struct LdapSession {
     idle_timeout: std::time::Duration,
 }
 
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 impl LdapSession {
     /// Read LDAP messages off the socket and answer them.
     ///
@@ -854,7 +854,7 @@ impl LdapSession {
 }
 
 /// What the session should do after handling one message.
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 /// Who chose the response the peer is about to receive.
 ///
 /// The wire cannot always carry the distinction - a refusal the model chose and a refusal the
@@ -886,11 +886,11 @@ enum SessionStep {
 // ============================================================================
 
 /// Largest LDAP message accepted, in bytes. A long-form length header can promise up to 4 GiB.
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 pub const MAX_LDAP_MESSAGE: usize = 1 << 20;
 
 /// Socket read size. Unrelated to message size now that messages are reassembled.
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 const READ_CHUNK: usize = 8192;
 
 /// Maximum search-filter nesting rendered. Filters are recursive and client-supplied, so an
@@ -898,60 +898,60 @@ const READ_CHUNK: usize = 8192;
 ///
 /// `fuzz/fuzz_targets/ldap_filter.rs` carries a depth bomb for this; with the check in
 /// `render_filter` removed, that seed kills the fuzzer with a stack overflow.
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 pub const MAX_FILTER_DEPTH: usize = 32;
 
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 const TAG_SEQUENCE: u8 = 0x30;
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 const TAG_INTEGER: u8 = 0x02;
 
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 const OP_BIND_REQUEST: u8 = 0x60;
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 const OP_SEARCH_REQUEST: u8 = 0x63;
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 const OP_MODIFY_REQUEST: u8 = 0x66;
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 const OP_ADD_REQUEST: u8 = 0x68;
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 const OP_DELETE_REQUEST: u8 = 0x4A;
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 const OP_UNBIND_REQUEST: u8 = 0x42;
 
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 const RESPONSE_BIND: u8 = 0x61;
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 const RESPONSE_SEARCH_DONE: u8 = 0x65;
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 const RESPONSE_MODIFY: u8 = 0x67;
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 const RESPONSE_ADD: u8 = 0x69;
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 const RESPONSE_DELETE: u8 = 0x6B;
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 const RESPONSE_EXTENDED: u8 = 0x78;
 
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 const AUTH_SIMPLE: u8 = 0x80;
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 const AUTH_SASL: u8 = 0xA3;
 
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 const RESULT_SUCCESS: u8 = 0;
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 const RESULT_PROTOCOL_ERROR: u8 = 2;
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 const RESULT_INVALID_CREDENTIALS: u8 = 49;
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 const RESULT_BUSY: u8 = 51;
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 const RESULT_UNAVAILABLE: u8 = 52;
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 const RESULT_UNWILLING_TO_PERFORM: u8 = 53;
 
 /// The response type matching a request type, for error replies.
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 fn response_tag_for(request_tag: u8) -> u8 {
     match request_tag {
         OP_BIND_REQUEST => RESPONSE_BIND,
@@ -964,7 +964,7 @@ fn response_tag_for(request_tag: u8) -> u8 {
 }
 
 /// One decoded BER tag-length-value.
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 struct BerElement<'a> {
     tag: u8,
     /// The content octets, already bounds-checked against the input.
@@ -974,7 +974,7 @@ struct BerElement<'a> {
 }
 
 /// Decode the element at the start of `data`, verifying it fits.
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 fn read_ber_element(data: &[u8]) -> Result<BerElement<'_>> {
     if data.is_empty() {
         anyhow::bail!("Truncated BER element: no tag");
@@ -1002,7 +1002,7 @@ fn read_ber_element(data: &[u8]) -> Result<BerElement<'_>> {
 }
 
 /// Decode a BER length. Returns (length, bytes consumed by the length field).
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 fn parse_ber_length(data: &[u8]) -> Result<(usize, usize)> {
     if data.is_empty() {
         anyhow::bail!("Empty data for BER length");
@@ -1037,7 +1037,7 @@ fn parse_ber_length(data: &[u8]) -> Result<(usize, usize)> {
 }
 
 /// Decode INTEGER/ENUMERATED content octets.
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 fn ber_integer(value: &[u8]) -> Result<i64> {
     if value.is_empty() {
         anyhow::bail!("Empty BER INTEGER");
@@ -1055,7 +1055,7 @@ fn ber_integer(value: &[u8]) -> Result<i64> {
 }
 
 /// Decode OCTET STRING content octets as text.
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 fn ber_string(value: &[u8]) -> String {
     String::from_utf8_lossy(value).to_string()
 }
@@ -1064,7 +1064,7 @@ fn ber_string(value: &[u8]) -> String {
 ///
 /// `Ok(None)` means "need more bytes"; `Err` means the stream is not LDAP and the connection
 /// should be dropped.
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 pub fn ldap_message_len(buffer: &[u8]) -> Result<Option<usize>> {
     if buffer.is_empty() {
         return Ok(None);
@@ -1112,7 +1112,7 @@ pub fn ldap_message_len(buffer: &[u8]) -> Result<Option<usize>> {
 }
 
 /// Decode `AttributeList ::= SEQUENCE OF SEQUENCE { type, vals SET OF value }`.
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 fn parse_attribute_list(mut data: &[u8]) -> serde_json::Map<String, serde_json::Value> {
     let mut attributes = serde_json::Map::new();
     while let Ok(attribute) = read_ber_element(data) {
@@ -1126,7 +1126,7 @@ fn parse_attribute_list(mut data: &[u8]) -> serde_json::Map<String, serde_json::
 }
 
 /// Decode the inside of `PartialAttribute ::= SEQUENCE { type, vals SET OF value }`.
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 fn parse_partial_attribute(data: &[u8]) -> (String, Vec<serde_json::Value>) {
     let Ok(type_element) = read_ber_element(data) else {
         return (String::new(), Vec::new());
@@ -1149,7 +1149,7 @@ fn parse_partial_attribute(data: &[u8]) -> (String, Vec<serde_json::Value>) {
 ///
 /// Pure and public so `fuzz/fuzz_targets/ldap_filter.rs` drives the same decoder the session
 /// does; nothing here allocates or recurses.
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 pub fn decode_ldap_message(data: &[u8]) -> Result<(i32, u8, &[u8])> {
     let envelope = read_ber_element(data).context("LDAPMessage envelope")?;
     if envelope.tag != TAG_SEQUENCE {
@@ -1174,7 +1174,7 @@ pub fn decode_ldap_message(data: &[u8]) -> Result<(i32, u8, &[u8])> {
 }
 
 /// What a SearchRequest tells the model: the fields of `ldap_search`'s event data.
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct SearchRequestFields {
     pub base_dn: String,
@@ -1196,7 +1196,7 @@ pub struct SearchRequestFields {
 ///
 /// The filter is the only recursive part of any LDAP request, and it is client-supplied and
 /// pre-authentication (a search needs no bind). This is the entry point the fuzz target drives.
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 pub fn parse_search_request(data: &[u8]) -> Result<SearchRequestFields> {
     let base_element = read_ber_element(data).context("search baseObject")?;
     let base_dn = ber_string(base_element.value);
@@ -1255,7 +1255,7 @@ pub fn parse_search_request(data: &[u8]) -> Result<SearchRequestFields> {
 ///
 /// Depth-limited: `depth` counts nesting and the renderer stops at MAX_FILTER_DEPTH rather
 /// than recursing as deep as a client asks.
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 fn render_filter(element: &BerElement<'_>, depth: usize) -> String {
     if depth >= MAX_FILTER_DEPTH {
         return "(...)".to_string();
@@ -1329,7 +1329,7 @@ fn render_filter(element: &BerElement<'_>, depth: usize) -> String {
 ///
 /// Reads the message structurally instead of scanning for a 0x61 byte, which the old
 /// implementation did and which any DN or diagnostic message containing that byte could fool.
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 fn bind_succeeded(response: &[u8]) -> bool {
     let Ok(envelope) = read_ber_element(response) else {
         return false;
@@ -1350,7 +1350,7 @@ fn bind_succeeded(response: &[u8]) -> bool {
         .unwrap_or(false)
 }
 
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 fn encode_ber_length(length: usize) -> Vec<u8> {
     if length < 128 {
         vec![length as u8]
@@ -1368,7 +1368,7 @@ fn encode_ber_length(length: usize) -> Vec<u8> {
     }
 }
 
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 fn encode_ber_integer(value: i32) -> Vec<u8> {
     let mut result = vec![0x02]; // INTEGER tag
 
@@ -1383,7 +1383,7 @@ fn encode_ber_integer(value: i32) -> Vec<u8> {
     result
 }
 
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 fn encode_bind_response(msg_id: i32, result_code: u8, diagnostic_message: &str) -> Vec<u8> {
     // BindResponse ::= [APPLICATION 1] SEQUENCE {
     //     resultCode ENUMERATED,
@@ -1417,7 +1417,7 @@ fn encode_bind_response(msg_id: i32, result_code: u8, diagnostic_message: &str) 
     encode_ldap_message(msg_id, bind_msg)
 }
 
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 fn encode_search_done(msg_id: i32, result_code: u8, diagnostic_message: &str) -> Vec<u8> {
     // SearchResultDone ::= [APPLICATION 5] LDAPResult
 
@@ -1452,7 +1452,7 @@ fn encode_search_done(msg_id: i32, result_code: u8, diagnostic_message: &str) ->
 /// AddResponse [9] = 0x69, DelResponse [11] = 0x6B, ExtendedResponse [24] = 0x78. All share
 /// the LDAPResult prefix (resultCode, matchedDN, diagnosticMessage), which is why one encoder
 /// serves them all.
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 fn encode_ldap_result(
     msg_id: i32,
     response_tag: u8,
@@ -1483,7 +1483,7 @@ fn encode_ldap_result(
     encode_ldap_message(msg_id, message)
 }
 
-#[cfg(feature = "ldap")]
+#[cfg(not(target_arch = "wasm32"))]
 fn encode_ldap_message(msg_id: i32, protocol_op: Vec<u8>) -> Vec<u8> {
     // LDAPMessage ::= SEQUENCE {
     //     messageID INTEGER,
@@ -1501,7 +1501,7 @@ fn encode_ldap_message(msg_id: i32, protocol_op: Vec<u8>) -> Vec<u8> {
     message
 }
 
-#[cfg(not(feature = "ldap"))]
+#[cfg(target_arch = "wasm32")]
 impl LdapServer {
     pub async fn spawn_with_llm_actions(
         _listen_addr: SocketAddr,

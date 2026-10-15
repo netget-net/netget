@@ -3,7 +3,7 @@
 //! These tests spawn the actual NetGet binary with BLE GATT Battery Service prompts
 //! and validate the server startup and basic functionality.
 
-#![cfg(all(test, feature = "bluetooth-ble-battery"))]
+#![cfg(all(unix, feature = "bluetooth"))]
 
 use crate::helpers::{self, E2EResult, NetGetConfig};
 use std::time::Duration;

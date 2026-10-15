@@ -10,7 +10,7 @@
 //! `tokio_xmpp::Client` cannot complete its connect. The stream header, `<stream:features>`
 //! and the stanzas are nonetheless parsed by exactly the types that client is built on.
 
-#![cfg(feature = "xmpp")]
+#![cfg(unix)]
 
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use std::str::FromStr;

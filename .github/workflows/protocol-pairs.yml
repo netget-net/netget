@@ -37,7 +37,6 @@ env:
   CARGO_PROFILE_DEV_DEBUG: '0'
   CARGO_PROFILE_TEST_DEBUG: '0'
   CARGO_BUILD_JOBS: '4'
-  PAIR_FEATURES: tcp,nut,doq,statsd
 
 jobs:
   first-pairs:
@@ -87,13 +86,13 @@ jobs:
               client/*) target=client; filter=${filter#client/} ;;
               *) target=server ;;
             esac
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4
           done
 
       - name: Protocol metadata and action wiring
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -114,7 +113,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,graphite,beanstalkd,dict,gemini,quic
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -168,13 +166,13 @@ jobs:
               client/*) target=client; filter=${filter#client/} ;;
               *) target=server ;;
             esac
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4
           done
 
       - name: Shared metadata and task ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -198,7 +196,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
-      PAIR_FEATURES: tcp,gelf
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -231,13 +228,13 @@ jobs:
               client/*) target=client; filter=${filter#client/} ;;
               *) target=server ;;
             esac
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4
           done
 
       - name: Shared registration, semantics and lifecycle checks
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -263,7 +260,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
-      PAIR_FEATURES: tcp,nsq
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -285,13 +281,13 @@ jobs:
               client/*) target=client; filter=${filter#client/} ;;
               *) target=server ;;
             esac
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4
           done
 
       - name: Shared metadata, events and task ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -315,7 +311,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
-      PAIR_FEATURES: tcp,http3
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -341,15 +336,15 @@ jobs:
               client/*) target=client; filter=${filter#client/} ;;
               *) target=server ;;
             esac
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4
           done
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test http3_cancellation_test
 
       - name: Shared HTTP3 registration and ownership checks
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -372,7 +367,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
-      PAIR_FEATURES: tcp,fluent-forward
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -406,13 +400,13 @@ jobs:
               client/*) target=client; filter=${filter#client/} ;;
               *) target=server ;;
             esac
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4
           done
 
       - name: Shared Forward registration, silence and ownership checks
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -437,7 +431,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
-      PAIR_FEATURES: tcp,gearman
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -467,13 +460,13 @@ jobs:
               client/*) target=client; filter=${filter#client/} ;;
               *) target=server ;;
             esac
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4
           done
 
       - name: Shared registration and ownership checks
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -505,7 +498,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
-      PAIR_FEATURES: tcp,ssh
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -528,13 +520,13 @@ jobs:
               client/*) target=client; filter=${filter#client/} ;;
               *) target=server ;;
             esac
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4
           done
 
       - name: Shared SSH registration and ownership checks
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -557,7 +549,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
-      PAIR_FEATURES: tcp,influxdb
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -601,13 +592,13 @@ jobs:
               client/*) target=client; filter=${filter#client/} ;;
               *) target=server ;;
             esac
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4
           done
 
       - name: Shared registration, collector semantics and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -632,7 +623,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,prometheus
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -664,13 +654,13 @@ jobs:
               client/*) target=client; filter=${filter#client/} ;;
               *) target=server ;;
             esac
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4
           done
 
       - name: Shared Prometheus registration and ownership checks
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -693,7 +683,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
-      PAIR_FEATURES: tcp,docker
       NETGET_DOCKER_SOCKET: /var/run/docker.sock
     steps:
       - uses: actions/checkout@v4
@@ -723,13 +712,13 @@ jobs:
               client/*) target=client; filter=${filter#client/} ;;
               *) target=server ;;
             esac
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4
           done
 
       - name: Shared Docker registration and ownership checks
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test action_descriptions_test \
             --test startup_examples_validation_test \
             --test examples \
@@ -752,7 +741,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,loki
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -787,13 +775,13 @@ jobs:
               client/*) target=client; filter=${filter#client/} ;;
               *) target=server ;;
             esac
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4
           done
 
       - name: Shared Loki registration and ownership checks
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test action_descriptions_test \
             --test startup_examples_validation_test \
             --test examples \
@@ -816,7 +804,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,otlp,grpc
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -857,13 +844,13 @@ jobs:
               client/*) target=client; filter=${filter#client/} ;;
               *) target=server ;;
             esac
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4
           done
 
       - name: Shared OTLP ownership and receive-limit checks
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test vendored_tonic_patch_test \
             --test action_descriptions_test \
             --test startup_examples_validation_test \
@@ -887,7 +874,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,ipfix
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -921,13 +907,13 @@ jobs:
               client/*) target=client; filter=${filter#client/} ;;
               *) target=server ;;
             esac
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4
           done
 
       - name: Shared IPFIX registration and ownership checks
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test action_descriptions_test \
             --test startup_examples_validation_test \
             --test examples \
@@ -950,7 +936,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,grpc
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -988,12 +973,12 @@ jobs:
               client/*) target=client; filter=${filter#client/} ;;
               *) target=server ;;
             esac
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4
           done
       - name: Shared gRPC schema, ownership and framing checks
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test action_descriptions_test \
             --test startup_examples_validation_test \
             --test examples \
@@ -1019,7 +1004,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,sflow
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -1053,12 +1037,12 @@ jobs:
               client/*) target=client; filter=${filter#client/} ;;
               *) target=server ;;
             esac
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4
           done
       - name: Shared sFlow registration and ownership checks
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test action_descriptions_test \
             --test startup_examples_validation_test \
             --test examples \
@@ -1082,7 +1066,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,vault
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -1115,12 +1098,12 @@ jobs:
               client/*) target=client; filter=${filter#client/} ;;
               *) target=server ;;
             esac
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4
           done
       - name: Shared Vault registration, credential diagnostics and ownership checks
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test action_descriptions_test \
             --test startup_examples_validation_test \
             --test examples \
@@ -1146,7 +1129,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,prometheus-remote-write
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -1177,12 +1159,12 @@ jobs:
               client/*) target=client; filter=${filter#client/} ;;
               *) target=server ;;
             esac
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4
           done
       - name: Shared remote-write registration and ownership checks
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test action_descriptions_test \
             --test startup_examples_validation_test \
@@ -1206,7 +1188,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,grpc-web
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -1236,18 +1217,18 @@ jobs:
               client/*) target=client; filter=${filter#client/} ;;
               *) target=server ;;
             esac
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4
           done
       - name: Bounded Web frames and shared native tonic seam
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test grpc_web_wire_test \
             --test grpc_value_bounds_test \
             --test vendored_tonic_patch_test
       - name: Shared registration and ownership checks
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test action_descriptions_test \
             --test startup_examples_validation_test \
@@ -1272,7 +1253,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,nostr
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -1308,12 +1288,12 @@ jobs:
               client/*) target=client; filter=${filter#client/} ;;
               *) target=server ;;
             esac
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4
           done
       - name: Shared registration and ownership checks
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test action_descriptions_test \
             --test startup_examples_validation_test \
@@ -1338,7 +1318,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,netflow-v9
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -1368,12 +1347,12 @@ jobs:
               client/*) target=client; filter=${filter#client/} ;;
               *) target=server ;;
             esac
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4
           done
       - name: Shared registration and ownership checks
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test action_descriptions_test \
             --test startup_examples_validation_test \
@@ -1400,7 +1379,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,connect_rpc,grpc-web
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -1433,20 +1411,20 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Connect framing, Web framing and shared typed protobuf bounds
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test connect_rpc_wire_test \
             --test grpc_web_wire_test \
             --test grpc_value_bounds_test \
             --test vendored_tonic_patch_test
       - name: Shared registration, public catalogue and ownership checks
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -1472,7 +1450,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,tacacs
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -1507,13 +1484,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared registration, privacy, public catalogue and ownership checks
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -1542,7 +1519,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,bolt
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -1579,13 +1555,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared registration, privacy, startup input and ownership checks
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -1619,7 +1595,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,http,oci-registry
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -1648,13 +1623,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, privacy, startup inputs and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -1689,7 +1664,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,gnmi
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -1712,8 +1686,6 @@ jobs:
             printf 'NETGET_GNMIC=%s/gnmi-peers/gnmic-0.49.0/gnmic\n' "$RUNNER_TEMP"
             printf 'NETGET_GNMI_PYTHON=%s/gnmi-python/bin/python\n' "$RUNNER_TEMP"
           } >> "$GITHUB_ENV"
-      - name: Compile gNMI as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features gnmi --all-targets
       - name: Both roles with mandatory independent peers, bounds and cancellation
         run: |
           set -euo pipefail
@@ -1725,13 +1697,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Encoded and constructed bounds, semantic refusals, TLS input and real HTTP2 timers
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test gnmi_bounds_test \
             --test gnmi_semantic_test \
             --test gnmi_tls_input_test \
@@ -1741,7 +1713,7 @@ jobs:
             -- --test-threads=32
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -1783,7 +1755,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,diameter
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -1809,8 +1780,6 @@ jobs:
             printf 'NETGET_DIAMETER_PYTHON=python3\n'
             printf 'PYTHONPATH=%s/diameter-peers/python\n' "$RUNNER_TEMP"
           } >> "$GITHUB_ENV"
-      - name: Compile Diameter as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features diameter --all-targets
       - name: Both roles with mandatory independent peers, bounds and cancellation
         run: |
           set -euo pipefail
@@ -1822,13 +1791,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -1870,7 +1839,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,netconf
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -1888,8 +1856,6 @@ jobs:
         run: |
           python3 tests/server/netconf/install_peers.py "$RUNNER_TEMP/netconf-peers"
           printf 'NETGET_NETCONF_PYTHON=%s/netconf-peers/venv/bin/python\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
-      - name: Compile NETCONF as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features netconf --all-targets
       - name: Both roles with mandatory independent peers, bounds and cancellation
         run: |
           set -euo pipefail
@@ -1901,13 +1867,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -1949,7 +1915,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,rpki_rtr
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -1968,8 +1933,6 @@ jobs:
         run: |
           python3 tests/server/rpki_rtr/install_peers.py "$RUNNER_TEMP/rpki-rtr-peers" | tee "$RUNNER_TEMP/rpki-rtr-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/rpki-rtr-env" >> "$GITHUB_ENV"
-      - name: Compile RPKI-RTR as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features rpki_rtr --all-targets
       - name: Both roles with mandatory independent peers, bounds and cancellation
         run: |
           set -euo pipefail
@@ -1981,13 +1944,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -2029,7 +1992,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      PAIR_FEATURES: tcp,rdap
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -2051,8 +2013,6 @@ jobs:
         run: |
           bash tests/server/rdap/install_peers.sh "$RUNNER_TEMP/rdap-peers" | tee "$RUNNER_TEMP/rdap-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/rdap-env" >> "$GITHUB_ENV"
-      - name: Compile RDAP as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features rdap --all-targets
       - name: Both roles with mandatory independent peers, bounds and cancellation
         run: |
           set -euo pipefail
@@ -2064,13 +2024,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -2112,7 +2072,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,hl7
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -2130,8 +2089,6 @@ jobs:
         run: |
           python3 tests/server/hl7/install_peers.py "$RUNNER_TEMP/hl7-peers" | tee "$RUNNER_TEMP/hl7-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/hl7-env" >> "$GITHUB_ENV"
-      - name: Compile HL7 as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features hl7 --all-targets
       - name: Both roles with mandatory independent peers, bounds and cancellation
         run: |
           set -euo pipefail
@@ -2143,13 +2100,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -2191,7 +2148,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,icap
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -2209,8 +2165,6 @@ jobs:
         run: |
           bash tests/server/icap/install_peers.sh "$RUNNER_TEMP/icap-peers" | tee "$RUNNER_TEMP/icap-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/icap-env" >> "$GITHUB_ENV"
-      - name: Compile ICAP as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features icap --all-targets
       - name: Both roles with mandatory independent peers, bounds and cancellation
         run: |
           set -euo pipefail
@@ -2222,13 +2176,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -2270,7 +2224,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,ocpp
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -2288,8 +2241,6 @@ jobs:
         run: |
           python3 tests/server/ocpp/install_peers.py "$RUNNER_TEMP/ocpp-peers" | tee "$RUNNER_TEMP/ocpp-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/ocpp-env" >> "$GITHUB_ENV"
-      - name: Compile OCPP as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features ocpp --all-targets
       - name: Both roles with mandatory independent peers, bounds and cancellation
         run: |
           set -euo pipefail
@@ -2301,13 +2252,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -2348,7 +2299,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,a2a
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -2366,8 +2316,6 @@ jobs:
         run: |
           python3 tests/server/a2a/install_peers.py "$RUNNER_TEMP/a2a-peers" | tee "$RUNNER_TEMP/a2a-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/a2a-env" >> "$GITHUB_ENV"
-      - name: Compile A2A as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features a2a --all-targets
       - name: Both roles with mandatory independent peers, bounds and cancellation
         run: |
           set -euo pipefail
@@ -2379,13 +2327,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -2426,7 +2374,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,graphql
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -2444,8 +2391,6 @@ jobs:
         run: |
           python3 tests/server/graphql/install_peers.py "$RUNNER_TEMP/graphql-peers" | tee "$RUNNER_TEMP/graphql-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/graphql-env" >> "$GITHUB_ENV"
-      - name: Compile GraphQL as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features graphql --all-targets
       - name: Both roles with mandatory independent peers, bounds and cancellation
         run: |
           set -euo pipefail
@@ -2457,13 +2402,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -2504,7 +2449,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,fastcgi
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -2522,8 +2466,6 @@ jobs:
         run: |
           python3 tests/server/fastcgi/install_peers.py "$RUNNER_TEMP/fastcgi-peers" | tee "$RUNNER_TEMP/fastcgi-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/fastcgi-env" >> "$GITHUB_ENV"
-      - name: Compile FastCGI as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features fastcgi --all-targets
       - name: Both roles with mandatory independent peers, bounds and cancellation
         run: |
           set -euo pipefail
@@ -2535,13 +2477,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -2582,7 +2524,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,redfish
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -2604,8 +2545,6 @@ jobs:
         run: |
           python3 tests/server/redfish/install_peers.py "$RUNNER_TEMP/redfish-peers" | tee "$RUNNER_TEMP/redfish-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/redfish-env" >> "$GITHUB_ENV"
-      - name: Compile Redfish as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features redfish --all-targets
       - name: Both roles with mandatory independent peers, bounds and cancellation
         run: |
           set -euo pipefail
@@ -2617,13 +2556,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -2664,7 +2603,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,scim
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -2682,8 +2620,6 @@ jobs:
         run: |
           python3 tests/server/scim/install_peers.py "$RUNNER_TEMP/scim-peers" | tee "$RUNNER_TEMP/scim-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/scim-env" >> "$GITHUB_ENV"
-      - name: Compile SCIM as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features scim --all-targets
       - name: Both roles with mandatory independent peers, bounds and cancellation
         run: |
           set -euo pipefail
@@ -2695,13 +2631,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -2742,7 +2678,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,socketio
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -2763,8 +2698,6 @@ jobs:
         run: |
           python3 tests/server/socketio/install_peers.py "$RUNNER_TEMP/socketio-peers" | tee "$RUNNER_TEMP/socketio-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/socketio-env" >> "$GITHUB_ENV"
-      - name: Compile Socket.IO as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features socketio --all-targets
       - name: Both roles with mandatory independent peers, bounds and cancellation
         run: |
           set -euo pipefail
@@ -2776,13 +2709,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -2823,7 +2756,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,caldav
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -2841,8 +2773,6 @@ jobs:
         run: |
           python3 tests/server/caldav/install_peers.py "$RUNNER_TEMP/dav-peers" | tee "$RUNNER_TEMP/dav-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/dav-env" >> "$GITHUB_ENV"
-      - name: Compile CalDAV as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features caldav --all-targets
       - name: Both roles with mandatory independent peers, bounds and cancellation
         run: |
           set -euo pipefail
@@ -2854,13 +2784,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -2901,7 +2831,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,carddav
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -2919,8 +2848,6 @@ jobs:
         run: |
           python3 tests/server/caldav/install_peers.py "$RUNNER_TEMP/dav-peers" | tee "$RUNNER_TEMP/dav-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/dav-env" >> "$GITHUB_ENV"
-      - name: Compile CardDAV as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features carddav --all-targets
       - name: Both roles with mandatory independent peers, bounds and cancellation
         run: |
           set -euo pipefail
@@ -2932,13 +2859,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -2980,7 +2907,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,dicom
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -2998,8 +2924,6 @@ jobs:
         run: |
           python3 tests/server/dicom/install_peers.py "$RUNNER_TEMP/dicom-peers" | tee "$RUNNER_TEMP/dicom-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/dicom-env" >> "$GITHUB_ENV"
-      - name: Compile DICOM as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features dicom --all-targets
       - name: Both roles with mandatory independent peers, bounds and cancellation
         run: |
           set -euo pipefail
@@ -3011,13 +2935,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -3059,7 +2983,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,acme
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -3081,8 +3004,6 @@ jobs:
         run: |
           python3 tests/server/acme/install_peers.py "$RUNNER_TEMP/acme-peers" | tee "$RUNNER_TEMP/acme-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/acme-env" >> "$GITHUB_ENV"
-      - name: Compile ACME as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features acme --all-targets
       - name: Both roles with mandatory independent peers, bounds and cancellation
         run: |
           set -euo pipefail
@@ -3094,13 +3015,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -3142,7 +3063,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,fix
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -3164,8 +3084,6 @@ jobs:
         run: |
           python3 tests/server/fix/install_peers.py "$RUNNER_TEMP/fix-peers" | tee "$RUNNER_TEMP/fix-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/fix-env" >> "$GITHUB_ENV"
-      - name: Compile FIX as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features fix --all-targets
       - name: Both roles with mandatory independent peers, bounds and cancellation
         run: |
           set -euo pipefail
@@ -3177,13 +3095,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -3225,7 +3143,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,wamp
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -3247,8 +3164,6 @@ jobs:
         run: |
           python3 tests/server/wamp/install_peers.py "$RUNNER_TEMP/wamp-peers" | tee "$RUNNER_TEMP/wamp-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/wamp-env" >> "$GITHUB_ENV"
-      - name: Compile WAMP as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features wamp --all-targets
       - name: Both roles with mandatory independent peers, bounds and cancellation
         run: |
           set -euo pipefail
@@ -3260,13 +3175,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -3308,7 +3223,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,rtmp
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -3328,8 +3242,6 @@ jobs:
         run: |
           python3 tests/server/rtmp/install_peers.py "$RUNNER_TEMP/rtmp-peers" | tee "$RUNNER_TEMP/rtmp-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/rtmp-env" >> "$GITHUB_ENV"
-      - name: Compile RTMP as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features rtmp --all-targets
       - name: Both roles with mandatory independent peers, bounds and cancellation
         run: |
           set -euo pipefail
@@ -3341,13 +3253,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -3389,7 +3301,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,srt
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -3409,8 +3320,6 @@ jobs:
         run: |
           python3 tests/server/srt/install_peers.py "$RUNNER_TEMP/srt-peers" | tee "$RUNNER_TEMP/srt-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/srt-env" >> "$GITHUB_ENV"
-      - name: Compile SRT as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features srt --all-targets
       - name: Both roles with mandatory independent peers, bounds and cancellation
         run: |
           set -euo pipefail
@@ -3422,13 +3331,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -3470,7 +3379,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,amqp1
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -3495,8 +3403,6 @@ jobs:
         run: |
           python3 tests/server/amqp1/install_peers.py "$RUNNER_TEMP/amqp1-peers" | tee "$RUNNER_TEMP/amqp1-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/amqp1-env" >> "$GITHUB_ENV"
-      - name: Compile AMQP 1.0 as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features amqp1 --all-targets
       - name: Both roles with mandatory independent peers, bounds and cancellation
         run: |
           set -euo pipefail
@@ -3508,13 +3414,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -3556,7 +3462,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,thrift
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -3575,8 +3480,6 @@ jobs:
           set -euo pipefail
           python3 tests/server/thrift/install_peers.py "$RUNNER_TEMP/thrift-peers" | tee "$RUNNER_TEMP/thrift-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/thrift-env" >> "$GITHUB_ENV"
-      - name: Compile Thrift as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features thrift --all-targets
       - name: Both roles with mandatory independent peers, bounds and cancellation
         run: |
           set -euo pipefail
@@ -3588,13 +3491,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -3636,7 +3539,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,bmp
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -3656,8 +3558,6 @@ jobs:
           set -euo pipefail
           python3 tests/server/bmp/install_peers.py "$RUNNER_TEMP/bmp-peers" | tee "$RUNNER_TEMP/bmp-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/bmp-env" >> "$GITHUB_ENV"
-      - name: Compile BMP as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features bmp --all-targets
       - name: Both roles with mandatory independent peers, bounds and cancellation
         run: |
           set -euo pipefail
@@ -3669,13 +3569,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -3717,7 +3617,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,mqtt_sn
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -3733,8 +3632,6 @@ jobs:
           set -euo pipefail
           python3 tests/server/mqtt_sn/install_peers.py "$RUNNER_TEMP/mqtt-sn-peers" | tee "$RUNNER_TEMP/mqtt-sn-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/mqtt-sn-env" >> "$GITHUB_ENV"
-      - name: Compile MQTT-SN as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features mqtt_sn --all-targets
       - name: Both roles with mandatory independent peers, bounds and cancellation
         run: |
           set -euo pipefail
@@ -3746,13 +3643,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -3794,7 +3691,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,nbd
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -3810,8 +3706,6 @@ jobs:
           set -euo pipefail
           python3 tests/server/nbd/install_peers.py "$RUNNER_TEMP/nbd-peers" | tee "$RUNNER_TEMP/nbd-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/nbd-env" >> "$GITHUB_ENV"
-      - name: Compile NBD as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features nbd --all-targets
       - name: Both roles with mandatory independent peers, bounds and cancellation
         run: |
           set -euo pipefail
@@ -3823,13 +3717,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -3871,7 +3765,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,managesieve
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -3887,8 +3780,6 @@ jobs:
           set -euo pipefail
           python3 tests/server/managesieve/install_peers.py "$RUNNER_TEMP/managesieve-peers" | tee "$RUNNER_TEMP/managesieve-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/managesieve-env" >> "$GITHUB_ENV"
-      - name: Compile ManageSieve as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features managesieve --all-targets
       - name: Both roles with mandatory independent peers, bounds and cancellation
         run: |
           set -euo pipefail
@@ -3900,13 +3791,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -3948,7 +3839,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,zenoh
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -3964,8 +3854,6 @@ jobs:
           set -euo pipefail
           python3 tests/server/zenoh/install_peers.py "$RUNNER_TEMP/zenoh-peers" | tee "$RUNNER_TEMP/zenoh-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/zenoh-env" >> "$GITHUB_ENV"
-      - name: Compile Zenoh as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features zenoh --all-targets
       - name: Both roles with mandatory independent peers, bounds and cancellation
         run: |
           set -euo pipefail
@@ -3977,13 +3865,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -4025,7 +3913,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,lwm2m
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -4045,8 +3932,6 @@ jobs:
           set -euo pipefail
           python3 tests/server/lwm2m/install_peers.py "$RUNNER_TEMP/lwm2m-peers" | tee "$RUNNER_TEMP/lwm2m-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/lwm2m-env" >> "$GITHUB_ENV"
-      - name: Compile LwM2M as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features lwm2m --all-targets
       - name: Both roles with mandatory independent peers, bounds and cancellation
         run: |
           set -euo pipefail
@@ -4058,13 +3943,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -4106,7 +3991,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,restconf
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -4126,8 +4010,6 @@ jobs:
           set -euo pipefail
           python3 tests/server/restconf/install_peers.py "$RUNNER_TEMP/restconf-peers" | tee "$RUNNER_TEMP/restconf-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/restconf-env" >> "$GITHUB_ENV"
-      - name: Compile RESTCONF as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features restconf --all-targets
       - name: Both roles with mandatory independent peers, bounds and cancellation
         run: |
           set -euo pipefail
@@ -4139,13 +4021,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -4186,7 +4068,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,webtransport
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -4210,8 +4091,6 @@ jobs:
           "$chrome" --version
           node --version
           printf 'NETGET_CHROME=%s\n' "$chrome" >> "$GITHUB_ENV"
-      - name: Compile WebTransport as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features webtransport --all-targets
       - name: Both roles with mandatory independent peers, bounds and cancellation
         run: |
           set -euo pipefail
@@ -4223,17 +4102,17 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Vendored wtransport patches
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test vendored_wtransport_patch_test
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -4274,7 +4153,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,jmap
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -4290,8 +4168,6 @@ jobs:
           set -euo pipefail
           python3 tests/server/jmap/install_peers.py "$RUNNER_TEMP/jmap-peers" | tee "$RUNNER_TEMP/jmap-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/jmap-env" >> "$GITHUB_ENV"
-      - name: Compile JMAP as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features jmap --all-targets
       - name: Both roles with mandatory independent peers, bounds and cancellation
         run: |
           set -euo pipefail
@@ -4303,13 +4179,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -4350,7 +4226,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,epp
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -4370,8 +4245,6 @@ jobs:
           set -euo pipefail
           python3 tests/server/epp/install_peers.py "$RUNNER_TEMP/epp-peers" | tee "$RUNNER_TEMP/epp-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/epp-env" >> "$GITHUB_ENV"
-      - name: Compile EPP as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features epp --all-targets
       - name: Both roles with mandatory independent peers, bounds and cancellation
         run: |
           set -euo pipefail
@@ -4383,13 +4256,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -4431,7 +4304,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,lmtp
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -4448,8 +4320,6 @@ jobs:
           set -euo pipefail
           python3 tests/client/lmtp/install_peers.py "$RUNNER_TEMP/lmtp-peers" | tee "$RUNNER_TEMP/lmtp-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/lmtp-env" >> "$GITHUB_ENV"
-      - name: Compile LMTP as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features lmtp --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -4461,13 +4331,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -4508,7 +4378,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,lpd
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -4521,8 +4390,6 @@ jobs:
           sudo apt-get update
           sh scripts/test-peers/install-lprng.sh "$RUNNER_TEMP/lpd-peers" | tee "$RUNNER_TEMP/lpd-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/lpd-env" >> "$GITHUB_ENV"
-      - name: Compile lpd as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features lpd --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -4534,13 +4401,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -4581,7 +4448,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,inetd
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -4594,8 +4460,6 @@ jobs:
           sudo apt-get install -y --no-install-recommends rdate netcat-openbsd xinetd
           sudo systemctl stop xinetd || true
           perl -MNet::Ping -MNet::Time -e 'print "Net::Ping $Net::Ping::VERSION, Net::Time $Net::Time::VERSION\n"'
-      - name: Compile inetd as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features inetd --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -4607,13 +4471,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -4654,7 +4518,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,rcon
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -4670,8 +4533,6 @@ jobs:
           set -euo pipefail
           python3 tests/client/rcon/install_peers.py "$RUNNER_TEMP/rcon-peers" | tee "$RUNNER_TEMP/rcon-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/rcon-env" >> "$GITHUB_ENV"
-      - name: Compile rcon as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features rcon --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -4683,13 +4544,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -4730,7 +4591,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,a2s
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -4746,8 +4606,6 @@ jobs:
           set -euo pipefail
           python3 tests/client/a2s/install_peers.py "$RUNNER_TEMP/a2s-peers" | tee "$RUNNER_TEMP/a2s-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/a2s-env" >> "$GITHUB_ENV"
-      - name: Compile a2s as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features a2s --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -4759,13 +4617,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -4806,7 +4664,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,minecraft
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -4821,8 +4678,6 @@ jobs:
           set -euo pipefail
           python3 tests/client/minecraft/install_peers.py "$RUNNER_TEMP/minecraft-peers" | tee "$RUNNER_TEMP/minecraft-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/minecraft-env" >> "$GITHUB_ENV"
-      - name: Compile minecraft as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features minecraft --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -4834,13 +4689,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -4881,7 +4736,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,ninep
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -4897,8 +4751,6 @@ jobs:
           set -euo pipefail
           python3 tests/client/ninep/install_peers.py "$RUNNER_TEMP/ninep-peers" | tee "$RUNNER_TEMP/ninep-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/ninep-env" >> "$GITHUB_ENV"
-      - name: Compile ninep as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features ninep --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -4910,13 +4762,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -4957,7 +4809,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,zeromq
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -4976,8 +4827,6 @@ jobs:
           set -euo pipefail
           python3 tests/client/zeromq/install_peers.py "$RUNNER_TEMP/zeromq-peers" | tee "$RUNNER_TEMP/zeromq-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/zeromq-env" >> "$GITHUB_ENV"
-      - name: Compile zeromq as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features zeromq --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -4989,13 +4838,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -5036,7 +4885,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,smpp
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -5052,8 +4900,6 @@ jobs:
           set -euo pipefail
           python3 tests/client/smpp/install_peers.py "$RUNNER_TEMP/smpp-peers" | tee "$RUNNER_TEMP/smpp-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/smpp-env" >> "$GITHUB_ENV"
-      - name: Compile smpp as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features smpp --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -5065,13 +4911,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -5112,7 +4958,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,clickhouse
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -5127,8 +4972,6 @@ jobs:
           set -euo pipefail
           python3 tests/client/clickhouse/install_peers.py "$RUNNER_TEMP/clickhouse-peers" | tee "$RUNNER_TEMP/clickhouse-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/clickhouse-env" >> "$GITHUB_ENV"
-      - name: Compile clickhouse as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features clickhouse --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -5140,13 +4983,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -5187,7 +5030,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,msgpack-rpc
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -5205,8 +5047,6 @@ jobs:
           sudo apt-get install -y --no-install-recommends neovim
           python3 tests/client/msgpack_rpc/install_peers.py "$RUNNER_TEMP/msgpack-peers" | tee "$RUNNER_TEMP/msgpack-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/msgpack-env" >> "$GITHUB_ENV"
-      - name: Compile msgpack-rpc as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features msgpack-rpc --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -5218,13 +5058,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -5265,7 +5105,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,zipkin
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -5286,8 +5125,6 @@ jobs:
           python3 tests/server/zipkin/install_peers.py "$RUNNER_TEMP/zipkin-peers" | tee "$RUNNER_TEMP/zipkin-env"
           python3 tests/client/zipkin/install_peers.py "$RUNNER_TEMP/zipkin-servers" | tee -a "$RUNNER_TEMP/zipkin-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/zipkin-env" >> "$GITHUB_ENV"
-      - name: Compile zipkin as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features zipkin --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -5299,13 +5136,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -5346,7 +5183,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,capnp-rpc
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -5364,8 +5200,6 @@ jobs:
           sudo apt-get install -y --no-install-recommends capnproto
           python3 tests/server/capnp_rpc/install_peers.py "$RUNNER_TEMP/capnp-peers" | tee "$RUNNER_TEMP/capnp-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/capnp-env" >> "$GITHUB_ENV"
-      - name: Compile capnp-rpc as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features capnp-rpc --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -5377,13 +5211,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -5424,7 +5258,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,nats
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -5445,8 +5278,6 @@ jobs:
           nats-server --version
           python3 tests/server/nats/install_jetstream_peers.py "$RUNNER_TEMP/js-peers" | tee "$RUNNER_TEMP/js-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/js-env" >> "$GITHUB_ENV"
-      - name: Compile nats as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features nats --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -5458,13 +5289,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -5505,7 +5336,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,knx
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -5519,8 +5349,6 @@ jobs:
           sudo apt-get install -y --no-install-recommends knxd knxd-tools
           python3 tests/server/knx/install_peers.py "$RUNNER_TEMP/knx-peers" | tee "$RUNNER_TEMP/knx-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/knx-env" >> "$GITHUB_ENV"
-      - name: Compile knx as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features knx --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -5532,13 +5360,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -5579,7 +5407,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,consul
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -5591,8 +5418,6 @@ jobs:
           set -euo pipefail
           python3 tests/server/consul/install_peers.py "$RUNNER_TEMP/consul-peers" | tee "$RUNNER_TEMP/consul-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/consul-env" >> "$GITHUB_ENV"
-      - name: Compile consul as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features consul --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -5604,13 +5429,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -5651,7 +5476,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,milter
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -5669,8 +5493,6 @@ jobs:
           sudo apt-get install -y --no-install-recommends miltertest python3-milter
           python3 tests/server/milter/install_peers.py "$RUNNER_TEMP/milter-peers" | tee "$RUNNER_TEMP/milter-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/milter-env" >> "$GITHUB_ENV"
-      - name: Compile milter as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features milter --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -5682,13 +5504,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -5729,7 +5551,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,anthropic
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -5748,8 +5569,6 @@ jobs:
           set -euo pipefail
           python3 tests/server/anthropic/install_peers.py "$RUNNER_TEMP/anthropic-peers" | tee "$RUNNER_TEMP/anthropic-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/anthropic-env" >> "$GITHUB_ENV"
-      - name: Compile anthropic as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features anthropic --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -5761,13 +5580,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -5808,7 +5627,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,radsec
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -5824,8 +5642,6 @@ jobs:
           sudo systemctl stop freeradius || true
           radsecproxy -v | head -1
           radiusd -v | head -1
-      - name: Compile radsec as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features radsec --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -5837,13 +5653,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -5884,7 +5700,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,x11
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -5899,8 +5714,6 @@ jobs:
           sudo mkdir -p /tmp/.X11-unix
           sudo chmod 1777 /tmp/.X11-unix
           Xvfb -help 2>&1 | head -1 || true
-      - name: Compile x11 as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features x11 --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -5911,13 +5724,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -5958,7 +5771,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,dbus
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -5972,8 +5784,6 @@ jobs:
           sudo apt-get install -y --no-install-recommends dbus-daemon dbus-bin libglib2.0-bin python3-dbus-next
           dbus-daemon --version | head -1
           python3 -c "import dbus_next"
-      - name: Compile dbus as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features dbus --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -5985,13 +5795,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -6032,7 +5842,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,wsdiscovery
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -6049,8 +5858,6 @@ jobs:
           "$RUNNER_TEMP/wsd-venv/bin/python" -c "import wsdiscovery"
           echo "NETGET_WSD_PYTHON=$RUNNER_TEMP/wsd-venv/bin/python" >> "$GITHUB_ENV"
           wsdd --version
-      - name: Compile wsdiscovery as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features wsdiscovery --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -6062,13 +5869,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -6109,7 +5916,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,bfd
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -6131,8 +5937,6 @@ jobs:
           getcap "$(command -v bird)"
           bird --version
           tshark --version | head -1
-      - name: Compile bfd as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features bfd --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -6144,13 +5948,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -6191,7 +5995,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,vxlan
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -6213,8 +6016,6 @@ jobs:
               sudo modprobe "$module"
             fi
           done
-      - name: Compile vxlan as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features vxlan --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -6226,13 +6027,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -6273,7 +6074,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,rsync
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -6288,8 +6088,6 @@ jobs:
           # The package may start a system daemon on 873; the tests run their own.
           sudo systemctl stop rsync || true
           rsync --version | head -1
-      - name: Compile rsync as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features rsync --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -6301,13 +6099,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -6348,7 +6146,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,pfcp
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -6366,8 +6163,6 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tshark
           python3 tests/server/pfcp/install_peers.py "$RUNNER_TEMP/pfcp-peers" | tee "$RUNNER_TEMP/pfcp-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/pfcp-env" >> "$GITHUB_ENV"
-      - name: Compile pfcp as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features pfcp --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -6379,13 +6174,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -6426,7 +6221,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,gtp
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -6449,8 +6243,6 @@ jobs:
           osmo-ggsn --version || true
           python3 tests/client/gtp/install_peers.py "$RUNNER_TEMP/gtp-peers" | tee "$RUNNER_TEMP/gtp-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/gtp-env" >> "$GITHUB_ENV"
-      - name: Compile gtp as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features gtp --all-targets
       - name: Client with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -6461,13 +6253,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -6508,7 +6300,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,db2
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -6531,8 +6322,6 @@ jobs:
           "$RUNNER_TEMP/ibm-db/bin/pip" install ibm_db==3.3.0
           "$RUNNER_TEMP/ibm-db/bin/python" -I -c 'import ibm_db'
           echo "NETGET_IBM_DB_PYTHON=$RUNNER_TEMP/ibm-db/bin/python" >> "$GITHUB_ENV"
-      - name: Compile db2 as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features db2 --all-targets
       - name: Client against Derby, server against Derby's and IBM's drivers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -6543,13 +6332,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -6590,7 +6379,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,snowflake
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -6609,8 +6397,6 @@ jobs:
           set -euo pipefail
           sh tests/client/snowflake/install_peers.sh "$RUNNER_TEMP/snowflake-peers" | tee "$RUNNER_TEMP/snowflake-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/snowflake-env" >> "$GITHUB_ENV"
-      - name: Compile snowflake as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features snowflake --all-targets
       - name: Client against fakesnow and snowflake-emulator, server against the official Python driver
         run: |
           set -euo pipefail
@@ -6621,13 +6407,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -6668,7 +6454,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,spark
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -6697,8 +6482,6 @@ jobs:
           set -euo pipefail
           sh tests/server/spark/install_datadog_check.sh "$RUNNER_TEMP/datadog-spark" | tee "$RUNNER_TEMP/datadog-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/datadog-env" >> "$GITHUB_ENV"
-      - name: Compile spark as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features spark --all-targets
       - name: Client against a live Spark driver UI and Spark's History Server, server against Datadog's Spark check
         run: |
           set -euo pipefail
@@ -6709,13 +6492,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -6756,7 +6539,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,yarn
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -6785,8 +6567,6 @@ jobs:
           set -euo pipefail
           sh tests/server/yarn/install_datadog_check.sh "$RUNNER_TEMP/datadog-yarn" | tee "$RUNNER_TEMP/datadog-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/datadog-env" >> "$GITHUB_ENV"
-      - name: Compile yarn as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features yarn --all-targets
       - name: Client against a single-node Hadoop YARN, server against Datadog's YARN check
         run: |
           set -euo pipefail
@@ -6797,13 +6577,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -6844,7 +6624,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,matrix
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -6860,8 +6639,6 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/matrix-venv"
           "$RUNNER_TEMP/matrix-venv/bin/pip" install --quiet matrix-nio==0.26.0 matrix-synapse==1.162.0
           echo "NETGET_MATRIX_PYTHON=$RUNNER_TEMP/matrix-venv/bin/python" >> "$GITHUB_ENV"
-      - name: Compile matrix as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features matrix --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -6873,13 +6650,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -6920,7 +6697,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,libp2p
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -6936,8 +6712,6 @@ jobs:
           set -euo pipefail
           python3 tests/server/libp2p/install_peers.py "$RUNNER_TEMP/libp2p-peers" | tee "$RUNNER_TEMP/libp2p-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/libp2p-env" >> "$GITHUB_ENV"
-      - name: Compile libp2p as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features libp2p --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -6949,13 +6723,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -6996,7 +6770,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,sunrpc
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -7010,8 +6783,6 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends rpcbind iproute2 iptables tshark
           sudo systemctl start rpcbind.socket rpcbind.service || sudo rpcbind -w
           rpcinfo -p 127.0.0.1
-      - name: Compile sunrpc as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features sunrpc --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -7023,13 +6794,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -7070,7 +6841,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,rtsp
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -7081,8 +6851,6 @@ jobs:
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
           python3 tests/client/rtsp/install_peers.py "$RUNNER_TEMP/mediamtx" | sed 's/^export //' >> "$GITHUB_ENV"
-      - name: Compile rtsp as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features rtsp --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -7093,13 +6861,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -7140,7 +6908,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,sse
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -7154,8 +6921,6 @@ jobs:
         run: |
           set -euo pipefail
           python3 tests/server/sse/install_peers.py "$RUNNER_TEMP/sse-peers" | sed 's/^export //' >> "$GITHUB_ENV"
-      - name: Compile sse as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features sse --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -7167,13 +6932,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -7231,15 +6996,12 @@ jobs:
         run: |
           python3 tests/helpers/install_ics_peers.py "$RUNNER_TEMP/ics-peers" | tee "$RUNNER_TEMP/ics-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/ics-env" >> "$GITHUB_ENV"
-      - name: Standalone feature build
-        run: |
-          cargo check --locked --no-default-features --features ${{ matrix.feature }} --all-targets
       - name: Independent interoperability, negative and lifecycle checks
         run: |
-          cargo test --locked --no-default-features --features ${{ matrix.feature }} --test server --test client -- ${{ matrix.feature }}:: --test-threads=100
+          cargo test --locked --no-default-features --test server --test client -- ${{ matrix.feature }}:: --test-threads=100
       - name: Blocking lint
         run: |
-          cargo clippy --locked --no-default-features --features ${{ matrix.feature }} --all-targets -- -D clippy::correctness -D clippy::suspicious -D unused_must_use
+          cargo clippy --locked --no-default-features --all-targets -- -D clippy::correctness -D clippy::suspicious -D unused_must_use
 
   p2p-news:
     if: inputs.only == '' || inputs.only == 'p2p-news'
@@ -7266,12 +7028,9 @@ jobs:
         env:
           CARGO_BUILD_JOBS: 4
         run: |
-          cargo test --locked --no-default-features --features adc_peer,dc_peer,soulseek_peer,gnutella,nntp --test server --test client -- --test-threads=8
-          cargo test --locked --no-default-features --features adc_peer,dc_peer,soulseek_peer,gnutella,nntp --test site_protocol_list_test --test protocol_startup_examples_test --test dual_protocol_test --test event_action_declarations_test --test protocol_name_resolution_test --test advertised_actions_test --test rustls_provider_gate_test
-          for feature in adc adc_peer dc_peer soulseek soulseek_peer gnutella nntp; do
-            cargo check --locked --no-default-features --features "$feature" --all-targets
-          done
-          cargo clippy --locked --no-default-features --features adc_peer,dc_peer,soulseek_peer,gnutella,nntp --all-targets -- -D clippy::correctness -D clippy::suspicious -D unused_must_use
+          cargo test --locked --no-default-features --test server --test client -- adc dc_peer soulseek gnutella nntp --test-threads=8
+          cargo test --locked --no-default-features --test site_protocol_list_test --test protocol_startup_examples_test --test dual_protocol_test --test event_action_declarations_test --test protocol_name_resolution_test --test advertised_actions_test --test rustls_provider_gate_test
+          cargo clippy --locked --no-default-features --all-targets -- -D clippy::correctness -D clippy::suspicious -D unused_must_use
 
   guacamole:
     if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'guacamole')
@@ -7279,7 +7038,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,guacamole
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -7297,8 +7055,6 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends guacd libguac-client-vnc0 tigervnc-standalone-server xterm xclip maven
           python3 tests/server/guacamole/install_peers.py "$RUNNER_TEMP/guac-peers" | tee "$RUNNER_TEMP/guac-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/guac-env" >> "$GITHUB_ENV"
-      - name: Compile guacamole as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features guacamole --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -7310,13 +7066,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -7357,7 +7113,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,activitypub
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -7369,8 +7124,6 @@ jobs:
           node-version: '22'
       - name: Install Fedify 2.4.2 and the library peer
         run: python3 tests/server/activitypub/install_peers.py "$RUNNER_TEMP/fedify" | sed 's/^export //' >> "$GITHUB_ENV"
-      - name: Compile activitypub as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features activitypub --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -7382,13 +7135,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -7429,7 +7182,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,stratum
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -7441,8 +7193,6 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq build-essential autoconf automake libtool yasm pkg-config libcurl4-openssl-dev
           python3 tests/server/stratum/install_peers.py "$RUNNER_TEMP/stratum" | sed 's/^export //' >> "$GITHUB_ENV"
-      - name: Compile stratum as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features stratum --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -7454,13 +7204,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -7501,7 +7251,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,pulsar
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -7514,8 +7263,6 @@ jobs:
           java-version: '21'
       - name: Install Apache Pulsar 4.0.6 and the Python client
         run: python3 tests/server/pulsar/install_peers.py "$RUNNER_TEMP/pulsar" | sed 's/^export //' >> "$GITHUB_ENV"
-      - name: Compile pulsar as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features pulsar --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -7527,13 +7274,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -7574,7 +7321,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,tr069
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -7586,8 +7332,6 @@ jobs:
           node-version: '22'
       - name: Install genieacs-sim, GenieACS 1.2.16 and MongoDB 8.0.4
         run: python3 tests/server/tr069/install_peers.py "$RUNNER_TEMP/cwmp" | sed 's/^export //' >> "$GITHUB_ENV"
-      - name: Compile tr069 as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features tr069 --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -7599,13 +7343,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -7646,7 +7390,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,zabbix
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -7660,8 +7403,6 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq zabbix-agent zabbix-proxy-sqlite3
           sudo systemctl stop zabbix-agent zabbix-proxy 2>/dev/null || true
-      - name: Compile zabbix as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features zabbix --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -7672,13 +7413,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -7719,7 +7460,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,rtp
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -7728,8 +7468,6 @@ jobs:
           key: protocol-pairs-${{ github.job }}
       - name: Install ffmpeg
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
-      - name: Compile rtp as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features rtp --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -7740,13 +7478,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -7787,7 +7525,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,hls
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -7798,8 +7535,6 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly
-      - name: Compile hls as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features hls --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -7810,13 +7545,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -7857,7 +7592,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,snmp
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -7875,8 +7609,6 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/pysnmp"
           "$RUNNER_TEMP/pysnmp/bin/pip" install --quiet pysnmp==7.1.22 pyasn1==0.6.4 cryptography==46.0.3
           echo "NETGET_PYSNMP_PYTHON=$RUNNER_TEMP/pysnmp/bin/python" >> "$GITHUB_ENV"
-      - name: Compile snmp as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features snmp --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -7890,13 +7622,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -7937,7 +7669,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,mqtt
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -7959,8 +7690,6 @@ jobs:
           set -euo pipefail
           python3 tests/server/mqtt/install_v5_peers.py "$RUNNER_TEMP/mqtt-v5-peers" | tee "$RUNNER_TEMP/mqtt-v5-env"
           grep '^NETGET_' "$RUNNER_TEMP/mqtt-v5-env" >> "$GITHUB_ENV"
-      - name: Compile mqtt as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features mqtt --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -7976,13 +7705,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -8023,7 +7752,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,websocket
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -8044,8 +7772,6 @@ jobs:
           "$RUNNER_TEMP/bin/websocat" --version
           python3 tests/server/websocket/install_peers.py "$RUNNER_TEMP/ws-peers" | tee "$RUNNER_TEMP/ws-env"
           grep '^NETGET_' "$RUNNER_TEMP/ws-env" >> "$GITHUB_ENV"
-      - name: Compile websocket as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features websocket --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -8057,13 +7783,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -8104,7 +7830,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: coap
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -8137,8 +7862,6 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/aiocoap"
           "$RUNNER_TEMP/aiocoap/bin/pip" install --no-cache-dir aiocoap==0.4.12
           printf 'NETGET_AIOCOAP_PYTHON=%s/aiocoap/bin/python\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
-      - name: Compile coap as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features coap --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -8153,13 +7876,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -8200,7 +7923,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,dns
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -8223,8 +7945,6 @@ jobs:
           for tool in named dig delv kdig drill ldns-verify-zone dnssec-verify tshark; do
             command -v "$tool"
           done
-      - name: Compile dns as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features dns --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -8238,13 +7958,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -8285,7 +8005,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,kafka
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -8307,8 +8026,6 @@ jobs:
           kcat -V | head -1
           python3 tests/server/kafka/install_peers.py "$RUNNER_TEMP/kafka-peers"
           echo "NETGET_KAFKA_PEERS=$RUNNER_TEMP/kafka-peers" >> "$GITHUB_ENV"
-      - name: Compile kafka as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features kafka --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -8323,13 +8040,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -8370,7 +8087,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,rdp-client
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -8387,8 +8103,6 @@ jobs:
           sudo systemctl stop xrdp xrdp-sesman || true
           xrdp --version | head -1
           freerdp-shadow-cli3 /version || true
-      - name: Compile rdp-client as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features rdp-client --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -8399,13 +8113,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -8446,7 +8160,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,onvif
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -8466,8 +8179,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends python3-venv
           python3 tests/server/onvif/install_peers.py "$RUNNER_TEMP/onvif" | sed 's/^export //' >> "$GITHUB_ENV"
-      - name: Compile onvif as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features onvif --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -8479,13 +8190,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -8526,7 +8237,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      PAIR_FEATURES: tcp,stratum-v2
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -8544,8 +8254,6 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq capnproto libcapnp-dev
           python3 tests/server/stratum_v2/install_peers.py "$RUNNER_TEMP/stratum-v2" | sed 's/^export //' >> "$GITHUB_ENV"
-      - name: Compile stratum-v2 as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features stratum-v2 --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -8557,13 +8265,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -8604,7 +8312,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      PAIR_FEATURES: tcp,ngap
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -8636,8 +8343,6 @@ jobs:
           sudo systemctl stop open5gs-amfd || true
           sudo setcap cap_net_raw,cap_net_admin=eip "$(command -v dumpcap)"
           python3 tests/server/ngap/install_peers.py "$RUNNER_TEMP/ngap" | sed 's/^export //' >> "$GITHUB_ENV"
-      - name: Compile ngap as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features ngap --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -8649,13 +8354,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -8696,7 +8401,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      PAIR_FEATURES: tcp,m3ua
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -8726,8 +8430,6 @@ jobs:
           sudo systemctl stop osmo-stp || true
           sudo setcap cap_net_raw,cap_net_admin=eip "$(command -v dumpcap)"
           python3 tests/server/m3ua/install_peers.py "$RUNNER_TEMP/m3ua" | sed 's/^export //' >> "$GITHUB_ENV"
-      - name: Compile m3ua as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features m3ua --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -8739,13 +8441,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -8786,7 +8488,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     env:
-      PAIR_FEATURES: tcp,h323
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -8816,8 +8517,6 @@ jobs:
           sudo systemctl stop asterisk || true
           sudo setcap cap_net_raw,cap_net_admin=eip "$(command -v dumpcap)"
           python3 tests/server/h323/install_peers.py "$RUNNER_TEMP/h323" | tail -n 1 >> "$GITHUB_PATH"
-      - name: Compile h323 as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features h323 --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -8830,13 +8529,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -8877,7 +8576,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,kerberos
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -8920,8 +8618,6 @@ jobs:
           kinit.heimdal --version
           "$prefix/usr/lib/heimdal-servers/kdc" --version
           ls -l /usr/sbin/krb5kdc /usr/sbin/kadmin.local /usr/bin/kadmin.heimdal
-      - name: Compile kerberos as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features kerberos --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -8933,13 +8629,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -8980,7 +8676,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,spice
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -9009,8 +8704,6 @@ jobs:
           "$chrome" --version
           node --version
           printf 'NETGET_CHROME=%s\n' "$chrome" >> "$GITHUB_ENV"
-      - name: Compile spice as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features spice --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -9022,13 +8715,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \
@@ -9069,7 +8762,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PAIR_FEATURES: tcp,devp2p
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -9085,8 +8777,6 @@ jobs:
           set -euo pipefail
           python3 tests/server/devp2p/install_peers.py "$RUNNER_TEMP/devp2p-peers" | tee "$RUNNER_TEMP/devp2p-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/devp2p-env" >> "$GITHUB_ENV"
-      - name: Compile devp2p as a standalone Cargo feature
-        run: cargo check --locked --no-default-features --features devp2p --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -9098,13 +8788,13 @@ jobs:
               *) target=server ;;
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
-            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            cargo test --locked --no-default-features \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
-          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+          cargo test --locked --no-default-features \
             --test event_action_declarations_test \
             --test advertised_actions_test \
             --test action_descriptions_test \

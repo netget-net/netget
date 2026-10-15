@@ -1,6 +1,6 @@
 //! BLE HID Keyboard tests
 
-#![cfg(all(test, feature = "bluetooth-ble-keyboard"))]
+#![cfg(all(unix, feature = "bluetooth"))]
 
 mod decision_tag_test;
 mod e2e_test;

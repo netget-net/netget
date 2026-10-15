@@ -23,7 +23,7 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features isis --test server -- isis::hello_field
 
-#![cfg(feature = "isis")]
+#![cfg(all(unix, feature = "libpcap"))]
 
 use netget::server::isis::actions::IsisProtocol;
 

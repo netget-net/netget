@@ -9,7 +9,7 @@
 //! what the model asked for either, and the error text is what lets the repair loop fix the
 //! call.
 
-#![cfg(all(test, feature = "proxy"))]
+#![cfg(unix)]
 
 use netget::llm::actions::protocol_trait::{ActionResult, Server};
 use netget::server::proxy::actions::ProxyProtocol;

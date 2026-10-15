@@ -1,6 +1,6 @@
-#[cfg(all(test, feature = "datalink"))]
+#[cfg(all(unix, feature = "libpcap"))]
 mod action_test;
-#[cfg(all(test, feature = "datalink"))]
+#[cfg(all(unix, feature = "libpcap"))]
 mod command_channel_test;
-#[cfg(all(test, feature = "datalink"))]
+#[cfg(all(unix, feature = "libpcap"))]
 mod e2e_test;

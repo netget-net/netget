@@ -13,7 +13,7 @@
 //! - Linux may require user in `bluetooth` group or sudo
 //! - These tests are resource-intensive (real Bluetooth hardware)
 
-#![cfg(all(test, feature = "bluetooth-ble", feature = "bluetooth-ble-client"))]
+#![cfg(all(unix, feature = "bluetooth"))]
 
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use std::time::Duration;

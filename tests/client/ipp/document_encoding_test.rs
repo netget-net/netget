@@ -16,8 +16,6 @@
 //! `unwrap_or_else(|_| document_data.as_bytes().to_vec())`, so a truncated document was printed
 //! as its own base64 *text* and the model was told the job succeeded.
 
-#![cfg(feature = "ipp")]
-
 use netget::client::ipp::IppClientProtocol;
 use netget::llm::actions::client_trait::{Client, ClientActionResult};
 use serde_json::json;

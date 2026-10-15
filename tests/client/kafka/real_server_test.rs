@@ -13,7 +13,6 @@
 //! That is the client acting on the model's answer, asserted from the broker's side. The
 //! versions are read from the client's own events. The broker and kcat are required:
 //! `NETGET_KAFKA_PEERS` names the directory `tests/server/kafka/install_peers.py` filled.
-#![cfg(all(test, feature = "kafka"))]
 
 use crate::helpers::real_server::{InstallHint, RealServer};
 use netget::cli::management::ClientForm;

@@ -28,7 +28,7 @@
 //! the refusal is a datagram that either arrives or does not, and nothing the peer does
 //! afterwards can discard it.
 
-#![cfg(all(test, feature = "turn"))]
+#![cfg(unix)]
 
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::net::{Ipv6Addr, SocketAddr};

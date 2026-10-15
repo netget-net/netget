@@ -1,4 +1,4 @@
-#[cfg(all(test, feature = "arp"))]
+#[cfg(all(unix, feature = "libpcap"))]
 mod e2e_test;
-#[cfg(all(test, feature = "arp"))]
+#[cfg(all(unix, feature = "libpcap"))]
 mod frame_codec_test;

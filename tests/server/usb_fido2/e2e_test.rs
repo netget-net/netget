@@ -26,7 +26,7 @@
 //! tests worth keeping are still here at the bottom; the point is that they were never the
 //! thing that could have caught it.
 
-#[cfg(all(test, feature = "usb-fido2"))]
+#[cfg(all(unix, feature = "libusb"))]
 mod tests {
     use std::time::Duration;
 

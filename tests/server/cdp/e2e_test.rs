@@ -15,7 +15,7 @@
 //! 3. `no_advertisement` — the model's explicit refusal — also emits nothing, and is distinct in
 //!    the log from the failure above.
 
-#[cfg(all(test, feature = "cdp"))]
+#[cfg(all(unix, feature = "libpcap"))]
 mod tests {
     use crate::helpers::*;
     use ::netget::server::cdp::codec;

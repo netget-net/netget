@@ -1,21 +1,22 @@
-//! Wire regressions for the pinned tonic receive-limit patch, independent of OTLP runtime.
+//! Wire regressions for NetGet's tonic receive-limit patch (the `netget-tonic` fork,
+//! github.com/netget-net/tonic), independent of OTLP runtime.
+#[path = "helpers/fork_source.rs"]
+mod fork_source;
+
 #[test]
-fn tonic_patch_preserves_pinned_version_license_and_provenance() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let manifest = std::fs::read_to_string(root.join("vendor/tonic/Cargo.toml")).unwrap();
-    assert!(manifest.contains("version = \"0.12.3\""));
+fn cargo_builds_the_tonic_fork_with_its_license() {
+    fork_source::assert_fork_is_built("tonic", "0.12.3");
+    let manifest = fork_source::read_fork("netget-tonic", "Cargo.toml");
     assert!(manifest.contains("license = \"MIT\""));
-    assert!(root.join("vendor/tonic/LICENSE").is_file());
-    let provenance: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(root.join("vendor/tonic/.cargo_vcs_info.json")).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(
-        provenance["git"]["sha1"],
-        "4b8d2c46aa57e40b1e80077f4f7b7d4679027bb5"
+    assert!(fork_source::fork_dir("netget-tonic")
+        .join("LICENSE")
+        .is_file());
+    let compression = fork_source::read_fork("netget-tonic", "src/codec/compression.rs");
+    assert!(
+        compression.contains("limit"),
+        "the decompression bound is gone from the fork's codec/compression.rs"
     );
 }
-#[cfg(feature = "grpc")]
 mod wire {
     use prost::Message;
     use std::{

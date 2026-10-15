@@ -3,8 +3,6 @@
 //! These tests spawn the NetGet binary and verify that the LLM correctly
 //! controls SMB authentication, file operations, and responses.
 
-#![cfg(all(test, feature = "smb"))]
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 
 use super::wire_util::{nbss, read_frame_into};

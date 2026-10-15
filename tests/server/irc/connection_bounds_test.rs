@@ -26,8 +26,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features irc --test server -- irc::connection_bounds --test-threads=100
 
-#![cfg(feature = "irc")]
-
 use std::time::Duration;
 
 use netget::cli::management::ServerForm;

@@ -24,7 +24,6 @@
 //!
 //! LLM budget: 7 calls across two tests. See `tests/server/stomp/CLAUDE.md`.
 
-#[cfg(all(test, feature = "stomp"))]
 mod stomp_e2e_test {
     use crate::helpers::{start_netget_server, E2EResult, NetGetConfig};
     use async_stomp::client::{ClientTransport, Connector, Subscriber};

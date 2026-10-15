@@ -20,8 +20,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features ldap --test client -- ldap::real_server_test --test-threads=100
 
-#![cfg(all(test, feature = "ldap"))]
-
 use crate::helpers::real_server::{missing_binary, run_tool, InstallHint, RealServer};
 use crate::helpers::*;
 use serde_json::json;

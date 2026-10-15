@@ -23,8 +23,6 @@
 //!
 //! `ssh2` is a blocking client, so all three tests drive it inside `spawn_blocking`.
 
-#![cfg(feature = "ssh")]
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::io::{Read, Write};
 use std::net::TcpStream;

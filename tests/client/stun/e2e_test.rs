@@ -16,7 +16,7 @@
 //! instruction → `stun_connected` → `send_binding_request` chain works when the *model*
 //! drives it, rather than when a test injects the action directly.
 
-#![cfg(all(test, feature = "stun"))]
+#![cfg(unix)]
 
 mod stun_client_tests {
     use crate::helpers::*;

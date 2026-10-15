@@ -72,7 +72,6 @@ pub async fn discard_raw_rectangle<R: AsyncReadExt + Unpin>(
 /// receives a well-formed KeyEvent for a key nobody pressed.
 ///
 /// Returns `None` for an unrecognised name so the caller can refuse rather than send keysym 0.
-#[cfg(feature = "vnc")]
 pub fn resolve_keysym(value: &serde_json::Value) -> Option<u32> {
     if let Some(n) = value.as_u64() {
         return u32::try_from(n).ok();

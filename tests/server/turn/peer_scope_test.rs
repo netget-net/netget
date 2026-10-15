@@ -15,7 +15,7 @@
 //! Both gates are covered, because CreatePermission is not the only way to point a relay:
 //! ChannelBind grants a permission as a side effect.
 
-#![cfg(feature = "turn")]
+#![cfg(unix)]
 
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::net::SocketAddr;

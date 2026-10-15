@@ -1,6 +1,6 @@
-#[cfg(all(test, feature = "icmp"))]
+#[cfg(unix)]
 mod action_codec_test;
-#[cfg(all(test, feature = "icmp"))]
+#[cfg(unix)]
 mod command_channel_test;
-#[cfg(all(test, feature = "icmp"))]
+#[cfg(unix)]
 mod e2e_test;

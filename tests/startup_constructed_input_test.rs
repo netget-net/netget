@@ -1,5 +1,4 @@
 //! Constructed startup input is bounded before any copy, early failure or registration.
-#![cfg(feature = "tcp")]
 
 use netget::cli::{
     client_startup,

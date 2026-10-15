@@ -16,12 +16,12 @@
 //! block the current thread from within a runtime"*. It is synchronous now, and these tests
 //! calling it without `.await` is the visible half of that fix.
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use netget::server::usb::fido2::approval::*;
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use std::time::Duration;
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 fn details(rp: &str, operation: OperationType) -> ApprovalDetails {
     ApprovalDetails {
         operation,
@@ -32,7 +32,7 @@ fn details(rp: &str, operation: OperationType) -> ApprovalDetails {
 }
 
 /// Two requests open at once are resolved independently, each by its own id.
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 #[tokio::test]
 async fn concurrent_requests_are_resolved_by_id() {
     let manager = ApprovalManager::new(ApprovalConfig {
@@ -88,7 +88,7 @@ async fn concurrent_requests_are_resolved_by_id() {
 /// clones would go on to issue the *same* ids from that point. The connection task and the
 /// action path hold different clones of the same manager, which is exactly the situation where
 /// duplicate ids would let one decision resolve another request.
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 #[tokio::test]
 async fn cloned_managers_share_one_id_space() {
     let manager = ApprovalManager::new(ApprovalConfig::default());
@@ -114,7 +114,7 @@ async fn cloned_managers_share_one_id_space() {
 }
 
 /// Auto-approve short-circuits without ever registering a pending request.
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 #[tokio::test]
 async fn auto_approve_leaves_nothing_pending() {
     let manager = ApprovalManager::new(ApprovalConfig {

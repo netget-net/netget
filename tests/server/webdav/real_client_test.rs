@@ -54,8 +54,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features webdav \
 //!       --test server -- server::webdav::real_client --test-threads=8
 
-#![cfg(all(test, feature = "webdav"))]
-
 use crate::helpers::{self, E2EResult, NetGetConfig};
 use quick_xml::events::Event;
 use quick_xml::Reader;

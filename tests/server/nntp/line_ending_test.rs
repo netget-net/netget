@@ -8,8 +8,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features nntp --test server -- nntp::line_ending --test-threads=100
 
-#![cfg(feature = "nntp")]
-
 use netget::llm::actions::protocol_trait::{ActionResult, Server};
 use netget::server::nntp::actions::NntpProtocol;
 use serde_json::json;

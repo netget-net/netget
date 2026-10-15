@@ -3,8 +3,6 @@
 //! These tests spawn the actual NetGet binary as a Maven repository
 //! and validate Maven artifact serving using real HTTP requests and Maven CLI.
 
-#![cfg(feature = "maven")]
-
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use std::fs;
 

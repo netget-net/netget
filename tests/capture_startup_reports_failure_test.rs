@@ -27,12 +27,7 @@
 //!   --test capture_startup_reports_failure_test -- --test-threads=100
 //! ```
 
-#![cfg(any(
-    feature = "arp",
-    feature = "datalink",
-    feature = "isis",
-    feature = "icmp"
-))]
+#![cfg(unix)]
 
 #[allow(unused_imports)]
 use netget::llm::ollama_client::OllamaClient;
@@ -91,7 +86,7 @@ fn harness() -> (
 // DataLink
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "datalink")]
+#[cfg(all(unix, feature = "libpcap"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn datalink_spawn_reports_unknown_device() {
     use netget::server::DataLinkServer;
@@ -119,7 +114,7 @@ async fn datalink_spawn_reports_unknown_device() {
     );
 }
 
-#[cfg(feature = "datalink")]
+#[cfg(all(unix, feature = "libpcap"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn datalink_spawn_outcome_matches_capture_privilege() {
     use netget::server::DataLinkServer;
@@ -143,7 +138,7 @@ async fn datalink_spawn_outcome_matches_capture_privilege() {
 // ARP
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "arp")]
+#[cfg(all(unix, feature = "libpcap"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn arp_spawn_reports_unknown_device() {
     use netget::server::ArpServer;
@@ -175,7 +170,7 @@ async fn arp_spawn_reports_unknown_device() {
 /// would sit in `ServerStatus::Running` having captured nothing, forever, which is the exact
 /// failure the rest of this file exists to prevent. What was wrong is that the refusal named
 /// libpcap's optimiser instead of the reason.
-#[cfg(feature = "arp")]
+#[cfg(all(unix, feature = "libpcap"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn arp_spawn_refuses_loopback_and_says_why() {
     use netget::server::ArpServer;
@@ -207,7 +202,7 @@ async fn arp_spawn_refuses_loopback_and_says_why() {
 // IS-IS — the one that was missed three times
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "isis")]
+#[cfg(all(unix, feature = "libpcap"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn isis_spawn_reports_unknown_device() {
     use netget::server::IsisServer;
@@ -235,7 +230,7 @@ async fn isis_spawn_reports_unknown_device() {
     );
 }
 
-#[cfg(feature = "isis")]
+#[cfg(all(unix, feature = "libpcap"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn isis_spawn_outcome_matches_capture_privilege() {
     use netget::server::IsisServer;
@@ -259,7 +254,7 @@ async fn isis_spawn_outcome_matches_capture_privilege() {
 // ICMP — raw IP sockets rather than layer-2 capture, so a different capability
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "icmp")]
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn icmp_spawn_outcome_matches_raw_socket_privilege() {
     use netget::server::IcmpServer;

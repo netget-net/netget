@@ -12,7 +12,7 @@
 //!
 //! These tests need no Bluetooth adapter, so they are not `#[ignore]`d.
 
-#![cfg(all(test, feature = "bluetooth-ble-running"))]
+#![cfg(all(unix, feature = "bluetooth"))]
 
 use netget::llm::actions::protocol_trait::Protocol;
 use netget::server::bluetooth_ble_running::actions::BluetoothBleRunningProtocol;

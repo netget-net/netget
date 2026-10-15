@@ -26,8 +26,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features saml --test client -- saml::startup_params --test-threads=100
 
-#![cfg(feature = "saml")]
-
 use std::time::Duration;
 
 use base64::Engine as _;

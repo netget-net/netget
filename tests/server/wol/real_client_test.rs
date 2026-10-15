@@ -24,8 +24,6 @@
 //! implementation was reading **NetGet's output**. Here it writes NetGet's input, and nothing
 //! third-party ever judges anything NetGet produced. See `src/server/wol/CLAUDE.md`.
 
-#![cfg(feature = "wol")]
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 

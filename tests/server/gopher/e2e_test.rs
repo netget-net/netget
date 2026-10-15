@@ -24,7 +24,6 @@
 //! - **A type-3 error item is still exit 0.** curl has no concept of a Gopher error, so an
 //!   error reply must be asserted on stdout, never on the exit status.
 //! - **`%09` in the URL becomes a real tab**, which is how a type-7 search request is spelled.
-#[cfg(all(test, feature = "gopher"))]
 mod gopher_e2e_test {
     use crate::helpers::{start_netget_server, E2EResult, NetGetConfig};
     use std::process::Stdio;

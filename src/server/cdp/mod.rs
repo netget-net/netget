@@ -80,7 +80,7 @@ const CDP_BPF_FILTER: &str = "ether dst 01:00:0c:cc:cc:cc and ether[14:2] = 0xaa
 #[derive(Clone)]
 enum CdpSink {
     /// A live pcap handle, shared with the capture loop.
-    #[cfg(feature = "cdp")]
+    #[cfg(all(unix, feature = "libpcap"))]
     Raw(Arc<std::sync::Mutex<pcap::Capture<pcap::Active>>>),
     /// The bound UDP socket, plus the peer this frame is answering.
     Udp(Arc<UdpSocket>, SocketAddr),
@@ -89,7 +89,7 @@ enum CdpSink {
 impl CdpSink {
     async fn send(&self, frame: &[u8]) -> Result<()> {
         match self {
-            #[cfg(feature = "cdp")]
+            #[cfg(all(unix, feature = "libpcap"))]
             CdpSink::Raw(cap) => {
                 let mut guard = cap.lock().unwrap_or_else(|e| e.into_inner());
                 guard
@@ -108,7 +108,7 @@ impl CdpSink {
 
     fn describe(&self) -> String {
         match self {
-            #[cfg(feature = "cdp")]
+            #[cfg(all(unix, feature = "libpcap"))]
             CdpSink::Raw(_) => "pcap".to_string(),
             CdpSink::Udp(_, peer) => format!("udp:{}", peer),
         }

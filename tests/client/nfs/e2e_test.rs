@@ -4,7 +4,7 @@
 //! and testing client behavior as a black-box.
 //! Test strategy: Use netget binary to start NFS server + client, < 10 LLM calls total.
 
-#[cfg(all(test, feature = "nfs"))]
+#[cfg(unix)]
 mod nfs_client_tests {
     use crate::helpers::*;
     use std::time::Duration;

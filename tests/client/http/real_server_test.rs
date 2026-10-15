@@ -19,8 +19,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features http --test client -- http::real_server_test --test-threads=100
 
-#![cfg(all(test, feature = "http"))]
-
 use crate::helpers::real_server::{InstallHint, RealServer};
 use crate::helpers::*;
 use serde_json::json;

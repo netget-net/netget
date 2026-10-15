@@ -15,8 +15,6 @@
 //!
 //! See `tests/server/coap/CLAUDE.md` for the LLM call budget.
 
-#![cfg(feature = "coap")]
-
 use crate::helpers::pcap_oracle::PcapOracle;
 use crate::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use coap_lite::{

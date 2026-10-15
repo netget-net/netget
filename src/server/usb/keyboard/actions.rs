@@ -1,31 +1,31 @@
 //! USB HID Keyboard protocol actions implementation
 
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::llm::actions::{
     protocol_trait::{ActionResult, Protocol, Server},
     ActionDefinition, Parameter,
 };
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::protocol::log_template::LogTemplate;
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::protocol::EventType;
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::server::connection::ConnectionId;
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::state::app_state::AppState;
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 use anyhow::{Context, Result};
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 use serde_json::json;
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 use std::collections::HashMap;
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 use std::sync::{Arc, LazyLock};
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 use tokio::sync::Mutex;
 
 // Event type definitions (static for efficient reuse)
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 pub static USB_KEYBOARD_ATTACHED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "usb_keyboard_attached",
@@ -55,7 +55,7 @@ pub static USB_KEYBOARD_ATTACHED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     .with_alternative_example(json!({"type": "wait_for_more"}))
 });
 
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 pub static USB_KEYBOARD_DETACHED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "usb_keyboard_detached",
@@ -74,7 +74,7 @@ pub static USB_KEYBOARD_DETACHED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     .with_no_actions()
 });
 
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 pub static USB_KEYBOARD_LED_STATUS_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "usb_keyboard_led_status",
@@ -124,7 +124,7 @@ pub static USB_KEYBOARD_LED_STATUS_EVENT: LazyLock<EventType> = LazyLock::new(||
 });
 
 /// USB HID Keyboard protocol action handler
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 pub struct UsbKeyboardProtocol {
     /// Map of active connections (for async actions)
     #[allow(dead_code)]
@@ -139,24 +139,24 @@ pub struct UsbKeyboardProtocol {
 }
 
 /// The handler `usbip` holds for one attached host, as this module shares it.
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 type SharedHandler = Arc<std::sync::Mutex<Box<dyn usbip::UsbInterfaceHandler + Send>>>;
 
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Clone)]
 pub struct ConnectionData {
     // Placeholder for keyboard-specific connection data
     // Will be populated during USB/IP implementation
 }
 
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 impl Default for UsbKeyboardProtocol {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 impl UsbKeyboardProtocol {
     pub fn new() -> Self {
         Self {
@@ -255,7 +255,7 @@ impl UsbKeyboardProtocol {
 }
 
 // Implement Protocol trait
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 impl Protocol for UsbKeyboardProtocol {
     fn get_startup_parameters(&self) -> Vec<crate::llm::actions::ParameterDefinition> {
         vec![
@@ -419,7 +419,7 @@ print(json.dumps({"actions": actions}))"#;
 }
 
 // Implement Server trait
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 impl Server for UsbKeyboardProtocol {
     fn spawn(
         &self,
@@ -635,7 +635,7 @@ impl Server for UsbKeyboardProtocol {
 // executor.
 
 /// Modifier bits in byte 0 of a boot-protocol keyboard report.
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 mod modifier_bit {
     pub const LEFT_CTRL: u8 = 0x01;
     pub const LEFT_SHIFT: u8 = 0x02;
@@ -644,7 +644,7 @@ mod modifier_bit {
 }
 
 /// Map a modifier name the LLM may use to its report bit.
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 fn modifier_name_to_bit(name: &str) -> Option<u8> {
     match name.to_ascii_lowercase().as_str() {
         "ctrl" | "control" => Some(modifier_bit::LEFT_CTRL),
@@ -658,7 +658,7 @@ fn modifier_name_to_bit(name: &str) -> Option<u8> {
 }
 
 /// Map a printable ASCII character to `(modifier, keycode)`.
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 fn ascii_to_hid(c: char) -> Option<(u8, u8)> {
     const SHIFT: u8 = modifier_bit::LEFT_SHIFT;
     Some(match c {
@@ -707,7 +707,7 @@ fn ascii_to_hid(c: char) -> Option<(u8, u8)> {
 
 /// Map a key name (a single character, or a named key like `enter` / `f5` / `up`) to
 /// `(modifier, keycode)`.
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 fn key_name_to_hid(name: &str) -> Option<(u8, u8)> {
     let mut chars = name.chars();
     if let (Some(c), None) = (chars.next(), chars.next()) {
@@ -765,7 +765,7 @@ fn key_name_to_hid(name: &str) -> Option<(u8, u8)> {
 ///
 /// Three forms are accepted: the number, the number as a string, and the `conn-N` form the
 /// events themselves carry. Declared "string" because that last one is what events emit.
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 fn connection_id_parameter() -> Parameter {
     Parameter {
         name: "connection_id".to_string(),
@@ -777,7 +777,7 @@ fn connection_id_parameter() -> Parameter {
     }
 }
 
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 fn type_text_action() -> ActionDefinition {
     ActionDefinition {
         name: "type_text".to_string(),
@@ -812,7 +812,7 @@ fn type_text_action() -> ActionDefinition {
     }
 }
 
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 fn press_key_action() -> ActionDefinition {
     ActionDefinition {
         name: "press_key".to_string(),
@@ -847,7 +847,7 @@ fn press_key_action() -> ActionDefinition {
     }
 }
 
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 fn press_key_combo_action() -> ActionDefinition {
     ActionDefinition {
         name: "press_key_combo".to_string(),
@@ -873,7 +873,7 @@ fn press_key_combo_action() -> ActionDefinition {
     }
 }
 
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 fn release_all_keys_action() -> ActionDefinition {
     ActionDefinition {
         name: "release_all_keys".to_string(),
@@ -890,7 +890,7 @@ fn release_all_keys_action() -> ActionDefinition {
     }
 }
 
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 fn wait_for_more_action() -> ActionDefinition {
     ActionDefinition {
         name: "wait_for_more".to_string(),

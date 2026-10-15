@@ -11,8 +11,6 @@
 //! unlike bare UDP there is a connection and a human waiting on it: a Telnet session that
 //! stops answering is indistinguishable from one that has hung.
 
-#![cfg(feature = "telnet")]
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};

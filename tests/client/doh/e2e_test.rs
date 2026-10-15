@@ -3,7 +3,6 @@
 //! These tests verify DoH client functionality by connecting to a local DoH server
 //! and testing DNS query resolution as a black-box with Ollama mocks.
 
-#[cfg(all(test, feature = "doh"))]
 mod doh_client_tests {
     use crate::helpers::*;
     use std::time::Duration;

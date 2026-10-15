@@ -25,7 +25,7 @@
 //! Everything runs against the real `BluetoothBle::event_loop` via `run_event_loop_without_radio`
 //! — no Bluetooth hardware, byte-for-byte the request/response paths a real central drives.
 
-#![cfg(all(test, feature = "bluetooth-ble"))]
+#![cfg(all(unix, feature = "bluetooth"))]
 
 use super::super::super::helpers::mock_builder::MockLlmBuilder;
 use super::super::super::helpers::mock_ollama::MockOllamaServer;

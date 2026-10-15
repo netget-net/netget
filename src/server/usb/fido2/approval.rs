@@ -30,25 +30,25 @@
 //! action (`deny_request`) rather than the absence of one. `auto_approve` exists, is off by
 //! default, and has to be asked for by name in `startup_params`.
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use std::collections::HashMap;
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use std::sync::atomic::{AtomicU64, Ordering};
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use std::sync::{Arc, Mutex, RwLock};
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use std::time::Duration;
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use tokio::sync::oneshot;
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use tracing::{info, warn};
 
 /// Unique ID for an approval request
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub type ApprovalId = u64;
 
 /// Approval decision
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApprovalDecision {
     Approved,
@@ -56,14 +56,14 @@ pub enum ApprovalDecision {
 }
 
 /// Type of FIDO2 operation
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperationType {
     Register,
     Authenticate,
 }
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 impl OperationType {
     /// The event id this operation raises.
     pub fn event_id(&self) -> &'static str {
@@ -79,7 +79,7 @@ impl OperationType {
 /// Deliberately no bytes: no client data hash, no challenge, no credential id. A model cannot
 /// reason about those and cannot produce them, and the project rule is that action and event
 /// payloads carry structured fields only.
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApprovalDetails {
     pub operation: OperationType,
@@ -96,7 +96,7 @@ pub struct ApprovalDetails {
 ///
 /// The handler is called once with [`Ask`](UserPresence::Ask); if the command needs presence it
 /// answers [`ApprovalDetails`] instead of a response, and is called again with the decision.
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UserPresence {
     /// No decision yet. A command requiring presence must ask rather than act.
@@ -108,7 +108,7 @@ pub enum UserPresence {
 }
 
 /// Pending approval request
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 struct PendingApproval {
     id: ApprovalId,
     details: ApprovalDetails,
@@ -117,7 +117,7 @@ struct PendingApproval {
 }
 
 /// Configuration for approval behavior
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Debug, Clone)]
 pub struct ApprovalConfig {
     /// Automatically approve all requests (dev mode). Off unless asked for by name.
@@ -129,7 +129,7 @@ pub struct ApprovalConfig {
     pub timeout_decision: ApprovalDecision,
 }
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 impl Default for ApprovalConfig {
     fn default() -> Self {
         Self {
@@ -141,14 +141,14 @@ impl Default for ApprovalConfig {
 }
 
 /// Manager for approval requests
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub struct ApprovalManager {
     config: Arc<RwLock<ApprovalConfig>>,
     pending: Arc<Mutex<HashMap<ApprovalId, PendingApproval>>>,
     next_id: Arc<AtomicU64>,
 }
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 impl ApprovalManager {
     pub fn new(config: ApprovalConfig) -> Self {
         Self {
@@ -337,7 +337,7 @@ impl ApprovalManager {
 }
 
 /// A pending request, as reported to the model by `list_pending_approvals`.
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Debug, Clone)]
 pub struct PendingApprovalInfo {
     pub id: ApprovalId,
@@ -345,7 +345,7 @@ pub struct PendingApprovalInfo {
     pub connection_id: Option<String>,
 }
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 impl Clone for ApprovalManager {
     fn clone(&self) -> Self {
         Self {

@@ -3,8 +3,6 @@
 //! These tests spawn the actual NetGet binary with FTP prompts
 //! and validate the responses using raw TCP connections.
 
-#![cfg(feature = "ftp")]
-
 use super::super::super::helpers::{self, E2EResult};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};

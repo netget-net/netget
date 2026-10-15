@@ -17,8 +17,6 @@
 //! `decision=model_reject`, `decision=model_wait_for_more` and `decision=model_silent` are
 //! what separate them now.
 
-#![cfg(feature = "telnet")]
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

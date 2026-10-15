@@ -16,7 +16,7 @@
 //!   ./cargo-isolated.sh test --no-default-features --features igmp \
 //!       --test server -- server::igmp::packet_codec --test-threads=100
 
-#![cfg(feature = "igmp")]
+#![cfg(unix)]
 
 use netget::llm::actions::protocol_trait::{ActionResult, Server};
 use netget::server::igmp::actions::{igmp_checksum, IgmpProtocol};

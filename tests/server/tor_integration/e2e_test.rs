@@ -8,7 +8,7 @@
 //!
 //! The test validates that all components work together correctly.
 
-#[cfg(all(test, feature = "tor"))]
+#[cfg(unix)]
 mod tests {
     use super::super::helpers::TorTestNetwork;
     use super::super::tor_client::TorClient;

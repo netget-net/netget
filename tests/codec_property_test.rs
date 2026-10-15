@@ -240,7 +240,6 @@ mod bencode_props {
 // `parse_request` already validated (≤2000 bits, ≤125 registers). Both were unguarded in a
 // `pub fn`; all three now return `Result` and refuse.
 
-#[cfg(feature = "modbus")]
 mod modbus_props {
     use netget::server::modbus::codec::{
         encode_adu, encode_bits_response, encode_exception, encode_registers_response,
@@ -576,7 +575,6 @@ mod modbus_props {
 //
 // `encode` now returns `Result` and refuses both.
 
-#[cfg(feature = "coap")]
 mod coap_props {
     use netget::server::coap::codec::{
         code_to_string, parse_code_string, CoapMessage, MessageType, MAX_PAYLOAD_LEN,
@@ -760,7 +758,6 @@ mod coap_props {
 // STOMP — `src/server/stomp/frame.rs`
 // ===========================================================================================
 
-#[cfg(feature = "stomp")]
 mod stomp_props {
     use netget::server::stomp::frame::{
         escape_header, is_safe_unescaped_header, parse_frame, should_escape, unescape_header,
@@ -977,7 +974,7 @@ mod stomp_props {
 // is worse: it writes `declared as u16`, so a parameter value of 65532 bytes or more has its
 // length silently truncated and the whole body after it is misread.
 
-#[cfg(feature = "m3ua")]
+#[cfg(unix)]
 mod m3ua_props {
     use netget::server::m3ua::codec::{
         padding_for, parse_header, parse_parameters, peek_class_type, Message, Parameter,
@@ -1191,7 +1188,6 @@ mod m3ua_props {
 // instead of refusing it, so `decode_apn(encode_apn(x)) != x`. `netbios_ns`'s
 // `encode_name_field` is the same situation and bails; this one now does too.
 
-#[cfg(feature = "gtp")]
 mod gtp_props {
     use netget::server::gtp::codec::{
         decode_apn, decode_end_user_address, decode_fteid, decode_paa, decode_tbcd, encode_apn,
@@ -1331,7 +1327,6 @@ mod gtp_props {
 // HSRP — `src/server/hsrp/codec.rs`
 // ===========================================================================================
 
-#[cfg(feature = "hsrp")]
 mod hsrp_props {
     use netget::server::hsrp::codec::{
         decode, encode, HsrpMessage, HsrpState, HsrpVersion, Opcode, V1_LEN,
@@ -1558,7 +1553,7 @@ mod hsrp_props {
 // VRRP — `src/server/vrrp/codec.rs`
 // ===========================================================================================
 
-#[cfg(feature = "vrrp")]
+#[cfg(unix)]
 mod vrrp_props {
     use netget::server::vrrp::codec::{
         checksum_is_valid, internet_checksum, Advertisement, PseudoHeader, Variant,
@@ -1769,7 +1764,6 @@ mod vrrp_props {
 // `Attribute::encode` refuses a value past 253 rather than truncating it. Both bounds are
 // asserted below so a future edit cannot quietly drop them.
 
-#[cfg(feature = "radius")]
 mod radius_props {
     use netget::server::radius::packet::{
         decode_attributes, decode_user_password, encode_response, encode_user_password,
@@ -1942,7 +1936,6 @@ mod radius_props {
 // NetBIOS Name Service — `src/server/netbios_ns/packet.rs`
 // ===========================================================================================
 
-#[cfg(feature = "netbios-ns")]
 mod netbios_props {
     use netget::server::netbios_ns::packet::{
         decode_first_level, encode_first_level, encode_name_field, pad_netbios_name,
@@ -2162,7 +2155,7 @@ mod sanitizer_props {
 // body whose 802.3 length field would land in EtherType space rather than narrowing into it.
 // That refusal is asserted below so a future edit cannot quietly drop it.
 
-#[cfg(feature = "stp")]
+#[cfg(all(unix, feature = "libpcap"))]
 mod stp_props {
     use netget::server::stp::codec::{
         decode_frame, encode_frame, encode_tcn_bpdu, seconds_to_ticks, ticks_to_seconds, Bpdu,
@@ -2383,7 +2376,7 @@ mod stp_props {
 // resend — so the round-trip generator produces control-free text, and the refusal gets its
 // own assertion.
 
-#[cfg(feature = "lldp")]
+#[cfg(all(unix, feature = "libpcap"))]
 mod lldp_props {
     use netget::server::lldp::codec::{
         capability_bits, capability_names, decode_frame, encode_frame, format_mac, parse_mac,
@@ -2649,7 +2642,7 @@ mod lldp_props {
 // `encode_frame` refuses a body past 1500 rather than writing an EtherType into the 802.3
 // length field. Both are asserted.
 
-#[cfg(feature = "cdp")]
+#[cfg(all(unix, feature = "libpcap"))]
 mod cdp_props {
     use netget::server::cdp::codec::{
         capability_bits, decode_frame, decode_payload, encode_frame, encode_payload, mac_to_string,
@@ -2832,7 +2825,7 @@ mod cdp_props {
 // produced a message whose own decoder reads the wrong number of type octets and then
 // misattributes the remainder. It now refuses, like the rest of this codec.
 
-#[cfg(feature = "nfc-client")]
+#[cfg(all(unix, feature = "pcsc"))]
 mod ndef_props {
     use netget::client::nfc::ndef::{decode_message, encode_message, MAX_MESSAGE_LEN, MAX_RECORDS};
     use proptest::prelude::*;
@@ -3082,7 +3075,7 @@ mod ndef_props {
 // fixed 16- or 72-octet buffer. An error frame carrying more than 8 (classic) or 64 (FD)
 // octets panicked rather than returning `Err`. The length check now runs for error frames too.
 
-#[cfg(feature = "can")]
+#[cfg(unix)]
 mod can_props {
     use netget::server::can::frame::{
         dlc_for_len, len_for_dlc, CanFrame, CANFD_MAX_DLEN, CANFD_MTU, CAN_EFF_MASK, CAN_MAX_DLEN,
@@ -3336,7 +3329,7 @@ mod can_props {
 // No findings: every refusal this codec owes, it makes. The assertions below pin them so a
 // future edit cannot quietly drop one.
 
-#[cfg(feature = "ndp")]
+#[cfg(unix)]
 mod ndp_props {
     use netget::server::ndp::codec::{
         decode_addressed, decode_options, encode_addressed, format_mac, icmpv6_checksum, parse_mac,
@@ -3732,7 +3725,6 @@ mod ndp_props {
 //    capped by the same constant with the same accounting, which is what lets the round-trip
 //    property above hold at the boundary instead of only inside it.
 
-#[cfg(feature = "amqp")]
 mod amqp_props {
     use netget::server::amqp::codec::{
         body_frames, method_frame, BasicProperties, Decoder, Encoder, FRAME_END, FRAME_METHOD,
@@ -4195,7 +4187,7 @@ mod amqp_props {
 // result is well-formed and describes a different packet. Fixed by refusing; see the
 // at-the-bound assertions below.
 
-#[cfg(feature = "eapol")]
+#[cfg(all(unix, feature = "libpcap"))]
 mod eapol_props {
     use netget::server::eapol::codec::{
         build_ethernet_frame, decode_md5_value, eap_response, eap_response_identity,
@@ -4461,7 +4453,7 @@ mod eapol_props {
 // builder that wrote a plausible-looking wrong checksum passes every field assertion and fails
 // this one.
 
-#[cfg(feature = "tuntap")]
+#[cfg(unix)]
 mod tuntap_props {
     use netget::server::tuntap::packet::{
         build_packet, checksum16, decode, decode_payload, format_mac, parse_mac, tcp_flag_bits,

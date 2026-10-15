@@ -9,8 +9,6 @@
 //! LLM calls: 6 — the startup instruction, `kv put`, `kv get`, `kv list`, a wrong-token
 //! `kv get`, and `kv metadata get`. `status` and every KV preflight are served without the model.
 
-#![cfg(feature = "vault")]
-
 use super::real_client_test::{require_tool, vault, FIXTURE_TOKEN};
 use crate::server::helpers::{self, E2EResult, NetGetConfig};
 use serde_json::{json, Value};

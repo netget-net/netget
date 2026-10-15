@@ -3,7 +3,7 @@
 //! These tests verify Tor client functionality using a local tor_relay server
 //! with BEGIN_DIR support (fully local, no internet required).
 
-#[cfg(all(test, feature = "tor"))]
+#[cfg(unix)]
 mod tor_client_tests {
     use crate::helpers::*;
     use serde_json::json;

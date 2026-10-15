@@ -27,7 +27,7 @@
 //!    un-caps the server silently; a permit never released wedges it shut after `MAX` peers have
 //!    ever connected, which is far worse than no cap at all.
 
-#[cfg(all(test, feature = "usb-keyboard"))]
+#[cfg(all(unix, feature = "libusb"))]
 mod usb_keyboard_connection_cap {
     use crate::helpers::usbip_client::UsbIpClient;
     use crate::helpers::*;

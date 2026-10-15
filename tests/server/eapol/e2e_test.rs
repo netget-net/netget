@@ -41,7 +41,7 @@
 //!   ./cargo-isolated.sh test --no-default-features --features eapol \
 //!       --test server server::eapol -- --test-threads=100
 
-#![cfg(all(test, feature = "eapol"))]
+#![cfg(all(unix, feature = "libpcap"))]
 
 use netget::llm::actions::protocol_trait::{Protocol, Server};
 use netget::llm::OllamaClient;

@@ -25,8 +25,6 @@
 //! This test is **not** `#[ignore]`d and does **not** skip when mongosh is missing —
 //! see `require_mongosh`.
 
-#![cfg(all(feature = "mongodb-server", feature = "mongodb"))]
-
 use crate::helpers::*;
 use serde_json::json;
 use std::time::Duration;

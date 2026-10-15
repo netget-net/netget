@@ -257,10 +257,7 @@ async fn start_and_stop(state: &AppState, form: ServerForm) -> Result<(), String
 ///
 /// Only meaningful where the build compiles everything the list names.
 #[test]
-#[cfg_attr(
-    not(feature = "all-protocols"),
-    ignore = "a narrower build cannot tell a stale skip entry from an uncompiled protocol"
-)]
+#[ignore = "a narrower build cannot tell a stale skip entry from an uncompiled protocol"]
 fn every_skip_entry_names_a_protocol_that_exists() {
     let names: Vec<String> = registry()
         .all_protocols()

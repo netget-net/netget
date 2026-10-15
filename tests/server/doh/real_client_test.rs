@@ -24,8 +24,6 @@
 //! profile does not authenticate it, which is what lets this run without provisioning a CA —
 //! and is also why certificate validation stays unproven.
 
-#![cfg(all(test, feature = "doh"))]
-
 use crate::helpers::{E2EResult, NetGetConfig};
 use std::time::Duration;
 use tokio::process::Command;

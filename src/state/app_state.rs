@@ -340,7 +340,7 @@ struct AppStateInner {
     /// All client instances
     clients: HashMap<ClientId, ClientInstance>,
     /// Tor client instances (for directory queries)
-    #[cfg(feature = "tor")]
+    #[cfg(unix)]
     tor_clients: HashMap<ClientId, Arc<arti_client::TorClient<tor_rtcompat::PreferredRuntime>>>,
     /// All easy protocol instances
     easy_instances: HashMap<EasyId, EasyInstance>,
@@ -616,7 +616,7 @@ impl AppState {
                 mode: Mode::Idle,
                 servers: HashMap::new(),
                 clients: HashMap::new(),
-                #[cfg(feature = "tor")]
+                #[cfg(unix)]
                 tor_clients: HashMap::new(),
                 easy_instances: HashMap::new(),
                 server_to_easy: HashMap::new(),
@@ -1902,7 +1902,7 @@ impl AppState {
     // ========== Proxy Filter Configuration Methods ==========
 
     /// Get proxy filter configuration for a server
-    #[cfg(feature = "proxy")]
+    #[cfg(unix)]
     pub async fn get_proxy_filter_config(
         &self,
         server_id: ServerId,
@@ -1920,7 +1920,7 @@ impl AppState {
     }
 
     /// Set proxy filter configuration for a server
-    #[cfg(feature = "proxy")]
+    #[cfg(unix)]
     pub async fn set_proxy_filter_config(
         &self,
         server_id: ServerId,
@@ -1934,7 +1934,7 @@ impl AppState {
     }
 
     /// Update proxy filter configuration by merging with existing config
-    #[cfg(feature = "proxy")]
+    #[cfg(unix)]
     pub async fn update_proxy_filter_config(
         &self,
         server_id: ServerId,
@@ -1956,7 +1956,7 @@ impl AppState {
     }
 
     /// Get SOCKS5 filter configuration for a server
-    #[cfg(feature = "socks5")]
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn get_socks5_filter_config(
         &self,
         server_id: ServerId,
@@ -1974,7 +1974,7 @@ impl AppState {
     }
 
     /// Set SOCKS5 filter configuration for a server
-    #[cfg(feature = "socks5")]
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn set_socks5_filter_config(
         &self,
         server_id: ServerId,
@@ -1988,7 +1988,7 @@ impl AppState {
     }
 
     /// Update SOCKS5 connection target address
-    #[cfg(feature = "socks5")]
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn update_socks5_target(
         &self,
         server_id: ServerId,
@@ -2018,7 +2018,7 @@ impl AppState {
     // ========== IMAP Connection State Methods ==========
 
     /// Update IMAP connection session state
-    #[cfg(feature = "imap")]
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn update_imap_session_state(
         &self,
         server_id: ServerId,
@@ -2038,7 +2038,7 @@ impl AppState {
     }
 
     /// Update IMAP connection full state (session, user, mailbox)
-    #[cfg(feature = "imap")]
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn update_imap_connection_state(
         &self,
         server_id: ServerId,
@@ -2078,7 +2078,7 @@ impl AppState {
     }
 
     /// Get IMAP connection state
-    #[cfg(feature = "imap")]
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn get_imap_connection_state(
         &self,
         server_id: ServerId,
@@ -2117,7 +2117,7 @@ impl AppState {
     }
 
     /// Update IMAP protocol state (Idle/Processing/Accumulating)
-    #[cfg(feature = "imap")]
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn update_imap_protocol_state(
         &self,
         server_id: ServerId,
@@ -3434,7 +3434,7 @@ impl AppState {
     }
 
     /// Store Tor client instance for directory queries
-    #[cfg(feature = "tor")]
+    #[cfg(unix)]
     pub async fn set_tor_client(
         &self,
         client_id: ClientId,
@@ -3445,7 +3445,7 @@ impl AppState {
     }
 
     /// Get Tor client instance by client ID
-    #[cfg(feature = "tor")]
+    #[cfg(unix)]
     pub async fn get_tor_client(
         &self,
         client_id: ClientId,
@@ -3455,7 +3455,7 @@ impl AppState {
     }
 
     /// Remove Tor client instance (called when client closes)
-    #[cfg(feature = "tor")]
+    #[cfg(unix)]
     pub async fn remove_tor_client(&self, client_id: ClientId) {
         let mut inner = self.inner.write().await;
         inner.tor_clients.remove(&client_id);

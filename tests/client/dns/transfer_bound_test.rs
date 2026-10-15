@@ -12,8 +12,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features dns --test client -- dns::transfer_bound --test-threads=100
 
-#![cfg(feature = "dns")]
-
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;

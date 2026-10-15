@@ -17,7 +17,6 @@
 //! docker run -p 8000:8000 amazon/dynamodb-local -jar DynamoDBLocal.jar -inMemory -sharedDb
 //! ```
 
-#[cfg(all(test, feature = "dynamo"))]
 mod dynamodb_client_tests {
     use aws_sdk_dynamodb::Client;
     use std::collections::HashMap;

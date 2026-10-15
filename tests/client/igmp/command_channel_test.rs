@@ -21,7 +21,7 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features igmp --test client -- igmp::command_channel --test-threads=100
 
-#![cfg(feature = "igmp")]
+#![cfg(unix)]
 
 use std::time::Duration;
 

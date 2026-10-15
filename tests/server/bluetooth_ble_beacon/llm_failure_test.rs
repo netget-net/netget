@@ -20,7 +20,7 @@
 //! Linux end-to-end check is `#[ignore]`d for the same reason as the one in `e2e_test.rs`: it
 //! needs `bluetoothd` and an adapter.
 
-#![cfg(all(test, feature = "bluetooth-ble-beacon"))]
+#![cfg(all(unix, feature = "bluetooth"))]
 
 use netget::server::bluetooth_ble_beacon::beacon_configuration_failure;
 

@@ -883,65 +883,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "async-opcua"
-version = "0.19.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c011d92128edf3870ae12fc12eed59fb21b2cc45900a9c2ff57218aff2c835b4"
-dependencies = [
- "async-opcua-client",
- "async-opcua-core",
- "async-opcua-core-namespace",
- "async-opcua-crypto",
- "async-opcua-macros",
- "async-opcua-nodes",
- "async-opcua-server",
- "async-opcua-types",
- "chrono",
-]
-
-[[package]]
-name = "async-opcua-client"
-version = "0.19.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df6b6057fb54758328c3f069c39d55920470247e2cf183bbf9ab8a293d6604b4"
-dependencies = [
- "arc-swap",
- "async-opcua-core",
- "async-opcua-crypto",
- "async-opcua-nodes",
- "async-opcua-types",
- "async-trait",
- "bytes",
- "chrono",
- "futures",
- "hashbrown 0.15.5",
- "parking_lot",
- "rsa 0.9.8",
- "serde",
- "tokio",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
-name = "async-opcua-core"
-version = "0.19.0"
-dependencies = [
- "async-opcua-crypto",
- "async-opcua-types",
- "bytes",
- "chrono",
- "parking_lot",
- "serde",
- "serde_yaml",
- "thiserror 2.0.20",
- "tokio",
- "tokio-util",
- "tracing",
- "url",
-]
-
-[[package]]
 name = "async-opcua-core-namespace"
 version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1001,31 +942,6 @@ dependencies = [
  "regex",
  "thiserror 2.0.20",
  "tracing",
-]
-
-[[package]]
-name = "async-opcua-server"
-version = "0.19.0"
-dependencies = [
- "arc-swap",
- "async-opcua-core",
- "async-opcua-core-namespace",
- "async-opcua-crypto",
- "async-opcua-nodes",
- "async-opcua-types",
- "async-trait",
- "bitflags 2.13.2",
- "chrono",
- "futures",
- "hashbrown 0.15.5",
- "parking_lot",
- "postcard",
- "regex",
- "serde",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-futures",
 ]
 
 [[package]]
@@ -1345,17 +1261,6 @@ dependencies = [
  "serde",
  "serde_json",
  "url",
-]
-
-[[package]]
-name = "atty"
-version = "0.2.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9b39be18770d11421cdb1b9947a45dd3f37e93092cbf377614828a319d5fee8"
-dependencies = [
- "hermit-abi 0.1.19",
- "libc",
- "winapi 0.3.9",
 ]
 
 [[package]]
@@ -5096,19 +5001,6 @@ dependencies = [
 
 [[package]]
 name = "env_logger"
-version = "0.9.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a12e6657c4c97ebab115a42dcee77225f7f482cdd841cf7088c657a42e9e00e7"
-dependencies = [
- "atty",
- "humantime",
- "log",
- "regex",
- "termcolor",
-]
-
-[[package]]
-name = "env_logger"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4cd405aab171cb85d6735e5c8d9db038c17d3ca007a4d2c25f337935c3d90580"
@@ -5175,22 +5067,6 @@ checksum = "aa68f1b12764fab894d2755d2518754e71b4fd80ecfb822714a1206c2aab39bf"
 dependencies = [
  "cc",
  "libc",
-]
-
-[[package]]
-name = "etcd-client"
-version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "27f998f8294bc5e7d4f8ea31bd08a1e4a69f94e79d88bc289ea48e9eb7c33b39"
-dependencies = [
- "http 1.5.0",
- "prost",
- "tokio",
- "tokio-stream",
- "tonic",
- "tonic-build",
- "tower 0.4.13",
- "tower-service",
 ]
 
 [[package]]
@@ -6109,18 +5985,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "h3-quinn"
-version = "0.0.10"
-dependencies = [
- "bytes",
- "futures",
- "h3",
- "quinn",
- "tokio",
- "tokio-util",
-]
-
-[[package]]
 name = "half"
 version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6268,15 +6132,6 @@ name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
-
-[[package]]
-name = "hermit-abi"
-version = "0.1.19"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62b467343b94ba476dcb2500d242dadbb39557df889310ac77c5d99100aaac33"
-dependencies = [
- "libc",
-]
 
 [[package]]
 name = "hermit-abi"
@@ -7029,24 +6884,6 @@ dependencies = [
 
 [[package]]
 name = "image"
-version = "0.24.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5690139d2f55868e080017335e4b94cb7414274c74f1669c84fb5feba2c9f69d"
-dependencies = [
- "bytemuck",
- "byteorder",
- "color_quant",
- "exr",
- "gif",
- "jpeg-decoder",
- "num-traits",
- "png 0.17.16",
- "qoi",
- "tiff 0.9.1",
-]
-
-[[package]]
-name = "image"
 version = "0.25.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "529feb3e6769d234375c4cf1ee2ce713682b8e76538cb13f9fc23e1400a591e7"
@@ -7064,7 +6901,7 @@ dependencies = [
  "ravif",
  "rayon",
  "rgb",
- "tiff 0.10.3",
+ "tiff",
  "zune-core",
  "zune-jpeg",
 ]
@@ -7593,7 +7430,7 @@ version = "0.4.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
- "hermit-abi 0.5.2",
+ "hermit-abi",
  "libc",
  "windows-sys 0.61.2",
 ]
@@ -7747,15 +7584,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "jpeg-decoder"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00810f1d8b74be64b13dbf3db89ac67740615d6c891f0e7b6179326533011a07"
-dependencies = [
- "rayon",
-]
-
-[[package]]
 name = "js-sys"
 version = "0.3.105"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7814,23 +7642,6 @@ dependencies = [
  "serde",
  "serde-value",
  "serde_json",
-]
-
-[[package]]
-name = "kafka-protocol"
-version = "0.14.1"
-dependencies = [
- "anyhow",
- "bytes",
- "crc",
- "crc32c",
- "flate2",
- "indexmap 2.12.0",
- "lz4",
- "paste",
- "snap",
- "uuid",
- "zstd",
 ]
 
 [[package]]
@@ -8023,7 +7834,6 @@ checksum = "191898e17ddee19e60bccb3945aa02339e81edd4a8c50e21fd4d48cdecda7b29"
 dependencies = [
  "lazy-regex-proc_macros",
  "once_cell",
- "regex",
  "regex-lite",
 ]
 
@@ -9152,7 +8962,268 @@ dependencies = [
 ]
 
 [[package]]
-name = "netget"
+name = "netget-async-opcua"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e01d36dcf4ac0040c7a7f03a16e873c57788a9b8956cea32be2b27283f4b29c"
+dependencies = [
+ "async-opcua-core-namespace",
+ "async-opcua-crypto",
+ "async-opcua-macros",
+ "async-opcua-nodes",
+ "async-opcua-types",
+ "chrono",
+ "netget-async-opcua-client",
+ "netget-async-opcua-core",
+ "netget-async-opcua-server",
+]
+
+[[package]]
+name = "netget-async-opcua-client"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68f4b0f15a46e1bc3d5ce57dede0c0ad3c860403adb71646adb0ae81ea949be0"
+dependencies = [
+ "arc-swap",
+ "async-opcua-crypto",
+ "async-opcua-nodes",
+ "async-opcua-types",
+ "async-trait",
+ "bytes",
+ "chrono",
+ "futures",
+ "hashbrown 0.15.5",
+ "netget-async-opcua-core",
+ "parking_lot",
+ "rsa 0.9.8",
+ "serde",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "netget-async-opcua-core"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2cdf4bc52d20ed02af610013df5067b384f15612f587e97e7008524ce4e45863"
+dependencies = [
+ "async-opcua-crypto",
+ "async-opcua-types",
+ "bytes",
+ "chrono",
+ "parking_lot",
+ "serde",
+ "serde_yaml",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "netget-async-opcua-server"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "925b594bf6fdb7af6fd13c7be7a5714bcf0787d32143bed88d6b4e64ed9df0e7"
+dependencies = [
+ "arc-swap",
+ "async-opcua-core-namespace",
+ "async-opcua-crypto",
+ "async-opcua-nodes",
+ "async-opcua-types",
+ "async-trait",
+ "bitflags 2.13.2",
+ "chrono",
+ "futures",
+ "hashbrown 0.15.5",
+ "netget-async-opcua-core",
+ "parking_lot",
+ "postcard",
+ "regex",
+ "serde",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-futures",
+]
+
+[[package]]
+name = "netget-crossterm-wasm"
+version = "0.1.0"
+dependencies = [
+ "bitflags 2.13.2",
+ "ratatui",
+ "tui-textarea",
+]
+
+[[package]]
+name = "netget-etcd-client"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "64f6e2ab4b1c74df018ed4945b27508bc65b3916877895705f4db5327618f6e5"
+dependencies = [
+ "http 1.5.0",
+ "netget-tonic",
+ "prost",
+ "tokio",
+ "tokio-stream",
+ "tonic-build",
+ "tower 0.4.13",
+ "tower-service",
+]
+
+[[package]]
+name = "netget-h3-quinn"
+version = "0.0.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bff04caff90ae6652de03382e999e3b97164820968d67898e422a895a1812185"
+dependencies = [
+ "bytes",
+ "futures",
+ "h3",
+ "quinn",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "netget-kafka-protocol"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33200d01e3331981b531f96b3d942b36c8207dcbf23a678ae08758d26b92bd5a"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "crc",
+ "crc32c",
+ "flate2",
+ "indexmap 2.12.0",
+ "lz4",
+ "paste",
+ "snap",
+ "uuid",
+ "zstd",
+]
+
+[[package]]
+name = "netget-openapi-rs"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f276d7b021cbcda04c5f79662eeca5dc77a5c088a68b4e687b0ad785fc3fcac1"
+dependencies = [
+ "anyhow",
+ "base64 0.21.7",
+ "chrono",
+ "env_logger",
+ "fern",
+ "futures-util",
+ "log",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "url",
+ "uuid",
+ "validator",
+]
+
+[[package]]
+name = "netget-opentelemetry-proto"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ffc9f9cdf21ac570e8fcfff2b091d77bd833609d9e204417f61010baa0e6839"
+dependencies = [
+ "netget-tonic",
+ "opentelemetry",
+ "opentelemetry_sdk",
+ "prost",
+]
+
+[[package]]
+name = "netget-tokio-wasm"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "gloo-timers",
+ "js-sys",
+ "pin-project-lite",
+ "send_wrapper",
+ "tokio",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+]
+
+[[package]]
+name = "netget-tonic"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dd107da0b7c3b3b4a7ff5857ca11c932dd44160647de798310967e2e10a6754a"
+dependencies = [
+ "async-stream",
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "bytes",
+ "flate2",
+ "h2 0.4.12",
+ "http 1.5.0",
+ "http-body 1.0.1",
+ "http-body-util",
+ "hyper 1.7.0",
+ "hyper-timeout",
+ "hyper-util",
+ "percent-encoding",
+ "pin-project",
+ "prost",
+ "rustls-pemfile 2.2.0",
+ "socket2 0.5.10",
+ "tokio",
+ "tokio-rustls 0.26.4",
+ "tokio-stream",
+ "tower 0.4.13",
+ "tower-layer",
+ "tower-service",
+ "tracing",
+ "webpki-roots 0.26.11",
+]
+
+[[package]]
+name = "netget-tonic-reflection"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ccf2cdba54ae589c93f6a12a8ff226622874aaeeae2ef5e8424b744b69a40bd3"
+dependencies = [
+ "netget-tonic",
+ "prost",
+ "prost-types",
+ "tokio",
+ "tokio-stream",
+]
+
+[[package]]
+name = "netget-tonic-web"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3e0cfa94954fe959df1fd1cc3dbfcabd9a9438befe34bbda312ee1cbc006089"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "http 1.5.0",
+ "http-body 1.0.1",
+ "http-body-util",
+ "netget-tonic",
+ "pin-project",
+ "tokio-stream",
+ "tower-http 0.5.2",
+ "tower-layer",
+ "tower-service",
+ "tracing",
+]
+
+[[package]]
+name = "netget-tool"
 version = "0.3.3"
 dependencies = [
  "aes 0.8.4",
@@ -9162,7 +9233,6 @@ dependencies = [
  "async-imap",
  "async-native-tls 0.5.0",
  "async-nats",
- "async-opcua",
  "async-openai",
  "async-stomp",
  "async-trait",
@@ -9198,7 +9268,6 @@ dependencies = [
  "dhcproto",
  "dirs 5.0.1",
  "ed25519-dalek 2.2.0",
- "etcd-client",
  "feed-rs",
  "flate2",
  "font8x8",
@@ -9210,7 +9279,6 @@ dependencies = [
  "git2",
  "h2 0.4.12",
  "h3",
- "h3-quinn",
  "handlebars",
  "hex",
  "hf-hub",
@@ -9225,7 +9293,7 @@ dependencies = [
  "http-mitm-proxy",
  "hyper 1.7.0",
  "hyper-util",
- "image 0.25.8",
+ "image",
  "imap-codec",
  "include_dir",
  "ipp",
@@ -9238,7 +9306,6 @@ dependencies = [
  "ironrdp-tls",
  "ironrdp-tokio",
  "k8s-openapi",
- "kafka-protocol",
  "kube",
  "lapin",
  "ldap3",
@@ -9258,8 +9325,19 @@ dependencies = [
  "native-tls",
  "nectar",
  "netgauze-bgp-pkt",
+ "netget-async-opcua",
  "netget-crossterm-wasm",
+ "netget-etcd-client",
+ "netget-h3-quinn",
+ "netget-kafka-protocol",
+ "netget-openapi-rs",
+ "netget-opentelemetry-proto",
  "netget-tokio-wasm",
+ "netget-tonic",
+ "netget-tonic-reflection",
+ "netget-tonic-web",
+ "netget-wtransport",
+ "netget-wtransport-proto",
  "nfs3_client",
  "nfs3_types",
  "nfsserve",
@@ -9268,11 +9346,9 @@ dependencies = [
  "oauth2",
  "ollama-rs",
  "once_cell",
- "openapi-rs",
  "openidconnect",
  "opensrv-mysql",
  "openssl-sys",
- "opentelemetry-proto",
  "pavao",
  "pcap",
  "pcsc",
@@ -9286,6 +9362,7 @@ dependencies = [
  "prost-build",
  "prost-reflect",
  "prost-types",
+ "protoc-bin-vendored",
  "pty-process",
  "quick-xml 0.37.5",
  "quinn",
@@ -9300,7 +9377,6 @@ dependencies = [
  "regex",
  "reqwest 0.12.24",
  "reqwest_dav",
- "rfb",
  "ring 0.17.14",
  "rmcp",
  "rsa 0.9.8",
@@ -9338,7 +9414,6 @@ dependencies = [
  "ssh-agent-lib",
  "ssh2",
  "stunclient",
- "suppaftp",
  "syntect",
  "sys-locale",
  "sysinfo 0.32.1",
@@ -9363,10 +9438,7 @@ dependencies = [
  "tokio-util",
  "tokio-xmpp",
  "toml 0.8.23",
- "tonic",
  "tonic-build",
- "tonic-reflection",
- "tonic-web",
  "tor-cell",
  "tor-cert",
  "tor-dirmgr",
@@ -9391,36 +9463,11 @@ dependencies = [
  "webrtc-stun",
  "webrtc-turn",
  "windows-sys 0.61.2",
- "wtransport",
- "wtransport-proto",
  "x25519-dalek 2.0.1",
  "xmlrpc",
  "xmpp-parsers",
  "zenoh",
  "zookeeper-async",
-]
-
-[[package]]
-name = "netget-crossterm-wasm"
-version = "0.1.0"
-dependencies = [
- "bitflags 2.13.2",
- "ratatui",
- "tui-textarea",
-]
-
-[[package]]
-name = "netget-tokio-wasm"
-version = "0.1.0"
-dependencies = [
- "futures",
- "gloo-timers",
- "js-sys",
- "pin-project-lite",
- "send_wrapper",
- "tokio",
- "wasm-bindgen",
- "wasm-bindgen-futures",
 ]
 
 [[package]]
@@ -9432,9 +9479,9 @@ dependencies = [
  "console_error_panic_hook",
  "futures",
  "js-sys",
- "netget",
  "netget-crossterm-wasm",
  "netget-tokio-wasm",
+ "netget-tool",
  "ratatui",
  "serde",
  "serde_json",
@@ -9445,6 +9492,42 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "netget-wtransport"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df20a24c54463ba38bf733b83ea21bb710d15e1eed05091da343b0bf997279d2"
+dependencies = [
+ "bytes",
+ "netget-wtransport-proto",
+ "pem 3.0.6",
+ "quinn",
+ "rcgen 0.14.5",
+ "rustls 0.23.43",
+ "rustls-native-certs 0.8.2",
+ "rustls-pki-types",
+ "sha2 0.11.0",
+ "socket2 0.6.5",
+ "thiserror 2.0.20",
+ "time",
+ "tokio",
+ "tracing",
+ "url",
+ "x509-parser 0.18.1",
+]
+
+[[package]]
+name = "netget-wtransport-proto"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c48919da1c65d23b29d3ef58966aef61c11ab5b2b338f07f1edf4655e3407c54"
+dependencies = [
+ "httlib-huffman",
+ "octets",
+ "thiserror 2.0.20",
+ "url",
 ]
 
 [[package]]
@@ -9884,7 +9967,7 @@ version = "1.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "91df4bbde75afed763b708b7eee1e8e7651e02d97f6d5dd763e89367e957b23b"
 dependencies = [
- "hermit-abi 0.5.2",
+ "hermit-abi",
  "libc",
 ]
 
@@ -10180,27 +10263,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
-name = "openapi-rs"
-version = "0.1.0"
-source = "git+https://github.com/baerwang/openapi-rs#e410a2db898d70ca50bd22d9f9fc05d5b0b88494"
-dependencies = [
- "anyhow",
- "base64 0.21.7",
- "chrono",
- "env_logger 0.10.2",
- "fern",
- "futures-util",
- "log",
- "regex",
- "serde",
- "serde_json",
- "serde_yaml",
- "url",
- "uuid",
- "validator",
-]
-
-[[package]]
 name = "openidconnect"
 version = "3.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10314,18 +10376,6 @@ dependencies = [
  "pin-project-lite",
  "thiserror 2.0.20",
  "tracing",
-]
-
-[[package]]
-name = "opentelemetry-proto"
-version = "0.29.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c40da242381435e18570d5b9d50aca2a4f4f4d8e146231adb4e7768023309b3"
-dependencies = [
- "opentelemetry",
- "opentelemetry_sdk",
- "prost",
- "tonic",
 ]
 
 [[package]]
@@ -11349,7 +11399,7 @@ checksum = "5d0e4f59085d47d8241c88ead0f274e8a0cb551f3625263c05eb8dd897c34218"
 dependencies = [
  "cfg-if 1.0.4",
  "concurrent-queue",
- "hermit-abi 0.5.2",
+ "hermit-abi",
  "pin-project-lite",
  "rustix 1.1.2",
  "windows-sys 0.61.2",
@@ -11697,6 +11747,70 @@ checksum = "52c2c1bf36ddb1a1c396b3601a3cec27c2462e45f07c386894ec3ccf5332bd16"
 dependencies = [
  "prost",
 ]
+
+[[package]]
+name = "protoc-bin-vendored"
+version = "3.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8760a25b6ff9c620324822737e468478fa092234190d2e449760344354896ed9"
+dependencies = [
+ "protoc-bin-vendored-linux-aarch_64",
+ "protoc-bin-vendored-linux-ppcle_64",
+ "protoc-bin-vendored-linux-s390_64",
+ "protoc-bin-vendored-linux-x86_32",
+ "protoc-bin-vendored-linux-x86_64",
+ "protoc-bin-vendored-macos-aarch_64",
+ "protoc-bin-vendored-macos-x86_64",
+ "protoc-bin-vendored-win32",
+]
+
+[[package]]
+name = "protoc-bin-vendored-linux-aarch_64"
+version = "3.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73fa2624782ca04cd44f51554566717377acd240e4c0016d757dd74fccc9324f"
+
+[[package]]
+name = "protoc-bin-vendored-linux-ppcle_64"
+version = "3.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2417e9817fa237dab803ad4dda7357a111656e242959cc6b8f9a1a583367d42"
+
+[[package]]
+name = "protoc-bin-vendored-linux-s390_64"
+version = "3.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4d189c34636356a46a7ed3188233dc8a88c431278cc54d4a19b096a2d270e985"
+
+[[package]]
+name = "protoc-bin-vendored-linux-x86_32"
+version = "3.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "171e39f1e846e5f322ced1ac3b8d4cd3a3833ca24b6e5d58b3632574fe6204fa"
+
+[[package]]
+name = "protoc-bin-vendored-linux-x86_64"
+version = "3.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "873cdcc097593432086661aa432b8078f1cd87bfb02847c332e98ae2c119e966"
+
+[[package]]
+name = "protoc-bin-vendored-macos-aarch_64"
+version = "3.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eeb72df001783b8297847fe8f5f874ee400fd742c843d60583e8c23d96977c7f"
+
+[[package]]
+name = "protoc-bin-vendored-macos-x86_64"
+version = "3.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b04652167eca899dda05f32f5481adeaf25c623a98ce2fc146a001cc59a2add7"
+
+[[package]]
+name = "protoc-bin-vendored-win32"
+version = "3.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "263a3f48f01e7309e857138bd47f785585b4a005e8e56c6d2824ce91195999c3"
 
 [[package]]
 name = "psm"
@@ -12607,22 +12721,6 @@ name = "retry-error"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "061ea3484f50bb17b7adfbf69c8a2d97ccdbcf4981375a50f291d3e4cce6f130"
-
-[[package]]
-name = "rfb"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a91cf2d1b55f3221acda1fda4807a66336e2ab96cb22f28b4be40eb4f2880e1"
-dependencies = [
- "anyhow",
- "async-trait",
- "bitflags 1.3.2",
- "env_logger 0.9.3",
- "futures",
- "image 0.24.9",
- "log",
- "tokio",
-]
 
 [[package]]
 name = "rfc6979"
@@ -15084,19 +15182,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
-name = "suppaftp"
-version = "6.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9d869e942cc5f349ad91645925a9e6b570f62c4c170ad1c7b92b867bd16bd54"
-dependencies = [
- "chrono",
- "futures-lite",
- "lazy-regex",
- "log",
- "thiserror 2.0.20",
-]
-
-[[package]]
 name = "swash"
 version = "0.1.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -15494,17 +15579,6 @@ dependencies = [
  "tracing",
  "uuid",
  "winauth",
-]
-
-[[package]]
-name = "tiff"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba1310fcea54c6a9a4fd1aad794ecc02c31682f6bfbecdf460bf19533eed1e3e"
-dependencies = [
- "flate2",
- "jpeg-decoder",
- "weezl",
 ]
 
 [[package]]
@@ -16016,38 +16090,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df8b2b54733674ad286d16267dcfc7a71ed5c776e4ac7aa3c3e2561f7c637bf2"
 
 [[package]]
-name = "tonic"
-version = "0.12.3"
-dependencies = [
- "async-stream",
- "async-trait",
- "axum",
- "base64 0.22.1",
- "bytes",
- "flate2",
- "h2 0.4.12",
- "http 1.5.0",
- "http-body 1.0.1",
- "http-body-util",
- "hyper 1.7.0",
- "hyper-timeout",
- "hyper-util",
- "percent-encoding",
- "pin-project",
- "prost",
- "rustls-pemfile 2.2.0",
- "socket2 0.5.10",
- "tokio",
- "tokio-rustls 0.26.4",
- "tokio-stream",
- "tower 0.4.13",
- "tower-layer",
- "tower-service",
- "tracing",
- "webpki-roots 0.26.11",
-]
-
-[[package]]
 name = "tonic-build"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -16059,39 +16101,6 @@ dependencies = [
  "prost-types",
  "quote",
  "syn 2.0.119",
-]
-
-[[package]]
-name = "tonic-reflection"
-version = "0.12.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "878d81f52e7fcfd80026b7fdb6a9b578b3c3653ba987f87f0dce4b64043cba27"
-dependencies = [
- "prost",
- "prost-types",
- "tokio",
- "tokio-stream",
- "tonic",
-]
-
-[[package]]
-name = "tonic-web"
-version = "0.12.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5299dd20801ad736dccb4a5ea0da7376e59cd98f213bf1c3d478cf53f4834b58"
-dependencies = [
- "base64 0.22.1",
- "bytes",
- "http 1.5.0",
- "http-body 1.0.1",
- "http-body-util",
- "pin-project",
- "tokio-stream",
- "tonic",
- "tower-http 0.5.2",
- "tower-layer",
- "tower-service",
- "tracing",
 ]
 
 [[package]]
@@ -19316,38 +19325,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tungstenite",
-]
-
-[[package]]
-name = "wtransport"
-version = "0.7.2"
-dependencies = [
- "bytes",
- "pem 3.0.6",
- "quinn",
- "rcgen 0.14.5",
- "rustls 0.23.43",
- "rustls-native-certs 0.8.2",
- "rustls-pki-types",
- "sha2 0.11.0",
- "socket2 0.6.5",
- "thiserror 2.0.20",
- "time",
- "tokio",
- "tracing",
- "url",
- "wtransport-proto",
- "x509-parser 0.18.1",
-]
-
-[[package]]
-name = "wtransport-proto"
-version = "0.7.2"
-dependencies = [
- "httlib-huffman",
- "octets",
- "thiserror 2.0.20",
- "url",
 ]
 
 [[package]]

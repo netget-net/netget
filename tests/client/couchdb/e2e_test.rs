@@ -3,8 +3,6 @@
 //! Tests the CouchDB client implementation against NetGet CouchDB server.
 //! Uses mocks for LLM responses to keep test suite fast (< 10 LLM calls).
 
-#![cfg(feature = "couchdb")]
-
 use crate::helpers::*;
 use serde_json::json;
 use std::time::Duration;

@@ -9,8 +9,6 @@
 //! clients report. 503 with `unavailable_shards_exception` is ES's own "come back later" and
 //! is used when the backend is merely saturated.
 
-#![cfg(all(test, feature = "elasticsearch"))]
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use serde_json::Value;
 use std::time::Duration;

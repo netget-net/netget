@@ -1425,7 +1425,7 @@ fn json_to_string(value: &serde_json::Value) -> String {
 /// Everything is best-effort: a truncated or malformed packet yields empty strings rather
 /// than an error, because the caller's job is to refuse a login it cannot justify, and an
 /// unparseable login is exactly that. It must never be the reason a login is *granted*.
-#[cfg(feature = "mssql")]
+#[cfg(not(target_arch = "wasm32"))]
 fn parse_login7(data: &[u8]) -> (String, String, String) {
     /// Offsets of the (offset, length) pairs within the LOGIN7 body, per MS-TDS 2.2.6.4.
     const IB_USERNAME: usize = 40;

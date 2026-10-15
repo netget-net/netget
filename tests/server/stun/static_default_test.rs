@@ -6,7 +6,7 @@
 //! model. The mock has a `stun_binding_request` rule with `expect_calls(0)`: if the mechanical
 //! path ever reaches the LLM, that rule fires and `verify_mocks()` fails.
 
-#![cfg(feature = "stun")]
+#![cfg(unix)]
 
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;

@@ -26,8 +26,6 @@
 //! be replaced by a default instruction), and the requests used are either answered by the
 //! specification with no model call or parked on a `manual` rule. Loopback only.
 
-#![cfg(feature = "modbus")]
-
 use std::time::Duration;
 
 use netget::cli::management::ServerForm;

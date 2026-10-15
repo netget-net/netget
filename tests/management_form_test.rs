@@ -11,8 +11,6 @@
 //!
 //! No LLM is involved: servers use *static* handlers. Everything binds 127.0.0.1.
 
-#![cfg(feature = "http")]
-
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;

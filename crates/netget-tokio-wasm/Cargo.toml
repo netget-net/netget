@@ -3,6 +3,8 @@ name = "netget-tokio-wasm"
 version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
+repository = "https://github.com/netget-net/netget"
+homepage = "https://netget.net"
 description = "The subset of the tokio API NetGet uses, for wasm32-unknown-unknown: the JS event loop as the executor, timers on setTimeout, and an in-memory virtual network in place of sockets. NetGet depends on it under the name `tokio` on that target so no protocol source changes."
 
 [lib]

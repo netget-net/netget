@@ -19,8 +19,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features xmlrpc --test client -- xmlrpc::response_guard --test-threads=100
 
-#![cfg(feature = "xmlrpc")]
-
 use std::time::Duration;
 
 use netget::cli::management::ClientForm;

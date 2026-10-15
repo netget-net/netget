@@ -20,7 +20,7 @@
 //!   ./cargo-isolated.sh test --no-default-features --features mcp-stdio,tcp \
 //!       --test mcp_scheduled_task_timer_test -- --test-threads=100
 
-#![cfg(all(feature = "mcp-stdio", feature = "tcp"))]
+#![cfg(feature = "mcp-stdio")]
 // `mod helpers` compiles the whole shared E2E harness into this binary; this file uses a
 // small slice of it (the mock LLM server). Same situation as `tests/feedback_loop_test.rs`.
 #![allow(dead_code, unused_imports)]

@@ -17,7 +17,6 @@ fn static_handler(pattern: &str, actions: serde_json::Value) -> Vec<serde_json::
     })]
 }
 
-#[cfg(feature = "tcp")]
 #[test]
 fn unknown_action_name_is_rejected_at_parse_time() {
     let err = EventHandler::parse_event_handlers(static_handler(
@@ -41,7 +40,6 @@ fn unknown_action_name_is_rejected_at_parse_time() {
     );
 }
 
-#[cfg(feature = "tcp")]
 #[test]
 fn valid_action_name_is_accepted() {
     let config = EventHandler::parse_event_handlers(static_handler(
@@ -52,7 +50,6 @@ fn valid_action_name_is_accepted() {
     assert_eq!(config.len(), 1);
 }
 
-#[cfg(feature = "tcp")]
 #[test]
 fn common_actions_are_accepted_for_any_protocol() {
     EventHandler::parse_event_handlers(static_handler(
@@ -65,7 +62,6 @@ fn common_actions_are_accepted_for_any_protocol() {
     .expect("common actions must be valid alongside protocol actions");
 }
 
-#[cfg(feature = "tcp")]
 #[test]
 fn action_valid_for_another_protocol_is_rejected() {
     // `send_dns_a_response` is a DNS action; on a TCP event it cannot execute.
@@ -77,7 +73,6 @@ fn action_valid_for_another_protocol_is_rejected() {
     assert!(err.to_string().contains("send_dns_a_response"));
 }
 
-#[cfg(feature = "tcp")]
 #[test]
 fn malformed_event_reference_is_rejected_at_parse_time() {
     // `EventHandlerType::validate()` detects a reference with an empty path.
@@ -105,7 +100,6 @@ fn malformed_event_reference_is_rejected_at_parse_time() {
     );
 }
 
-#[cfg(feature = "tcp")]
 #[test]
 fn well_formed_event_reference_is_accepted() {
     EventHandler::parse_event_handlers(static_handler(

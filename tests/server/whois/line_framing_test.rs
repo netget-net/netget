@@ -8,7 +8,6 @@
 //! WHOIS is the protocol other simple protocols in this repo were told to copy, so a framing
 //! defect here is the kind that gets inherited.
 
-#[cfg(all(test, feature = "whois"))]
 mod whois_line_framing_test {
     use crate::helpers::{start_netget_server, E2EResult, NetGetConfig};
     use std::time::Duration;

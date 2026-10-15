@@ -12,7 +12,7 @@
 //!
 //! These tests need no Bluetooth adapter, so they are not ignored.
 
-#![cfg(all(test, feature = "bluetooth-ble-data-stream"))]
+#![cfg(all(unix, feature = "bluetooth"))]
 
 use netget::llm::actions::protocol_trait::Protocol;
 use netget::server::bluetooth_ble_data_stream::actions::BluetoothBleDataStreamProtocol;

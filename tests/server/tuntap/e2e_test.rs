@@ -20,7 +20,7 @@
 //!   ./cargo-isolated.sh test --no-default-features --features tuntap \
 //!       --test server -- server::tuntap::e2e_test --test-threads=100
 
-#[cfg(all(test, feature = "tuntap"))]
+#[cfg(unix)]
 mod tests {
     use crate::helpers::mock_builder::MockLlmBuilder;
     use crate::helpers::mock_ollama::MockOllamaServer;

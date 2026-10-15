@@ -13,8 +13,6 @@
 //!   defect (`65536 + status` truncating into a `200`) in a protocol where the success is a
 //!   credential.
 
-#![cfg(all(test, feature = "oauth2"))]
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use serde_json::Value;
 use std::time::Duration;

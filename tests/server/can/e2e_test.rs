@@ -27,7 +27,7 @@
 //!   ./cargo-isolated.sh test --no-default-features --features can --test server can:: \
 //!       -- --test-threads=100
 
-#![cfg(all(test, feature = "can"))]
+#![cfg(unix)]
 
 use netget::llm::actions::protocol_trait::{Protocol, Server};
 use netget::llm::OllamaClient;

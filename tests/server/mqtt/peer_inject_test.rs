@@ -11,8 +11,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features mqtt --test server -- mqtt::peer_inject --test-threads=100
 
-#![cfg(feature = "mqtt")]
-
 use std::time::Duration;
 
 use netget::cli::management::ServerForm;

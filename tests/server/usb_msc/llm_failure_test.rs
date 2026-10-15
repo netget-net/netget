@@ -21,7 +21,7 @@
 //! about transfers the image has already served, so there is nothing the host is waiting for and
 //! nothing to withdraw. They log at ERROR and stop.
 
-#[cfg(all(test, feature = "usb-msc"))]
+#[cfg(all(unix, feature = "libusb"))]
 mod usb_msc_llm_failure {
     use crate::helpers::usbip_client::{Csw, UsbIpClient};
     use crate::helpers::*;

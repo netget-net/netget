@@ -20,7 +20,6 @@
 //! exactly two actions, `send_signaling_message` and `disconnect_peer`, and nothing else is
 //! mocked here.
 
-#[cfg(all(test, feature = "webrtc"))]
 mod webrtc_signaling_server_tests {
     use crate::helpers::*;
     use futures::{SinkExt, StreamExt};

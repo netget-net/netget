@@ -316,7 +316,6 @@ fn sigkilled_parent_takes_its_child_with_it() {
 ///
 /// Feature-gated because it needs a protocol to serve; `tcp` is in the blocking
 /// CI feature set and in the default build.
-#[cfg(feature = "tcp")]
 #[test]
 fn sigkilled_parent_takes_its_netget_with_it() {
     if std::env::var(WORKER_ENV).is_ok() {
@@ -339,7 +338,6 @@ fn sigkilled_parent_takes_its_netget_with_it() {
 
 enum WorkerChild {
     Sleep,
-    #[cfg(feature = "tcp")]
     NetGet,
 }
 
@@ -369,7 +367,6 @@ fn worker_body(kind: WorkerChild) {
             std::mem::forget(child);
             pid
         }
-        #[cfg(feature = "tcp")]
         WorkerChild::NetGet => spawn_harness_netget(),
     };
 
@@ -388,7 +385,6 @@ fn worker_body(kind: WorkerChild) {
 /// `start_netget` is what every e2e suite calls, so this exercises the tie
 /// exactly as the suite arms it — mock Ollama included, without which netget
 /// exits immediately with "Ollama is not available".
-#[cfg(feature = "tcp")]
 fn spawn_harness_netget() -> u32 {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

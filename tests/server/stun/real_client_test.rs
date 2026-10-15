@@ -30,7 +30,7 @@
 //! *protocol implementation* rather than about a mock's ability to echo a transaction ID: the
 //! bytes stuntman accepts were assembled by `src/server/stun/`, and by nothing else.
 
-#![cfg(feature = "stun")]
+#![cfg(unix)]
 
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::net::SocketAddr;

@@ -511,7 +511,6 @@ async fn test_all_protocols_static_mode_startup() -> E2EResult<()> {
 // =============================================================================
 
 /// E2E test for TCP using actual protocol examples
-#[cfg(feature = "tcp")]
 #[tokio::test]
 async fn test_tcp_actual_examples() -> E2EResult<()> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -627,7 +626,6 @@ async fn test_tcp_actual_examples() -> E2EResult<()> {
 }
 
 /// E2E test for HTTP using actual protocol examples
-#[cfg(feature = "http")]
 #[tokio::test]
 async fn test_http_actual_examples() -> E2EResult<()> {
     println!("\n=== E2E Test: HTTP Actual Examples ===\n");
@@ -705,7 +703,6 @@ async fn test_http_actual_examples() -> E2EResult<()> {
 }
 
 /// E2E test for DNS using actual protocol examples
-#[cfg(feature = "dns")]
 #[tokio::test]
 async fn test_dns_actual_examples() -> E2EResult<()> {
     use hickory_client::client::{AsyncClient, ClientHandle};
@@ -801,7 +798,6 @@ async fn test_dns_actual_examples() -> E2EResult<()> {
 }
 
 /// Test static mode startup examples actually work
-#[cfg(feature = "tcp")]
 #[tokio::test]
 async fn test_tcp_static_mode_example() -> E2EResult<()> {
     use tokio::io::AsyncReadExt;
@@ -863,7 +859,6 @@ async fn test_tcp_static_mode_example() -> E2EResult<()> {
 }
 
 /// Test HTTP static mode startup example
-#[cfg(feature = "http")]
 #[tokio::test]
 async fn test_http_static_mode_example() -> E2EResult<()> {
     println!("\n=== E2E Test: HTTP Static Mode Actual Example ===\n");
@@ -919,7 +914,6 @@ async fn test_http_static_mode_example() -> E2EResult<()> {
 }
 
 /// Test alternative examples for TCP
-#[cfg(feature = "tcp")]
 #[tokio::test]
 async fn test_tcp_alternative_examples() -> E2EResult<()> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};

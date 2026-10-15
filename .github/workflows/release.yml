@@ -26,35 +26,38 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Every protocol a target can build is compiled in; `features` adds the capabilities.
+        # macOS ships libpcap, PC/SC and CoreBluetooth, so its binaries carry those protocols
+        # too. Linux and Windows release binaries need no system library at run time.
         include:
           - target: aarch64-apple-darwin
             runner: macos-14
-            features: dist-darwin
+            features: mcp-stdio,mcp-http,sqlite,vendored-openssl,libpcap,bluetooth,pcsc
             key: darwin-arm64
             ext: tar.gz
           - target: x86_64-apple-darwin
             runner: macos-14 # cross-compiled from Apple Silicon; Intel runners are scarce
-            features: dist-darwin
+            features: mcp-stdio,mcp-http,sqlite,vendored-openssl,libpcap,bluetooth,pcsc
             key: darwin-x64
             ext: tar.gz
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-22.04
-            features: dist
+            features: mcp-stdio,mcp-http,sqlite,vendored-openssl
             key: linux-x64
             ext: tar.gz
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-22.04-arm
-            features: dist
+            features: mcp-stdio,mcp-http,sqlite,vendored-openssl
             key: linux-arm64
             ext: tar.gz
           - target: x86_64-unknown-linux-musl
             runner: ubuntu-22.04
-            features: dist
+            features: mcp-stdio,mcp-http,sqlite,vendored-openssl
             key: linux-x64-musl
             ext: tar.gz
           - target: x86_64-pc-windows-msvc
             runner: windows-2022
-            features: dist-windows
+            features: mcp-stdio,mcp-http,sqlite,vendored-openssl
             key: win32-x64
             ext: zip
     steps:

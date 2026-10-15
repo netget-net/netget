@@ -25,7 +25,7 @@
 //!   ./cargo-isolated.sh test --no-default-features --features ssh-agent --test server -- \
 //!       ssh_agent::connection_bounds_test --test-threads=100
 
-#![cfg(all(test, feature = "ssh-agent", unix))]
+#![cfg(unix)]
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;

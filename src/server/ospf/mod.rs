@@ -19,23 +19,23 @@ use tokio::io::unix::AsyncFd;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info, trace, warn};
 
-#[cfg(feature = "ospf")]
+#[cfg(unix)]
 use crate::llm::action_helper::call_llm;
-#[cfg(feature = "ospf")]
+#[cfg(unix)]
 use crate::llm::ollama_client::OllamaClient;
-#[cfg(feature = "ospf")]
+#[cfg(unix)]
 use crate::logging::emit::Log;
-#[cfg(feature = "ospf")]
+#[cfg(unix)]
 use crate::protocol::Event;
-#[cfg(feature = "ospf")]
+#[cfg(unix)]
 use crate::server::connection::ConnectionId;
-#[cfg(feature = "ospf")]
+#[cfg(unix)]
 use crate::server::socket_helpers::create_ospf_raw_socket;
-#[cfg(feature = "ospf")]
+#[cfg(unix)]
 use crate::state::app_state::AppState;
-#[cfg(feature = "ospf")]
+#[cfg(unix)]
 use crate::state::server::OspfNeighborState;
-#[cfg(feature = "ospf")]
+#[cfg(unix)]
 use actions::{
     OspfInterfaceConfig, OspfProtocol, OSPF_DATABASE_DESCRIPTION_EVENT, OSPF_HELLO_EVENT,
     OSPF_LINK_STATE_ACK_EVENT, OSPF_LINK_STATE_REQUEST_EVENT, OSPF_LINK_STATE_UPDATE_EVENT,
@@ -59,7 +59,7 @@ const OSPF_ALL_SPF_ROUTERS: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 5);
 const OSPF_ALL_DROUTERS: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 6);
 
 /// OSPF neighbor information
-#[cfg(feature = "ospf")]
+#[cfg(unix)]
 struct OspfNeighbor {
     #[allow(dead_code)]
     router_id: String,
@@ -74,7 +74,7 @@ struct OspfNeighbor {
 }
 
 /// Shared OSPF server state
-#[cfg(feature = "ospf")]
+#[cfg(unix)]
 struct OspfState {
     socket_fd: i32,
     /// This interface's address: the local end of every neighbour connection published
@@ -89,7 +89,7 @@ struct OspfState {
 /// OSPF server
 pub struct OspfServer;
 
-#[cfg(feature = "ospf")]
+#[cfg(unix)]
 impl OspfServer {
     /// Spawn OSPF server with LLM control
     pub async fn spawn_with_llm_actions(
@@ -311,7 +311,7 @@ impl OspfServer {
         Ok(SocketAddr::new(IpAddr::V4(interface_ip), 0))
     }
 
-    #[cfg(feature = "ospf")]
+    #[cfg(unix)]
     async fn handle_ospf_packet(
         packet_type: u8,
         data: &[u8],
@@ -525,7 +525,7 @@ impl OspfServer {
         Ok(())
     }
 
-    #[cfg(feature = "ospf")]
+    #[cfg(unix)]
     async fn handle_hello_packet(
         data: &[u8],
         src_ip: Ipv4Addr,
@@ -657,7 +657,7 @@ impl OspfServer {
     ///
     /// Body layout after the 24-byte OSPF header:
     /// InterfaceMTU(2) | Options(1) | Flags(1) | DDSequenceNumber(4) | LSA headers (20 each)
-    #[cfg(feature = "ospf")]
+    #[cfg(unix)]
     #[allow(clippy::too_many_arguments)]
     async fn handle_database_description_packet(
         data: &[u8],
@@ -726,7 +726,7 @@ impl OspfServer {
     /// Handle a Link State Request packet (RFC 2328 A.3.4).
     ///
     /// Body is a repeating triple: LSType(4) | LinkStateID(4) | AdvertisingRouter(4)
-    #[cfg(feature = "ospf")]
+    #[cfg(unix)]
     #[allow(clippy::too_many_arguments)]
     async fn handle_link_state_request_packet(
         data: &[u8],
@@ -789,7 +789,7 @@ impl OspfServer {
     ///
     /// Body layout: NumberOfLSAs(4) followed by that many LSAs, each starting with a
     /// 20-byte header whose `length` field covers header plus body.
-    #[cfg(feature = "ospf")]
+    #[cfg(unix)]
     #[allow(clippy::too_many_arguments)]
     async fn handle_link_state_update_packet(
         data: &[u8],
@@ -863,7 +863,7 @@ impl OspfServer {
     }
 
     /// Handle a Link State Acknowledgment packet (RFC 2328 A.3.6) - a list of LSA headers.
-    #[cfg(feature = "ospf")]
+    #[cfg(unix)]
     #[allow(clippy::too_many_arguments)]
     async fn handle_link_state_ack_packet(
         data: &[u8],
@@ -916,7 +916,7 @@ impl OspfServer {
     ///
     /// Shared by every packet-type handler so they all get identical action handling, logging
     /// and destination resolution.
-    #[cfg(feature = "ospf")]
+    #[cfg(unix)]
     #[allow(clippy::too_many_arguments)]
     async fn dispatch_event(
         event: Event,
@@ -1158,7 +1158,7 @@ impl OspfServer {
     }
 
     /// Send OSPF packet to destination
-    #[cfg(feature = "ospf")]
+    #[cfg(unix)]
     pub fn send_ospf_packet(socket_fd: i32, dest_ip: Ipv4Addr, ospf_data: &[u8]) -> Result<()> {
         unsafe {
             let mut dest_addr = std::mem::zeroed::<libc::sockaddr_in>();
@@ -1197,7 +1197,7 @@ impl OspfServer {
 /// for `event_id`. When false the server observes passively and never consults the model —
 /// whether to respond to an OSPF speaker (and how: DR claim, honeypot, ...) is a policy decision
 /// with no configured policy to apply.
-#[cfg(feature = "ospf")]
+#[cfg(unix)]
 async fn operator_wants_dynamic(
     state: &AppState,
     server_id: crate::state::ServerId,

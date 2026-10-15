@@ -17,8 +17,6 @@
 //! at all, so defaulting it to `false` hid per-item failures the handler had itself reported.
 //! It is now derived from the items when omitted — observable rather than assumed.
 
-#![cfg(all(test, feature = "elasticsearch"))]
-
 use crate::server::helpers::*;
 use ::netget::llm::actions::protocol_trait::{ActionResult, Server};
 use ::netget::server::ElasticsearchProtocol;

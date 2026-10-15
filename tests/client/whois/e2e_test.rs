@@ -15,7 +15,6 @@
 //!
 //! LLM calls: 4 (two startups, one server-side query, one client-side response).
 
-#[cfg(all(test, feature = "whois"))]
 mod whois_client_tests {
     use crate::helpers::*;
     use std::sync::{Arc, Mutex};

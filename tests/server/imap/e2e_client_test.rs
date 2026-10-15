@@ -8,7 +8,6 @@
 //! This complements the raw TCP tests in tests/server/imap/test.rs
 //! by using an actual IMAP client implementation.
 
-#[cfg(all(test, feature = "imap", feature = "imap"))]
 mod e2e_imap_client {
     use crate::helpers::*;
     use futures::StreamExt;

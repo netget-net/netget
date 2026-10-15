@@ -2,8 +2,6 @@
 //! instance, and where it is offered (a row on every instance, a button on the
 //! create/edit form so the capture can run before the instance exists).
 
-#![cfg(feature = "tcp")]
-
 use netget::tui::app::Section;
 use netget::tui::cards::{self, InstanceAction};
 use netget::tui::hit::ModalAction;

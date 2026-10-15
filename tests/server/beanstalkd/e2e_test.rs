@@ -11,8 +11,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features beanstalkd --test server -- beanstalkd::e2e --test-threads=100
 
-#![cfg(feature = "beanstalkd")]
-
 use super::common::Peer;
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 

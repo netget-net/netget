@@ -15,8 +15,6 @@
 //! * a `RETR` answered as a `+OK` and the message as raw `send_pop3_message` text is framed by
 //!   NetGet (status line, CRLF, terminating `.`), logged `decision=multiline_assembled`.
 
-#![cfg(feature = "pop3")]
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};

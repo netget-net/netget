@@ -26,8 +26,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features pop3 --test server -- pop3::connection_bounds --test-threads=100
 
-#![cfg(feature = "pop3")]
-
 use std::time::Duration;
 
 use netget::cli::management::ServerForm;

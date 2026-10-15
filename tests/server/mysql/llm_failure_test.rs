@@ -8,8 +8,6 @@
 //! The alternative this replaced was an empty OK packet, which the client cannot distinguish
 //! from a statement that succeeded and affected no rows.
 
-#![cfg(feature = "mysql")]
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 

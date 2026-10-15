@@ -26,7 +26,7 @@
 //! The device must also still be *there*: the session survives, so a host that keeps polling
 //! gets a working keyboard back the moment the backend recovers.
 
-#[cfg(all(test, feature = "usb-keyboard"))]
+#[cfg(all(unix, feature = "libusb"))]
 mod usb_keyboard_llm_failure {
     use crate::helpers::usbip_client::UsbIpClient;
     use crate::helpers::*;

@@ -3,8 +3,6 @@
 //! Both cases below were live defects, and neither is reachable through `tiberius` — which is
 //! why the rest of this suite, driven entirely by `tiberius`, missed them.
 
-#![cfg(feature = "mssql")]
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

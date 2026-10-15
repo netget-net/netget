@@ -9,7 +9,6 @@
 // Lesson worth keeping: an `#[ignore]` citing a defect elsewhere goes stale silently when that
 // defect is fixed, and nothing re-checks it. Re-run ignored tests with `--include-ignored`
 // after landing an infrastructure fix.
-#[cfg(all(test, feature = "svn"))]
 mod svn_e2e_test {
     use crate::helpers::{E2EResult, NetGetConfig};
     use std::time::Duration;

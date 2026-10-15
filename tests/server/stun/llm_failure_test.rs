@@ -17,7 +17,7 @@
 //! answer here; tagging it `fail_closed_` would mislead anyone grepping for requests that went
 //! unanswered. See the failure-behaviour table in `src/server/stun/CLAUDE.md`.
 
-#![cfg(feature = "stun")]
+#![cfg(unix)]
 
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;

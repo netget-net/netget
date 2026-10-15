@@ -20,7 +20,7 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features bluetooth-ble-client --test client -- bluetooth::command_channel --test-threads=100
 
-#![cfg(feature = "bluetooth-ble-client")]
+#![cfg(all(unix, feature = "bluetooth"))]
 
 use std::time::Duration;
 

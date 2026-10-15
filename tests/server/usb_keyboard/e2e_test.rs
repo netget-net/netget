@@ -27,7 +27,7 @@
 //! - `usb_keyboard_detached` was noted as unreachable behind `sleep(u64::MAX)`. That was fixed
 //!   in the source before this pass; the `#[ignore]` was simply stale.
 
-#[cfg(all(test, feature = "usb-keyboard"))]
+#[cfg(all(unix, feature = "libusb"))]
 mod usb_keyboard_e2e {
     use crate::helpers::usbip_client::UsbIpClient;
     use crate::helpers::*;

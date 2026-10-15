@@ -19,8 +19,6 @@
 //! its whole startup conversation, and the assertion is about a specific opcode and a specific
 //! four-byte code.
 
-#![cfg(all(test, feature = "cassandra"))]
-
 use crate::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

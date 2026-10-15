@@ -3,8 +3,6 @@
 //! These tests spawn the actual NetGet binary with IPP prompts
 //! and validate the responses using HTTP clients (IPP runs over HTTP).
 
-#![cfg(feature = "ipp")]
-
 // Helper module imported from parent
 
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};

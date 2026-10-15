@@ -18,8 +18,6 @@
 //!   MongoDB's own `Overflow` error, and a message with an unknown *required* flag bit is
 //!   refused. Zero LLM calls.
 
-#![cfg(feature = "mongodb-server")]
-
 use std::time::Duration;
 
 use netget::cli::management::ServerForm;
@@ -33,7 +31,6 @@ use tokio::sync::mpsc;
 // The official driver
 // ---------------------------------------------------------------------------------------------
 
-#[cfg(feature = "mongodb")]
 #[tokio::test]
 async fn driver_write_batches_reach_the_model_in_full() -> crate::helpers::E2EResult<()> {
     use crate::helpers::{start_netget_server, NetGetConfig};

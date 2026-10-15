@@ -14,8 +14,6 @@
 //! * the GTPv1 **fixed (<128) vs TLV (>=128) information element split** — a parser that
 //!   assumes TLV throughout reads a Cause value as the first octet of a length.
 
-#![cfg(feature = "gtp")]
-
 use netget::server::gtp::codec as ng;
 use std::net::{IpAddr, Ipv4Addr};
 

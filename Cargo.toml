@@ -1,9 +1,32 @@
 [package]
-name = "netget"
+# crates.io's `netget` and `netget-cli` are unrelated projects, so the package is netget-tool.
+# The library stays `netget` ([lib] below) and the installed command stays `netget`
+# (src/bin/netget.rs).
+name = "netget-tool"
 version = "0.3.3"
 edition = "2021"
 license = "AGPL-3.0-or-later"
-repository = "https://github.com/smotanacom/netget"
+description = "Network protocol stubbing toolkit: ~280 protocol servers and clients whose responses come from an LLM, a script, a static rule or a person."
+repository = "https://github.com/netget-net/netget"
+homepage = "https://netget.net"
+readme = "README.md"
+keywords = ["network", "protocol", "llm", "mock", "server"]
+categories = ["network-programming", "command-line-utilities", "development-tools::testing"]
+# What crates.io receives: the sources, the build inputs and the license. Tests, fuzz targets,
+# the site, docs and the in-tree AGENTS.md/CLAUDE.md notes stay in the repository (the upload
+# limit is 10 MB compressed).
+include = [
+    "/src/**/*.rs",
+    "/src/**/*.json",
+    "/prompts/**",
+    "/proto/**",
+    "/build.rs",
+    "/README.md",
+    "/LICENSE",
+]
+
+[lib]
+name = "netget"
 
 [workspace]
 members = ["crates/*"]
@@ -15,1147 +38,33 @@ exclude = ["fuzz", "vendor"]
 resolver = "2"
 
 [features]
-default = ["all-protocols"]
-
-# Terminal snapshot testing (PTY-based TUI tests)
-terminal-snapshot = []
-
-# GPU monitoring (cross-platform: NVIDIA, AMD, Intel)
-gpu = ["dep:gfxinfo"]
-
-# Android Termux: Pure-Rust protocols compatible with Android/Termux environment
-# (portable-base plus isis, which sniffs L2 frames via libpcap — available on Termux).
-android-termux = ["portable-base", "isis"]
-
-# Portable base: pure-Rust protocols with NO system-library dependency at link
-# or runtime. Excludes: BLE (needs BlueZ), NFC (needs PC/SC), USB (needs USB/IP),
-# packet capture / isis (needs libpcap), STUN/TURN (old nix crate),
-# WireGuard/OpenVPN (not gated for Android). Uses vendored OpenSSL.
-portable-base = [
-    "dep:openssl-sys",  # Force vendored OpenSSL compilation from source
-    "tcp",
-    "socket_file",
-    "http",
-    "http2",
-    "quic",
-    "http3",
-    "pypi",
-    "maven",
-    "udp",
-    "dc",
-    "dns",
-    "dot",
-    "doq",
-    "doh",
-    "dhcp",
-    "bootp",
-    "ntp",
-    "whois",
-    "nats",
-    "stomp",
-    "ident",
-    "gopher",
-    "dict",
-    "nut",
-    "beanstalkd",
-    "zabbix",
-    "gearman",
-    "nsq",
-    "gemini",
-    "finger",
-    "ssdp",
-    "llmnr",
-    "netbios-ns",
-    "snmp",
-    "igmp",
-    "syslog",
-    "statsd",
-    "graphite",
-    "gelf",
-    "fluent-forward",
-    "influxdb",
-    "loki",
-    "ipfix",
-    "netflow-v9",
-    "tacacs",
-    "diameter",
-    "netconf",
-    "rpki_rtr",
-    "rdap",
-    "hl7",
-    "icap",
-    "dc_peer",
-    "adc",
-    "adc_peer",
-    "soulseek",
-    "soulseek_peer",
-    "gnutella",
-    "s7comm",
-    "ethernet_ip",
-    "dnp3",
-    "iec104",
-    "bacnet",
-    "opcua",
-    "ocpp",
-    "a2a",
-    "graphql",
-    "fastcgi",
-    "redfish",
-    "scim",
-    "socketio",
-    "caldav",
-    "carddav",
-    "dicom",
-    "acme",
-    "fix",
-    "wamp",
-    "rtmp",
-    "srt",
-    "amqp1",
-    "thrift",
-    "bmp",
-    "mqtt_sn",
-    "nbd",
-    "managesieve",
-    "zenoh",
-    "lwm2m",
-    "restconf",
-    "webtransport",
-    "jmap",
-    "epp",
-    "lmtp",
-    "lpd",
-    "inetd",
-    "rcon",
-    "a2s",
-    "minecraft",
-    "ninep",
-    "zeromq",
-    "smpp",
-    "clickhouse",
-    "msgpack-rpc",
-    "zipkin",
-    "capnp-rpc",
-    "knx",
-    "consul",
-    "milter",
-    "anthropic",
-    "radsec",
-    "dbus",
-    "bfd",
-    "vxlan",
-    "rsync",
-    "pfcp",
-    "matrix",
-    "libp2p",
-    "sunrpc",
-    "guacamole",
-    "activitypub",
-    "stratum",
-    "stratum-v2",
-    "pulsar",
-    "tr069",
-    "sse",
-    "wsdiscovery",
-    "onvif",
-    "kerberos",
-    "x11",
-    "sflow",
-    "prometheus-remote-write",
-    "ssh",
-    "ssh-agent",
-    "svn",
-    "irc",
-    "xmpp",
-    "telnet",
-    "smtp",
-    "mdns",
-    "mysql",
-    "mssql",
-    "snowflake",
-    "db2",
-    "ipp",
-    "postgresql",
-    "mongodb-server",
-    "mongodb",
-    "memcached",
-    "radius",
-    "redis",
-    "rss",
-    "proxy",
-    "webdav",
-    "nfs",
-    "cassandra",
-    "smb",
-    # STUN/TURN excluded (use old nix-0.8.1 crate incompatible with modern Rust)
-    "webrtc",
-    "sip",
-    "h323",
-    "rtp",
-    "rtsp",
-    "hls",
-    "ldap",
-    "imap",
-    "pop3",
-    "nntp",
-    "mqtt",
-    "modbus",
-    "coap",
-    "amqp",
-    "socks5",
-    "elasticsearch",
-    "couchdb",
-    "yarn",
-    "spark",
-    "dynamo",
-    "s3",
-    "sqs",
-    "npm",
-    "oci-registry",
-    "openai",
-    "ollama",
-    "oauth2",
-    "jsonrpc",
-    # WireGuard/OpenVPN excluded (platform-specific, not gated for Android)
-    "ipsec",
-    "bgp",
-    # OSPF excluded (requires raw sockets/root)
-    # isis moved to android-termux wrapper (needs libpcap)
-    "rip",
-    "bitcoin",
-    "devp2p",
-    "nostr",
-    "mcp",
-    "grpc",
-    "grpc-web",
-    "connect_rpc",
-    "gnmi",
-    "xmlrpc",
-    "tor",
-    "vnc",
-    "reverse-shell",
-    "rdp",
-    "spice",
-    "openapi",
-    "openid",
-    "git",
-    "mercurial",
-    "kafka",
-    "kubernetes",
-    "kubernetes-server",
-    "prometheus",
-    "otlp",
-    "docker",
-    "vault",
-    "bolt",
-    "etcd",
-    "zookeeper",
-    "torrent-tracker",
-    "torrent-dht",
-    "torrent-peer",
-    "tls",
-    "saml-idp",
-    "saml-sp",
-    # BLE protocols excluded (need BlueZ on Linux, not available on Android)
-    # NFC protocols excluded (need PC/SC library, not on Android)
-    # USB protocols excluded (need USB/IP kernel module)
-    # DataLink/ARP excluded (need libpcap and root access)
+# Protocols are not features. Every protocol compiles on every platform it supports (the
+# browser build and Windows each skip the ones they cannot build; see AGENTS.md). Features
+# select what needs a system library, and optional capabilities.
+default = [
+    "libpcap", "bluetooth", "pcsc", "libusb", "libsmbclient",
+    "mcp-stdio", "mcp-http", "embedded-llm", "sqlite",
 ]
 
-tcp = []
-socket_file = []  # Unix domain socket server & client for IPC (Unix/Linux/macOS only, gated with #[cfg(unix)]), no extra deps
-named_pipe = []  # POSIX named pipe (mkfifo FIFO) server, impersonates an OS-level IPC endpoint (Unix only, #[cfg(unix)]), no extra deps
-pty = []  # Pseudo-terminal (openpty) server, LLM role-plays a program on a terminal (Unix only, #[cfg(unix)]); libc only, no extra deps
-stdio = []  # NetGet as a stdin/stdout/stderr pipe filter, LLM drives the streams (Unix only, #[cfg(unix)]); refuses under TUI/--mcp; no extra deps
-http = ["dep:rustls", "dep:tokio-rustls", "dep:rustls-pemfile", "dep:rcgen", "urlencoding"]
-http2 = ["dep:h2", "dep:rustls", "dep:tokio-rustls", "dep:rustls-pemfile", "dep:rcgen"]
-pypi = ["http", "urlencoding"]  # PyPI (Python Package Index) uses HTTP and URL encoding for search (PEP 503 Simple Repository API)
-maven = []  # Maven repository server (HTTP-based artifact distribution)
-udp = []
-datalink = ["dep:pcap"]  # DataLink sniffs L2 frames via libpcap
-arp = ["pnet", "dep:pcap"]  # ARP (Address Resolution Protocol) uses pnet for packet handling + libpcap for capture
-icmp = ["pnet", "socket2/all"]  # ICMP (Internet Control Message Protocol) uses pnet for packet handling + raw sockets (requires socket2 'all' feature for Type::RAW)
-ndp = ["pnet", "socket2/all"]  # IPv6 Neighbor Discovery (ICMPv6) - raw socket via pnet + socket2
-dhcpv6 = ["dhcproto"]  # DHCPv6 (RFC 8415) server on UDP 547 - reuses dhcproto
-tuntap = ["dep:tun"]  # TUN/TAP interface endpoint - every routed IP packet becomes an event
-rawip = ["socket2/all"]  # Generic raw IP protocol-N listener (GRE 47, ESP 50, ...) - raw socket via socket2; the codec is hand-written
-gtp = []  # GTP-C / GTP-U mobile core (UDP 2123/2152) server and client (SGSN/SGW/MME side) - hand-rolled, no extra deps
-m3ua = []  # M3UA/SIGTRAN - SCTP where available, refuses elsewhere; no extra deps
-can = ["dep:socketcan"]  # CAN bus via SocketCAN - Linux only, target-gated like bluetooth-ble-beacon
-lldp = ["pnet", "dep:pcap"]  # LLDP link-layer discovery - raw Ethernet via pnet, capture via libpcap
-cdp = ["pnet", "dep:pcap"]  # Cisco Discovery Protocol - raw Ethernet SNAP via pnet, capture via libpcap
-stp = ["dep:pcap"]  # STP/RSTP bridge protocol data units - raw 802.3 LLC via libpcap (codec is hand-written; pnet is not used)
-vrrp = ["socket2/all", "dep:sha1"]  # VRRP v2/v3 and CARP - IP protocol 112 raw socket; sha1 for CARP's HMAC-SHA1 auth field
-hsrp = []  # HSRP v1/v2 gateway redundancy over UDP 1985 - no extra deps
-eapol = ["pnet", "dep:pcap", "dep:md-5"]  # EAPOL / 802.1X authenticator - libpcap capture; md-5 for the RFC 1994 MD5-Challenge digest
-wol = []  # Wake-on-LAN magic packet listener (UDP 9) - no extra deps
-dc = ["dep:rustls", "dep:tokio-rustls", "dep:webpki-roots"]  # DC (Direct Connect) - supports TLS (DCCS)
-dns = ["hickory-server", "hickory-proto", "hickory-proto/dnssec-ring", "dep:hickory-client"]
-doq = ["dns", "dep:quinn", "dep:rustls", "dep:rustls-pemfile", "dep:rcgen", "dep:webpki-roots"]  # RFC 9250 DNS over QUIC server and client
-dot = ["dns", "hickory-server/dns-over-rustls", "hickory-proto/dns-over-rustls", "dep:rustls", "dep:tokio-rustls", "dep:rustls-pemfile", "dep:rcgen", "dep:webpki-roots"]  # DNS-over-TLS server
-doh = ["dns", "hickory-server/dns-over-https-rustls", "hickory-proto/dns-over-https-rustls", "dep:rustls", "dep:tokio-rustls", "dep:rustls-pemfile", "dep:rcgen", "dep:h2"]  # DNS-over-HTTPS server
-dhcp = ["dhcproto"]
-bootp = ["dhcproto"]  # BOOTP (Bootstrap Protocol) - DHCP predecessor, uses same packet format
-ntp = ["dep:rsntp"]  # NTP client support
-tftp = []  # TFTP (Trivial File Transfer Protocol) server and client - custom implementation, no dependencies
-bluetooth-ble-client = ["btleplug"]  # Bluetooth Low Energy (BLE) client for connecting to BLE devices
-bluetooth-ble = ["ble-peripheral-rust"]  # Bluetooth Low Energy (BLE) GATT server (peripheral mode)
-nfc = []  # Virtual NFC tag over a TCP socket (vpcd framing). Needs no PC/SC: the server IS the card, and card emulation via a PC/SC reader is not possible
-nfc-client = ["dep:pcsc"]  # NFC reader/writer client via PC/SC (ISO14443, APDU, NDEF)
-bluetooth-ble-keyboard = ["bluetooth-ble"]  # BLE HID keyboard server
-bluetooth-ble-mouse = ["bluetooth-ble"]  # BLE HID mouse server
-bluetooth-ble-beacon = ["bluetooth-ble", "dep:bluer"]  # BLE beacon (iBeacon, Eddystone) - advertising payload needs BlueZ (Linux only)
-bluetooth-ble-remote = ["bluetooth-ble"]  # BLE media remote control
-bluetooth-ble-battery = ["bluetooth-ble"]  # BLE Battery Service
-bluetooth-ble-heart-rate = ["bluetooth-ble"]  # BLE Heart Rate Service
-bluetooth-ble-thermometer = ["bluetooth-ble"]  # BLE Health Thermometer
-bluetooth-ble-environmental = ["bluetooth-ble"]  # BLE Environmental Sensing
-bluetooth-ble-proximity = ["bluetooth-ble"]  # BLE Proximity/Find Me
-bluetooth-ble-gamepad = ["bluetooth-ble"]  # BLE HID gamepad
-bluetooth-ble-presenter = ["bluetooth-ble"]  # BLE presentation clicker
-bluetooth-ble-file-transfer = ["bluetooth-ble"]  # BLE file transfer
-bluetooth-ble-data-stream = ["bluetooth-ble"]  # BLE real-time data streaming
-bluetooth-ble-cycling = ["bluetooth-ble"]  # BLE Cycling Speed and Cadence
-bluetooth-ble-running = ["bluetooth-ble"]  # BLE Running Speed and Cadence
-bluetooth-ble-weight-scale = ["bluetooth-ble"]  # BLE Weight Scale
-whois = []  # WHOIS uses only TCP, no extra deps
-nats = []  # NATS text-protocol pub/sub server - hand-rolled, no extra deps
-stomp = []  # STOMP 1.2 text-frame messaging server - hand-rolled, no extra deps
-ident = []  # Ident (RFC 1413) identification server - hand-rolled, no extra deps
-gemini = ["dep:rustls", "dep:tokio-rustls", "dep:rustls-pemfile", "dep:rcgen", "dep:webpki-roots"]  # Gemini (gemini://) capsule over TLS - rustls + rcgen, hand-rolled framing
-nut = [] # NUT UPS management client/server, pure Tokio
-dict = []  # DICT (RFC 2229) dictionary server - hand-rolled line protocol, no extra deps
-beanstalkd = []  # Beanstalkd work-queue server - hand-rolled text protocol, no extra deps
-zabbix = []  # Zabbix trapper (zabbix_sender) - hand-rolled ZBXD framing, serde_json only
-gearman = []  # Gearman job server - hand-rolled binary + admin protocols, no extra deps
-nsq = []  # NSQ broker (nsqd TCP protocol V2) - hand-rolled framing, serde_json only
-gopher = []  # Gopher (RFC 1436) menu/document server - hand-rolled, no extra deps
-finger = []  # Finger (RFC 1288) user information server - hand-rolled, no extra deps
-ssdp = []  # SSDP/UPnP discovery (HTTPU over UDP multicast) - hand-rolled, no extra deps
-llmnr = ["hickory-proto"]  # LLMNR (RFC 4795) - DNS wire format via hickory-proto
-netbios-ns = []  # NetBIOS Name Service (RFC 1002) - hand-rolled name encoding
-snmp = ["rasn-snmp", "rasn", "rasn-smi", "dep:snmp", "dep:des", "dep:aes", "dep:hmac", "dep:sha1", "dep:sha2", "dep:md-5"]  # SNMPv3 USM: DES-CBC/AES-CFB privacy, HMAC-MD5/SHA-1/SHA-2 authentication
-igmp = []  # IGMP multicast group management, no extra deps
-syslog = ["syslog_loose"]
-statsd = [] # StatsD / DogStatsD UDP collector and emitter; native codec
-graphite = [] # Carbon plaintext TCP collector and emitter; native codec
-gelf = ["dep:flate2"] # GELF 1.1 UDP/TCP structured logging
-fluent-forward = ["dep:flate2"] # MessagePack Forward logs and ACKs
-influxdb = ["dep:flate2"] # Typed InfluxDB v2 HTTP write collector/emitter
-loki = ["dep:flate2"] # Typed Loki JSON/gzip and native protobuf/Snappy push
-ipfix = [] # Native typed UDP IPFIX templates/options/records
-netflow-v9 = [] # Native RFC3954 v9 UDP templates/options/records
-tacacs = ["dep:md-5"] # Native selected RFC8907 legacy AAA; existing MD5
-diameter = [] # Native bounded TCP peer lifecycle and stateless NASREQ
-netconf = ["russh", "russh-keys", "quick-xml"] # NETCONF 1.0/1.1 over SSH, handler-controlled datastores
-rpki_rtr = [] # RPKI-to-Router cache and router roles (RFC 8210/6810)
-rdap = [] # RDAP registration data server and client (RFC 7480/9082/9083)
-hl7 = [] # HL7 v2 over MLLP integration endpoint and sender
-icap = [] # ICAP content adaptation server and client (RFC 3507)
-dc_peer = ["dc", "dep:bzip2", "dep:tiger", "dep:rustls", "dep:tokio-rustls", "dep:rustls-pemfile", "dep:webpki-roots"] # NMDC peer file transfers
-adc = ["dep:tiger", "dep:rustls", "dep:tokio-rustls", "dep:rustls-pemfile", "dep:webpki-roots"] # ADC/ADCS hub and client
-adc_peer = ["adc", "dep:bzip2", "dep:rustls", "dep:tokio-rustls", "dep:rustls-pemfile", "dep:webpki-roots"] # ADC/ADCS peer file transfers
-soulseek_peer = ["soulseek"]
-soulseek = ["dep:md-5", "dep:flate2", "dep:rustls", "dep:tokio-rustls", "dep:rustls-pemfile", "dep:webpki-roots"] # Selected Soulseek server and peer operations
-gnutella = ["dep:rustls", "dep:tokio-rustls", "dep:rustls-pemfile", "dep:webpki-roots"] # Gnutella 0.6 peer simulator and connector
-s7comm = [] # ISO-on-TCP legacy byte data-area PLC simulator and scanner
-ethernet_ip = [] # Selected EtherNet/IP device and scanner operations
-dnp3 = [] # Selected DNP3 device and scanner operations
-iec104 = [] # Selected IEC 60870-5-104 device and scanner operations
-bacnet = [] # Selected BACnet/IP device and scanner operations
-opcua = ["dep:async-opcua"] # Selected OPC UA device and scanner operations
-ocpp = ["dep:tokio-tungstenite"] # OCPP-J 1.6 / 2.0.1 central system and charge point
-a2a = [] # Agent2Agent protocol 1.0 agent and client (JSON-RPC binding)
-fastcgi = [] # FastCGI 1.0 Responder application and web-server-side client
-redfish = [] # DMTF Redfish service and client (sessions, tasks, Base-registry errors)
-scim = ["urlencoding"] # SCIM 2.0 provisioning service and client (RFC 7643/7644)
-socketio = ["dep:tokio-tungstenite"] # Socket.IO v5 over Engine.IO v4 server and client
-caldav = ["quick-xml", "urlencoding"] # CalDAV calendar server and client (RFC 4791)
-carddav = ["quick-xml", "urlencoding"] # CardDAV address book server and client (RFC 6352)
-dicom = [] # DICOM DIMSE SCP and SCU (C-ECHO, C-STORE, C-FIND)
-acme = ["dep:rustls", "dep:tokio-rustls", "dep:rustls-pemfile", "dep:rcgen", "rcgen/x509-parser", "ring"] # ACME (RFC 8555) test CA and client
-fix = [] # FIX 4.x acceptor and initiator (tag=value session layer)
-wamp = ["dep:tokio-tungstenite", "ring"] # WAMP v2 router and client (JSON over WebSocket)
-rtmp = ["ring"] # RTMP live server (publish/play relay) and client
-srt = ["dep:srt-tokio"] # SRT listener (publish/request relay) and caller
-amqp1 = [] # AMQP 1.0 container and client (separate from AMQP 0-9-1)
-thrift = [] # Apache Thrift RPC server and client (IDL-driven, binary and compact)
-bmp = ["bgp"] # BGP Monitoring Protocol collector and exporter (RFC 7854); BGP PDUs through the bgp feature
-mqtt_sn = [] # MQTT-SN 1.2 gateway and sensor client over UDP
-nbd = ["dep:sha2"] # Network Block Device read-only server and client
-managesieve = [] # ManageSieve (RFC 5804) server and client
-zenoh = ["dep:zenoh"] # Zenoh router/peer and client over the zenoh runtime (TCP transport)
-lwm2m = ["coap"] # LwM2M 1.1 server and device over the coap feature's CoAP codec
-restconf = ["urlencoding"] # RESTCONF (RFC 8040) server and client
-epp = ["dep:rustls", "dep:tokio-rustls", "dep:rustls-pemfile", "dep:rcgen", "dep:webpki-roots", "quick-xml"] # EPP (RFC 5730/5734) registry server and registrar client
-lmtp = [] # LMTP (RFC 2033) local delivery server and client
-lpd = [] # LPD (RFC 1179) line printer daemon server and client
-inetd = [] # Classic inetd services: Echo, Discard, Daytime, QOTD, Chargen and Time (RFC 862-868), servers and clients
-rcon = [] # Source/Minecraft RCON server and client
-a2s = [] # Steam/Source server query (A2S) server and client
-minecraft = ["dep:flate2"] # Minecraft Java Edition server-list ping and login probe, server and client
-ninep = [] # 9P2000 file server and client
-zeromq = [] # ZeroMQ (ZMTP 3.1) server and client sockets
-smpp = [] # SMPP 3.4 SMSC server and ESME client
-clickhouse = ["dep:lz4_flex", "dep:naive-cityhash"] # ClickHouse native TCP server and client
-msgpack-rpc = [] # MessagePack-RPC server and client (Neovim's RPC)
-zipkin = ["dep:flate2"] # Zipkin collector/read API and span reporter
-capnp-rpc = ["dep:tempfile"] # Cap'n Proto RPC server and client, schema-typed
-knx = [] # KNXnet/IP tunnelling gateway and client
-consul = ["urlencoding"] # Consul agent HTTP API server and client
-milter = [] # Mail filter (milter) protocol server and MTA-side client
-anthropic = [] # Anthropic Messages API server and client
-radsec = ["radius", "tls"] # RADIUS over TLS (RFC 6614) server and client
-dbus = [] # D-Bus server (a small message bus) and client, hand-rolled wire protocol
-bfd = ["dep:md-5", "dep:sha1"] # BFD (RFC 5880/5881/5883) speaker and client, hand-rolled; md-5/sha1 for keyed authentication
-vxlan = [] # VXLAN (RFC 7348), Geneve (RFC 8926) and GRE-in-UDP gretap (RFC 2784/2890/8086) tunnel endpoint and overlay host, hand-rolled
-rsync = ["dep:md4"] # rsync daemon (rsync://, protocol 29) and client, hand-rolled; md4 for its checksums
-pfcp = [] # PFCP (3GPP TS 29.244, the 5G N4 interface) UPF and SMF, hand-rolled
-ngap = [] # NGAP (3GPP TS 38.413, the 5G N2 interface) AMF and gNB, hand-rolled APER; SCTP where available, refuses elsewhere
-matrix = ["urlencoding"] # Matrix homeserver (client-server API v3) and client, hyper HTTP/1.1
-libp2p = ["dep:x25519-dalek", "x25519-dalek/static_secrets", "dep:ed25519-dalek", "dep:sha2", "dep:hkdf", "ring"] # libp2p host and dialler over TCP (multistream-select, Noise XX, yamux, identify, ping), hand-rolled; with the ipfs startup parameter also IPFS: Bitswap 1.2.0/1.1.0/1.0.0, CIDv0/v1 with raw/dag-pb/UnixFS, and the Kademlia DHT (/ipfs/kad/1.0.0, /ipfs/lan/kad/1.0.0)
-sunrpc = [] # ONC RPC portmapper/rpcbind (PMAP v2, RPCBIND v3-v4) server and client, hand-rolled
-guacamole = ["dep:font8x8"] # Apache Guacamole protocol server (in guacd's place) and client of guacd, hand-rolled
-activitypub = ["dep:rsa", "dep:sha2", "urlencoding"] # ActivityPub instance and actor (WebFinger, HTTP Signatures rsa-sha256, signed delivery), hyper + reqwest
-stratum = ["dep:sha2"]  # Stratum V1 mining pool and miner (LLM-controlled; shares verified in Rust)
-stratum-v2 = ["dep:sha2", "dep:secp256k1", "dep:chacha20poly1305"]  # Stratum V2 pool and mining device: Noise NX (secp256k1 EllSwift, ChaChaPoly), Mining Protocol, hand-rolled
-pulsar = ["dep:prost"]  # Apache Pulsar binary protocol broker and client (LLM-controlled)
-tr069 = ["quick-xml"]  # TR-069 CWMP ACS and CPE (SOAP over HTTP, LLM-controlled)
-sse = []  # Server-sent events (text/event-stream) server and EventSource-style client, hand-rolled HTTP/1.1
-wsdiscovery = ["quick-xml"] # WS-Discovery (SOAP-over-UDP 3702) target service and discovery client, 2005/04 and 2009/01
-onvif = ["quick-xml", "dep:sha1"] # ONVIF device (Device and Media services, SOAP 1.2, WS-Security digest) and client
-kerberos = ["dep:picky-krb", "dep:picky-asn1", "dep:picky-asn1-der", "dep:hmac", "dep:sha1", "dep:sha2"] # Kerberos V5 KDC (AS/TGS, aes-cts-hmac-sha1-96) and client; picky-krb ASN.1 types
-x11 = [] # X11 client (X Window System core protocol): windows, properties and events against an X server
-jmap = ["dep:rustls", "dep:tokio-rustls", "dep:rustls-pemfile", "dep:rcgen"] # JMAP (RFC 8620/8621) server and client
-webtransport = ["dep:rustls", "dep:wtransport", "dep:wtransport-proto", "dep:sha2"] # WebTransport over HTTP/3 (draft-02) server and client
-graphql = ["dep:apollo-compiler", "dep:tokio-tungstenite"] # GraphQL over HTTP and graphql-transport-ws server and client (apollo-compiler validation, introspection, execution)
-sflow = [] # Native typed sFlow v5 UDP samples/counters
-prometheus-remote-write = [] # Published v1 float-sample protobuf/Snappy sender/receiver
-ssh = ["russh", "russh-keys", "russh-sftp", "dep:ssh2"]
-ssh-agent = ["dep:ssh-agent-lib", "dep:tempfile"]  # SSH Key Agent protocol (server and client for key management)
-svn = []  # SVN (Subversion) uses only TCP, no extra deps
-irc = ["dep:irc"]  # IRC client support
-xmpp = ["dep:tokio-xmpp", "dep:xmpp-parsers", "dep:sasl"]  # XMPP/Jabber instant messaging client
-telnet = ["nectar"]
-smtp = ["rust-smtp-server", "dep:rustls", "dep:tokio-rustls", "dep:rustls-pemfile", "dep:rcgen", "dep:lettre"]
-ftp = []  # FTP (File Transfer Protocol) server and client - manual implementation, no extra deps
-mdns = ["mdns-sd"]
-mysql = ["dep:opensrv-mysql", "dep:mysql_async"]
-mssql = ["dep:tiberius"]
-snowflake = ["dep:flate2"]  # Snowflake data warehouse: server (REST/JSON login + query protocol over hyper; flate2 reads the gzip bodies the official connectors send) and client (connector REST protocol, JSON and Arrow results decoded by hand)
-db2 = []  # IBM Db2 DRDA wire protocol: server (handshake + basic query) and client (statements, queries with decoded rows, commit/rollback) - hand-rolled, no extra deps
-ipp = ["dep:ipp"]
-postgresql = ["dep:pgwire", "dep:tokio-postgres"]
-# NOTE: tests/server/mongodb/mod.rs gates on BOTH `mongodb-server` and `mongodb`, because its
-# Beta evidence is the official driver acting as the peer. This feature does not imply that one,
-# so `--features mongodb-server` alone compiles ZERO mongodb server tests - silently, with no
-# error. Use `--features mongodb-server,mongodb` to actually run them. This is the declared-but-
-# never-compiled cousin of the tests/*/mod.rs footgun in CLAUDE.md; the orphaned-tests CI job
-# does not catch it, because the directory *is* declared.
-mongodb-server = ["dep:bson"]  # MongoDB server with LLM-controlled database operations
-mongodb = ["dep:mongodb", "dep:bson"]  # MongoDB client
-memcached = []  # Memcached text-protocol server - hand-rolled, no dependencies, stores nothing
-radius = ["dep:md-5"]  # RADIUS AAA server (RFC 2865/2866) - hand-rolled codec, md-5 for the authenticators
-redis = ["dep:redis-protocol", "dep:redis"]
-rss = ["dep:rss"]  # RSS feed server and client (RSS 2.0 XML generation and parsing)
-proxy = ["http-mitm-proxy", "dep:rcgen", "tokio-native-tls", "native-tls", "dep:rustls", "dep:tokio-rustls", "dep:rustls-pemfile", "dep:webpki-roots"]
-http_proxy = ["http-mitm-proxy", "dep:rcgen", "tokio-native-tls", "native-tls", "dep:rustls", "dep:tokio-rustls", "dep:rustls-pemfile", "dep:webpki-roots"]  # HTTP proxy (alternate name)
-webdav = ["dep:reqwest_dav"]  # dav-server dropped: the server answers DAV verbs directly
-nfs = ["nfsserve", "dep:nfs3_client", "dep:nfs3_types"]
-cassandra = ["dep:cassandra-protocol", "tcp", "dep:scylla"]
-smb = []
-stun = ["dep:webrtc-stun", "dep:stunclient"]
-smb-client = ["smb", "pavao"]  # SMB client requires native libsmbclient library
-turn = ["dep:webrtc-turn"]
-# `dep:rustls` is not decoration: webrtc-dtls builds its DTLS config through rustls 0.23, which
-# panics unless a process-level CryptoProvider is installed. Naming rustls here is what makes
-# `src/bin/netget.rs` install one for a webrtc-only build (and what makes
-# `tests/rustls_provider_gate_test.rs` enforce it).
-webrtc = ["dep:webrtc", "dep:tokio-tungstenite", "dep:rustls"]  # WebRTC client + server for peer-to-peer data channels
-# Generic WebSocket (RFC 6455) server + client. Reuses the tokio-tungstenite 0.21 already in
-# the tree for `webrtc`: framing, masking, fragmentation, ping/pong and the close handshake.
-# Bumping that crate is a webrtc-wide decision, so this feature deliberately does not force one.
-# No system library, hence present in dist / dist-windows (and dist-darwin via dist).
-websocket = ["dep:tokio-tungstenite", "dep:flate2", "flate2/zlib-rs"]
-sip = []  # SIP uses only UDP, no extra deps (manual protocol implementation)
-h323 = []  # H.323: H.225.0 RAS gatekeeper (UDP 1719), H.225.0/Q.931 call-signalling endpoint (TCP 1720) and client; hand-written ALIGNED PER from generated schema tables, no extra deps
-rtp = []  # RTP (RFC 3550) media server; G.711 synthesis + packetizer, no system library
-rtsp = ["rtp"]  # RTSP (RFC 2326) control server; reuses the rtp media engine for PLAY
-hls = []  # HLS (RFC 8216) over minimal HTTP/1.1; no system library
-ldap = ["dep:ldap3_proto", "rasn", "dep:ldap3"]
-imap = ["imap-codec", "dep:async-imap", "dep:async-native-tls"]  # IMAP uses imap-codec for protocol parsing
-pop3 = ["dep:rustls", "dep:tokio-rustls", "dep:rustls-pemfile", "dep:webpki-roots", "dep:rcgen"]  # POP3 email retrieval (manual implementation with TLS support)
-nntp = ["dep:rustls", "dep:tokio-rustls", "dep:rustls-pemfile", "dep:webpki-roots"]  # NNTP (Network News Transfer Protocol) for Usenet, uses only TCP, no extra deps
-mqtt = ["dep:rumqttd", "dep:rumqttc"]  # MQTT broker and client for IoT messaging
-modbus = []  # Modbus TCP server (ICS/SCADA) - hand-rolled MBAP+PDU codec, no extra deps
-coap = []  # CoAP server (RFC 7252, IoT over UDP) - hand-rolled codec, no extra deps
-amqp = ["dep:lapin"]  # AMQP broker and client for RabbitMQ compatibility
-socks5 = ["dep:tokio-socks"]  # SOCKS5 server and client (client uses tokio-socks)
-elasticsearch = []  # Elasticsearch uses only HTTP, no extra deps
-couchdb = ["dep:couch_rs", "dep:form_urlencoded"]  # CouchDB server and client (server uses HTTP, client uses couch_rs)
-yarn = []  # Hadoop YARN ResourceManager REST API: server and client - HTTP only, no extra deps
-spark = []  # Apache Spark monitoring REST API: server and client (live driver UI / History Server) - HTTP only, no extra deps
-dynamo = ["aws-config", "aws-sdk-dynamodb", "aws-smithy-types", "dep:aws-credential-types"]  # DynamoDB client
-dynamodb = ["aws-config", "aws-sdk-dynamodb", "aws-smithy-types", "dep:aws-credential-types"]  # DynamoDB client (alternate name)
-s3 = ["aws-config", "dep:aws-sdk-s3", "dep:aws-credential-types", "dep:rust-s3"]  # S3 client
-sqs = ["aws-config", "aws-sdk-sqs"]  # AWS SQS queue
-npm = ["http", "urlencoding"]  # NPM registry server and client (built on HTTP, uses urlencoding for search queries)
-oci-registry = ["dep:sha2", "dep:rustls"]  # OCI pull server/client; SHA256 verifies native content and Rustls verifies HTTPS. No system library; included in every dist set
-openai = ["async-openai"]  # OpenAI API client
-ollama = []  # Ollama API server and client (uses existing reqwest, no extra deps)
-oauth2 = ["dep:oauth2", "urlencoding"]  # OAuth2 authorization server and client
-jsonrpc = []  # JSON-RPC 2.0 server uses only HTTP, no extra deps
-saml-idp = []  # SAML Identity Provider (authentication, assertion generation)
-saml-sp = ["urlencoding"]  # SAML Service Provider (assertion validation, session management)
-saml = ["quick-xml", "urlencoding", "dep:flate2"]  # SAML client (SP-initiated SSO, assertion validation)
-wireguard = ["dep:defguard_wireguard_rs", "dep:x25519-dalek"]  # Full WireGuard VPN server with LLM control
-openvpn = ["dep:rustls", "dep:tokio-rustls", "dep:rcgen", "dep:sha2"]  # OpenVPN control-plane responder: real TLS control channel, key method 2. No data channel and no TUN - see src/server/openvpn/mod.rs
-ipsec = []  # IPSec/IKEv2 honeypot (packet detection only, no full crypto)
-bgp = ["netgauze-bgp-pkt"]  # BGP routing protocol
-ospf = ["udp"]  # OSPF (IP proto 89, raw sockets, needs root/CAP_NET_RAW). The udp dep is for the test file's own UDP server, which does NOT exercise OSPF - see src/server/ospf/CLAUDE.md
-isis = ["dep:pcap"]  # IS-IS routing protocol (Intermediate System to Intermediate System) - sniffs L2 frames via libpcap
-rip = []  # RIP (Routing Information Protocol) v2 - distance-vector routing
-bitcoin = ["dep:bitcoin"]  # Bitcoin P2P protocol server (LLM-controlled, not a real full node)
-nostr = ["dep:tokio-tungstenite", "dep:secp256k1", "dep:sha2", "dep:rustls", "dep:tokio-rustls", "dep:webpki-roots"]  # Nostr relay (NIP-01 over WebSocket, NIP-11) - secp256k1 is the 0.29 bitcoin already links
-mcp = ["dep:axum", "dep:tower-http"]  # Model Context Protocol (JSON-RPC 2.0 over HTTP/SSE)
-grpc = ["dep:tonic", "tonic/tls-webpki-roots", "dep:h2", "dep:rustls", "dep:prost", "dep:prost-reflect", "dep:prost-types", "dep:tonic-reflection", "dep:tower", "dep:tempfile"]  # Dynamic unary/streaming gRPC and bounded reflection
-grpc-web = ["grpc", "dep:tonic-web", "dep:flate2"] # Binary HTTP/1.1 unary and server-streaming binding
-connect_rpc = ["grpc", "dep:flate2"] # Binary HTTP/1.1 Connect unary and server-streaming binding
-gnmi = ["grpc", "dep:tokio-rustls", "dep:rustls-pemfile"] # Typed native OpenConfig gNMI
-etcd = ["grpc", "dep:etcd-client"]  # etcd v3 key-value store server (KV service via gRPC)
-zookeeper = ["dep:zookeeper-async"]  # ZooKeeper distributed coordination server and client with binary protocol support
-xmlrpc = ["quick-xml", "dep:xmlrpc"]  # XML-RPC server and client with LLM-controlled method execution
-tor = ["dep:tor-netdoc", "dep:tor-cert", "dep:tor-cell", "dep:rustls", "dep:tokio-rustls", "dep:rcgen", "dep:ed25519-dalek", "dep:x25519-dalek", "dep:sha2", "dep:aes", "dep:ctr", "dep:hmac", "dep:hkdf", "dep:arti-client", "dep:tor-rtcompat", "dep:tor-dirmgr", "dep:tor-netdir"]  # Tor directory mirror and OR protocol relay (Guard/Middle/Exit) with cell handling + client with directory queries
-vnc = ["dep:des"]  # VNC server and client with custom RFB protocol implementation
-reverse-shell = []  # Reverse-shell listener EMULATION (red-team/CTF); model role-plays the shell, nothing is executed
-rdp = []  # RDP server: TPKT/X.224 connection-negotiation slice of [MS-RDPBCGR] (hand-rolled, no crate)
-rdp-client = ["rdp", "dep:rustls", "dep:ironrdp-connector", "dep:ironrdp-session", "dep:ironrdp-tokio", "dep:ironrdp-tls", "dep:ironrdp-input", "dep:ironrdp-pdu", "dep:ironrdp-graphics"]  # RDP client: IronRDP drives the connection sequence (TLS / CredSSP), the model types, clicks and reads the screen
-spice = ["vnc", "dep:rsa", "dep:sha1"]  # SPICE server and client: hand-written link (RSA-OAEP ticket), main/display/inputs channels; reuses VNC's drawing-command parser
-devp2p = ["dep:secp256k1", "secp256k1/recovery", "dep:aes", "dep:ctr", "dep:hmac", "dep:sha2", "dep:sha3", "dep:snap"]  # Ethereum devp2p node and dialler: hand-rolled RLPx (EIP-8 ECIES handshake, AES-CTR frames, keccak MACs, Snappy), RLP, eth/68 and eth/69
-openapi = ["http", "dep:openapi-rs", "dep:matchit"]  # OpenAPI 3.1 server with runtime request validation and route matching
-openid = ["urlencoding"]  # OpenID Connect authentication provider with LLM-controlled token generation
-usb-common = ["dep:usbip"]  # Common USB/IP functionality for USB device protocols
-usb-keyboard = ["usb-common"]  # USB HID Keyboard virtual device
-usb-mouse = ["usb-common"]  # USB HID Mouse virtual device
-usb-serial = ["usb-common"]  # USB CDC ACM Serial virtual device
-usb-msc = ["usb-common", "memmap2"]  # USB Mass Storage Class virtual device (flash drive/disk)
-# ring/std is required: ring only implements std::error::Error for Unspecified and
-# KeyRejected under its `std` feature, and fido2 propagates both with `?` into anyhow.
-# Without it this feature only compiled when some other enabled feature happened to
-# turn ring/std on via feature unification.
-usb-fido2 = ["usb-common", "ring", "ring/std", "serde_cbor"]  # USB FIDO2/U2F Security Key virtual device
-usb-smartcard = ["usb-common"]  # Virtual USB CCID smart card reader over USB/IP. rsa/sha2 dropped with crypto.rs: the handler owns every response APDU, so the protocol holds no keys
-usb = ["dep:nusb"]  # USB client for connecting to USB devices
-openidconnect = ["dep:openidconnect", "urlencoding"]  # OpenID Connect client for authentication flows
-kubernetes = ["dep:kube", "dep:k8s-openapi", "dep:rustls"]  # Kubernetes client protocol with v1.30 API support
-# Kubernetes API *server*. Deliberately independent of the `kubernetes` client feature: kubectl
-# speaks JSON to an apiserver by default, so this needs neither kube nor k8s-openapi - just the
-# HTTP stack and rustls for the optional TLS listener. Pure Rust, no system library.
-kubernetes-server = ["dep:rustls", "dep:tokio-rustls", "dep:rustls-pemfile", "dep:rcgen"]
-prometheus = []  # Prometheus exporter (/metrics) - hyper only, exposition rendered by NetGet
-otlp = ["dep:opentelemetry-proto", "opentelemetry-proto/gen-tonic", "dep:prost", "dep:prost-types", "dep:flate2", "dep:tonic", "dep:tower", "dep:rustls", "dep:tokio-rustls", "dep:rustls-pemfile", "dep:webpki-roots", "tonic/gzip", "tonic/tls-webpki-roots", "hyper-util/server-auto"] # OTLP HTTP/gRPC receiver and semantic exporter
-docker = ["urlencoding"]  # Docker Engine API (read-only) - hyper only, documents rendered by NetGet
-vault = []  # HashiCorp Vault KV v2 - hyper only, envelope rendered by NetGet; the model holds the secrets
-bolt = ["dep:rustls", "dep:tokio-rustls", "dep:webpki-roots"]  # Bolt codec/state machine; verified native client TLS
-git = ["dep:git2"]  # Git client support
-mercurial = ["http", "urlencoding"]  # Mercurial HTTP server with LLM-controlled virtual repositories
-kafka = ["dep:kafka-protocol"]  # Apache Kafka broker and client, both pure Rust on kafka-protocol (rdkafka/librdkafka removed - aborted in malloc)
-# QUIC server and client (RFC 9000/9001): raw bidirectional QUIC streams under TLS 1.3. Deliberately
-# NOT HTTP/3 - no RFC 9114 framing, no QPACK - so it needs neither h3 nor h3-quinn. See
-# src/server/quic/CLAUDE.md.
-quic = ["dep:quinn", "dep:rustls", "dep:rustls-pemfile", "dep:rcgen", "dep:webpki-roots"]
-# HTTP/3 server and client (RFC 9114, via the h3 crate). Independent of `quic`: enabling this does
-# NOT build the QUIC server, and the two cannot talk to each other.
-http3 = ["dep:quinn", "dep:rustls", "dep:rustls-pemfile", "dep:rcgen", "dep:webpki-roots", "dep:h3", "dep:h3-quinn"]
-torrent-tracker = ["dep:serde_bencode", "urlencoding"]  # BitTorrent Tracker (HTTP-based peer discovery with announce/scrape)
-torrent-dht = ["dep:serde_bencode"]  # BitTorrent DHT (Kademlia-based distributed peer discovery)
-torrent-peer = ["dep:serde_bencode"]  # BitTorrent Peer Wire Protocol (peer-to-peer data transfer)
-tls = ["dep:rustls", "dep:tokio-rustls", "dep:rustls-pemfile", "dep:rcgen", "dep:webpki-roots"]  # TLS server and client for custom protocols on top of encrypted transport
-embedded-llm = ["dep:llama-cpp-2", "dep:hf-hub"]  # Embedded LLM inference via llama.cpp (fallback when Ollama unavailable)
-sqlite = ["dep:rusqlite"]  # SQLite database support for protocols (in-memory or file-based)
+# System libraries. Each is Unix-only and gates the protocols that link it; without it those
+# protocols are simply absent from the build.
+libpcap = ["dep:pcap"]  # arp, datalink, isis, lldp, cdp, stp, eapol
+bluetooth = ["dep:btleplug", "dep:ble-peripheral-rust", "dep:bluer"]  # bluetooth-ble* (CoreBluetooth on macOS; BlueZ over D-Bus on Linux)
+pcsc = ["dep:pcsc"]  # NFC client (PC/SC; pcsclite on Linux)
+libusb = ["dep:usbip", "dep:serde_cbor", "dep:memmap2"]  # usb-* virtual devices over USB/IP
+libsmbclient = ["dep:pavao"]  # SMB client
+
+# Optional capabilities.
 # The rmcp `client` feature is enabled so the in-process MCP smoke tests can drive the server.
 mcp-stdio = ["dep:rmcp", "dep:schemars", "rmcp/client"]  # MCP STDIO server mode for Claude Desktop/Code integration
-mcp-http = ["dep:rmcp", "dep:schemars", "dep:axum", "rmcp/client", "rmcp/transport-streamable-http-server"]  # MCP HTTP/SSE server mode for remote/web MCP clients
-
-# Prebuilt-binary release sets (GitHub Releases / npm @smotana/netget).
-# Trim policy: a feature stays in a target's set iff it compiles for that target in CI
-# AND adds no runtime dynamic-link dependency users may lack.
-# Excluded everywhere: stun/turn (ancient nix 0.8 dep), smb-client (libsmbclient),
-# embedded-llm (LLM backend, not a protocol; heavy llama.cpp build).
-# Excluded on Linux: bluetooth-ble* (libdbus), nfc* (libpcsclite), datalink/arp/isis (libpcap).
-# icmp is included here (not libpcap-gated: it only pulls in pnet's packet parsing +
-# socket2 raw sockets). It builds on Linux/macOS because pnet_datalink's Linux (AF_PACKET)
-# and macOS (BPF) backends are plain libc syscalls with no external link dependency. It is
-# NOT added to dist-windows: pnet_datalink's Windows backend hard-links against WinPcap/
-# Npcap's Packet.lib (#[link(name = "Packet")] in pnet_datalink::bindings::winpcap)
-# unconditionally, regardless of which pnet module is actually used, and that SDK is not
-# present on the windows-2022 CI runner.
-dist = [
-    "portable-base",
-    "mcp-stdio",
-    "mcp-http",
-    # Pure-Rust protocols absent from android-termux for historical reasons only
-    "websocket",
-    "ftp",
-    "tftp",
-    "ospf",
-    "openidconnect",
-    "saml",
-    "usb",
-    # Unix-only VPNs; move out of dist if they break musl/windows legs
-    "wireguard",
-    "openvpn",
-    "icmp",
-    # Unix-only OS-IPC endpoint impersonation; #[cfg(unix)], safe on all dist (Linux) targets
-    "named_pipe",
-    "pty",
-    "stdio",
-]
-# macOS ships CoreBluetooth, PC/SC, and libpcap with the OS, so these are safe to bundle.
-dist-darwin = [
-    "dist",
-    "isis",   # libpcap ships with macOS
-    "arp",    # ARP also just needs pnet + libpcap, same as isis/datalink above
-    "bluetooth-ble",
-    "bluetooth-ble-client",
-    "bluetooth-ble-keyboard",
-    "bluetooth-ble-mouse",
-    "bluetooth-ble-beacon",
-    "bluetooth-ble-remote",
-    "bluetooth-ble-battery",
-    "bluetooth-ble-heart-rate",
-    "bluetooth-ble-thermometer",
-    "bluetooth-ble-environmental",
-    "bluetooth-ble-proximity",
-    "bluetooth-ble-gamepad",
-    "bluetooth-ble-presenter",
-    "bluetooth-ble-file-transfer",
-    "bluetooth-ble-data-stream",
-    "bluetooth-ble-cycling",
-    "bluetooth-ble-running",
-    "bluetooth-ble-weight-scale",
-    "nfc",
-    "nfc-client",
-    "datalink",
-]
-# Windows set: dist minus unix-gated features; refined by CI validation builds.
-dist-windows = [
-    "dep:openssl-sys", # OPC UA crypto: static vendored OpenSSL, no external DLL requirement
-    "mcp-stdio",
-    "mcp-http",
-    "tcp",
-    "websocket",
-    "http",
-    "http2",
-    "quic",
-    "http3",
-    "pypi",
-    "maven",
-    "udp",
-    "dc",
-    "dns",
-    "dot",
-    "doq",
-    "doh",
-    "dhcp",
-    "bootp",
-    "ntp",
-    "tftp",
-    "ftp",
-    "whois",
-    "nats",
-    "stomp",
-    "ident",
-    "gopher",
-    "dict",
-    "nut",
-    "beanstalkd",
-    "zabbix",
-    "gearman",
-    "nsq",
-    "gemini",
-    "finger",
-    "ssdp",
-    "llmnr",
-    "netbios-ns",
-    "snmp",
-    # igmp excluded: raw libc sockets (AF_INET/SOCK_RAW), unix-only
-    "syslog",
-    "statsd",
-    "graphite",
-    "gelf",
-    "fluent-forward",
-    "influxdb",
-    "loki",
-    "ipfix",
-    "netflow-v9",
-    "tacacs",
-    "diameter",
-    "netconf",
-    "rpki_rtr",
-    "rdap",
-    "hl7",
-    "icap",
-    "dc_peer",
-    "adc",
-    "adc_peer",
-    "soulseek",
-    "soulseek_peer",
-    "gnutella",
-    "s7comm",
-    "ethernet_ip",
-    "dnp3",
-    "iec104",
-    "bacnet",
-    "opcua",
-    "ocpp",
-    "a2a",
-    "graphql",
-    "fastcgi",
-    "redfish",
-    "scim",
-    "socketio",
-    "caldav",
-    "carddav",
-    "dicom",
-    "acme",
-    "fix",
-    "wamp",
-    "rtmp",
-    "srt",
-    "amqp1",
-    "thrift",
-    "bmp",
-    "mqtt_sn",
-    "nbd",
-    "managesieve",
-    "zenoh",
-    "lwm2m",
-    "restconf",
-    "webtransport",
-    "jmap",
-    "epp",
-    "lmtp",
-    "lpd",
-    "inetd",
-    "rcon",
-    "a2s",
-    "minecraft",
-    "ninep",
-    "zeromq",
-    "smpp",
-    "clickhouse",
-    "msgpack-rpc",
-    "zipkin",
-    "capnp-rpc",
-    "knx",
-    "consul",
-    "milter",
-    "anthropic",
-    "radsec",
-    "dbus",
-    "bfd",
-    "vxlan",
-    "rsync",
-    "pfcp",
-    "matrix",
-    "libp2p",
-    "sunrpc",
-    "guacamole",
-    "activitypub",
-    "stratum",
-    "stratum-v2",
-    "pulsar",
-    "tr069",
-    "sse",
-    "wsdiscovery",
-    "onvif",
-    "kerberos",
-    "x11",
-    "sflow",
-    "prometheus-remote-write",
-    "ssh",
-    "svn",
-    "irc",
-    # xmpp excluded: tokio-xmpp uses std::os::fd (unix-only)
-    "telnet",
-    "smtp",
-    "mdns",
-    "mysql",
-    "mssql",
-    "snowflake",
-    "db2",
-    "ipp",
-    "postgresql",
-    "mongodb-server",
-    "mongodb",
-    "memcached",
-    "radius",
-    "redis",
-    "rss",
-    "webdav",
-    "cassandra",
-    "smb",
-    "webrtc",
-    "sip",
-    "h323",
-    "rtp",
-    "rtsp",
-    "hls",
-    "ldap",
-    "imap",
-    "pop3",
-    "nntp",
-    "mqtt",
-    "modbus",
-    "coap",
-    "amqp",
-    "socks5",
-    "elasticsearch",
-    "couchdb",
-    "yarn",
-    "spark",
-    "dynamo",
-    "s3",
-    "sqs",
-    "npm",
-    "oci-registry",
-    "openai",
-    "ollama",
-    "oauth2",
-    "jsonrpc",
-    "ipsec",
-    "bgp",
-    # isis excluded: needs libpcap (not present on Windows runners)
-    "rip",
-    "bitcoin",
-    "devp2p",
-    "nostr",
-    "mcp",
-    "grpc",
-    "grpc-web",
-    "connect_rpc",
-    "gnmi",
-    "xmlrpc",
-    "vnc",
-    "reverse-shell",
-    "rdp",
-    "spice",
-    "openapi",
-    "openid",
-    "openidconnect",
-    "git",
-    "mercurial",
-    "kafka",
-    "kubernetes",
-    "kubernetes-server",
-    "prometheus",
-    "otlp",
-    "docker",
-    "vault",
-    "bolt",
-    "etcd",
-    "zookeeper",
-    "torrent-tracker",
-    "torrent-dht",
-    "torrent-peer",
-    "tls",
-    "saml",
-    "saml-idp",
-    "saml-sp",
-    "usb",
-]
-all-protocols = [
-    "tcp",
-    "socket_file",
-    "named_pipe",
-    "pty",
-    "stdio",
-    "http",
-    "http2",
-    "quic",
-    "http3",
-    "pypi",
-    "maven",
-    "udp",
-    "datalink",
-    "arp",
-    "icmp",
-    "dc",
-    "dns",
-    "dot",
-    "doq",
-    "doh",
-    "dhcp",
-    "bootp",
-    "ntp",
-    "tftp",
-    "bluetooth-ble-client",
-    "whois",
-    "ndp",
-    "dhcpv6",
-    "tuntap",
-    "rawip",
-    "gtp",
-    "m3ua",
-    "ngap",
-    "can",
-    "lldp",
-    "cdp",
-    "stp",
-    "vrrp",
-    "hsrp",
-    "eapol",
-    "wol",
-    "nats",
-    "stomp",
-    "ident",
-    "gopher",
-    "dict",
-    "nut",
-    "beanstalkd",
-    "zabbix",
-    "gearman",
-    "nsq",
-    "gemini",
-    "finger",
-    "ssdp",
-    "llmnr",
-    "netbios-ns",
-    "snmp",
-    "igmp",
-    "syslog",
-    "statsd",
-    "graphite",
-    "gelf",
-    "fluent-forward",
-    "influxdb",
-    "loki",
-    "ipfix",
-    "netflow-v9",
-    "tacacs",
-    "diameter",
-    "netconf",
-    "rpki_rtr",
-    "rdap",
-    "hl7",
-    "icap",
-    "dc_peer",
-    "adc",
-    "adc_peer",
-    "soulseek",
-    "soulseek_peer",
-    "gnutella",
-    "s7comm",
-    "ethernet_ip",
-    "dnp3",
-    "iec104",
-    "bacnet",
-    "opcua",
-    "ocpp",
-    "a2a",
-    "graphql",
-    "fastcgi",
-    "redfish",
-    "scim",
-    "socketio",
-    "caldav",
-    "carddav",
-    "dicom",
-    "acme",
-    "fix",
-    "wamp",
-    "rtmp",
-    "srt",
-    "amqp1",
-    "thrift",
-    "bmp",
-    "mqtt_sn",
-    "nbd",
-    "managesieve",
-    "zenoh",
-    "lwm2m",
-    "restconf",
-    "webtransport",
-    "jmap",
-    "epp",
-    "lmtp",
-    "lpd",
-    "inetd",
-    "rcon",
-    "a2s",
-    "minecraft",
-    "ninep",
-    "zeromq",
-    "smpp",
-    "clickhouse",
-    "msgpack-rpc",
-    "zipkin",
-    "capnp-rpc",
-    "knx",
-    "consul",
-    "milter",
-    "anthropic",
-    "radsec",
-    "dbus",
-    "bfd",
-    "vxlan",
-    "rsync",
-    "pfcp",
-    "matrix",
-    "libp2p",
-    "sunrpc",
-    "guacamole",
-    "activitypub",
-    "stratum",
-    "stratum-v2",
-    "pulsar",
-    "tr069",
-    "sse",
-    "wsdiscovery",
-    "onvif",
-    "kerberos",
-    "x11",
-    "sflow",
-    "prometheus-remote-write",
-    "ssh",
-    "ssh-agent",
-    "svn",
-    "irc",
-    "xmpp",
-    "telnet",
-    "smtp",
-    "ftp",
-    "mdns",
-    "mysql",
-    "mssql",
-    "snowflake",
-    "db2",
-    "ipp",
-    "postgresql",
-    "mongodb-server",
-    "mongodb",
-    "memcached",
-    "radius",
-    "redis",
-    "rss",
-    "proxy",
-    "webdav",
-    "nfs",
-    "cassandra",
-    "smb",
-    "stun",
-    "turn",
-    "webrtc",
-    "websocket",
-    "sip",
-    "h323",
-    "rtp",
-    "rtsp",
-    "hls",
-    "ldap",
-    "imap",
-    "pop3",
-    "nntp",
-    "mqtt",
-    "modbus",
-    "coap",
-    "amqp",
-    "socks5",
-    "elasticsearch",
-    "couchdb",
-    "yarn",
-    "spark",
-    "dynamo",
-    "s3",
-    "sqs",
-    "npm",
-    "oci-registry",
-    "openai",
-    "ollama",
-    "oauth2",
-    "jsonrpc",
-    "wireguard",
-    "openvpn",
-    "ipsec",
-    "bgp",
-    "ospf",
-    "isis",
-    "rip",
-    "bitcoin",
-    "devp2p",
-    "nostr",
-    "mcp",
-    "grpc",
-    "grpc-web",
-    "connect_rpc",
-    "gnmi",
-    "xmlrpc",
-    "tor",
-    "vnc",
-    "reverse-shell",
-    "rdp",
-    "spice",
-    "rdp-client",
-    "openapi",
-    "openid",
-    "git",
-    "mercurial",
-    "kafka",
-    "kubernetes",
-    "kubernetes-server",
-    "prometheus",
-    "otlp",
-    "docker",
-    "vault",
-    "bolt",
-    "etcd",
-    "zookeeper",
-    "torrent-tracker",
-    "torrent-dht",
-    "torrent-peer",
-    "tls",
-    "saml-idp",
-    "saml-sp",
-    "usb-keyboard",
-    "usb-mouse",
-    "usb-serial",
-    "usb-msc",
-    "usb-fido2",
-    "usb-smartcard",
-    "usb",
-    "bluetooth-ble",
-    "bluetooth-ble-keyboard",
-    "bluetooth-ble-mouse",
-    "bluetooth-ble-beacon",
-    "bluetooth-ble-remote",
-    "bluetooth-ble-battery",
-    "bluetooth-ble-heart-rate",
-    "bluetooth-ble-thermometer",
-    "bluetooth-ble-environmental",
-    "bluetooth-ble-proximity",
-    "bluetooth-ble-gamepad",
-    "bluetooth-ble-presenter",
-    "bluetooth-ble-file-transfer",
-    "bluetooth-ble-data-stream",
-    "bluetooth-ble-cycling",
-    "bluetooth-ble-running",
-    "bluetooth-ble-weight-scale",
-    "nfc",
-    "nfc-client",
-    "embedded-llm",
-    "sqlite",
-    "http_proxy",
-    "dynamodb",
-    "openidconnect",
-    "saml",
-    "smb-client",
-]
-tun = ["dep:tun"]
-sha1 = ["dep:sha1"]
+mcp-http = ["dep:rmcp", "dep:schemars", "rmcp/client", "rmcp/transport-streamable-http-server"]  # MCP HTTP/SSE server mode for remote/web MCP clients
+embedded-llm = ["dep:llama-cpp-2", "dep:hf-hub"]  # Embedded LLM inference via llama.cpp (needs cmake and a C++ compiler)
+sqlite = ["dep:rusqlite"]  # SQLite databases the model can create at runtime
+gpu = ["dep:gfxinfo"]  # GPU stats in the dashboard (not on macOS, see AGENTS.md)
+vendored-openssl = ["dep:openssl-sys"]  # Static OpenSSL for release builds (OPC UA crypto)
+terminal-snapshot = []  # Terminal snapshot testing (PTY-based TUI tests)
 
 [dependencies]
-async-opcua = { version = "=0.19.0", optional = true, features = ["server", "client"] }
 
 # Async runtime
 tokio-util = { version = "0.7", features = ["codec", "compat"] }
@@ -1174,14 +83,14 @@ futures = "0.3"
 textwrap = "0.16"
 
 # HTTP client for Ollama
-des = { version = "0.8", optional = true }
+des = { version = "0.8" }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "http2"] }
 
 # Ollama Rust client
 
 # HTTP server
 hyper = { version = "1.5", features = ["full"] }
-hyper-util = { version = "0.1", features = ["tokio"] }
+hyper-util = { version = "0.1", features = ["tokio", "server-auto"] }
 http-body-util = "0.1"
 http = "1.3"  # Needed for h2 Request/Response types
 
@@ -1194,7 +103,6 @@ toml = "0.8"  # TOML serialization for config files
 # MCP STDIO server (Model Context Protocol)
 rmcp = { version = "1.2", optional = true, features = ["server", "transport-io"] }
 schemars = { version = "1.0", optional = true }
-apollo-compiler = { version = "1.33.0", optional = true } # graphql: parse, validate, introspect, execute
 
 # Error handling
 anyhow = "1.0"
@@ -1204,8 +112,6 @@ thiserror = "2.0"
 bytes = "1.8"
 hex = "0.4"
 base64 = "0.22"
-tiger = { version = "0.2", optional = true }
-bzip2 = { version = "0.5", optional = true, features = ["static"] }
 serde_urlencoded = "0.7"  # query strings and form bodies on the browser HTTP transport (src/client/http_fetch)
 
 # Socket options (SO_REUSEADDR)
@@ -1221,7 +127,7 @@ chrono = { version = "0.4", features = ["serde", "wasmbind"] }  # wasmbind: js D
 time = { version = "0.3", features = ["macros", "formatting"] }  # Time handling for rcgen certificates
 url = "2.5"  # URL parsing for web approval prompts
 regex = "1.11"
-urlencoding = { version = "2.1", optional = true }
+urlencoding = { version = "2.1" }
 html2text = "0.12"
 once_cell = "1.20"
 rand = "0.8"  # Random number generation for crypto
@@ -1237,198 +143,89 @@ clap = { version = "4.5", features = ["derive"] }
 # Home directory
 dirs = "5.0"
 
-# Packet capture (libpcap) - optional: only linked by features that sniff L2
-# (datalink/arp/isis). Kept out of portable release binaries to avoid a
-# libpcap runtime dependency.
-pcap = { version = "2.2", optional = true }
 
-# ARP (Address Resolution Protocol) packet handling
-pnet = { version = "0.35", optional = true }
 
-# DNS server (Hickory DNS, formerly Trust-DNS)
-hickory-server = { version = "0.24", optional = true }
-hickory-proto = { version = "0.24", optional = true }
 
 # TLS support for DoT and DoH
 # default-features off: the default `aws_lc_rs` provider is a C library that does not build for
 # wasm32, and the binary installs the `ring` provider explicitly anyway (src/bin/netget.rs).
-rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"], optional = true }
-tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging", "tls12"], optional = true }
-rustls-pemfile = { version = "2.0", optional = true }
-webpki-roots = { version = "0.26", optional = true }  # Root certificates for TLS verification
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging", "tls12"] }
+rustls-pemfile = { version = "2.0" }
+webpki-roots = { version = "0.26" }  # Root certificates for TLS verification
 
 # HTTP/2 support for DoH
-h2 = { version = "0.4", optional = true }
+h2 = { version = "0.4" }
 
 # DHCP server
-dhcproto = { version = "0.12", optional = true }
+dhcproto = { version = "0.12" }
 
 # SNMP agent
-rasn-snmp = { version = "0.18", optional = true }
-rasn-smi = { version = "0.18", optional = true }
-rasn = { version = "0.18", optional = true }
+rasn-snmp = { version = "0.18" }
+rasn-smi = { version = "0.18" }
+rasn = { version = "0.18" }
 
 # Syslog server
-syslog_loose = { version = "0.22", optional = true }
+syslog_loose = { version = "0.22" }
 
-# SSH server
-russh = { version = "0.45", optional = true }
-russh-keys = { version = "0.45", optional = true }
-russh-sftp = { version = "2.1", optional = true }
 async-trait = "0.1"
 
-# SSH Agent protocol (key management server and client)
-ssh-agent-lib = { version = "0.5", optional = true }
 
 # Telnet server
-nectar = { version = "0.4", optional = true }
+nectar = { version = "0.4" }
 
-# SMTP server
-rust-smtp-server = { version = "0.1", optional = true }
 
-# mDNS/DNS-SD service discovery
-mdns-sd = { version = "0.15", optional = true }
 
-# MySQL server
-opensrv-mysql = { version = "0.7", optional = true }
 
-# IPP (Internet Printing Protocol)
-ipp = { version = "5.3", optional = true }
 
-# PostgreSQL server
-pgwire = { version = "0.35", optional = true }
 
-# Redis server (RESP protocol)
-redis-protocol = { version = "6.0", optional = true }
 
-# HTTP Proxy (MITM)
-http-mitm-proxy = { version = "0.16", optional = true }
-rcgen = { version = "0.14", optional = true }  # For certificate generation
-tokio-native-tls = { version = "0.3", optional = true }
-native-tls = { version = "0.2", optional = true }
+rcgen = { version = "0.14", features = ["x509-parser"] }  # For certificate generation
 
 # WebDAV server
 
-# NFS server
-nfsserve = { version = "0.10", optional = true }
 
-# Cassandra/CQL server
-cassandra-protocol = { version = "3.3", optional = true }
 
-# SMB client (native libsmbclient wrapper; the server uses its own codec)
-pavao = { version = "0.2", optional = true }
 
-# STUN server (Session Traversal Utilities for NAT)
-webrtc-stun = { version = "0.1", optional = true }
-stunclient = { version = "0.4", optional = true }  # STUN client for discovering external IP/port
 
-# TURN server (Traversal Using Relays around NAT)
-webrtc-turn = { version = "0.1", optional = true }
 
-# WebRTC client (peer-to-peer data channels, no media)
-webrtc = { version = "0.11", optional = true }
 
-# WebRTC Signaling Server (WebSocket-based SDP relay)
-tokio-tungstenite = { version = "0.21", optional = true }
-srt-tokio = { version = "0.4.4", optional = true }  # SRT (Secure Reliable Transport): pure-Rust ARQ, TSBPD and AES
 
-# LDAP server (ASN.1 BER encoding for LDAP protocol)
-ldap3_proto = { version = "0.3", optional = true }
 # rasn is already included via snmp feature, but we explicitly depend on it for LDAP too
 
-# IMAP server (IMAP protocol parsing)
-imap-codec = { version = "2.0.0-alpha.6", optional = true }
 
-# XMPP/Jabber client (instant messaging)
-tokio-xmpp = { version = "5.0", optional = true }
-xmpp-parsers = { version = "0.22", optional = true }
-# Named by tokio-xmpp's `ServerConnector::connect` signature (`sasl::common::ChannelBinding`),
-# which tokio-xmpp does not re-export; the version tokio-xmpp 5.0 itself locks.
-sasl = { version = "0.5.2", optional = true }
 
-# MQTT broker (IoT messaging)
-rumqttd = { version = "0.20", optional = true }
 
 # OpenID Connect client
-openidconnect = { version = "3.5", optional = true }
+openidconnect = { version = "3.5" }
 
-# SOCKS5 client (proxy protocol client)
-tokio-socks = { version = "0.5", optional = true }
 
-# BGP server (Border Gateway Protocol)
-zenoh = { version = "=1.10.1", optional = true, default-features = false, features = ["transport_tcp", "unstable"] }  # Zenoh runtime for the zenoh feature; TCP only
-netgauze-bgp-pkt = { version = "0.7", optional = true, features = ["serde", "codec"] }
+netgauze-bgp-pkt = { version = "0.7", features = ["serde", "codec"] }
 
 # Bitcoin P2P protocol (blockchain P2P network)
-bitcoin = { version = "0.32", optional = true }
+bitcoin = { version = "0.32" }
 
-# Nostr relay: BIP-340 Schnorr verification and signing. The same 0.29 that `bitcoin` links,
-# so the tree carries one secp256k1, not two curve libraries.
-secp256k1 = { version = "0.29", optional = true }
-# Stratum V2: the Noise transport's AEAD (ChaCha20-Poly1305, IETF); its chacha20 and poly1305
-# are the versions already in the tree.
-chacha20poly1305 = { version = "0.10", optional = true }
-# devp2p: keccak-256 (block hashes, RLPx secrets and MACs) and Snappy (message compression
-# after Hello v5). Both are the versions already in the tree through other crates.
-sha3 = { version = "0.10", optional = true }
-snap = { version = "1.1", optional = true }
 
-# WireGuard VPN server (full implementation with LLM control)
-defguard_wireguard_rs = { version = "0.7", optional = true, features = ["serde"] }
-x25519-dalek = { version = "2.0", optional = true }  # For WireGuard key generation
 
 # OpenVPN VPN server (full implementation with TLS control channel)
 # rustls, tokio-rustls, sha2, hmac, hkdf, rand already declared above
 
-# MCP (Model Context Protocol) server
-axum = { version = "0.7", optional = true }
-tower-http = { version = "0.5", optional = true, features = ["fs", "trace"] }
 uuid = { version = "1.11", features = ["v4"] }
 
-# gRPC server with dynamic schema support
-tonic = { version = "0.12", optional = true, features = ["gzip"] }
-prost = { version = "0.13", optional = true }
-prost-reflect = { version = "0.14", optional = true }
-prost-types = { version = "0.13", optional = true }
-tonic-web = { version = "=0.12.3", optional = true }
-tonic-reflection = { version = "0.12", optional = true }
-tower = { version = "0.5", optional = true }
-tempfile = { version = "3.13", optional = true }
-etcd-client = { version = "0.15", optional = true }
 
-# ZooKeeper client
-zookeeper-async = { version = "5.0", optional = true }
 
 # XML-RPC server and client (XML parsing for RPC protocol)
-quick-xml = { version = "0.37", optional = true, features = ["serialize"] }
-xmlrpc = { version = "0.15", optional = true }  # XML-RPC client library
+quick-xml = { version = "0.37", features = ["serialize"] }
 
 # SAML client (compression for HTTP-Redirect binding)
-flate2 = { version = "1.0", optional = true }
-lz4_flex = { version = "0.11", optional = true }  # ClickHouse native compressed frames (pure Rust)
-naive-cityhash = { version = "0.2", optional = true }  # CityHash128 v1.0.2, the ClickHouse frame checksum (pure Rust)
+flate2 = { version = "1.0", features = ["zlib-rs"] }
 
-# OTLP/HTTP receiver: the OpenTelemetry project's generated protobuf message types, without
-# tonic's transport or the serde layer (JSON is walked as serde_json::Value instead).
-# 0.29 because its tonic is 0.12, the same tonic grpc/etcd/tonic-reflection/etcd-client use;
-# 0.30 pulls tonic 0.13 and 0.31 tonic 0.14 + prost 0.14. Move them together.
-opentelemetry-proto = { version = "0.29", optional = true, default-features = false, features = ["gen-tonic-messages", "trace", "metrics", "logs"] }
 
-# Tor directory mirror (Tor protocol parsing and generation)
-tor-netdoc = { version = "0.36", optional = true }  # Tor network document parsing (consensus, descriptors)
-tor-cert = { version = "0.36", optional = true }  # Tor certificate handling
 
-# Tor relay (OR protocol cell handling and cryptography)
-tor-cell = { version = "0.36", optional = true }  # Tor cell encoding/decoding (RELAY, CREATE, etc.)
-ed25519-dalek = { version = "2.1", optional = true }  # Ed25519 signatures for relay identity
-sha2 = { version = "0.10", optional = true }  # SHA-256 for ntor handshake
-rsa = { version = "0.9", optional = true, features = ["sha2"] }  # ActivityPub: HTTP signatures (rsa-sha256)
-md-5 = { version = "0.10", optional = true }  # MD5 for the RADIUS authenticators (RFC 2865 §3, §5.2) - already in the tree transitively
-md4 = { version = "0.10", optional = true }  # MD4: rsync protocol 29 file and block checksums, and its daemon auth response
-aes = { version = "0.8", optional = true }  # AES for relay cell encryption
-ctr = { version = "0.9", optional = true }  # CTR mode for AES
-hmac = { version = "0.12", optional = true }  # HMAC for ntor authentication
-hkdf = { version = "0.12", optional = true }  # HKDF for key derivation in ntor
+sha2 = { version = "0.10" }  # SHA-256 for ntor handshake
+md-5 = { version = "0.10" }  # MD5 for the RADIUS authenticators (RFC 2865 §3, §5.2) - already in the tree transitively
+aes = { version = "0.8" }  # AES for relay cell encryption
+hmac = { version = "0.12" }  # HMAC for ntor authentication
 # x25519-dalek already used by wireguard feature, don't redeclare
 # tokio-rustls already available, don't redeclare
 # rcgen already used by proxy feature, don't redeclare
@@ -1437,137 +234,33 @@ hkdf = { version = "0.12", optional = true }  # HKDF for key derivation in ntor
 tiny-skia = "0.11"  # 2D graphics rendering
 cosmic-text = "0.12"  # Text rendering with font support
 image = "0.25"  # Image buffer manipulation
-font8x8 = { version = "0.3", optional = true }  # Guacamole: the model's text, rendered to PNG
 sys-locale = "0.3"  # System locale detection for text rendering
 
-# VNC server (Remote Frame Buffer protocol)
-rfb = { version = "0.1", optional = true }
 
 # OpenAPI 3.1 server (runtime request validation and route matching)
-openapi-rs = { git = "https://github.com/baerwang/openapi-rs", optional = true }
-matchit = { version = "0.8", optional = true }  # High-performance path router for OpenAPI
+openapi-rs = { package = "netget-openapi-rs", version = "0.1.0" }
+matchit = { version = "0.8" }  # High-performance path router for OpenAPI
 
 # Kafka broker (wire protocol parsing and serialization)
-kafka-protocol = { version = "0.14", optional = true }  # Code-generated Kafka protocol support
+kafka-protocol = { package = "netget-kafka-protocol", version = "0.14.1" }  # Code-generated Kafka protocol support
 
-# HTTP/3 protocol (HTTP over QUIC - UDP-based, encrypted, multiplexed - RFC 9114)
-quinn = { version = "0.11", optional = true }  # Async QUIC implementation for HTTP/3
-h3 = { version = "0.0.8", optional = true }  # HTTP/3 implementation
-h3-quinn = { version = "0.0.10", optional = true }  # QUIC adapter for HTTP/3
-wtransport = { version = "=0.7.2", default-features = false, features = ["ring", "quinn", "self-signed"], optional = true }  # WebTransport (vendored with fixes, see vendor/wtransport/README.netget.md)
-wtransport-proto = { version = "=0.7.2", features = ["async"], optional = true }
 
 # BitTorrent protocols (bencode encoding/decoding)
-serde_bencode = { version = "0.2", optional = true }  # Bencode serialization for BitTorrent protocols
+serde_bencode = { version = "0.2" }  # Bencode serialization for BitTorrent protocols
 
-# AWS SDK for SQS and DynamoDB clients
-aws-config = { version = "1.5", features = ["behavior-version-latest"], optional = true }
-aws-sdk-sqs = { version = "1.86", optional = true }
-aws-sdk-dynamodb = { version = "1.52", optional = true }
-aws-smithy-types = { version = "1.3", optional = true }
 
-# OpenAI API client
-async-openai = { version = "0.26", optional = true }
 # OAuth2 client
-oauth2 = { version = "4.4", optional = true }
+oauth2 = { version = "4.4" }
 
-# Client protocol dependencies
-# FTP client
-suppaftp = { version = "6.0", optional = true }
 # SNMP client
-snmp = { version = "0.2", optional = true }
-# DNS client (includes TLS for DoT/DoH)
-hickory-client = { version = "0.24", optional = true, features = ["dns-over-rustls", "dns-over-https-rustls"] }
-# NTP client
-rsntp = { version = "4.0", optional = true }
-# SSH client
-ssh2 = { version = "0.9", optional = true }
-# IRC client
-irc = { version = "1.1", optional = true }
-# SMTP client
-lettre = { version = "0.11", optional = true }
-# MySQL client
-mysql_async = { version = "0.34", optional = true }
-# MSSQL (SQL Server) client
-tiberius = { version = "0.12", optional = true }
-# PostgreSQL client
-tokio-postgres = { version = "0.7", optional = true }
+snmp = { version = "0.2" }
 # MongoDB server and client
-bson = { version = "3.0", optional = true, features = ["serde", "serde_with-3", "serde_json-1"] }  # BSON encoding/decoding for MongoDB
-mongodb = { version = "3.3", optional = true }  # Official MongoDB async driver
-# redis-rs: used only by tests, as an independent client of NetGet's Redis server (src/ frames
-# RESP itself). An optional dev-dependency is not possible, so it rides on the `redis` feature;
-# `cluster-async` is its cluster client, which tests/server/redis/cluster_test.rs drives.
-redis = { version = "0.27", optional = true, features = ["tokio-comp", "cluster-async"] }
-# CouchDB client
-couch_rs = { version = "0.10", optional = true }
-form_urlencoded = { version = "1.2", optional = true }
+bson = { version = "3.0", features = ["serde", "serde_with-3", "serde_json-1"] }  # BSON encoding/decoding for MongoDB
 # RSS feed generation and parsing
-rss = { version = "2.0", optional = true }
-# WebDAV client
-reqwest_dav = { version = "0.2", optional = true }
-# NFS client
-nfs3_client = { version = "0.7", optional = true, features = ["tokio"] }
-# Cassandra client
-scylla = { version = "1.3", optional = true }
-# LDAP client
-ldap3 = { version = "0.11", optional = true }
-# IMAP client
-async-imap = { version = "0.11", optional = true }
-async-native-tls = { version = "0.5", optional = true }
-# S3 client
-rust-s3 = { version = "0.37", optional = true }
-aws-sdk-s3 = { version = "1.90", optional = true }
-aws-credential-types = { version = "1.2", optional = true }
-# Tor client with experimental-api for directory access
-arti-client = { version = "0.36", optional = true, features = ["experimental-api"] }
-ironrdp-connector = { version = "0.10", optional = true }
-ironrdp-session = { version = "0.11", optional = true }
-ironrdp-tokio = { version = "0.10", optional = true }
-ironrdp-tls = { version = "0.2", optional = true, features = ["rustls-ring"] }
-ironrdp-input = { version = "0.7", optional = true }
-ironrdp-pdu = { version = "0.9", optional = true }
-ironrdp-graphics = { version = "0.9", optional = true }
-picky-krb = { version = "0.12", optional = true }  # Kerberos ASN.1 types and RFC 3962 crypto
-picky-asn1 = { version = "0.10", optional = true }
-picky-asn1-der = { version = "0.5", optional = true }
-tor-rtcompat = { version = "0.36", optional = true }
-tor-dirmgr = { version = "0.36", optional = true }  # Tor directory manager types
-tor-netdir = { version = "0.36", optional = true }  # Tor network directory queries
-# Git client
-git2 = { version = "0.19", optional = true }
-# MQTT client
-rumqttc = { version = "0.24", optional = true }
-# AMQP client
-lapin = { version = "4.0.0-rc.1", optional = true }
-# The Kafka client needs no dependency of its own: it uses `kafka-protocol` in the client
-# direction (request encoders, response decoders) through the re-export the Kafka broker
-# already provides. rdkafka/librdkafka was removed - it aborted in malloc, and the optional
-# `rdkafka` feature it left behind gated the client out of every `--features kafka` build.
-# Kubernetes client with v1.30 API support (latest in k8s-openapi 0.24)
-kube = { version = "0.99", optional = true, features = ["client", "rustls-tls"] }
-k8s-openapi = { version = "0.24", optional = true, features = ["v1_30"] }
-# NFS types for NFSv3 protocol
-nfs3_types = { version = "0.4", optional = true }
-# Bluetooth Low Energy (BLE) client - cross-platform (Windows, macOS, Linux)
-btleplug = { version = "0.11", optional = true }
-# Bluetooth Low Energy (BLE) server/peripheral - cross-platform (Windows, macOS, Linux)
-ble-peripheral-rust = { version = "0.2", optional = true }
-# NFC (Near Field Communication) via PC/SC - cross-platform smart card API (Windows/macOS native, Linux pcscd)
-pcsc = { version = "2.9", optional = true }
-# NDEF (NFC Data Exchange Format) message parsing and generation
-# USB client
-nusb = { version = "0.1", optional = true }
+rss = { version = "2.0" }
 
-# USB/IP protocol for virtual USB device creation
-usbip = { version = "0.9", optional = true }
 
-# Memory-mapped file I/O for USB MSC disk images
-memmap2 = { version = "0.9", optional = true }
 
-# USB FIDO2 dependencies
-ring = { version = "0.17", optional = true }  # ECDSA P-256 cryptography for FIDO2
-serde_cbor = { version = "0.11", optional = true }  # CBOR encoding for CTAP2
 
 # USB Smart Card dependencies
 # sha2 already defined above for wireguard/tor
@@ -1578,8 +271,7 @@ hf-hub = { version = "0.3", optional = true, features = ["tokio"] }  # Hugging F
 
 # SQLite database support (in-memory or file-based)
 rusqlite = { version = "0.37", optional = true, features = ["bundled", "limits", "hooks"] }  # SQLite library with bundled SQLite (matches tor-dirmgr dependency)
-tun = { version = "0.8.14", optional = true }
-sha1 = { version = "0.10", optional = true }
+sha1 = { version = "0.10" }
 
 # Linux-only dependencies
 #
@@ -1600,7 +292,7 @@ ratatui = { version = "0.29", default-features = false, features = ["crossterm"]
 tui-textarea = "0.7"
 termbg = "0.5"  # Terminal background detection for adaptive theming
 ollama-rs = { version = "0.3.3", features = ["stream"] }
-socket2 = "0.5"  # Socket options (SO_REUSEADDR)
+socket2 = { version = "0.5", features = ["all"] }  # Socket options (SO_REUSEADDR)
 fs2 = "0.4"  # Cross-process lock for non-destructive legacy settings migration
 syntect = "5.3"
 
@@ -1610,12 +302,165 @@ syntect = "5.3"
 # names in src/lib.rs so the protocol servers and the dashboard compile without a `#[cfg]` at
 # each use. The rest are per-crate switches their upstream needs on this target.
 # ---------------------------------------------------------------------------------------------
+
+# Protocols the browser build cannot compile (real sockets, processes, C libraries).
+opcua = { package = "netget-async-opcua", version = "=0.19.0", features = ["server", "client"] }
+apollo-compiler = { version = "1.33.0" } # graphql: parse, validate, introspect, execute
+tiger = { version = "0.2" }
+bzip2 = { version = "0.5", features = ["static"] }
+# DNS server (Hickory DNS, formerly Trust-DNS)
+hickory-server = { version = "0.24", features = ["dns-over-https-rustls", "dns-over-rustls"] }
+hickory-proto = { version = "0.24", features = ["dns-over-https-rustls", "dns-over-rustls", "dnssec-ring"] }
+# SSH server
+russh = { version = "0.45" }
+russh-keys = { version = "0.45" }
+russh-sftp = { version = "2.1" }
+# SMTP server
+rust-smtp-server = { version = "0.1" }
+# mDNS/DNS-SD service discovery
+mdns-sd = { version = "0.15" }
+# MySQL server
+opensrv-mysql = { version = "0.7" }
+# IPP (Internet Printing Protocol)
+ipp = { version = "5.3" }
+# PostgreSQL server
+pgwire = { version = "0.35" }
+# Redis server (RESP protocol)
+redis-protocol = { version = "6.0" }
+# Cassandra/CQL server
+cassandra-protocol = { version = "3.3" }
+# WebRTC client (peer-to-peer data channels, no media)
+webrtc = { version = "0.11" }
+# WebRTC Signaling Server (WebSocket-based SDP relay)
+tokio-tungstenite = { version = "0.21" }
+srt-tokio = { version = "0.4.4" }  # SRT (Secure Reliable Transport): pure-Rust ARQ, TSBPD and AES
+# LDAP server (ASN.1 BER encoding for LDAP protocol)
+ldap3_proto = { version = "0.3" }
+# IMAP server (IMAP protocol parsing)
+imap-codec = { version = "2.0.0-alpha.6" }
+# MQTT broker (IoT messaging)
+rumqttd = { version = "0.20" }
+# SOCKS5 client (proxy protocol client)
+tokio-socks = { version = "0.5" }
+# BGP server (Border Gateway Protocol)
+zenoh = { version = "=1.10.1", default-features = false, features = ["transport_tcp", "unstable"] }  # Zenoh runtime for the zenoh feature; TCP only
+# Nostr relay: BIP-340 Schnorr verification and signing. The same 0.29 that `bitcoin` links,
+# so the tree carries one secp256k1, not two curve libraries.
+secp256k1 = { version = "0.29", features = ["recovery"] }
+# Stratum V2: the Noise transport's AEAD (ChaCha20-Poly1305, IETF); its chacha20 and poly1305
+# are the versions already in the tree.
+chacha20poly1305 = { version = "0.10" }
+# devp2p: keccak-256 (block hashes, RLPx secrets and MACs) and Snappy (message compression
+# after Hello v5). Both are the versions already in the tree through other crates.
+sha3 = { version = "0.10" }
+snap = { version = "1.1" }
+x25519-dalek = { version = "2.0", features = ["static_secrets"] }  # For WireGuard key generation
+# MCP (Model Context Protocol) server
+axum = { version = "0.7" }
+tower-http = { version = "0.5", features = ["fs", "trace"] }
+# gRPC server with dynamic schema support
+tonic = { package = "netget-tonic", version = "0.12.3", features = ["gzip", "tls-webpki-roots"] }
+prost = { version = "0.13" }
+prost-reflect = { version = "0.14" }
+prost-types = { version = "0.13" }
+tonic-web = { package = "netget-tonic-web", version = "=0.12.3" }
+tonic-reflection = { package = "netget-tonic-reflection", version = "0.12.3" }
+tower = { version = "0.5" }
+tempfile = { version = "3.13" }
+etcd-client = { package = "netget-etcd-client", version = "0.15.0" }
+# ZooKeeper client
+zookeeper-async = { version = "5.0" }
+xmlrpc = { version = "0.15" }  # XML-RPC client library
+lz4_flex = { version = "0.11" }  # ClickHouse native compressed frames (pure Rust)
+naive-cityhash = { version = "0.2" }  # CityHash128 v1.0.2, the ClickHouse frame checksum (pure Rust)
+# OTLP/HTTP receiver: the OpenTelemetry project's generated protobuf message types, without
+# tonic's transport or the serde layer (JSON is walked as serde_json::Value instead).
+# 0.29 because its tonic is 0.12, the same tonic grpc/etcd/tonic-reflection/etcd-client use;
+# 0.30 pulls tonic 0.13 and 0.31 tonic 0.14 + prost 0.14. Move them together.
+opentelemetry-proto = { package = "netget-opentelemetry-proto", version = "0.29.0", default-features = false, features = ["gen-tonic-messages", "trace", "metrics", "logs", "gen-tonic"] }
+ed25519-dalek = { version = "2.1" }  # Ed25519 signatures for relay identity
+rsa = { version = "0.9", features = ["sha2"] }  # ActivityPub: HTTP signatures (rsa-sha256)
+md4 = { version = "0.10" }  # MD4: rsync protocol 29 file and block checksums, and its daemon auth response
+ctr = { version = "0.9" }  # CTR mode for AES
+hkdf = { version = "0.12" }  # HKDF for key derivation in ntor
+font8x8 = { version = "0.3" }  # Guacamole: the model's text, rendered to PNG
+# HTTP/3 protocol (HTTP over QUIC - UDP-based, encrypted, multiplexed - RFC 9114)
+quinn = { version = "0.11" }  # Async QUIC implementation for HTTP/3
+h3 = { version = "0.0.8" }  # HTTP/3 implementation
+h3-quinn = { package = "netget-h3-quinn", version = "0.0.10" }  # QUIC adapter for HTTP/3
+wtransport = { package = "netget-wtransport", version = "=0.7.2", default-features = false, features = ["ring", "quinn", "self-signed"] }  # WebTransport, NetGet fork (github.com/netget-net/wtransport)
+wtransport-proto = { package = "netget-wtransport-proto", version = "=0.7.2", features = ["async"] }
+# AWS SDK for SQS and DynamoDB clients
+aws-config = { version = "1.5", features = ["behavior-version-latest"] }
+aws-sdk-sqs = { version = "1.86" }
+aws-sdk-dynamodb = { version = "1.52" }
+aws-smithy-types = { version = "1.3" }
+# OpenAI API client
+async-openai = { version = "0.26" }
+# DNS client (includes TLS for DoT/DoH)
+hickory-client = { version = "0.24", features = ["dns-over-rustls", "dns-over-https-rustls"] }
+# NTP client
+rsntp = { version = "4.0" }
+# SSH client
+ssh2 = { version = "0.9" }
+# IRC client
+irc = { version = "1.1" }
+# SMTP client
+lettre = { version = "0.11" }
+# MySQL client
+mysql_async = { version = "0.34" }
+# MSSQL (SQL Server) client
+tiberius = { version = "0.12" }
+# PostgreSQL client
+tokio-postgres = { version = "0.7" }
+mongodb = { version = "3.3" }  # Official MongoDB async driver
+# redis-rs: used only by tests, as an independent client of NetGet's Redis server (src/ frames
+# RESP itself). An optional dev-dependency is not possible, so it rides on the `redis` feature;
+# `cluster-async` is its cluster client, which tests/server/redis/cluster_test.rs drives.
+redis = { version = "0.27", features = ["tokio-comp", "cluster-async"] }
+# CouchDB client
+couch_rs = { version = "0.10" }
+form_urlencoded = { version = "1.2" }
+# WebDAV client
+reqwest_dav = { version = "0.2" }
+# Cassandra client
+scylla = { version = "1.3" }
+# LDAP client
+ldap3 = { version = "0.11" }
+# IMAP client
+async-imap = { version = "0.11" }
+async-native-tls = { version = "0.5" }
+# S3 client
+rust-s3 = { version = "0.37" }
+aws-sdk-s3 = { version = "1.90" }
+aws-credential-types = { version = "1.2" }
+picky-krb = { version = "0.12" }  # Kerberos ASN.1 types and RFC 3962 crypto
+picky-asn1 = { version = "0.10" }
+picky-asn1-der = { version = "0.5" }
+# Git client
+git2 = { version = "0.19" }
+# MQTT client
+rumqttc = { version = "0.24" }
+# AMQP client
+lapin = { version = "4.0.0-rc.1" }
+# The Kafka client needs no dependency of its own: it uses `kafka-protocol` in the client
+# direction (request encoders, response decoders) through the re-export the Kafka broker
+# already provides. rdkafka/librdkafka was removed - it aborted in malloc, and the optional
+# `rdkafka` feature it left behind gated the client out of every `--features kafka` build.
+# Kubernetes client with v1.30 API support (latest in k8s-openapi 0.24)
+kube = { version = "0.99", features = ["client", "rustls-tls"] }
+k8s-openapi = { version = "0.24", features = ["v1_30"] }
+# NDEF (NFC Data Exchange Format) message parsing and generation
+# USB client
+nusb = { version = "0.1" }
+# USB FIDO2 dependencies
+ring = { version = "0.17", features = ["std"] }  # ECDSA P-256 cryptography for FIDO2
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Cargo forbids one dependency name resolving to different packages per target, so these keep
 # their own names here and `src/lib.rs` binds them as `tokio` and `crossterm` for the whole
 # crate with `extern crate netget_tokio_wasm as tokio;` (only on this target).
-netget-tokio-wasm = { path = "crates/netget-tokio-wasm" }
-netget-crossterm-wasm = { path = "crates/netget-crossterm-wasm" }
+netget-tokio-wasm = { path = "crates/netget-tokio-wasm", version = "0.1.0" }
+netget-crossterm-wasm = { path = "crates/netget-crossterm-wasm", version = "0.1.0" }
 ratatui = { version = "0.29", default-features = false }
 tui-textarea = { version = "0.7", default-features = false, features = ["ratatui", "no-backend"] }
 syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }  # onig needs a C compiler
@@ -1630,7 +475,7 @@ bluer = { version = "0.17", optional = true, features = ["bluetoothd"] }
 # SocketCAN is an AF_CAN socket family that exists only in the Linux kernel. Target-gated for the
 # same reason as bluer above: the `can` feature compiles everywhere, and the protocol returns a
 # clear Err naming the platform rather than being hidden, on every other OS.
-socketcan = { version = "3.5", optional = true }
+socketcan = { version = "3.5" }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
@@ -1639,6 +484,74 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Secur
 # These fixture dependencies expose Unix-only process/terminal APIs.
 pty-process = "0.5"
 nix = { version = "0.29", features = ["signal", "process", "term", "ioctl"] }
+
+[target.'cfg(unix)'.dependencies]
+
+# Protocols that build only on Unix (raw sockets, pty, Unix pipes, platform crates).
+# ARP (Address Resolution Protocol) packet handling
+pnet = { version = "0.35" }
+# SSH Agent protocol (key management server and client)
+ssh-agent-lib = { version = "0.5" }
+# HTTP Proxy (MITM)
+http-mitm-proxy = { version = "0.16" }
+tokio-native-tls = { version = "0.3" }
+native-tls = { version = "0.2" }
+# NFS server
+nfsserve = { version = "0.10" }
+# STUN server (Session Traversal Utilities for NAT)
+webrtc-stun = { version = "0.1" }
+stunclient = { version = "0.4" }  # STUN client for discovering external IP/port
+# TURN server (Traversal Using Relays around NAT)
+webrtc-turn = { version = "0.1" }
+# XMPP/Jabber client (instant messaging)
+tokio-xmpp = { version = "5.0" }
+xmpp-parsers = { version = "0.22" }
+# Named by tokio-xmpp's `ServerConnector::connect` signature (`sasl::common::ChannelBinding`),
+# which tokio-xmpp does not re-export; the version tokio-xmpp 5.0 itself locks.
+sasl = { version = "0.5.2" }
+# WireGuard VPN server (full implementation with LLM control)
+defguard_wireguard_rs = { version = "0.7", features = ["serde"] }
+# Tor directory mirror (Tor protocol parsing and generation)
+tor-netdoc = { version = "0.36" }  # Tor network document parsing (consensus, descriptors)
+tor-cert = { version = "0.36" }  # Tor certificate handling
+# Tor relay (OR protocol cell handling and cryptography)
+tor-cell = { version = "0.36" }  # Tor cell encoding/decoding (RELAY, CREATE, etc.)
+# NFS client
+nfs3_client = { version = "0.7", features = ["tokio"] }
+# Tor client with experimental-api for directory access
+arti-client = { version = "0.36", features = ["experimental-api"] }
+ironrdp-connector = { version = "0.10" }
+ironrdp-session = { version = "0.11" }
+ironrdp-tokio = { version = "0.10" }
+ironrdp-tls = { version = "0.2", features = ["rustls-ring"] }
+ironrdp-input = { version = "0.7" }
+ironrdp-pdu = { version = "0.9" }
+ironrdp-graphics = { version = "0.9" }
+tor-rtcompat = { version = "0.36" }
+tor-dirmgr = { version = "0.36" }  # Tor directory manager types
+tor-netdir = { version = "0.36" }  # Tor network directory queries
+# NFS types for NFSv3 protocol
+nfs3_types = { version = "0.4" }
+tun = { version = "0.8.14" }
+
+# System libraries, each behind the feature of the same purpose (see [features]).
+# Packet capture (libpcap) - optional: only linked by features that sniff L2
+# (datalink/arp/isis). Kept out of portable release binaries to avoid a
+# libpcap runtime dependency.
+pcap = { version = "2.2", optional = true }
+# SMB client (native libsmbclient wrapper; the server uses its own codec)
+pavao = { version = "0.2", optional = true }
+# Bluetooth Low Energy (BLE) client - cross-platform (Windows, macOS, Linux)
+btleplug = { version = "0.11", optional = true }
+# Bluetooth Low Energy (BLE) server/peripheral - cross-platform (Windows, macOS, Linux)
+ble-peripheral-rust = { version = "0.2", optional = true }
+# NFC (Near Field Communication) via PC/SC - cross-platform smart card API (Windows/macOS native, Linux pcscd)
+pcsc = { version = "2.9", optional = true }
+# USB/IP protocol for virtual USB device creation
+usbip = { version = "0.9", optional = true }
+# Memory-mapped file I/O for USB MSC disk images
+memmap2 = { version = "0.9", optional = true }
+serde_cbor = { version = "0.11", optional = true }  # CBOR encoding for CTAP2
 
 [dev-dependencies]
 # For async tests
@@ -1695,9 +608,11 @@ async-stomp = "0.6.3"
 proptest = { version = "1", default-features = false, features = ["std", "bit-set"] }
 
 [build-dependencies]
-# Protocol buffer compiler for etcd gRPC service
+# Protocol buffers for the etcd and gNMI servers. protoc comes from protoc-bin-vendored unless
+# PROTOC names one, so building NetGet needs no protobuf compiler installed.
 prost-build = "0.13"
 tonic-build = "0.12"
+protoc-bin-vendored = "3"
 
 [profile.release]
 # Keep prebuilt binaries small: symbols stripped, thin LTO.
@@ -1730,20 +645,8 @@ panic = "abort"
 # unchanged. vendor/hyper/README.md has the diff and how to re-apply it on a hyper upgrade;
 # tests/vendored_hyper_patch_test.rs fails when Cargo.lock and the vendored copy disagree.
 [patch.crates-io]
-async-opcua-core = { path = "vendor/async-opcua-core" }
-async-opcua-server = { path = "vendor/async-opcua-server" }
+# hyper 1.7.0 reads std's clock, which panics on wasm32-unknown-unknown; this copy reads
+# JavaScript's Date.now() there and is otherwise upstream (vendor/hyper/README.md). Only the
+# browser build is affected, so the published crate uses upstream hyper. NetGet's security
+# patches to other crates live in published forks (github.com/netget-net), not here.
 hyper = { path = "vendor/hyper" }
-h3-quinn = { path = "vendor/h3-quinn" }
-# kafka-protocol 0.14.1 sizes allocations from peer-supplied counts and lengths (arrays, a
-# record batch's record count, a record's header count, owned strings and bytes, a snappy
-# block's declared length), so a few unauthenticated bytes could abort the process. Each is
-# bounded by the bytes actually present. See vendor/kafka-protocol/README.netget.md and
-# tests/vendored_kafka_protocol_patch_test.rs.
-kafka-protocol = { path = "vendor/kafka-protocol" }
-# Bound tonic0.12.3 decompression with the configured receive limit in both directions.
-# See vendor/tonic/README.netget.md and tests/vendored_tonic_patch_test.rs.
-tonic = { path = "vendor/tonic" }
-# Owned, bounded wtransport 0.7.2 driver with checked SETTINGS and bounded QPACK.
-# See vendor/wtransport/README.netget.md and tests/vendored_wtransport_patch_test.rs.
-wtransport = { path = "vendor/wtransport" }
-wtransport-proto = { path = "vendor/wtransport-proto" }

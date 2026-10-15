@@ -3,7 +3,6 @@
 //! These tests verify MSSQL client functionality by spawning the actual NetGet binary
 //! and testing client behavior as a black-box.
 
-#[cfg(all(test, feature = "mssql"))]
 mod mssql_client_tests {
     use crate::helpers::*;
     use std::time::Duration;

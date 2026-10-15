@@ -1,6 +1,6 @@
 //! End-to-end Bluetooth LE Presenter Service tests for NetGet
 
-#![cfg(all(test, feature = "bluetooth-ble-presenter"))]
+#![cfg(all(unix, feature = "bluetooth"))]
 
 use crate::helpers::{self, E2EResult, NetGetConfig};
 

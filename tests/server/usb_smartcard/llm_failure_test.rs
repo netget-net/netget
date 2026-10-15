@@ -24,7 +24,7 @@
 //! * The card **keeps answering**. A second APDU also gets `6F00`, so the host is never left on
 //!   its own timeout.
 
-#[cfg(all(test, feature = "usb-smartcard"))]
+#[cfg(all(unix, feature = "libusb"))]
 mod usb_smartcard_llm_failure {
     use crate::helpers::usbip_client::UsbIpClient;
     use crate::helpers::*;

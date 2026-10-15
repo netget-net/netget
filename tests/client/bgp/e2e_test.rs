@@ -22,7 +22,6 @@
 //! 3. Every assertion was `output_contains("BGP")` — satisfied by a log line saying the
 //!    connection had failed.
 
-#[cfg(all(test, feature = "bgp"))]
 mod bgp_client_tests {
     use crate::helpers::*;
     use std::time::Duration;

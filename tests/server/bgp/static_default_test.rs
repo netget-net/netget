@@ -9,8 +9,6 @@
 //! `bgp_open` and `bgp_established` rules have `expect_calls(0)`: if the session path ever reaches
 //! the LLM, they fire and `verify_mocks()` fails.
 
-#![cfg(feature = "bgp")]
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;

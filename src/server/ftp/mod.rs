@@ -10,30 +10,20 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-#[cfg(feature = "ftp")]
 use tokio::sync::Mutex;
 
-#[cfg(feature = "ftp")]
 use crate::llm::action_helper::call_llm;
-#[cfg(feature = "ftp")]
 use crate::llm::ollama_client::OllamaClient;
-#[cfg(feature = "ftp")]
 use crate::llm::ActionResult;
-#[cfg(feature = "ftp")]
 use crate::logging::emit::Log;
-#[cfg(feature = "ftp")]
 use crate::protocol::Event;
-#[cfg(feature = "ftp")]
 use crate::server::ftp::actions::FtpProtocol;
-#[cfg(feature = "ftp")]
 use crate::state::app_state::AppState;
-#[cfg(feature = "ftp")]
 use actions::FTP_COMMAND_EVENT;
 
 /// FTP server that provides LLM-controlled file transfer operations
 pub struct FtpServer;
 
-#[cfg(feature = "ftp")]
 impl FtpServer {
     /// Spawn FTP server with integrated LLM actions
     #[allow(clippy::too_many_arguments)]
@@ -193,14 +183,12 @@ impl FtpServer {
 /// The greeting itself is generated and written before the command loop begins, so the model's
 /// time over it, and a `manual` rule parking it for a human, are outside this deadline by
 /// construction — as is every later LLM round-trip, which happens after a line has been read.
-#[cfg(feature = "ftp")]
 const FIRST_COMMAND_READ_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// The two read deadlines for one connection, resolved from the server's startup parameters.
 ///
 /// Carried as one value so threading them from `spawn_with_llm_actions` down to the command
 /// loop costs one argument rather than two at each hop.
-#[cfg(feature = "ftp")]
 #[derive(Clone, Copy)]
 struct ReadDeadlines {
     /// [`FIRST_COMMAND_READ_TIMEOUT`], or this server's `first_byte_timeout_secs`.
@@ -209,7 +197,6 @@ struct ReadDeadlines {
     idle: Duration,
 }
 
-#[cfg(feature = "ftp")]
 impl ReadDeadlines {
     fn resolve(first_byte_secs: Option<u64>, idle_secs: Option<u64>) -> Self {
         Self {
@@ -238,7 +225,6 @@ impl ReadDeadlines {
 ///
 /// Overridable per server with `idle_timeout_secs`, for the same reason the first bound is:
 /// the right value is a property of who is on the other end, and only the operator knows that.
-#[cfg(feature = "ftp")]
 const IDLE_BETWEEN_COMMANDS_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Concurrent control connections this server admits.
@@ -246,7 +232,6 @@ const IDLE_BETWEEN_COMMANDS_TIMEOUT: Duration = Duration::from_secs(300);
 /// [`crate::server::accept_bounded::DEFAULT_MAX_CONNECTIONS`]. Each connection may buffer up to
 /// [`MAX_COMMAND_LINE`], so this is the multiplier that turns that per-connection bound into a
 /// total one.
-#[cfg(feature = "ftp")]
 const MAX_CONNECTIONS: usize = crate::server::accept_bounded::DEFAULT_MAX_CONNECTIONS;
 
 /// What a peer over [`MAX_CONNECTIONS`] is told before the socket closes.
@@ -256,7 +241,6 @@ const MAX_CONNECTIONS: usize = crate::server::accept_bounded::DEFAULT_MAX_CONNEC
 /// they are at their client limit. A `4xx` is a transient negative reply, so a client retries
 /// later rather than recording a permanent failure. Fixed text, so there is no placeholder an
 /// internal error could reach.
-#[cfg(feature = "ftp")]
 const CONNECTION_CAP_REFUSAL: &[u8] = b"421 Too many connections, closing control connection\r\n";
 
 /// Largest control line the server will accumulate before giving up on the peer.
@@ -266,11 +250,9 @@ const CONNECTION_CAP_REFUSAL: &[u8] = b"421 Too many connections, closing contro
 /// [`tokio::io::AsyncBufReadExt::read_line`] grows its buffer until it finds a newline: a
 /// peer that opens a connection and streams bytes with no `\n` makes the server allocate
 /// without bound, which is a one-connection out-of-memory.
-#[cfg(feature = "ftp")]
 pub const MAX_COMMAND_LINE: usize = 8192;
 
 /// The result of trying to read one control line.
-#[cfg(feature = "ftp")]
 enum CommandLine {
     /// A complete line. The trailing CRLF is still attached; the caller trims it.
     Line(String),
@@ -284,7 +266,6 @@ enum CommandLine {
 ///
 /// Returns the line and the number of bytes consumed from the socket, so the caller can
 /// account for them in the connection stats exactly as `read_line` allowed.
-#[cfg(feature = "ftp")]
 async fn read_command_line<R>(
     reader: &mut tokio::io::BufReader<R>,
     max_len: usize,
@@ -345,7 +326,6 @@ where
 /// For the log only. FTP has a rich enough vocabulary that the *code* is the outcome, so the
 /// `decision=` line names what the peer actually received — which is how an operator sees
 /// that a PASS was answered 530 and not 230.
-#[cfg(feature = "ftp")]
 fn reply_code_of(data: &[u8]) -> Option<u16> {
     let head = data.get(..3)?;
     if head.iter().all(u8::is_ascii_digit) {
@@ -363,14 +343,12 @@ fn reply_code_of(data: &[u8]) -> Option<u16> {
 /// commands it sent afterwards, so `USER anonymous` read `220 FTP Server Ready` and no login
 /// ever happened (`ftp/anonymous-login` 0/5). Everything after the first completion reply is
 /// dropped and counted, and the caller logs `decision=duplicate_response_dropped`.
-#[cfg(feature = "ftp")]
 #[derive(Default)]
 struct OneReply {
     completed: bool,
     dropped: usize,
 }
 
-#[cfg(feature = "ftp")]
 impl OneReply {
     /// Whether `data` may go on the wire.
     fn admit(&mut self, data: &[u8]) -> bool {
@@ -407,7 +385,6 @@ impl OneReply {
 /// model that answered with nothing, and a model whose action the executor refused all leave
 /// the *same* thing on the wire today — nothing at all — so the log is the only place they
 /// can be told apart, and only the first of the three is a decision anybody made.
-#[cfg(feature = "ftp")]
 fn classify_ftp_outcome(result: &crate::llm::ExecutionResult) -> (&'static str, String) {
     let codes: Vec<String> = result
         .protocol_results
@@ -466,10 +443,8 @@ fn classify_ftp_outcome(result: &crate::llm::ExecutionResult) -> (&'static str, 
     )
 }
 
-#[cfg(feature = "ftp")]
 struct FtpSession;
 
-#[cfg(feature = "ftp")]
 impl FtpSession {
     /// Handle an FTP session
     ///
@@ -883,24 +858,4 @@ impl FtpSession {
     }
 }
 
-#[cfg(not(feature = "ftp"))]
-impl FtpServer {
-    #[allow(clippy::too_many_arguments)]
-    pub async fn spawn_with_llm_actions(
-        _listen_addr: SocketAddr,
-        _llm_client: OllamaClient,
-        _app_state: Arc<AppState>,
-        _status_tx: mpsc::UnboundedSender<String>,
-        _server_id: crate::state::ServerId,
-        _first_byte_timeout_secs: Option<u64>,
-        _idle_timeout_secs: Option<u64>,
-    ) -> Result<SocketAddr> {
-        anyhow::bail!("FTP feature not enabled")
-    }
-}
-
 // Stub types needed for non-feature compilation
-#[cfg(not(feature = "ftp"))]
-use crate::llm::ollama_client::OllamaClient;
-#[cfg(not(feature = "ftp"))]
-use crate::state::app_state::AppState;

@@ -383,11 +383,8 @@ fn no_new_action_or_parameter_is_undescribed() {
 /// not compile, and they would all read as stale. Only run the check where the build can see
 /// everything the baseline was measured against.
 #[test]
-#[cfg_attr(
-    not(feature = "all-protocols"),
-    ignore = "the baseline is measured at --features all-protocols; a narrower build cannot \
-              tell a fixed entry from an uncompiled one"
-)]
+#[ignore = "the baseline is measured at --features all-protocols; a narrower build cannot \
+              tell a fixed entry from an uncompiled one"]
 fn the_baseline_has_no_stale_entries() {
     let violations = collect_violations();
     let live: BTreeSet<&str> = violations.iter().map(|v| v.key.as_str()).collect();

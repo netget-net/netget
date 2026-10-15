@@ -13,7 +13,7 @@
 //!   ./cargo-isolated.sh test --no-default-features --features usb-mouse --test server -- \
 //!       usb_mouse::connection_bounds --test-threads=100
 
-#![cfg(feature = "usb-mouse")]
+#![cfg(all(unix, feature = "libusb"))]
 
 use crate::helpers::usbip_bounds;
 

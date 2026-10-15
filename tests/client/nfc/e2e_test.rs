@@ -15,7 +15,7 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features nfc-client --test client -- nfc --test-threads=100
 
-#![cfg(feature = "nfc-client")]
+#![cfg(all(unix, feature = "pcsc"))]
 
 use netget::client::nfc::ndef::{decode_message, encode_message};
 use netget::client::nfc::NfcClientProtocol;

@@ -1,14 +1,14 @@
-#[cfg(all(test, feature = "turn"))]
+#[cfg(unix)]
 pub mod e2e_test;
 
-#[cfg(all(test, feature = "turn"))]
+#[cfg(unix)]
 mod static_default_test;
 
-#[cfg(all(test, feature = "turn"))]
+#[cfg(unix)]
 mod llm_failure_test;
 
-#[cfg(all(test, feature = "turn"))]
+#[cfg(unix)]
 mod peer_scope_test;
 
-#[cfg(all(test, feature = "turn"))]
+#[cfg(unix)]
 mod permission_limit_test;

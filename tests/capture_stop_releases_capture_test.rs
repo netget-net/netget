@@ -298,7 +298,7 @@ async fn assert_stops(
     );
 }
 
-#[cfg(feature = "arp")]
+#[cfg(all(unix, feature = "libpcap"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "needs layer-2 capture access (/dev/bpf* or CAP_NET_RAW); run with --ignored"]
 async fn arp_capture_stops_when_the_server_is_removed() {
@@ -318,7 +318,7 @@ async fn arp_capture_stops_when_the_server_is_removed() {
     assert_stops(&state, server_id, &mut status_rx, "stopping", "ARP").await;
 }
 
-#[cfg(feature = "datalink")]
+#[cfg(all(unix, feature = "libpcap"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "needs layer-2 capture access (/dev/bpf* or CAP_NET_RAW); run with --ignored"]
 async fn datalink_capture_stops_when_the_server_is_removed() {
@@ -339,7 +339,7 @@ async fn datalink_capture_stops_when_the_server_is_removed() {
     assert_stops(&state, server_id, &mut status_rx, "stopping", "DataLink").await;
 }
 
-#[cfg(feature = "isis")]
+#[cfg(all(unix, feature = "libpcap"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "needs layer-2 capture access (/dev/bpf* or CAP_NET_RAW); run with --ignored"]
 async fn isis_capture_stops_when_the_server_is_removed() {
@@ -360,7 +360,7 @@ async fn isis_capture_stops_when_the_server_is_removed() {
     assert_stops(&state, server_id, &mut status_rx, "stopping", "IS-IS").await;
 }
 
-#[cfg(feature = "icmp")]
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "needs raw IP socket access (root, or CAP_NET_RAW on Linux); run with --ignored"]
 async fn icmp_receive_loop_stops_when_the_server_is_removed() {

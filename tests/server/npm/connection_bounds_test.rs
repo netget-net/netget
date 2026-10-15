@@ -15,8 +15,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features npm --test server -- \
 //!       npm::connection_bounds --test-threads=100
 
-#![cfg(all(test, feature = "npm"))]
-
 use std::time::Duration;
 
 use crate::helpers::http_bounds::HttpBounds;

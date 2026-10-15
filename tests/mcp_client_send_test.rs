@@ -19,7 +19,7 @@
 //!   ./cargo-isolated.sh test --no-default-features --features mcp-stdio,tcp \
 //!       --test mcp_client_send_test -- --test-threads=100
 
-#![cfg(all(feature = "mcp-stdio", feature = "tcp"))]
+#![cfg(feature = "mcp-stdio")]
 
 use std::time::{Duration, Instant};
 
@@ -336,7 +336,6 @@ async fn send_to_peer_and_disconnect_peer_reach_the_peer() {
 
 /// `send_to_peer` on a server whose protocol only answers requests says so in the protocol's
 /// own terms, rather than suggesting a peer handle might turn up.
-#[cfg(feature = "http")]
 #[tokio::test]
 async fn send_to_peer_on_a_request_only_protocol_names_the_protocols_reason() {
     let (client, _state) = connect().await;

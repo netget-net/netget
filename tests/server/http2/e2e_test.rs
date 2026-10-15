@@ -3,8 +3,6 @@
 //! These tests spawn the actual NetGet binary with HTTP/2 prompts
 //! and validate the responses using real HTTP/2 clients (reqwest).
 
-#![cfg(feature = "http2")]
-
 use super::super::helpers::{self, E2EResult};
 use std::time::Duration;
 use tokio::time::sleep;

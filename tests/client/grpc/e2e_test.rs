@@ -3,7 +3,6 @@
 //! These tests verify gRPC client functionality by spawning NetGet gRPC server and client
 //! and testing client behavior as a black-box.
 
-#[cfg(all(test, feature = "grpc"))]
 mod grpc_client_tests {
     use crate::helpers::*;
     use std::time::Duration;

@@ -27,7 +27,7 @@ use tokio::sync::mpsc;
 use crate::llm::action_helper::call_llm;
 use crate::llm::ollama_client::OllamaClient;
 use crate::llm::ActionResult;
-#[cfg(feature = "xmlrpc")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::logging::emit::Log;
 use crate::server::connection::ConnectionId;
 use crate::state::app_state::AppState;
@@ -39,7 +39,7 @@ pub use actions::XmlRpcProtocol;
 
 /// Largest request body accepted, in bytes. hyper imposes no limit of its own, and
 /// the body is buffered whole, copied into a `String` and traced in full.
-#[cfg(feature = "xmlrpc")]
+#[cfg(not(target_arch = "wasm32"))]
 pub const MAX_REQUEST_BODY_BYTES: usize = 4 * 1024 * 1024;
 
 /// How long a peer that has connected and produced nothing may hold a slot.
@@ -54,7 +54,7 @@ pub const MAX_REQUEST_BODY_BYTES: usize = 4 * 1024 * 1024;
 /// hyper's own `header_read_timeout` is **not** this bound: its 30-second default is inert
 /// unless `http1::Builder::timer` is also set, which nothing here does — hyper downgrades a
 /// defaulted duration to `None` when no timer is present and applies no deadline at all.
-#[cfg(feature = "xmlrpc")]
+#[cfg(not(target_arch = "wasm32"))]
 const FIRST_BYTE_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// How long a connection with nothing outstanding may sit idle between requests.
@@ -69,7 +69,7 @@ const FIRST_BYTE_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_s
 /// [`ConnectionActivity`](crate::server::accept_bounded::ConnectionActivity), which reports a
 /// connection with work in flight — a model round-trip, or an event a `manual` rule parked for a
 /// human — as not idle at all.
-#[cfg(feature = "xmlrpc")]
+#[cfg(not(target_arch = "wasm32"))]
 const IDLE_BETWEEN_REQUESTS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Concurrent connections this server admits.
@@ -78,7 +78,7 @@ const IDLE_BETWEEN_REQUESTS_TIMEOUT: std::time::Duration = std::time::Duration::
 /// [`MAX_REQUEST_BODY_BYTES`] (4 MiB), so the cap is what turns that per-connection bound into a total
 /// one and holds the worst case well inside the ~1 GiB ceiling netget's HTTP family is held
 /// to. A protocol only declares a smaller number when its per-connection cost is larger.
-#[cfg(feature = "xmlrpc")]
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_CONNECTIONS: usize = crate::server::accept_bounded::DEFAULT_MAX_CONNECTIONS;
 
 /// What a peer over [`MAX_CONNECTIONS`] is told before the socket closes.
@@ -86,7 +86,7 @@ const MAX_CONNECTIONS: usize = crate::server::accept_bounded::DEFAULT_MAX_CONNEC
 /// `503 Service Unavailable` with a `Retry-After`, written directly onto the socket because the
 /// peer has not sent a request line for hyper to answer. Fixed bytes: nothing derived from an
 /// error reaches the wire (see `crate::utils::wire_failure`).
-#[cfg(feature = "xmlrpc")]
+#[cfg(not(target_arch = "wasm32"))]
 const CONNECTION_CAP_REFUSAL: &[u8] = b"HTTP/1.1 503 Service Unavailable\r\n\
     Content-Length: 0\r\nRetry-After: 5\r\nConnection: close\r\n\r\n";
 
@@ -99,16 +99,16 @@ const CONNECTION_CAP_REFUSAL: &[u8] = b"HTTP/1.1 503 Service Unavailable\r\n\
 /// `-32000..=-32099` is the implementation-defined server-error range in the XML-RPC
 /// fault-code interop note, so a saturated backend gets its own retryable code instead of
 /// being flattened into the permanent `-32603 internal error`.
-#[cfg(feature = "xmlrpc")]
+#[cfg(not(target_arch = "wasm32"))]
 const FAULT_INTERNAL_ERROR: i32 = -32603;
 /// Backend saturated — transient, the client should back off and retry.
-#[cfg(feature = "xmlrpc")]
+#[cfg(not(target_arch = "wasm32"))]
 const FAULT_SERVER_BUSY: i32 = -32000;
 
 /// XML-RPC server that handles RPC method calls with LLM
 pub struct XmlRpcServer;
 
-#[cfg(feature = "xmlrpc")]
+#[cfg(not(target_arch = "wasm32"))]
 impl XmlRpcServer {
     /// Spawn XML-RPC server with integrated LLM actions
     pub async fn spawn_with_llm_actions(
@@ -302,7 +302,7 @@ impl XmlRpcServer {
 }
 
 /// Handle a single XML-RPC request
-#[cfg(feature = "xmlrpc")]
+#[cfg(not(target_arch = "wasm32"))]
 async fn handle_xmlrpc_request(
     req: Request<hyper::body::Incoming>,
     connection_id: ConnectionId,
@@ -493,11 +493,11 @@ pub enum XmlRpcValue {
 /// Without this cap a 4 MiB body is a value ~100 000 deep, and 16 000 levels already overflow
 /// an 8 MiB stack: `fuzz/fuzz_targets/xmlrpc_value.rs`'s `depth_bomb` seed `SIGSEGV`s with the
 /// check disabled. It also bounds the parser's own container stack.
-#[cfg(feature = "xmlrpc")]
+#[cfg(not(target_arch = "wasm32"))]
 pub const MAX_VALUE_DEPTH: usize = 64;
 
 /// A container currently being filled.
-#[cfg(feature = "xmlrpc")]
+#[cfg(not(target_arch = "wasm32"))]
 enum Container {
     Array(Vec<XmlRpcValue>),
     Struct {
@@ -521,7 +521,7 @@ enum Container {
 ///
 /// Public for `fuzz/fuzz_targets/xmlrpc_value.rs`, which hands whatever this accepts to
 /// `actions::create_method_call_event` exactly as the request path does.
-#[cfg(feature = "xmlrpc")]
+#[cfg(not(target_arch = "wasm32"))]
 pub fn parse_method_call(xml: &str) -> Result<MethodCall> {
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(true);
@@ -723,7 +723,7 @@ pub fn parse_method_call(xml: &str) -> Result<MethodCall> {
 }
 
 /// Decode a text node according to the type element that encloses it.
-#[cfg(feature = "xmlrpc")]
+#[cfg(not(target_arch = "wasm32"))]
 fn typed_value(tag: Option<&[u8]>, text: &str) -> Result<XmlRpcValue> {
     let parse_err = |ty: &str| anyhow::anyhow!("invalid <{}> value: {:?}", ty, text);
     Ok(match tag {
@@ -763,7 +763,7 @@ fn typed_value(tag: Option<&[u8]>, text: &str) -> Result<XmlRpcValue> {
 }
 
 /// The value of a type element that contains no text, e.g. `<string/>`.
-#[cfg(feature = "xmlrpc")]
+#[cfg(not(target_arch = "wasm32"))]
 fn empty_typed_value(tag: &[u8]) -> XmlRpcValue {
     match tag {
         b"i4" | b"int" => XmlRpcValue::Int(0),
@@ -783,7 +783,7 @@ fn empty_typed_value(tag: &[u8]) -> XmlRpcValue {
 /// is entirely plausible — produced a document no client could parse. The same
 /// applied to the parse-error and internal-error paths, which embed the text of a
 /// `serde`/`quick-xml` error.
-#[cfg(feature = "xmlrpc")]
+#[cfg(not(target_arch = "wasm32"))]
 pub fn generate_fault(code: i32, message: &str) -> String {
     format!(
         r#"<?xml version="1.0"?>
@@ -809,7 +809,7 @@ pub fn generate_fault(code: i32, message: &str) -> String {
 }
 
 /// Escape the five XML predefined entities in character data.
-#[cfg(feature = "xmlrpc")]
+#[cfg(not(target_arch = "wasm32"))]
 fn escape_xml_text(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
@@ -826,7 +826,7 @@ fn escape_xml_text(text: &str) -> String {
 }
 
 /// Generate XML-RPC success response with a value
-#[cfg(feature = "xmlrpc")]
+#[cfg(not(target_arch = "wasm32"))]
 pub fn generate_success_response(value: &XmlRpcValue) -> String {
     let mut writer = Writer::new(Cursor::new(Vec::new()));
 
@@ -864,7 +864,7 @@ pub fn generate_success_response(value: &XmlRpcValue) -> String {
 }
 
 /// Write XML-RPC value to XML writer
-#[cfg(feature = "xmlrpc")]
+#[cfg(not(target_arch = "wasm32"))]
 fn write_value(writer: &mut Writer<Cursor<Vec<u8>>>, value: &XmlRpcValue) {
     writer
         .write_event(XmlEvent::Start(BytesStart::new("value")))

@@ -29,8 +29,6 @@
 //! circularity that held this protocol at Experimental. A second implementation reading the
 //! bytes off the socket is the only thing that settles what a real reader sees.
 
-#![cfg(feature = "rss")]
-
 use crate::server::helpers::*;
 
 /// A title that tries to close its element and open a second `<item>`.

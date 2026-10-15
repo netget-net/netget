@@ -24,7 +24,6 @@
 //! `dns_response_received` firing is the real assertion in every test here: it can only happen
 //! if a reply actually arrived and parsed.
 
-#[cfg(all(test, feature = "dns"))]
 mod dns_client_tests {
     use crate::helpers::*;
     use std::time::Duration;

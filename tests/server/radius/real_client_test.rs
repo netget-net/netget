@@ -23,8 +23,6 @@
 //! (Debian/Ubuntu). RADIUS is not in CI's `CI_FEATURES`, so this costs the CI gate nothing;
 //! see `tests/server/radius/CLAUDE.md`.
 
-#![cfg(feature = "radius")]
-
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use std::process::Stdio;
 use std::time::Duration;

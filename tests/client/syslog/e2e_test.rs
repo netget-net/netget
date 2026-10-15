@@ -4,7 +4,6 @@
 //! and testing client behavior as a black-box.
 //! Test strategy: Use netget binary to start syslog server + client, < 10 LLM calls total.
 
-#[cfg(all(test, feature = "syslog"))]
 mod syslog_client_tests {
     use crate::helpers::*;
     use std::time::Duration;

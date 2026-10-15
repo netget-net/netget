@@ -10,8 +10,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features ipp --test client -- ipp::command_channel --test-threads=100
 
-#![cfg(all(test, feature = "ipp"))]
-
 use std::time::Duration;
 
 use netget::cli::management::{ClientForm, ServerForm};

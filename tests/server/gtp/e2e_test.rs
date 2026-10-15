@@ -17,8 +17,6 @@
 //! the event, which is the rule the root `CLAUDE.md` states for UDP protocols: a hardcoded
 //! transaction identifier is the documented cause of timeouts in every UDP suite here.
 
-#![cfg(feature = "gtp")]
-
 use crate::helpers::server::NetGetServer;
 use crate::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use serde_json::json;

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{error, info, trace, warn};
 
-#[cfg(feature = "mongodb")]
+#[cfg(not(target_arch = "wasm32"))]
 use mongodb::{
     bson::Document,
     options::{ClientOptions, FindOptions},
@@ -32,7 +32,7 @@ use crate::state::{ClientId, ClientStatus};
 ///
 /// Returned by [`MongodbClient::apply_action`], the single place an action reaches the
 /// server — the connected-event LLM path and injected dashboard commands both go through it.
-#[cfg(feature = "mongodb")]
+#[cfg(not(target_arch = "wasm32"))]
 enum Applied {
     /// An operation ran. `detail` is the injected-action outcome text; `event` is the
     /// `mongodb_result_received` the client raises next, exactly as the LLM path does.
@@ -81,7 +81,7 @@ impl MongodbClient {
         .await
     }
 
-    #[cfg(feature = "mongodb")]
+    #[cfg(not(target_arch = "wasm32"))]
     async fn connect_impl(
         remote_addr: String,
         llm_client: OllamaClient,
@@ -255,7 +255,7 @@ impl MongodbClient {
         Ok(socket_addr)
     }
 
-    #[cfg(not(feature = "mongodb"))]
+    #[cfg(target_arch = "wasm32")]
     async fn connect_impl(
         _remote_addr: String,
         _llm_client: OllamaClient,
@@ -273,7 +273,7 @@ impl MongodbClient {
     /// The generic `command_support::handle_stream_client_command` cannot serve this client:
     /// the driver owns the socket, so every verb yields `ClientActionResult::Custom` and the
     /// effect goes through the shared [`Self::apply_action`].
-    #[cfg(feature = "mongodb")]
+    #[cfg(not(target_arch = "wasm32"))]
     #[allow(clippy::too_many_arguments)]
     async fn command_loop(
         mut command_rx: mpsc::Receiver<ClientCommand>,
@@ -375,7 +375,7 @@ impl MongodbClient {
     ///
     /// `depth` is how many follow-up hops led here; 0 for the connected event and for an
     /// injected command. See [`MAX_FOLLOWUP_DEPTH`].
-    #[cfg(feature = "mongodb")]
+    #[cfg(not(target_arch = "wasm32"))]
     #[allow(clippy::too_many_arguments)]
     async fn execute_llm_action(
         client_id: ClientId,
@@ -429,7 +429,7 @@ impl MongodbClient {
 
     /// Run one executed action against the database. Shared by the LLM path and injected
     /// commands so the BSON conversion and driver calls exist exactly once.
-    #[cfg(feature = "mongodb")]
+    #[cfg(not(target_arch = "wasm32"))]
     async fn apply_action(
         client_id: ClientId,
         result: crate::llm::actions::client_trait::ClientActionResult,
@@ -634,7 +634,7 @@ impl MongodbClient {
         }
     }
 
-    #[cfg(not(feature = "mongodb"))]
+    #[cfg(target_arch = "wasm32")]
     async fn execute_llm_action(
         _client_id: ClientId,
         _action: serde_json::Value,
@@ -648,7 +648,7 @@ impl MongodbClient {
     }
 
     /// Send a prepared result event to the LLM and run whatever it answers with.
-    #[cfg(feature = "mongodb")]
+    #[cfg(not(target_arch = "wasm32"))]
     #[allow(clippy::too_many_arguments)]
     async fn raise_result_event(
         client_id: ClientId,
@@ -736,7 +736,7 @@ impl MongodbClient {
 }
 
 /// Build the `mongodb_result_received` event for one completed operation.
-#[cfg(feature = "mongodb")]
+#[cfg(not(target_arch = "wasm32"))]
 fn result_event(result_type: &str, documents: Option<Vec<Document>>, count: Option<u64>) -> Event {
     let mut event_data = serde_json::json!({
         "result_type": result_type,

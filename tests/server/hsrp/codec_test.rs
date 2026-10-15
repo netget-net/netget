@@ -9,8 +9,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features hsrp \
 //!       --test server hsrp::codec_test -- --test-threads=100
 
-#![cfg(all(test, feature = "hsrp"))]
-
 use netget::server::hsrp::codec::{
     self, HsrpMessage, HsrpState, HsrpVersion, Opcode, AUTH_FIELD_LEN,
 };

@@ -1,4 +1,4 @@
 //! OSPF protocol tests
 
-#[cfg(all(test, feature = "ospf"))]
+#[cfg(unix)]
 pub mod e2e_test;

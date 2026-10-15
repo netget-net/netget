@@ -268,15 +268,15 @@ fn compiled_mapping_is_subset_of_codebase_mapping() {
         }
     }
     // TCP is in every default/test build; the demo pair must be live.
-    #[cfg(feature = "tcp")]
     assert_eq!(
         compiled_client_protocol_for_server("TCP").as_deref(),
         Some("TCP")
     );
 }
 
-/// Build guidance must name an actual Cargo feature; a plausible runtime slug
-/// can otherwise tell the user to rebuild with a flag the manifest rejects.
+/// "Not compiled into this build" guidance names what the build needs. When that is a Cargo
+/// feature (the system-library features), the feature must exist; a plausible slug can
+/// otherwise tell the user to rebuild with a flag the manifest rejects.
 #[test]
 fn compiled_out_dual_protocol_guidance_names_real_cargo_features() {
     use netget::protocol::{
@@ -286,38 +286,35 @@ fn compiled_out_dual_protocol_guidance_names_real_cargo_features() {
     let manifest: toml::Value =
         toml::from_str(&std::fs::read_to_string("Cargo.toml").unwrap()).unwrap();
     let features = manifest["features"].as_table().unwrap();
+    let check = |who: &str, requires: &str| {
+        if let Some(rest) = requires.strip_prefix("the `") {
+            let feature = rest.split('`').next().unwrap();
+            assert!(
+                features.contains_key(feature),
+                "{who} advises nonexistent Cargo feature {feature:?}"
+            );
+        }
+    };
     for (server, client) in all_dual_protocols() {
         match server_registry().resolve(server) {
             Ok(_) => {}
-            Err(ProtocolLookupError::NotCompiled { feature, .. }) => assert!(
-                features.contains_key(feature),
-                "server {server:?} advises nonexistent Cargo feature {feature:?}"
-            ),
+            Err(ProtocolLookupError::NotCompiled { requires, .. }) => {
+                check(&format!("server {server:?}"), requires)
+            }
             Err(error) => panic!("known dual server {server:?} is unresolved: {error}"),
         }
         match CLIENT_REGISTRY.resolve(client) {
             Ok(_) => {}
-            Err(ClientProtocolLookupError::NotCompiled { feature, .. }) => assert!(
-                features.contains_key(feature),
-                "client {client:?} advises nonexistent Cargo feature {feature:?}"
-            ),
+            Err(ClientProtocolLookupError::NotCompiled { requires, .. }) => {
+                check(&format!("client {client:?}"), requires)
+            }
             Err(error) => panic!("known dual client {client:?} is unresolved: {error}"),
         }
     }
 }
 
-/// A small build must not pair an unavailable FTP implementation with its TCP fallback.
-#[cfg(all(feature = "tcp", not(feature = "ftp")))]
-#[test]
-fn an_uncompiled_ftp_protocol_never_offers_the_tcp_client() {
-    for name in ["FTP", "ftp", "Ftp"] {
-        assert_eq!(compiled_client_protocol_for_server(name), None, "{name}");
-    }
-}
-
 /// A running instance keeps the operator's registry keyword, not necessarily its canonical
 /// name. Bitcoin's keyword is also the RPC client's name, so resolve the server first.
-#[cfg(feature = "bitcoin")]
 #[test]
 fn bitcoin_server_keyword_never_offers_the_rpc_client() {
     assert_eq!(compiled_client_protocol_for_server("bitcoin"), None);

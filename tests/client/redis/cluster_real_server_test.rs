@@ -19,7 +19,6 @@
 //! command.
 //!
 //! LLM calls: 5 (connect, the two redirected replies, the two follow-up writes).
-#![cfg(all(test, feature = "redis"))]
 
 use crate::helpers::common::E2EResult;
 use crate::helpers::mock_builder::MockLlmBuilder;

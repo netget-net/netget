@@ -27,8 +27,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features rtsp --test server -- \
 //!       rtsp::connection_bounds --test-threads=100
 
-#![cfg(all(feature = "rtsp", feature = "rtp"))]
-
 use std::time::Duration;
 
 use netget::cli::management::ServerForm;

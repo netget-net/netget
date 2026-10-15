@@ -95,15 +95,15 @@ fn privileged_protocols_map_onto_the_dependency_they_actually_need() {
     };
 
     // Layer-2 capture, NOT raw IP sockets — the distinction PromiscuousMode exists for.
-    #[cfg(feature = "arp")]
+    #[cfg(all(unix, feature = "libpcap"))]
     check("ARP", ProtocolDependency::PromiscuousMode);
-    #[cfg(feature = "datalink")]
+    #[cfg(all(unix, feature = "libpcap"))]
     check("DataLink", ProtocolDependency::PromiscuousMode);
 
     // Raw IP sockets, NOT capture.
-    #[cfg(feature = "icmp")]
+    #[cfg(unix)]
     check("ICMP", ProtocolDependency::RawSocketAccess);
-    #[cfg(feature = "igmp")]
+    #[cfg(unix)]
     check("IGMP", ProtocolDependency::RawSocketAccess);
 }
 
@@ -116,7 +116,6 @@ fn privileged_protocols_map_onto_the_dependency_they_actually_need() {
 /// the startup dependency gate has nothing to enforce and is decorative — the inert-mechanism
 /// shape this file exists to catch.
 #[test]
-#[cfg(feature = "grpc")]
 fn grpc_declares_its_runtime_protoc_dependency() {
     let protocol = registry()
         .get("gRPC")
@@ -218,7 +217,6 @@ fn promiscuous_mode_reads_capture_access_not_raw_sockets() {
 /// `src/client/grpc/mod.rs` runs `protoc --descriptor_set_out=/dev/stdout` to compile the
 /// inline `.proto` text form of `proto_schema`.
 #[test]
-#[cfg(feature = "grpc")]
 fn the_grpc_client_declares_protoc_as_well_as_the_server() {
     use netget::protocol::client_registry::CLIENT_REGISTRY;
 
@@ -250,7 +248,7 @@ fn the_grpc_client_declares_protoc_as_well_as_the_server() {
 /// they are different missing pieces, and an operator who gains root still cannot start this
 /// without the binary.
 #[test]
-#[cfg(all(feature = "wireguard", target_os = "macos"))]
+#[cfg(all(unix, target_os = "macos"))]
 fn wireguard_declares_the_external_binary_its_macos_backend_runs() {
     let server = registry()
         .get("WireGuard")
@@ -287,7 +285,7 @@ fn wireguard_declares_the_external_binary_its_macos_backend_runs() {
 /// `Protocol::get_dependencies`'s own docs say this; asserting it means a future pass that adds
 /// a device variant has to come past the reasoning rather than around it.
 #[test]
-#[cfg(feature = "bluetooth-ble")]
+#[cfg(all(unix, feature = "bluetooth"))]
 fn a_device_protocol_declares_nothing_it_cannot_probe() {
     let ble = registry()
         .get("BLUETOOTH_BLE")

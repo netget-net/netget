@@ -3,11 +3,9 @@
 //! These tests demonstrate the LLM using tools (read_file, web_search) to gather
 //! information and use it in network protocol responses.
 
-#[cfg(all(test, feature = "mysql"))]
 #[allow(dead_code, unused_imports)]
 mod helpers;
 
-#[cfg(all(test, feature = "mysql"))]
 mod tool_call_integration_tests {
     use super::helpers::{start_netget_server, NetGetConfig};
     use mysql_async::prelude::*;

@@ -11,8 +11,6 @@
 //!
 //! LLM call budget: 2 (models) + 2 (chat) + 3 (error paths) + 3 (SDK) = 10.
 
-#![cfg(feature = "openai")]
-
 use crate::server::helpers::{self, E2EResult, NetGetConfig};
 use serde_json::Value;
 use std::time::Duration;

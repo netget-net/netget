@@ -5,8 +5,6 @@
 //! and the executor refused the whole action, so every one became the fail-closed 503. With
 //! another instruction it refused the upgrade outright because "no subprotocols were offered".
 
-#![cfg(feature = "websocket")]
-
 use netget::llm::actions::protocol_trait::{ActionResult, Server};
 use netget::server::connection::ConnectionId;
 use netget::server::websocket::actions::{

@@ -4,7 +4,7 @@
 //! SSH Agent uses a binary wire protocol over Unix sockets, making it more complex
 //! to test than text-based protocols.
 
-#![cfg(all(feature = "ssh-agent", unix))]
+#![cfg(unix)]
 
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

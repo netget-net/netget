@@ -17,7 +17,6 @@
 //! Net-SNMP is required; the tests fail rather than skip without it. MIB loading is off and
 //! `SNMP_PERSISTENT_DIR` points at a temp dir, so nothing is read from or written to the
 //! machine's own Net-SNMP state. No LLM calls: a python handler answers every request.
-#![cfg(all(test, feature = "snmp"))]
 
 use netget::cli::management::ServerForm;
 use netget::server::snmp::usm::{self, AuthProtocol, ReportKind, User};

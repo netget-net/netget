@@ -7,8 +7,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features bgp --test server -- bgp::peer_inject --test-threads=100
 
-#![cfg(feature = "bgp")]
-
 use std::net::Ipv4Addr;
 use std::time::Duration;
 

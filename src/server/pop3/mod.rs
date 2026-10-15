@@ -8,23 +8,14 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
-#[cfg(feature = "pop3")]
 use crate::console_debug;
-#[cfg(feature = "pop3")]
 use crate::llm::action_helper::call_llm;
-#[cfg(feature = "pop3")]
 use crate::llm::ollama_client::OllamaClient;
-#[cfg(feature = "pop3")]
 use crate::llm::ActionResult;
-#[cfg(feature = "pop3")]
 use crate::protocol::Event;
-#[cfg(feature = "pop3")]
 use crate::server::Pop3Protocol;
-#[cfg(feature = "pop3")]
 use crate::state::app_state::AppState;
-#[cfg(feature = "pop3")]
 use actions::POP3_COMMAND_EVENT;
-#[cfg(feature = "pop3")]
 use tokio_rustls::TlsAcceptor;
 
 /// Largest single command line the server will buffer before refusing the peer.
@@ -39,7 +30,6 @@ use tokio_rustls::TlsAcceptor;
 /// newline made the server allocate without limit, which is a one-connection out-of-memory.
 /// The refusal happens here, before the `pop3_command_received` event is built, so an
 /// oversized line never reaches a prompt.
-#[cfg(feature = "pop3")]
 pub const MAX_COMMAND_BYTES: usize = 1024;
 
 /// How long to wait for the first command after the greeting has been sent.
@@ -76,14 +66,12 @@ pub const MAX_COMMAND_BYTES: usize = 1024;
 /// The greeting itself sits outside this deadline by construction: it is generated and written
 /// before the command loop begins, so however long the model — or a `manual` rule parking it
 /// for a human — takes over it, the clock below has not started.
-#[cfg(feature = "pop3")]
 const FIRST_COMMAND_READ_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// The two read deadlines for one connection, resolved from the server's startup parameters.
 ///
 /// Carried as one value so threading them from `spawn_with_llm_actions` down to the command
 /// loop costs one argument rather than two at each hop.
-#[cfg(feature = "pop3")]
 #[derive(Clone, Copy)]
 struct ReadDeadlines {
     /// [`FIRST_COMMAND_READ_TIMEOUT`], or this server's `first_byte_timeout_secs`.
@@ -92,7 +80,6 @@ struct ReadDeadlines {
     idle: Duration,
 }
 
-#[cfg(feature = "pop3")]
 impl ReadDeadlines {
     fn resolve(first_byte_secs: Option<u64>, idle_secs: Option<u64>) -> Self {
         Self {
@@ -121,7 +108,6 @@ impl ReadDeadlines {
 /// Overridable per server with `idle_timeout_secs` — but note that RFC 1939's floor means
 /// lowering it below 600 puts this server outside the specification, which the parameter's own
 /// description says.
-#[cfg(feature = "pop3")]
 const IDLE_BETWEEN_COMMANDS_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Concurrent connections this server admits.
@@ -129,7 +115,6 @@ const IDLE_BETWEEN_COMMANDS_TIMEOUT: Duration = Duration::from_secs(600);
 /// [`crate::server::accept_bounded::DEFAULT_MAX_CONNECTIONS`]. Each connection may buffer up to
 /// [`MAX_COMMAND_BYTES`], so this is the multiplier that turns that per-connection bound into a
 /// total one.
-#[cfg(feature = "pop3")]
 const MAX_CONNECTIONS: usize = crate::server::accept_bounded::DEFAULT_MAX_CONNECTIONS;
 
 /// What a peer over [`MAX_CONNECTIONS`] is told before the socket closes.
@@ -139,7 +124,6 @@ const MAX_CONNECTIONS: usize = crate::server::accept_bounded::DEFAULT_MAX_CONNEC
 /// temporary condition, retry later. A client that understands it backs off instead of
 /// recording a permanent fault; one that does not still reads a well-formed `-ERR`. This file
 /// already uses the `[SYS/PERM]` half of the same pair for an over-long command line.
-#[cfg(feature = "pop3")]
 const CONNECTION_CAP_REFUSAL: &[u8] = b"-ERR [SYS/TEMP] too many connections\r\n";
 
 /// POP3 server that forwards mail retrieval to LLM
@@ -291,7 +275,6 @@ pub fn pop3_command_event_data(command: &str) -> serde_json::Value {
 
 pub struct Pop3Server;
 
-#[cfg(feature = "pop3")]
 impl Pop3Server {
     /// Spawn POP3 server with integrated LLM actions
     ///
@@ -459,10 +442,8 @@ impl Pop3Server {
     }
 }
 
-#[cfg(feature = "pop3")]
 struct Pop3Session;
 
-#[cfg(feature = "pop3")]
 impl Pop3Session {
     /// Drive one POP3 session to completion.
     ///
@@ -1025,7 +1006,6 @@ impl Pop3Session {
 ///
 /// Every branch is `-ERR`. POP3 has no response that both refuses and looks like success, so
 /// there is no way for this path to authenticate anybody or hand out a message.
-#[cfg(feature = "pop3")]
 fn pop3_failure_reply(err: &anyhow::Error) -> String {
     // The text is a category, never the error itself (`crate::utils::wire_failure`). The reply
     // is one line, so a newline in an error would have forged a second response, and a leading
@@ -1044,7 +1024,6 @@ fn pop3_failure_reply(err: &anyhow::Error) -> String {
 /// `process_command` used to signal a close by returning `Ok(())` early, which is
 /// indistinguishable from "command handled" - so `close_connection` never actually closed
 /// anything and a client that sent QUIT was left holding an open socket.
-#[cfg(feature = "pop3")]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SessionControl {
     Continue,

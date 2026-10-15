@@ -19,8 +19,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features nsq --test server -- nsq::real_client --test-threads=100
 
-#![cfg(feature = "nsq")]
-
 use super::common::{self, broker_handler};
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::sync::{Arc, Mutex};

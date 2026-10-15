@@ -18,9 +18,7 @@ use crate::state::app_state::AppState;
 use actions::BOOTP_REQUEST_EVENT;
 
 use crate::{console_debug, console_trace};
-#[cfg(feature = "bootp")]
 use actions::BootpRequestContext;
-#[cfg(feature = "bootp")]
 use dhcproto::{v4, Decodable, Decoder};
 
 /// Render a hardware address the way the `bootp_request` event reports it: lower-case hex
@@ -68,14 +66,7 @@ impl BootpServer {
                         let hex_str = hex::encode(&data);
                         console_trace!(status_tx, "BOOTP data (hex): {}", hex_str);
 
-                        #[cfg(feature = "bootp")]
                         let parsed_info = Self::parse_bootp_message(&data);
-
-                        #[cfg(not(feature = "bootp"))]
-                        let parsed_info: Option<(
-                            String,
-                            Option<BootpRequestContext>,
-                        )> = None;
 
                         // Add connection to ServerInstance
                         use crate::state::server::{
@@ -84,14 +75,10 @@ impl BootpServer {
                         };
                         let now = crate::utils::clock::Instant::now();
 
-                        #[cfg(feature = "bootp")]
                         let _request_type = parsed_info
                             .as_ref()
                             .map(|(desc, _)| desc.clone())
                             .unwrap_or_else(|| "unknown".to_string());
-
-                        #[cfg(not(feature = "bootp"))]
-                        let request_type = "request".to_string();
 
                         let conn_state = ServerConnectionState {
                             id: connection_id,
@@ -126,13 +113,11 @@ impl BootpServer {
                                 // other's transaction ID.
                                 let protocol = BootpProtocol::new();
 
-                                #[cfg(feature = "bootp")]
                                 if let Some((_, Some(ctx))) = parsed_info.as_ref() {
                                     protocol.set_request_context(ctx.clone());
                                 }
 
                                 // Extract event data
-                                #[cfg(feature = "bootp")]
                                 let (op_code, client_mac, client_ip, xid, gateway_ip) =
                                     if let Some((_, Some(ctx))) = &parsed_info {
                                         (
@@ -151,15 +136,6 @@ impl BootpServer {
                                             "0.0.0.0".to_string(),
                                         )
                                     };
-
-                                #[cfg(not(feature = "bootp"))]
-                                let (op_code, client_mac, client_ip, xid, gateway_ip) = (
-                                    "unknown".to_string(),
-                                    "unknown".to_string(),
-                                    "0.0.0.0".to_string(),
-                                    None::<u32>,
-                                    "0.0.0.0".to_string(),
-                                );
 
                                 let client_mac_for_log = client_mac.clone();
 
@@ -339,7 +315,6 @@ impl BootpServer {
         Log::new(Some(status_tx)).info(line);
     }
 
-    #[cfg(feature = "bootp")]
     fn parse_bootp_message(data: &[u8]) -> Option<(String, Option<BootpRequestContext>)> {
         match v4::Message::decode(&mut Decoder::new(data)) {
             Ok(msg) => {

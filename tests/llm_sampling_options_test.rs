@@ -12,7 +12,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features tcp \
 //!       --test llm_sampling_options_test -- --test-threads=100
 
-#![cfg(feature = "tcp")]
 #![allow(dead_code, unused_imports)]
 
 mod helpers;

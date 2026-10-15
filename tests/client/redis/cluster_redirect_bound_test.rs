@@ -9,7 +9,6 @@
 //!
 //! These servers are NetGet's own, so this is a test of the bound, not interoperability
 //! evidence (that is `cluster_real_server_test.rs`). LLM calls: 2.
-#![cfg(all(test, feature = "redis"))]
 
 use crate::helpers::mock_builder::MockLlmBuilder;
 use crate::helpers::mock_ollama::MockOllamaServer;

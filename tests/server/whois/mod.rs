@@ -1,10 +1,5 @@
-#[cfg(all(test, feature = "whois"))]
 mod connection_bounds_test;
-#[cfg(all(test, feature = "whois"))]
 mod e2e_test;
-#[cfg(all(test, feature = "whois"))]
 mod line_framing_test;
-#[cfg(all(test, feature = "whois"))]
 mod peer_inject_test;
-#[cfg(all(test, feature = "whois"))]
 mod record_fields_test;

@@ -1,4 +1,4 @@
-#[cfg(all(test, feature = "bluetooth-ble-weight-scale"))]
+#[cfg(all(unix, feature = "bluetooth"))]
 mod e2e_test;
-#[cfg(all(test, feature = "bluetooth-ble-weight-scale"))]
+#[cfg(all(unix, feature = "bluetooth"))]
 mod gatt_examples_test;

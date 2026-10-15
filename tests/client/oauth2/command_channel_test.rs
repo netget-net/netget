@@ -14,8 +14,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features oauth2 --test client -- oauth2::command_channel --test-threads=100
 
-#![cfg(feature = "oauth2")]
-
 use std::time::Duration;
 
 use netget::cli::management::ClientForm;

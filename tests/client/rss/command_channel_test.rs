@@ -11,8 +11,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features rss --test client -- rss::command_channel --test-threads=100
 
-#![cfg(feature = "rss")]
-
 use std::time::Duration;
 
 use netget::cli::management::{ClientForm, ServerForm};

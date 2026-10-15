@@ -15,8 +15,6 @@
 //! Zero LLM calls: a `*` static handler with no actions answers every client event, and the
 //! client's own LLM points at an unreachable URL.
 
-#![cfg(feature = "ollama")]
-
 use std::sync::Arc;
 use std::time::Duration;
 

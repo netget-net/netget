@@ -3,7 +3,6 @@
 //! These tests verify SQS client functionality by spawning the actual NetGet binary
 //! and testing client behavior as a black-box with a LocalStack SQS server.
 
-#[cfg(all(test, feature = "sqs"))]
 mod sqs_client_tests {
     use crate::helpers::*;
     use std::time::Duration;

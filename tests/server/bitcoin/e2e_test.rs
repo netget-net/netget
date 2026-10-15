@@ -3,7 +3,6 @@
 //! These tests spawn the NetGet binary and test Bitcoin P2P operations
 //! using raw TCP clients to send/receive Bitcoin P2P messages.
 
-#[cfg(all(test, feature = "bitcoin"))]
 mod e2e_bitcoin {
     use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
     use std::io::Cursor;

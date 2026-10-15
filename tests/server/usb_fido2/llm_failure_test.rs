@@ -24,7 +24,7 @@
 //! store must still be empty. A GetAssertion for the same relying party must report
 //! `CTAP2_ERR_NO_CREDENTIALS`, which can only hold if no key pair was ever generated.
 
-#[cfg(all(test, feature = "usb-fido2"))]
+#[cfg(all(unix, feature = "libusb"))]
 mod usb_fido2_llm_failure {
     use std::time::{Duration, Instant};
 

@@ -12,8 +12,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features gemini --test server -- gemini::wire --test-threads=100
 
-#![cfg(feature = "gemini")]
-
 use netget::server::gemini::wire::{
     gemtext_mime, leading_status, parse_request, percent_decode, render_gemtext, render_response,
     GemtextLine, RequestRefusal, MAX_META_BYTES, STATUS_CODES,

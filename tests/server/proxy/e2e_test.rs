@@ -3,7 +3,7 @@
 //! These tests verify Proxy functionality using mock LLM responses.
 //! Test strategy: Mock proxy decisions, < 10 LLM calls total.
 
-#[cfg(all(test, feature = "proxy"))]
+#[cfg(unix)]
 mod proxy_server_tests {
     use crate::helpers::*;
     use std::time::Duration;

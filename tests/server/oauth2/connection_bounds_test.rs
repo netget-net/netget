@@ -15,7 +15,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features oauth2 \
 //!       --test server -- server::oauth2::connection_bounds_test --test-threads=100
 
-#[cfg(all(test, feature = "oauth2"))]
 mod oauth2_connection_bounds {
     use crate::helpers::http_bounds::{
         assert_connection_cap, assert_read_deadlines, HttpBoundsCase,

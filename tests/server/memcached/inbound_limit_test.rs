@@ -19,8 +19,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features memcached --test server -- memcached::inbound_limit --test-threads=100
 
-#![cfg(feature = "memcached")]
-
 use std::time::Duration;
 
 use netget::server::memcached::protocol::MAX_VALUE_LEN;

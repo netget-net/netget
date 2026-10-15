@@ -26,7 +26,7 @@
 //! opening one that fails. NetGet's own capability probe (`src/privilege.rs`) opens a
 //! handle for exactly this reason.
 
-#![cfg(feature = "arp")]
+#![cfg(all(unix, feature = "libpcap"))]
 
 use crate::server::helpers::*;
 use pcap::{Capture, Device};

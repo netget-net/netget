@@ -25,7 +25,7 @@ impl ServerRegistry {
             keyword_map: HashMap::new(),
         };
 
-        // Register all protocols based on feature flags
+        // Register every protocol this platform builds
         registry.register_protocols();
         registry.build_keyword_map();
 
@@ -35,583 +35,542 @@ impl ServerRegistry {
         registry
     }
 
-    /// Register all available protocols based on compiled features
+    /// Register every protocol this build includes (platform and system-library gates)
     fn register_protocols(&mut self) {
         // Create a shared dummy AppState for protocols that need it during registration
         // This avoids creating multiple AppState instances which trigger expensive environment detection
-        #[cfg(any(
-            feature = "mysql",
-            feature = "mssql",
-            feature = "snowflake",
-            feature = "db2",
-            feature = "postgresql",
-            feature = "redis",
-            feature = "cassandra",
-            feature = "mongodb-server"
-        ))]
         let dummy_state = Arc::new(crate::state::app_state::AppState::new());
 
-        #[cfg(feature = "tcp")]
         self.register(Arc::new(crate::server::TcpProtocol::new()));
 
-        #[cfg(all(feature = "socket_file", unix))]
+        #[cfg(unix)]
         self.register(Arc::new(crate::server::SocketFileProtocol::new()));
 
-        #[cfg(all(feature = "named_pipe", unix))]
+        #[cfg(unix)]
         self.register(Arc::new(crate::server::NamedPipeProtocol::new()));
 
-        #[cfg(all(feature = "pty", unix))]
+        #[cfg(unix)]
         self.register(Arc::new(crate::server::PtyProtocol::new()));
 
-        #[cfg(all(feature = "stdio", unix))]
+        #[cfg(unix)]
         self.register(Arc::new(crate::server::StdioProtocol::new()));
 
-        #[cfg(feature = "http")]
         self.register(Arc::new(crate::server::HttpProtocol::new()));
 
-        #[cfg(feature = "http2")]
         self.register(Arc::new(crate::server::Http2Protocol::new()));
 
-        #[cfg(feature = "pypi")]
         self.register(Arc::new(crate::server::PypiProtocol::new()));
 
-        #[cfg(feature = "maven")]
         self.register(Arc::new(crate::server::MavenProtocol::new()));
 
-        #[cfg(feature = "udp")]
         self.register(Arc::new(crate::server::UdpProtocol::new()));
 
-        #[cfg(feature = "datalink")]
+        #[cfg(all(unix, feature = "libpcap"))]
         self.register(Arc::new(crate::server::DataLinkProtocol::new()));
 
-        #[cfg(feature = "arp")]
+        #[cfg(all(unix, feature = "libpcap"))]
         self.register(Arc::new(crate::server::ArpProtocol::new()));
 
-        #[cfg(feature = "icmp")]
+        #[cfg(unix)]
         self.register(Arc::new(crate::server::IcmpProtocol::new()));
 
-        #[cfg(feature = "dc_peer")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::dc_peer::actions::DcPeerProtocol::new(),
         ));
 
-        #[cfg(feature = "adc")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::adc::actions::AdcProtocol::new()));
 
-        #[cfg(feature = "adc_peer")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::adc_peer::actions::AdcPeerProtocol::new(),
         ));
 
-        #[cfg(feature = "soulseek")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::soulseek::actions::SoulseekProtocol::new(),
         ));
 
-        #[cfg(feature = "soulseek_peer")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::soulseek_peer::actions::SoulseekPeerProtocol::new(),
         ));
 
-        #[cfg(feature = "gnutella")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::gnutella::actions::GnutellaProtocol::new(),
         ));
 
-        #[cfg(feature = "dc")]
         self.register(Arc::new(crate::server::DcProtocol::new()));
 
-        #[cfg(feature = "dns")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::DnsProtocol::new()));
 
-        #[cfg(feature = "doq")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::doq::actions::DoqProtocol::new()));
 
-        #[cfg(feature = "dot")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::DotProtocol::new()));
 
-        #[cfg(feature = "doh")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::DohProtocol::new()));
 
-        #[cfg(feature = "dhcp")]
         self.register(Arc::new(crate::server::DhcpProtocol::new()));
 
-        #[cfg(feature = "bootp")]
         self.register(Arc::new(crate::server::BootpProtocol::new()));
 
-        #[cfg(feature = "ntp")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::NtpProtocol::new()));
 
-        #[cfg(feature = "tftp")]
         self.register(Arc::new(crate::server::TftpProtocol::new()));
 
-        #[cfg(feature = "nut")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::nut::actions::NutProtocol::new()));
 
-        #[cfg(feature = "whois")]
         self.register(Arc::new(crate::server::WhoisProtocol::new()));
 
-        #[cfg(feature = "ndp")]
+        #[cfg(unix)]
         self.register(Arc::new(crate::server::NdpProtocol::new()));
 
-        #[cfg(feature = "dhcpv6")]
         self.register(Arc::new(crate::server::Dhcpv6Protocol::new()));
 
-        #[cfg(feature = "tuntap")]
+        #[cfg(unix)]
         self.register(Arc::new(crate::server::TunTapProtocol::new()));
 
-        #[cfg(feature = "rawip")]
+        #[cfg(unix)]
         self.register(Arc::new(crate::server::RawIpProtocol::new()));
 
-        #[cfg(feature = "gtp")]
         self.register(Arc::new(crate::server::GtpProtocol::new()));
 
-        #[cfg(feature = "m3ua")]
+        #[cfg(unix)]
         self.register(Arc::new(crate::server::M3uaProtocol::new()));
 
-        #[cfg(feature = "ngap")]
+        #[cfg(unix)]
         self.register(Arc::new(crate::server::ngap::actions::NgapProtocol::new()));
 
-        #[cfg(feature = "can")]
+        #[cfg(unix)]
         self.register(Arc::new(crate::server::CanProtocol::new()));
 
-        #[cfg(feature = "lldp")]
+        #[cfg(all(unix, feature = "libpcap"))]
         self.register(Arc::new(crate::server::LldpProtocol::new()));
 
-        #[cfg(feature = "cdp")]
+        #[cfg(all(unix, feature = "libpcap"))]
         self.register(Arc::new(crate::server::CdpProtocol::new()));
 
-        #[cfg(feature = "stp")]
+        #[cfg(all(unix, feature = "libpcap"))]
         self.register(Arc::new(crate::server::StpProtocol::new()));
 
-        #[cfg(feature = "vrrp")]
+        #[cfg(unix)]
         self.register(Arc::new(crate::server::VrrpProtocol::new()));
 
-        #[cfg(feature = "hsrp")]
         self.register(Arc::new(crate::server::HsrpProtocol::new()));
 
-        #[cfg(feature = "eapol")]
+        #[cfg(all(unix, feature = "libpcap"))]
         self.register(Arc::new(crate::server::EapolProtocol::new()));
 
-        #[cfg(feature = "wol")]
         self.register(Arc::new(crate::server::WolProtocol::new()));
 
-        #[cfg(feature = "nats")]
         self.register(Arc::new(crate::server::NatsProtocol::new()));
 
-        #[cfg(feature = "stomp")]
         self.register(Arc::new(crate::server::StompProtocol::new()));
 
-        #[cfg(feature = "ident")]
         self.register(Arc::new(crate::server::IdentProtocol::new()));
 
-        #[cfg(feature = "gemini")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::GeminiProtocol::new()));
 
-        #[cfg(feature = "dict")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::DictProtocol::new()));
 
-        #[cfg(feature = "beanstalkd")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::BeanstalkdProtocol::new()));
 
-        #[cfg(feature = "zabbix")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::ZabbixProtocol::new()));
 
-        #[cfg(feature = "gearman")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::GearmanProtocol::new()));
 
-        #[cfg(feature = "nsq")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::NsqProtocol::new()));
 
-        #[cfg(feature = "gopher")]
         self.register(Arc::new(crate::server::GopherProtocol::new()));
 
-        #[cfg(feature = "finger")]
         self.register(Arc::new(crate::server::FingerProtocol::new()));
 
-        #[cfg(feature = "ssdp")]
         self.register(Arc::new(crate::server::SsdpProtocol::new()));
 
-        #[cfg(feature = "llmnr")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::LlmnrProtocol::new()));
 
-        #[cfg(feature = "netbios-ns")]
         self.register(Arc::new(crate::server::NetbiosNsProtocol::new()));
 
-        #[cfg(feature = "snmp")]
         self.register(Arc::new(crate::server::SnmpProtocol::new()));
 
-        #[cfg(feature = "igmp")]
+        #[cfg(unix)]
         self.register(Arc::new(crate::server::IgmpProtocol::new()));
 
-        #[cfg(feature = "diameter")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::diameter::actions::DiameterProtocol::new(),
         ));
 
-        #[cfg(feature = "tacacs")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::tacacs::actions::TacacsProtocol::new(),
         ));
 
-        #[cfg(feature = "netconf")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::netconf::actions::NetconfProtocol::new(),
         ));
 
-        #[cfg(feature = "rpki_rtr")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::rpki_rtr::actions::RpkiRtrProtocol::new(),
         ));
 
-        #[cfg(feature = "rdap")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::rdap::actions::RdapProtocol::new()));
 
-        #[cfg(feature = "hl7")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::hl7::actions::Hl7Protocol::new()));
 
-        #[cfg(feature = "icap")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::icap::actions::IcapProtocol::new()));
 
-        #[cfg(feature = "s7comm")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::s7comm::actions::S7commProtocol::new(),
         ));
 
-        #[cfg(feature = "ethernet_ip")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::ethernet_ip::actions::EthernetIpProtocol::new(),
         ));
 
-        #[cfg(feature = "dnp3")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::dnp3::actions::Dnp3Protocol::new()));
 
-        #[cfg(feature = "iec104")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::iec104::actions::Iec104Protocol::new(),
         ));
 
-        #[cfg(feature = "bacnet")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::bacnet::actions::BacnetProtocol::new(),
         ));
 
-        #[cfg(feature = "opcua")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::opcua::actions::OpcuaProtocol::new()));
 
-        #[cfg(feature = "ocpp")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::ocpp::actions::OcppProtocol::new()));
 
-        #[cfg(feature = "a2a")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::a2a::actions::A2aProtocol::new()));
 
-        #[cfg(feature = "graphql")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::graphql::actions::GraphqlProtocol::new(),
         ));
 
-        #[cfg(feature = "fastcgi")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::fastcgi::actions::FastcgiProtocol::new(),
         ));
 
-        #[cfg(feature = "redfish")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::redfish::actions::RedfishProtocol::new(),
         ));
 
-        #[cfg(feature = "scim")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::scim::actions::ScimProtocol::new()));
 
-        #[cfg(feature = "socketio")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::socketio::actions::SocketIoProtocol::new(),
         ));
 
-        #[cfg(feature = "caldav")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::caldav::actions::CalDavProtocol::new(),
         ));
 
-        #[cfg(feature = "carddav")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::carddav::actions::CardDavProtocol::new(),
         ));
 
-        #[cfg(feature = "dicom")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::dicom::actions::DicomProtocol::new()));
 
-        #[cfg(feature = "acme")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::acme::actions::AcmeProtocol::new()));
 
-        #[cfg(feature = "fix")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::fix::actions::FixProtocol::new()));
 
-        #[cfg(feature = "wamp")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::wamp::actions::WampProtocol::new()));
 
-        #[cfg(feature = "rtmp")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::rtmp::actions::RtmpProtocol::new()));
 
-        #[cfg(feature = "srt")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::srt::actions::SrtProtocol::new()));
 
-        #[cfg(feature = "amqp1")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::amqp1::actions::Amqp1Protocol::new()));
 
-        #[cfg(feature = "thrift")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::thrift::actions::ThriftProtocol::new(),
         ));
-        #[cfg(feature = "bmp")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::bmp::actions::BmpProtocol::new()));
-        #[cfg(feature = "mqtt_sn")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::mqtt_sn::actions::MqttSnProtocol::new(),
         ));
-        #[cfg(feature = "nbd")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::nbd::actions::NbdProtocol::new()));
-        #[cfg(feature = "managesieve")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::managesieve::actions::ManageSieveProtocol::new(),
         ));
-        #[cfg(feature = "zenoh")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::zenoh::actions::ZenohProtocol::new()));
-        #[cfg(feature = "lwm2m")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::lwm2m::actions::Lwm2mProtocol::new()));
-        #[cfg(feature = "restconf")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::restconf::actions::RestconfProtocol::new(),
         ));
-        #[cfg(feature = "webtransport")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::webtransport::actions::WebTransportProtocol::new(),
         ));
-        #[cfg(feature = "jmap")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::jmap::actions::JmapProtocol::new()));
-        #[cfg(feature = "epp")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::epp::actions::EppProtocol::new()));
-        #[cfg(feature = "lmtp")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::lmtp::actions::LmtpProtocol::new()));
-        #[cfg(feature = "lpd")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::lpd::actions::LpdProtocol::new()));
-        #[cfg(feature = "inetd")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::inetd::actions::EchoProtocol::new()));
-        #[cfg(feature = "inetd")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::inetd::actions::DiscardProtocol::new(),
         ));
-        #[cfg(feature = "inetd")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::inetd::actions::DaytimeProtocol::new(),
         ));
-        #[cfg(feature = "inetd")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::inetd::actions::QotdProtocol::new()));
-        #[cfg(feature = "inetd")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::inetd::actions::ChargenProtocol::new(),
         ));
-        #[cfg(feature = "inetd")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::inetd::actions::TimeProtocol::new()));
-        #[cfg(feature = "rcon")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::rcon::actions::RconProtocol::new()));
-        #[cfg(feature = "a2s")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::a2s::actions::A2sProtocol::new()));
-        #[cfg(feature = "minecraft")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::minecraft::actions::MinecraftProtocol::new(),
         ));
-        #[cfg(feature = "ninep")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::ninep::actions::NinepProtocol::new()));
-        #[cfg(feature = "zeromq")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::zeromq::actions::ZeromqProtocol::new(),
         ));
-        #[cfg(feature = "smpp")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::smpp::actions::SmppProtocol::new()));
-        #[cfg(feature = "clickhouse")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::clickhouse::actions::ClickhouseProtocol::new(),
         ));
-        #[cfg(feature = "msgpack-rpc")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::msgpack_rpc::actions::MsgpackRpcProtocol::new(),
         ));
-        #[cfg(feature = "zipkin")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::zipkin::actions::ZipkinProtocol::new(),
         ));
-        #[cfg(feature = "capnp-rpc")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::capnp_rpc::actions::CapnpRpcProtocol::new(),
         ));
-        #[cfg(feature = "knx")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::knx::actions::KnxProtocol::new()));
-        #[cfg(feature = "consul")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::consul::actions::ConsulProtocol::new(),
         ));
-        #[cfg(feature = "milter")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::milter::actions::MilterProtocol::new(),
         ));
-        #[cfg(feature = "anthropic")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::anthropic::actions::AnthropicProtocol::new(),
         ));
-        #[cfg(feature = "radsec")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::radsec::actions::RadsecProtocol::new(),
         ));
-        #[cfg(feature = "dbus")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::dbus::actions::DbusProtocol::new()));
-        #[cfg(feature = "bfd")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::bfd::actions::BfdProtocol::new()));
-        #[cfg(feature = "vxlan")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::vxlan::actions::VxlanProtocol::new()));
-        #[cfg(feature = "rsync")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::rsync::actions::RsyncProtocol::new()));
-        #[cfg(feature = "pfcp")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::pfcp::actions::PfcpProtocol::new()));
-        #[cfg(feature = "matrix")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::matrix::actions::MatrixProtocol::new(),
         ));
-        #[cfg(feature = "libp2p")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::libp2p::actions::Libp2pProtocol::new(),
         ));
-        #[cfg(feature = "sunrpc")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::sunrpc::actions::SunRpcProtocol::new(),
         ));
-        #[cfg(feature = "guacamole")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::guacamole::actions::GuacamoleProtocol::new(),
         ));
-        #[cfg(feature = "activitypub")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::activitypub::actions::ActivityPubProtocol::new(),
         ));
-        #[cfg(feature = "stratum")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::stratum::actions::StratumProtocol::new(),
         ));
-        #[cfg(feature = "stratum-v2")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::stratum_v2::actions::StratumV2Protocol::new(),
         ));
-        #[cfg(feature = "pulsar")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::pulsar::actions::PulsarProtocol::new(),
         ));
-        #[cfg(feature = "tr069")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::tr069::actions::Tr069Protocol::new()));
-        #[cfg(feature = "sse")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::sse::actions::SseProtocol::new()));
-        #[cfg(feature = "wsdiscovery")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::wsdiscovery::actions::WsDiscoveryProtocol::new(),
         ));
-        #[cfg(feature = "onvif")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::onvif::actions::OnvifProtocol::new()));
-        #[cfg(feature = "kerberos")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::kerberos::actions::KerberosProtocol::new(),
         ));
 
-        #[cfg(feature = "netflow-v9")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::netflow_v9::actions::NetflowV9Protocol::new(),
         ));
-        #[cfg(feature = "ipfix")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::ipfix::actions::IpfixProtocol::new()));
-        #[cfg(feature = "prometheus-remote-write")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::prometheus_remote_write::actions::PrometheusRemoteWriteProtocol::new(),
         ));
-        #[cfg(feature = "sflow")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::sflow::actions::SflowProtocol::new()));
-        #[cfg(feature = "loki")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::loki::actions::LokiProtocol::new()));
-        #[cfg(feature = "influxdb")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::influxdb::actions::InfluxDbProtocol::new(),
         ));
 
-        #[cfg(feature = "fluent-forward")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::fluent_forward::actions::FluentForwardProtocol::new(),
         ));
 
-        #[cfg(feature = "gelf")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::gelf::actions::GelfProtocol::new()));
 
-        #[cfg(feature = "graphite")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::graphite::actions::GraphiteProtocol::new(),
         ));
 
-        #[cfg(feature = "statsd")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::statsd::actions::StatsdProtocol::new(),
         ));
 
-        #[cfg(feature = "syslog")]
         self.register(Arc::new(crate::server::SyslogProtocol::new()));
 
-        #[cfg(feature = "ssh")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::SshProtocol::new()));
 
-        #[cfg(all(feature = "ssh-agent", unix))]
+        #[cfg(unix)]
         self.register(Arc::new(crate::server::SshAgentProtocol::new()));
 
-        #[cfg(feature = "svn")]
         self.register(Arc::new(crate::server::SvnProtocol::new()));
 
-        #[cfg(feature = "irc")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::IrcProtocol::new()));
 
-        #[cfg(feature = "xmpp")]
+        #[cfg(unix)]
         self.register(Arc::new(crate::server::XmppProtocol::new()));
 
-        #[cfg(feature = "telnet")]
         self.register(Arc::new(crate::server::TelnetProtocol::new()));
 
-        #[cfg(feature = "smtp")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::SmtpProtocol::new()));
 
-        #[cfg(feature = "ftp")]
         self.register(Arc::new(crate::server::FtpProtocol::new()));
 
-        #[cfg(feature = "imap")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::ImapProtocol::new()));
 
-        #[cfg(feature = "pop3")]
         self.register(Arc::new(crate::server::Pop3Protocol::new()));
 
-        #[cfg(feature = "nntp")]
         self.register(Arc::new(crate::server::NntpProtocol::new()));
 
-        #[cfg(feature = "mqtt")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::MqttProtocol::new()));
 
-        #[cfg(feature = "modbus")]
         self.register(Arc::new(crate::server::ModbusProtocol::new()));
 
-        #[cfg(feature = "coap")]
         self.register(Arc::new(crate::server::CoapProtocol::new()));
 
-        #[cfg(feature = "amqp")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::AmqpProtocol::new()));
 
-        #[cfg(feature = "mdns")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::MdnsProtocol::new()));
 
-        #[cfg(feature = "ldap")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::LdapProtocol::new()));
 
-        #[cfg(feature = "mysql")]
+        #[cfg(not(target_arch = "wasm32"))]
         {
             use crate::server::connection::ConnectionId;
             use tokio::sync::mpsc;
@@ -623,7 +582,6 @@ impl ServerRegistry {
             )));
         }
 
-        #[cfg(feature = "snowflake")]
         {
             use crate::server::connection::ConnectionId;
             use tokio::sync::mpsc;
@@ -635,7 +593,6 @@ impl ServerRegistry {
             )));
         }
 
-        #[cfg(feature = "db2")]
         {
             use crate::server::connection::ConnectionId;
             use tokio::sync::mpsc;
@@ -647,7 +604,7 @@ impl ServerRegistry {
             )));
         }
 
-        #[cfg(feature = "mssql")]
+        #[cfg(not(target_arch = "wasm32"))]
         {
             use crate::server::connection::ConnectionId;
             use tokio::sync::mpsc;
@@ -659,7 +616,7 @@ impl ServerRegistry {
             )));
         }
 
-        #[cfg(feature = "postgresql")]
+        #[cfg(not(target_arch = "wasm32"))]
         {
             use crate::server::connection::ConnectionId;
             use tokio::sync::mpsc;
@@ -671,7 +628,7 @@ impl ServerRegistry {
             )));
         }
 
-        #[cfg(feature = "redis")]
+        #[cfg(not(target_arch = "wasm32"))]
         {
             use crate::server::connection::ConnectionId;
             use tokio::sync::mpsc;
@@ -683,16 +640,13 @@ impl ServerRegistry {
             )));
         }
 
-        #[cfg(feature = "memcached")]
         self.register(Arc::new(crate::server::MemcachedProtocol::new()));
 
-        #[cfg(feature = "radius")]
         self.register(Arc::new(crate::server::RadiusProtocol::new()));
 
-        #[cfg(feature = "rss")]
         self.register(Arc::new(crate::server::RssProtocol::new()));
 
-        #[cfg(feature = "cassandra")]
+        #[cfg(not(target_arch = "wasm32"))]
         {
             use crate::server::connection::ConnectionId;
             use tokio::sync::mpsc;
@@ -704,7 +658,6 @@ impl ServerRegistry {
             )));
         }
 
-        #[cfg(feature = "mongodb-server")]
         {
             use crate::server::connection::ConnectionId;
             use tokio::sync::mpsc;
@@ -716,302 +669,273 @@ impl ServerRegistry {
             )));
         }
 
-        #[cfg(feature = "dynamo")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::DynamoProtocol::new()));
 
-        #[cfg(feature = "s3")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::S3Protocol::new()));
 
-        #[cfg(feature = "sqs")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::SqsProtocol::new()));
 
-        #[cfg(feature = "elasticsearch")]
         self.register(Arc::new(crate::server::ElasticsearchProtocol::new()));
 
-        #[cfg(feature = "couchdb")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::CouchDbProtocol::new()));
 
-        #[cfg(feature = "yarn")]
         self.register(Arc::new(crate::server::YarnProtocol::new()));
 
-        #[cfg(feature = "spark")]
         self.register(Arc::new(crate::server::SparkProtocol::new()));
 
-        #[cfg(feature = "npm")]
         self.register(Arc::new(crate::server::NpmProtocol::new()));
 
-        #[cfg(feature = "oci-registry")]
         self.register(Arc::new(crate::server::OciRegistryProtocol::new()));
 
-        #[cfg(feature = "kubernetes-server")]
         self.register(Arc::new(crate::server::KubernetesProtocol::new()));
 
-        #[cfg(feature = "prometheus")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::PrometheusProtocol::new()));
 
-        #[cfg(feature = "otlp")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::OtlpProtocol::new()));
 
-        #[cfg(feature = "docker")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::DockerProtocol::new()));
 
-        #[cfg(feature = "vault")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::VaultProtocol::new()));
 
-        #[cfg(feature = "bolt")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::BoltProtocol::new()));
 
-        #[cfg(feature = "ipp")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::IppProtocol::new()));
 
-        #[cfg(feature = "webdav")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::WebDavProtocol::new()));
 
-        #[cfg(feature = "nfs")]
+        #[cfg(unix)]
         self.register(Arc::new(crate::server::NfsProtocol::new()));
 
-        #[cfg(feature = "nfc")]
+        #[cfg(unix)]
         self.register(Arc::new(crate::server::NfcServerProtocol));
 
-        #[cfg(feature = "smb")]
         self.register(Arc::new(crate::server::SmbProtocol::new()));
 
-        #[cfg(feature = "proxy")]
+        #[cfg(unix)]
         self.register(Arc::new(crate::server::ProxyProtocol::new()));
 
-        #[cfg(feature = "socks5")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::Socks5Protocol::new()));
 
-        #[cfg(feature = "wireguard")]
+        #[cfg(unix)]
         self.register(Arc::new(crate::server::WireguardProtocol::new()));
 
-        #[cfg(feature = "openvpn")]
+        #[cfg(unix)]
         self.register(Arc::new(crate::server::OpenvpnProtocol::new()));
 
-        #[cfg(feature = "ipsec")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::IpsecProtocol::new()));
 
-        #[cfg(feature = "stun")]
+        #[cfg(unix)]
         self.register(Arc::new(crate::server::StunProtocol::new()));
 
-        #[cfg(feature = "turn")]
+        #[cfg(unix)]
         self.register(Arc::new(crate::server::TurnProtocol::new()));
 
-        #[cfg(feature = "webrtc")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::WebRtcProtocol::new()));
 
-        #[cfg(feature = "webrtc")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::WebRtcSignalingProtocol::new()));
 
-        #[cfg(feature = "websocket")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::WebSocketProtocol::new()));
 
-        #[cfg(feature = "sip")]
         self.register(Arc::new(crate::server::SipProtocol::new()));
-        #[cfg(feature = "h323")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::h323::actions::H323GatekeeperProtocol::new(),
         ));
-        #[cfg(feature = "h323")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::h323::actions::H323EndpointProtocol::new(),
         ));
 
-        #[cfg(feature = "rtp")]
         self.register(Arc::new(crate::server::RtpProtocol::new()));
 
-        #[cfg(feature = "rtsp")]
         self.register(Arc::new(crate::server::RtspProtocol::new()));
 
-        #[cfg(feature = "hls")]
         self.register(Arc::new(crate::server::HlsProtocol::new()));
 
-        #[cfg(feature = "bgp")]
         self.register(Arc::new(crate::server::BgpProtocol::new()));
 
-        #[cfg(feature = "ospf")]
+        #[cfg(unix)]
         self.register(Arc::new(crate::server::OspfProtocol::new()));
 
-        #[cfg(feature = "isis")]
+        #[cfg(all(unix, feature = "libpcap"))]
         self.register(Arc::new(crate::server::IsisProtocol::new()));
 
-        #[cfg(feature = "rip")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::RipProtocol::new()));
 
-        #[cfg(feature = "bitcoin")]
         self.register(Arc::new(crate::server::BitcoinProtocol::new()));
-        #[cfg(feature = "devp2p")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::devp2p::actions::Devp2pProtocol::new(),
         ));
-        #[cfg(feature = "nostr")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::NostrProtocol::new()));
 
-        #[cfg(feature = "mcp")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::McpProtocol::new()));
 
-        #[cfg(feature = "openai")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::OpenAiProtocol::new()));
 
-        #[cfg(feature = "ollama")]
         self.register(Arc::new(crate::server::OllamaProtocol::new()));
 
-        #[cfg(feature = "oauth2")]
         self.register(Arc::new(crate::server::OAuth2Protocol::new()));
 
-        #[cfg(feature = "jsonrpc")]
         self.register(Arc::new(crate::server::JsonRpcProtocol::new()));
 
-        #[cfg(feature = "xmlrpc")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::XmlRpcProtocol::new()));
 
-        #[cfg(feature = "grpc")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::GrpcProtocol::new()));
-        #[cfg(feature = "grpc-web")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::grpc_web::actions::GrpcWebProtocol::new(),
         ));
-        #[cfg(feature = "gnmi")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::gnmi::actions::GnmiProtocol::new()));
-        #[cfg(feature = "connect_rpc")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::connect_rpc::actions::ConnectRpcProtocol::new(),
         ));
 
-        #[cfg(feature = "etcd")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::EtcdProtocol::new()));
 
-        #[cfg(feature = "zookeeper")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::ZookeeperProtocol::new()));
 
-        #[cfg(feature = "tor")]
+        #[cfg(unix)]
         self.register(Arc::new(crate::server::TorRelayProtocol::new()));
 
-        #[cfg(feature = "vnc")]
         self.register(Arc::new(crate::server::VncProtocol::new()));
 
-        #[cfg(feature = "reverse-shell")]
         self.register(Arc::new(crate::server::ReverseShellProtocol::new()));
 
-        #[cfg(feature = "rdp")]
         self.register(Arc::new(crate::server::RdpProtocol::new()));
-        #[cfg(feature = "spice")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::spice::actions::SpiceProtocol::new()));
 
-        #[cfg(feature = "openapi")]
         self.register(Arc::new(crate::server::OpenApiProtocol::new()));
 
-        #[cfg(feature = "openid")]
         self.register(Arc::new(crate::server::OpenIdProtocol::new()));
 
-        #[cfg(feature = "git")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::GitProtocol::new()));
 
-        #[cfg(feature = "mercurial")]
         self.register(Arc::new(crate::server::MercurialProtocol::new()));
 
-        #[cfg(feature = "kafka")]
         self.register(Arc::new(crate::server::KafkaProtocol::new()));
 
-        #[cfg(feature = "http3")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::Http3Protocol::new()));
 
-        #[cfg(feature = "quic")]
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::QuicProtocol::new()));
 
-        #[cfg(feature = "torrent-tracker")]
         self.register(Arc::new(crate::server::TorrentTrackerProtocol::new()));
 
-        #[cfg(feature = "torrent-dht")]
         self.register(Arc::new(crate::server::TorrentDhtProtocol::new()));
 
-        #[cfg(feature = "torrent-peer")]
         self.register(Arc::new(crate::server::TorrentPeerProtocol::new()));
 
-        #[cfg(feature = "tls")]
         self.register(Arc::new(crate::server::TlsProtocol::new()));
 
-        #[cfg(feature = "saml-idp")]
         self.register(Arc::new(crate::server::SamlIdpProtocol::new()));
 
-        #[cfg(feature = "saml-sp")]
         self.register(Arc::new(crate::server::SamlSpProtocol::new()));
 
-        #[cfg(feature = "usb-keyboard")]
+        #[cfg(all(unix, feature = "libusb"))]
         self.register(Arc::new(crate::server::UsbKeyboardProtocol::new()));
 
-        #[cfg(feature = "usb-mouse")]
+        #[cfg(all(unix, feature = "libusb"))]
         self.register(Arc::new(crate::server::UsbMouseProtocol::new()));
 
-        #[cfg(feature = "usb-serial")]
+        #[cfg(all(unix, feature = "libusb"))]
         self.register(Arc::new(crate::server::UsbSerialProtocol::new()));
 
-        #[cfg(feature = "usb-msc")]
+        #[cfg(all(unix, feature = "libusb"))]
         self.register(Arc::new(crate::server::UsbMscProtocol::new()));
 
-        #[cfg(feature = "usb-fido2")]
+        #[cfg(all(unix, feature = "libusb"))]
         self.register(Arc::new(crate::server::UsbFido2Protocol::new()));
 
-        #[cfg(feature = "usb-smartcard")]
+        #[cfg(all(unix, feature = "libusb"))]
         self.register(Arc::new(crate::server::UsbSmartCardProtocol::new()));
 
-        #[cfg(feature = "bluetooth-ble")]
+        #[cfg(all(unix, feature = "bluetooth"))]
         self.register(Arc::new(crate::server::BluetoothBleProtocol::new()));
 
-        #[cfg(feature = "bluetooth-ble-keyboard")]
+        #[cfg(all(unix, feature = "bluetooth"))]
         self.register(Arc::new(crate::server::BluetoothBleKeyboardProtocol::new()));
 
-        #[cfg(feature = "bluetooth-ble-mouse")]
+        #[cfg(all(unix, feature = "bluetooth"))]
         self.register(Arc::new(crate::server::BluetoothBleMouseProtocol::new()));
 
-        #[cfg(feature = "bluetooth-ble-beacon")]
+        #[cfg(all(unix, feature = "bluetooth"))]
         self.register(Arc::new(crate::server::BluetoothBleBeaconProtocol::new()));
 
-        #[cfg(feature = "bluetooth-ble-remote")]
+        #[cfg(all(unix, feature = "bluetooth"))]
         self.register(Arc::new(crate::server::BluetoothBleRemoteProtocol::new()));
 
-        #[cfg(feature = "bluetooth-ble-battery")]
+        #[cfg(all(unix, feature = "bluetooth"))]
         self.register(Arc::new(crate::server::BluetoothBleBatteryProtocol::new()));
 
-        #[cfg(feature = "bluetooth-ble-heart-rate")]
+        #[cfg(all(unix, feature = "bluetooth"))]
         self.register(Arc::new(crate::server::BluetoothBleHeartRateProtocol::new()));
 
-        #[cfg(feature = "bluetooth-ble-thermometer")]
+        #[cfg(all(unix, feature = "bluetooth"))]
         self.register(Arc::new(
             crate::server::BluetoothBleThermometerProtocol::new(),
         ));
 
-        #[cfg(feature = "bluetooth-ble-environmental")]
+        #[cfg(all(unix, feature = "bluetooth"))]
         self.register(Arc::new(
             crate::server::BluetoothBleEnvironmentalProtocol::new(),
         ));
 
-        #[cfg(feature = "bluetooth-ble-proximity")]
+        #[cfg(all(unix, feature = "bluetooth"))]
         self.register(Arc::new(crate::server::BluetoothBleProximityProtocol::new()));
 
-        #[cfg(feature = "bluetooth-ble-gamepad")]
+        #[cfg(all(unix, feature = "bluetooth"))]
         self.register(Arc::new(crate::server::BluetoothBleGamepadProtocol::new()));
 
-        #[cfg(feature = "bluetooth-ble-presenter")]
+        #[cfg(all(unix, feature = "bluetooth"))]
         self.register(Arc::new(crate::server::BluetoothBlePresenterProtocol::new()));
 
-        #[cfg(feature = "bluetooth-ble-file-transfer")]
+        #[cfg(all(unix, feature = "bluetooth"))]
         self.register(Arc::new(
             crate::server::BluetoothBleFileTransferProtocol::new(),
         ));
 
-        #[cfg(feature = "bluetooth-ble-data-stream")]
+        #[cfg(all(unix, feature = "bluetooth"))]
         self.register(Arc::new(
             crate::server::BluetoothBleDataStreamProtocol::new(),
         ));
 
-        #[cfg(feature = "bluetooth-ble-cycling")]
+        #[cfg(all(unix, feature = "bluetooth"))]
         self.register(Arc::new(crate::server::BluetoothBleCyclingProtocol::new()));
 
-        #[cfg(feature = "bluetooth-ble-running")]
+        #[cfg(all(unix, feature = "bluetooth"))]
         self.register(Arc::new(crate::server::BluetoothBleRunningProtocol::new()));
 
-        #[cfg(feature = "bluetooth-ble-weight-scale")]
+        #[cfg(all(unix, feature = "bluetooth"))]
         self.register(Arc::new(
             crate::server::BluetoothBleWeightScaleProtocol::new(),
         ));
@@ -1154,10 +1078,10 @@ impl ServerRegistry {
         // Not found among compiled-in protocols. Check whether `input` names a
         // real NetGet protocol that simply wasn't compiled into this build.
         let input_norm = input.to_lowercase().replace(['-', ' '], "_");
-        for (name, feature) in ALL_KNOWN_PROTOCOLS {
+        for (name, requires) in ALL_KNOWN_PROTOCOLS {
             let name_norm = name.to_lowercase().replace(['-', ' '], "_");
             if name_norm == input_norm {
-                return Err(ProtocolLookupError::NotCompiled { name, feature });
+                return Err(ProtocolLookupError::NotCompiled { name, requires });
             }
         }
 
@@ -1344,7 +1268,6 @@ impl ServerRegistry {
         }
 
         // Default to TCP if "tcp", "raw", "ftp", "custom" found
-        #[cfg(feature = "tcp")]
         if input_lower.contains("tcp")
             || input_lower.contains("raw")
             || input_lower.contains("ftp")
@@ -1540,311 +1463,335 @@ impl ServerRegistry {
     }
 }
 
-/// All protocol names known to the netget codebase, paired with the Cargo
-/// feature flag that compiles each one in — independent of which features are
-/// actually enabled in *this* build. This lets [`ServerRegistry::resolve`] tell
-/// "protocol exists but wasn't compiled in" apart from "no such protocol".
+/// All protocol names known to the netget codebase, paired with what a build needs to
+/// include each one ("a native build (not the browser)", "the `libpcap` feature, on Unix",
+/// …) — independent of what *this* build includes. This lets [`ServerRegistry::resolve`] tell
+/// "protocol exists but wasn't compiled in" apart from "no such protocol", and say why.
 ///
-/// Kept manually in sync with the `#[cfg(feature = "...")]` registrations in
+/// Kept manually in sync with the platform gates on the registrations in
 /// `register_protocols()` above. This is the one acceptable central touchpoint
 /// per CLAUDE.md's decentralization policy (it plays the same role as the
 /// `register()` calls themselves) — when adding a new protocol, add its
-/// (canonical name, feature) pair here too.
+/// (canonical name, requirement) pair here too.
 pub(crate) const ALL_KNOWN_PROTOCOLS: &[(&str, &str)] = &[
-    ("TCP", "tcp"),
-    ("SOCKET_FILE", "socket_file"),
+    ("TCP", "nothing (every build has it)"),
+    ("SOCKET_FILE", "a Unix build (macOS or Linux)"),
     // The other three local-descriptor protocols. Without these, a build that does not compile
     // them answers `Unknown protocol: 'pty'. Did you mean 'NTP'?` instead of saying the protocol
     // exists but is not compiled in - the table is what tells those two cases apart.
-    ("PTY", "pty"),
-    ("STDIO", "stdio"),
-    ("NAMED_PIPE", "named_pipe"),
-    ("HTTP", "http"),
-    ("HTTP2", "http2"),
-    ("PyPI", "pypi"),
-    ("Maven", "maven"),
-    ("UDP", "udp"),
-    ("DataLink", "datalink"),
-    ("ARP", "arp"),
-    ("ICMP", "icmp"),
-    ("NMDC Peer", "dc_peer"),
-    ("ADC", "adc"),
-    ("ADC Peer", "adc_peer"),
-    ("Soulseek", "soulseek"),
-    ("Soulseek Peer", "soulseek_peer"),
-    ("Gnutella", "gnutella"),
-    ("DC", "dc"),
-    ("DNS", "dns"),
-    ("DoT", "dot"),
-    ("DoQ", "doq"),
-    ("DoH", "doh"),
-    ("DHCP", "dhcp"),
-    ("BOOTP", "bootp"),
-    ("NTP", "ntp"),
-    ("TFTP", "tftp"),
-    ("NUT", "nut"),
-    ("WHOIS", "whois"),
-    ("NDP", "ndp"),
-    ("DHCPv6", "dhcpv6"),
-    ("TUN/TAP", "tuntap"),
-    ("Raw IP", "rawip"),
-    ("GTP", "gtp"),
-    ("M3UA", "m3ua"),
-    ("NGAP", "ngap"),
-    ("CAN", "can"),
-    ("LLDP", "lldp"),
-    ("CDP", "cdp"),
-    ("STP", "stp"),
-    ("VRRP", "vrrp"),
-    ("HSRP", "hsrp"),
-    ("EAPOL", "eapol"),
-    ("Wake-on-LAN", "wol"),
-    ("NATS", "nats"),
-    ("STOMP", "stomp"),
-    ("Ident", "ident"),
-    ("Gopher", "gopher"),
-    ("DICT", "dict"),
-    ("Beanstalkd", "beanstalkd"),
-    ("Zabbix", "zabbix"),
-    ("Gearman", "gearman"),
-    ("NSQ", "nsq"),
-    ("Gemini", "gemini"),
-    ("Finger", "finger"),
-    ("SSDP", "ssdp"),
-    ("LLMNR", "llmnr"),
-    ("NetBIOS-NS", "netbios-ns"),
-    ("SNMP", "snmp"),
-    ("IGMP", "igmp"),
-    ("Syslog", "syslog"),
-    ("FluentForward", "fluent-forward"),
-    ("NETFLOWV9", "netflow-v9"),
-    ("NETFLOW-V9", "netflow-v9"),
-    ("NETFLOW_V9", "netflow-v9"),
-    ("IPFIX", "ipfix"),
-    ("IPFIX-UDP", "ipfix"),
-    ("PrometheusRemoteWrite", "prometheus-remote-write"),
-    ("RemoteWrite", "prometheus-remote-write"),
-    ("sFlow", "sflow"),
-    ("sFlow-v5", "sflow"),
-    ("Loki", "loki"),
-    ("LokiPush", "loki"),
-    ("InfluxDB", "influxdb"),
-    ("InfluxDB2", "influxdb"),
-    ("GELF", "gelf"),
-    ("Graylog", "gelf"),
-    ("Graphite", "graphite"),
-    ("StatsD", "statsd"),
-    ("DogStatsD", "statsd"),
-    ("SSH", "ssh"),
-    ("SSH Agent", "ssh-agent"),
-    ("SVN", "svn"),
-    ("IRC", "irc"),
-    ("XMPP", "xmpp"),
-    ("Telnet", "telnet"),
-    ("SMTP", "smtp"),
-    ("FTP", "ftp"),
-    ("IMAP", "imap"),
-    ("NNTP", "nntp"),
-    ("MQTT", "mqtt"),
-    ("Modbus", "modbus"),
-    ("CoAP", "coap"),
-    ("AMQP", "amqp"),
-    ("mDNS", "mdns"),
-    ("LDAP", "ldap"),
-    ("MySQL", "mysql"),
-    ("MSSQL", "mssql"),
-    ("Snowflake", "snowflake"),
-    ("Db2", "db2"),
-    ("PostgreSQL", "postgresql"),
-    ("Memcached", "memcached"),
-    ("RADIUS", "radius"),
-    ("DIAMETER", "diameter"),
-    ("Redis", "redis"),
-    ("RSS", "rss"),
-    ("Cassandra", "cassandra"),
-    ("MongoDB", "mongodb-server"),
-    ("DynamoDB", "dynamo"),
-    ("SQS", "sqs"),
-    ("Elasticsearch", "elasticsearch"),
-    ("CouchDB", "couchdb"),
-    ("YARN", "yarn"),
-    ("Spark", "spark"),
-    ("NPM", "npm"),
-    ("OCI-Registry", "oci-registry"),
-    ("Kubernetes", "kubernetes-server"),
-    ("Prometheus", "prometheus"),
-    ("OTLP", "otlp"),
-    ("Docker", "docker"),
-    ("Vault", "vault"),
-    ("Bolt", "bolt"),
-    ("IPP", "ipp"),
-    ("WebDAV", "webdav"),
-    ("NFS", "nfs"),
-    ("nfc", "nfc"),
-    ("SMB", "smb"),
-    ("Proxy", "proxy"),
-    ("SOCKS5", "socks5"),
-    ("WireGuard", "wireguard"),
-    ("OpenVPN", "openvpn"),
-    ("IPSec/IKEv2", "ipsec"),
-    ("TURN", "turn"),
-    ("WebRTC Signaling", "webrtc"),
-    ("WebSocket", "websocket"),
-    ("SIP", "sip"),
-    ("H323", "h323"),
-    ("H323-Gatekeeper", "h323"),
-    ("RTP", "rtp"),
-    ("RTSP", "rtsp"),
-    ("HLS", "hls"),
-    ("ISIS", "isis"),
-    ("RIP", "rip"),
-    ("Bitcoin P2P", "bitcoin"),
-    ("devp2p", "devp2p"),
-    ("Nostr", "nostr"),
-    ("MCP", "mcp"),
-    ("OpenAI", "openai"),
-    ("Ollama", "ollama"),
-    ("OAuth2", "oauth2"),
-    ("JSON-RPC", "jsonrpc"),
-    ("XML-RPC", "xmlrpc"),
-    ("gRPC", "grpc"),
-    ("gRPC-Web", "grpc-web"),
-    ("gNMI", "gnmi"),
-    ("ConnectRPC", "connect_rpc"),
-    ("TACACS", "tacacs"),
-    ("NETCONF", "netconf"),
-    ("RPKI-RTR", "rpki_rtr"),
-    ("RDAP", "rdap"),
-    ("HL7", "hl7"),
-    ("ICAP", "icap"),
-    ("OCPP", "ocpp"),
-    ("A2A", "a2a"),
-    ("GraphQL", "graphql"),
-    ("FastCGI", "fastcgi"),
-    ("Redfish", "redfish"),
-    ("SCIM", "scim"),
-    ("Socket.IO", "socketio"),
-    ("CalDAV", "caldav"),
-    ("CardDAV", "carddav"),
-    ("DICOM", "dicom"),
-    ("ACME", "acme"),
-    ("FIX", "fix"),
-    ("WAMP", "wamp"),
-    ("RTMP", "rtmp"),
-    ("SRT", "srt"),
-    ("AMQP1", "amqp1"),
-    ("Thrift", "thrift"),
-    ("BMP", "bmp"),
-    ("MQTT-SN", "mqtt_sn"),
-    ("NBD", "nbd"),
-    ("ManageSieve", "managesieve"),
-    ("Zenoh", "zenoh"),
-    ("LwM2M", "lwm2m"),
-    ("RESTCONF", "restconf"),
-    ("WebTransport", "webtransport"),
-    ("JMAP", "jmap"),
-    ("EPP", "epp"),
-    ("LMTP", "lmtp"),
-    ("LPD", "lpd"),
-    ("Echo", "inetd"),
-    ("Discard", "inetd"),
-    ("Daytime", "inetd"),
-    ("QOTD", "inetd"),
-    ("Chargen", "inetd"),
-    ("Time", "inetd"),
-    ("RCON", "rcon"),
-    ("A2S", "a2s"),
-    ("Minecraft", "minecraft"),
-    ("9P", "ninep"),
-    ("ZeroMQ", "zeromq"),
-    ("SMPP", "smpp"),
-    ("ClickHouse", "clickhouse"),
-    ("MessagePack-RPC", "msgpack-rpc"),
-    ("Zipkin", "zipkin"),
-    ("Cap'n Proto RPC", "capnp-rpc"),
-    ("KNX/IP", "knx"),
-    ("Consul", "consul"),
-    ("Milter", "milter"),
-    ("Anthropic", "anthropic"),
-    ("RadSec", "radsec"),
-    ("D-Bus", "dbus"),
-    ("BFD", "bfd"),
-    ("VXLAN", "vxlan"),
-    ("rsync", "rsync"),
-    ("PFCP", "pfcp"),
-    ("Matrix", "matrix"),
-    ("libp2p", "libp2p"),
-    ("SunRPC", "sunrpc"),
-    ("Guacamole", "guacamole"),
-    ("ActivityPub", "activitypub"),
-    ("Stratum", "stratum"),
-    ("Stratum V2", "stratum-v2"),
-    ("Apache Pulsar", "pulsar"),
-    ("TR-069 (CWMP)", "tr069"),
-    ("SSE", "sse"),
-    ("WS-Discovery", "wsdiscovery"),
-    ("ONVIF", "onvif"),
-    ("Kerberos", "kerberos"),
-    ("etcd", "etcd"),
-    ("ZooKeeper", "zookeeper"),
-    ("Tor Relay", "tor"),
-    ("VNC", "vnc"),
-    ("Reverse Shell", "reverse-shell"),
-    ("RDP", "rdp"),
-    ("SPICE", "spice"),
-    ("OpenAPI", "openapi"),
-    ("OpenID", "openid"),
-    ("KAFKA", "kafka"),
+    ("PTY", "a Unix build (macOS or Linux)"),
+    ("STDIO", "a Unix build (macOS or Linux)"),
+    ("NAMED_PIPE", "a Unix build (macOS or Linux)"),
+    ("HTTP", "nothing (every build has it)"),
+    ("HTTP2", "nothing (every build has it)"),
+    ("PyPI", "nothing (every build has it)"),
+    ("Maven", "nothing (every build has it)"),
+    ("UDP", "nothing (every build has it)"),
+    ("DataLink", "the `libpcap` feature, on Unix"),
+    ("ARP", "the `libpcap` feature, on Unix"),
+    ("ICMP", "a Unix build (macOS or Linux)"),
+    ("NMDC Peer", "a native build (not the browser)"),
+    ("ADC", "a native build (not the browser)"),
+    ("ADC Peer", "a native build (not the browser)"),
+    ("Soulseek", "a native build (not the browser)"),
+    ("Soulseek Peer", "a native build (not the browser)"),
+    ("Gnutella", "a native build (not the browser)"),
+    ("DC", "nothing (every build has it)"),
+    ("DNS", "a native build (not the browser)"),
+    ("DoT", "a native build (not the browser)"),
+    ("DoQ", "a native build (not the browser)"),
+    ("DoH", "a native build (not the browser)"),
+    ("DHCP", "nothing (every build has it)"),
+    ("BOOTP", "nothing (every build has it)"),
+    ("NTP", "a native build (not the browser)"),
+    ("TFTP", "nothing (every build has it)"),
+    ("NUT", "a native build (not the browser)"),
+    ("WHOIS", "nothing (every build has it)"),
+    ("NDP", "a Unix build (macOS or Linux)"),
+    ("DHCPv6", "nothing (every build has it)"),
+    ("TUN/TAP", "a Unix build (macOS or Linux)"),
+    ("Raw IP", "a Unix build (macOS or Linux)"),
+    ("GTP", "nothing (every build has it)"),
+    ("M3UA", "a Unix build (macOS or Linux)"),
+    ("NGAP", "a Unix build (macOS or Linux)"),
+    ("CAN", "a Unix build (macOS or Linux)"),
+    ("LLDP", "the `libpcap` feature, on Unix"),
+    ("CDP", "the `libpcap` feature, on Unix"),
+    ("STP", "the `libpcap` feature, on Unix"),
+    ("VRRP", "a Unix build (macOS or Linux)"),
+    ("HSRP", "nothing (every build has it)"),
+    ("EAPOL", "the `libpcap` feature, on Unix"),
+    ("Wake-on-LAN", "nothing (every build has it)"),
+    ("NATS", "nothing (every build has it)"),
+    ("STOMP", "nothing (every build has it)"),
+    ("Ident", "nothing (every build has it)"),
+    ("Gopher", "nothing (every build has it)"),
+    ("DICT", "a native build (not the browser)"),
+    ("Beanstalkd", "a native build (not the browser)"),
+    ("Zabbix", "a native build (not the browser)"),
+    ("Gearman", "a native build (not the browser)"),
+    ("NSQ", "a native build (not the browser)"),
+    ("Gemini", "a native build (not the browser)"),
+    ("Finger", "nothing (every build has it)"),
+    ("SSDP", "nothing (every build has it)"),
+    ("LLMNR", "a native build (not the browser)"),
+    ("NetBIOS-NS", "nothing (every build has it)"),
+    ("SNMP", "nothing (every build has it)"),
+    ("IGMP", "a Unix build (macOS or Linux)"),
+    ("Syslog", "nothing (every build has it)"),
+    ("FluentForward", "a native build (not the browser)"),
+    ("NETFLOWV9", "a native build (not the browser)"),
+    ("NETFLOW-V9", "a native build (not the browser)"),
+    ("NETFLOW_V9", "a native build (not the browser)"),
+    ("IPFIX", "a native build (not the browser)"),
+    ("IPFIX-UDP", "a native build (not the browser)"),
+    ("PrometheusRemoteWrite", "a native build (not the browser)"),
+    ("RemoteWrite", "a native build (not the browser)"),
+    ("sFlow", "a native build (not the browser)"),
+    ("sFlow-v5", "a native build (not the browser)"),
+    ("Loki", "a native build (not the browser)"),
+    ("LokiPush", "a native build (not the browser)"),
+    ("InfluxDB", "a native build (not the browser)"),
+    ("InfluxDB2", "a native build (not the browser)"),
+    ("GELF", "a native build (not the browser)"),
+    ("Graylog", "a native build (not the browser)"),
+    ("Graphite", "a native build (not the browser)"),
+    ("StatsD", "a native build (not the browser)"),
+    ("DogStatsD", "a native build (not the browser)"),
+    ("SSH", "a native build (not the browser)"),
+    ("SSH Agent", "a Unix build (macOS or Linux)"),
+    ("SVN", "nothing (every build has it)"),
+    ("IRC", "a native build (not the browser)"),
+    ("XMPP", "a Unix build (macOS or Linux)"),
+    ("Telnet", "nothing (every build has it)"),
+    ("SMTP", "a native build (not the browser)"),
+    ("FTP", "nothing (every build has it)"),
+    ("IMAP", "a native build (not the browser)"),
+    ("NNTP", "nothing (every build has it)"),
+    ("MQTT", "a native build (not the browser)"),
+    ("Modbus", "nothing (every build has it)"),
+    ("CoAP", "nothing (every build has it)"),
+    ("AMQP", "a native build (not the browser)"),
+    ("mDNS", "a native build (not the browser)"),
+    ("LDAP", "a native build (not the browser)"),
+    ("MySQL", "a native build (not the browser)"),
+    ("MSSQL", "a native build (not the browser)"),
+    ("Snowflake", "nothing (every build has it)"),
+    ("Db2", "nothing (every build has it)"),
+    ("PostgreSQL", "a native build (not the browser)"),
+    ("Memcached", "nothing (every build has it)"),
+    ("RADIUS", "nothing (every build has it)"),
+    ("DIAMETER", "a native build (not the browser)"),
+    ("Redis", "a native build (not the browser)"),
+    ("RSS", "nothing (every build has it)"),
+    ("Cassandra", "a native build (not the browser)"),
+    ("MongoDB", "nothing (every build has it)"),
+    ("DynamoDB", "a native build (not the browser)"),
+    ("SQS", "a native build (not the browser)"),
+    ("Elasticsearch", "nothing (every build has it)"),
+    ("CouchDB", "a native build (not the browser)"),
+    ("YARN", "nothing (every build has it)"),
+    ("Spark", "nothing (every build has it)"),
+    ("NPM", "nothing (every build has it)"),
+    ("OCI-Registry", "nothing (every build has it)"),
+    ("Kubernetes", "nothing (every build has it)"),
+    ("Prometheus", "a native build (not the browser)"),
+    ("OTLP", "a native build (not the browser)"),
+    ("Docker", "a native build (not the browser)"),
+    ("Vault", "a native build (not the browser)"),
+    ("Bolt", "a native build (not the browser)"),
+    ("IPP", "a native build (not the browser)"),
+    ("WebDAV", "a native build (not the browser)"),
+    ("NFS", "a Unix build (macOS or Linux)"),
+    ("nfc", "a Unix build (macOS or Linux)"),
+    ("SMB", "nothing (every build has it)"),
+    ("Proxy", "a Unix build (macOS or Linux)"),
+    ("SOCKS5", "a native build (not the browser)"),
+    ("WireGuard", "a Unix build (macOS or Linux)"),
+    ("OpenVPN", "a Unix build (macOS or Linux)"),
+    ("IPSec/IKEv2", "a native build (not the browser)"),
+    ("TURN", "a Unix build (macOS or Linux)"),
+    ("WebRTC Signaling", "a native build (not the browser)"),
+    ("WebSocket", "a native build (not the browser)"),
+    ("SIP", "nothing (every build has it)"),
+    ("H323", "a native build (not the browser)"),
+    ("H323-Gatekeeper", "a native build (not the browser)"),
+    ("RTP", "nothing (every build has it)"),
+    ("RTSP", "nothing (every build has it)"),
+    ("HLS", "nothing (every build has it)"),
+    ("ISIS", "the `libpcap` feature, on Unix"),
+    ("RIP", "a native build (not the browser)"),
+    ("Bitcoin P2P", "nothing (every build has it)"),
+    ("devp2p", "a native build (not the browser)"),
+    ("Nostr", "a native build (not the browser)"),
+    ("MCP", "a native build (not the browser)"),
+    ("OpenAI", "a native build (not the browser)"),
+    ("Ollama", "nothing (every build has it)"),
+    ("OAuth2", "nothing (every build has it)"),
+    ("JSON-RPC", "nothing (every build has it)"),
+    ("XML-RPC", "a native build (not the browser)"),
+    ("gRPC", "a native build (not the browser)"),
+    ("gRPC-Web", "a native build (not the browser)"),
+    ("gNMI", "a native build (not the browser)"),
+    ("ConnectRPC", "a native build (not the browser)"),
+    ("TACACS", "a native build (not the browser)"),
+    ("NETCONF", "a native build (not the browser)"),
+    ("RPKI-RTR", "a native build (not the browser)"),
+    ("RDAP", "a native build (not the browser)"),
+    ("HL7", "a native build (not the browser)"),
+    ("ICAP", "a native build (not the browser)"),
+    ("OCPP", "a native build (not the browser)"),
+    ("A2A", "a native build (not the browser)"),
+    ("GraphQL", "a native build (not the browser)"),
+    ("FastCGI", "a native build (not the browser)"),
+    ("Redfish", "a native build (not the browser)"),
+    ("SCIM", "a native build (not the browser)"),
+    ("Socket.IO", "a native build (not the browser)"),
+    ("CalDAV", "a native build (not the browser)"),
+    ("CardDAV", "a native build (not the browser)"),
+    ("DICOM", "a native build (not the browser)"),
+    ("ACME", "a native build (not the browser)"),
+    ("FIX", "a native build (not the browser)"),
+    ("WAMP", "a native build (not the browser)"),
+    ("RTMP", "a native build (not the browser)"),
+    ("SRT", "a native build (not the browser)"),
+    ("AMQP1", "a native build (not the browser)"),
+    ("Thrift", "a native build (not the browser)"),
+    ("BMP", "a native build (not the browser)"),
+    ("MQTT-SN", "a native build (not the browser)"),
+    ("NBD", "a native build (not the browser)"),
+    ("ManageSieve", "a native build (not the browser)"),
+    ("Zenoh", "a native build (not the browser)"),
+    ("LwM2M", "a native build (not the browser)"),
+    ("RESTCONF", "a native build (not the browser)"),
+    ("WebTransport", "a native build (not the browser)"),
+    ("JMAP", "a native build (not the browser)"),
+    ("EPP", "a native build (not the browser)"),
+    ("LMTP", "a native build (not the browser)"),
+    ("LPD", "a native build (not the browser)"),
+    ("Echo", "a native build (not the browser)"),
+    ("Discard", "a native build (not the browser)"),
+    ("Daytime", "a native build (not the browser)"),
+    ("QOTD", "a native build (not the browser)"),
+    ("Chargen", "a native build (not the browser)"),
+    ("Time", "a native build (not the browser)"),
+    ("RCON", "a native build (not the browser)"),
+    ("A2S", "a native build (not the browser)"),
+    ("Minecraft", "a native build (not the browser)"),
+    ("9P", "a native build (not the browser)"),
+    ("ZeroMQ", "a native build (not the browser)"),
+    ("SMPP", "a native build (not the browser)"),
+    ("ClickHouse", "a native build (not the browser)"),
+    ("MessagePack-RPC", "a native build (not the browser)"),
+    ("Zipkin", "a native build (not the browser)"),
+    ("Cap'n Proto RPC", "a native build (not the browser)"),
+    ("KNX/IP", "a native build (not the browser)"),
+    ("Consul", "a native build (not the browser)"),
+    ("Milter", "a native build (not the browser)"),
+    ("Anthropic", "a native build (not the browser)"),
+    ("RadSec", "a native build (not the browser)"),
+    ("D-Bus", "a native build (not the browser)"),
+    ("BFD", "a native build (not the browser)"),
+    ("VXLAN", "a native build (not the browser)"),
+    ("rsync", "a native build (not the browser)"),
+    ("PFCP", "a native build (not the browser)"),
+    ("Matrix", "a native build (not the browser)"),
+    ("libp2p", "a native build (not the browser)"),
+    ("SunRPC", "a native build (not the browser)"),
+    ("Guacamole", "a native build (not the browser)"),
+    ("ActivityPub", "a native build (not the browser)"),
+    ("Stratum", "a native build (not the browser)"),
+    ("Stratum V2", "a native build (not the browser)"),
+    ("Apache Pulsar", "a native build (not the browser)"),
+    ("TR-069 (CWMP)", "a native build (not the browser)"),
+    ("SSE", "a native build (not the browser)"),
+    ("WS-Discovery", "a native build (not the browser)"),
+    ("ONVIF", "a native build (not the browser)"),
+    ("Kerberos", "a native build (not the browser)"),
+    ("etcd", "a native build (not the browser)"),
+    ("ZooKeeper", "a native build (not the browser)"),
+    ("Tor Relay", "a Unix build (macOS or Linux)"),
+    ("VNC", "nothing (every build has it)"),
+    ("Reverse Shell", "nothing (every build has it)"),
+    ("RDP", "nothing (every build has it)"),
+    ("SPICE", "a native build (not the browser)"),
+    ("OpenAPI", "nothing (every build has it)"),
+    ("OpenID", "nothing (every build has it)"),
+    ("KAFKA", "nothing (every build has it)"),
     // Separate raw QUIC and RFC 9114 HTTP/3 transports.
-    ("HTTP3", "http3"),
-    ("QUIC", "quic"),
-    ("Torrent-Tracker", "torrent-tracker"),
-    ("Torrent-DHT", "torrent-dht"),
-    ("Torrent-Peer", "torrent-peer"),
-    ("TLS", "tls"),
-    ("SamlIdp", "saml-idp"),
-    ("SamlSp", "saml-sp"),
-    ("USB-Keyboard", "usb-keyboard"),
-    ("USB-Mouse", "usb-mouse"),
-    ("USB-Serial", "usb-serial"),
-    ("USB-MassStorage", "usb-msc"),
-    ("usb-fido2", "usb-fido2"),
-    ("usb-smartcard", "usb-smartcard"),
-    ("BLUETOOTH_BLE", "bluetooth-ble"),
-    ("BLUETOOTH_BLE_KEYBOARD", "bluetooth-ble-keyboard"),
-    ("BLUETOOTH_BLE_MOUSE", "bluetooth-ble-mouse"),
-    ("BLUETOOTH_BLE_BEACON", "bluetooth-ble-beacon"),
-    ("BLUETOOTH_BLE_REMOTE", "bluetooth-ble-remote"),
-    ("BLUETOOTH_BLE_BATTERY", "bluetooth-ble-battery"),
-    ("BLUETOOTH_BLE_HEART_RATE", "bluetooth-ble-heart-rate"),
-    ("BLUETOOTH_BLE_THERMOMETER", "bluetooth-ble-thermometer"),
-    ("BLUETOOTH_BLE_ENVIRONMENTAL", "bluetooth-ble-environmental"),
-    ("BLUETOOTH_BLE_PROXIMITY", "bluetooth-ble-proximity"),
-    ("BLUETOOTH_BLE_GAMEPAD", "bluetooth-ble-gamepad"),
-    ("BLUETOOTH_BLE_PRESENTER", "bluetooth-ble-presenter"),
-    ("BLUETOOTH_BLE_FILE_TRANSFER", "bluetooth-ble-file-transfer"),
-    ("BLUETOOTH_BLE_DATA_STREAM", "bluetooth-ble-data-stream"),
-    ("BLUETOOTH_BLE_CYCLING", "bluetooth-ble-cycling"),
-    ("BLUETOOTH_BLE_RUNNING", "bluetooth-ble-running"),
-    ("BLUETOOTH_BLE_WEIGHT_SCALE", "bluetooth-ble-weight-scale"),
-    ("POP3", "pop3"),
-    ("S3", "s3"),
-    ("STUN", "stun"),
-    ("WebRTC", "webrtc"),
-    ("BGP", "bgp"),
-    ("OSPF", "ospf"),
-    ("Git", "git"),
-    ("Mercurial", "mercurial"),
+    ("HTTP3", "a native build (not the browser)"),
+    ("QUIC", "a native build (not the browser)"),
+    ("Torrent-Tracker", "nothing (every build has it)"),
+    ("Torrent-DHT", "nothing (every build has it)"),
+    ("Torrent-Peer", "nothing (every build has it)"),
+    ("TLS", "nothing (every build has it)"),
+    ("SamlIdp", "nothing (every build has it)"),
+    ("SamlSp", "nothing (every build has it)"),
+    ("USB-Keyboard", "the `libusb` feature, on Unix"),
+    ("USB-Mouse", "the `libusb` feature, on Unix"),
+    ("USB-Serial", "the `libusb` feature, on Unix"),
+    ("USB-MassStorage", "the `libusb` feature, on Unix"),
+    ("usb-fido2", "the `libusb` feature, on Unix"),
+    ("usb-smartcard", "the `libusb` feature, on Unix"),
+    ("BLUETOOTH_BLE", "the `bluetooth` feature, on Unix"),
+    ("BLUETOOTH_BLE_KEYBOARD", "the `bluetooth` feature, on Unix"),
+    ("BLUETOOTH_BLE_MOUSE", "the `bluetooth` feature, on Unix"),
+    ("BLUETOOTH_BLE_BEACON", "the `bluetooth` feature, on Unix"),
+    ("BLUETOOTH_BLE_REMOTE", "the `bluetooth` feature, on Unix"),
+    ("BLUETOOTH_BLE_BATTERY", "the `bluetooth` feature, on Unix"),
+    (
+        "BLUETOOTH_BLE_HEART_RATE",
+        "the `bluetooth` feature, on Unix",
+    ),
+    (
+        "BLUETOOTH_BLE_THERMOMETER",
+        "the `bluetooth` feature, on Unix",
+    ),
+    (
+        "BLUETOOTH_BLE_ENVIRONMENTAL",
+        "the `bluetooth` feature, on Unix",
+    ),
+    (
+        "BLUETOOTH_BLE_PROXIMITY",
+        "the `bluetooth` feature, on Unix",
+    ),
+    ("BLUETOOTH_BLE_GAMEPAD", "the `bluetooth` feature, on Unix"),
+    (
+        "BLUETOOTH_BLE_PRESENTER",
+        "the `bluetooth` feature, on Unix",
+    ),
+    (
+        "BLUETOOTH_BLE_FILE_TRANSFER",
+        "the `bluetooth` feature, on Unix",
+    ),
+    (
+        "BLUETOOTH_BLE_DATA_STREAM",
+        "the `bluetooth` feature, on Unix",
+    ),
+    ("BLUETOOTH_BLE_CYCLING", "the `bluetooth` feature, on Unix"),
+    ("BLUETOOTH_BLE_RUNNING", "the `bluetooth` feature, on Unix"),
+    (
+        "BLUETOOTH_BLE_WEIGHT_SCALE",
+        "the `bluetooth` feature, on Unix",
+    ),
+    ("POP3", "nothing (every build has it)"),
+    ("S3", "a native build (not the browser)"),
+    ("STUN", "a Unix build (macOS or Linux)"),
+    ("WebRTC", "a native build (not the browser)"),
+    ("BGP", "nothing (every build has it)"),
+    ("OSPF", "a Unix build (macOS or Linux)"),
+    ("Git", "a native build (not the browser)"),
+    ("Mercurial", "nothing (every build has it)"),
 ];
 
 /// Why [`ServerRegistry::resolve`] could not find a protocol for the given input.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProtocolLookupError {
-    /// A real NetGet protocol by this name exists, but this build was compiled
-    /// without the feature that enables it.
+    /// A real NetGet protocol by this name exists, but this build does not include it
+    /// (`requires` says what does).
     NotCompiled {
         name: &'static str,
-        feature: &'static str,
+        requires: &'static str,
     },
     /// No protocol by this name/keyword is known to NetGet at all, in any build.
     Unknown {
@@ -1856,9 +1803,9 @@ pub enum ProtocolLookupError {
 impl std::fmt::Display for ProtocolLookupError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ProtocolLookupError::NotCompiled { name, feature } => write!(
+            ProtocolLookupError::NotCompiled { name, requires } => write!(
                 f,
-                "Protocol '{name}' exists but is not compiled into this build (rebuild with --features {feature})"
+                "Protocol '{name}' exists but is not compiled into this build: it needs {requires}"
             ),
             ProtocolLookupError::Unknown {
                 input,

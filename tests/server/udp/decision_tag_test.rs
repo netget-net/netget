@@ -14,8 +14,6 @@
 //! application semantics, so any bytes invented here could be parsed as a real reply by
 //! whatever protocol the peer is actually speaking. See `src/server/udp/CLAUDE.md`.
 
-#![cfg(feature = "udp")]
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 use tokio::net::UdpSocket;

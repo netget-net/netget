@@ -1,16 +1,16 @@
 //! Tor client e2e tests
 
-#[cfg(all(test, feature = "tor"))]
+#[cfg(unix)]
 pub mod e2e_test;
 
-#[cfg(all(test, feature = "tor"))]
+#[cfg(unix)]
 pub mod test;
 
-#[cfg(all(test, feature = "tor"))]
+#[cfg(unix)]
 mod command_channel_test;
 
-#[cfg(all(test, feature = "tor"))]
+#[cfg(unix)]
 mod apply_actions_test;
 
-#[cfg(all(test, feature = "tor"))]
+#[cfg(unix)]
 mod action_test;

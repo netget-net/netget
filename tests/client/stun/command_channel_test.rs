@@ -16,7 +16,7 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features stun --test client -- stun::command_channel --test-threads=100
 
-#![cfg(feature = "stun")]
+#![cfg(unix)]
 
 use std::net::IpAddr;
 use std::time::Duration;

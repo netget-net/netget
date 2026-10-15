@@ -19,8 +19,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features hls --test server -- hls::inbound_limit --test-threads=100
 
-#![cfg(feature = "hls")]
-
 use std::time::Duration;
 
 use netget::server::hls::MAX_REQUEST_HEAD_BYTES;

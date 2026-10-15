@@ -6,8 +6,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features ftp --test client -- ftp::command_channel --test-threads=100
 
-#![cfg(feature = "ftp")]
-
 use std::time::Duration;
 
 use netget::cli::management::{ClientForm, ServerForm};

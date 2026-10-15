@@ -5,8 +5,6 @@
 //! would have produced this answer did not". The assertion reads it back through
 //! `tokio-postgres`, an independent implementation of the wire protocol.
 
-#![cfg(feature = "postgresql")]
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 use tokio_postgres::error::SqlState;

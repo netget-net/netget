@@ -16,8 +16,6 @@
 //!
 //! `dns` and `dot` and `mdns` each had a failure test and DoH did not; this closes that gap.
 
-#![cfg(feature = "doh")]
-
 use crate::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use hickory_proto::op::{Message as DnsMessage, Query, ResponseCode};
 use hickory_proto::rr::{Name, RecordType};

@@ -9,8 +9,6 @@
 //! Responses must use the same query_id as the request, or clients will time out.
 //! Tests use `respond_with_actions_from_event()` to dynamically extract the query_id.
 
-#![cfg(all(test, feature = "dns"))]
-
 use crate::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use hickory_client::client::{AsyncClient, ClientHandle};
 use hickory_client::rr::{DNSClass, Name, RecordType};

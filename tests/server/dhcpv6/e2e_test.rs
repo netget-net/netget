@@ -11,8 +11,6 @@
 //! DHCPv6 on a real interface). So the peer here is an independent reading of the spec, not an
 //! independent implementation — which is why the protocol is rated Experimental.
 
-#![cfg(feature = "dhcpv6")]
-
 use super::super::super::helpers::{self, E2EResult};
 use std::net::Ipv6Addr;
 use std::time::Duration;

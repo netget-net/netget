@@ -16,8 +16,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features gemini --test server -- gemini::connection_bounds --test-threads=100
 
-#![cfg(feature = "gemini")]
-
 use super::common::{self, raw_request, split_response, tls_connect};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

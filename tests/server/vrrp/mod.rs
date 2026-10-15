@@ -10,8 +10,8 @@
 //!   test transport, the silence-on-LLM-failure guarantee, startup-parameter handling, and
 //!   the raw transport's refusal to report success without a raw socket.
 
-#[cfg(all(test, feature = "vrrp"))]
+#[cfg(unix)]
 mod codec_test;
 
-#[cfg(all(test, feature = "vrrp"))]
+#[cfg(unix)]
 mod e2e_test;

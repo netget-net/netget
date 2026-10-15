@@ -13,7 +13,6 @@
 //! after one answer (a finger client reads until EOF, so this is the property a real client
 //! would depend on most), and that a forwarding query is refused before the model is even
 //! consulted.
-#[cfg(all(test, feature = "finger"))]
 mod finger_e2e_test {
     use crate::helpers::{start_netget_server, E2EResult, NetGetConfig};
     use std::time::Duration;

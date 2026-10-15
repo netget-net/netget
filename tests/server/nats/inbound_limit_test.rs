@@ -20,8 +20,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features nats --test server -- nats::inbound_limit --test-threads=100
 
-#![cfg(feature = "nats")]
-
 use std::time::Duration;
 
 use netget::server::nats::actions::{DEFAULT_MAX_PAYLOAD, MAX_PAYLOAD_CEILING};

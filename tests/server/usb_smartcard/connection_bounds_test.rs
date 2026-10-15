@@ -13,7 +13,7 @@
 //!   ./cargo-isolated.sh test --no-default-features --features usb-smartcard --test server -- \
 //!       usb_smartcard::connection_bounds --test-threads=100
 
-#![cfg(feature = "usb-smartcard")]
+#![cfg(all(unix, feature = "libusb"))]
 
 use crate::helpers::usbip_bounds;
 

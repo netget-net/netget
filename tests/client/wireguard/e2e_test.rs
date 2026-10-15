@@ -10,7 +10,7 @@
 //! **LLM Call Budget**: < 10 calls total
 //! **Expected Runtime**: ~10-15 seconds
 
-#[cfg(all(test, feature = "wireguard"))]
+#[cfg(unix)]
 mod tests {
     use crate::helpers::*;
     use ::netget::llm::actions::Protocol;

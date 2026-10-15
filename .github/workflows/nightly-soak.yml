@@ -23,9 +23,9 @@ on:
   workflow_dispatch:
     inputs:
       features:
-        description: "Protocol features to soak (must match the tests compiled in)"
+        description: "Cargo features to build the soak with (protocols are always compiled in)"
         required: false
-        default: "tcp,http,dns,redis"
+        default: "mcp-stdio,sqlite"
 
 concurrency:
   group: nightly-soak
@@ -36,7 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      SOAK_FEATURES: ${{ github.event.inputs.features || 'tcp,http,dns,redis' }}
+      SOAK_FEATURES: ${{ github.event.inputs.features || 'mcp-stdio,sqlite' }}
 
     steps:
       - uses: actions/checkout@v4

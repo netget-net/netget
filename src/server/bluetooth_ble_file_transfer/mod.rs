@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 
 pub struct BluetoothBleFileTransfer;
 impl BluetoothBleFileTransfer {
-    #[cfg(feature = "bluetooth-ble-file-transfer")]
+    #[cfg(all(unix, feature = "bluetooth"))]
     pub async fn spawn_with_llm_actions(
         device_name: String,
         llm: crate::llm::ollama_client::OllamaClient,
@@ -38,7 +38,7 @@ impl BluetoothBleFileTransfer {
         .await
     }
 }
-#[cfg(not(feature = "bluetooth-ble-file-transfer"))]
+#[cfg(any(all(unix, not(feature = "bluetooth")), not(unix)))]
 impl BluetoothBleFileTransfer {
     pub async fn spawn_with_llm_actions(
         _: String,

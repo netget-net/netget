@@ -18,7 +18,7 @@
 //! launch the stdio protocol; see `src/server/stdio/CLAUDE.md`.
 //!
 //! Platform: Unix/Linux/macOS only.
-#![cfg(all(feature = "stdio", unix))]
+#![cfg(unix)]
 
 use super::super::super::helpers::child_guard;
 use super::super::super::helpers::mock_builder::MockLlmBuilder;

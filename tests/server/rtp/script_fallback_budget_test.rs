@@ -31,8 +31,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features rtp \
 //!       --test server -- server::rtp::script_fallback_budget_test --test-threads=100
 
-#![cfg(feature = "rtp")]
-
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 

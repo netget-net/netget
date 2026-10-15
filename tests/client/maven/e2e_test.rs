@@ -3,7 +3,6 @@
 //! These tests verify Maven client functionality by spawning the actual NetGet binary
 //! and testing client behavior against real Maven repositories.
 
-#[cfg(all(test, feature = "maven"))]
 mod maven_client_tests {
     use crate::helpers::*;
     use std::time::Duration;
