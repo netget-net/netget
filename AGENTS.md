@@ -906,6 +906,14 @@ replaced.** `tests/well_known_port_declaration_test.rs` requires every server to
 sit in its `NO_WELL_KNOWN_PORT` list with the reason (link layer, devices, pipes, the generic
 `tcp`/`udp`, and application protocols carried on plain HTTP), and requires every
 `PrivilegedPort(n)` to equal the declared port and the transport to match `stack_name()`.
+
+**The host is the caller's too, and so is exposing a server.** With no host a server binds
+`127.0.0.1`; an explicit host — `0.0.0.0` and `::` included — is bound as given, on every
+binding path. That is a deliberate decision of the maintainer's (October 2026), not an
+oversight to tighten: the legacy path that ~240 servers still take used to build its address
+from `127.0.0.1` "for security" and silently drop the host, so a request to expose a server on
+the LAN quietly bound loopback. A host that is not an address (or `localhost`) is refused, never
+replaced. `tests/legacy_host_binding_test.rs` holds both halves.
 - **A test can start an entirely different protocol and still pass.** `ospf`'s three e2e
   tests pass `"base_stack": "UDP"`, which `open_server` renames to `protocol` — so what
   starts is the **generic UDP server**, not `src/server/ospf/`. The mocked event is

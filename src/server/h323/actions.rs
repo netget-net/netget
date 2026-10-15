@@ -1157,7 +1157,6 @@ impl Protocol for H323EndpointProtocol {
             "q.931",
             "q931",
             "h.245",
-            "voip",
             "video conferencing",
             "netmeeting",
         ]

@@ -466,7 +466,6 @@ impl Protocol for H323ClientProtocol {
             "h.225",
             "q.931",
             "gatekeeper",
-            "voip",
             "h323 client",
         ]
     }
