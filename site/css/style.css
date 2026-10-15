@@ -13,7 +13,7 @@
     --glow: rgba(35, 100, 162, 0.04);
     --shadow: 0 16px 45px rgba(25, 43, 64, 0.07);
     --term-bg: #ffffff;
-    --logo-tile: #dfe8f1; --logo-top: #087e80; --logo-layer: #2364a2;
+    --logo-top: #087e80; --logo-layer: #2364a2;
     --sans: 'Inter', system-ui, sans-serif;
     --mono: 'JetBrains Mono', ui-monospace, monospace;
     color-scheme: light;
@@ -24,7 +24,7 @@
         --text: #e3eaf0; --muted: #a0b0bf; --green: #63c5bf; --cyan: #7db9e7;
         --yellow: #d9b972; --red: #ef8e8e; --term-bg: #111b25;
         --glow: rgba(99, 197, 191, 0.025); --shadow: 0 16px 45px rgba(0, 0, 0, 0.15);
-        --logo-tile: #192b40; --logo-top: #63c5bf; --logo-layer: #7db9e7;
+        --logo-top: #63c5bf; --logo-layer: #7db9e7;
         color-scheme: dark;
     }
 }
@@ -33,7 +33,7 @@
     --text: #e3eaf0; --muted: #a0b0bf; --green: #63c5bf; --cyan: #7db9e7;
     --yellow: #d9b972; --red: #ef8e8e; --term-bg: #111b25;
     --glow: rgba(99, 197, 191, 0.025); --shadow: 0 16px 45px rgba(0, 0, 0, 0.15);
-    --logo-tile: #192b40; --logo-top: #63c5bf; --logo-layer: #7db9e7;
+    --logo-top: #63c5bf; --logo-layer: #7db9e7;
     color-scheme: dark;
 }
 *, *::before, *::after { box-sizing: border-box; }
@@ -51,8 +51,8 @@ code, pre { font-family: var(--mono); }
 .nav { display: flex; align-items: center; justify-content: space-between; min-height: 80px; border-bottom: 1px solid var(--border); }
 .logo { display: inline-flex; align-items: center; gap: 0.55rem; font-family: var(--mono); font-weight: 700; font-size: 1.2rem; color: var(--text); text-decoration: none; letter-spacing: -0.05em; }
 .logo-word span { color: var(--green); }
-.logo-mark { width: 28px; height: 28px; flex: none; }
-.lm-tile { fill: var(--logo-tile); } .lm-top { fill: var(--logo-top); } .lm-layer { fill: var(--logo-layer); }
+.logo-mark { width: 24px; height: 24px; flex: none; }
+.lm-top { fill: var(--logo-top); } .lm-layer { fill: var(--logo-layer); }
 .nav-right { display: flex; align-items: center; gap: 1.25rem; }
 .nav-link { font-size: 0.8rem; color: var(--muted); text-decoration: none; }
 .nav-link:hover, .footer a:hover { color: var(--green); }
