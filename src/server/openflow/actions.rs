@@ -387,7 +387,7 @@ pub static PACKET_IN_EVENT: LazyLock<EventType> =
             "Names this packet for openflow_packet_out / openflow_flow_mod",
             true,
         ),
-        p("datapath_id", "string", "The switch", true),
+        p("datapath_id", "string", "The switch's datapath id, 16 hex digits", true),
         p("in_port", "number", "The port it arrived on (or a reserved name)", false),
         p("reason", "string", "no_match, action or invalid_ttl", true),
         p("table_id", "number", "The table that sent it up", true),
@@ -432,17 +432,17 @@ pub static FLOW_REMOVED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         json!({"type": "openflow_drop_packet", "reason": "nothing to do"}),
     )
     .with_parameters(vec![
-        p("datapath_id", "string", "The switch", true),
+        p("datapath_id", "string", "The switch's datapath id, 16 hex digits", true),
         p(
             "reason",
             "string",
             "idle_timeout, hard_timeout, delete or group_delete",
             true,
         ),
-        p("table_id", "number", "Its table", true),
-        p("priority", "number", "Its priority", true),
-        p("cookie", "string", "Its cookie (hex)", true),
-        p("match", "object", "Its match", true),
+        p("table_id", "number", "The flow table the flow was in", true),
+        p("priority", "number", "The removed flow's priority", true),
+        p("cookie", "string", "The removed flow's cookie, in hex", true),
+        p("match", "object", "The removed flow's match, by field name", true),
         p("packet_count", "number", "Packets it matched", true),
         p("byte_count", "number", "Bytes it matched", true),
         p("duration_sec", "number", "How long it was installed", true),
@@ -462,7 +462,7 @@ pub static PORT_STATUS_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         json!({"type": "openflow_request_stats", "kind": "port"}),
     )
     .with_parameters(vec![
-        p("datapath_id", "string", "The switch", true),
+        p("datapath_id", "string", "The switch's datapath id, 16 hex digits", true),
         p("reason", "string", "add, delete or modify", true),
         p(
             "port",
@@ -486,7 +486,7 @@ pub static STATS_REPLY_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         json!({"type": "openflow_drop_packet", "reason": "statistics noted"}),
     )
     .with_parameters(vec![
-        p("datapath_id", "string", "The switch", true),
+        p("datapath_id", "string", "The switch's datapath id, 16 hex digits", true),
         p(
             "kind",
             "string",
@@ -524,9 +524,9 @@ pub static ERROR_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         json!({"type": "openflow_drop_packet", "reason": "giving up on that flow"}),
     )
     .with_parameters(vec![
-        p("datapath_id", "string", "The switch", true),
-        p("error_type", "string", "e.g. BAD_MATCH", true),
-        p("error_code", "string", "e.g. BAD_PREREQ", true),
+        p("datapath_id", "string", "The switch's datapath id, 16 hex digits", true),
+        p("error_type", "string", "The OpenFlow error type, e.g. BAD_MATCH", true),
+        p("error_code", "string", "The error code within that type, e.g. BAD_PREREQ", true),
         p(
             "request",
             "object",

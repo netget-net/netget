@@ -116,8 +116,8 @@ fn port_status_action() -> ActionDefinition {
         vec![
             p("reason", "string", "add, delete or modify", true),
             p("port_no", "number", "The port number", true),
-            p("name", "string", "Its name (add)", false),
-            p("hw_addr", "string", "Its MAC address (add)", false),
+            p("name", "string", "The port's name, for an added port (under 16 bytes)", false),
+            p("hw_addr", "string", "The port's MAC address, for an added port", false),
             p("link_down", "boolean", "True when the link is down", false),
             p(
                 "admin_down",
@@ -137,7 +137,7 @@ fn flow_removed_action() -> ActionDefinition {
          out or was deleted. The flow is the one with this priority and exactly this match in \
          that table",
         vec![
-            p("priority", "number", "The flow's priority", true),
+            p("priority", "number", "The flow's priority, 0-65535", true),
             p(
                 "match",
                 "object",
@@ -208,8 +208,8 @@ pub static FLOW_MOD_EVENT: LazyLock<EventType> =
                 "add, modify, modify_strict, delete or delete_strict",
                 true,
             ),
-            p("table_id", "number", "The table", true),
-            p("priority", "number", "The flow's priority", true),
+            p("table_id", "number", "The flow table the FLOW_MOD addressed", true),
+            p("priority", "number", "The flow's priority, 0-65535", true),
             p("match", "object", "The flow's match, by field name", true),
             p("instructions", "array", "apply_actions, goto_table, … with their actions", true),
             p("idle_timeout", "number", "Seconds idle before expiry (0 = never)", true),
@@ -254,8 +254,8 @@ pub static ERROR_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         "openflow_error_received",
         "The controller sent an OpenFlow ERROR, usually about something this switch sent.",
         vec![
-            p("error_type", "string", "e.g. BAD_REQUEST", true),
-            p("error_code", "string", "e.g. BAD_TYPE", true),
+            p("error_type", "string", "The OpenFlow error type, e.g. BAD_REQUEST", true),
+            p("error_code", "string", "The error code within that type, e.g. BAD_TYPE", true),
             p(
                 "request",
                 "object",
@@ -272,7 +272,7 @@ pub static DISCONNECTED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         "The connection to the controller ended.",
         json!({"type": "disconnect"}),
     )
-    .with_parameters(vec![p("reason", "string", "Why", true)])
+    .with_parameters(vec![p("reason", "string", "Why the connection ended", true)])
     .with_no_actions()
     .with_log_template(LogTemplate::new().with_info("openflow: disconnected ({reason})"))
 });

@@ -269,21 +269,32 @@ async fn open_vswitch_installs_the_models_flows_and_sends_its_packets() -> E2ERe
     let flooded = ovs.wait_transmitted("p1", 1).await?;
     assert_eq!(flooded[0][1], "02:00:00:00:00:77");
 
-    // Statistics, through the operator's channel: the model's flow has counted a packet.
+    // Statistics, through the operator's channel: the model's flow has counted the packet OVS
+    // forwarded through it. OVS pushes datapath counters to its flow table periodically, so the
+    // request is repeated until the count arrives.
     let conn = c.connections().await[0];
-    let out = c
-        .state
-        .send_to_peer(c.id, conn, json!({"type": "openflow_request_stats", "kind": "flow"}), Duration::from_secs(10))
-        .await?;
-    println!("stats request: {out:?}");
-    let stats = c.wait_for_events("openflow_stats_reply", 1).await;
-    let entries = stats[0]["entries"].as_array().unwrap();
-    let learned = entries
-        .iter()
-        .find(|e| e["priority"] == 10)
-        .unwrap_or_else(|| panic!("{entries:?}"));
-    assert!(learned["packet_count"].as_u64().unwrap() >= 1, "{learned}");
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let mut asked = 0;
+    let learned = loop {
+        c.state
+            .send_to_peer(c.id, conn, json!({"type": "openflow_request_stats", "kind": "flow"}), Duration::from_secs(10))
+            .await?;
+        asked += 1;
+        let stats = c.wait_for_events("openflow_stats_reply", asked).await;
+        let entries = stats[asked - 1]["entries"].as_array().unwrap().clone();
+        let learned = entries
+            .iter()
+            .find(|e| e["priority"] == 10)
+            .cloned()
+            .unwrap_or_else(|| panic!("{entries:?}"));
+        if learned["packet_count"].as_u64().unwrap_or(0) >= 1 {
+            break learned;
+        }
+        assert!(std::time::Instant::now() < deadline, "the flow never counted a packet: {learned}");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    };
     assert_eq!(learned["match"]["eth_dst"], HOST_B);
+    assert_eq!(learned["instructions"][0]["actions"][0]["port"], 2);
 
     // A FLOW_MOD OVS refuses comes back to the model as an error naming it.
     c.state
@@ -298,6 +309,9 @@ async fn open_vswitch_installs_the_models_flows_and_sends_its_packets() -> E2ERe
     let errors = c.wait_for_events("openflow_error", 1).await;
     assert_eq!(errors.len(), 1, "{}", c.log_text());
     assert_eq!(errors[0]["request"]["type"], "FLOW_MOD", "{errors:?}");
+    assert_eq!(errors[0]["error_type"], "BAD_INSTRUCTION", "{errors:?}");
+    assert_eq!(errors[0]["error_code"], "BAD_TABLE_ID", "{errors:?}");
+    assert!(errors[0]["request"]["what"].as_str().unwrap().contains("table 3"), "{errors:?}");
     println!("OVS refused the backwards goto_table with {}/{}", errors[0]["error_type"], errors[0]["error_code"]);
 
     // tshark's openflow_v4 dissector over everything that crossed, both ways.

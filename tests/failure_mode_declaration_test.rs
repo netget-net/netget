@@ -103,6 +103,9 @@ const DOCUMENTED_SILENT: &[&str] = &[
     "llmnr",
     "mdns",
     "ndp",
+    // Every controller message is an instruction (PACKET_OUT forwards, FLOW_MOD installs); an
+    // unanswered PACKET_IN is left unforwarded, never flooded.
+    "openflow",
     "openvpn",
     "ospf",
     "rawip",

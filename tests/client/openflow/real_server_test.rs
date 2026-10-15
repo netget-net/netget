@@ -65,16 +65,14 @@ class LearningSwitch(app_manager.OSKenApp):
                       [parser.OFPActionOutput(ofp.OFPP_CONTROLLER, ofp.OFPCML_NO_BUFFER)])
         print("OSKEN table-miss installed on %016x n_tables=%d" % (dp.id, ev.msg.n_tables), flush=True)
 
-    @set_ev_cls(ofp_event.EventOFPPortDescStatsReply, MAIN_DISPATCHER)
-    def ports(self, ev):
-        print("OSKEN ports %s" % sorted(p.name.decode() for p in ev.msg.body), flush=True)
-
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def packet_in(self, ev):
         msg = ev.msg
         dp = msg.datapath
         ofp, parser = dp.ofproto, dp.ofproto_parser
         in_port = msg.match['in_port']
+        # dp.ports is what os-ken's own handshake read from the PORT_DESC reply.
+        print("OSKEN ports %s" % sorted(p.name.decode() for p in dp.ports.values()), flush=True)
         eth = packet.Packet(msg.data).get_protocols(ethernet.ethernet)[0]
         ports = self.mac_to_port.setdefault(dp.id, {})
         ports[eth.src] = in_port
