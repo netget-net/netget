@@ -428,9 +428,14 @@ async fn ras_bookkeeping_is_answered_without_the_model() -> E2EResult<()> {
     let gk = support::start_server(
         "H323-Gatekeeper",
         0,
-        gatekeeper_policy(
-            "[{'type':'h323_confirm_registration','time_to_live':60}]",
-            "[]",
+        support::script(
+            r#"import json,sys
+i=json.load(sys.stdin); t=i['event_type_id']; e=i['event']
+a=[]
+if t=='h323_registration_request': a=[{'type':'h323_confirm_registration','time_to_live':60}]
+elif t=='h323_location_request' and e['registered_destinations']: a=[{'type':'h323_confirm_location'}]
+elif t=='h323_location_request': a=[{'type':'h323_reject_location','reason':'notRegistered'}]
+print(json.dumps({'actions':a}))"#,
         ),
         json!({}),
         DOWN,
@@ -527,6 +532,35 @@ async fn ras_bookkeeping_is_answered_without_the_model() -> E2EResult<()> {
     assert_eq!(arj["requestSeqNum"], 103);
     assert_eq!(arj["rejectReason"], json!({"callerNotRegistered": null}));
     assert!(gk.events("h323_admission_request").await.is_empty());
+    // Where is h323-ID:raw? The model locates the registered alias, and refuses one nobody holds.
+    let lrq = |seq: u64, alias: &str| {
+        json!({
+            "requestSeqNum": seq,
+            "destinationInfo": [h225::alias(alias).unwrap()],
+            "replyAddress": h225::transport(me),
+            "canMapAlias": false,
+            "canMapSrcAlias": false,
+        })
+    };
+    let (kind, lcf) = ras_once(&sock, gk.addr(), "locationRequest", lrq(110, "h323-ID:raw"))
+        .await
+        .expect("LCF");
+    assert_eq!(kind, "locationConfirm", "{lcf}");
+    assert_eq!(lcf["requestSeqNum"], 110);
+    assert_eq!(
+        h225::transport_text(&lcf["callSignalAddress"]),
+        "127.0.0.1:1720"
+    );
+    let (kind, lrj) = ras_once(
+        &sock,
+        gk.addr(),
+        "locationRequest",
+        lrq(111, "h323-ID:nobody"),
+    )
+    .await
+    .expect("LRJ");
+    assert_eq!(kind, "locationReject");
+    assert_eq!(lrj["rejectReason"], json!({"notRegistered": null}));
     // Disengage and unregister.
     let drq = json!({
         "requestSeqNum": 104,
