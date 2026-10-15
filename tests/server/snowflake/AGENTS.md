@@ -1,6 +1,28 @@
 # Snowflake Server E2E Tests
 
-`e2e_test.rs`, declared in `tests/server/mod.rs` (`pub mod snowflake;`).
+Declared in `tests/server/mod.rs` (`pub mod snowflake;`).
+
+## Against the official Python driver
+
+`real_client_test.rs` runs **snowflake-connector-python 4.8.0** (`connector_peer.py`, from the
+venv `tests/client/snowflake/install_peers.sh` builds; `NETGET_SNOWFLAKE_PEERS` must point at
+it, and the test **fails** rather than skips without it) against one NetGet server, three times:
+
+| run | the model | the driver shows |
+|---|---|---|
+| `analyst`, `SELECT * FROM notes ORDER BY id` | grants the login (`has_password` true), answers a six-column rowset | `[1, "123.45", "hello", true, "2026-10-14", "2026-10-14 12:34:56.123456"]` and an all-NULL row — typed by the driver's own JSON converters (a `Decimal` for FIXED scale 2, a `date` from day count 20740, a `datetime` from `seconds.fraction`); `sfqid` is the model's query id; `description` says FIXED scale 2 |
+| `analyst`, `SELECT * FROM nope` | `snowflake_error` 002003 with `sql_state` 42S02 | `ProgrammingError`, errno 2003, sqlstate 42S02 |
+| `intruder` | `snowflake_error` 390100 at login | a 390100 error, no rows |
+
+Both granted sessions end with the driver's `POST /session?delete=true`, which must reach the
+model as `op=logout decision=model_answer`. LLM calls: 8. Run with
+`--test server -- snowflake::real_client_test` after exporting `NETGET_SNOWFLAKE_PEERS`.
+
+Each of the three server fixes it led to (gzip bodies, the logout route, `data` on a query
+error) was checked by reverting it: the test fails at the login, at the logout assertion and at
+the error run respectively.
+
+## Against reqwest
 
 ## Strategy
 

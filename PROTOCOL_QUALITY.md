@@ -631,7 +631,8 @@ declare, whether or not anyone has looked at it.
     `nats` (CONNECT), `stomp` (CONNECT), `tls` (ClientHello), `mysql` (HandshakeResponse41),
     `zookeeper` (ConnectRequest), `ssh` (ident + userauth), `vnc` (the RFB version reply),
     `nfs` (GETPORT + MNT), `grpc` (tonic's eager `connect()`), `mcp` (`initialize`),
-    `openidconnect` (discovery), `dc` (`$Key`/`$ValidateNick`), `db2` (EXCSAT through ACCRDB).
+    `openidconnect` (discovery), `dc` (`$Key`/`$ValidateNick`), `db2` (EXCSAT through ACCRDB),
+    `snowflake` (login-request).
   - **connected and silent** — a socket is open and the client writes nothing until a model
     action or a human's `[ send message ]`. **This is the defect**: 30 or 60 seconds is shorter
     than the 300 a `manual` rule gives that same person (`src/state/intercepts.rs`), so the
@@ -640,7 +641,7 @@ declare, whether or not anyone has looked at it.
     at the application layer.
 
   A fourth, simpler exemption: **no NetGet client of this protocol at all** — `m3ua`,
-  `memcached`, `modbus`, `oci_registry`, `rdp`, `reverse_shell`, `snowflake`, `spark`, `yarn`,
+  `memcached`, `modbus`, `oci_registry`, `rdp`, `reverse_shell`, `spark`, `yarn`,
   `svn`, `mercurial`, `saml_sp` (the SAML client plays the SP role and targets an IdP). Note
   that `svn`, `mercurial` and `oracle` have a `src/client/<p>/` directory holding only a
   `CLAUDE.md`, so a directory listing over-reports.

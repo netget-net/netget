@@ -1,0 +1,23 @@
+{
+ "data": {
+  "queryId": "011792040612-c0ab2eb1338cd2c1",
+  "queryResultFormat": "json",
+  "returned": 1,
+  "rowset": [
+   [
+    "2026-10-14 00:00:00 +0000 UTC"
+   ]
+  ],
+  "rowtype": [
+   {
+    "name": "dv",
+    "nullable": true,
+    "type": "DATE"
+   }
+  ],
+  "sqlState": "00000",
+  "statementTypeId": 1,
+  "total": 1
+ },
+ "success": true
+}

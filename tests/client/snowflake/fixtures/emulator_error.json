@@ -1,0 +1,9 @@
+{
+ "code": "001007",
+ "data": {
+  "originalError": "query execution error: Binder Error: Referenced column \"nosuch\" not found in FROM clause!\nCandidate bindings: \"ok\", \"amount\"\n\nLINE 1: select nosuch from notes\n               ^"
+ },
+ "message": "query execution failed: query execution error: Binder Error: Referenced column \"nosuch\" not found in FROM clause!\nCandidate bindings: \"ok\", \"amount\"\n\nLINE 1: select nosuch from notes\n               ^",
+ "sqlState": "HY000",
+ "success": false
+}

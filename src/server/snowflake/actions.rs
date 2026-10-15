@@ -96,13 +96,14 @@ impl Protocol for SnowflakeProtocol {
             .state(DevelopmentState::Experimental)
             .implementation("Hand-written Snowflake REST/JSON endpoints over hyper (login, query, session)")
             .llm_control("Session tokens at login, rowset/rowtype for queries, error envelopes")
-            .e2e_testing("reqwest driving the exact login/query/logout JSON endpoints (no real Snowflake driver)")
+            .e2e_testing("tests/server/snowflake/real_client_test.rs drives the server with snowflake-connector-python 4.8.0, Snowflake's official Python driver (gzipped request bodies): a login the model grants and one it refuses (the driver raises 390100), a six-column rowset typed by the driver's own JSON converters (FIXED with a scale, BOOLEAN, DATE, TIMESTAMP_NTZ, NULL), a query error raised with the model's errno and SQLSTATE, and the driver's POST /session?delete=true logout. e2e_test.rs and llm_failure_test.rs drive the envelopes with reqwest")
             .notes(
                 "HTTP/JSON only; TLS termination is out of scope (real drivers use HTTPS — front with a \
-                 TLS proxy if needed). Not real-client validated: tested against the documented request/\
-                 response envelope shapes with reqwest, NOT a genuine Snowflake connector. No session \
-                 store, so tokens are not validated against issued ones. Fail-closed: an LLM outage on \
-                 login is a refusal (no token issued), never a success-shaped empty result.",
+                 TLS proxy if needed). One real driver so far (snowflake-connector-python over plain \
+                 HTTP); JDBC, ODBC and gosnowflake are untested, and results are JSON only (no Arrow, \
+                 no chunks). No session store, so tokens are not validated against issued ones. \
+                 Fail-closed: an LLM outage on login is a refusal (no token issued), never a \
+                 success-shaped empty result.",
             )
             .max_inbound_bytes(crate::server::snowflake::MAX_REQUEST_BYTES)
             .request_only("The Snowflake API is HTTP request/response; a server cannot send a peer anything unprompted")
@@ -304,13 +305,21 @@ impl SnowflakeProtocol {
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown error")
             .to_string();
+        let sql_state = action
+            .get("sql_state")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty());
         debug!("Snowflake error response: {} - {}", code, message);
         let _ = self
             .status_tx
             .send(format!("[DEBUG] Snowflake ✗ error {}: {}", code, message));
+        let mut data = json!({ "code": code, "message": message });
+        if let Some(state) = sql_state {
+            data["sql_state"] = json!(state);
+        }
         Ok(ActionResult::Custom {
             name: "snowflake_error".to_string(),
-            data: json!({ "code": code, "message": message }),
+            data,
         })
     }
 }
@@ -476,6 +485,15 @@ pub fn snowflake_error_action() -> ActionDefinition {
                 type_hint: "string".to_string(),
                 description: "Human-readable error message shown to the client".to_string(),
                 required: true,
+            },
+            Parameter {
+                name: "sql_state".to_string(),
+                type_hint: "string".to_string(),
+                description: "Five-character SQLSTATE for a refused query, e.g. \"42S02\" \
+                    (table not found) or \"42000\" (syntax error); drivers raise it with the \
+                    error. Ignored for a refused login."
+                    .to_string(),
+                required: false,
             },
         ],
         example: json!({

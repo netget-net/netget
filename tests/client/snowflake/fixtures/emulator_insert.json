@@ -1,0 +1,11 @@
+{
+ "data": {
+  "queryId": "011792040612-fd57eb004c211888",
+  "queryResultFormat": "json",
+  "returned": 0,
+  "sqlState": "00000",
+  "statementTypeId": 3,
+  "total": 2
+ },
+ "success": true
+}
