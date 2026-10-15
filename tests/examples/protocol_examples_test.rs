@@ -63,6 +63,8 @@ fn unsupported_on_this_platform(protocol_name: &str) -> Option<&'static str> {
         // N2 is SCTP (TS 38.412) and NGAP's examples use it; a host with no SCTP stack (macOS,
         // or Linux without the sctp module) refuses to start it by name. Probed, not inferred.
         "NGAP" if !host_has_sctp() => Some("NGAP's transport is SCTP, which this host lacks"),
+        // M3UA is SIGTRAN, SCTP by RFC 4666, and its examples ask for it the same way.
+        "M3UA" if !host_has_sctp() => Some("M3UA's transport is SCTP, which this host lacks"),
         _ => None,
     }
 }
