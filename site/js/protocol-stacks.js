@@ -171,6 +171,7 @@ export const protocolStacks = [
     ["nfc-client", "application"],
     ["nfs", "ETH>IP>TCP>NFS"],
     ["nfs", "ETH>IP>TCP>RPC>NFS"],
+    ["ngap", "ETH>IP>SCTP>NGAP"],
     ["ninep", "ETH>IP>TCP>9P"],
     ["nntp", "ETH>IP>TCP>NNTP"],
     ["nostr", "ETH>IP>TCP>HTTP>WS>NOSTR"],
