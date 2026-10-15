@@ -426,8 +426,8 @@ impl Protocol for SpiceProtocol {
             )
             .notes(
                 "Experimental: two independent clients drive it (spice-gtk and spice-html5) but \
-                 nobody has reviewed it against the spice-protocol headers line by line, and no \
-                 fuzz target exists. No TLS channel (NEED_SECURED is never sent; tls-port is not \
+                 nobody has reviewed it against the spice-protocol headers line by line, no \
+                 fuzz target exists, and its pair job had not run in CI when it landed. No TLS channel (NEED_SECURED is never sent; tls-port is not \
                  offered), no SASL, no cursor, audio, agent, USB or smartcard channels, no image \
                  compression (every update is width*height*4 bytes), no streams, one display \
                  and one surface per session. The screen is redrawn whole on every change. \
