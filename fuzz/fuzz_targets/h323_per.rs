@@ -19,7 +19,10 @@ use netget::server::h323::{per, q931, schema};
 /// The two recursive types, decoded on their own too: an open type caps an embedded value at
 /// 16 383 octets, which caps how deep a bomb can be when it arrives inside a message.
 fn named(name: &str) -> u16 {
-    schema::NAMES.iter().position(|n| *n == name).expect("in the schema") as u16
+    schema::NAMES
+        .iter()
+        .position(|n| *n == name)
+        .expect("in the schema") as u16
 }
 
 fuzz_target!(|data: &[u8]| {

@@ -1,7 +1,8 @@
 # H.323 client (an endpoint that places calls)
 
-Uses the server's codecs and call leg (`src/server/h323/{per,q931,h225,h245,call}.rs`) as the
-calling side.
+Uses the server's codecs and call leg as the calling side: `src/server/h323/per.rs`,
+`src/server/h323/q931.rs`, `src/server/h323/h225.rs`, `src/server/h323/h245.rs` and
+`src/server/h323/call.rs`.
 
 ## Connect
 
