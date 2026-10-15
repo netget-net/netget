@@ -174,6 +174,19 @@ async fn preauthentication_is_verified_by_the_kdc_not_the_model() {
         codec::KRB_AP_ERR_SKEW
     );
 
+    // The right key and a fresh time, but the last byte of the HMAC flipped: the plaintext
+    // decrypts intact, so only the integrity check can refuse it.
+    let mut pa = wire::pa_enc_timestamp(&key).unwrap();
+    let mut enc: codec::types::EncryptedData = codec::decode(&pa.padata_data.0 .0).unwrap();
+    let last = enc.cipher.0 .0.len() - 1;
+    enc.cipher.0 .0[last] ^= 0x01;
+    pa.padata_data.0 .0 = codec::encode(&enc).unwrap();
+    let (msg, _) = as_req(vec![pa], &request(3600));
+    assert_eq!(
+        error_code(&udp(addr, &msg).await.unwrap()),
+        codec::KDC_ERR_PREAUTH_FAILED
+    );
+
     // An unknown principal cannot pre-authenticate at all.
     let pa = wire::pa_enc_timestamp(&key).unwrap();
     let eve = Principal::parse("eve").unwrap().0;
@@ -369,7 +382,18 @@ async fn the_tgs_exchange_checks_the_tgt_the_authenticator_and_the_body() {
 
 #[tokio::test]
 async fn every_undecided_request_fails_closed_with_an_error_the_model_cannot_send() {
-    let (msg, _) = as_req(vec![], &request(3600));
+    // A principal that needs no pre-authentication: a server that failed open would answer this
+    // very request with a ticket, so nothing but the fail-closed rule stands between it and one.
+    let legacy = Principal::parse(support::LEGACY).unwrap().0;
+    let msg = wire::as_req(
+        &legacy,
+        REALM,
+        &tgs(),
+        &request(3600),
+        wire::nonce(),
+        vec![],
+    )
+    .unwrap();
 
     // The model is unreachable.
     let kdc = support::start(None, support::params()).await;

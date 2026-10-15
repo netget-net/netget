@@ -382,10 +382,10 @@ async fn with_the_model_unreachable_both_clients_get_an_error_and_no_ticket() {
     let cc = dir.path().join("cc-mit");
     let r = run(
         &t.mit_kinit,
-        &["alice"],
+        &[support::LEGACY],
         &conf,
         &cc,
-        &format!("{ALICE_PASSWORD}\n"),
+        &format!("{}\n", support::LEGACY_PASSWORD),
     )
     .await;
     assert!(!r.ok, "MIT kinit got a ticket with no model:\n{}", r.text);
@@ -393,13 +393,13 @@ async fn with_the_model_unreachable_both_clients_get_an_error_and_no_ticket() {
 
     let conf = krb5_conf(dir.path(), kdc.addr(), Via::HeimdalTcp);
     let pw = dir.path().join("pw");
-    std::fs::write(&pw, ALICE_PASSWORD).unwrap();
+    std::fs::write(&pw, support::LEGACY_PASSWORD).unwrap();
     let cc = dir.path().join("cc-heimdal");
     let r = run(
         &t.heimdal_kinit,
         &[
             &format!("--password-file={}", pw.display()),
-            &format!("alice@{REALM}"),
+            &format!("{}@{REALM}", support::LEGACY),
         ],
         &conf,
         &cc,

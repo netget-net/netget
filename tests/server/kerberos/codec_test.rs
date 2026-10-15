@@ -246,3 +246,27 @@ fn mutated_requests_are_answered_or_refused_never_a_panic() {
         "most corruptions must be refused: {refused}"
     );
 }
+
+#[test]
+fn decryption_refuses_a_tampered_checksum_and_the_wrong_key() {
+    let key = Key::from_password(codec::ETYPE_AES128, "pw", "REALMuser").unwrap();
+    let mut sealed = key.encrypt(7, b"the plaintext").unwrap();
+    assert_eq!(key.decrypt(7, &sealed).unwrap(), b"the plaintext");
+    // Another usage is another key.
+    assert_eq!(key.decrypt(8, &sealed), Err(codec::CryptoError::Integrity));
+    let last = sealed.len() - 1;
+    sealed[last] ^= 0x80;
+    assert_eq!(key.decrypt(7, &sealed), Err(codec::CryptoError::Integrity));
+    assert_eq!(
+        key.decrypt(7, &sealed[..20]),
+        Err(codec::CryptoError::Length)
+    );
+    // Keyed checksums: only this key's own type, only the right bytes.
+    let sum = key.checksum(6, b"body").unwrap();
+    assert!(key.verify_checksum(key.checksum_type(), 6, b"body", &sum));
+    assert!(!key.verify_checksum(key.checksum_type(), 6, b"bodY", &sum));
+    assert!(
+        !key.verify_checksum(1, 6, b"body", &sum),
+        "an unkeyed CRC32 type"
+    );
+}

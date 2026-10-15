@@ -16,6 +16,10 @@ pub const REALM: &str = "NETGET.TEST";
 pub const ALICE_PASSWORD: &str = "wonder land 42";
 pub const SERVICE: &str = "host/svc.netget.test";
 pub const SERVICE_PASSWORD: &str = "svc-key-Xq81";
+/// A principal exempt from pre-authentication: the one for which "fail open" would hand out a
+/// ticket on the very first request, so the fail-closed tests use it.
+pub const LEGACY: &str = "legacy";
+pub const LEGACY_PASSWORD: &str = "legacy-pw-55";
 
 /// The model, as a python script: alice and bob are admitted once pre-authenticated (two-hour
 /// forwardable, renewable tickets), mallory is revoked, everyone else is unknown; host/
@@ -55,7 +59,9 @@ pub fn params() -> Value {
             "bob": "bob-pw",
             "mallory": "mallory-pw",
             SERVICE: SERVICE_PASSWORD,
-        }
+            LEGACY: LEGACY_PASSWORD,
+        },
+        "no_preauth_principals": [LEGACY]
     })
 }
 
