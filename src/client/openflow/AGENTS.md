@@ -2,7 +2,8 @@
 
 NetGet connects to an OpenFlow 1.3 controller (default port 6653) and is the switch it
 controls. It shares the controller's codec, JSON vocabulary and packet builder
-(`src/server/openflow/{wire,fields,packet}.rs`).
+(`src/server/openflow/wire.rs`, `src/server/openflow/fields.rs`,
+`src/server/openflow/packet.rs`).
 
 ## What Rust answers
 

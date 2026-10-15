@@ -736,6 +736,8 @@ pub mod oci_registry;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod onvif;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod openflow;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod pfcp;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod pulsar;
@@ -769,8 +771,6 @@ pub mod sunrpc;
 pub mod tr069;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod vxlan;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod openflow;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod webtransport;
 #[cfg(not(target_arch = "wasm32"))]
