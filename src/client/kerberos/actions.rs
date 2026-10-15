@@ -418,17 +418,23 @@ impl Protocol for KerberosClientProtocol {
                  granted or why it refused. It never sees the password or a key.",
             )
             .e2e_testing(
-                "tests/client/kerberos/real_server_test.rs against MIT krb5kdc in a temporary \
-                 realm (kdb5_util, kadmin.local): a TGT and a service ticket that MIT klist reads \
-                 from the ccache NetGet wrote and MIT kvno verifies against the service's keytab, \
-                 krb5kdc's own log showing AS_REQ and TGS_REQ ISSUE, the model's lifetime and \
-                 flags requested, and a wrong password refused (PREAUTH_FAILED). Fails, not \
-                 skips, without krb5kdc. bounds_test.rs covers oversize, deeply nested, forged \
-                 and wrong-nonce replies and the follow-up depth against canned KDCs.",
+                "tests/client/kerberos/real_server_test.rs against two independent KDCs, each \
+                 in a temporary realm built with its own admin tool: MIT krb5kdc (kdb5_util, \
+                 kadmin.local) and Heimdal's kdc (kadmin -l). With a python chain as the model: \
+                 a TGT with the model's lifetime and flags, a service ticket, and a refused \
+                 unknown service. MIT klist and Heimdal klist read the ccache NetGet wrote; MIT \
+                 kvno -k decrypts the service ticket with the keytab each KDC's database \
+                 exported; MIT kvno and Heimdal kgetcred use NetGet's TGT and session key for a \
+                 ticket NetGet never asked for; krb5kdc's log shows the AS_REQ and TGS_REQ it \
+                 issued. A wrong password is refused by the KDC (pre-authentication) or by \
+                 NetGet (an AS-REP it cannot decrypt). Traffic to MIT is dissected by tshark. \
+                 Fails, not skips, without the KDCs. bounds_test.rs: oversize, deeply nested \
+                 and wrong-nonce replies, a service ticket before a TGT, and the follow-up depth.",
             )
             .notes(
-                "Experimental: one independent KDC so far, and the pair job has not run in CI. \
-                 No FAST, PKINIT, renewal, cross-realm, AP exchange or RFC 8009 enctypes.",
+                "Experimental: two independent KDCs complete real sessions with it, but nobody \
+                 has reviewed it beyond its tests and the pair job has not run in CI. No FAST, \
+                 PKINIT, renewal, cross-realm, AP exchange or RFC 8009 enctypes.",
             )
             .build()
     }
