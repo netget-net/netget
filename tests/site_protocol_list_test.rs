@@ -21,17 +21,27 @@ fn registrations() -> BTreeSet<String> {
     let mut all = BTreeSet::new();
     for role in ["server", "client"] {
         let source = fs::read_to_string(format!("src/protocol/{role}_registry.rs")).unwrap();
-        let needle = format!("self.register(Arc::new(");
+        let needle = "self.register(Arc::new(";
         let mut rest = source.as_str();
-        while let Some(i) = rest.find(&needle) {
+        while let Some(i) = rest.find(needle) {
             let after = rest[i + needle.len()..].trim_start();
             let path = after
                 .strip_prefix(&format!("crate::{role}::"))
                 .unwrap_or_else(|| panic!("unrecognised {role} registration: {}", &after[..60]));
+            // Module segments up to and including the type (the first capitalised segment),
+            // as scripts/site_protocol_stacks.py reads them: `tcp::TcpClientProtocol`, not
+            // `tcp::TcpClientProtocol::new`.
             let end = path
                 .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == ':'))
                 .unwrap();
-            all.insert(format!("{role}::{}", &path[..end]));
+            let mut segments = Vec::new();
+            for segment in path[..end].split("::") {
+                segments.push(segment);
+                if segment.starts_with(|c: char| c.is_ascii_uppercase()) {
+                    break;
+                }
+            }
+            all.insert(format!("{role}::{}", segments.join("::")));
             rest = &rest[i + needle.len()..];
         }
     }
