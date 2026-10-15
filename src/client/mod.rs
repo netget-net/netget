@@ -794,6 +794,8 @@ pub mod hls;
 pub mod inetd;
 #[cfg(feature = "jmap")]
 pub mod jmap;
+#[cfg(feature = "kerberos")]
+pub mod kerberos;
 #[cfg(feature = "knx")]
 pub mod knx;
 #[cfg(feature = "libp2p")]

@@ -750,6 +750,10 @@ impl ClientRegistry {
         self.register(Arc::new(
             crate::client::onvif::actions::OnvifClientProtocol::new(),
         ));
+        #[cfg(feature = "kerberos")]
+        self.register(Arc::new(
+            crate::client::kerberos::actions::KerberosClientProtocol::new(),
+        ));
         #[cfg(feature = "x11")]
         self.register(Arc::new(
             crate::client::x11::actions::X11ClientProtocol::new(),
@@ -1326,6 +1330,7 @@ pub(crate) const ALL_KNOWN_CLIENT_PROTOCOLS: &[(&str, &str)] = &[
     ("HLS", "hls"),
     ("WS-Discovery", "wsdiscovery"),
     ("ONVIF", "onvif"),
+    ("Kerberos", "kerberos"),
     ("X11", "x11"),
     ("HTTP", "http"),
     ("HTTP2", "http2"),

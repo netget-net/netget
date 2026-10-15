@@ -487,6 +487,7 @@ pub fn wire_for(protocol: &str) -> Wire {
         "snmp" => udp("snmp"),
         "syslog" => either("syslog"),
         "radius" => udp("radius"),
+        "kerberos" => either("kerberos"),
         "stun" => udp("stun"),
         "turn" => with_display(udp("stun"), "stun || turnchannel"),
         "coap" => udp("coap"),
