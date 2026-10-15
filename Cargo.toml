@@ -190,6 +190,7 @@ portable-base = [
     # STUN/TURN excluded (use old nix-0.8.1 crate incompatible with modern Rust)
     "webrtc",
     "sip",
+    "h323",
     "rtp",
     "rtsp",
     "hls",
@@ -477,6 +478,7 @@ webrtc = ["dep:webrtc", "dep:tokio-tungstenite", "dep:rustls"]  # WebRTC client 
 # No system library, hence present in dist / dist-windows (and dist-darwin via dist).
 websocket = ["dep:tokio-tungstenite", "dep:flate2", "flate2/zlib-rs"]
 sip = []  # SIP uses only UDP, no extra deps (manual protocol implementation)
+h323 = []  # H.323: H.225.0 RAS gatekeeper (UDP 1719), H.225.0/Q.931 call-signalling endpoint (TCP 1720) and client; hand-written ALIGNED PER from generated schema tables, no extra deps
 rtp = []  # RTP (RFC 3550) media server; G.711 synthesis + packetizer, no system library
 rtsp = ["rtp"]  # RTSP (RFC 2326) control server; reuses the rtp media engine for PLAY
 hls = []  # HLS (RFC 8216) over minimal HTTP/1.1; no system library
@@ -796,6 +798,7 @@ dist-windows = [
     "smb",
     "webrtc",
     "sip",
+    "h323",
     "rtp",
     "rtsp",
     "hls",
@@ -1046,6 +1049,7 @@ all-protocols = [
     "webrtc",
     "websocket",
     "sip",
+    "h323",
     "rtp",
     "rtsp",
     "hls",

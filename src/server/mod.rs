@@ -649,6 +649,10 @@ pub use sip::actions::SipProtocol;
 #[cfg(feature = "sip")]
 pub use sip::SipServer;
 
+// H.323 gatekeeper (H.225.0 RAS) and call-signalling endpoint (H.225.0 / Q.931)
+#[cfg(feature = "h323")]
+pub mod h323;
+
 #[cfg(feature = "rtp")]
 pub mod rtp;
 #[cfg(feature = "rtp")]
