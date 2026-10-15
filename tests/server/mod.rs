@@ -262,6 +262,8 @@ pub mod socket_file;
 pub mod socks5;
 #[cfg(feature = "spark")]
 pub mod spark;
+#[cfg(feature = "spice")]
+pub mod spice;
 #[cfg(feature = "sqs")]
 pub mod sqs;
 #[cfg(feature = "ssdp")]

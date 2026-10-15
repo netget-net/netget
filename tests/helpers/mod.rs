@@ -23,7 +23,7 @@ pub mod netns;
 pub mod ollama_test_builder;
 pub mod pcap_oracle;
 pub mod real_server;
-#[cfg(feature = "kerberos")]
+#[cfg(any(feature = "kerberos", feature = "spice"))]
 pub mod recording_relay;
 pub mod server;
 #[cfg(feature = "sflow")]
