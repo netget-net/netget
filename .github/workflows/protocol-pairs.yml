@@ -112,7 +112,6 @@ jobs:
     name: Graphite, queue, DICT, Gemini and raw QUIC with independent peers
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -195,7 +194,6 @@ jobs:
     name: GELF TCP and UDP with independent emitters and collectors
     runs-on: ubuntu-24.04
     timeout-minutes: 35
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -259,7 +257,6 @@ jobs:
     name: NSQ publisher and subscriber with independent peers
     runs-on: ubuntu-24.04
     timeout-minutes: 35
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -310,7 +307,6 @@ jobs:
     name: HTTP3 with independent aioquic peers and pending-read cancellation
     runs-on: ubuntu-24.04
     timeout-minutes: 35
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -366,7 +362,6 @@ jobs:
     name: Fluent Forward with independent emitter and official Fluentd collector
     runs-on: ubuntu-24.04
     timeout-minutes: 35
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -430,7 +425,6 @@ jobs:
     name: Gearman submitter and selected worker with independent peers
     runs-on: ubuntu-24.04
     timeout-minutes: 40
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -497,7 +491,6 @@ jobs:
     name: SSH and read-only SFTP with independent OpenSSH peers
     runs-on: ubuntu-24.04
     timeout-minutes: 40
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -548,7 +541,6 @@ jobs:
     name: InfluxDB writes and Flux/InfluxQL queries with independent clients, decoder and real service
     runs-on: ubuntu-24.04
     timeout-minutes: 40
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -622,7 +614,6 @@ jobs:
     name: Prometheus scraping with independent daemon and OpenMetrics exporter
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -740,7 +731,6 @@ jobs:
     name: Loki pushes with official service and maintained Alloy emitter
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -803,7 +793,6 @@ jobs:
     name: OTLP HTTP and gRPC with official Collector and independent exporters
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -873,7 +862,6 @@ jobs:
     name: IPFIX templates and flows with independent Python and GoFlow2 peers
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -935,7 +923,6 @@ jobs:
     name: Generic gRPC streams and reflection with independent grpcio and grpcurl peers
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -1003,7 +990,6 @@ jobs:
     name: sFlow compact and expanded samples with Cistern and GoFlow2 peers
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -1065,7 +1051,6 @@ jobs:
     name: Vault client and programmable server with isolated native Vault peers
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -1128,7 +1113,6 @@ jobs:
     name: Published remote write1.0 with official Prometheus sender and receiver
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -1187,7 +1171,6 @@ jobs:
     name: Binary gRPC-Web with independent Connect-ES peers and bounded framing
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -1252,7 +1235,6 @@ jobs:
     name: Nostr publishing and subscriptions with independent nak and rust-nostr peers
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -1317,7 +1299,6 @@ jobs:
     name: Native NetFlow v9 with unmodified softflowd and GoFlow2 peers
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -1378,7 +1359,6 @@ jobs:
     name: Binary ConnectRPC and gRPC-Web with independent Connect-ES peers
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -1449,7 +1429,6 @@ jobs:
     name: Legacy TACACS+ roles with pinned independent Go and Python SDKs
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -1518,7 +1497,6 @@ jobs:
     name: Bolt roles with official Neo4j Community and native cypher-shell
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -1594,7 +1572,6 @@ jobs:
     name: OCI registry pulls with unchanged crane SDK and native registry
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -1663,7 +1640,6 @@ jobs:
     name: Native gNMI RPCs and subscriptions with OpenConfig gNMIc and grpcio
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -1754,7 +1730,6 @@ jobs:
     name: Stateless Diameter NASREQ with independent Go and Python SDKs
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -1838,7 +1813,6 @@ jobs:
     name: NETCONF over SSH with independent ncclient and netconf 2.1.0 peers
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -1914,7 +1888,6 @@ jobs:
     name: RPKI-RTR cache and router with StayRTR and RTRlib
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -1991,7 +1964,6 @@ jobs:
     name: RDAP server and client with OpenRDAP and ICANN rdap tooling
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -2071,7 +2043,6 @@ jobs:
     name: HL7 v2 MLLP endpoint and sender with python-hl7
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -2147,7 +2118,6 @@ jobs:
     name: ICAP server and client with c-icap
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -2223,7 +2193,6 @@ jobs:
     name: OCPP 1.6 and 2.0.1 CSMS and charge point with python ocpp
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -2298,7 +2267,6 @@ jobs:
     name: A2A 1.0 agent and client with a2a-sdk
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -2373,7 +2341,6 @@ jobs:
     name: GraphQL over HTTP server and client with gql and strawberry
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -2448,7 +2415,6 @@ jobs:
     name: FastCGI responder and client with nginx and flup
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -2523,7 +2489,6 @@ jobs:
     name: Redfish service and client with gofish, redfishtool and the DMTF mockup server
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -2602,7 +2567,6 @@ jobs:
     name: SCIM 2.0 service and client with scim2-tester, scim2-cli and scim2-server
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -2677,7 +2641,6 @@ jobs:
     name: Socket.IO server and client with python-socketio and socket.io-client
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -2755,7 +2718,6 @@ jobs:
     name: CalDAV server and client with python caldav, vdirsyncer and Radicale
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -2830,7 +2792,6 @@ jobs:
     name: CardDAV server and client with python caldav, vdirsyncer and Radicale
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -2906,7 +2867,6 @@ jobs:
     name: DICOM SCP and SCU with pynetdicom
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -2982,7 +2942,6 @@ jobs:
     name: ACME CA and client with lego, certbot and Pebble
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -3062,7 +3021,6 @@ jobs:
     name: FIX acceptor and initiator with QuickFIX/Go
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -3142,7 +3100,6 @@ jobs:
     name: WAMP router and client with nexus and autobahn-python
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -3222,7 +3179,6 @@ jobs:
     name: RTMP server and client with FFmpeg and MediaMTX
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -3300,7 +3256,6 @@ jobs:
     name: SRT listener and caller with libsrt
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -3378,7 +3333,6 @@ jobs:
     name: AMQP 1.0 container and client with rhea and go-amqp
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -3461,7 +3415,6 @@ jobs:
     name: Thrift server and client with thriftpy2 and Apache Thrift
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -3538,7 +3491,6 @@ jobs:
     name: BMP collector and exporter with GoBGP and gobmp
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -3616,7 +3568,6 @@ jobs:
     name: MQTT-SN gateway and client with mqtt-sn-tools and the Paho gateway
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -3690,7 +3641,6 @@ jobs:
     name: NBD server and client with libnbd and nbdkit
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -3764,7 +3714,6 @@ jobs:
     name: ManageSieve server and client with sievelib and Dovecot Pigeonhole
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -3838,7 +3787,6 @@ jobs:
     name: Zenoh router and client with zenoh-pico
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -3912,7 +3860,6 @@ jobs:
     name: LwM2M server and device with Eclipse Leshan
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -3990,7 +3937,6 @@ jobs:
     name: RESTCONF server and client with FreeCONF
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -4067,7 +4013,6 @@ jobs:
     name: WebTransport server and client with aioquic and headless Chrome
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -4152,7 +4097,6 @@ jobs:
     name: JMAP server and client with jmapc and Stalwart
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -4225,7 +4169,6 @@ jobs:
     name: EPP server and client with pyepp and epp-lib
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -4303,7 +4246,6 @@ jobs:
     name: LMTP server and client with smtplib, swaks and aiosmtpd
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -4377,7 +4319,6 @@ jobs:
     name: LPD server and client with LPRng and the CUPS lpd backend
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -4447,7 +4388,6 @@ jobs:
     name: Echo, Discard, Daytime, QOTD, Chargen and Time with Perl Net::Ping/Net::Time, rdate, netcat and xinetd
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -4517,7 +4457,6 @@ jobs:
     name: RCON server and client with gorcon/rcon and the Python rcon package
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -4590,7 +4529,6 @@ jobs:
     name: A2S server and client with python-a2s and woozymasta/a2s
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -4663,7 +4601,6 @@ jobs:
     name: Minecraft server and client with mcstatus and node-minecraft-protocol
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -4735,7 +4672,6 @@ jobs:
     name: 9P server and client with 9fans.net/go and knusbaum/go9p
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -4808,7 +4744,6 @@ jobs:
     name: ZeroMQ server and client with pyzmq and go-zeromq/zmq4
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -4884,7 +4819,6 @@ jobs:
     name: SMPP server and client with smpplib, gosmpp and the Melrose Labs SMSC simulator
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -4957,7 +4891,6 @@ jobs:
     name: ClickHouse server and client with the official 24.8 binary and clickhouse-driver
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -5029,7 +4962,6 @@ jobs:
     name: MessagePack-RPC server and client with Neovim and ugorji/go
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -5104,7 +5036,6 @@ jobs:
     name: Zipkin collector and reporter with zipkin-go, OpenTelemetry, zipkin-server and Jaeger
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -5182,7 +5113,6 @@ jobs:
     name: Cap'n Proto RPC server and client with pycapnp and go-capnp
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -5257,7 +5187,6 @@ jobs:
     name: NATS JetStream with nats.go, nats-py and nats-server
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -5335,7 +5264,6 @@ jobs:
     name: KNX/IP server and client with xknx, knxd and knxtool
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -5406,7 +5334,6 @@ jobs:
     name: Consul server and client with the consul CLI, py-consul and consul agent -dev
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -5475,7 +5402,6 @@ jobs:
     name: Milter filter and MTA side with miltertest, pymilter and go-milter
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -5550,7 +5476,6 @@ jobs:
     name: Anthropic Messages API server and client with both official SDKs and llama-server
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -5626,7 +5551,6 @@ jobs:
     name: RadSec server and client with radsecproxy and FreeRADIUS
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -5699,7 +5623,6 @@ jobs:
     name: X11 client against Xvfb, read back with xprop and xwininfo
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -5770,7 +5693,6 @@ jobs:
     name: D-Bus server and client with dbus-send, gdbus, dbus-next and dbus-daemon
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -5841,7 +5763,6 @@ jobs:
     name: WS-Discovery server and client against python WSDiscovery and wsdd
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -5915,7 +5836,6 @@ jobs:
     name: BFD server and client against BIRD
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -5994,7 +5914,6 @@ jobs:
     name: VXLAN, Geneve and GRE server and client against the Linux kernel's vxlan and gretap (over fou) drivers
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -6073,7 +5992,6 @@ jobs:
     name: rsync daemon and client against the stock rsync 3.2.7 client and daemon
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -6145,7 +6063,6 @@ jobs:
     name: PFCP UPF and SMF against wmnsk/go-pfcp, with the tshark oracle
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -6220,7 +6137,6 @@ jobs:
     name: GTP client against wmnsk/go-gtp and osmo-ggsn, with the tshark oracle
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -6299,7 +6215,6 @@ jobs:
     name: Db2 client against Apache Derby, Db2 server against Derby's JDBC and IBM's CLI drivers, with the tshark oracle
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -6378,7 +6293,6 @@ jobs:
     name: Snowflake client against fakesnow and snowflake-emulator, Snowflake server against snowflake-connector-python
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -6453,7 +6367,6 @@ jobs:
     name: Spark client against Apache Spark 4.2.0 (live driver UI and History Server), Spark server against Datadog's Spark check
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -6538,7 +6451,6 @@ jobs:
     name: YARN client against Apache Hadoop 3.5.0 (ResourceManager + NodeManager running distributed-shell applications), YARN server against Datadog's YARN check
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -6623,7 +6535,6 @@ jobs:
     name: Matrix homeserver and client with matrix-nio and Synapse
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -6696,7 +6607,6 @@ jobs:
     name: libp2p host and dialler, with IPFS (Bitswap, DHT), against go-libp2p and Kubo
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -6769,7 +6679,6 @@ jobs:
     name: SunRPC portmapper and client with rpcinfo and rpcbind
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -6840,7 +6749,6 @@ jobs:
     name: RTSP client against mediamtx with an ffmpeg publisher
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -6907,7 +6815,6 @@ jobs:
     name: SSE server and client with eventsource, httpx-sse, sse-starlette and aiohttp-sse
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -7037,7 +6944,6 @@ jobs:
     name: Guacamole server and client with pyguacamole, guacamole-common, guacd and Xvnc
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -7112,7 +7018,6 @@ jobs:
     name: ActivityPub pair (Fedify)
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -7181,7 +7086,6 @@ jobs:
     name: Stratum pool and miner with cpuminer, ckpool and Bitcoin Core
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -7250,7 +7154,6 @@ jobs:
     name: Pulsar broker and client with the Python and Java clients and Pulsar 4.0.6
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -7320,7 +7223,6 @@ jobs:
     name: TR-069 ACS and device with genieacs-sim, GenieACS and MongoDB
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -7389,7 +7291,6 @@ jobs:
     name: Zabbix client against zabbix_agentd and zabbix_proxy 7.0
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -7459,7 +7360,6 @@ jobs:
     name: RTP endpoint against ffmpeg in both directions
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -7524,7 +7424,6 @@ jobs:
     name: HLS client against ffmpeg and GStreamer hlssink2
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -7591,7 +7490,6 @@ jobs:
     name: SNMP agent, manager, SNMPv3 USM and notifications against Net-SNMP and pysnmp
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -7668,7 +7566,6 @@ jobs:
     name: MQTT 3.1.1 and 5.0 broker and client with Mosquitto and Paho
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -7751,7 +7648,6 @@ jobs:
     name: WebSocket server and client with websocat, Python websockets and Node ws (permessage-deflate)
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -7829,7 +7725,6 @@ jobs:
     name: CoAP Observe and Block-wise with libcoap and aiocoap
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -7922,7 +7817,6 @@ jobs:
     name: DNS TCP, zone transfers and DNSSEC with BIND, Knot and ldns
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -8004,7 +7898,6 @@ jobs:
     name: Kafka broker and client at the newest flexible versions against kcat, the Java client, franz-go and Apache Kafka 3.9.1
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -8086,7 +7979,6 @@ jobs:
     name: RDP client against FreeRDP's shadow server (NLA) on Xvfb and xrdp (TLS)
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -8159,7 +8051,6 @@ jobs:
     name: ONVIF device and client against onvif-zeep-async, use-go/onvif and RPOS
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -8236,7 +8127,6 @@ jobs:
     name: Stratum V2 pool and mining device against SRI's mining_device, pool_sv2 and Bitcoin Core
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -8311,7 +8201,6 @@ jobs:
     name: NGAP AMF and gNB against UERANSIM and Open5GS's AMF over SCTP
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -8400,7 +8289,6 @@ jobs:
     name: M3UA SGP and ASP with SCCP, TCAP, MAP and CAMEL against Restcomm jSS7 and osmo-stp over SCTP
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -8487,7 +8375,6 @@ jobs:
     name: H.323 gatekeeper, endpoint and client against GNU Gatekeeper, H323Plus simph323 and Asterisk chan_ooh323
     runs-on: ubuntu-24.04
     timeout-minutes: 75
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -8575,7 +8462,6 @@ jobs:
     name: Kerberos KDC against MIT and Heimdal kinit, client against MIT krb5kdc and Heimdal kdc
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -8675,7 +8561,6 @@ jobs:
     name: SPICE server against spice-gtk (spicy-screenshot, spicy on Xvfb) and spice-html5 in Chrome, client against QEMU's spice-server
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -8761,7 +8646,6 @@ jobs:
     name: Ethereum devp2p node and dialler against go-ethereum (geth, devp2p tool) and reth
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    env:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
