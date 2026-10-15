@@ -270,7 +270,12 @@ pub static DISCONNECTED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     ev(
         "spice_disconnected",
         "The session ended.",
-        vec![p("reason", "string", "Why", true)],
+        vec![p(
+            "reason",
+            "string",
+            "Why the session ended: the server closed a channel, a bound was broken, or the client disconnected",
+            true,
+        )],
     )
 });
 

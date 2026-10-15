@@ -281,9 +281,9 @@ pub static KEY_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         ),
         p("scancode", "number", "PC/AT set-1 scancode", true),
         p("extended", "boolean", "True for an 0xE0-prefixed key", true),
-        p("shift", "boolean", "Shift was held", true),
-        p("ctrl", "boolean", "Control was held", true),
-        p("alt", "boolean", "Alt was held", true),
+        p("shift", "boolean", "True when a Shift key was held as this key went down", true),
+        p("ctrl", "boolean", "True when a Control key was held as this key went down", true),
+        p("alt", "boolean", "True when an Alt key was held as this key went down", true),
     ])
     .with_actions(screen_actions())
     .with_alternative_example(json!({"type": "spice_no_change"}))
