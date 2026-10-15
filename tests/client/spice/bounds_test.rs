@@ -236,13 +236,26 @@ async fn an_image_past_the_size_limit_is_refused() {
 
 #[tokio::test]
 async fn clip_rectangles_past_the_limit_are_refused() {
-    // DisplayBase with a RECTS clip claiming 5000 rectangles.
+    // A fill whose RECTS clip really carries one rectangle more than the client accepts: every
+    // byte is there, so only the count refuses it. Each rectangle is a pass over its area, so
+    // without the count a message's worth of whole-surface rectangles is a CPU bill the server
+    // writes for the client.
+    let n = netget::client::spice::display::MAX_CLIP_RECTS + 1;
     let mut fill = 0u32.to_le_bytes().to_vec();
-    for v in [0i32, 0, 10, 10] {
+    for v in [0i32, 0, 64, 64] {
         fill.extend_from_slice(&v.to_le_bytes());
     }
     fill.push(1);
-    fill.extend_from_slice(&5000u32.to_le_bytes());
+    fill.extend_from_slice(&n.to_le_bytes());
+    for _ in 0..n {
+        for v in [0i32, 0, 64, 64] {
+            fill.extend_from_slice(&v.to_le_bytes());
+        }
+    }
+    fill.push(1);
+    fill.extend_from_slice(&0x00ff_ffffu32.to_le_bytes());
+    fill.extend_from_slice(&wire::ROPD_OP_PUT.to_le_bytes());
+    fill.extend_from_slice(&[0; 13]);
     let addr = fake_server(
         0,
         true,
@@ -251,7 +264,10 @@ async fn clip_rectangles_past_the_limit_are_refused() {
     .await;
     let (state, id) = client(addr, silent()).await.unwrap();
     let reason = ended(&state, id).await;
-    assert!(reason.contains("5000 clip rects"), "{reason}");
+    assert!(
+        reason.contains(&format!("{n} clip rects; at most")),
+        "{reason}"
+    );
 }
 
 #[tokio::test]
