@@ -54,6 +54,8 @@ pub mod gopher;
 pub mod grpc;
 #[cfg(feature = "grpc-web")]
 pub mod grpc_web;
+#[cfg(feature = "h323")]
+pub mod h323;
 #[cfg(feature = "http")]
 pub mod http;
 #[cfg(feature = "http2")]
