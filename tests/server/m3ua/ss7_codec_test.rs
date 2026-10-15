@@ -389,6 +389,9 @@ fn an_unanswerable_map_dialogue_fails_closed_with_system_failure_not_success() {
 #[test]
 fn a_continue_for_an_unknown_transaction_is_p_aborted() {
     let mut engine = Engine::new();
+    // An open dialogue that the Continue must NOT be matched to.
+    let open = begin(&mut engine, jss7::IDP_BEGIN);
+    assert_ne!(open.dialogue_id, 0x0bad_cafe);
     let (replies, note) = handled(engine.on_data(
         &from_jss7(&with_dtid(jss7::ERB_ANSWER, 0x0bad_cafe), 1),
         None,

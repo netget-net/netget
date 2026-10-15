@@ -955,7 +955,9 @@ print(json.dumps({"actions": actions}))"#;
                 "base_stack": "m3ua",
                 "startup_params": { "transport": "sctp" },
                 "event_handlers": [{
-                    "event_pattern": "m3ua_*",
+                    // Patterns are an exact event id or "*" — there is no prefix glob, and
+                    // "m3ua_*" would match nothing.
+                    "event_pattern": "*",
                     "handler": {
                         "type": "script",
                         "language": "python",

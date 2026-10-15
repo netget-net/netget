@@ -1238,7 +1238,10 @@ fn invokes(d: &mut Dialogue, list: Vec<(i64, Option<Vec<u8>>)>) -> Result<Vec<Co
     Ok(out)
 }
 
-fn cap_invokes(intent: &Value) -> Result<Vec<(i64, Option<Vec<u8>>)>, String> {
+/// (operation code, encoded argument) pairs.
+type Invokes = Vec<(i64, Option<Vec<u8>>)>;
+
+fn cap_invokes(intent: &Value) -> Result<Invokes, String> {
     let ops = intent
         .get("operations")
         .and_then(Value::as_array)

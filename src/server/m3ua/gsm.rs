@@ -360,7 +360,7 @@ pub fn ussd_decode(dcs: u8, octets: &[u8]) -> Option<String> {
         let count = octets.len() * 8 / 7;
         let mut septets = unpack_septets(octets, count, 0);
         // Section 6.1.2.3.1: 7 spare bits at the end are filled with CR, which is not text.
-        if count % 8 == 0 && septets.last() == Some(&0x0d) {
+        if count.is_multiple_of(8) && septets.last() == Some(&0x0d) {
             septets.pop();
         }
         Some(gsm7_text(&septets))

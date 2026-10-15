@@ -533,7 +533,7 @@ pub fn hex(bytes: &[u8]) -> String {
 /// nature; every encoded value is built from structured fields instead.
 pub fn unhex(s: &str) -> Result<Vec<u8>, BerError> {
     let s = s.trim();
-    if s.len() % 2 != 0 || !s.chars().all(|c| c.is_ascii_hexdigit()) {
+    if !s.len().is_multiple_of(2) || !s.chars().all(|c| c.is_ascii_hexdigit()) {
         return err(format!("{s:?} is not an even-length hex string"));
     }
     Ok((0..s.len())

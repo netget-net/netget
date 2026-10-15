@@ -61,7 +61,7 @@ pub fn actions() -> Vec<ActionDefinition> {
             .into(),
         parameters: vec![],
         example: json!({"type": "wait_for_more"}),
-        log_template: None,
+        log_template: Some(LogTemplate::new().with_info("-> M3UA wait for more")),
     });
     a
 }
@@ -121,7 +121,7 @@ pub static ERROR_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         json!({"type": "wait_for_more"}),
     )
     .with_parameters(vec![
-        p("message", "string", "What arrived", true),
+        p("message", "string", "What arrived: \"err\" for an M3UA ERR, or a description of an MSU with a service indicator NetGet does not decode", true),
         p("error_name", "string", "The M3UA error, for an ERR", false),
     ])
     .with_actions(actions())

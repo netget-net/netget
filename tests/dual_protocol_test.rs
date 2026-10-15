@@ -135,6 +135,7 @@ fn golden_duals_map() {
         "rsync",
         "PFCP",
         "NGAP",
+        "M3UA",
         "Matrix",
         "libp2p",
         "SunRPC",
