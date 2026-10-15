@@ -552,9 +552,10 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
     rather than an extra LLM call; and nginx's echo quoting the previous response back made a
     looser rule answer both responses until the follow-up depth cap stopped the loop.
 
-  **Sixteen as of 15 October 2026 (16 Beta, 206 Experimental — re-derive with `--side client`).**
+  **Seventeen as of 15 October 2026 (17 Beta — re-derive with `--side client`).**
   Since the thirteen below: `kafka`, `dns` and `rdp` arrived Beta with the protocol-expansion
-  pairs, and `spark` against a real Apache Spark's live driver UI and History Server. `ssh` went
+  pairs, `spark` against a real Apache Spark's live driver UI and History Server, and `yarn`
+  against a real Hadoop ResourceManager and NodeManager. `ssh` went
   the other way on 2 October 2026: its SFTP operations shipped without a second independent SFTP
   server, pcap oracle or fuzz target, and its `metadata()` says so.
 

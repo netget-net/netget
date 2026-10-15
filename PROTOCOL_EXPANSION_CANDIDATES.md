@@ -71,7 +71,13 @@ What is left from this document, with the reason each is still open:
     mode (CRC16 hash slots, `CLUSTER SLOTS/SHARDS/NODES`, MOVED/ASK/CROSSSLOT on the server; a
     slot-routing client following MOVED and ASK), against redis-cli, redis-rs and a real
     three-node cluster. No cluster bus, replicas, keyspace notifications or `CLIENT TRACKING`.
-- **Peer-limited missing clients**: yarn still has no client.
+- **Peer-limited missing clients**: none left.
+  ~~yarn~~ landed 15 October 2026 at Beta (the ResourceManager REST API: cluster info and
+  metrics, the scheduler's queue tree, applications with filters, attempts, state and queue,
+  nodes; `kill_application` only with `allow_kill`), against a real Apache Hadoop 3.5.0
+  ResourceManager and NodeManager running distributed-shell applications; the same pass drove
+  the YARN server with Datadog's YARN check and served the scheduler endpoint it needs.
+  Submission is deliberately not built: its body is a shell command run on a cluster node.
   ~~spark~~ landed 15 October 2026 at Beta (the monitoring REST API: applications, jobs,
   stages with attempts and task summaries, executors, environment, SQL executions), against
   a real Apache Spark 4.2.0's live driver UI and History Server; the same pass drove the Spark
