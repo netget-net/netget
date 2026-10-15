@@ -71,7 +71,12 @@ What is left from this document, with the reason each is still open:
     mode (CRC16 hash slots, `CLUSTER SLOTS/SHARDS/NODES`, MOVED/ASK/CROSSSLOT on the server; a
     slot-routing client following MOVED and ASK), against redis-cli, redis-rs and a real
     three-node cluster. No cluster bus, replicas, keyspace notifications or `CLIENT TRACKING`.
-- **Peer-limited missing clients**: snowflake, spark and yarn still have no client.
+- **Peer-limited missing clients**: spark and yarn still have no client.
+  ~~snowflake~~ landed 15 October 2026 (connector REST protocol: password login, queries
+  with JSON and Arrow rowsets decoded by column type, token renewal, result polling,
+  logout; the target is mandatory and never derived) against fakesnow and
+  snowflake-emulator; the same pass drove the Snowflake server with the official
+  snowflake-connector-python for the first time and fixed the three defects it exposed.
   ~~db2~~ landed 15 October 2026 (EXCSAT/ACCSEC/SECCHK/ACCRDB, EXCSQLIMM, PRPSQLSTT +
   OPNQRY/CNTQRY with typed rows, commit/rollback) against Apache Derby's DRDA server; the
   same pass drove the Db2 server with Derby's JDBC driver and IBM's `ibm_db` for the first
