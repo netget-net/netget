@@ -8690,6 +8690,96 @@ jobs:
             --test real_client_evidence_is_run_test \
             -- --test-threads=32
 
+  m3ua:
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'm3ua')
+    name: M3UA SGP and ASP with SCCP, TCAP, MAP and CAMEL against Restcomm jSS7 and osmo-stp over SCTP
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      PAIR_FEATURES: tcp,m3ua
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: protocol-pairs-${{ github.job }}
+      - name: Load the kernel's SCTP module
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          # The Azure kernel ships sctp.ko in linux-modules-extra; if it is absent, modprobe says so.
+          sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)" || true
+          sudo modprobe sctp
+          test -d /proc/sys/net/sctp
+      - name: Cache the jSS7 driver and its Maven repository
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/m3ua
+          key: m3ua-jss7-${{ runner.os }}-${{ hashFiles('tests/server/m3ua/install_peers.py', 'tests/server/m3ua/jss7_peer/**') }}
+      - name: Install osmo-stp, a JDK and Maven, build the jSS7 8.0.112 driver, let dumpcap capture on loopback
+        run: |
+          set -euo pipefail
+          echo 'wireshark-common wireshark-common/install-setuid boolean false' | sudo debconf-set-selections
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            osmo-stp openjdk-17-jdk-headless maven tshark lksctp-tools
+          # The package starts its own osmo-stp on port 2905; the tests start theirs on probed ports.
+          sudo systemctl stop osmo-stp || true
+          sudo setcap cap_net_raw,cap_net_admin=eip "$(command -v dumpcap)"
+          python3 tests/server/m3ua/install_peers.py "$RUNNER_TEMP/m3ua" | sed 's/^export //' >> "$GITHUB_ENV"
+      - name: Compile m3ua as a standalone Cargo feature
+        run: cargo check --locked --no-default-features --features m3ua --all-targets
+      - name: Both roles with mandatory independent peers, bounds and fail-closed paths
+        run: |
+          set -euo pipefail
+          for filter in \
+            m3ua:: \
+            client/m3ua::; do
+            case "$filter" in
+              client/*) target=client; filter=${filter#client/} ;;
+              *) target=server ;;
+            esac
+            pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
+            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+              --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
+            grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
+          done
+      - name: Shared declarations, native startup, privacy and ownership
+        run: |
+          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            --test event_action_declarations_test \
+            --test advertised_actions_test \
+            --test action_descriptions_test \
+            --test startup_examples_validation_test \
+            --test examples \
+            --test startup_param_defaults_test \
+            --test startup_param_drift_test \
+            --test protocol_startup_examples_test \
+            --test startup_params_result_test \
+            --test startup_constructed_input_test \
+            --test management_test \
+            --test management_form_test \
+            --test dual_protocol_test \
+            --test dashboard_wireshark_test \
+            --test client_event_wiring_test \
+            --test event_emit_sites_test \
+            --test task_registration_cancellation_test \
+            --test server_task_registry_test \
+            --test client_stop_releases_socket_test \
+            --test peer_handle_coverage_ratchet_test \
+            --test client_credential_logging_test \
+            --test client_llm_budget_test \
+            --test secret_redaction_test \
+            --test wire_failure_test \
+            --test site_protocol_list_test \
+            --test well_known_port_declaration_test \
+            --test failure_mode_declaration_test \
+            --test decision_tag_ratchet_test \
+            --test max_inbound_bytes_declaration_test \
+            --test max_inbound_bytes_bound_plus_one_test \
+            --test test_suite_hygiene_test \
+            --test real_client_evidence_is_run_test \
+            -- --test-threads=32
+
   kerberos:
     if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'kerberos')
     name: Kerberos KDC against MIT and Heimdal kinit, client against MIT krb5kdc and Heimdal kdc

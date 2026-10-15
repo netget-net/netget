@@ -1,26 +1,45 @@
 # M3UA Test Strategy
 
-Three files, three different kinds of evidence. Read
-[`src/server/m3ua/AGENTS.md`](../../../src/server/m3ua/AGENTS.md) first — in particular the
-transport section, which is what limits what any of this can prove.
+Read [`src/server/m3ua/AGENTS.md`](../../../src/server/m3ua/AGENTS.md) first.
 
 | File | What it is evidence of | LLM calls |
 |---|---|---|
-| `codec_test.rs` | the wire format matches RFC 4666, asserted against literal octets | 0 |
+| `codec_test.rs` | the M3UA wire format matches RFC 4666, asserted against literal octets | 0 |
 | `transport_test.rs` | the SCTP refusal happens, and says something useful | 0 |
 | `e2e_test.rs` | the association, the state machine and the fail-closed rule, over the **lab** transport | 7 |
+| `ss7_codec_test.rs` | SCCP/TCAP/MAP/CAP against jSS7's captured bytes: NetGet's MAP answers equal jSS7's own; every bound; fail-closed; tshark reads NetGet's answers | 0 |
+| `ss7_e2e_test.rs` | the same through a NetGet process and the mocked model, over the lab transport | 5 |
+| `real_peer_test.rs` (Linux) | Restcomm jSS7 8.0.112 over real SCTP: MAP and CAMEL dialogues answered by the model, decoded by jSS7; fail-closed seen by jSS7; live capture through tshark | 0 (python policy) |
+| `osmo_stp_test.rs` (Linux) | osmo-stp 1.6 as an ASP of NetGet's SGP, routing jSS7's MAP to it | 0 (python policy) |
 
-## The ceiling on all of it
+`ss7_support.rs` holds jSS7's captured messages (cut from a dumpcap capture of jSS7 talking to
+itself; they are a third party's encoding, nothing here came from NetGet) and the pcap writer for
+the tshark oracle; `ss7_live.rs` the live capture, the jSS7 driver command and osmo-stp. Both are
+shared with `tests/client/m3ua/` by `#[path]`.
 
-**M3UA runs over SCTP and macOS has no SCTP stack.** Nothing in this directory has ever run over
-the protocol's real transport, and no test here is evidence of interoperability with a real
-SIGTRAN peer — there is none to run against, and the one the e2e tests do run against speaks TCP,
-which no real ASP does.
+## The real peers
 
-That is not a gap to be closed by writing more tests here. It is closed on Linux, against
-`osmo-stp` / `libosmo-sigtran`. Until then the protocol stays `Experimental`, and any claim
-otherwise should be treated as the `wireguard` bug the root `AGENTS.md` records: a maturity
-rating resting on a test that never exercised the thing it claimed.
+`install_peers.py <dir>` builds `jss7_peer/` (Ss7Peer.java: test glue over jSS7's SCTP, M3UA,
+SCCP, TCAP, MAP and CAP stacks from Maven Central and the JBoss repository; JDK 11+ and Maven)
+and prints `NETGET_JSS7_PEER`. `osmo-stp` is the Ubuntu package. The tests need a kernel with
+SCTP (`sudo modprobe sctp`) and dumpcap allowed to capture on loopback, and **fail** — not skip —
+without any of them; on macOS they are not compiled (`mod.rs`), since there is no SCTP there.
+
+The driver's output protocol (`READY`, `RESULT scenario=…`, `RECV op=…`, `DONE …`) is documented
+at the top of `Ss7Peer.java`. Free text is percent-encoded; the JVM must run under a UTF-8 locale
+or non-ASCII argv arrives mangled (`ss7_live::jss7_command` sets it — a test once read
+`"Gr    e"` for `"Grüße"` until it did).
+
+jSS7 facts that shaped the code: its AS goes active only on NTFY(AS-ACTIVE) after ASPAC ACK, so
+NetGet's policy sends one; its server associations accept only the configured remote port, so
+the client has `local_port`; it refuses a networkUnstructuredSsContext TC-BEGIN without
+MAP-OpenInfo, so NetGet's USSD dialogues carry it; it sends invoke ids from 0 and SCCP class 1,
+which NetGet mirrors.
+
+## The ceiling
+
+Everything real-peer runs on Linux only, in the protocol-pairs `m3ua` job. On macOS the codec,
+engine and lab-transport suites run; nothing there proves the SCTP path.
 
 ## `codec_test.rs` — why literal octets, not round-trips
 
