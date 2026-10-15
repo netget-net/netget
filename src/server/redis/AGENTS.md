@@ -1,9 +1,17 @@
 # Redis Protocol Implementation
 
-RESP2 server. `redis-protocol` v6.0 parses inbound frames; responses are encoded
-by hand in `actions.rs` (`encode_*`, the single source of truth — each reply verb's
-executor returns the encoded bytes as `ActionResult::Output`). The LLM owns every
-reply — there is no key space, no storage, and no command dispatch table in Rust.
+RESP2 server (RESP3 after `HELLO 3`), with pub/sub and an optional cluster mode.
+`redis-protocol` v6.0 parses inbound frames; responses are encoded by hand in `actions.rs`
+(`encode_*`, the single source of truth — each reply verb's executor returns the encoded
+bytes as `ActionResult::Output`). The LLM owns every reply to a data command — there is no
+key space, no storage, and no command dispatch table in Rust.
+
+What Rust does own is protocol mechanics: `HELLO` negotiation, the pub/sub subscription
+registry and message fan-out between connections of one server (`pubsub.rs`), and in cluster
+mode the hash-slot routing and `CLUSTER` introspection (`cluster.rs`, slot arithmetic in
+`src/utils/redis_keys.rs`). The model decides policy on top: whether a subscription is
+allowed, whether a published message is delivered and what the publisher is told, what the
+server publishes on its own, and which node owns which slots.
 
 **State**: Beta — **two** independent clients, sharing no code with each other or
 with the `redis-protocol` crate the server parses with:
@@ -27,7 +35,19 @@ reviewed, which has not been done. (This file used to say Experimental while
 
 ## What the model sees and controls
 
-**Event**: `redis_command`, one per decoded RESP frame.
+**Events**:
+
+- `redis_command`, one per decoded RESP frame that Rust does not answer itself.
+- `redis_subscribe` — a `SUBSCRIBE`, `PSUBSCRIBE` or `SSUBSCRIBE` that fits every bound;
+  carries `command`, `channels` (the names or patterns, in order), `subscriptions` (what the
+  connection already holds) and `protocol`. Answer `redis_accept_subscription` or
+  `redis_error` (e.g. `NOPERM …`).
+- `redis_publish` — a `PUBLISH` or `SPUBLISH` whose message fits its bound; carries
+  `command`, `channel`, `message`, `receivers` (how many deliveries `redis_deliver_message`
+  would make now) and `protocol`. Answer `redis_deliver_message` (deliver, reply with the
+  count), `redis_integer` (reply without delivering), or `redis_error`.
+
+`redis_command` fields:
 
 | Field | Notes |
 |---|---|
@@ -48,6 +68,15 @@ indistinguishable from two arguments.
 | `redis_error` | `message` (required) | `-message\r\n` |
 | `redis_null` | — | `$-1\r\n` |
 | `close_this_connection` | — | flushes pending output, then closes |
+| `redis_accept_subscription` | — | on `redis_subscribe`: the subscription is registered and one confirmation per name is sent |
+| `redis_deliver_message` | — | on `redis_publish`: delivered to every matching subscription, publisher gets `:N` |
+| `redis_publish_message` | `channel`, `message`, `shard` | publishes a message of the model's own; writes nothing to the current connection. **Also async** |
+| `redis_cluster_set_slot` | `slots` (`"42"` / `"0-100"`), `state` (`node`/`migrating`/`importing`/`stable`), `node` | changes this server's slot map (cluster mode). **Also async** |
+
+The two async actions reach the running server through `execute_action_with_state` and the
+`RedisShared` handle `spawn` registers (`AppState::register_server_handle`), so the model can
+publish, or move a slot, from a scheduled task or a conversation, not only while answering a
+command.
 
 `redis_array` element mapping, exactly as implemented in `actions.rs::encode_array`:
 
@@ -102,6 +131,14 @@ length-prefixed, so it can carry any bytes, newlines included.
   `decision=model_reject`. On the wire a refusal and an outage are both just
   `-…`, so as in `src/server/radius/` only the log distinguishes them; the
   no-response case above is `decision=fail_closed_no_action`.
+- **`SUBSCRIBE` with no decision, or the model call failing** → refused (`-ERR no response
+  produced for this command`, or the failure category), nothing registered. Logged
+  `decision=fail_closed_no_action` / `fail_closed_llm_*`; a model refusal is
+  `decision=model_reject`, an acceptance `decision=model_accept`.
+- **`PUBLISH` with no decision, or the model call failing** → the same errors, and **nothing
+  is delivered**. `decision=model_deliver` / `model_withhold` otherwise.
+- **A subscription or message past a bound** → refused before the model is asked
+  (`decision=fail_closed_subscription_bound` / `fail_closed_message_bound`). See "Pub/sub".
 - **Action result that is `Custom` rather than `Output`** → logged at WARN and
   skipped (no Redis action returns `Custom` any more; the arm exists so a
   regression is loud); if nothing else was produced the no-response error above
@@ -230,23 +267,114 @@ RESP2 (the action fails and nothing is written for it), since RESP2 has no out-o
 
 Requests are RESP2 arrays in both versions, so the decoder and its depth guard are unchanged.
 
+## Pub/sub (`pubsub.rs`)
+
+`SUBSCRIBE` / `PSUBSCRIBE` / `SSUBSCRIBE` ask the model (`redis_subscribe`) and, if it accepts,
+are registered in the server's `PubSubHub`, which queues one confirmation per name
+(`subscribe <name> <count>` — channels plus patterns; shard channels counted apart, as Redis
+counts them). `UNSUBSCRIBE` / `PUNSUBSCRIBE` / `SUNSUBSCRIBE` (with names, or none for all; with
+nothing held, one confirmation with a null name), `PUBSUB CHANNELS | NUMSUB | NUMPAT |
+SHARDCHANNELS | SHARDNUMSUB` and `RESET` are answered in Rust. `PUBLISH` / `SPUBLISH` ask the
+model (`redis_publish`).
+
+Delivery is exactly Redis's shapes: `message <channel> <payload>`, `pmessage <pattern>
+<channel> <payload>`, `smessage <channel> <payload>` — an array on RESP2, a `>` push on RESP3,
+encoded per subscriber for its own version. A connection subscribed to a channel and to a
+matching pattern receives (and counts) twice. Patterns use Redis's glob
+(`utils::redis_keys::glob_match`, a port of `stringmatchlen` that is iterative and never
+backtracks past the last `*`, including Redis's quirk that `*` does not match an empty name).
+
+**Subscribed mode**: a RESP2 connection holding any subscription may send only the pub/sub
+family, `PING` (answered `["pong", <arg or "">]`), `QUIT` and `RESET`; anything else gets
+Redis's `-ERR Can't execute '<cmd>': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT /
+RESET are allowed in this context`. RESP3 allows everything. `RESET` (always answered in Rust)
+drops every subscription without confirmations, returns the connection to RESP2 and answers
+`+RESET`.
+
+**One writer per connection.** Every byte the read loop writes, and every delivered message,
+goes through the connection's `Outbox` to a single writer task. A subscription is registered
+and its confirmations queued under the hub lock, as is every publish's fan-out, so a
+subscriber always reads `subscribe` before the first message on that channel. The read loop
+waits for each reply to be written before reading the next command, so a peer that stops
+reading still stalls its own command stream as a direct write would. The writer is registered
+with `register_server_task` and aborted when the read loop ends.
+
+**Bounds** (each refuses the whole command; constants in `pubsub.rs`):
+
+| Bound | Value |
+|---|---|
+| channel name / pattern length | 1 KiB / 256 B |
+| message | 1 MiB |
+| subscriptions per connection | 1024 (channels + patterns + shard channels) |
+| subscriptions per server | 65 536 |
+| distinct patterns per server | 1024 — each costs a matcher run per publish |
+| queued, unwritten messages per subscriber | 8 MiB, then the subscriber is **disconnected** (`decision=slow_consumer_disconnected`) |
+
+The last is Redis's `client-output-buffer-limit pubsub` hard limit, without the soft limit and
+at 8 MiB rather than 32 (256 connections × 32 MiB is 8 GiB). The read loop selects on the
+outbox's closing signal, so a slow consumer parked in `read()` is closed at once, and the
+writer — possibly parked in a write to a peer that reads nothing — is aborted.
+
+Not done: keyspace notifications, `CLIENT TRACKING` invalidation pushes, and cluster-wide
+`PUBLISH` (in cluster mode a publish reaches this node's subscribers only — there is no bus).
+
+## Cluster mode (`cluster.rs`)
+
+Started with `cluster_nodes`, a server is one master of a cluster whose shape the parameter
+declares: `[{"host", "port", "slots": ["0-5460", …], "id"?, "myself": true}, …]`. `myself`'s
+host and port default to where the server is listening. Node ids, when not given, are derived
+from `host:port`, so servers handed the same array agree on every id. A topology with no
+`myself`, an overlapping slot, a slot past 16383 or a host that is not a hostname refuses to
+start.
+
+- `CLUSTER SLOTS`, `SHARDS`, `NODES`, `INFO`, `KEYSLOT`, `MYID`, and `ASKING`, `READONLY`,
+  `READWRITE` are answered in Rust from the topology. Every other `CLUSTER` subcommand
+  (`SETSLOT`, `COUNTKEYSINSLOT`, …) goes to the model, which can honour a `SETSLOT` with
+  `redis_cluster_set_slot`. `HELLO` reports `mode: cluster`.
+- Before anything else looks at a command, its keys (`utils::redis_keys::slot_keys`: Redis's
+  key positions per command, the channel for `SPUBLISH`/`SSUBSCRIBE`, the first argument for an
+  unknown command) are hashed — CRC16-XMODEM of the `{hashtag}` or the whole key, mod 16384 —
+  and routed: `-MOVED <slot> <host:port>` for another node's slot, `-CROSSSLOT` for keys in
+  different slots, `-CLUSTERDOWN Hash slot not served` for an unassigned one.
+- Migration follows `CLUSTER SETSLOT`: a slot this node owns and marked `migrating` answers
+  **every** key with `-ASK` (Redis does so only for keys it no longer holds; this server holds
+  none); an `importing` slot is served only on the command right after `ASKING`.
+- `INFO` stays the model's. `redis-cli --cluster check` refuses a node whose `INFO` lacks
+  `cluster_enabled:1`, so an instruction for a cluster node should say to report it.
+
+There is no cluster bus: `redis_cluster_set_slot` changes one server's view, so moving a slot
+across a fake cluster means telling each server, and a client that reaches a server with a
+different view is redirected by it.
+
 ## Not implemented
 
 - **RESP3 attributes** (`|`), streamed strings and aggregates, and client-side caching
-  (`CLIENT TRACKING`); a push is only ever sent when the model asks for one.
+  (`CLIENT TRACKING`).
 - **Inline commands** (`PING\r\n` typed into `nc`) — only RESP arrays decode;
   anything else closes the connection. `redis-cli` and `redis-rs` always send
   RESP arrays, so this only affects hand-typed sessions.
 - **AUTH / SELECT / MULTI / EXEC / WATCH** — reach the model as ordinary
   commands with no special handling. There is no auth gate.
-- **Pub/sub**, **blocking commands** (`BLPOP`), **Lua** (`EVAL`), **cluster**,
-  **replication**, **persistence**.
+- **Blocking commands** (`BLPOP`), **Lua** (`EVAL`), **replication**, **persistence**,
+  replicas in cluster mode, and a cluster bus.
 - **TLS**.
-- Server-initiated pushes: nothing can be written except in reply to a command.
 
 ## Testing
 
-Eight files, declared in `tests/server/redis/mod.rs`:
+Twelve files, declared in `tests/server/redis/mod.rs`:
+
+- `pubsub_test.rs` — redis-cli (RESP2 and `-3`) and redis-rs (its RESP2 `PubSub` and a RESP3
+  multiplexed connection with a push sender): a message one real client publishes reaches
+  real subscribers of the channel and of a matching pattern; a message the model publishes
+  reaches them; a refused subscription and a withheld publish hold. Zero LLM calls.
+- `pubsub_bounds_test.rs` — subscribed mode, every bound above, the slow-consumer disconnect,
+  fail-closed `SUBSCRIBE`/`PUBLISH`, and the async `redis_publish_message` path, from raw
+  sockets. Zero LLM calls.
+- `cluster_test.rs` — three NetGet servers as one cluster, navigated by `redis-cli -c`,
+  checked by `redis-cli --cluster check`, and driven by redis-rs's `ClusterClient`, including
+  a slot the model moves (stale map → `MOVED` → refresh) and one it migrates (`ASK`/`ASKING`).
+- `keys_oracle_test.rs` — hash slots against a real `redis-server`'s `CLUSTER KEYSLOT` and glob
+  matching against its `KEYS`, over 1 500+ keys and 36 patterns.
 
 - `e2e_test.rs` — six `redis-rs` tests, one per RESP2 reply type.
 - `real_client_test.rs` — the real `redis-cli` binary, seven commands on one

@@ -1475,8 +1475,10 @@ tokio-postgres = { version = "0.7", optional = true }
 # MongoDB server and client
 bson = { version = "3.0", optional = true, features = ["serde", "serde_with-3", "serde_json-1"] }  # BSON encoding/decoding for MongoDB
 mongodb = { version = "3.3", optional = true }  # Official MongoDB async driver
-# Redis client
-redis = { version = "0.27", optional = true, features = ["tokio-comp"] }
+# redis-rs: used only by tests, as an independent client of NetGet's Redis server (src/ frames
+# RESP itself). An optional dev-dependency is not possible, so it rides on the `redis` feature;
+# `cluster-async` is its cluster client, which tests/server/redis/cluster_test.rs drives.
+redis = { version = "0.27", optional = true, features = ["tokio-comp", "cluster-async"] }
 # CouchDB client
 couch_rs = { version = "0.10", optional = true }
 form_urlencoded = { version = "1.2", optional = true }

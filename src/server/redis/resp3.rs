@@ -52,14 +52,15 @@ pub fn parse_hello(args: &[String]) -> std::result::Result<Hello, String> {
     Ok(hello)
 }
 
-/// The server properties `HELLO` answers with: a map in RESP3, a flat array in RESP2.
-pub fn hello_reply(proto: u8, connection_id: u64) -> Vec<u8> {
+/// The server properties `HELLO` answers with: a map in RESP3, a flat array in RESP2. `mode`
+/// is `standalone`, or `cluster` for a server started with `cluster_nodes`.
+pub fn hello_reply(proto: u8, connection_id: u64, mode: &str) -> Vec<u8> {
     let fields: Vec<(&str, Value)> = vec![
         ("server", Value::from("redis")),
         ("version", Value::from(REPORTED_VERSION)),
         ("proto", Value::from(proto)),
         ("id", Value::from(connection_id)),
-        ("mode", Value::from("standalone")),
+        ("mode", Value::from(mode)),
         ("role", Value::from("master")),
         ("modules", Value::Array(vec![])),
     ];
