@@ -99,6 +99,8 @@ export const protocolStacks = [
     ["grpc-web", "ETH>IP>TCP>HTTP>GRPC-WEB"],
     ["gtp", "ETH>IP>UDP>GTP"],
     ["guacamole", "ETH>IP>TCP>Guacamole"],
+    ["h323", "ETH>IP>TCP>TPKT>Q.931>H.225.0"],
+    ["h323", "ETH>IP>UDP>H.225.0 RAS"],
     ["hl7", "ETH>IP>TCP>MLLP>HL7"],
     ["hls", "ETH>IP>TCP>HTTP>HLS"],
     ["hsrp", "ETH>IP>UDP>HSRP"],
