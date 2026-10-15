@@ -682,6 +682,10 @@ impl ClientRegistry {
         self.register(Arc::new(
             crate::client::spark::actions::SparkClientProtocol::new(),
         ));
+        #[cfg(feature = "yarn")]
+        self.register(Arc::new(
+            crate::client::yarn::actions::YarnClientProtocol::new(),
+        ));
         #[cfg(feature = "matrix")]
         self.register(Arc::new(
             crate::client::matrix::actions::MatrixClientProtocol::new(),
@@ -1304,6 +1308,7 @@ pub(crate) const ALL_KNOWN_CLIENT_PROTOCOLS: &[(&str, &str)] = &[
     ("Db2", "db2"),
     ("Snowflake", "snowflake"),
     ("Spark", "spark"),
+    ("YARN", "yarn"),
     ("NGAP", "ngap"),
     ("Matrix", "matrix"),
     ("libp2p", "libp2p"),
