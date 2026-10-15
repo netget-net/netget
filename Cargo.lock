@@ -9060,13 +9060,14 @@ dependencies = [
 
 [[package]]
 name = "netget-etcd-client"
-version = "0.15.0"
+version = "0.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64f6e2ab4b1c74df018ed4945b27508bc65b3916877895705f4db5327618f6e5"
+checksum = "81b017e469301529154f78c380f72978867641e950bc82d9d4413f7705d81f71"
 dependencies = [
  "http 1.5.0",
  "netget-tonic",
  "prost",
+ "protoc-bin-vendored",
  "tokio",
  "tokio-stream",
  "tonic-build",
@@ -9224,7 +9225,7 @@ dependencies = [
 
 [[package]]
 name = "netget-tool"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "aes 0.8.4",
  "anyhow",

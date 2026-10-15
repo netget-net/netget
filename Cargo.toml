@@ -3,7 +3,7 @@
 # The library stays `netget` ([lib] below) and the installed command stays `netget`
 # (src/bin/netget.rs).
 name = "netget-tool"
-version = "0.3.3"
+version = "0.3.4"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 description = "Network protocol stubbing toolkit: ~280 protocol servers and clients whose responses come from an LLM, a script, a static rule or a person."
@@ -367,7 +367,7 @@ tonic-web = { package = "netget-tonic-web", version = "=0.12.3" }
 tonic-reflection = { package = "netget-tonic-reflection", version = "0.12.3" }
 tower = { version = "0.5" }
 tempfile = { version = "3.13" }
-etcd-client = { package = "netget-etcd-client", version = "0.15.0" }
+etcd-client = { package = "netget-etcd-client", version = "0.15.1" }
 # ZooKeeper client
 zookeeper-async = { version = "5.0" }
 xmlrpc = { version = "0.15" }  # XML-RPC client library
