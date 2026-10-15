@@ -11,10 +11,12 @@ python3 tests/client/db2/install_derby.py /tmp/derby && export NETGET_DERBY_LIB=
 ./cargo-isolated.sh test --no-default-features --features tcp,db2 --test client -- db2:: --test-threads=4
 ```
 
-`derby.rs` starts a server per test (`RealServer`: probed loopback port, `derby.system.home`
-in the guard's temp dir, `derby.language.logStatementText=true` so `derby.log` lists every
-statement executed), runs Derby's `ij` over **Derby's own DRDA client driver** to read the
-results back, and provides a recording TCP proxy for the pcap oracle.
+`real_server_test.rs::start_derby` starts a server per test (`RealServer`: probed loopback
+port, `derby.system.home` in the guard's temp dir, `derby.language.logStatementText=true` so
+`derby.log` lists every statement executed). It lives in a file that has tests because
+`scripts/beta_evidence_table.py` attributes a spawned peer to the file that spawns it. `derby.rs`
+runs Derby's `ij` over **Derby's own DRDA client driver** to read the results back, and
+provides a recording TCP proxy for the pcap oracle.
 
 | file | what | LLM calls |
 |---|---|---|

@@ -9,7 +9,8 @@
 //!
 //! No LLM calls. Fails rather than skips without java or the Derby jars.
 
-use super::derby::{derby_log, ij, start_derby};
+use super::derby::{derby_log, ij};
+use super::real_server_test::start_derby;
 use crate::helpers::E2EResult;
 use netget::client::db2::{wire, Conn};
 use serde_json::{json, Value};

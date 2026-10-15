@@ -1,5 +1,6 @@
-//! Apache Derby's network server, the third-party DRDA server these tests drive, and Derby's
-//! own `ij` client (over its own DRDA client driver) to read back what NetGet left behind.
+//! Derby's own `ij` client (over its own DRDA client driver) to read back what NetGet left
+//! behind in Apache Derby's network server, and a recording proxy. The server itself is
+//! started by `real_server_test.rs::start_derby`.
 //!
 //! The jars are fetched and SHA-256-checked by `tests/client/db2/install_derby.py`, which
 //! prints the `NETGET_DERBY_LIB` export this module reads. A missing `java` or missing jars
@@ -10,7 +11,6 @@ use crate::helpers::E2EResult;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -52,7 +52,7 @@ pub fn derby_lib() -> E2EResult<PathBuf> {
     Ok(dir)
 }
 
-fn classpath(jars: &[&str]) -> E2EResult<String> {
+pub fn classpath(jars: &[&str]) -> E2EResult<String> {
     let dir = derby_lib()?;
     Ok(jars
         .iter()
@@ -63,42 +63,6 @@ fn classpath(jars: &[&str]) -> E2EResult<String> {
         })
         .collect::<Vec<_>>()
         .join(":"))
-}
-
-/// Start a Derby network server on a loopback port with its system directory in the guard's
-/// temporary directory. Every statement it executes is written to `derby.log` there.
-/// With `password`, BUILTIN authentication is on and user `app` must present it.
-pub async fn start_derby(password: Option<&str>) -> E2EResult<RealServer> {
-    let cp = classpath(&["derby", "derbynet", "derbyshared", "derbytools"])?;
-    let mut args = vec![
-        "-Dderby.system.home={dir}".to_string(),
-        "-Dderby.language.logStatementText=true".to_string(),
-        "-Dderby.drda.logConnections=true".to_string(),
-    ];
-    if let Some(pw) = password {
-        args.push("-Dderby.connection.requireAuthentication=true".into());
-        args.push("-Dderby.authentication.provider=BUILTIN".into());
-        args.push(format!("-Dderby.user.app={pw}"));
-    }
-    args.extend(
-        [
-            "-cp",
-            &cp,
-            "org.apache.derby.drda.NetworkServerControl",
-            "start",
-            "-h",
-            "127.0.0.1",
-            "-p",
-            "{port}",
-        ]
-        .map(String::from),
-    );
-    RealServer::builder("java", JAVA)
-        .args(args)
-        .ready_when_log_matches(r"started and ready to accept connections on port")
-        .startup_timeout(Duration::from_secs(60))
-        .start()
-        .await
 }
 
 /// Run SQL through Derby's `ij` over Derby's own DRDA client driver, as user `app`.

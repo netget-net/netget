@@ -16,13 +16,50 @@
 //!   python3 tests/client/db2/install_derby.py /tmp/derby && export NETGET_DERBY_LIB=/tmp/derby
 //!   ./cargo-isolated.sh test --no-default-features --features tcp,db2 --test client -- db2:: --test-threads=4
 
-use super::derby::{derby_log, ij, start_derby, RecordingProxy};
+use super::derby::{classpath, derby_log, ij, RecordingProxy, JAVA};
 use crate::helpers::pcap_oracle::PcapOracle;
 use crate::helpers::real_server::RealServer;
 use crate::helpers::*;
 use serde_json::{json, Value};
+use std::time::Duration;
 
 const PASSWORD: &str = "secret";
+
+/// Start Apache Derby's network server on a loopback port with its system directory in the guard's
+/// temporary directory. Every statement it executes is written to `derby.log` there.
+/// With `password`, BUILTIN authentication is on and user `app` must present it.
+pub async fn start_derby(password: Option<&str>) -> E2EResult<RealServer> {
+    let cp = classpath(&["derby", "derbynet", "derbyshared", "derbytools"])?;
+    let mut args = vec![
+        "-Dderby.system.home={dir}".to_string(),
+        "-Dderby.language.logStatementText=true".to_string(),
+        "-Dderby.drda.logConnections=true".to_string(),
+    ];
+    if let Some(pw) = password {
+        args.push("-Dderby.connection.requireAuthentication=true".into());
+        args.push("-Dderby.authentication.provider=BUILTIN".into());
+        args.push(format!("-Dderby.user.app={pw}"));
+    }
+    args.extend(
+        [
+            "-cp",
+            &cp,
+            "org.apache.derby.drda.NetworkServerControl",
+            "start",
+            "-h",
+            "127.0.0.1",
+            "-p",
+            "{port}",
+        ]
+        .map(String::from),
+    );
+    RealServer::builder("java", JAVA)
+        .args(args)
+        .ready_when_log_matches(r"started and ready to accept connections on port")
+        .startup_timeout(Duration::from_secs(60))
+        .start()
+        .await
+}
 
 /// The model's view of a row, flattened into one string it writes back to the database, so a
 /// value decoded wrongly (a BIGINT as a string, a DECIMAL rounded, a NULL as a value) changes
