@@ -832,6 +832,10 @@ impl ServerRegistry {
 
         #[cfg(feature = "bitcoin")]
         self.register(Arc::new(crate::server::BitcoinProtocol::new()));
+        #[cfg(feature = "devp2p")]
+        self.register(Arc::new(
+            crate::server::devp2p::actions::Devp2pProtocol::new(),
+        ));
         #[cfg(feature = "nostr")]
         self.register(Arc::new(crate::server::NostrProtocol::new()));
 
@@ -1685,6 +1689,7 @@ pub(crate) const ALL_KNOWN_PROTOCOLS: &[(&str, &str)] = &[
     ("ISIS", "isis"),
     ("RIP", "rip"),
     ("Bitcoin P2P", "bitcoin"),
+    ("devp2p", "devp2p"),
     ("Nostr", "nostr"),
     ("MCP", "mcp"),
     ("OpenAI", "openai"),

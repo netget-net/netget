@@ -135,6 +135,10 @@ const PLAIN_UDP: Wire = Wire {
     note: None,
 };
 
+const DEVP2P_NOTE: &str = "RLPx encrypts every devp2p frame (AES-256-CTR, keys from an ECIES \
+    handshake) and Wireshark has no RLPx dissector, so the capture shows the two handshake \
+    packets and frame sizes, never a message. NetGet's own log has every decoded message.";
+
 const VXLAN_ENCAPSULATION_NOTE: &str = "This decodes VXLAN. With encapsulation geneve use \
     `-d udp.port==<port>,geneve` instead, and with gretap (GRE in UDP) `-d udp.port==<port>,gre`.";
 
@@ -146,10 +150,11 @@ const GTP_NOTE: &str = "GTP binds two ports and they are different protocols: GT
 2123 (signalling) and GTP-U on 2152 (user payload). Give each its own `-d udp.port==N,gtp` \
 clause, or the port you omit stays undecoded.";
 
-const M3UA_NOTE: &str = "Real M3UA runs over SCTP, where the capture filter must be \
-`sctp port N` and no decode-as clause is needed. The `tcp` form below matches NetGet's \
-non-standard TCP transport (`transport=tcp`), which exists for environments without SCTP - \
-this machine is one.";
+const M3UA_NOTE: &str = "M3UA runs over SCTP with payload protocol identifier 3, which \
+Wireshark's m3ua dissector registers on, so the `sctp` capture filter needs no decode-as clause; \
+SCCP, TCAP, GSM MAP and CAMEL are dissected beneath it by service indicator, SSN and application \
+context. NetGet's non-standard `transport=tcp` lab transport carries the same messages on a TCP \
+stream: capture `tcp port N` and add `-d tcp.port==N,m3ua` for that one.";
 
 const NGAP_NOTE: &str = "NGAP runs over SCTP with payload protocol identifier 60, which \
 Wireshark's ngap dissector registers on, so the `sctp` capture filter and the `ngap` display filter \
@@ -472,6 +477,9 @@ pub fn wire_for(protocol: &str) -> Wire {
         "ipp" => with_display(tcp("http"), "ipp || http"),
         "bgp" => tcp("bgp"),
         "bitcoin" => tcp("bitcoin"),
+        // RLPx encrypts every frame after its two handshake packets and Wireshark has no RLPx
+        // dissector, so there is nothing to decode as: the capture shows packet sizes only.
+        "devp2p" => with_note(PLAIN_TCP, DEVP2P_NOTE),
         "torrent_peer" => tcp("bittorrent"),
         // ---- UDP ---------------------------------------------------------
         "dns" => either("dns"),
@@ -514,11 +522,12 @@ pub fn wire_for(protocol: &str) -> Wire {
         // PLAIN_TCP default. For gtp and can that default is the wrong *transport*, not
         // merely a missing dissector. Checked against this machine's tshark 4.6.8, which
         // rejects an unknown name in `-d` (verified with a bogus one), so these are
-        // measurements: `udp.port==N,gtp` is accepted, `tcp.port==N,m3ua` is accepted,
+        // measurements: `udp.port==N,gtp` is accepted, `tcp.port==N,m3ua` is accepted (the m3ua
+        // entry now names SCTP, its real transport; the note keeps the TCP lab form),
         // and `udp.port==N,can` is *rejected* - hence can gets the off-network treatment
         // rather than a dissector it does not have.
         "gtp" => with_note(with_display(udp("gtp"), "gtp || gtpv2"), GTP_NOTE),
-        "m3ua" => with_note(tcp("m3ua"), M3UA_NOTE),
+        "m3ua" => with_note(raw("sctp", "m3ua || sccp || tcap || gsm_map || camel"), M3UA_NOTE),
         "ngap" => with_note(raw("sctp", "ngap"), NGAP_NOTE),
         "can" => offline(CAN_NOTE),
         // ---- raw / link layer --------------------------------------------

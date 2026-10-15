@@ -24,6 +24,8 @@ pub mod couchdb;
 pub mod datalink;
 #[cfg(feature = "dc")]
 pub mod dc;
+#[cfg(feature = "devp2p")]
+pub mod devp2p;
 #[cfg(feature = "dhcp")]
 pub mod dhcp;
 #[cfg(feature = "dns")]
@@ -404,6 +406,8 @@ pub mod libp2p;
 pub mod lmtp;
 #[cfg(feature = "lpd")]
 pub mod lpd;
+#[cfg(feature = "m3ua")]
+pub mod m3ua;
 #[cfg(feature = "matrix")]
 pub mod matrix;
 #[cfg(feature = "milter")]

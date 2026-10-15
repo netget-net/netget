@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- jSS7 8.0.112's POMs declare the JBoss repositories over plain http, which Maven 3.8+ blocks.
+     Map every one of them onto the https JBoss repository; everything else comes from Central. -->
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0">
+  <mirrors>
+    <mirror>
+      <id>jboss-https</id>
+      <mirrorOf>jboss-public-repository-group,jboss-3rd-party-repository-group,jboss-3rd-party-upload-repository-group,java.net-Public,backup.repository.jboss.org,jboss-public,jboss-releases,jboss-snapshots,jboss-deprecated</mirrorOf>
+      <url>https://repository.jboss.org/nexus/repository/public/</url>
+    </mirror>
+  </mirrors>
+</settings>

@@ -56,6 +56,7 @@ export const protocolStacks = [
     ["dbus", "ETH>IP>TCP>D-Bus"],
     ["dc", "ETH>IP>TCP>DC"],
     ["dc_peer", "ETH>IP>TCP>NMDC Peer"],
+    ["devp2p", "ETH>IP>TCP>RLPx>devp2p"],
     ["dhcp", "ETH>IP>UDP>DHCP"],
     ["dhcpv6", "ETH>IPv6>UDP>DHCPv6"],
     ["diameter", "ETH>IP>TCP>DIAMETER"],

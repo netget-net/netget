@@ -56,15 +56,25 @@
 //! a parked manual handler would let the association time out while a human read a question.
 
 pub mod actions;
+pub mod ber;
+pub mod cap;
 pub mod codec;
+pub mod gsm;
+pub mod map;
+pub mod sccp;
+pub mod ss7;
+pub mod ss7_actions;
+pub mod tcap;
+pub mod transport;
 
 use anyhow::{anyhow, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info, trace, warn};
+use transport::{Reader, Writer};
 
 use crate::llm::action_helper::call_llm;
 use crate::llm::actions::protocol_trait::ActionResult;
@@ -461,11 +471,13 @@ struct M3uaSession {
     /// The ASP Identifier from ASPUP, if it sent one — reported in later events so a handler
     /// can tell two ASPs apart.
     asp_identifier: Option<u32>,
-    writer: Arc<Mutex<WriteHalf<TcpStream>>>,
+    writer: Arc<Mutex<Writer>>,
+    /// TCAP dialogues on this association (the SCCP / TCAP / MAP / CAP layer).
+    engine: ss7::Engine,
 }
 
 /// Outcome of reading one framed message.
-enum Incoming {
+pub enum Incoming {
     Message(codec::Message),
     /// The common header was unusable. There is no way to find the next message boundary after
     /// this, so the association ends.
@@ -488,8 +500,9 @@ async fn run_session(
     config: M3uaConfig,
 ) -> Result<()> {
     // Split rather than clone: the read half stays here, the write half is shared with the
-    // dashboard's peer command task.
-    let (mut reader, writer) = tokio::io::split(stream);
+    // dashboard's peer command task. Over SCTP each write is one message with PPID 3, on stream
+    // 0 for management and stream 1 for DATA (`transport.rs`).
+    let (mut reader, writer) = transport::split(stream, config.transport == M3uaTransport::Sctp);
     let writer = Arc::new(Mutex::new(writer));
 
     // Registered before the first read so "message this peer" and "disconnect this peer" work
@@ -502,7 +515,7 @@ async fn run_session(
     .await;
     crate::server::peer_support::spawn_peer_command_task(
         peer_rx,
-        protocol.clone(),
+        Arc::new(M3uaProtocol::for_peer_commands()),
         app_state.clone(),
         server_id,
         connection_id.as_u32(),
@@ -522,13 +535,14 @@ async fn run_session(
         state: AspState::Down,
         asp_identifier: None,
         writer,
+        engine: ss7::Engine::new(),
     };
 
     session.run(&mut reader).await
 }
 
 impl M3uaSession {
-    async fn run(&mut self, reader: &mut ReadHalf<TcpStream>) -> Result<()> {
+    async fn run(&mut self, reader: &mut Reader) -> Result<()> {
         debug!(
             "M3UA association {} open, ASP in {}",
             self.connection_id,
@@ -1034,6 +1048,31 @@ impl M3uaSession {
             }
         };
 
+        // SCCP (Service Indicator 3) is decoded through TCAP down to MAP or CAP. Everything that
+        // follows from the protocol is answered in Rust; a dialogue message the model must
+        // answer becomes m3ua_map_received / m3ua_cap_received instead of an opaque payload.
+        let now = crate::utils::clock::Instant::now();
+        self.expire_dialogues(now).await;
+        let mut sccp_note = None;
+        match self
+            .engine
+            .on_data(&protocol_data, routing_context, network_appearance, now)
+        {
+            ss7::Inbound::NotSccp => {}
+            ss7::Inbound::Undecoded(reason) => sccp_note = Some(reason),
+            ss7::Inbound::Handled { replies, note } => {
+                Log::new(Some(&self.status_tx)).info(format!(
+                    "M3UA SCCP from {} opc={} handled without the model: {}",
+                    self.remote_addr, protocol_data.opc, note
+                ));
+                for reply in replies {
+                    self.send_ss7(reply).await;
+                }
+                return Ok(true);
+            }
+            ss7::Inbound::Event(event) => return Ok(self.on_ss7_event(event).await),
+        }
+
         let (payload, encoding) = render_payload(&protocol_data.payload);
         info!(
             "M3UA DATA from {} opc={} dpc={} si={} ({}) sls={}",
@@ -1066,6 +1105,7 @@ impl M3uaSession {
                 "routing_context": routing_context,
                 "network_appearance": network_appearance,
                 "correlation_id": message.param_u32(codec::TAG_CORRELATION_ID),
+                "sccp_note": sccp_note,
             }),
         };
 
@@ -1188,12 +1228,129 @@ impl M3uaSession {
                     drop(writer);
                     closed = true;
                 }
+                ActionResult::Custom { name, data } if name == ss7::SS7_INTENT => {
+                    let route = self.engine.last_route.clone();
+                    match self.engine.apply(
+                        &data,
+                        route.as_ref(),
+                        0,
+                        crate::utils::clock::Instant::now(),
+                    ) {
+                        Ok((_, out)) => {
+                            sent.push((codec::CLASS_TRANSFER, codec::TRANSFER_DATA));
+                            self.send_ss7(out).await;
+                        }
+                        Err(e) => {
+                            // The dialogue's own fail-closed rule (below, in on_ss7_event)
+                            // still applies: an intent that could not be honoured answers
+                            // nothing, so an invoke it was meant to answer stays unanswered.
+                            Log::new(Some(&self.status_tx)).warn(format!(
+                                "M3UA {} refused for {}: {} (decision=action_refused)",
+                                data["type"].as_str().unwrap_or("SS7 action"),
+                                self.remote_addr,
+                                e
+                            ));
+                        }
+                    }
+                }
                 ActionResult::WaitForMore | ActionResult::NoAction => {}
                 other => debug!("M3UA ignoring action result {other:?}"),
             }
         }
 
         HandlerOutcome::Ran { sent, closed }
+    }
+
+    /// Wrap an SS7 message in M3UA DATA and send it.
+    async fn send_ss7(&self, out: ss7::Outgoing) {
+        trace!(
+            "M3UA SS7 {} to {} opc={} dpc={}",
+            out.label,
+            self.remote_addr,
+            out.protocol_data.opc,
+            out.protocol_data.dpc
+        );
+        self.send_encoded(
+            &out.label,
+            codec::data(
+                &out.protocol_data,
+                out.network_appearance,
+                out.routing_context,
+                None,
+            ),
+        )
+        .await;
+    }
+
+    /// Abort and forget dialogues that have been idle past `ss7::DIALOGUE_IDLE_TIMEOUT`.
+    async fn expire_dialogues(&mut self, now: crate::utils::clock::Instant) {
+        for (dialogue, abort) in self.engine.expire(now) {
+            Log::new(Some(&self.status_tx)).info(format!(
+                "M3UA dialogue {} with {} idle for {}s; aborted (decision=dialogue_idle_timeout)",
+                dialogue.id,
+                self.remote_addr,
+                ss7::DIALOGUE_IDLE_TIMEOUT.as_secs()
+            ));
+            if let Some(out) = abort {
+                self.send_ss7(out).await;
+            }
+        }
+    }
+
+    /// A decoded MAP or CAP dialogue message: ask the model, then hold it to an answer.
+    ///
+    /// Returns whether the association stays open.
+    async fn on_ss7_event(&mut self, ev: ss7::Ss7Event) -> bool {
+        for reply in ev.replies {
+            self.send_ss7(reply).await;
+        }
+        let event_type: &'static crate::protocol::EventType = match ev.family {
+            ss7::Family::Map => &ss7_actions::SGP_MAP_EVENT,
+            ss7::Family::Cap => &ss7_actions::SGP_CAP_EVENT,
+        };
+        let mut data = ev.data;
+        data["connection_id"] = serde_json::json!(self.connection_id.to_string());
+        data["remote_addr"] = serde_json::json!(self.remote_addr.to_string());
+        data["transport"] = serde_json::json!(self.config.transport.label());
+        Log::new(Some(&self.status_tx)).info(format!(
+            "M3UA {} TC-{} dialogue {} from {}",
+            ev.family.name().to_uppercase(),
+            ev.kind.name().to_uppercase(),
+            ev.dialogue_id,
+            self.remote_addr
+        ));
+        let event = Event { event_type, data };
+        let outcome = self.call_llm_and_send(&event).await;
+        let closed = matches!(outcome, HandlerOutcome::Ran { closed: true, .. });
+        if ev.ended || !self.engine.awaiting_answer(ev.dialogue_id) {
+            if ev.ended {
+                self.log_observational_outcome(event_type.id.as_str(), outcome);
+            }
+            return !closed;
+        }
+        // The dialogue still owes the peer an answer. Leaving it open would have the far end's
+        // invoke timer decide; answering something here is the honest alternative, and what is
+        // answered depends on why there was no answer.
+        let (fail_closed, decision) = match &outcome {
+            HandlerOutcome::Ran { .. } => (false, "model_silent".to_string()),
+            HandlerOutcome::Failed(f) => (
+                true,
+                format!("fail_closed_llm_error, {}", failure_category(*f)),
+            ),
+            HandlerOutcome::NoPolicy => (true, "no_policy_configured".to_string()),
+        };
+        if let Some(out) = self.engine.close_unanswered(ev.dialogue_id, fail_closed) {
+            Log::new(Some(&self.status_tx)).warn(format!(
+                "M3UA {} dialogue {} from {} left unanswered (decision={}); sending {}",
+                ev.family.name().to_uppercase(),
+                ev.dialogue_id,
+                self.remote_addr,
+                decision,
+                out.label
+            ));
+            self.send_ss7(out).await;
+        }
+        !closed
     }
 
     async fn send(&self, bytes: Vec<u8>) {
@@ -1355,8 +1512,8 @@ async fn operator_wants_dynamic(state: &AppState, server_id: ServerId, event_id:
 /// buffer size, and `length - HEADER_LEN` cannot underflow.
 ///
 /// The second element is the number of octets consumed, for the connection's inbound counters.
-async fn read_message(
-    reader: &mut ReadHalf<TcpStream>,
+pub async fn read_message<R: AsyncRead + Unpin>(
+    reader: &mut R,
     read_timeout: std::time::Duration,
 ) -> (Incoming, usize) {
     let mut header = [0u8; codec::HEADER_LEN];

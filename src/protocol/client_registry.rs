@@ -55,6 +55,10 @@ impl ClientRegistry {
         self.register(Arc::new(
             crate::client::bitcoin::BitcoinClientProtocol::new(),
         ));
+        #[cfg(feature = "devp2p")]
+        self.register(Arc::new(
+            crate::client::devp2p::actions::Devp2pClientProtocol::new(),
+        ));
 
         #[cfg(feature = "bluetooth-ble-client")]
         self.register(Arc::new(
@@ -661,6 +665,10 @@ impl ClientRegistry {
         #[cfg(feature = "spice")]
         self.register(Arc::new(
             crate::client::spice::actions::SpiceClientProtocol::new(),
+        ));
+        #[cfg(feature = "m3ua")]
+        self.register(Arc::new(
+            crate::client::m3ua::actions::M3uaClientProtocol::new(),
         ));
         #[cfg(feature = "ngap")]
         self.register(Arc::new(
@@ -1318,6 +1326,7 @@ pub(crate) const ALL_KNOWN_CLIENT_PROTOCOLS: &[(&str, &str)] = &[
     ("Snowflake", "snowflake"),
     ("Spark", "spark"),
     ("YARN", "yarn"),
+    ("M3UA", "m3ua"),
     ("NGAP", "ngap"),
     ("Matrix", "matrix"),
     ("libp2p", "libp2p"),
@@ -1447,6 +1456,7 @@ pub(crate) const ALL_KNOWN_CLIENT_PROTOCOLS: &[(&str, &str)] = &[
     ("WebRTC", "webrtc"),
     ("WebSocket", "websocket"),
     ("Bitcoin", "bitcoin"),
+    ("devp2p", "devp2p"),
     ("Bluetooth (BLE)", "bluetooth-ble-client"),
     ("DynamoDB", "dynamodb"),
     ("Elasticsearch", "elasticsearch"),

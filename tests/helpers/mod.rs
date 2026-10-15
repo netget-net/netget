@@ -3,6 +3,8 @@
 pub mod child_guard;
 pub mod client;
 pub mod common;
+#[cfg(feature = "devp2p")]
+pub mod ethereum;
 pub mod event_trigger;
 pub mod example_test_framework;
 #[cfg(feature = "grpc")]

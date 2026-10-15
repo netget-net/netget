@@ -24,7 +24,12 @@ use std::sync::LazyLock;
 use super::codec;
 
 /// M3UA protocol action handler.
-pub struct M3uaProtocol;
+pub struct M3uaProtocol {
+    /// Set on the instance the dashboard's peer command task runs: an SS7 dialogue intent needs
+    /// the association's transaction table, which only the session holds, so there it is refused
+    /// by name instead of being reported as executed with nothing sent.
+    peer_commands: bool,
+}
 
 impl Default for M3uaProtocol {
     fn default() -> Self {
@@ -263,7 +268,16 @@ pub fn decode_payload(action: &serde_json::Value) -> Result<Vec<u8>> {
 
 impl M3uaProtocol {
     pub fn new() -> Self {
-        Self
+        Self {
+            peer_commands: false,
+        }
+    }
+
+    /// The instance for the dashboard's "message this peer" (see `peer_commands`).
+    pub fn for_peer_commands() -> Self {
+        Self {
+            peer_commands: true,
+        }
     }
 
     fn execute_send_asp_up_ack(&self, action: serde_json::Value) -> Result<ActionResult> {
@@ -790,7 +804,11 @@ impl Protocol for M3uaProtocol {
     }
 
     fn get_sync_actions(&self) -> Vec<ActionDefinition> {
-        m3ua_response_actions()
+        let mut actions = m3ua_response_actions();
+        actions.extend(super::ss7_actions::all_actions(
+            super::ss7_actions::Role::Sgp,
+        ));
+        actions
     }
 
     fn protocol_name(&self) -> &'static str {
@@ -804,6 +822,8 @@ impl Protocol for M3uaProtocol {
             M3UA_DATA_EVENT.clone(),
             M3UA_ASP_DOWN_EVENT.clone(),
             M3UA_ERROR_EVENT.clone(),
+            super::ss7_actions::SGP_MAP_EVENT.clone(),
+            super::ss7_actions::SGP_CAP_EVENT.clone(),
         ]
     }
 
@@ -812,7 +832,10 @@ impl Protocol for M3uaProtocol {
     }
 
     fn keywords(&self) -> Vec<&'static str> {
-        vec!["m3ua", "sigtran", "ss7", "mtp3", "sgp", "asp"]
+        vec![
+            "m3ua", "sigtran", "ss7", "mtp3", "sgp", "asp", "sccp", "tcap", "map", "gsm map",
+            "camel", "cap", "hlr", "ussd",
+        ]
     }
 
     fn metadata(&self) -> crate::protocol::metadata::ProtocolMetadataV2 {
@@ -828,41 +851,53 @@ impl Protocol for M3uaProtocol {
             .well_known_sctp_port(2905)
             .implementation(
                 "RFC 4666 common header, TLV parameters and ASP state machine, hand-written; \
-                 SCTP transport via a socket2 SOCK_STREAM/IPPROTO_SCTP socket, plus a \
-                 non-standard TCP transport for lab use",
+                 SCTP transport via a socket2 SOCK_STREAM/IPPROTO_SCTP socket with sendmsg \
+                 (PPID 3, management on stream 0, DATA on stream 1), plus a non-standard TCP \
+                 transport for lab use. Above it, for service indicator 3: SCCP UDT/XUDT with \
+                 point code, SSN and global title addressing, ITU TCAP (dialogue portion and \
+                 components) over a hand-rolled bounded BER codec, and MAP and CAMEL operation \
+                 mappings (src/server/m3ua/{sccp,tcap,ber,map,cap,ss7}.rs)",
             )
             .llm_control(
-                "The model is the admission policy: it decides whether an ASP may come up and \
-                 go active, and what MSUs to send back. BEAT/BEAT ACK, ASPDN ACK, ASPIA ACK and \
-                 every protocol-validity refusal are answered in Rust with no LLM call",
+                "The model is the admission policy (may an ASP come up, go active) and the SS7 \
+                 node behind the SGP: it answers decoded MAP invokes (sendRoutingInfoForSM, \
+                 anyTimeInterrogation, processUnstructuredSS-Request, mo/mt-forwardSM, \
+                 sendRoutingInfo, updateLocation) with structured results or MAP errors, and \
+                 CAMEL initialDP / eventReportBCSM with connect, continue, releaseCall and \
+                 requestReportBCSMEvent. Rust owns transaction and invoke ids, AARE, SCCP and \
+                 MTP addressing; BEAT, ASPDN/ASPIA ACK, SCCP SST, CAP activityTest, every \
+                 protocol-validity refusal (P-Abort, Reject, AARE reject) are answered with no \
+                 LLM call",
             )
             .e2e_testing(
-                "Codec asserted octet-for-octet against RFC 4666 (including the TLV padding \
-                 excluded from the length field); session E2E over the TCP lab transport with a \
-                 mocked model; the SCTP refusal on a host without an SCTP stack is its own test",
+                "Restcomm jSS7 8.0.112 (an independent Java SS7 stack) over real SCTP on Linux \
+                 drives MAP and CAMEL dialogues against the SGP and decodes the model's answers \
+                 (tests/server/m3ua/real_peer_test.rs), also with osmo-stp (libosmo-sigtran, C) \
+                 routing between them as an ASP of NetGet's SGP (osmo_stp_test.rs); a live \
+                 capture is read by tshark's m3ua/sccp/tcap/gsm_map/camel dissectors. The codec \
+                 suite requires NetGet's MAP answers to equal jSS7's own answers octet for octet \
+                 for the same requests; RFC 4666 literal vectors for M3UA; mocked-model E2E over \
+                 the lab transport",
             )
             .notes(
-                "EXPERIMENTAL, AND IT CANNOT BE OTHERWISE FROM macOS. M3UA's transport is SCTP \
-                 (RFC 4666 section 1.4.1, port 2905) and macOS ships no SCTP stack at all - no \
-                 kernel support, no headers - so the real transport has NEVER BEEN EXECUTED on \
-                 the machine that tests this. What is proven: the codec, against literal bytes \
-                 derived from RFC 4666 rather than from this implementation. What is exercised \
-                 but is NOT the protocol's real transport: everything above the codec, over a \
-                 non-standard TCP framing offered as startup parameter transport=\"tcp\" for \
-                 lab use. No real SIGTRAN peer speaks M3UA over TCP; requesting the default \
-                 SCTP transport where none exists makes spawn() return an Err naming SCTP \
-                 rather than starting something that is not M3UA. Never spoken to a real ASP or \
-                 SGP: the route to that is osmo-stp / libosmo-sigtran on Linux, where the SCTP \
-                 socket path can actually run. Routing key management (RKM) is decoded and \
-                 refused rather than implemented, because a routing key table is storage. No \
-                 MTP3 network management (SSNM) is generated.",
+                "EXPERIMENTAL. Two independent peers exercise it over real SCTP (jSS7 for M3UA, \
+                 SCCP, TCAP, MAP and CAP; osmo-stp for M3UA and MTP routing), but only on Linux \
+                 and only in the protocol-pairs m3ua job, which has not yet run in CI, and the \
+                 code has had no human review - so the Beta bar is not met yet. macOS has no \
+                 SCTP: requesting the default transport there makes spawn() return an Err naming \
+                 SCTP; transport=\"tcp\" is a NON-STANDARD lab framing. MAP and CAP are a \
+                 subset (no sendAuthenticationInfo, insertSubscriberData, MAP v1 origination, \
+                 CAP charging or SRF operations); SCCP segmentation, LUDT and the \
+                 connection-oriented classes are refused, not implemented; there is no global \
+                 title translation. Routing key management (RKM) is decoded and refused because \
+                 a routing key table is storage. No MTP3 network management (SSNM) is generated.",
             )
             .max_inbound_bytes(crate::server::m3ua::codec::MAX_MESSAGE_LEN)
             .build()
     }
 
     fn description(&self) -> &'static str {
-        "M3UA/SIGTRAN signalling gateway (SS7 MTP3 user adaptation)"
+        "M3UA/SIGTRAN signalling gateway with SCCP, TCAP, MAP and CAMEL (SS7 over IP)"
     }
 
     fn example_prompt(&self) -> &'static str {
@@ -946,7 +981,9 @@ print(json.dumps({"actions": actions}))"#;
                 "base_stack": "m3ua",
                 "startup_params": { "transport": "sctp" },
                 "event_handlers": [{
-                    "event_pattern": "m3ua_*",
+                    // Patterns are an exact event id or "*" — there is no prefix glob, and
+                    // "m3ua_*" would match nothing.
+                    "event_pattern": "*",
                     "handler": {
                         "type": "script",
                         "language": "python",
@@ -1017,6 +1054,20 @@ impl Server for M3uaProtocol {
             "send_m3ua_data" => self.execute_send_data(action),
             "send_m3ua_error" => self.execute_send_error(action),
             "send_m3ua_notify" => self.execute_send_notify(action),
+            name if super::ss7::INTENTS.contains(&name) => {
+                if self.peer_commands {
+                    anyhow::bail!(
+                        "{name} answers a TCAP dialogue, which only the association's own \
+                         handler can address; from the dashboard send M3UA messages \
+                         (send_m3ua_data, send_m3ua_notify, send_m3ua_error)"
+                    );
+                }
+                super::ss7::check_intent(&action).map_err(|e| anyhow::anyhow!(e))?;
+                Ok(ActionResult::Custom {
+                    name: super::ss7::SS7_INTENT.to_string(),
+                    data: action,
+                })
+            }
             "wait_for_more" => Ok(ActionResult::WaitForMore),
             // Not offered to the model — refusing an ASP is send_m3ua_error, which keeps the
             // association up so the peer can retry. The dashboard's "disconnect this peer"
