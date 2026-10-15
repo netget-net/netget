@@ -148,6 +148,7 @@ fn golden_duals_map() {
         "WS-Discovery",
         "ONVIF",
         "Kerberos",
+        "SPICE",
         "Nostr",
         "Vault",
         "Bolt",

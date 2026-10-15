@@ -66,6 +66,11 @@ const NO_WELL_KNOWN_PORT: &[(&str, &str)] = &[
         "reverse_shell",
         "a listener for shells that call back; any port the operator hands the target is right",
     ),
+    (
+        "spice",
+        "SPICE registers no port with IANA and neither spice-server nor QEMU has a default: every \
+         -spice port=… is the operator's, and libvirt hands them out from VNC's 5900 range",
+    ),
     // ---- Below the transport layer: no port exists ----
     ("arp", "link layer (EtherType 0x0806); ports do not exist here"),
     ("cdp", "link layer (802.3 LLC/SNAP); ports do not exist here"),

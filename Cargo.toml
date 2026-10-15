@@ -233,6 +233,7 @@ portable-base = [
     "vnc",
     "reverse-shell",
     "rdp",
+    "spice",
     "openapi",
     "openid",
     "git",
@@ -526,6 +527,7 @@ vnc = ["dep:des"]  # VNC server and client with custom RFB protocol implementati
 reverse-shell = []  # Reverse-shell listener EMULATION (red-team/CTF); model role-plays the shell, nothing is executed
 rdp = []  # RDP server: TPKT/X.224 connection-negotiation slice of [MS-RDPBCGR] (hand-rolled, no crate)
 rdp-client = ["rdp", "dep:rustls", "dep:ironrdp-connector", "dep:ironrdp-session", "dep:ironrdp-tokio", "dep:ironrdp-tls", "dep:ironrdp-input", "dep:ironrdp-pdu", "dep:ironrdp-graphics"]  # RDP client: IronRDP drives the connection sequence (TLS / CredSSP), the model types, clicks and reads the screen
+spice = ["vnc", "dep:rsa", "dep:sha1"]  # SPICE server and client: hand-written link (RSA-OAEP ticket), main/display/inputs channels; reuses VNC's drawing-command parser
 openapi = ["http", "dep:openapi-rs", "dep:matchit"]  # OpenAPI 3.1 server with runtime request validation and route matching
 openid = ["urlencoding"]  # OpenID Connect authentication provider with LLM-controlled token generation
 usb-common = ["dep:usbip"]  # Common USB/IP functionality for USB device protocols
@@ -832,6 +834,7 @@ dist-windows = [
     "vnc",
     "reverse-shell",
     "rdp",
+    "spice",
     "openapi",
     "openid",
     "openidconnect",
@@ -1084,6 +1087,7 @@ all-protocols = [
     "vnc",
     "reverse-shell",
     "rdp",
+    "spice",
     "rdp-client",
     "openapi",
     "openid",

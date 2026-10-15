@@ -992,6 +992,8 @@ pub use reverse_shell::ReverseShellServer;
 
 #[cfg(feature = "rdp")]
 pub mod rdp;
+#[cfg(feature = "spice")]
+pub mod spice;
 #[cfg(feature = "rdp")]
 pub use rdp::actions::RdpProtocol;
 #[cfg(feature = "rdp")]
