@@ -151,6 +151,12 @@ const M3UA_NOTE: &str = "Real M3UA runs over SCTP, where the capture filter must
 non-standard TCP transport (`transport=tcp`), which exists for environments without SCTP - \
 this machine is one.";
 
+const NGAP_NOTE: &str = "NGAP runs over SCTP with payload protocol identifier 60, which \
+Wireshark's ngap dissector registers on, so the `sctp` capture filter and the `ngap` display filter \
+are all that is needed (add `-d sctp.port==N,ngap` only if a peer sends PPID 0). NetGet's \
+`transport=tcp` lab framing is a NetGet-only 4-octet length prefix over TCP that no dissector \
+knows, so a lab-transport capture shows plain TCP; read the PDUs in the hex pane.";
+
 const CAN_NOTE: &str = "Wireshark dissects CAN from a SocketCAN capture on a bus interface \
 (`can0`, `vcan0`) on Linux, where `can` is a valid display filter. There is no IP port to \
 filter on. NetGet's UDP transport carries a raw `struct can_frame` with no encapsulation \
@@ -511,6 +517,7 @@ pub fn wire_for(protocol: &str) -> Wire {
         // rather than a dissector it does not have.
         "gtp" => with_note(with_display(udp("gtp"), "gtp || gtpv2"), GTP_NOTE),
         "m3ua" => with_note(tcp("m3ua"), M3UA_NOTE),
+        "ngap" => with_note(raw("sctp", "ngap"), NGAP_NOTE),
         "can" => offline(CAN_NOTE),
         // ---- raw / link layer --------------------------------------------
         "icmp" => raw("icmp", "icmp"),

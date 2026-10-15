@@ -407,6 +407,7 @@ bfd = ["dep:md-5", "dep:sha1"] # BFD (RFC 5880/5881/5883) speaker and client, ha
 vxlan = [] # VXLAN (RFC 7348), Geneve (RFC 8926) and GRE-in-UDP gretap (RFC 2784/2890/8086) tunnel endpoint and overlay host, hand-rolled
 rsync = ["dep:md4"] # rsync daemon (rsync://, protocol 29) and client, hand-rolled; md4 for its checksums
 pfcp = [] # PFCP (3GPP TS 29.244, the 5G N4 interface) UPF and SMF, hand-rolled
+ngap = [] # NGAP (3GPP TS 38.413, the 5G N2 interface) AMF and gNB, hand-rolled APER; SCTP where available, refuses elsewhere
 matrix = ["urlencoding"] # Matrix homeserver (client-server API v3) and client, hyper HTTP/1.1
 libp2p = ["dep:x25519-dalek", "x25519-dalek/static_secrets", "dep:ed25519-dalek", "dep:sha2", "dep:hkdf", "ring"] # libp2p host and dialler over TCP (multistream-select, Noise XX, yamux, identify, ping), hand-rolled; with the ipfs startup parameter also IPFS: Bitswap 1.2.0/1.1.0/1.0.0, CIDv0/v1 with raw/dag-pb/UnixFS, and the Kademlia DHT (/ipfs/kad/1.0.0, /ipfs/lan/kad/1.0.0)
 sunrpc = [] # ONC RPC portmapper/rpcbind (PMAP v2, RPCBIND v3-v4) server and client, hand-rolled
@@ -885,6 +886,7 @@ all-protocols = [
     "rawip",
     "gtp",
     "m3ua",
+    "ngap",
     "can",
     "lldp",
     "cdp",

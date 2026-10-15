@@ -8179,3 +8179,95 @@ jobs:
             --test test_suite_hygiene_test \
             --test real_client_evidence_is_run_test \
             -- --test-threads=32
+
+  ngap:
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'ngap')
+    name: NGAP AMF and gNB against UERANSIM and Open5GS's AMF over SCTP
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      PAIR_FEATURES: tcp,ngap
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: protocol-pairs-${{ github.job }}
+      - name: Load the kernel's SCTP module
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          # The Azure kernel ships sctp.ko in linux-modules-extra; if it is absent, modprobe says so.
+          sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)" || true
+          sudo modprobe sctp
+          test -d /proc/sys/net/sctp
+      - name: Cache UERANSIM v3.2.7
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ngap
+          key: ngap-ueransim-${{ runner.os }}-${{ hashFiles('tests/server/ngap/install_peers.py') }}
+      - name: Build UERANSIM, install Open5GS's AMF, let dumpcap capture on loopback
+        run: |
+          set -euo pipefail
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            cmake g++ libsctp-dev lksctp-tools tshark software-properties-common
+          sudo add-apt-repository -y ppa:open5gs/latest
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends open5gs-amf
+          # The package starts its own AMF on 127.0.0.5; the tests start theirs on probed ports.
+          sudo systemctl stop open5gs-amfd || true
+          sudo setcap cap_net_raw,cap_net_admin=eip "$(command -v dumpcap)"
+          python3 tests/server/ngap/install_peers.py "$RUNNER_TEMP/ngap" | sed 's/^export //' >> "$GITHUB_ENV"
+      - name: Compile ngap as a standalone Cargo feature
+        run: cargo check --locked --no-default-features --features ngap --all-targets
+      - name: Both roles with mandatory independent peers, bounds and fail-closed paths
+        run: |
+          set -euo pipefail
+          for filter in \
+            ngap:: \
+            client/ngap::; do
+            case "$filter" in
+              client/*) target=client; filter=${filter#client/} ;;
+              *) target=server ;;
+            esac
+            pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
+            cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+              --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
+            grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
+          done
+      - name: Shared declarations, native startup, privacy and ownership
+        run: |
+          cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
+            --test event_action_declarations_test \
+            --test advertised_actions_test \
+            --test action_descriptions_test \
+            --test startup_examples_validation_test \
+            --test examples \
+            --test startup_param_defaults_test \
+            --test startup_param_drift_test \
+            --test protocol_startup_examples_test \
+            --test startup_params_result_test \
+            --test startup_constructed_input_test \
+            --test management_test \
+            --test management_form_test \
+            --test dual_protocol_test \
+            --test dashboard_wireshark_test \
+            --test client_event_wiring_test \
+            --test event_emit_sites_test \
+            --test task_registration_cancellation_test \
+            --test server_task_registry_test \
+            --test client_stop_releases_socket_test \
+            --test peer_handle_coverage_ratchet_test \
+            --test client_credential_logging_test \
+            --test client_llm_budget_test \
+            --test secret_redaction_test \
+            --test wire_failure_test \
+            --test site_protocol_list_test \
+            --test well_known_port_declaration_test \
+            --test failure_mode_declaration_test \
+            --test decision_tag_ratchet_test \
+            --test max_inbound_bytes_declaration_test \
+            --test max_inbound_bytes_bound_plus_one_test \
+            --test test_suite_hygiene_test \
+            --test real_client_evidence_is_run_test \
+            -- --test-threads=32

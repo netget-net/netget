@@ -178,6 +178,8 @@ pub mod netbios_ns;
 pub mod nfc;
 #[cfg(feature = "nfs")]
 pub mod nfs;
+#[cfg(feature = "ngap")]
+pub mod ngap;
 #[cfg(feature = "nntp")]
 pub mod nntp;
 #[cfg(feature = "nostr")]
