@@ -135,6 +135,10 @@ const PLAIN_UDP: Wire = Wire {
     note: None,
 };
 
+const DEVP2P_NOTE: &str = "RLPx encrypts every devp2p frame (AES-256-CTR, keys from an ECIES \
+    handshake) and Wireshark has no RLPx dissector, so the capture shows the two handshake \
+    packets and frame sizes, never a message. NetGet's own log has every decoded message.";
+
 const VXLAN_ENCAPSULATION_NOTE: &str = "This decodes VXLAN. With encapsulation geneve use \
     `-d udp.port==<port>,geneve` instead, and with gretap (GRE in UDP) `-d udp.port==<port>,gre`.";
 
@@ -472,6 +476,9 @@ pub fn wire_for(protocol: &str) -> Wire {
         "ipp" => with_display(tcp("http"), "ipp || http"),
         "bgp" => tcp("bgp"),
         "bitcoin" => tcp("bitcoin"),
+        // RLPx encrypts every frame after its two handshake packets and Wireshark has no RLPx
+        // dissector, so there is nothing to decode as: the capture shows packet sizes only.
+        "devp2p" => with_note(PLAIN_TCP, DEVP2P_NOTE),
         "torrent_peer" => tcp("bittorrent"),
         // ---- UDP ---------------------------------------------------------
         "dns" => either("dns"),

@@ -222,6 +222,7 @@ portable-base = [
     # isis moved to android-termux wrapper (needs libpcap)
     "rip",
     "bitcoin",
+    "devp2p",
     "nostr",
     "mcp",
     "grpc",
@@ -528,6 +529,7 @@ reverse-shell = []  # Reverse-shell listener EMULATION (red-team/CTF); model rol
 rdp = []  # RDP server: TPKT/X.224 connection-negotiation slice of [MS-RDPBCGR] (hand-rolled, no crate)
 rdp-client = ["rdp", "dep:rustls", "dep:ironrdp-connector", "dep:ironrdp-session", "dep:ironrdp-tokio", "dep:ironrdp-tls", "dep:ironrdp-input", "dep:ironrdp-pdu", "dep:ironrdp-graphics"]  # RDP client: IronRDP drives the connection sequence (TLS / CredSSP), the model types, clicks and reads the screen
 spice = ["vnc", "dep:rsa", "dep:sha1"]  # SPICE server and client: hand-written link (RSA-OAEP ticket), main/display/inputs channels; reuses VNC's drawing-command parser
+devp2p = ["dep:secp256k1", "secp256k1/recovery", "dep:aes", "dep:ctr", "dep:hmac", "dep:sha2", "dep:sha3", "dep:snap"]  # Ethereum devp2p node and dialler: hand-rolled RLPx (EIP-8 ECIES handshake, AES-CTR frames, keccak MACs, Snappy), RLP, eth/68 and eth/69
 openapi = ["http", "dep:openapi-rs", "dep:matchit"]  # OpenAPI 3.1 server with runtime request validation and route matching
 openid = ["urlencoding"]  # OpenID Connect authentication provider with LLM-controlled token generation
 usb-common = ["dep:usbip"]  # Common USB/IP functionality for USB device protocols
@@ -824,6 +826,7 @@ dist-windows = [
     # isis excluded: needs libpcap (not present on Windows runners)
     "rip",
     "bitcoin",
+    "devp2p",
     "nostr",
     "mcp",
     "grpc",
@@ -1076,6 +1079,7 @@ all-protocols = [
     "isis",
     "rip",
     "bitcoin",
+    "devp2p",
     "nostr",
     "mcp",
     "grpc",
@@ -1360,6 +1364,10 @@ secp256k1 = { version = "0.29", optional = true }
 # Stratum V2: the Noise transport's AEAD (ChaCha20-Poly1305, IETF); its chacha20 and poly1305
 # are the versions already in the tree.
 chacha20poly1305 = { version = "0.10", optional = true }
+# devp2p: keccak-256 (block hashes, RLPx secrets and MACs) and Snappy (message compression
+# after Hello v5). Both are the versions already in the tree through other crates.
+sha3 = { version = "0.10", optional = true }
+snap = { version = "1.1", optional = true }
 
 # WireGuard VPN server (full implementation with LLM control)
 defguard_wireguard_rs = { version = "0.7", optional = true, features = ["serde"] }
