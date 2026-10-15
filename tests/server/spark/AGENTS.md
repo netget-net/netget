@@ -1,9 +1,19 @@
 # Spark server E2E tests
 
-Drives the Spark monitoring REST endpoints with `reqwest` (a real, independent HTTP client) and
-asserts the decoded JSON matches the documented Spark monitoring REST shapes — crucially that
-success responses are top-level JSON **arrays**. No real Spark client is available on macOS/CI, so
-this is **shape-conformance against the documented response bodies**, not real-client validation.
+Two kinds of evidence:
+
+- `datadog_check_test.rs` — **Datadog's Spark integration** (`datadog_checks.spark`,
+  integrations-core tag `spark-7.8.0`), an independent consumer of the monitoring API, run once
+  in `spark_driver_mode` against the server through `datadog_check.py` (the Agent replaced by
+  `datadog_checks.base`'s stubs). It asserts what the check submitted: job/stage counts and
+  their tags, task counts, run times, driver vs executor metrics, executor-level metrics, the
+  cached RDD's metrics, the version metadata and the service checks. **Fails rather than skips**
+  without `NETGET_DATADOG_SPARK` from `install_datadog_check.sh` (python 3.12+; the check's
+  files are fetched at a pinned commit and SHA-256-checked). One mock rule on `spark_request`
+  branches on `operation` (and on the path for `streaming/statistics`, answered 404 as a
+  non-streaming Spark driver does).
+- `e2e_test.rs` — `reqwest` against the documented shapes: success responses are top-level JSON
+  **arrays**, and `GET /api/v1/applications/{id}` is the one **object**.
 
 ## Mock expectations
 
@@ -12,12 +22,15 @@ on the `spark_request` event's `operation` field so one server handles several e
 
 ## LLM call budget
 
-- `test_spark_version_static_and_applications`: startup (1) + applications (1). `/api/v1/version`
-  is **static** — no LLM call. Total 2.
+- `datadogs_spark_integration_reads_the_models_application`: startup (1) + applications, jobs,
+  stages, executors, storage/rdd, streaming/statistics (6). Version and `/metrics/json` are
+  static. Total 7.
+- `test_spark_version_static_and_applications`: startup (1) + applications (1) + one application
+  (1). `/api/v1/version` is **static** — no LLM call. Total 3.
 - `test_spark_jobs_stages_executors`: startup (1) + jobs (1) + stages (1) + executors (1). Total 4.
 - `llm_failure_test`: startup (1) + one unmatched applications request forcing a 5xx. Total ~2.
 
-Suite total ~8 LLM calls, under the ~10 budget. Localhost only; never contacts external endpoints.
+Suite total ~16 LLM calls across four tests. Localhost only; never contacts external endpoints.
 
 ## What each test validates
 
@@ -32,8 +45,10 @@ Suite total ~8 LLM calls, under the ~10 budget. Localhost only; never contacts e
 ## Running
 
 ```bash
-./cargo-isolated.sh test --no-default-features --features spark \
-    --test server -- server::spark::e2e_test --test-threads=100
+sh tests/server/spark/install_datadog_check.sh /tmp/dd-spark   # once; prints the export
+export NETGET_DATADOG_SPARK=/tmp/dd-spark
+./cargo-isolated.sh test --no-default-features --features tcp,spark \
+    --test server -- spark:: --test-threads=8
 ```
 
 ## The `decision=` tag

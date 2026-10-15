@@ -40,6 +40,18 @@ async fn test_spark_version_static_and_applications() -> E2EResult<()> {
                 }]))
                 .expect_calls(1)
                 .and()
+                // After the list rule, so "applications" never reaches it.
+                .on_event("spark_request")
+                .and_event_data_contains("operation", "application")
+                .respond_with_actions(json!([{
+                    "type": "send_spark_applications",
+                    "applications": [{
+                        "id": "app-20161116163331-0000", "name": "Spark shell",
+                        "attempts": [{"completed": false, "sparkUser": "jose"}]
+                    }]
+                }]))
+                .expect_calls(1)
+                .and()
         });
 
     let server = start_netget_server(config).await?;
@@ -64,6 +76,19 @@ async fn test_spark_version_static_and_applications() -> E2EResult<()> {
     );
     assert_eq!(a[0]["id"], "app-20161116163331-0000");
     assert_eq!(a[0]["attempts"][0]["completed"], false);
+
+    // One application is the API's one object: Spark answers `{...}`, not `[{...}]`.
+    let one = client
+        .get(format!("{apps_url}/app-20161116163331-0000"))
+        .send()
+        .await?;
+    assert!(one.status().is_success());
+    let o: serde_json::Value = serde_json::from_str(&one.text().await?)?;
+    assert!(
+        o.is_object(),
+        "GET /applications/{{id}} must be an object, got {o}"
+    );
+    assert_eq!(o["id"], "app-20161116163331-0000");
 
     // Wait for the exchange the mocks describe, rather than trusting a fixed
     // sleep to have covered it. Under load the last event routinely lands after

@@ -6664,7 +6664,7 @@ jobs:
 
   spark:
     if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'spark')
-    name: Spark client against Apache Spark 4.2.0 (live driver UI and History Server)
+    name: Spark client against Apache Spark 4.2.0 (live driver UI and History Server), Spark server against Datadog's Spark check
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -6692,14 +6692,22 @@ jobs:
           set -euo pipefail
           sh tests/client/spark/install_peers.sh "$RUNNER_TEMP/spark-peers" | tee "$RUNNER_TEMP/spark-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/spark-env" >> "$GITHUB_ENV"
+      - name: Install Datadog's Spark integration (integrations-core spark-7.8.0, SHA-256 pinned)
+        run: |
+          set -euo pipefail
+          sh tests/server/spark/install_datadog_check.sh "$RUNNER_TEMP/datadog-spark" | tee "$RUNNER_TEMP/datadog-env"
+          sed -n 's/^export //p' "$RUNNER_TEMP/datadog-env" >> "$GITHUB_ENV"
       - name: Compile spark as a standalone Cargo feature
         run: cargo check --locked --no-default-features --features spark --all-targets
-      - name: Client against a live Spark driver UI and Spark's History Server
+      - name: Client against a live Spark driver UI and Spark's History Server, server against Datadog's Spark check
         run: |
           set -euo pipefail
           for filter in \
-            client/spark::; do
-            target=client; filter=${filter#client/}
+            client/spark:: spark::datadog_check_test; do
+            case "$filter" in
+              client/*) target=client; filter=${filter#client/} ;;
+              *) target=server ;;
+            esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
             cargo test --locked --no-default-features --features "$PAIR_FEATURES" \
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
