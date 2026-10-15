@@ -13,6 +13,7 @@
     --glow: rgba(35, 100, 162, 0.04);
     --shadow: 0 16px 45px rgba(25, 43, 64, 0.07);
     --term-bg: #ffffff;
+    --logo-tile: #dfe8f1; --logo-top: #087e80; --logo-layer: #2364a2;
     --sans: 'Inter', system-ui, sans-serif;
     --mono: 'JetBrains Mono', ui-monospace, monospace;
     color-scheme: light;
@@ -23,6 +24,7 @@
         --text: #e3eaf0; --muted: #a0b0bf; --green: #63c5bf; --cyan: #7db9e7;
         --yellow: #d9b972; --red: #ef8e8e; --term-bg: #111b25;
         --glow: rgba(99, 197, 191, 0.025); --shadow: 0 16px 45px rgba(0, 0, 0, 0.15);
+        --logo-tile: #192b40; --logo-top: #63c5bf; --logo-layer: #7db9e7;
         color-scheme: dark;
     }
 }
@@ -31,6 +33,7 @@
     --text: #e3eaf0; --muted: #a0b0bf; --green: #63c5bf; --cyan: #7db9e7;
     --yellow: #d9b972; --red: #ef8e8e; --term-bg: #111b25;
     --glow: rgba(99, 197, 191, 0.025); --shadow: 0 16px 45px rgba(0, 0, 0, 0.15);
+    --logo-tile: #192b40; --logo-top: #63c5bf; --logo-layer: #7db9e7;
     color-scheme: dark;
 }
 *, *::before, *::after { box-sizing: border-box; }
@@ -46,8 +49,10 @@ code, pre { font-family: var(--mono); }
 .skip-link { position: fixed; top: -5rem; left: 1rem; z-index: 10; padding: 0.75rem 1rem; background: var(--panel); }
 .skip-link:focus { top: 1rem; }
 .nav { display: flex; align-items: center; justify-content: space-between; min-height: 80px; border-bottom: 1px solid var(--border); }
-.logo { font-family: var(--mono); font-weight: 700; font-size: 1.2rem; color: var(--text); text-decoration: none; letter-spacing: -0.05em; }
-.logo span { color: var(--green); }
+.logo { display: inline-flex; align-items: center; gap: 0.55rem; font-family: var(--mono); font-weight: 700; font-size: 1.2rem; color: var(--text); text-decoration: none; letter-spacing: -0.05em; }
+.logo-word span { color: var(--green); }
+.logo-mark { width: 28px; height: 28px; flex: none; }
+.lm-tile { fill: var(--logo-tile); } .lm-top { fill: var(--logo-top); } .lm-layer { fill: var(--logo-layer); }
 .nav-right { display: flex; align-items: center; gap: 1.25rem; }
 .nav-link { font-size: 0.8rem; color: var(--muted); text-decoration: none; }
 .nav-link:hover, .footer a:hover { color: var(--green); }
@@ -60,6 +65,10 @@ code, pre { font-family: var(--mono); }
 h1 { font-size: clamp(2.25rem, 5vw, 3.3rem); line-height: 1.12; letter-spacing: -0.045em; font-weight: 600; }
 .accent { color: var(--green); }
 .hero p { margin-top: 1.25rem; font-size: 0.96rem; color: var(--muted); }
+.hero-actions { display: flex; justify-content: center; gap: 0.75rem; margin-top: 1.75rem; }
+.hero-actions .button { min-width: 7.5rem; padding: 0.6rem 1.4rem; font-size: 0.9rem; }
+.button-primary { background: var(--green); border-color: var(--green); color: var(--bg); font-weight: 600; }
+.button-primary:hover { background: color-mix(in srgb, var(--green) 85%, var(--text)); color: var(--bg); }
 .section { padding: 1.8rem 0; }
 h2 { font-size: 1.3rem; font-weight: 600; letter-spacing: -0.025em; margin-bottom: 1rem; }
 /* Protocol stacks of different depths align at their base layers. */

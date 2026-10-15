@@ -87,6 +87,14 @@ export function newEntry(action, source) {
 }
 
 /**
+ * The one field the simple composer edits: the index of the entry's only parameter when it is
+ * free text (send_telnet_line's `line`), otherwise -1 and the full form is the only editor.
+ */
+export function simpleFieldIndex(entry) {
+    return entry && entry.fields.length === 1 && entry.fields[0].kind === 'text' ? 0 : -1;
+}
+
+/**
  * The action object an entry stands for: `{ok: true, value}` or `{ok: false, errors}`,
  * where each error is `{field, message}`.
  */
@@ -210,31 +218,84 @@ let uid = 0;
 
 /**
  * Render the composer into `root` and resolve through `onSend(reply)` / `onRefuse()`.
- * Falls back to a plain reply field when the request offers no actions. `autofocus: false`
- * leaves the focus wherever the visitor put it; focusing never
- * scrolls the page.
+ *
+ * When the preselected action takes one free-text parameter, the composer starts simple: one
+ * textarea holding `prefill` (or the action's example), Send, and Advanced, which opens the
+ * full form (any action, any number of them, answer with nothing, refuse). `onAdvanced(on)`
+ * reports each switch, including the initial one. Falls back to a plain reply field when the
+ * request offers no actions. `autofocus: false` leaves the focus wherever the visitor put it;
+ * focusing never scrolls the page.
  */
-export function mountComposer(root, req, { onSend, onRefuse, autofocus = true }) {
+export function mountComposer(root, req, { onSend, onRefuse, onAdvanced = () => {}, prefill = '', autofocus = true }) {
     const actions = offeredActions(req);
     const id = 'cmp' + (++uid);
     const state = {
         entries: actions.length ? [newEntry(actions[defaultActionIndex(actions)])] : [],
     };
+    const simpleAction = actions.length ? actions[defaultActionIndex(actions)] : null;
+    const simpleField = simpleFieldIndex(state.entries[0]);
+    const canSimple = simpleField >= 0;
+    // An example that ends its text with a line break (send_telnet_message's "Hello\r\n") is
+    // a line: the simple field shows it without the break and puts it back on send.
+    const lineBreak = canSimple && /\n$/.test(String(state.entries[0].fields[simpleField].raw));
+    const shown = (text) => (lineBreak ? String(text).replace(/\r?\n$/, '') : String(text));
 
     root.innerHTML = `
+      ${canSimple ? `<div class="cmp-simple"><textarea class="llm-input cmp-simple-input" rows="2" spellcheck="false" aria-label="${esc(simpleAction.parameters[simpleField].name)} (${esc(simpleAction.name)})"></textarea></div>` : ''}
       <div class="cmp-form" id="${id}-form"></div>
       ${actions.length ? '' : `<textarea class="llm-input cmp-free-input" rows="8" spellcheck="false" aria-label="Reply"></textarea>`}
       <div class="cmp-error" role="alert"></div>
       <div class="llm-actions">
-        <button type="button" class="btn btn-primary llm-send">Send reply</button>
-        <button type="button" class="btn cmp-nothing" title='Reply {"actions": []}: a real answer that does nothing, not a failure'>Answer with nothing</button>
-        <button type="button" class="btn llm-fail">Refuse (fail closed)</button>
+        <button type="button" class="btn btn-primary llm-send">Send</button>
+        <button type="button" class="btn cmp-nothing cmp-adv" title='Reply {"actions": []}: a real answer that does nothing, not a failure'>Answer with nothing</button>
+        <button type="button" class="btn llm-fail cmp-adv">Refuse (fail closed)</button>
+        ${canSimple ? '<button type="button" class="btn cmp-toggle" aria-expanded="false">Advanced</button>' : ''}
       </div>
     `;
 
     const formEl = root.querySelector('.cmp-form');
     const freeInput = root.querySelector('.cmp-free-input');
+    const simpleInput = root.querySelector('.cmp-simple-input');
+    const toggle = root.querySelector('.cmp-toggle');
     const errorEl = root.querySelector('.cmp-error');
+    let advanced = !canSimple;
+
+    const growSimple = () => {
+        simpleInput.style.height = 'auto';
+        simpleInput.style.height = simpleInput.scrollHeight + 2 + 'px';
+    };
+
+    // The simple field's text as the one entry it stands for.
+    function simpleEntries() {
+        const entry = newEntry(simpleAction);
+        const text = simpleInput.value;
+        entry.fields[simpleField].raw = lineBreak && !text.endsWith('\n') ? text + '\n' : text;
+        return [entry];
+    }
+
+    function setAdvanced(on) {
+        if (on && !advanced) {
+            state.entries = simpleEntries();
+            renderForm();
+        } else if (!on && advanced) {
+            const first = state.entries[0];
+            if (first && first.name === simpleAction.name) simpleInput.value = shown(first.fields[simpleField].raw);
+        }
+        advanced = on;
+        paintMode();
+    }
+
+    function paintMode() {
+        const on = advanced;
+        errorEl.textContent = '';
+        root.querySelector('.cmp-simple').hidden = on;
+        formEl.hidden = !on;
+        for (const b of root.querySelectorAll('.cmp-adv')) b.hidden = !on;
+        toggle.textContent = on ? 'Simple' : 'Advanced';
+        toggle.setAttribute('aria-expanded', String(on));
+        if (!on) growSimple();
+        onAdvanced(on);
+    }
 
     function renderField(entry, ei, f, fi, action) {
         const param = action.parameters[fi];
@@ -374,6 +435,12 @@ export function mountComposer(root, req, { onSend, onRefuse, autofocus = true })
     function send() {
         errorEl.textContent = '';
         if (freeInput) { onSend({ content: freeInput.value }); return; }
+        if (!advanced) {
+            const built = buildReply(req, actions, simpleEntries());
+            if (built.ok) onSend(built.reply);
+            else errorEl.textContent = built.errors.map((e) => e.field + ' ' + e.message).join('; ');
+            return;
+        }
         const built = buildReply(req, actions, state.entries);
         if (!built.ok) {
             const ei = state.entries.indexOf(built.entry);
@@ -396,10 +463,22 @@ export function mountComposer(root, req, { onSend, onRefuse, autofocus = true })
         if ((ev.metaKey || ev.ctrlKey) && ev.key === 'Enter') { ev.preventDefault(); send(); }
     });
 
-    if (actions.length) {
+    if (canSimple) {
+        simpleInput.value = prefill || shown(state.entries[0].fields[simpleField].raw);
+        simpleInput.addEventListener('input', growSimple);
+        // Enter sends, as a chat box does; Shift+Enter is a line break.
+        simpleInput.addEventListener('keydown', (ev) => {
+            if (ev.key === 'Enter' && !ev.shiftKey && !ev.metaKey && !ev.ctrlKey && !ev.isComposing) { ev.preventDefault(); send(); }
+        });
+        toggle.addEventListener('click', () => setAdvanced(!advanced));
+        paintMode();
+        if (autofocus) simpleInput.focus({ preventScroll: true });
+    } else if (actions.length) {
         renderForm();
+        onAdvanced(true);
         if (autofocus) formEl.querySelector('.cmp-picker')?.focus({ preventScroll: true });
     } else {
+        onAdvanced(true);
         formEl.hidden = true;
         freeInput.addEventListener('input', () => {
             freeInput.style.height = 'auto';

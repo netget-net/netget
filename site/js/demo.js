@@ -24,7 +24,6 @@
 
 import { mountComposer, offeredActions, entriesFromEnvelope, buildReply } from './composer.js';
 import { splitThinking } from './thinking.js';
-import { Adventure } from './adventure.js';
 import { TelnetDecoder } from './telnet.js';
 
 const PKG = '../demo/pkg/netget_web.js';
@@ -74,28 +73,17 @@ const CLIENT_AFTER_MS = 2000;   // after NetGet boots, connect the Telnet client
 // handler adds its instruction to that event's prompt alone, after the event's data, as the
 // last thing the model reads (web/README.md has the measurements).
 //
-// Connection-open is handled statically; only typed lines reach the model.
-//
-// - The adventure. Room transitions are applied by adventure.js before a request reaches a
-//   model or the manual composer. The model receives the current room and command result on
-//   every turn, so a model that never calls set_memory can still play the whole map.
-const TELNET_INSTRUCTION = 'You are the NetGet BBS, a tiny retro bulletin board reached over '
-    + 'Telnet. Answer every line a visitor types with send_telnet_line: one or two short, friendly '
-    + 'lines of plain text, under 200 characters. Greet them by name, chat, tell a one-line joke '
-    + 'when asked, or run a tiny text adventure if they type "play". The adventure\'s map: Gate '
-    + '(a rusty lamp; north to Hall), Hall (a sleeping dragon; south to Gate, east to Vault), '
-    + 'Vault (a heap of gold; west to Hall). It starts at the Gate.';
-const TELNET_GAME_RULE = 'Answer with send_telnet_line. The demo owns the adventure state. '
-    + 'Use the Demo adventure state supplied below to describe the current room and the '
-    + 'command result. "play" or "reset" starts at the Gate; "look" describes the room; '
-    + 'north, south, east, west or "go <direction>" moves when an exit exists. '
-    + 'A blocked move stays in the same room. Anything else is chat.';
+// Connection-open is handled statically; only typed lines reach the model, and the rule for
+// them asks for the one-line answer a small model or a person can give.
+const TELNET_INSTRUCTION = 'Provide life coaching services over Telnet.';
+const TELNET_LINE_RULE = 'Answer with send_telnet_line: one or two short lines of plain text, '
+    + 'under 200 characters.';
 const TELNET_EVENT_HANDLERS = [{
     event_pattern: 'telnet_connection_opened',
     handler: { type: 'static', actions: [] },
 }, {
     event_pattern: 'telnet_message_received',
-    handler: { type: 'llm', instruction: TELNET_GAME_RULE },
+    handler: { type: 'llm', instruction: TELNET_LINE_RULE },
 }];
 
 // Options for the Prompt API: English text in, English text out.
@@ -111,7 +99,6 @@ const app = {
     netget: null,
     dash: null,           // xterm for the dashboard
     telnet: { term: null, conn: null, line: '', serverUp: false, serverId: null, typing: false },
-    adventure: new Adventure(),
     models: [],           // what the select lists, each with its own state
     selected: null,       // the id the select shows
     active: null,         // the model answering, or null: the visitor answers
@@ -313,6 +300,11 @@ function selectedModel() { return modelById(app.selected); }
 
 // The full label on a wide screen; on a narrow one only what tells the options apart, so it
 // fits the select: "Qwen2.5 3B · 2 GB", "Qwen3 1.7B · thinks · cached".
+// Where a model runs, for status lines: "Chrome built-in Gemini Nano", "WebLLM Qwen3 1.7B".
+function sourceName(m) {
+    return m.kind === BUILTIN ? `${m.where} built-in ${m.name}` : `WebLLM ${m.name}`;
+}
+
 function optionLabel(m) {
     if (NARROW.matches) {
         if (m.kind === BUILTIN) return `${m.name} · built in`;
@@ -321,7 +313,7 @@ function optionLabel(m) {
         bits.push(m.state === 'unsupported' ? 'no WebGPU' : m.cached ? 'cached' : m.size.replace(/^~/, ''));
         return bits.join(' · ');
     }
-    if (m.kind === BUILTIN) return `${m.name} (built into ${m.where})`;
+    if (m.kind === BUILTIN) return `${m.name} · ${m.where} built-in`;
     const kind = m.thinks ? 'WebLLM · thinks' : 'WebLLM';
     if (m.state === 'unsupported') return `${m.name} · ${kind} · needs WebGPU`;
     return `${m.name} · ${kind} · ${m.cached ? 'downloaded' : m.size + ' download'}`;
@@ -360,40 +352,39 @@ function paintControl() {
     setProgress(null);
     if (app.selected === YOU) {
         status.textContent = app.models.some((m) => m.state !== 'unsupported')
-            ? 'You are the model.' : 'Local models unavailable. Reply manually.';
+            ? 'Manual: you write each LLM response.' : 'No local LLM in this browser. Manual responses.';
         return;
     }
     const m = selectedModel();
-    if (!m) { status.textContent = 'You are the model.'; return; }
-    const name = escapeHtml(m.name);
-    const other = app.active && app.active !== m ? escapeHtml(app.active.name) : null;
-    const fallback = other ? ` ${other} keeps answering.` : '';
+    if (!m) { status.textContent = 'Manual: you write each LLM response.'; return; }
+    const source = sourceName(m);
+    const fallback = app.active && app.active !== m ? ` · ${app.active.name} answers meanwhile` : '';
     switch (m.state) {
     case 'ready':
-        status.innerHTML = `Ready: ${name}.`;
+        status.textContent = `Ready: ${source}`;
         break;
     case 'loading': {
         const known = typeof m.progress === 'number';
         setProgress(known ? m.progress : null);
-        status.innerHTML = `${m.verb} ${name}${known ? percent(m) + '.' : '…'}${fallback}`;
+        status.textContent = `${m.verb} ${source}…${percent(m)}${fallback}`;
         break;
     }
     case 'checking':
     case 'loadable':
-        status.innerHTML = `Checking ${name}…${fallback}`;
+        status.textContent = `Checking ${source}…${fallback}`;
         break;
     case 'needs-click':
         btn.hidden = false;
-        btn.textContent = m.kind === BUILTIN ? `Download ${m.name}` : `Download ${m.name} · ${m.size}`;
-        status.innerHTML = `Download to use this model.${fallback}`;
+        btn.textContent = m.kind === BUILTIN ? 'Download' : `Download · ${m.size}`;
+        status.textContent = `${source}: not downloaded${fallback}`;
         break;
     case 'failed':
         btn.hidden = false;
-        btn.textContent = 'Try again';
-        status.innerHTML = `Could not load ${name} (${escapeHtml(m.error || 'unknown error')}).${fallback}`;
+        btn.textContent = 'Retry';
+        status.textContent = `${source}: load failed (${m.error || 'unknown error'})${fallback}`;
         break;
     default:
-        status.textContent = 'Choose a model or reply manually.';
+        status.textContent = 'Select an LLM source.';
     }
 }
 
@@ -462,7 +453,7 @@ async function setupModelControl() {
     }
     const sel = $('#model-select');
     sel.innerHTML = app.models.map((m) => `<option value="${m.id}"${m.state === 'unsupported' ? ' disabled' : ''}>${escapeHtml(optionLabel(m))}</option>`).join('')
-        + `<option value="${YOU}">You are the model</option>`;
+        + `<option value="${YOU}">Respond on behalf of LLM</option>`;
     sel.onchange = () => {
         try { localStorage.setItem(MODEL_KEY, sel.value); } catch (e) { /* storage refused */ }
         choose(sel.value);
@@ -516,7 +507,7 @@ function loadBuiltin(m, { quiet = false } = {}) {
     m.creating = pending;
     if (!quiet) {
         m.state = 'loading';
-        m.verb = before === 'loadable' ? 'Starting' : 'Downloading';
+        m.verb = before === 'loadable' ? 'Loading' : 'Downloading';
         m.progress = null;
         m.note = null;
         renderControl();
@@ -656,7 +647,7 @@ function describe(req) {
 }
 
 function handleLlmRequest(json) {
-    const req = app.adventure.prepare(JSON.parse(json), app.telnet.serverId);
+    const req = JSON.parse(json);
     return new Promise((resolve) => {
         // mode: 'waiting' (for a model that is loading), 'manual' (the visitor has it) or
         // 'model' (a model is answering it).
@@ -717,8 +708,8 @@ function reroute() {
 // Why a request that waited for `m` is the visitor's now.
 function leftBy(m) {
     if (app.selected === YOU || !m) return '';
-    if (m.state === 'failed') return `${m.name} could not be loaded (${m.error || 'unknown error'}), so this one is yours.`;
-    if (m.state === 'needs-click') return `${m.name} needs a download first, so this one is yours.`;
+    if (m.state === 'failed') return `${sourceName(m)}: load failed (${m.error || 'unknown error'}). Manual response.`;
+    if (m.state === 'needs-click') return `${sourceName(m)}: not downloaded. Manual response.`;
     return '';
 }
 
@@ -744,10 +735,7 @@ function headHtml(entry, state) {
 
 function promptHtml(req) {
     const n = offeredActions(req).length;
-    const room = req.adventure
-        ? `<div class="llm-note adventure-state">Room: <b>${escapeHtml(req.adventure.room)}</b>. ${escapeHtml(req.adventure.detail)}</div>`
-        : '';
-    return room + `<details class="llm-prompt">
+    return `<details class="llm-prompt">
         <summary>The prompt NetGet sent · ${req.messages.length} message${req.messages.length === 1 ? '' : 's'}${n ? ` · ${n} actions offered` : ''}</summary>
         ${req.messages.map((m) => `<span class="llm-role">${escapeHtml(m.role)}</span><pre>${escapeHtml(m.content)}</pre>`).join('')}
       </details>`;
@@ -772,8 +760,7 @@ function updateWaiting(entry) {
     const el = $('#llm-current .llm-waiting-text');
     if (!el || app.current !== entry) return;
     const m = entry.waitFor;
-    el.textContent = `Waiting for ${m.name} to load…${percent(m)} It answers this request as soon as it is ready; `
-        + `if that takes more than ${MODEL_WAIT_MS / 60000} minutes, this one is yours.`;
+    el.textContent = `${m.state === 'loading' ? m.verb : 'Loading'} ${sourceName(m)}…${percent(m)}`;
 }
 
 // The model is still not ready: the visitor gets the request, while NetGet still has most of
@@ -782,11 +769,16 @@ function waitedOut(entry) {
     if (app.current !== entry || entry.mode !== 'waiting') return;
     entry.waitedOut = true;
     const m = entry.waitFor;
-    answerManually(entry, `${m.name} is still loading after ${MODEL_WAIT_MS / 60000} minutes, so this one is yours `
-        + `unless it is ready before you start; it answers the next request once it is.`);
+    answerManually(entry, `${sourceName(m)}: still loading after ${MODEL_WAIT_MS / 60000} min. Manual response.`);
 }
 
 // --- you are the model -------------------------------------------------------------------
+
+// A reply worth sending as it stands, for the simple composer's one field: an echo of the line.
+function suggestedReply(req) {
+    const { detail } = describe(req);
+    return detail ? `You said: ${detail}` : '';
+}
 
 function answerManually(entry, note = '') {
     entry.mode = 'manual';
@@ -794,7 +786,7 @@ function answerManually(entry, note = '') {
     const root = $('#llm-current');
     root.innerHTML = headHtml(entry, 'waiting for you')
         + (note ? `<div class="llm-note">${escapeHtml(note)}</div>` : '')
-        + promptHtml(entry.req)
+        + '<div class="llm-advanced-only" hidden>' + promptHtml(entry.req) + '</div>'
         + '<div class="llm-composer"></div>';
     renderQueueCount();
     const touch = () => { entry.touched = true; };
@@ -802,6 +794,8 @@ function answerManually(entry, note = '') {
     for (const type of ['input', 'change', 'click']) composerRoot.addEventListener(type, touch);
     mountComposer(composerRoot, entry.req, {
         autofocus: false,
+        prefill: suggestedReply(entry.req),
+        onAdvanced: (on) => { $('.llm-advanced-only', root).hidden = !on; },
         onSend: (reply) => { finish(entry, reply); },
         onRefuse: () => { finish(entry, { error: 'refused by the person at the keyboard' }); },
     });
@@ -875,10 +869,9 @@ async function answerWithModel(entry) {
     clearTimeout(entry.timer);
     const model = app.active;
     const who = model.name;
-    const { event, detail } = describe(entry.req);
     const root = $('#llm-current');
-    root.innerHTML = headHtml(entry, 'the model is answering')
-        + `<div class="llm-working"><span>${escapeHtml(who)} is answering <code>${escapeHtml(event)}</code>${detail ? ` for “${escapeHtml(detail.length > 60 ? detail.slice(0, 59) + '…' : detail)}”` : ''}</span></div>`;
+    root.innerHTML = headHtml(entry, 'answering')
+        + `<div class="llm-working"><span>${escapeHtml(sourceName(model))} generating…</span></div>`;
     renderQueueCount();
     const view = liveView(root, model);
     const started = performance.now();
@@ -893,7 +886,7 @@ async function answerWithModel(entry) {
         console.warn('the model could not answer; the visitor answers this one', e);
         if (app.current === entry) {
             entry.modelFailed = true;
-            answerManually(entry, `${who} could not answer this one (${e && e.message || e}), so it is yours.`);
+            answerManually(entry, `${who} failed: ${e && e.message || e}. Manual response.`);
         }
         return;
     } finally {
@@ -1244,6 +1237,12 @@ function wireTelnet() {
     app.telnet.term = term;
     showPrompt();
     term.onData(telnetInput);
+    // xterm.js draws no cursor at all until the terminal is first focused. Mark it drawn (the
+    // pinned 5.5.0's coreService flag, which focus() would set) so an unfocused terminal shows
+    // the hollow cursor, then focus it unless the visitor has already put focus elsewhere.
+    const core = term._core && term._core.coreService;
+    if (core && !core.isCursorInitialized) { core.isCursorInitialized = true; term.refresh(0, term.rows - 1); }
+    if (!document.activeElement || document.activeElement === document.body) term.focus();
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1278,12 +1277,6 @@ function whenListening(port, then, deadline = performance.now() + 15000) {
     setTimeout(() => whenListening(port, then, deadline), 100);
 }
 
-// The adventure's game state is per connection; drop it for peers that have gone.
-function pruneAdventure() {
-    if (!app.netget) return;
-    app.netget.servers((json) => app.adventure.prune(JSON.parse(json)));
-}
-
 // ---------------------------------------------------------------------------------------
 
 async function main() {
@@ -1293,7 +1286,7 @@ async function main() {
     renderIdle();
     // Which model the control offers does not depend on NetGet; find out while it loads.
     const control = setupModelControl();
-    if (!('WebAssembly' in window)) { banner.textContent = 'This browser cannot run WebAssembly.'; return; }
+    if (!('WebAssembly' in window)) { banner.hidden = false; banner.textContent = 'This browser cannot run WebAssembly.'; return; }
 
     let mod;
     try {
@@ -1306,8 +1299,6 @@ async function main() {
             + '<code>./web/build.sh</code>; see <code>web/README.md</code>.';
         return;
     }
-    banner.hidden = true;
-    banner.textContent = '';
 
     // xterm.js measures its cell once, when it opens: let the terminal font arrive first.
     await Promise.race([
@@ -1340,7 +1331,6 @@ async function main() {
         telnetConnect();
     })), CLIENT_AFTER_MS);
 
-    setInterval(pruneAdventure, 2000);
 
     $('#theme-toggle')?.addEventListener('click', () => {
         setTimeout(() => { for (const t of [app.dash, app.telnet.term]) t.options.theme = xtermTheme(); }, 0);

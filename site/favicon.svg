@@ -1,7 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <rect width="32" height="32" rx="5" fill="#192b40"/>
-  <g fill="none" stroke="#85d6d1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M6 23V12m0 4c0-6 8-6 8 0v7"/>
-    <path d="M19 13h8m-3-3 3 3-3 3M27 22h-8m3-3-3 3 3 3"/>
-  </g>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <style>
+    .tile { fill: #dfe8f1; } .top { fill: #087e80; } .layer { fill: #2364a2; }
+    @media (prefers-color-scheme: dark) { .tile { fill: #192b40; } .top { fill: #63c5bf; } .layer { fill: #7db9e7; } }
+  </style>
+  <rect class="tile" width="64" height="64" rx="14"/>
+  <rect class="top" x="13" y="13" width="38" height="8" rx="3"/>
+  <rect class="layer" x="13" y="25" width="38" height="8" rx="3"/>
+  <rect class="layer" x="13" y="37" width="38" height="8" rx="3" opacity=".65"/>
+  <rect class="layer" x="13" y="49" width="38" height="3" rx="1.5" opacity=".35"/>
 </svg>

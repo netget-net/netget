@@ -96,39 +96,24 @@ below them at full width; on a narrow one they stack as Telnet, dashboard, model
 dashboard's terminal is 13px wherever 80 columns fit; narrower, the dashboard stacks its own
 two columns (`src/tui/render/mod.rs`, from 40 columns up) and the page picks the largest font
 that fits 48 columns — 10.5px on a 390px phone, where squeezing in 80 columns meant 6.5px. The page
-around them carries no step list or notes: the machines are the explanation. Nothing needs a
-click. The dashboard has no extra listening-status row or keyboard-help footer.
+around them carries no step list or notes: each machine's header names it in one line
+("NetGet in your browser via WASM", "Mock Telnet client connected to NetGet WASM", "Source
+LLM used by NetGet WASM"), and no loading banner shifts the page while the bundle loads (the
+banner element shows only an error). Nothing needs a click: once the Telnet terminal exists it
+takes focus, unless the visitor has already focused something else, and its cursor is drawn
+from the start (xterm.js draws none until a terminal's first focus, so the page sets the
+pinned 5.5.0's `coreService.isCursorInitialized` itself). The dashboard has no extra
+listening-status row or keyboard-help footer.
 
 - About a second after `new NetGet(...)` the page calls `start_server` for a Telnet server on
-  2323 with a short BBS instruction. A static rule with no actions handles
+  2323 with the instruction "Provide life coaching services over Telnet." and one `llm`
+  rule on typed lines asking for a short `send_telnet_line` answer. A static rule with no actions handles
   `telnet_connection_opened`, so connecting or reconnecting makes no model request.
   `send_first` does not suppress Telnet's connect event; the static rule is what skips the LLM.
 
-  The adventure's room state now belongs to `site/js/adventure.js`, scoped to the demo
-  server and each connection. `play`/`reset` starts at the Gate; north reaches the Hall, east
-  reaches the Vault, west returns to the Hall and south returns to the Gate. Invalid exits
-  keep the player in the same room. The model still writes the response, but receives the
-  current room, exits and already-applied command result on every turn. The manual composer
-  shows the same room and result. Models never have to call `set_memory` to make a move stick.
-
   The bridge carries optional structured event metadata (`server_id`, `connection_id`,
-  protocol, event type/data and a token stable across retries). The demo does not recover
-  event data from prompt prose. A repeated model attempt reuses the same room snapshot,
-  whereas a later identical command is a new turn. The last 16 snapshots per connection are
-  retained; `servers()` reports active connection ids so closed peers and stopped/restarted
-  servers lose their game state. Other servers and ordinary chat requests are unchanged.
-
-  This replaces the earlier instruction-only approach. In the September 30 measurements,
-  asking for `set_memory` explicitly still had Gemini Nano save memory in only 1 of 67 turns
-  and llama3.1:8b in 1 of 13 sessions, neither on a move. Adding a server-kept transcript was
-  also tried and rejected: models copied their earlier replies (llama3.1:8b in 4 of 5 sessions,
-  qwen2.5:1.5b in all five). No transcript is sent by the current demo.
-
-  `web/test/adventure.mjs` covers map transitions, invalid moves, reset, repeated model
-  attempts, connection isolation and cleanup. The page test uses stateless model stubs that
-  never emit `set_memory`: both built-in model identities, all six WebLLM adapters and the
-  manual composer receive the same deterministic state. These are adapter/state guarantees,
-  not claims that every downloaded model phrases the answer correctly.
+  protocol, event type/data and a token stable across retries); the LLM panel reads the typed
+  line from it rather than from prompt prose.
 
   About a second later the Telnet terminal `connect()`s to it. The terminal reads as a shell session:
   a `$ ` prompt, `telnet localhost 2323` typed out so that it finishes as the client connects,
@@ -150,10 +135,10 @@ click. The dashboard has no extra listening-status row or keyboard-help footer.
   reasoning and would be mislabelled as such. `site/js/thinking.js` does the split. A model's
   answered request stays on screen, marked "answered in N s", until the next request
   replaces it; one the visitor answered goes idle at once.
-- The model control is one `<select>` in the LLM machine's header. Where
+- The model control is one `<select>` at the top of the LLM machine's panel. Where
   `LanguageModel.availability()` answers `available`, `downloadable` or `downloading`, its
-  first option is the browser's built-in model, by name: "Gemini Nano (built into Chrome)",
-  or "Phi-4-mini (built into Edge)" when the user agent says Edge (the API does not name its
+  first option is the browser's built-in model, by name: "Gemini Nano · Chrome built-in",
+  or "Phi-4-mini · Edge built-in" when the user agent says Edge (the API does not name its
   model; Edge's flag-gated Aion-1.0-Instruct cannot be told apart). Below 600px wide the
   labels say only what tells the options apart, so they fit the select on a phone ("Gemini
   Nano · built in", "Qwen2.5 3B · 2 GB", "Qwen3 1.7B · thinks · 1 GB", "… · cached").
@@ -162,9 +147,9 @@ click. The dashboard has no extra listening-status row or keyboard-help footer.
   `ndarray-cache.json`; WebLLM's prebuilt config gives only VRAM) and "thinks" for Qwen3, or
   "downloaded" once WebLLM's
   `hasModelInCache` says so; without WebGPU they are listed disabled. The last option is
-  "You are the model": chosen, the visitor answers every request even with a model loaded
+  "Respond on behalf of LLM": chosen, the visitor answers every request even with a model loaded
   (which stays loaded, so choosing it again is immediate). The default is the built-in model,
-  else the first WebLLM model, else "You are the model"; a choice made in the select,
+  else the first WebLLM model, else "Respond on behalf of LLM"; a choice made in the select,
   including that one, is kept in `localStorage` (`netget-demo-model`) and restored on the
   next visit.
   Choosing a model that is on this device (the built-in model `available`, or a cached WebLLM
@@ -178,12 +163,13 @@ click. The dashboard has no extra listening-status row or keyboard-help footer.
   otherwise, while the selected model is **on its way** — being looked for in the cache,
   starting (`LanguageModel.create()`), loading from the cache, or downloading once the
   visitor asked — the request **waits for it**, shown in the LLM panel as "waiting for Gemini
-  Nano" / "Waiting for Gemini Nano to load… 40%", and goes to it the moment it is ready;
-  otherwise (a model that needs a click to download, one that failed, or "You are the model")
+  Nano" / "Downloading Chrome built-in Gemini Nano… 40%", and goes to it the moment it is ready;
+  otherwise (a model that needs a click to download, one that failed, or "Respond on behalf of LLM")
   the visitor answers. Connecting stays idle; if the visitor sends a line before the
   selected model finishes loading, that message waits for the model. If the load fails, a request that waited goes to
   the composer with the reason. A model already answering keeps answering while another
-  loads. The status line under the select says which of these applies.
+  loads. The status line under the select says which of these applies, in one short line
+  ("Ready: Chrome built-in Gemini Nano", "WebLLM Qwen3 1.7B: not downloaded").
 
   The wait is bounded on the page, deliberately below NetGet's own bounds. NetGet waits for
   the page's answer to one request for `LLM_TIMEOUT` (900 s, `crates/netget-web/src/lib.rs`)
@@ -233,8 +219,12 @@ click. The dashboard has no extra listening-status row or keyboard-help footer.
 The page never starts an HTTP-family server itself. The dashboard's picker lists every
 compiled protocol, so a visitor can, and the hyper servers answer here (see below).
 
-When the visitor is the model, `site/js/composer.js` turns `actions` into a form, after the
-dashboard's intercept composer: a picker of the offered actions (the protocol's own first
+When the visitor is the model, `site/js/composer.js` starts simple wherever the preselected
+action takes one free-text parameter (Telnet's `send_telnet_message`): one textarea prefilled
+with an echo of the line ("You said: hello"), Send (or Enter), and Advanced. An example whose
+text ends in a line break is a line, so the field shows it without the break and puts it back
+on send. Advanced opens the full form and the prompt NetGet sent; Simple folds them again.
+The full form follows the dashboard's intercept composer: a picker of the offered actions (the protocol's own first
 action preselected, not a `generic` one), one control per parameter by type, every field
 prefilled from the action's example, "Add another action", "Answer with nothing" (`{"actions":
 []}`, a real answer), "Refuse (fail closed)", and the schema behind a disclosure. There is
@@ -243,20 +233,19 @@ no reply heading or editor selector; requests with actions always use the form. 
 without `actions` gets a plain reply field. The top half of the file is DOM-free so
 `smoke.mjs` builds the same default reply under Node; `web/test/page_composer.py` drives the
 page itself in headless Chromium: the Telnet server and client come up with no clicks and
-no model calls, the first typed line opens a request, the visitor answers through the composer and the answers reach the Telnet terminal, startup and
+no model calls, the first typed line opens a request, the visitor answers through the simple field and through Advanced and the answers reach the Telnet terminal, the Telnet terminal takes focus on load when nothing else has it, startup and
 incoming requests preserve the visitor's focus, submitting a reply never focuses a terminal, no element of
 the demo has a scrollbar at 1280x800, 1440x900, 1920x1080 and 390x844, the terminal reads as
 a telnet session through a hang-up and a reconnect, the removed explanatory text stays
-removed, stateless model stubs and the manual composer play the adventure through every room
-without saving model memory, a 390x844 phone gets the short select
+removed, a 390x844 phone gets the short select
 labels (each measured to fit) and the stacked dashboard at 10px or more, and a stub `LanguageModel` proves the Prompt API path both when the model is
 `available` (named first in the select, loads by itself, answers with no composer,
 constrained to the offered actions, falls back on an unparseable answer) and when it is
 `downloadable` (waits for the first keypress). A stub whose `create()` the test holds for
 seconds while the Telnet client sends a line proves the queue: that message shows as
 waiting for the model, the composer never appears, and the model answers once `create()`
-resolves; with `create()` failing instead, that request goes to the composer. "You are the
-model" chosen with the stub loaded sends the next request to the composer, choosing the
+resolves; with `create()` failing instead, that request goes to the composer. "Respond on
+behalf of LLM" chosen with the stub loaded sends the next request to the composer, choosing the
 model again hands requests back with no new session, and the choice survives a reload. Switching is
 driven against a fake WebLLM module the test serves in place of the esm.run import: an
 uncached model shows its sized download button and downloads nothing unasked, switching back

@@ -1,8 +1,9 @@
 # netget.net — the landing page
 
 `index.html` is the landing page; `demo.html` is the standalone interactive demo. Only the
-demo loads xterm.js and the WebAssembly runtime. Terminal focus belongs to the visitor:
-startup, connection, incoming requests, and sending a composer reply must not focus a terminal.
+demo loads xterm.js and the WebAssembly runtime. The Telnet terminal takes focus once, when it
+is created on load, and only if nothing else on the page has focus; after that focus belongs to
+the visitor: connection, incoming requests, and sending a composer reply must not focus a terminal.
 
 The landing page ships complete example stacks in HTML. CSS container queries fit whole
 columns to the available width, and equal grid rows keep each driver box the same height
@@ -22,13 +23,11 @@ bundle, which is the one thing here that is built: `./web/build.sh` from the rep
 writes it (gitignored), `web/README.md` explains it, and `./deploy.sh` refuses to run
 without it. `./deploy.sh` is the whole publishing pipeline.
 
-`js/demo.js` is the demo page's script and `js/composer.js` the "you are the model" answer
-form it opens for each model request (built from the request's offered `actions`; see
-`web/README.md`). `composer.js`'s pure half is imported by `web/test/smoke.mjs`, so keep
+`js/demo.js` is the demo page's script and `js/composer.js` the "Respond on behalf of LLM"
+answer form it opens for each model request (a single prefilled field with Advanced for the
+full form built from the request's offered `actions`; see `web/README.md`). `composer.js`'s pure half is imported by `web/test/smoke.mjs`, so keep
 DOM access out of module top level. `js/thinking.js` splits a thinking model's streamed
 `<think>` block from its answer for the LLM panel; it is pure and `smoke.mjs` imports it too.
-`js/adventure.js` keeps the Telnet adventure's room for each connection and adds it to every
-request, so no model has to remember where the visitor is; `web/test/adventure.mjs` tests it.
 
 What is in this directory is public, with one exception: `deploy.sh` and every `*.md` —
 this file included — are excluded from the sync, because this one names infrastructure IDs.

@@ -70,7 +70,7 @@
 }
 
 .machine-netget { border-color: var(--green); border-width: 2px; }
-.machine-client { border-color: var(--cyan); border-style: dashed; border-width: 2px; }
+.machine-client { border-color: var(--cyan); border-width: 2px; }
 .machine-model { border-color: var(--yellow); border-width: 2px; }
 .machine-netget .machine-label { color: var(--green); }
 .machine-client .machine-label { color: var(--cyan); }
@@ -93,6 +93,7 @@
 }
 
 .machine-label .muted { font-weight: 400; }
+.machine-note { font-weight: 400; font-size: 0.72rem; color: var(--muted); }
 
 .machine-dot {
     width: 9px;
@@ -216,12 +217,13 @@
 
 /* ---- the model ------------------------------------------------------------------------ */
 
-/* The header carries the model control: the title, the model select, and the one button a
+/* The model control, at the top of the panel: the source select and the one button a
    download needs. The select takes the rest of the row and shrinks before anything wraps. */
-.llm-header select { flex: 1 1 12rem; width: 0; font-size: 0.78rem; font-weight: 400; padding: 0.2rem 0.45rem; margin-left: 0.3rem; }
-.llm-header .btn { font-size: 0.76rem; padding: 0.22rem 0.6rem; white-space: nowrap; }
-.llm-source { display: flex; flex-direction: column; gap: 0.4rem; padding: 0.55rem 0.9rem 0.1rem; font-size: 0.85rem; }
-.llm-status { font-size: 0.78rem; color: var(--muted); }
+.llm-select-row { display: flex; gap: 0.4rem; align-items: center; }
+.llm-select-row select { flex: 1 1 12rem; width: 0; font-size: 0.78rem; padding: 0.25rem 0.45rem; }
+.llm-select-row .btn { font-size: 0.76rem; padding: 0.25rem 0.6rem; white-space: nowrap; }
+.llm-source { display: flex; flex-direction: column; gap: 0.4rem; padding: 0.6rem 0.9rem 0.1rem; font-size: 0.85rem; }
+.llm-status { font-family: var(--mono); font-size: 0.72rem; color: var(--muted); }
 .llm-status:empty { display: none; }
 .llm-status b { color: var(--yellow); font-weight: 600; }
 
@@ -334,6 +336,9 @@
 .cmp-error { padding: 0 0.6rem; color: var(--red); font-size: 0.78rem; }
 .cmp-error:empty { display: none; }
 .llm-actions { flex-wrap: wrap; }
+.cmp-simple { padding: 0 0.6rem 0.4rem; }
+.demo .cmp-simple-input { display: block; margin: 0; width: 100%; resize: none; overflow: hidden; line-height: 1.4; }
+.cmp-toggle { margin-left: auto; }
 
 @media (max-width: 600px) {
     .cmp-field { grid-template-columns: minmax(0, 1fr); }
