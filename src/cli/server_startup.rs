@@ -344,6 +344,21 @@ pub async fn start_server_by_id(
 /// Start a server from action parameters (used by /load command)
 /// Returns the server ID on success
 #[allow(clippy::too_many_arguments)]
+/// The address a protocol without `default_binding()` listens on: loopback by default, the
+/// caller's host when one is named. `localhost` is accepted as loopback; any other name is
+/// refused, because this path binds an address and never resolves one.
+pub fn legacy_bind_ip(host: Option<&str>) -> Result<std::net::IpAddr> {
+    use std::net::{IpAddr, Ipv4Addr};
+    match host.map(str::trim) {
+        None | Some("") | Some("localhost") => Ok(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+        Some(h) => h
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse()
+            .map_err(|_| anyhow::anyhow!("host {h:?} is not an IP address (or \"localhost\")")),
+    }
+}
+
 pub async fn start_server_from_action(
     state: &AppState,
     // NEW: Flexible binding parameters (all optional)
@@ -545,15 +560,16 @@ pub async fn start_server_from_action(
             // the port to whoever asks in between.
             let actual_port = port_value;
 
-            // Get default listen address (always 127.0.0.1 for security)
-            let listen_addr: SocketAddr = format!("127.0.0.1:{}", actual_port)
-                .parse()
-                .map_err(|e| anyhow::anyhow!("Invalid port: {}", e))?;
+            // Loopback unless the caller named a host. An explicit host used to be dropped
+            // here without a word, so `host: "0.0.0.0"` quietly bound 127.0.0.1; a host that
+            // is not an address is refused rather than replaced.
+            let ip = legacy_bind_ip(host.as_deref())?;
+            let listen_addr = SocketAddr::new(ip, actual_port);
 
             (
                 None,
                 None,
-                Some("127.0.0.1".to_string()),
+                Some(ip.to_string()),
                 Some(actual_port),
                 false,
                 listen_addr,
