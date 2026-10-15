@@ -20,6 +20,15 @@ No LLM calls: a python chain is the model.
   `tests/helpers/real_server.rs` searches both directories, and Homebrew's keg-only krb5 first
   (macOS's `/usr/sbin/kadmin.local` is Apple's, not MIT's).
 
+Heimdal 7.8's `kadmin -l` writes an iprop log, by default under `/var/lib/heimdal-kdc`, which an
+unprivileged test cannot open ("Failed iprop log initialization"), and then every `add` fails;
+the realm's config sets `log_file` to its own directory. Heimdal 7's klist is `heimtools klist`.
+Both were found and confirmed in an ubuntu:24.04 container running the CI job's packages as an
+unprivileged user: NetGet's client got a TGT (forwardable, renewable, pre-authenticated) and a
+service ticket from Heimdal 7.8's kdc, `heimtools klist` read the ccache, `kgetcred` used it,
+MIT 1.20 `kvno -k` validated the service ticket, and a wrong password was refused with
+PREAUTH_FAILED (7.8; Apple's 1.5 answers PREAUTH_REQUIRED again).
+
 Apple's Heimdal KDC answers a timestamp that does not decrypt with PREAUTH_REQUIRED again rather
 than PREAUTH_FAILED (it logs "Failed to decrypt PA-DATA"); the test accepts either and asserts
 the log line and the absence of a TGT.

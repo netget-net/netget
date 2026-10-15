@@ -334,6 +334,16 @@ const HEIMDAL_KDC: InstallHint = InstallHint {
 
 /// The first of `candidates` that exists and says it is Heimdal.
 fn heimdal_tool(candidates: &[&str]) -> PathBuf {
+    heimdal_tool_opt(candidates).unwrap_or_else(|| {
+        panic!(
+            "no Heimdal tool among {candidates:?}: `sudo apt-get install {}` (macOS ships them). \
+             This is independent evidence for the Kerberos client, so it fails rather than skips.",
+            HEIMDAL_KDC.apt
+        )
+    })
+}
+
+fn heimdal_tool_opt(candidates: &[&str]) -> Option<PathBuf> {
     for c in candidates {
         let Some(p) = crate::helpers::real_server::find_binary(c) else {
             continue;
@@ -350,24 +360,23 @@ fn heimdal_tool(candidates: &[&str]) -> PathBuf {
             })
             .unwrap_or_default();
         if banner.contains("Heimdal") {
-            return p;
+            return Some(p);
         }
     }
-    panic!(
-        "no Heimdal tool among {candidates:?}: `sudo apt-get install {}` (macOS ships them). \
-         This is independent evidence for the Kerberos client, so it fails rather than skips.",
-        HEIMDAL_KDC.apt
-    )
+    None
 }
 
 /// A temporary Heimdal realm, administered with Heimdal's own `kadmin -l`.
 async fn heimdal_kdc() -> RealServer {
     let kadmin = heimdal_tool(&["kadmin.heimdal", "/usr/sbin/kadmin"]);
+    // `log_file`: Heimdal 7.8's `kadmin -l` writes an iprop log, by default under
+    // /var/lib/heimdal-kdc, which an unprivileged test cannot open ("Failed iprop log
+    // initialization"); every principal it adds then fails. The realm keeps its own.
     let kadmin = kadmin.to_str().unwrap();
     let conf = format!(
         "[libdefaults]\n default_realm = {REALM}\n\
          [realms]\n {REALM} = {{\n  kdc = 127.0.0.1:{{port}}\n }}\n\
-         [kdc]\n database = {{\n  dbname = {{dir}}/heimdal\n  realm = {REALM}\n  mkey_file = {{dir}}/m-key\n }}\n\
+         [kdc]\n database = {{\n  dbname = {{dir}}/heimdal\n  realm = {REALM}\n  mkey_file = {{dir}}/m-key\n  log_file = {{dir}}/iprop.log\n }}\n\
          [logging]\n kdc = STDERR\n"
     );
     let admin = |args: &[&str]| -> Vec<String> {
@@ -481,8 +490,12 @@ async fn netget_gets_tickets_from_a_heimdal_kdc_that_heimdal_tools_accept() {
     // ticket NetGet never asked for; MIT's kvno decrypts the service ticket with the keytab
     // Heimdal's database exported.
     let conf = kdc.dir().join("krb5.conf");
-    let klist = heimdal_tool(&["klist.heimdal", "/usr/bin/klist"]);
-    let (ok, text) = tool(&klist, &[], &conf, &cc).await;
+    // Heimdal 7's klist is `heimtools klist` (see tests/server/kerberos/support.rs).
+    let (klist, klist_args): (PathBuf, &[&str]) = match heimdal_tool_opt(&["heimtools"]) {
+        Some(h) => (h, &["klist"]),
+        None => (heimdal_tool(&["/usr/bin/klist"]), &[]),
+    };
+    let (ok, text) = tool(&klist, klist_args, &conf, &cc).await;
     assert!(ok && text.contains("host/svc.netget.test"), "{text}");
     let kgetcred = heimdal_tool(&["kgetcred"]);
     let (ok, text) = tool(

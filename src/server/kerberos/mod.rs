@@ -44,10 +44,7 @@ use actions::{
     KERBEROS_AS_REQUEST_EVENT, KERBEROS_TGS_REQUEST_EVENT, MAX_CLOCK_SKEW_LIMIT_SECS,
     MAX_TICKET_LIFETIME_LIMIT_SECS,
 };
-use codec::{
-    KDC_ERR_SVC_UNAVAILABLE, KRB_ERR_FIELD_TOOLONG, KRB_ERR_GENERIC, KRB_ERR_RESPONSE_TOO_BIG,
-    MAX_MESSAGE_LEN,
-};
+use codec::{KRB_ERR_FIELD_TOOLONG, KRB_ERR_GENERIC, KRB_ERR_RESPONSE_TOO_BIG, MAX_MESSAGE_LEN};
 use kdc::{Analysis, Exchange, Kdc, KdcConfig, Pending};
 
 /// How long a new TCP connection may take to send its first length prefix.
@@ -668,13 +665,21 @@ async fn ask_model(shared: &Arc<Shared>, pending: Pending, conn: Option<Connecti
 /// **The fail-closed rule.** Returns the decision tag, a detail for the log, and the reply.
 ///
 /// - The first reply an action built (its [`Record`]) is sent, tagged with what it decided.
-/// - The LLM call failed: KDC_ERR_SVC_UNAVAILABLE, `fail_closed_llm_error`.
+/// - The LLM call failed: KRB_ERR_GENERIC, e-text "the policy engine is unavailable",
+///   `fail_closed_llm_error`.
 /// - The model answered nothing: KRB_ERR_GENERIC, `fail_closed_no_action`.
 /// - The model answered, but no action could be executed: KRB_ERR_GENERIC,
 ///   `fail_closed_action_error`.
 ///
-/// None of these codes is in the model's own refusal vocabulary, so a refusal the model chose
+/// KRB_ERR_GENERIC is not in the model's own refusal vocabulary, so a refusal the model chose
 /// and one nobody chose differ on the wire as well as in the log. Nothing here issues a ticket.
+///
+/// **Not KDC_ERR_SVC_UNAVAILABLE**, although it names the situation. To a client it means "try
+/// another KDC", and Heimdal 7.8 does that without bound: `_krb5_kdc_retry` turns it into
+/// `KRB5_SENDTO_CONTINUE`, the reply stays in `ctx->response`, and `wait_response` hands the
+/// same reply straight back to the filter (lib/krb5/send_to_kdc.c), so `kinit` spins until it
+/// is killed. Measured against Ubuntu 24.04's `kinit.heimdal` 7.8.0: with SVC_UNAVAILABLE it was
+/// still running after 60 s; with KRB_ERR_GENERIC it exits at once with the error.
 pub fn decide(
     kdc: &Kdc,
     pending: &Pending,
@@ -693,7 +698,7 @@ pub fn decide(
                 format!("category={category}: {e}"),
                 kdc.fail_closed(
                     pending,
-                    KDC_ERR_SVC_UNAVAILABLE,
+                    KRB_ERR_GENERIC,
                     "no policy decision: the policy engine is unavailable",
                 ),
             );

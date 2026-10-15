@@ -303,7 +303,14 @@ async fn heimdal_kinit_and_kgetcred_against_netget_over_tcp() {
         r.text,
         kdc.log_text()
     );
-    let list = run(&t.heimdal_klist, &["-v"], &conf, &cc, "").await;
+    let list = run(
+        &t.heimdal_klist,
+        &t.heimdal_klist_args(&["-v"]),
+        &conf,
+        &cc,
+        "",
+    )
+    .await;
     assert!(list.ok, "klist: {}", list.text);
     let block = list
         .text
@@ -347,7 +354,7 @@ async fn heimdal_kinit_and_kgetcred_against_netget_over_tcp() {
         r.text,
         kdc.log_text()
     );
-    let list = run(&t.heimdal_klist, &[], &conf, &cc, "").await;
+    let list = run(&t.heimdal_klist, &t.heimdal_klist_args(&[]), &conf, &cc, "").await;
     assert!(
         list.text.contains(&format!("{SERVICE}@{REALM}")),
         "{}",

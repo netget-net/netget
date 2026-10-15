@@ -955,9 +955,10 @@ pub fn error_name(code: i32) -> String {
         .unwrap_or_else(|| format!("KRB_ERROR_{code}"))
 }
 
-/// The refusals the model may choose. KDC_ERR_SVC_UNAVAILABLE and KRB_ERR_GENERIC are absent on
-/// purpose: they are what the server sends when no decision was produced, and keeping them out
-/// of the model's vocabulary keeps "the model refused" and "nobody decided" apart on the wire.
+/// The refusals the model may choose. KRB_ERR_GENERIC is absent on purpose: it is what the
+/// server sends when no decision was produced, and keeping it out of the model's vocabulary
+/// keeps "the model refused" and "nobody decided" apart on the wire. KDC_ERR_SVC_UNAVAILABLE is
+/// absent too: Heimdal 7.8 clients retry it forever against a single KDC (see `mod.rs::decide`).
 pub const MODEL_REFUSALS: &[i32] = &[
     1, 2, 6, 7, 10, 11, 12, 13, 14, 18, 19, 20, 21, 22, 23, 24, 27,
 ];

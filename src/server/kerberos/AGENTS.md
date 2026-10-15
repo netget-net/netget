@@ -30,9 +30,9 @@ event**, and no action parameter can carry one.
   Usable for a principal that does not exist, so a model can hide which principals exist; such
   a principal's timestamp then fails as PREAUTH_FAILED, consistently.
 - `kerberos_refuse {error, text?}` — a code from `codec::MODEL_REFUSALS` (C/S_PRINCIPAL_UNKNOWN,
-  POLICY, CLIENT_REVOKED, KEY_EXPIRED, PREAUTH_FAILED, …), by name or number. **SVC_UNAVAILABLE
-  and KRB_ERR_GENERIC are not in it**: they are the fail-closed codes, so a refusal the model
-  chose and one nobody chose differ on the wire.
+  POLICY, CLIENT_REVOKED, KEY_EXPIRED, PREAUTH_FAILED, …), by name or number. **KRB_ERR_GENERIC
+  is not in it**: it is the fail-closed code, so a refusal the model chose and one nobody chose
+  differ on the wire. SVC_UNAVAILABLE is not in it either (below).
 
 Replies do not travel as executor output. Each action builds its reply and records it with its
 decision (`actions::Record`); `mod.rs` sends the first record's reply. One request, one reply.
@@ -73,11 +73,20 @@ Enforced in `Kdc::issue` even when the model says issue (`enforced_*`):
 | Situation | Wire | Log |
 |---|---|---|
 | model chose an action | its reply | `decision=model_issue` / `model_require_preauth` / `model_reject` / `enforced_*` |
-| LLM call failed | KDC_ERR_SVC_UNAVAILABLE | `decision=fail_closed_llm_error category=…` |
-| model answered nothing | KRB_ERR_GENERIC | `decision=fail_closed_no_action` |
+| LLM call failed | KRB_ERR_GENERIC, e-text "…the policy engine is unavailable" | `decision=fail_closed_llm_error category=…` |
+| model answered nothing | KRB_ERR_GENERIC, e-text "no policy decision was produced" | `decision=fail_closed_no_action` |
 | model's actions all failed | KRB_ERR_GENERIC | `decision=fail_closed_action_error` |
 
 Nothing on any of these paths can issue a ticket. `.answers_on_failure()` is declared.
+
+**Never KDC_ERR_SVC_UNAVAILABLE**, though it names the LLM-error case. A client reads it as "try
+another KDC", and Heimdal 7.8 tries forever: `_krb5_kdc_retry` maps it to
+`KRB5_SENDTO_CONTINUE`, the reply is never cleared from `ctx->response`, and `wait_response`
+returns it to the filter at once (lib/krb5/send_to_kdc.c) — `kinit` spins until killed. The
+first CI run found it (Ubuntu 24.04's `kinit.heimdal` "did not finish"); reproduced in an
+ubuntu:24.04 container, still running after 60 s, and gone with KRB_ERR_GENERIC: both
+`kinit.heimdal` 7.8.0 and `kinit.mit` 1.20 exit at once printing NetGet's e-text. Apple's
+Heimdal 1.5 and MIT 1.22 gave up on their own, which is why macOS never showed it.
 
 ## Keys
 
