@@ -130,6 +130,7 @@ export const protocolStacks = [
     ["jsonrpc", "ETH>IP>TCP>HTTP>JSONRPC"],
     ["kafka", "ETH>IP>TCP>KAFKA"],
     ["kafka", "ETH>IP>TCP>Kafka"],
+    ["kerberos", "ETH>IP>UDP>KERBEROS"],
     ["knx", "ETH>IP>UDP>KNXnet/IP"],
     ["kubernetes", "ETH>IP>TCP>TLS>HTTP>K8s API"],
     ["kubernetes-server", "ETH>IP>TCP>HTTP>KUBERNETES"],
