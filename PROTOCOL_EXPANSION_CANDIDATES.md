@@ -155,7 +155,7 @@ Effort **S/M/L** covers both roles plus interoperability tests.
 | Protocol | Why deferred |
 |---|---|
 | ~~**Kerberos KDC**~~ | **Landed 15 October 2026** as the `kerberos` pair: AS and TGS over UDP and TCP with PA-ENC-TIMESTAMP, aes256/aes128-cts-hmac-sha1-96, the model deciding admission, errors, lifetimes and flags under Rust-enforced ceilings, failing closed with KRB_ERR_GENERIC. Against MIT krb5 and Heimdal (kinit, klist, kvno, kgetcred; krb5kdc and kdc) under tshark's `kerberos` dissector. Not built: RFC 8009, FAST, PKINIT, PAC, cross-realm, renewal, S4U, kpasswd. |
-| **SPICE / PCoIP** | Heavy binary display protocols; little LLM surface. |
+| ~~**SPICE**~~ / **PCoIP** | **SPICE landed 15 October 2026** as the `spice` pair: link handshake with an RSA-OAEP ticket checked in Rust, main, display and inputs channels, the model drawing the screen with VNC's command vocabulary and answering key and mouse input; against spice-gtk (`spicy`, `spicy-screenshot`) and spice-html5 (server) and QEMU's spice-server (client), under tshark's `spice` dissector. Not built: TLS, SASL, cursor, audio, agent, USB, image decompression, video streams. **PCoIP is not buildable honestly**: Teradici/HP Anyware's proprietary protocol has no published wire specification and no open-source implementation, and every usable peer is a licensed proprietary binary. |
 | **Ethereum devp2p / RLPx** | ECIES handshake + RLP, crypto-heavy, model contributes little. |
 | **SS7 / SCCP / MAP / CAMEL / H.323** | Legacy telecom, ASN.1/IDL marshalling, SCTP transport. |
 | **OpenFlow** | Only dated crates (`rust_ofp` 2017); codec-heavy. Peer (Open vSwitch) exists if revisited. |
