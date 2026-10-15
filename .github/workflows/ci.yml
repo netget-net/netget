@@ -1301,13 +1301,22 @@ jobs:
             print "resp dissector present"
           }'
 
-      - name: cargo test (every target but the protocol suites)
-        run: |
-          targets=$(for f in tests/*.rs; do n=$(basename "$f" .rs); case "$n" in server|client) ;; *) printf -- '--test %s ' "$n" ;; esac; done)
-          cargo test --locked --no-default-features --features "$CI_FEATURES" $targets \
-            -- --test-threads=100
+      # Every protocol is in every test binary (~870 MB each, ~230 targets), so the targets
+      # are built and run ten at a time with each batch's executables deleted after it; all
+      # at once would not fit on the runner.
+      - name: cargo test (every target but the protocol suites, in batches)
+        env:
+          CARGO_INCREMENTAL: '0'
+          CARGO_PROFILE_DEV_DEBUG: '0'
+          CARGO_PROFILE_TEST_DEBUG: '0'
+          TEST_THREADS: '100'
+        run: scripts/test_batches.sh --locked --no-default-features --features "$CI_FEATURES"
 
       - name: cargo test (the CI_PROTOCOL_TESTS suites)
+        env:
+          CARGO_INCREMENTAL: '0'
+          CARGO_PROFILE_DEV_DEBUG: '0'
+          CARGO_PROFILE_TEST_DEBUG: '0'
         run: |
           cargo test --locked --no-default-features --features "$CI_FEATURES" \
             --test server --test client -- $CI_PROTOCOL_TESTS --test-threads=100

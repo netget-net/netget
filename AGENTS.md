@@ -1141,9 +1141,16 @@ Bind to localhost only (127.0.0.1 / ::1); never contact external endpoints.
 # Single protocol: select its suite by module path (every protocol is compiled in)
 ./cargo-isolated.sh test --test server -- server::tcp::e2e_test --test-threads=100
 
-# Full sweep. NOTE THE THREAD COUNT: 32, not 100.
-./cargo-isolated.sh test --all-features --no-fail-fast -- --test-threads=32 > /tmp/sweep.txt 2>&1
+# Full sweep: the top-level targets in batches (each test binary links every protocol,
+# ~870 MB; all ~230 at once is ~200 GB), then the protocol suites.
+CARGO_INCREMENTAL=0 CARGO_PROFILE_TEST_DEBUG=0 scripts/test_batches.sh > /tmp/sweep.txt 2>&1
+./cargo-isolated.sh test --test server --test client -- --test-threads=32 >> /tmp/sweep.txt 2>&1
 ```
+
+**Never build every test target at once.** With every protocol in every build, each of the
+~230 test binaries is ~870 MB unoptimised (debug info off), so a plain `cargo test` needs
+~200 GB and filled this machine's disk in October 2026. `scripts/test_batches.sh` builds ten
+at a time and deletes each batch's executables; CI's `test` job runs it.
 
 **`--test-threads=100` is right for one protocol and wrong for the whole tree**, and the
 failure is not a test failure. `--all-features` builds ~29 test binaries that each link the
@@ -1521,7 +1528,7 @@ Two things about it are load-bearing:
 - **`site/` is public and so is `docs/`, which this entry denied for months.** Only `site/` is
   uploaded by `deploy.sh`, and a new file there is a new public URL — that half is right. But
   the claim that `docs/` "used to be served … and is not any more" was **false when written and
-  is false now**: `gh api repos/smotanacom/netget/pages` reports Pages still enabled,
+  is false now**: `gh api repos/netget-net/netget/pages` reports Pages still enabled,
   `build_type: legacy`, source `master:/docs`, status `built`. Every push to master rebuilds it
   and all 32 files under `docs/` are live at `https://smotanacom.github.io/netget/<name>.html`.
   Verified by fetching three of them: 200 each.
