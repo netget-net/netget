@@ -238,9 +238,10 @@ async fn run(
             return format!("an undecodable Setup: {e:#}");
         }
     };
+    let setup_bytes = setup.encode().map(|b| b.len() as u64 + 4).unwrap_or(0);
     shared
         .app_state
-        .update_connection_stats(shared.server_id, id, Some(1), None, Some(1), None)
+        .update_connection_stats(shared.server_id, id, Some(setup_bytes), None, Some(1), None)
         .await;
     let media = match MediaSockets::bind(local.ip()).await {
         Ok(m) => m,
@@ -380,10 +381,13 @@ async fn run(
                     }
                     Some(Ok(m)) => m,
                 };
+                let received = m.encode().map(|b| b.len() as u64 + 4).unwrap_or(0);
+                let sent_before = leg.bytes_sent;
+                let outcome = leg.on_incoming(&m).await;
                 shared.app_state
-                    .update_connection_stats(shared.server_id, id, Some(1), Some(leg.bytes_sent), Some(1), None)
+                    .update_connection_stats(shared.server_id, id, Some(received), Some(leg.bytes_sent - sent_before), Some(1), None)
                     .await;
-                match leg.on_incoming(&m).await {
+                match outcome {
                     Ok(Incoming::Released { cause: c, reason }) => {
                         log.info(format!("H.323 {id}: call ended by the caller: {}", json!({"cause": c, "reason": reason, "call": leg.summary()})));
                         return format!("the caller released (cause {c:?}, {reason:?})");

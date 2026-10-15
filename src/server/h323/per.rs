@@ -645,7 +645,11 @@ impl Decoder<'_, '_> {
                 }
                 let raw = self.r.octets(len, what)?;
                 let v = raw.iter().fold(0u64, |acc, b| (acc << 8) | *b as u64);
-                Ok(json!(lb.saturating_add(v as i64)))
+                i64::try_from(v)
+                    .ok()
+                    .and_then(|v| lb.checked_add(v))
+                    .map(|n| json!(n))
+                    .ok_or_else(|| PerError(format!("{what}: {v} above {lb} does not fit")))
             }
             _ => self.unconstrained(what),
         }

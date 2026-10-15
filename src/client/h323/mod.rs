@@ -137,7 +137,11 @@ struct Ras {
 
 impl Ras {
     fn next_seq(&mut self) -> u16 {
-        self.seq = if self.seq == u16::MAX { 1 } else { self.seq + 1 };
+        self.seq = if self.seq == u16::MAX {
+            1
+        } else {
+            self.seq + 1
+        };
         self.seq
     }
 
