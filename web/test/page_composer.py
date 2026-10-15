@@ -13,7 +13,8 @@ is read from the LLM machine's `data-answerer`.
    one button names the download, and nothing is downloaded. The Telnet server opens by itself and the Telnet terminal reads as a shell:
    `$ telnet localhost 2323`, then telnet's own `Trying 127.0.0.1...`, `Connected to
    localhost.`, `Escape character is '^]'.`. The model stays idle until a typed line lands in the LLM
-   panel as the simple composer: one field prefilled with "You said: hello", Send and Advanced;
+   panel as the simple composer: one field prefilled from the action's example ("Hello"), Send
+   and Advanced;
    Advanced shows the full form (the protocol's first action, the text with its CRLF line break)
    and the prompt, and Simple folds them again. The test edits the field, sends, and reads the
    banner in the Telnet terminal. A typed line is echoed locally and answered with Enter in the
@@ -521,8 +522,8 @@ def check_model_header(page):
     what it is for, and no badge names a model. Each machine's header carries its note."""
     expect(page.locator(".machine-model .llm-source #model-select")).to_have_count(1)
     expect(page.locator(".machine-model .machine-label select")).to_have_count(0)
-    expect(page.locator(".machine-model .machine-label .machine-note")).to_have_text("Source LLM used by NetGet WASM")
-    expect(page.locator(".machine-client .machine-label .machine-note")).to_have_text("Mock Telnet client connected to NetGet WASM")
+    expect(page.locator(".machine-model .machine-label .machine-note")).to_have_text("Source LLM used by NetGet")
+    expect(page.locator(".machine-client .machine-label .machine-note")).to_have_text("Mock Telnet client connected to NetGet")
     expect(page.locator(".machine-netget .machine-label .machine-note")).to_have_text("NetGet in your browser via WASM")
     expect(page.locator(".model-badge, #model-badge, #dash-model")).to_have_count(0)
 
@@ -597,7 +598,7 @@ def run_you_are_the_model(browser, origin):
     expect(llm.locator(".llm-state")).to_have_text("waiting for you")
     field = llm.locator(".cmp-simple-input")
     expect(field).to_be_visible()
-    assert field.input_value() == "You said: hello", repr(field.input_value())
+    assert field.input_value() == "Hello", repr(field.input_value())
     expect(llm.locator("select.cmp-picker")).to_have_count(0)
     expect(llm.locator(".llm-prompt")).to_be_hidden()
     expect(llm.get_by_role("button", name="Answer with nothing")).to_be_hidden()
@@ -609,12 +610,12 @@ def run_you_are_the_model(browser, origin):
     picker = llm.locator("select.cmp-picker")
     expect(picker).to_have_value("send_telnet_message")
     full = llm.locator(".cmp-field textarea, .cmp-field input[type=text]").first
-    assert full.input_value() == "You said: hello\n", repr(full.input_value())
+    assert full.input_value() == "Hello\n", repr(full.input_value())
     expect(llm.get_by_label("send line breaks as CRLF")).to_be_checked()
     expect(llm.locator(".llm-prompt")).to_be_visible()
     llm.get_by_role("button", name="Simple").click()
     expect(field).to_be_visible()
-    assert field.input_value() == "You said: hello", repr(field.input_value())
+    assert field.input_value() == "Hello", repr(field.input_value())
     check_no_scrollbars(page, "composer")
 
     field.fill("Welcome to the page-test BBS. Your name?")

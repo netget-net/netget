@@ -97,8 +97,8 @@ dashboard's terminal is 13px wherever 80 columns fit; narrower, the dashboard st
 two columns (`src/tui/render/mod.rs`, from 40 columns up) and the page picks the largest font
 that fits 48 columns — 10.5px on a 390px phone, where squeezing in 80 columns meant 6.5px. The page
 around them carries no step list or notes: each machine's header names it in one line
-("NetGet in your browser via WASM", "Mock Telnet client connected to NetGet WASM", "Source
-LLM used by NetGet WASM"), and no loading banner shifts the page while the bundle loads (the
+("NetGet in your browser via WASM", "Mock Telnet client connected to NetGet", "Source
+LLM used by NetGet"), and no loading banner shifts the page while the bundle loads (the
 banner element shows only an error). Nothing needs a click: once the Telnet terminal exists it
 takes focus, unless the visitor has already focused something else, and its cursor is drawn
 from the start (xterm.js draws none until a terminal's first focus, so the page sets the
@@ -221,7 +221,7 @@ compiled protocol, so a visitor can, and the hyper servers answer here (see belo
 
 When the visitor is the model, `site/js/composer.js` starts simple wherever the preselected
 action takes one free-text parameter (Telnet's `send_telnet_message`): one textarea prefilled
-with an echo of the line ("You said: hello"), Send (or Enter), and Advanced. An example whose
+from the action's own example ("Hello"), Send (or Enter), and Advanced. An example whose
 text ends in a line break is a line, so the field shows it without the break and puts it back
 on send. Advanced opens the full form and the prompt NetGet sent; Simple folds them again.
 The full form follows the dashboard's intercept composer: a picker of the offered actions (the protocol's own first

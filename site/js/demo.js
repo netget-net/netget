@@ -774,12 +774,6 @@ function waitedOut(entry) {
 
 // --- you are the model -------------------------------------------------------------------
 
-// A reply worth sending as it stands, for the simple composer's one field: an echo of the line.
-function suggestedReply(req) {
-    const { detail } = describe(req);
-    return detail ? `You said: ${detail}` : '';
-}
-
 function answerManually(entry, note = '') {
     entry.mode = 'manual';
     clearTimeout(entry.timer);
@@ -794,7 +788,6 @@ function answerManually(entry, note = '') {
     for (const type of ['input', 'change', 'click']) composerRoot.addEventListener(type, touch);
     mountComposer(composerRoot, entry.req, {
         autofocus: false,
-        prefill: suggestedReply(entry.req),
         onAdvanced: (on) => { $('.llm-advanced-only', root).hidden = !on; },
         onSend: (reply) => { finish(entry, reply); },
         onRefuse: () => { finish(entry, { error: 'refused by the person at the keyboard' }); },

@@ -220,13 +220,13 @@ let uid = 0;
  * Render the composer into `root` and resolve through `onSend(reply)` / `onRefuse()`.
  *
  * When the preselected action takes one free-text parameter, the composer starts simple: one
- * textarea holding `prefill` (or the action's example), Send, and Advanced, which opens the
+ * textarea holding the action's example, Send, and Advanced, which opens the
  * full form (any action, any number of them, answer with nothing, refuse). `onAdvanced(on)`
  * reports each switch, including the initial one. Falls back to a plain reply field when the
  * request offers no actions. `autofocus: false` leaves the focus wherever the visitor put it;
  * focusing never scrolls the page.
  */
-export function mountComposer(root, req, { onSend, onRefuse, onAdvanced = () => {}, prefill = '', autofocus = true }) {
+export function mountComposer(root, req, { onSend, onRefuse, onAdvanced = () => {}, autofocus = true }) {
     const actions = offeredActions(req);
     const id = 'cmp' + (++uid);
     const state = {
@@ -464,7 +464,7 @@ export function mountComposer(root, req, { onSend, onRefuse, onAdvanced = () => 
     });
 
     if (canSimple) {
-        simpleInput.value = prefill || shown(state.entries[0].fields[simpleField].raw);
+        simpleInput.value = shown(state.entries[0].fields[simpleField].raw);
         simpleInput.addEventListener('input', growSimple);
         // Enter sends, as a chat box does; Shift+Enter is a line break.
         simpleInput.addEventListener('keydown', (ev) => {
