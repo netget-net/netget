@@ -1,0 +1,9 @@
+{
+ "code": "002043",
+ "data": {
+  "errorCode": "002043",
+  "sqlState": "02000"
+ },
+ "message": "002043 (02000): Binder Error: Referenced column \"NOSUCH\" not found in FROM clause!\nCandidate bindings: \"AMOUNT\", \"OK\", \"TS\"\n\nLINE 1: SELECT NOSUCH FROM NOTES\n               ^",
+ "success": false
+}

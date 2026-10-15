@@ -9,7 +9,7 @@
 //!   **statically** here, with no LLM round-trip.
 //! - Anything unrecognised (not under `/ws/v1/cluster`) gets a static 404 RemoteException,
 //!   again with no LLM call (keeps scanner noise off the model).
-//! - `metrics`, `apps` (list + submit), `nodes`, app-by-id — **LLM-driven**.
+//! - `metrics`, `scheduler`, `apps` (list + submit), `nodes`, app-by-id — **LLM-driven**.
 //!
 //! Fail-closed: on an LLM error, or when the model produces no `yarn_response`, the server
 //! answers 503/500 with a YARN RemoteException envelope — never a success-shaped empty
@@ -614,6 +614,7 @@ fn detect_yarn_operation(method: &str, path: &str) -> (String, Option<String>, O
         ("GET", ["ws", "v1", "cluster", "apps", app_id]) => {
             ("app".to_string(), Some(app_id.to_string()), None)
         }
+        ("GET", ["ws", "v1", "cluster", "scheduler"]) => ("scheduler".to_string(), None, None),
         ("GET", ["ws", "v1", "cluster", "nodes"]) => ("nodes".to_string(), None, None),
         ("GET", ["ws", "v1", "cluster", "nodes", node_id]) => {
             ("node".to_string(), None, Some(node_id.to_string()))

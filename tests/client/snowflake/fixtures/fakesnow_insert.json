@@ -1,0 +1,37 @@
+{
+ "data": {
+  "finalDatabaseName": "FIXTURES",
+  "finalSchemaName": "PUBLIC",
+  "parameters": [
+   {
+    "name": "TIMEZONE",
+    "value": "Etc/UTC"
+   }
+  ],
+  "queryId": "d2660884-e310-42c7-a4bf-050605967dc8",
+  "queryResultFormat": "json",
+  "rowset": [
+   [
+    "2"
+   ]
+  ],
+  "rowtype": [
+   {
+    "byteLength": null,
+    "collation": null,
+    "database": "",
+    "length": null,
+    "name": "number of rows inserted",
+    "nullable": true,
+    "precision": 38,
+    "scale": 0,
+    "schema": "",
+    "table": "",
+    "type": "fixed"
+   }
+  ],
+  "statementTypeId": 12544,
+  "total": 1
+ },
+ "success": true
+}

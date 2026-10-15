@@ -158,8 +158,17 @@ async fn test_db2_handshake_and_statement() -> E2EResult<()> {
     stream.write_all(&excsqlimm).await?;
     let rd = read_dss(&mut stream).await;
     assert_eq!(rd.codepoint, drda::cp::SQLCARD, "expected SQLCARD reply");
-    // Success SQLCA is the single NULL indicator byte 0xFF.
-    assert_eq!(rd.body, vec![0xFF], "success SQLCARD must be a null SQLCA");
+    // The model answered with rows_affected 1, which travels in SQLERRD3 of a full SQLCA:
+    // SQLCODE 0, SQLSTATE 00000, and the third SQLERRD of the SQLCAXGRP.
+    assert_eq!(rd.body, drda::sqlcard(0, "00000", 1)[4..].to_vec());
+    assert_eq!(&rd.body[1..5], &0i32.to_be_bytes(), "SQLCODE 0");
+    assert_eq!(&rd.body[5..10], b"00000");
+    assert_eq!(
+        &rd.body[27..31],
+        &1i32.to_be_bytes(),
+        "SQLERRD3 = rows affected"
+    );
+    assert_eq!(drda::sqlcard_success(), vec![0x00, 0x05, 0x24, 0x08, 0xFF]);
 
     // Wait for the exchange the mocks describe, rather than trusting a fixed
     // sleep to have covered it. Under load the last event routinely lands after

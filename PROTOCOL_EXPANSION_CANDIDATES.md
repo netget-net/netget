@@ -65,10 +65,37 @@ What is left from this document, with the reason each is still open:
     APER checked by tshark's `ngap` dissector, against UERANSIM's nr-gnb/nr-ue and Open5GS's
     AMF. NAS security (5G-AKA, Security Mode), PDU sessions, handover and paging are not
     built, so a real UE cannot complete registration.
-  - **Redis cluster and pub/sub depth**: RESP3 shipped; `CLUSTER` and pub/sub were not
-    extended.
-- **Peer-limited missing clients**: gtp, db2, snowflake, spark and yarn still have no
-  client. None has a clean local independent server to test against.
+  - ~~**Redis cluster and pub/sub depth**~~: landed 15 October 2026 on the `redis` server
+    and client — pub/sub (channels, patterns, shard channels, RESP2 subscribed mode and RESP3
+    pushes, model-initiated publish, bounded fan-out with a slow-subscriber limit) and cluster
+    mode (CRC16 hash slots, `CLUSTER SLOTS/SHARDS/NODES`, MOVED/ASK/CROSSSLOT on the server; a
+    slot-routing client following MOVED and ASK), against redis-cli, redis-rs and a real
+    three-node cluster. No cluster bus, replicas, keyspace notifications or `CLIENT TRACKING`.
+- **Peer-limited missing clients**: none left.
+  ~~yarn~~ landed 15 October 2026 at Beta (the ResourceManager REST API: cluster info and
+  metrics, the scheduler's queue tree, applications with filters, attempts, state and queue,
+  nodes; `kill_application` only with `allow_kill`), against a real Apache Hadoop 3.5.0
+  ResourceManager and NodeManager running distributed-shell applications; the same pass drove
+  the YARN server with Datadog's YARN check and served the scheduler endpoint it needs.
+  Submission is deliberately not built: its body is a shell command run on a cluster node.
+  ~~spark~~ landed 15 October 2026 at Beta (the monitoring REST API: applications, jobs,
+  stages with attempts and task summaries, executors, environment, SQL executions), against
+  a real Apache Spark 4.2.0's live driver UI and History Server; the same pass drove the Spark
+  server with Datadog's Spark check and fixed the two defects it exposed. The REST submission
+  API is deliberately not built: it runs arbitrary code on a cluster.
+  ~~snowflake~~ landed 15 October 2026 (connector REST protocol: password login, queries
+  with JSON and Arrow rowsets decoded by column type, token renewal, result polling,
+  logout; the target is mandatory and never derived) against fakesnow and
+  snowflake-emulator; the same pass drove the Snowflake server with the official
+  snowflake-connector-python for the first time and fixed the three defects it exposed.
+  ~~db2~~ landed 15 October 2026 (EXCSAT/ACCSEC/SECCHK/ACCRDB, EXCSQLIMM, PRPSQLSTT +
+  OPNQRY/CNTQRY with typed rows, commit/rollback) against Apache Derby's DRDA server; the
+  same pass drove the Db2 server with Derby's JDBC driver and IBM's `ibm_db` for the first
+  time and fixed the seven defects they exposed. IBM Db2 Community as a second peer is not
+  done (linux/amd64-only image, privileged container).
+  ~~gtp~~ landed 15 October 2026 (S5/S11 GTPv2 and Gn GTPv1, control and user plane),
+  against wmnsk/go-gtp and osmo-ggsn with the kernel tun, under tshark's `gtpv2`/`gtp`
+  dissectors.
 - **Tier C**: all deferred, unchanged, for the reasons in the table below. This includes
   the LoRaWAN Semtech UDP packet-forwarder slice, which could be promoted if IoT is
   wanted.
@@ -127,7 +154,7 @@ Effort **S/M/L** covers both roles plus interoperability tests.
 
 | Protocol | Why deferred |
 |---|---|
-| **Kerberos KDC** | ASN.1 + session crypto, model contributes little; same rationale as the already-deferred IPMI/WinRM/DCERPC. Peers (MIT krb5, Heimdal) exist if ever revisited. |
+| ~~**Kerberos KDC**~~ | **Landed 15 October 2026** as the `kerberos` pair: AS and TGS over UDP and TCP with PA-ENC-TIMESTAMP, aes256/aes128-cts-hmac-sha1-96, the model deciding admission, errors, lifetimes and flags under Rust-enforced ceilings, failing closed with KRB_ERR_GENERIC. Against MIT krb5 and Heimdal (kinit, klist, kvno, kgetcred; krb5kdc and kdc) under tshark's `kerberos` dissector. Not built: RFC 8009, FAST, PKINIT, PAC, cross-realm, renewal, S4U, kpasswd. |
 | **SPICE / PCoIP** | Heavy binary display protocols; little LLM surface. |
 | **Ethereum devp2p / RLPx** | ECIES handshake + RLP, crypto-heavy, model contributes little. |
 | **SS7 / SCCP / MAP / CAMEL / H.323** | Legacy telecom, ASN.1/IDL marshalling, SCTP transport. |

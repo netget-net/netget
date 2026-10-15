@@ -158,6 +158,7 @@ portable-base = [
     "sse",
     "wsdiscovery",
     "onvif",
+    "kerberos",
     "x11",
     "sflow",
     "prometheus-remote-write",
@@ -275,7 +276,7 @@ ndp = ["pnet", "socket2/all"]  # IPv6 Neighbor Discovery (ICMPv6) - raw socket v
 dhcpv6 = ["dhcproto"]  # DHCPv6 (RFC 8415) server on UDP 547 - reuses dhcproto
 tuntap = ["dep:tun"]  # TUN/TAP interface endpoint - every routed IP packet becomes an event
 rawip = ["socket2/all"]  # Generic raw IP protocol-N listener (GRE 47, ESP 50, ...) - raw socket via socket2; the codec is hand-written
-gtp = []  # GTP-C / GTP-U mobile core (UDP 2123/2152) - hand-rolled, no extra deps
+gtp = []  # GTP-C / GTP-U mobile core (UDP 2123/2152) server and client (SGSN/SGW/MME side) - hand-rolled, no extra deps
 m3ua = []  # M3UA/SIGTRAN - SCTP where available, refuses elsewhere; no extra deps
 can = ["dep:socketcan"]  # CAN bus via SocketCAN - Linux only, target-gated like bluetooth-ble-beacon
 lldp = ["pnet", "dep:pcap"]  # LLDP link-layer discovery - raw Ethernet via pnet, capture via libpcap
@@ -420,6 +421,7 @@ tr069 = ["quick-xml"]  # TR-069 CWMP ACS and CPE (SOAP over HTTP, LLM-controlled
 sse = []  # Server-sent events (text/event-stream) server and EventSource-style client, hand-rolled HTTP/1.1
 wsdiscovery = ["quick-xml"] # WS-Discovery (SOAP-over-UDP 3702) target service and discovery client, 2005/04 and 2009/01
 onvif = ["quick-xml", "dep:sha1"] # ONVIF device (Device and Media services, SOAP 1.2, WS-Security digest) and client
+kerberos = ["dep:picky-krb", "dep:picky-asn1", "dep:picky-asn1-der", "dep:hmac", "dep:sha1", "dep:sha2"] # Kerberos V5 KDC (AS/TGS, aes-cts-hmac-sha1-96) and client; picky-krb ASN.1 types
 x11 = [] # X11 client (X Window System core protocol): windows, properties and events against an X server
 jmap = ["dep:rustls", "dep:tokio-rustls", "dep:rustls-pemfile", "dep:rcgen"] # JMAP (RFC 8620/8621) server and client
 webtransport = ["dep:rustls", "dep:wtransport", "dep:wtransport-proto", "dep:sha2"] # WebTransport over HTTP/3 (draft-02) server and client
@@ -437,8 +439,8 @@ ftp = []  # FTP (File Transfer Protocol) server and client - manual implementati
 mdns = ["mdns-sd"]
 mysql = ["dep:opensrv-mysql", "dep:mysql_async"]
 mssql = ["dep:tiberius"]
-snowflake = []  # Snowflake data-warehouse server (REST/JSON login + query protocol; hand-rolled over hyper, no extra deps)
-db2 = []  # IBM Db2 DRDA wire-protocol server (hand-rolled DRDA/DDM handshake + basic query, no extra deps)
+snowflake = ["dep:flate2"]  # Snowflake data warehouse: server (REST/JSON login + query protocol over hyper; flate2 reads the gzip bodies the official connectors send) and client (connector REST protocol, JSON and Arrow results decoded by hand)
+db2 = []  # IBM Db2 DRDA wire protocol: server (handshake + basic query) and client (statements, queries with decoded rows, commit/rollback) - hand-rolled, no extra deps
 ipp = ["dep:ipp"]
 postgresql = ["dep:pgwire", "dep:tokio-postgres"]
 # NOTE: tests/server/mongodb/mod.rs gates on BOTH `mongodb-server` and `mongodb`, because its
@@ -487,8 +489,8 @@ amqp = ["dep:lapin"]  # AMQP broker and client for RabbitMQ compatibility
 socks5 = ["dep:tokio-socks"]  # SOCKS5 server and client (client uses tokio-socks)
 elasticsearch = []  # Elasticsearch uses only HTTP, no extra deps
 couchdb = ["dep:couch_rs", "dep:form_urlencoded"]  # CouchDB server and client (server uses HTTP, client uses couch_rs)
-yarn = []  # Hadoop YARN ResourceManager REST server - HTTP only, no extra deps
-spark = []  # Apache Spark monitoring REST server - HTTP only, no extra deps
+yarn = []  # Hadoop YARN ResourceManager REST API: server and client - HTTP only, no extra deps
+spark = []  # Apache Spark monitoring REST API: server and client (live driver UI / History Server) - HTTP only, no extra deps
 dynamo = ["aws-config", "aws-sdk-dynamodb", "aws-smithy-types", "dep:aws-credential-types"]  # DynamoDB client
 dynamodb = ["aws-config", "aws-sdk-dynamodb", "aws-smithy-types", "dep:aws-credential-types"]  # DynamoDB client (alternate name)
 s3 = ["aws-config", "dep:aws-sdk-s3", "dep:aws-credential-types", "dep:rust-s3"]  # S3 client
@@ -762,6 +764,7 @@ dist-windows = [
     "sse",
     "wsdiscovery",
     "onvif",
+    "kerberos",
     "x11",
     "sflow",
     "prometheus-remote-write",
@@ -1002,6 +1005,7 @@ all-protocols = [
     "sse",
     "wsdiscovery",
     "onvif",
+    "kerberos",
     "x11",
     "sflow",
     "prometheus-remote-write",
@@ -1475,8 +1479,10 @@ tokio-postgres = { version = "0.7", optional = true }
 # MongoDB server and client
 bson = { version = "3.0", optional = true, features = ["serde", "serde_with-3", "serde_json-1"] }  # BSON encoding/decoding for MongoDB
 mongodb = { version = "3.3", optional = true }  # Official MongoDB async driver
-# Redis client
-redis = { version = "0.27", optional = true, features = ["tokio-comp"] }
+# redis-rs: used only by tests, as an independent client of NetGet's Redis server (src/ frames
+# RESP itself). An optional dev-dependency is not possible, so it rides on the `redis` feature;
+# `cluster-async` is its cluster client, which tests/server/redis/cluster_test.rs drives.
+redis = { version = "0.27", optional = true, features = ["tokio-comp", "cluster-async"] }
 # CouchDB client
 couch_rs = { version = "0.10", optional = true }
 form_urlencoded = { version = "1.2", optional = true }
@@ -1506,6 +1512,9 @@ ironrdp-tls = { version = "0.2", optional = true, features = ["rustls-ring"] }
 ironrdp-input = { version = "0.7", optional = true }
 ironrdp-pdu = { version = "0.9", optional = true }
 ironrdp-graphics = { version = "0.9", optional = true }
+picky-krb = { version = "0.12", optional = true }  # Kerberos ASN.1 types and RFC 3962 crypto
+picky-asn1 = { version = "0.10", optional = true }
+picky-asn1-der = { version = "0.5", optional = true }
 tor-rtcompat = { version = "0.36", optional = true }
 tor-dirmgr = { version = "0.36", optional = true }  # Tor directory manager types
 tor-netdir = { version = "0.36", optional = true }  # Tor network directory queries

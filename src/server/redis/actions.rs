@@ -22,9 +22,13 @@ pub struct RedisProtocol {
     #[allow(dead_code)]
     app_state: Arc<AppState>,
     status_tx: mpsc::UnboundedSender<String>,
-    /// The RESP version this connection speaks: 2 until a `HELLO 3`. Shared by the read loop
-    /// and the peer-injection task, which both encode through this instance.
-    protover: AtomicU8,
+    /// The RESP version this connection speaks: 2 until a `HELLO 3`. Shared by the read loop,
+    /// the peer-injection task and the pub/sub hub, which encodes each delivered message for
+    /// its subscriber's version.
+    protover: Arc<AtomicU8>,
+    /// The running server's pub/sub hub and cluster topology. `None` on the registry's
+    /// stateless instance, which reaches them through `execute_action_with_state` instead.
+    shared: Option<Arc<super::RedisShared>>,
 }
 
 impl RedisProtocol {
@@ -37,7 +41,21 @@ impl RedisProtocol {
             connection_id,
             app_state,
             status_tx,
-            protover: AtomicU8::new(2),
+            protover: Arc::new(AtomicU8::new(2)),
+            shared: None,
+        }
+    }
+
+    /// The instance one connection encodes through, bound to its server's shared state.
+    pub fn for_connection(
+        connection_id: ConnectionId,
+        app_state: Arc<AppState>,
+        status_tx: mpsc::UnboundedSender<String>,
+        shared: Arc<super::RedisShared>,
+    ) -> Self {
+        Self {
+            shared: Some(shared),
+            ..Self::new(connection_id, app_state, status_tx)
         }
     }
 
@@ -48,6 +66,11 @@ impl RedisProtocol {
 
     pub fn set_protocol_version(&self, version: u8) {
         self.protover.store(version, Ordering::Relaxed);
+    }
+
+    /// The shared version cell, handed to the pub/sub hub with a subscription.
+    pub fn protover_cell(&self) -> Arc<AtomicU8> {
+        self.protover.clone()
     }
 }
 
@@ -91,12 +114,36 @@ impl Protocol for RedisProtocol {
                     example: json!(300),
                     default: Some(serde_json::json!(super::IDLE_BETWEEN_COMMANDS_TIMEOUT.as_secs())),
                 },
+                crate::llm::actions::ParameterDefinition {
+                    name: "cluster_nodes".to_string(),
+                    type_hint: "array".to_string(),
+                    description: "Run in cluster mode as one master of the Redis Cluster this \
+                                  array describes. Each node is {\"host\", \"port\", \
+                                  \"slots\": [\"0-5460\", ...], \"id\" (optional, 40 hex), \
+                                  \"myself\": true for this server}; this server's own host and \
+                                  port default to where it is listening. The server then answers \
+                                  CLUSTER SLOTS/SHARDS/NODES/INFO/KEYSLOT/MYID itself and \
+                                  redirects a key in a slot another node owns with -MOVED, so a \
+                                  cluster client can navigate several NetGet servers given the \
+                                  same array. Omit it for a standalone server."
+                        .to_string(),
+                    required: false,
+                    example: json!([
+                        {"host": "127.0.0.1", "port": 7000, "slots": ["0-8191"], "myself": true},
+                        {"host": "127.0.0.1", "port": 7001, "slots": ["8192-16383"]}
+                    ]),
+                    default: None,
+                },
             ]
     }
     fn get_async_actions(&self, _state: &AppState) -> Vec<ActionDefinition> {
-        // No user-triggered actions. (A `list_redis_connections` action used to be declared
-        // here; its executor returned a hardcoded empty list, so it only ever misled the model.)
-        vec![]
+        // Both reach the running server through `execute_action_with_state`. (A
+        // `list_redis_connections` action used to be declared here; its executor returned a
+        // hardcoded empty list, so it only ever misled the model.)
+        vec![
+            redis_publish_message_action(),
+            redis_cluster_set_slot_action(),
+        ]
     }
     fn get_sync_actions(&self) -> Vec<ActionDefinition> {
         vec![
@@ -107,6 +154,10 @@ impl Protocol for RedisProtocol {
             redis_error_action(),
             redis_null_action(),
             close_this_connection_action(),
+            redis_accept_subscription_action(),
+            redis_deliver_message_action(),
+            redis_publish_message_action(),
+            redis_cluster_set_slot_action(),
         ]
         .into_iter()
         .chain(resp3_actions())
@@ -135,7 +186,11 @@ impl Protocol for RedisProtocol {
             .state(DevelopmentState::Beta)
             .well_known_port(6379)
             .implementation("redis-protocol v6.0 (RESP2 request parsing), manual RESP2/RESP3 encoding per connection after HELLO")
-            .llm_control("All Redis commands (GET, SET, INCR, etc.)")
+            .llm_control(
+                "Every data command (GET, SET, INCR, ...); pub/sub policy (whether a SUBSCRIBE is \
+                 allowed, whether a PUBLISH is delivered and what it returns) and messages of its \
+                 own; cluster slot ownership",
+            )
             .e2e_testing(
                 "Two independent clients. redis-rs (tests/server/redis/e2e_test.rs, \
                  llm_failure_test.rs): one test per RESP2 reply type, each deserialised into \
@@ -149,11 +204,21 @@ impl Protocol for RedisProtocol {
                  RESP3 (resp3_test.rs): HELLO 3 answered in Rust, every RESP3 type read by \
                  redis-cli -3 and by redis-py 5's own RESP3 parser (with credentials sent in \
                  HELLO and a push ahead of a reply), and the RESP2 downgrades by both. \
+                 Pub/sub (pubsub_test.rs): redis-cli subscribers on RESP2 and RESP3 and on a \
+                 pattern receive what redis-cli publishes and what the model publishes, and \
+                 redis-rs's RESP2 PubSub and RESP3 push sender read message and pmessage; the \
+                 model's refusal and withholding hold. Cluster (cluster_test.rs): three servers \
+                 sharing a cluster_nodes topology are navigated by redis-cli -c, pass \
+                 redis-cli --cluster check, and serve redis-rs's ClusterClient, which follows \
+                 MOVED after the model moves a slot; ASK/ASKING for a migrating slot. Hash slots \
+                 and glob matching equal a real redis-server's CLUSTER KEYSLOT and KEYS \
+                 (keys_oracle_test.rs). Every pub/sub bound and the slow-consumer disconnect \
+                 are pinned from raw sockets (pubsub_bounds_test.rs). \
                  NOT proven: inline commands, pipelining \
-                 (neither client sends two commands in one write), AUTH/SELECT/MULTI/pub-sub, \
-                 and TLS.",
+                 (neither client sends two commands in one write), AUTH/SELECT/MULTI, \
+                 cluster-wide PUBLISH (there is no bus), and TLS.",
             )
-            .notes("RESP2, and RESP3 after HELLO 3 (no attributes, no streamed types, no client-side caching); HELLO with AUTH is judged by the handler; no SELECT/MULTI/pub-sub semantics, no inline commands")
+            .notes("RESP2, and RESP3 after HELLO 3 (no attributes, no streamed types, no client-side caching); HELLO with AUTH is judged by the handler. Pub/sub: SUBSCRIBE/PSUBSCRIBE/SSUBSCRIBE (model-approved), UNSUBSCRIBE family, PUBLISH/SPUBLISH (model decides delivery), PUBSUB introspection, RESP2 subscribed mode, redis_publish_message for the model's own messages; bounded per connection, per server and per message, and a subscriber 8 MiB behind is disconnected. Cluster mode (cluster_nodes): CLUSTER SLOTS/SHARDS/NODES/INFO/KEYSLOT/MYID, MOVED/ASK/CROSSSLOT/CLUSTERDOWN routing by CRC16 hash slot, redis_cluster_set_slot; no bus, no replicas. No SELECT/MULTI semantics, no inline commands")
             .max_inbound_bytes(crate::server::redis::MAX_PENDING_FRAME_BYTES)
             .build()
     }
@@ -275,6 +340,13 @@ impl Server for RedisProtocol {
             };
             let first_byte_timeout_secs = secs("first_byte_timeout_secs")?;
             let idle_timeout_secs = secs("idle_timeout_secs")?;
+            let cluster_nodes = ctx
+                .startup_params
+                .as_ref()
+                .map(|p| p.get_optional_array("cluster_nodes"))
+                .transpose()?
+                .flatten()
+                .map(|nodes| serde_json::Value::Array(nodes.clone()));
 
             RedisServer::spawn_with_llm_actions(
                 ctx.legacy_listen_addr(),
@@ -283,10 +355,45 @@ impl Server for RedisProtocol {
                 ctx.status_tx,
                 send_first,
                 ctx.server_id,
-                first_byte_timeout_secs,
-                idle_timeout_secs,
+                super::RedisServerOptions {
+                    first_byte_timeout_secs,
+                    idle_timeout_secs,
+                    cluster_nodes,
+                },
             )
             .await
+        })
+    }
+
+    /// `redis_publish_message` and `redis_cluster_set_slot` act on the running server, which
+    /// the registry's stateless instance can only reach through the handle `spawn` registered.
+    fn execute_action_with_state<'a>(
+        &'a self,
+        action: serde_json::Value,
+        state: AppState,
+        server_id: Option<crate::state::ServerId>,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = anyhow::Result<ActionResult>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            let needs_server = matches!(
+                action.get("type").and_then(|v| v.as_str()),
+                Some("redis_publish_message" | "redis_cluster_set_slot")
+            );
+            if needs_server && self.shared.is_none() {
+                let shared = match server_id {
+                    Some(id) => state.server_handle::<super::RedisShared>(id).await,
+                    None => None,
+                };
+                let Some(shared) = shared else {
+                    anyhow::bail!(
+                        "this action needs a running Redis server; name it with server_id \
+                         (it is dispatched through execute_action_with_state)"
+                    );
+                };
+                return execute_on_shared(&shared, &action, &self.status_tx);
+            }
+            self.execute_action(action)
         })
     }
     fn execute_action(&self, action: serde_json::Value) -> Result<ActionResult> {
@@ -310,6 +417,23 @@ impl Server for RedisProtocol {
             | "redis_verbatim_string"
             | "redis_push" => self.execute_resp3(action_type, &action),
             "close_this_connection" => Ok(ActionResult::CloseConnection),
+            // Decisions the read loop carries out: it holds the channel and the message the
+            // event was about, and the connection's outbox the confirmations go to.
+            "redis_accept_subscription" => Ok(ActionResult::Custom {
+                name: ACCEPT_SUBSCRIPTION.to_string(),
+                data: json!({}),
+            }),
+            "redis_deliver_message" => Ok(ActionResult::Custom {
+                name: DELIVER_MESSAGE.to_string(),
+                data: json!({}),
+            }),
+            "redis_publish_message" | "redis_cluster_set_slot" => match &self.shared {
+                Some(shared) => execute_on_shared(shared, &action, &self.status_tx),
+                None => Err(anyhow::anyhow!(
+                    "{action_type} needs the running server; it is dispatched through \
+                     execute_action_with_state with a server_id"
+                )),
+            },
             // Not offered to the model (`close_this_connection` is its verb), but the
             // dashboard's "disconnect this peer" injects `close_connection` through the peer
             // command task, which half-closes the write side on this result.
@@ -742,6 +866,180 @@ pub fn close_this_connection_action() -> ActionDefinition {
     }
 }
 
+/// `ActionResult::Custom` name of `redis_accept_subscription`.
+pub const ACCEPT_SUBSCRIPTION: &str = "redis_accept_subscription";
+/// `ActionResult::Custom` name of `redis_deliver_message`.
+pub const DELIVER_MESSAGE: &str = "redis_deliver_message";
+
+/// Carry out `redis_publish_message` or `redis_cluster_set_slot` against a running server.
+fn execute_on_shared(
+    shared: &super::RedisShared,
+    action: &serde_json::Value,
+    status_tx: &mpsc::UnboundedSender<String>,
+) -> Result<ActionResult> {
+    match action.get("type").and_then(|v| v.as_str()) {
+        Some("redis_publish_message") => {
+            let channel = action
+                .get("channel")
+                .and_then(|v| v.as_str())
+                .context("Missing 'channel'")?;
+            let message = action
+                .get("message")
+                .and_then(|v| v.as_str())
+                .context("Missing 'message'")?;
+            let shard = action
+                .get("shard")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let kind = if shard {
+                super::pubsub::Kind::Shard
+            } else {
+                super::pubsub::Kind::Channel
+            };
+            super::pubsub::check_name(kind, channel.as_bytes()).map_err(anyhow::Error::msg)?;
+            super::pubsub::check_message(message.as_bytes()).map_err(anyhow::Error::msg)?;
+            let receivers = shared
+                .hub
+                .publish(channel.as_bytes(), message.as_bytes(), shard);
+            debug!(
+                "Redis decision=model_publish channel='{}' receivers={}",
+                crate::utils::truncate_for_log(channel, 128),
+                receivers
+            );
+            let _ = status_tx.send(format!(
+                "[INFO] Redis published to '{}': {} receiver(s)",
+                crate::utils::truncate_for_log(channel, 128),
+                receivers
+            ));
+            Ok(ActionResult::NoAction)
+        }
+        Some("redis_cluster_set_slot") => {
+            let cluster = shared.cluster.as_ref().context(
+                "this server is not in cluster mode (start it with the cluster_nodes parameter)",
+            )?;
+            let slots =
+                super::cluster::parse_slots(action.get("slots").context("Missing 'slots'")?)?;
+            let state = action
+                .get("state")
+                .and_then(|v| v.as_str())
+                .unwrap_or("node");
+            let node = action.get("node").and_then(|v| v.as_str());
+            let summary = cluster
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .set_slot(slots, state, node)?;
+            let _ = status_tx.send(format!("[INFO] Redis cluster: {summary}"));
+            debug!("Redis cluster slot change: {}", summary);
+            Ok(ActionResult::NoAction)
+        }
+        other => Err(anyhow::anyhow!("not a server-state action: {other:?}")),
+    }
+}
+
+/// Action definition: allow a SUBSCRIBE / PSUBSCRIBE / SSUBSCRIBE.
+pub fn redis_accept_subscription_action() -> ActionDefinition {
+    ActionDefinition {
+        name: "redis_accept_subscription".to_string(),
+        description: "Allow the subscription a redis_subscribe event asks for. The server then \
+                      registers it and sends the client one confirmation per channel; to refuse \
+                      instead, answer with redis_error (e.g. NOPERM ...)."
+            .to_string(),
+        parameters: vec![],
+        example: json!({"type": "redis_accept_subscription"}),
+        log_template: Some(
+            LogTemplate::new()
+                .with_info("-> Redis subscription accepted")
+                .with_debug("Redis redis_accept_subscription"),
+        ),
+    }
+}
+
+/// Action definition: deliver the PUBLISH a redis_publish event is about.
+pub fn redis_deliver_message_action() -> ActionDefinition {
+    ActionDefinition {
+        name: "redis_deliver_message".to_string(),
+        description: "Deliver the message a redis_publish event is about to every subscriber of \
+                      its channel (and of every matching pattern), and answer the publisher with \
+                      the number of deliveries. To answer without delivering, send redis_integer \
+                      instead; to refuse, redis_error."
+            .to_string(),
+        parameters: vec![],
+        example: json!({"type": "redis_deliver_message"}),
+        log_template: Some(
+            LogTemplate::new()
+                .with_info("-> Redis message delivered")
+                .with_debug("Redis redis_deliver_message"),
+        ),
+    }
+}
+
+/// Action definition: publish a message of the model's own.
+pub fn redis_publish_message_action() -> ActionDefinition {
+    ActionDefinition {
+        name: "redis_publish_message".to_string(),
+        description: "Publish a message of your own to every client of this server subscribed \
+                      to the channel (or to a matching pattern), as if a client had sent PUBLISH. \
+                      Writes nothing to the client whose command you are answering, so still \
+                      answer it."
+            .to_string(),
+        parameters: vec![
+            param("channel", "string", "The channel to publish on", true),
+            param("message", "string", "The message text", true),
+            param(
+                "shard",
+                "boolean",
+                "true to publish on the shard channel (SPUBLISH) rather than the ordinary one",
+                false,
+            ),
+        ],
+        example: json!({"type": "redis_publish_message", "channel": "news", "message": "hello"}),
+        log_template: Some(
+            LogTemplate::new()
+                .with_info("-> Redis PUBLISH {channel}")
+                .with_debug("Redis redis_publish_message: channel={channel}"),
+        ),
+    }
+}
+
+/// Action definition: change which node serves cluster slots.
+pub fn redis_cluster_set_slot_action() -> ActionDefinition {
+    ActionDefinition {
+        name: "redis_cluster_set_slot".to_string(),
+        description: "Change this server's view of the cluster, as CLUSTER SETSLOT does (cluster \
+                      mode only). state node: the slots now belong to node, so this server \
+                      redirects them there with -MOVED; migrating: this server's slots are moving \
+                      to node and it answers -ASK; importing: the slots are arriving from node and \
+                      are served after ASKING; stable: clear migrating/importing."
+            .to_string(),
+        parameters: vec![
+            param(
+                "slots",
+                "string",
+                "A slot (\"42\") or an inclusive range (\"0-100\")",
+                true,
+            ),
+            param(
+                "state",
+                "string",
+                "node (default), migrating, importing or stable",
+                false,
+            ),
+            param(
+                "node",
+                "string",
+                "The other node, as host:port or its 40-character id (not needed for stable)",
+                false,
+            ),
+        ],
+        example: json!({"type": "redis_cluster_set_slot", "slots": "0-100", "state": "stable"}),
+        log_template: Some(
+            LogTemplate::new()
+                .with_info("-> Redis cluster slots {slots} {state}")
+                .with_debug("Redis redis_cluster_set_slot: slots={slots} state={state}"),
+        ),
+    }
+}
+
 // ============================================================================
 // Redis Action Constants
 // ============================================================================
@@ -791,6 +1089,8 @@ pub static REDIS_COMMAND_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         REDIS_ERROR_ACTION.clone(),
         REDIS_NULL_ACTION.clone(),
         REDIS_CLOSE_CONNECTION_ACTION.clone(),
+        redis_publish_message_action(),
+        redis_cluster_set_slot_action(),
     ]
     .into_iter()
     .chain(resp3_actions())
@@ -803,9 +1103,103 @@ pub static REDIS_COMMAND_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     )
 });
 
+/// A client asked to subscribe. Raised for SUBSCRIBE, PSUBSCRIBE and SSUBSCRIBE once the
+/// request is known to fit every bound, so the model decides policy and nothing else.
+pub static REDIS_SUBSCRIBE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    EventType::new(
+        "redis_subscribe",
+        "A client asked to subscribe to channels or patterns",
+        json!({"type": "redis_accept_subscription"}),
+    )
+    .with_parameters(vec![
+        param(
+            "command",
+            "string",
+            "SUBSCRIBE (channels), PSUBSCRIBE (glob patterns) or SSUBSCRIBE (shard channels)",
+            true,
+        ),
+        param(
+            "channels",
+            "array",
+            "The channels or patterns requested, in order",
+            true,
+        ),
+        param(
+            "subscriptions",
+            "number",
+            "How many subscriptions this connection already holds",
+            true,
+        ),
+        param(
+            "protocol",
+            "number",
+            "The connection's RESP version: messages arrive as pushes on 3, arrays on 2",
+            true,
+        ),
+    ])
+    .with_actions(vec![
+        redis_accept_subscription_action(),
+        REDIS_ERROR_ACTION.clone(),
+        redis_publish_message_action(),
+        REDIS_CLOSE_CONNECTION_ACTION.clone(),
+    ])
+    .with_log_template(
+        LogTemplate::new()
+            .with_info("Redis: {command} {channels}")
+            .with_debug("Redis subscribe: {command} {channels}"),
+    )
+});
+
+/// A client published. Raised for PUBLISH and SPUBLISH once the message fits its bound.
+pub static REDIS_PUBLISH_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    EventType::new(
+        "redis_publish",
+        "A client published a message to a channel",
+        json!({"type": "redis_deliver_message"}),
+    )
+    .with_parameters(vec![
+        param(
+            "command",
+            "string",
+            "PUBLISH, or SPUBLISH for a shard channel",
+            true,
+        ),
+        param("channel", "string", "The channel the message is for", true),
+        param("message", "string", "The message text", true),
+        param(
+            "receivers",
+            "number",
+            "How many deliveries redis_deliver_message would make right now",
+            true,
+        ),
+        param(
+            "protocol",
+            "number",
+            "The publisher's RESP version (2 or 3)",
+            true,
+        ),
+    ])
+    .with_actions(vec![
+        redis_deliver_message_action(),
+        REDIS_INTEGER_ACTION.clone(),
+        REDIS_ERROR_ACTION.clone(),
+        redis_publish_message_action(),
+        REDIS_CLOSE_CONNECTION_ACTION.clone(),
+    ])
+    .with_log_template(
+        LogTemplate::new()
+            .with_info("Redis: {command} {channel}")
+            .with_debug("Redis publish: {command} {channel} ({receivers} receivers)"),
+    )
+});
+
 /// Get Redis event types
 pub fn get_redis_event_types() -> Vec<EventType> {
-    vec![REDIS_COMMAND_EVENT.clone()]
+    vec![
+        REDIS_COMMAND_EVENT.clone(),
+        REDIS_SUBSCRIBE_EVENT.clone(),
+        REDIS_PUBLISH_EVENT.clone(),
+    ]
 }
 
 fn resp3_action(

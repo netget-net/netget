@@ -666,6 +666,26 @@ impl ClientRegistry {
         self.register(Arc::new(
             crate::client::pfcp::actions::PfcpClientProtocol::new(),
         ));
+        #[cfg(feature = "gtp")]
+        self.register(Arc::new(
+            crate::client::gtp::actions::GtpClientProtocol::new(),
+        ));
+        #[cfg(feature = "db2")]
+        self.register(Arc::new(
+            crate::client::db2::actions::Db2ClientProtocol::new(),
+        ));
+        #[cfg(feature = "snowflake")]
+        self.register(Arc::new(
+            crate::client::snowflake::actions::SnowflakeClientProtocol::new(),
+        ));
+        #[cfg(feature = "spark")]
+        self.register(Arc::new(
+            crate::client::spark::actions::SparkClientProtocol::new(),
+        ));
+        #[cfg(feature = "yarn")]
+        self.register(Arc::new(
+            crate::client::yarn::actions::YarnClientProtocol::new(),
+        ));
         #[cfg(feature = "matrix")]
         self.register(Arc::new(
             crate::client::matrix::actions::MatrixClientProtocol::new(),
@@ -729,6 +749,10 @@ impl ClientRegistry {
         #[cfg(feature = "onvif")]
         self.register(Arc::new(
             crate::client::onvif::actions::OnvifClientProtocol::new(),
+        ));
+        #[cfg(feature = "kerberos")]
+        self.register(Arc::new(
+            crate::client::kerberos::actions::KerberosClientProtocol::new(),
         ));
         #[cfg(feature = "x11")]
         self.register(Arc::new(
@@ -1284,6 +1308,11 @@ pub(crate) const ALL_KNOWN_CLIENT_PROTOCOLS: &[(&str, &str)] = &[
     ("rsync", "rsync"),
     ("RDP", "rdp-client"),
     ("PFCP", "pfcp"),
+    ("GTP", "gtp"),
+    ("Db2", "db2"),
+    ("Snowflake", "snowflake"),
+    ("Spark", "spark"),
+    ("YARN", "yarn"),
     ("NGAP", "ngap"),
     ("Matrix", "matrix"),
     ("libp2p", "libp2p"),
@@ -1301,6 +1330,7 @@ pub(crate) const ALL_KNOWN_CLIENT_PROTOCOLS: &[(&str, &str)] = &[
     ("HLS", "hls"),
     ("WS-Discovery", "wsdiscovery"),
     ("ONVIF", "onvif"),
+    ("Kerberos", "kerberos"),
     ("X11", "x11"),
     ("HTTP", "http"),
     ("HTTP2", "http2"),

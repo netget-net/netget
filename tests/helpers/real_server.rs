@@ -81,6 +81,21 @@ const FALLBACK_DIRS: &[&str] = &[
     "/usr/bin",
     "/sbin",
     "/bin",
+    // Heimdal's KDC: Debian/Ubuntu's heimdal-kdc, and the one macOS ships inside its framework.
+    "/usr/lib/heimdal-servers",
+    "/System/Library/PrivateFrameworks/Heimdal.framework/Helpers",
+];
+
+/// Directories searched **before** `PATH`. Homebrew's `krb5` is keg-only: MIT's `kadmin.local`,
+/// `kvno` and `ktutil` live under `opt/krb5` and never on `PATH`, while macOS ships Apple's own
+/// Heimdal-compatible `kadmin.local` in `/usr/sbin`, which `PATH` would find first and which
+/// cannot administer an MIT database. Only binaries that exist here are affected, and every one
+/// of them is MIT krb5's.
+const PREFERRED_DIRS: &[&str] = &[
+    "/opt/homebrew/opt/krb5/sbin",
+    "/opt/homebrew/opt/krb5/bin",
+    "/usr/local/opt/krb5/sbin",
+    "/usr/local/opt/krb5/bin",
 ];
 
 /// Where Debian and Ubuntu put PostgreSQL's server binaries: `/usr/lib/postgresql/<major>/bin`,
@@ -127,8 +142,10 @@ pub fn find_binary(binary: &str) -> Option<PathBuf> {
     let path_dirs = std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
         .unwrap_or_default();
-    path_dirs
-        .into_iter()
+    PREFERRED_DIRS
+        .iter()
+        .map(PathBuf::from)
+        .chain(path_dirs)
         .chain(FALLBACK_DIRS.iter().map(PathBuf::from))
         .chain(postgresql_bin_dirs())
         .map(|dir| dir.join(binary))
@@ -175,6 +192,7 @@ pub struct RealServerBuilder {
     hint: InstallHint,
     args: Vec<String>,
     env: Vec<(String, String)>,
+    setup_env: Vec<(String, String)>,
     files: Vec<(String, String)>,
     setup: Vec<SetupCommand>,
     port: PortSource,
@@ -222,6 +240,14 @@ impl RealServerBuilder {
     /// [`args`](Self::args) are substituted into `value`.
     pub fn env(mut self, key: &str, value: &str) -> Self {
         self.env.push((key.to_owned(), value.to_owned()));
+        self
+    }
+
+    /// Set an environment variable for the [`setup_command`](Self::setup_command)s only (MIT's
+    /// `kdb5_util` and `kadmin.local` find their realm through `KRB5_CONFIG` and
+    /// `KRB5_KDC_PROFILE`). The same placeholders as [`args`](Self::args) are substituted.
+    pub fn setup_env(mut self, key: &str, value: &str) -> Self {
+        self.setup_env.push((key.to_owned(), value.to_owned()));
         self
     }
 
@@ -365,6 +391,7 @@ impl RealServerBuilder {
             let mut command = Command::new(setup_program);
             command
                 .args(step.args.iter().map(|a| substitute(a)))
+                .envs(self.setup_env.iter().map(|(k, v)| (k, substitute(v))))
                 .current_dir(dir.path())
                 .stdin(Stdio::null());
             let (binary, hint) = (step.binary.clone(), step.hint);
@@ -516,6 +543,7 @@ impl RealServer {
             hint,
             args: Vec::new(),
             env: Vec::new(),
+            setup_env: Vec::new(),
             files: Vec::new(),
             setup: Vec::new(),
             port: PortSource::Probe,

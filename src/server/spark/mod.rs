@@ -451,11 +451,20 @@ async fn handle_spark_request_inner(
                         // monitoring client recording a fabricated success is exactly what a
                         // monitoring API must not do.
                         let status = status_or(data.get("status"), 500);
-                        let body = data
+                        let mut body = data
                             .get("body")
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
+                        // `GET /api/v1/applications/{id}` is the one object in the API: Spark
+                        // answers it `{id, name, attempts}`, not `[{...}]`. The model answers it
+                        // with `send_spark_applications` and one element, which is sent here as
+                        // that element.
+                        if operation == "application" && status < 400 {
+                            if let Some(one) = single_element(&body) {
+                                body = one;
+                            }
+                        }
                         let ct = data
                             .get("content_type")
                             .and_then(|v| v.as_str())
@@ -507,6 +516,17 @@ async fn handle_spark_request_inner(
     }
 }
 
+/// The one element of a JSON array that holds exactly one object, re-serialised; `None` for
+/// anything else, which is then sent as the model gave it.
+fn single_element(body: &str) -> Option<String> {
+    match serde_json::from_str::<serde_json::Value>(body).ok()? {
+        serde_json::Value::Array(mut items) if items.len() == 1 && items[0].is_object() => {
+            serde_json::to_string(&items.remove(0)).ok()
+        }
+        _ => None,
+    }
+}
+
 /// Fail-closed JSON error body (distinct from any success array, which is a bare `[...]`).
 fn build_spark_error(status: u16, message: &str) -> Response<Full<Bytes>> {
     let body = serde_json::json!({ "error": message, "status": status }).to_string();
@@ -547,10 +567,15 @@ fn detect_spark_operation(method: &str, path: &str) -> (String, Option<String>) 
         ("GET", ["api", "v1", "applications", id, "executors"]) => {
             ("executors".to_string(), Some(id.to_string()))
         }
+        // Read on every run by Datadog's Spark integration, which is how its absence was found:
+        // the model had no truthful way to answer it, only a 404 or a mislabelled array.
+        ("GET", ["api", "v1", "applications", id, "storage", "rdd"]) => {
+            ("rdd".to_string(), Some(id.to_string()))
+        }
         // A per-application sub-resource we don't model explicitly still reaches the LLM as a
         // generic per-application request so the model can answer or 404 it.
         ("GET", ["api", "v1", "applications", id, _rest @ ..]) => {
-            ("application".to_string(), Some(id.to_string()))
+            ("application_resource".to_string(), Some(id.to_string()))
         }
         _ => ("unknown".to_string(), None),
     }

@@ -778,10 +778,14 @@ pub mod capnp_rpc;
 pub mod clickhouse;
 #[cfg(feature = "consul")]
 pub mod consul;
+#[cfg(feature = "db2")]
+pub mod db2;
 #[cfg(feature = "dbus")]
 pub mod dbus;
 #[cfg(feature = "epp")]
 pub mod epp;
+#[cfg(feature = "gtp")]
+pub mod gtp;
 #[cfg(feature = "guacamole")]
 pub mod guacamole;
 #[cfg(feature = "hls")]
@@ -790,6 +794,8 @@ pub mod hls;
 pub mod inetd;
 #[cfg(feature = "jmap")]
 pub mod jmap;
+#[cfg(feature = "kerberos")]
+pub mod kerberos;
 #[cfg(feature = "knx")]
 pub mod knx;
 #[cfg(feature = "libp2p")]
@@ -836,6 +842,10 @@ pub mod rtp;
 pub mod rtsp;
 #[cfg(feature = "smpp")]
 pub mod smpp;
+#[cfg(feature = "snowflake")]
+pub mod snowflake;
+#[cfg(feature = "spark")]
+pub mod spark;
 #[cfg(feature = "sse")]
 pub mod sse;
 #[cfg(feature = "stratum")]
@@ -854,6 +864,8 @@ pub mod webtransport;
 pub mod wsdiscovery;
 #[cfg(feature = "x11")]
 pub mod x11;
+#[cfg(feature = "yarn")]
+pub mod yarn;
 #[cfg(feature = "zabbix")]
 pub mod zabbix;
 #[cfg(feature = "zenoh")]

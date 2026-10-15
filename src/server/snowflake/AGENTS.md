@@ -6,21 +6,22 @@ back. This server answers those endpoints over hyper and lets the LLM play the
 warehouse — it decides the session token minted at login and the rowset returned
 for a query. **There is no storage**: no session table, no row store in Rust.
 
-**State**: Experimental — LLM/handwritten, not real-client validated.
+**State**: Experimental — one real driver (snowflake-connector-python) so far.
 **Port**: 8085 by default (any high port). **Privilege**: `None`.
 **Stack**: `ETH>IP>TCP>HTTP>Snowflake`.
 
-> Not real-client validated. Real Snowflake connectors are hard to point at
-> localhost, so the evidence is the **request/response envelope shapes** exercised
-> with `reqwest` (see the tests), not a genuine driver on a live connection. TLS
-> termination is out of scope — the server speaks plaintext HTTP; front it with a
-> TLS proxy if a driver insists on HTTPS.
+> **snowflake-connector-python 4.8.0**, Snowflake's official Python driver, drives this
+> server over plain HTTP in `tests/server/snowflake/real_client_test.rs` (`host`, `port`,
+> `protocol="http"`): login granted and refused, a typed rowset read through the driver's own
+> converters, a query error raised with the model's errno and SQLSTATE, and the driver's
+> logout. Pointing it here found three defects, all fixed (see "What the driver found"). It is
+> one driver; JDBC, ODBC and gosnowflake have not been tried, so this is still
+> `Experimental`. TLS termination is out of scope — the server speaks plaintext HTTP; front it
+> with a TLS proxy if a driver insists on HTTPS.
 >
-> `reqwest` is a generic HTTP client: it proves the server answers HTTP and that
-> the JSON envelope has the fields a connector reads. It cannot prove a connector
-> *accepts* them, so `Experimental` is the ceiling here until one does. That is the
-> same rule that keeps `spark` at Experimental, and it is why this is not `Beta`
-> however green the suite is.
+> The other suites drive the envelopes with `reqwest`, a generic HTTP client: that proves the
+> server answers HTTP and that the JSON has the fields a connector reads, not that a connector
+> accepts them — which is exactly the gap the driver test showed was real.
 
 ## Authentication
 
@@ -42,7 +43,7 @@ login here**.
 |---|---|---|
 | `POST /session/v1/login-request` | `snowflake_login` | `snowflake_login_success` or `snowflake_error` |
 | `POST /queries/v1/query-request` | `snowflake_query` | `snowflake_query_response` or `snowflake_error` |
-| `POST /session/logout-request` | `snowflake_session` (op=logout) | `snowflake_session_response` or `snowflake_error` |
+| `POST /session?delete=true` (the drivers' logout) or `POST /session/logout-request` | `snowflake_session` (op=logout) | `snowflake_session_response` or `snowflake_error` |
 | `POST /session/token-request` | `snowflake_session` (op=token_renew) | `snowflake_session_response` or `snowflake_error` |
 
 (`/session/authenticator-request` is routed to `snowflake_login` as well.)
@@ -69,10 +70,12 @@ there are no advertised-but-unreachable events.
   descriptors are augmented with defaults (`nullable`, `length`, …).
 - `snowflake_session_response` — optional `data` object (renewed tokens for
   token-request; omit for logout).
-- `snowflake_error` — `code` (string, e.g. `"390100"`), `message`. The only way
-  to refuse a login/query. Client gets HTTP 200 with `success:false`.
+- `snowflake_error` — `code` (string, e.g. `"390100"`), `message`, optional `sql_state`.
+  The only way to refuse a login/query. Client gets HTTP 200 with `success:false`. A refused
+  login carries `data: null`; a refused query or session request carries
+  `data: {errorCode, sqlState?}`, as Snowflake's does.
 
-### Request bodies are capped
+### Request bodies are capped, and may be gzipped
 
 `read_json_body` reads through `http_body_util::Limited` at `MAX_REQUEST_BYTES`
 (4 MiB); it used to be an unbounded `collect()`, so an unauthenticated POST to the
@@ -80,6 +83,28 @@ login endpoint could grow the process without limit. An over-cap or unreadable b
 becomes `Value::Null`, which every endpoint treats as "no fields present" — and
 since each one fails closed when the model cannot answer from those fields, a
 rejected body can only ever lose a login, never grant one.
+
+A body sent with `Content-Encoding: gzip` — which is every body snowflake-connector-python
+sends — is inflated by `gunzip_bounded`, and the 4 MiB bound applies to the **inflated** size,
+since a few KiB of gzip can expand to gigabytes. An over-cap or corrupt stream is `Value::Null`
+like any other unreadable body.
+
+## What the driver found
+
+Each of these passed every `reqwest` test, because each test wrote its request the way the
+server expected rather than the way a driver does:
+
+- **Every login was refused.** The driver gzips its request bodies; the server parsed the
+  compressed bytes as JSON, found no `data`, and the model was asked about a login with no
+  name. Fixed by reading `Content-Encoding: gzip` (bounded, above).
+- **Logout reached no handler.** The drivers end a session with `POST /session?delete=true`;
+  only `/session/logout-request` was routed, so the logout was an unknown endpoint (390318).
+- **A refused query lost its SQLSTATE.** The driver reads it from `data.sqlState`; the envelope
+  sent `data: null` and `snowflake_error` had no field for one, so every query error reached
+  the application as SQLSTATE `n/a`. Query and session errors now carry
+  `data: {errorCode, sqlState}`, and `snowflake_error` takes the `sql_state` to put there. A
+  refused **login** keeps `data: null` (the tests assert that no token can ride along on a
+  refusal), and the driver handles that path.
 
 ## Fail-closed behaviour (the OAuth2/LDAP lesson)
 
@@ -180,8 +205,11 @@ answer given a boolean — not that the requester was authenticated. The query l
 
 ## Testing
 
-`tests/server/snowflake/e2e_test.rs`, declared in `tests/server/mod.rs`. Drives
-the real endpoints with `reqwest` against a running server with the LLM mocked.
+`tests/server/snowflake/`, declared in `tests/server/mod.rs`: `real_client_test.rs` drives the
+server with snowflake-connector-python (installed by `tests/client/snowflake/install_peers.sh`,
+which prints the `NETGET_SNOWFLAKE_PEERS` it needs; the test fails rather than skips without
+it); `e2e_test.rs` and `llm_failure_test.rs` drive the endpoints with `reqwest`;
+`connection_bounds_test.rs` the bounds. The LLM is mocked throughout.
 
 ```bash
 ./cargo-isolated.sh test --no-default-features --features snowflake \
@@ -215,8 +243,10 @@ mechanism; the server had no read bound at all.
 | `IDLE_BETWEEN_REQUESTS_TIMEOUT` | 300s | A driver logs in, submits a query and fetches the result on the same pooled connection, with gaps while the application consumes a result set. A query being answered is a request in flight and held busy for the whole of the model round-trip. Four times nginx's `keepalive_timeout` default of 75s. |
 | `MAX_CONNECTIONS` | 256 | Each admitted connection may hold one whole in-memory response body (a result set), so the cap turns that per-connection bound into a total one. Refusal: **HTTP/1.1 `503 Service Unavailable` with `Retry-After: 5`** — a 503 with `Retry-After` reads to a driver's HTTP layer as a retryable server condition. Nothing of netget's reaches the wire; the reason is logged under `decision=fail_closed_connection_cap`. |
 
-**There is no NetGet Snowflake client**, so this bound has no peer of ours to strand — the
-fourth exemption in `PROTOCOL_QUALITY.md`'s three-state test.
+NetGet's own Snowflake client (`src/client/snowflake/`) cannot be stranded by this bound: it
+speaks first — `connect()` posts its login before it returns — and it holds no connection
+between statements that it cannot reopen (reqwest reconnects a pooled connection the server
+closed).
 
 **The idle bound is a watchdog, not a read deadline, and that is not a stylistic choice.** hyper
 owns every read once `serve_connection` starts and keeps polling the connection for new frames

@@ -147,6 +147,7 @@ fn golden_duals_map() {
         "SSE",
         "WS-Discovery",
         "ONVIF",
+        "Kerberos",
         "Nostr",
         "Vault",
         "Bolt",
@@ -213,6 +214,11 @@ fn normalized_duals_map() {
     assert_eq!(client_protocol_for_server("RTSP"), Some("RTSP"));
     assert_eq!(client_protocol_for_server("HLS"), Some("HLS"));
     assert_eq!(client_protocol_for_server("RDP"), Some("RDP"));
+    assert_eq!(client_protocol_for_server("GTP"), Some("GTP"));
+    assert_eq!(client_protocol_for_server("Db2"), Some("Db2"));
+    assert_eq!(client_protocol_for_server("Snowflake"), Some("Snowflake"));
+    assert_eq!(client_protocol_for_server("Spark"), Some("Spark"));
+    assert_eq!(client_protocol_for_server("YARN"), Some("YARN"));
 }
 
 /// Server-only protocols must return None — a false positive here would make

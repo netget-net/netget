@@ -69,7 +69,10 @@ pub static SPARK_REQUEST_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         Parameter {
             name: "operation".to_string(),
             type_hint: "string".to_string(),
-            description: "Detected operation: applications, application, jobs, stages, executors"
+            description: "Detected operation: applications (the list), application (one, \
+                          GET /api/v1/applications/{id}), jobs, stages, executors, rdd \
+                          (/storage/rdd), or application_resource (any other per-application \
+                          path: answer it or 404 it with send_spark_error)"
                 .to_string(),
             required: true,
         },
@@ -99,8 +102,37 @@ fn spark_actions() -> Vec<ActionDefinition> {
         send_spark_jobs_action(),
         send_spark_stages_action(),
         send_spark_executors_action(),
+        send_spark_rdds_action(),
         send_spark_error_action(),
     ]
+}
+
+fn send_spark_rdds_action() -> ActionDefinition {
+    ActionDefinition {
+        name: "send_spark_rdds".to_string(),
+        description: "Answer GET /api/v1/applications/{id}/storage/rdd (operation rdd): the \
+                      application's cached RDDs. Supply the `rdds` array; the response is the \
+                      array itself, and an empty array means nothing is cached."
+            .to_string(),
+        parameters: vec![Parameter {
+            name: "rdds".to_string(),
+            type_hint: "array".to_string(),
+            description: "Array of RDD storage objects. Common fields: id (number), name, \
+                          numPartitions, numCachedPartitions, storageLevel (e.g. \"Memory \
+                          Deserialized 1x Replicated\"), memoryUsed, diskUsed (bytes)."
+                .to_string(),
+            required: true,
+        }],
+        example: json!({
+            "type": "send_spark_rdds",
+            "rdds": [{
+                "id": 3, "name": "ParallelCollectionRDD", "numPartitions": 4,
+                "numCachedPartitions": 4, "storageLevel": "Memory Deserialized 1x Replicated",
+                "memoryUsed": 2048, "diskUsed": 0
+            }]
+        }),
+        log_template: Some(LogTemplate::new().with_info("-> Spark {rdds_len} cached RDDs")),
+    }
 }
 
 fn send_spark_applications_action() -> ActionDefinition {
@@ -109,7 +141,8 @@ fn send_spark_applications_action() -> ActionDefinition {
         description: "Answer GET /api/v1/applications (list) or GET /api/v1/applications/{id} \
                       (single). Supply the `applications` array; the response is the array \
                       itself (Spark returns a bare JSON array). For the single-app endpoint \
-                      return exactly one element."
+                      (operation application) return exactly one element; it is sent as the \
+                      bare object, as Spark sends it."
             .to_string(),
         parameters: vec![Parameter {
             name: "applications".to_string(),
@@ -320,16 +353,25 @@ impl Protocol for SparkProtocol {
             .state(DevelopmentState::Experimental)
             .well_known_port(4040)
             .implementation("hyper v1 HTTP/1.1 server, manual Spark monitoring REST arrays")
-            .llm_control("Applications, jobs, stages and executors invented by the LLM")
+            .llm_control("Applications, jobs, stages, executors and cached RDDs invented by the LLM")
             .e2e_testing(
-                "curl / reqwest asserting the documented Spark REST array shapes \
-                          (shape-conformance, not a real Spark client)",
+                "tests/server/spark/datadog_check_test.rs runs Datadog's Spark integration \
+                 (datadog_checks.spark, integrations-core tag spark-7.8.0) once in driver mode \
+                 against the server and asserts the metrics, tags, service checks and version it \
+                 submitted from the model's answers (applications, jobs, stages, executors, \
+                 storage/rdd, a streaming-statistics 404). e2e_test.rs checks the documented \
+                 shapes with reqwest. NetGet's own Spark client is tested against real Spark, \
+                 not against this server",
             )
             .notes(
                 "Virtual application, no storage. GET /api/v1/version is answered \
-                    statically; applications/jobs/stages/executors are LLM-driven. \
+                    statically; applications/jobs/stages/executors/storage-rdd are LLM-driven, \
+                    and GET /api/v1/applications/{id} is sent as the one object Spark sends. \
                     Fail-closed: LLM failure returns 503/500 JSON error, never an empty-but-200 \
-                    array.",
+                    array. Experimental: one independent consumer (Datadog's check), which reads \
+                    the list endpoints only; nothing has yet driven the per-job, per-stage, \
+                    environment or SQL endpoints, which reach the model as \
+                    application_resource.",
             )
             .max_inbound_bytes(crate::server::spark::MAX_REQUEST_BYTES)
             .request_only("The Spark REST API is HTTP request/response; a server cannot send a peer anything unprompted")
@@ -447,6 +489,7 @@ impl Server for SparkProtocol {
             "send_spark_jobs" => json_array(200, array_body(&action, "jobs")?),
             "send_spark_stages" => json_array(200, array_body(&action, "stages")?),
             "send_spark_executors" => json_array(200, array_body(&action, "executors")?),
+            "send_spark_rdds" => json_array(200, array_body(&action, "rdds")?),
             "send_spark_error" => {
                 let status = parse_status(&action)?;
                 let message = action
