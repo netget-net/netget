@@ -102,17 +102,54 @@ fn sqlcard_success_is_null_sqlca() {
 
 #[test]
 fn sqlcard_error_carries_sqlcode_and_sqlstate() {
-    // SQLCODE -204, SQLSTATE 42704.
+    // SQLCODE -204, SQLSTATE 42704, as a complete SQLAM 7 SQLCA. The layout is the one
+    // Apache Derby's network server sends (captured; see tests/client/db2/wire_test.rs):
+    //   0x00 | SQLCODE i32 BE | SQLSTATE(5) | SQLERRPROC(8)
+    //   | 0x00 SQLCAXGRP: SQLERRD1..6 (6 x i32) | SQLWARN0..A (11) | 3 empty VCS/VCM
+    //   | 0xFF SQLDIAGGRP null
+    // The character fields are in the single-byte CCSID ACCRDBRM declares, UTF-8.
     let card = drda::sqlcard_error(-204, "42704");
-    // length(2) codepoint(0x2408) then SQLCAGRP:
-    //   0x00 (present) | SQLCODE i32 BE | SQLSTATE(5 EBCDIC) | SQLERRPROC(8) | 0xFF
-    let data_len = 1 + 4 + 5 + 8 + 1; // 19
+    let data_len = 1 + 4 + 5 + 8 + 1 + 24 + 11 + 6 + 1; // 61
     assert_eq!(card.len(), 4 + data_len);
     assert_eq!(&card[0..2], &((4 + data_len) as u16).to_be_bytes());
     assert_eq!(&card[2..4], &[0x24, 0x08]);
     assert_eq!(card[4], 0x00); // SQLCAGRP present
     assert_eq!(&card[5..9], &(-204i32).to_be_bytes()); // SQLCODE
-                                                       // SQLSTATE "42704" EBCDIC.
-    assert_eq!(&card[9..14], &drda::ascii_to_ebcdic("42704")[..]);
-    assert_eq!(*card.last().unwrap(), 0xFF); // SQLCAXGRP null
+    assert_eq!(&card[9..14], b"42704");
+    assert_eq!(&card[14..22], b"NETGET  ");
+    assert_eq!(card[22], 0x00); // SQLCAXGRP present
+    assert_eq!(*card.last().unwrap(), 0xFF); // SQLDIAGGRP null
+}
+
+#[test]
+fn replies_to_a_chained_request_are_chained() {
+    // Two reply DSSes with one correlator, answering a request that is itself chained to
+    // another: both say "chained", the first also "same correlator".
+    let mut reply = drda::encode_dss(drda::DSSFMT_RPYDSS, false, 2, &drda::sqlcard_success());
+    reply.extend(drda::encode_dss(
+        drda::DSSFMT_OBJDSS,
+        false,
+        2,
+        &drda::sqlcard_success(),
+    ));
+    let chained = drda::chain_reply(reply.clone(), true);
+    assert_eq!(chained[3], 0x52);
+    assert_eq!(chained[3 + 11], 0x43);
+    let last = drda::chain_reply(reply, false);
+    assert_eq!(last[3], 0x52);
+    assert_eq!(last[3 + 11], 0x03);
+}
+
+#[test]
+fn sqlstt_is_read_as_fdoca_utf8() {
+    // What a JDBC driver sends: 0x00, a 4-byte length, UTF-8 text, then a null 0xFF.
+    let mut body = vec![0x00, 0, 0, 0, 7];
+    body.extend_from_slice("héllo!".as_bytes());
+    body.push(0xFF);
+    assert_eq!(drda::decode_sqlstt(&body), "héllo!");
+    // Bare EBCDIC is still read.
+    assert_eq!(
+        drda::decode_sqlstt(&drda::ascii_to_ebcdic("SELECT 1")),
+        "SELECT 1"
+    );
 }
