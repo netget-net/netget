@@ -19,6 +19,7 @@ document.querySelectorAll('.copy-btn').forEach(function (btn) {
             selection.addRange(range);
         });
     });
+    btn.hidden = false;
 });
 
 // Light / dark theme toggle
@@ -46,5 +47,6 @@ document.querySelectorAll('.copy-btn').forEach(function (btn) {
     });
 
     render();
+    btn.hidden = false;
     window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', render);
 })();

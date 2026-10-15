@@ -59,10 +59,10 @@ find "$stage" \( -name '.DS_Store' -o -name '*.md' \) -delete
 # load (demo.js -> ../demo/pkg/, composer.js) are relative and move with them.
 for page in "${HTML_PAGES[@]}"; do
   sed -E -i.bak \
-    -e "s#(href|src)=\"(css|js|demo)/#\\1=\"v/$version/\\2/#g" \
+    -e "s#(href|src|srcset)=\"(css|js|demo)/#\\1=\"v/$version/\\2/#g" \
     "$stage/$page"
   rm "$stage/$page.bak"
-  if grep -nE '(href|src)="(css|js|demo)/' "$stage/$page"; then
+  if grep -nE '(href|src|srcset)="(css|js|demo)/' "$stage/$page"; then
     echo "$page still references an unversioned asset (above)" >&2
     exit 1
   fi

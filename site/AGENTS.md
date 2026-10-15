@@ -4,11 +4,16 @@
 demo loads xterm.js and the WebAssembly runtime. Terminal focus belongs to the visitor:
 startup, connection, incoming requests, and sending a composer reply must not focus a terminal.
 
-The landing page's `js/protocol-landscape.js` shuffles all protocol features on each page
-load, varies the four driver labels, and fits whole stack columns to the figure's width.
+The landing page ships complete example stacks in HTML. CSS container queries fit whole
+columns to the available width, and equal grid rows keep each driver box the same height
+as its protocol layers. `js/protocol-landscape.js` optionally shuffles all protocol features
+on each page load and varies LLM-driven, static, manual, Python, JavaScript, Perl and Go labels.
 Its generated `js/protocol-stacks.js` comes from both registries and their `stack_name()`
 declarations, including platform-gated protocols. `python3 scripts/site_protocol_stacks.py`
 refreshes it; `--check` detects drift. Deployment refreshes it before hashing the assets.
+Without JavaScript, the fixed stacks, protocol links, examples and install commands remain
+available; Copy/theme buttons are hidden until their handlers are installed. The demo's
+`noscript` preview uses actual desktop/mobile screenshots in `demo/preview*.png`.
 
 `css/`, `js/`, `favicon.svg`, and `demo/pkg/` — the NetGet-in-the-browser
 bundle, which is the one thing here that is built: `./web/build.sh` from the repository root

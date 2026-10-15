@@ -451,15 +451,11 @@
             <h3 class="sub-h">CLI</h3>
             <div class="code-block">
                 <button class="copy-btn" hidden data-target="cli">Copy</button>
-                <pre id="cli"><code><span class="c"># run</span>
-npx -y @smotana/netget
-
-<span class="c"># optional: local Ollama</span>
-ollama pull qwen3-coder:30b
-npx -y @smotana/netget
-
-<span class="c"># or run against any OpenAI-compatible API</span>
-npx -y @smotana/netget --openai-url "$MODEL_ENDPOINT" --model "$MODEL_NAME" --api-key "$MODEL_API_KEY"</code></pre>
+                <pre id="cli"><code>npx -y @smotana/netget</code></pre>
+            </div>
+            <div class="code-block">
+                <button class="copy-btn" hidden data-target="cargo-install">Copy</button>
+                <pre id="cargo-install"><code>cargo install netget</code></pre>
             </div>
 
             <h3 class="sub-h">MCP</h3>
@@ -475,19 +471,17 @@ npx -y @smotana/netget --openai-url "$MODEL_ENDPOINT" --model "$MODEL_NAME" --ap
   }
 }</code></pre>
             </div>
-            <p class="caption">Claude Code: <code>claude mcp add netget -- npx -y @smotana/netget --mcp</code></p>
 
             <h3 class="sub-h">From source</h3>
             <div class="code-block">
                 <button class="copy-btn" hidden data-target="src">Copy</button>
                 <pre id="src"><code>git clone https://github.com/smotanacom/netget.git
 cd netget
-
-<span class="c"># build only the protocols you need</span>
-cargo build --release --no-default-features --features tcp,http,ssh,dns,mcp-stdio
-
-./target/release/netget          <span class="c"># interactive TUI</span>
-./target/release/netget --mcp    <span class="c"># MCP STDIO server</span></code></pre>
+cargo build --release</code></pre>
+            </div>
+            <div class="code-block">
+                <button class="copy-btn" hidden data-target="src-run">Copy</button>
+                <pre id="src-run"><code>./target/release/netget          <span class="c"># interactive TUI</span></code></pre>
             </div>
         </section>
 

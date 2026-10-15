@@ -12,6 +12,9 @@
     padding-inline: 1rem;
 }
 
+.demo-preview { max-width: 1320px; margin: 0 auto; padding-inline: 1rem; }
+.demo-preview img { display: block; width: 100%; height: auto; }
+
 .demo-banner {
     background: var(--panel-2);
     border: 1px solid var(--border);

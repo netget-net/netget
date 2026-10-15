@@ -63,11 +63,21 @@ h1 { font-size: clamp(2.25rem, 5vw, 3.3rem); line-height: 1.12; letter-spacing: 
 .section { padding: 1.8rem 0; }
 h2 { font-size: 1.3rem; font-weight: 600; letter-spacing: -0.025em; margin-bottom: 1rem; }
 /* Protocol stacks of different depths align at their base layers. */
-/* The renderer fits whole columns to the available width, keeping one row. */
-.protocol-landscape { --stack-min-width: 88px; display: grid; grid-template-columns: repeat(var(--stack-count, 1), minmax(0, 1fr)); align-items: end; gap: 10px; margin: 0; padding: 1.25rem 0 0.75rem; }
-.protocol-stack { min-width: 0; display: flex; flex-direction: column; gap: 5px; list-style: none; margin: 0; padding: 0; }
-.protocol-stack li { display: grid; place-items: center; min-height: 36px; padding: 0.4rem 0.25rem; border: 1px solid var(--border); border-radius: 4px; background: var(--panel); color: var(--text); font-family: var(--mono); font-size: 0.7rem; line-height: 1.3; text-align: center; overflow-wrap: anywhere; }
-.protocol-stack .stack-driver { min-height: 48px; color: var(--bg); background: var(--green); border-color: var(--green); font-weight: 600; margin-bottom: 3px; }
+/* CSS fits whole columns in one row, even when JavaScript is unavailable. */
+#how-it-works { container-type: inline-size; }
+.protocol-landscape { display: flex; align-items: flex-end; gap: 10px; margin: 0; padding: 1.25rem 0 0.75rem; }
+.protocol-stack { flex: 1 1 0; min-width: 0; display: grid; grid-auto-rows: 1fr; gap: 5px; list-style: none; margin: 0; padding: 0; }
+.protocol-stack:nth-child(n+2) { display: none; }
+/* Each additional 88px column needs another 10px gap. */
+@container (min-width: 186px) { .protocol-stack:nth-child(2) { display: grid; } }
+@container (min-width: 284px) { .protocol-stack:nth-child(3) { display: grid; } }
+@container (min-width: 382px) { .protocol-stack:nth-child(4) { display: grid; } }
+@container (min-width: 480px) { .protocol-stack:nth-child(5) { display: grid; } }
+@container (min-width: 578px) { .protocol-stack:nth-child(6) { display: grid; } }
+@container (min-width: 676px) { .protocol-stack:nth-child(7) { display: grid; } }
+@container (min-width: 774px) { .protocol-stack:nth-child(8) { display: grid; } }
+.protocol-stack li { display: grid; place-items: center; min-height: 36px; padding: 0.15rem 0.25rem; border: 1px solid var(--border); border-radius: 4px; background: var(--panel); color: var(--text); font-family: var(--mono); font-size: 0.7rem; line-height: 1.3; text-align: center; overflow-wrap: anywhere; }
+.protocol-stack .stack-driver { color: var(--bg); background: var(--green); border-color: var(--green); font-weight: 600; }
 .protocol-stack .stack-application { color: var(--cyan); border-color: color-mix(in srgb, var(--cyan) 30%, var(--border)); background: color-mix(in srgb, var(--cyan) 7%, var(--panel)); }
 .protocol-stack .stack-transport { color: var(--cyan); }
 .protocol-stack .stack-network { color: var(--muted); }
@@ -103,7 +113,6 @@ main.demo-main { width: 100%; max-width: none; }
 .demo-intro p { margin-top: 0.5rem; font-size: 0.85rem; color: var(--muted); }
 @media (max-width: 760px) {
     .protocol-landscape { padding-top: 0.25rem; }
-    .protocol-stack li { min-height: 32px; font-size: 0.73rem; }
 }
 @media (max-width: 600px) {
     .nav, main, .footer { width: calc(100% - 2.5rem); }

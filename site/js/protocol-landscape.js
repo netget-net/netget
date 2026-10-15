@@ -19,8 +19,11 @@ if (landscape) {
     }
 
     // Shuffle once per page load. Resizing preserves the selection and order.
-    const drivers = shuffle(['LLM driven', 'static response', 'script driven', 'manual intercept']);
-    const selection = shuffle([...variants]).slice(0, 9).map(([feature, stacks], index) => ({
+    const drivers = shuffle([
+        'LLM-driven', 'static response', 'manual response',
+        'Python script', 'JavaScript', 'Perl script', 'Go script',
+    ]);
+    const selection = shuffle([...variants]).slice(0, 8).map(([feature, stacks], index) => ({
         feature,
         stack: stacks[Math.floor(Math.random() * stacks.length)],
         driver: drivers[index % drivers.length],
@@ -73,19 +76,6 @@ if (landscape) {
         return column;
     });
 
-    let visibleCount = 0;
-    function fitColumns() {
-        const style = getComputedStyle(landscape);
-        const minWidth = parseFloat(style.getPropertyValue('--stack-min-width'));
-        const gap = parseFloat(style.columnGap);
-        const count = Math.min(columns.length, Math.max(1,
-            Math.floor((landscape.clientWidth + gap) / (minWidth + gap))));
-        if (count === visibleCount) return;
-        visibleCount = count;
-        landscape.style.setProperty('--stack-count', count);
-        landscape.replaceChildren(...columns.slice(0, count));
-    }
-
-    fitColumns();
-    new ResizeObserver(fitColumns).observe(landscape);
+    // HTML supplies the initial stacks; CSS fits whole columns with or without JS.
+    landscape.replaceChildren(...columns);
 }
