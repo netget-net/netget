@@ -3,10 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NetGet — Network Protocol Stubbing Multitool</title>
-    <meta name="description" content="With LLM or Human driven requests/responses">
-    <meta property="og:title" content="NetGet — Network Protocol Stubbing Multitool">
-    <meta property="og:description" content="With LLM or Human driven requests/responses">
+    <title>NetGet | Network Protocol Stubbing Toolkit</title>
+    <meta name="description" content="With LLM/human driven responses">
+    <meta property="og:title" content="NetGet | Network Protocol Stubbing Toolkit">
+    <meta property="og:description" content="With LLM/human driven responses">
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://netget.net/">
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
@@ -23,18 +23,71 @@
         <div class="nav-right">
             <a class="nav-link" href="https://github.com/smotanacom/netget">GitHub ↗</a>
             <a class="button button-small" href="demo.html">Demo</a>
-            <button class="theme-btn" id="theme-toggle" aria-label="Toggle color theme">◐</button>
+            <button class="theme-btn" hidden id="theme-toggle" aria-label="Toggle color theme">◐</button>
         </div>
     </nav>
 
     <main id="main">
         <header class="hero">
-            <h1>Network Protocol<br><span class="accent">Stubbing Multitool</span></h1>
-            <p>With LLM or Human driven requests/responses</p>
+            <h1>Network Protocol<br><span class="accent">Stubbing Toolkit</span></h1>
+            <p>With LLM/human driven responses</p>
         </header>
 
         <section class="section" id="how-it-works" aria-label="Protocol stacks">
-            <figure class="protocol-landscape" aria-label="Protocol stacks with LLM driven, static response, script driven, and manual intercept modes"></figure>
+            <figure class="protocol-landscape" aria-label="Protocol stacks with LLM-driven, static, scripted, and manual responses">
+                <ol class="protocol-stack" data-protocol="http" aria-label="LLM-driven: HTTP over TCP over IP over Ethernet">
+                    <li class="stack-driver">LLM-driven</li>
+                    <li class="stack-application">HTTP</li>
+                    <li class="stack-transport">TCP</li>
+                    <li class="stack-network">IP</li>
+                    <li class="stack-link">Ethernet</li>
+                </ol>
+                <ol class="protocol-stack" data-protocol="dns" aria-label="static response: DNS over UDP over IP over Ethernet">
+                    <li class="stack-driver">static response</li>
+                    <li class="stack-application">DNS</li>
+                    <li class="stack-transport">UDP</li>
+                    <li class="stack-network">IP</li>
+                    <li class="stack-link">Ethernet</li>
+                </ol>
+                <ol class="protocol-stack" data-protocol="postgresql" aria-label="Python script: PostgreSQL over TCP over IP over Ethernet">
+                    <li class="stack-driver">Python script</li>
+                    <li class="stack-application">PostgreSQL</li>
+                    <li class="stack-transport">TCP</li>
+                    <li class="stack-network">IP</li>
+                    <li class="stack-link">Ethernet</li>
+                </ol>
+                <ol class="protocol-stack" data-protocol="mqtt" aria-label="manual response: MQTT over TCP over IP over Ethernet">
+                    <li class="stack-driver">manual response</li>
+                    <li class="stack-application">MQTT</li>
+                    <li class="stack-transport">TCP</li>
+                    <li class="stack-network">IP</li>
+                    <li class="stack-link">Ethernet</li>
+                </ol>
+                <ol class="protocol-stack" data-protocol="usb-keyboard" aria-label="JavaScript: Keyboard over HID over USB">
+                    <li class="stack-driver">JavaScript</li>
+                    <li class="stack-application">Keyboard</li>
+                    <li class="stack-application">HID</li>
+                    <li class="stack-link">USB</li>
+                </ol>
+                <ol class="protocol-stack" data-protocol="ssh" aria-label="Perl script: SSH over TCP over IP over Ethernet">
+                    <li class="stack-driver">Perl script</li>
+                    <li class="stack-application">SSH</li>
+                    <li class="stack-transport">TCP</li>
+                    <li class="stack-network">IP</li>
+                    <li class="stack-link">Ethernet</li>
+                </ol>
+                <ol class="protocol-stack" data-protocol="bluetooth-ble" aria-label="Go script: Bluetooth LE">
+                    <li class="stack-driver">Go script</li>
+                    <li class="stack-link">Bluetooth LE</li>
+                </ol>
+                <ol class="protocol-stack" data-protocol="quic" aria-label="LLM-driven: QUIC over UDP over IP over Ethernet">
+                    <li class="stack-driver">LLM-driven</li>
+                    <li class="stack-transport">QUIC</li>
+                    <li class="stack-transport">UDP</li>
+                    <li class="stack-network">IP</li>
+                    <li class="stack-link">Ethernet</li>
+                </ol>
+            </figure>
         </section>
 
         <section class="section" id="examples">
@@ -47,10 +100,10 @@
                     <p>DHCP-advertise self as gateway/DNS; DNS-resolve all to self; HTTP always return Hello World.</p>
                 </article>
                 <article>
-                    <p>Provide life coaching services over Telnet.</p>
+                    <p>Connect to PostgreSQL on localhost:5432 and send select query with an invalid UTF-8 continuation byte; log response</p>
                 </article>
                 <article>
-                    <p>Connect to PostgreSQL on localhost:5432 and send select query with an invalid UTF-8 continuation byte</p>
+                    <p>Provide life coaching services over Telnet.</p>
                 </article>
             </div>
         </section>
@@ -397,7 +450,7 @@
 
             <h3 class="sub-h">CLI</h3>
             <div class="code-block">
-                <button class="copy-btn" data-target="cli">Copy</button>
+                <button class="copy-btn" hidden data-target="cli">Copy</button>
                 <pre id="cli"><code><span class="c"># run</span>
 npx -y @smotana/netget
 
@@ -412,7 +465,7 @@ npx -y @smotana/netget --openai-url "$MODEL_ENDPOINT" --model "$MODEL_NAME" --ap
             <h3 class="sub-h">MCP</h3>
             <p class="caption">Add to <code>claude_desktop_config.json</code> or any MCP client config:</p>
             <div class="code-block">
-                <button class="copy-btn" data-target="mcp-json">Copy</button>
+                <button class="copy-btn" hidden data-target="mcp-json">Copy</button>
                 <pre id="mcp-json"><code>{
   <span class="str">"mcpServers"</span>: {
     <span class="str">"netget"</span>: {
@@ -426,7 +479,7 @@ npx -y @smotana/netget --openai-url "$MODEL_ENDPOINT" --model "$MODEL_NAME" --ap
 
             <h3 class="sub-h">From source</h3>
             <div class="code-block">
-                <button class="copy-btn" data-target="src">Copy</button>
+                <button class="copy-btn" hidden data-target="src">Copy</button>
                 <pre id="src"><code>git clone https://github.com/smotanacom/netget.git
 cd netget
 

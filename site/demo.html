@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NetGet — Interactive protocol demo</title>
+    <title>NetGet | Interactive protocol demo</title>
     <meta name="description" content="Explore the NetGet dashboard with a Telnet client and a simulated network in your browser.">
-    <meta property="og:title" content="NetGet — Interactive protocol demo">
+    <meta property="og:title" content="NetGet | Interactive protocol demo">
     <meta property="og:description" content="Explore the NetGet dashboard with a Telnet client and a simulated network in your browser.">
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://netget.net/demo.html">
@@ -17,6 +17,7 @@
     <link rel="stylesheet" href="css/style.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
     <link rel="stylesheet" href="css/demo.css">
+    <noscript><style>.demo { display: none; }</style></noscript>
 </head>
 <body>
     <a class="skip-link" href="#main">Skip to content</a>
@@ -25,7 +26,7 @@
         <div class="nav-right">
             <a class="nav-link" href="https://github.com/smotanacom/netget">GitHub ↗</a>
             <a class="button button-small" href="demo.html" aria-current="page">Demo</a>
-            <button class="theme-btn" id="theme-toggle" aria-label="Toggle color theme">◐</button>
+            <button class="theme-btn" hidden id="theme-toggle" aria-label="Toggle color theme">◐</button>
         </div>
     </nav>
     <main id="main" class="demo-main">
@@ -33,6 +34,15 @@
             <h1>Demo</h1>
             <p>NetGet compiled to WASM for demonstration only</p>
         </header>
+        <noscript>
+            <section class="demo-preview" aria-label="Static demo preview">
+                <picture>
+                    <source media="(max-width: 900px)" srcset="demo/preview-mobile.png">
+                    <img src="demo/preview.png" alt="NetGet demo showing a Telnet conversation, a manual response composer, and the protocol dashboard.">
+                </picture>
+                <p class="caption">Static preview. Enable JavaScript to use the interactive demo.</p>
+            </section>
+        </noscript>
     <section class="demo" id="demo">
         <div class="demo-banner" id="demo-banner">Loading NetGet…</div>
 
