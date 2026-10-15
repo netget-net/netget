@@ -24,6 +24,8 @@ pub mod couchdb;
 pub mod datalink;
 #[cfg(feature = "dc")]
 pub mod dc;
+#[cfg(feature = "devp2p")]
+pub mod devp2p;
 #[cfg(feature = "dhcp")]
 pub mod dhcp;
 #[cfg(feature = "dns")]

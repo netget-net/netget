@@ -35,6 +35,9 @@ pub use bgp::actions::BgpClientProtocol;
 pub mod bitcoin;
 #[cfg(feature = "bitcoin")]
 pub use bitcoin::actions::BitcoinClientProtocol;
+// Ethereum devp2p dialler
+#[cfg(feature = "devp2p")]
+pub mod devp2p;
 
 // bluetooth-ble client
 #[cfg(feature = "bluetooth-ble-client")]

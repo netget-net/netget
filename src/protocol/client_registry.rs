@@ -55,6 +55,10 @@ impl ClientRegistry {
         self.register(Arc::new(
             crate::client::bitcoin::BitcoinClientProtocol::new(),
         ));
+        #[cfg(feature = "devp2p")]
+        self.register(Arc::new(
+            crate::client::devp2p::actions::Devp2pClientProtocol::new(),
+        ));
 
         #[cfg(feature = "bluetooth-ble-client")]
         self.register(Arc::new(
@@ -1447,6 +1451,7 @@ pub(crate) const ALL_KNOWN_CLIENT_PROTOCOLS: &[(&str, &str)] = &[
     ("WebRTC", "webrtc"),
     ("WebSocket", "websocket"),
     ("Bitcoin", "bitcoin"),
+    ("devp2p", "devp2p"),
     ("Bluetooth (BLE)", "bluetooth-ble-client"),
     ("DynamoDB", "dynamodb"),
     ("Elasticsearch", "elasticsearch"),

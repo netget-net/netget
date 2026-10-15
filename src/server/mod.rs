@@ -917,6 +917,8 @@ pub use rip::RipServer;
 
 #[cfg(feature = "bitcoin")]
 pub mod bitcoin;
+#[cfg(feature = "devp2p")]
+pub mod devp2p;
 #[cfg(feature = "bitcoin")]
 pub use bitcoin::actions::BitcoinProtocol;
 #[cfg(feature = "bitcoin")]
