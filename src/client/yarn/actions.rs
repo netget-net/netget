@@ -185,7 +185,7 @@ pub fn actions() -> Vec<ActionDefinition> {
         ),
         action(
             "kill_application",
-            "Kill an application (PUT /ws/v1/cluster/apps/{app_id}/state with {\"state\": \"KILLED\"}). Refused unless the client was opened with the startup parameter allow_kill: true. YARN answers KILLING while it works and KILLED once done. Answered by yarn_app_state.",
+            "Kill an application (PUT /ws/v1/cluster/apps/{app_id}/state with {\"state\": \"KILLED\"}). Refused unless the client was opened with the startup parameter allow_kill: true. YARN answers 202 with an in-progress state (KILLING, or FINAL_SAVING while it records the outcome) and 200 KILLED once done. Answered by yarn_app_state.",
             vec![app_id_param()],
             json!({"type": "kill_application", "app_id": "application_1792047302594_0003"}),
         ),
@@ -315,7 +315,7 @@ pub static ATTEMPTS_EVENT: LazyLock<EventType> = LazyLock::new(|| {
 pub static APP_STATE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     ev(
         "yarn_app_state",
-        "An application's state, from get_app_state, or YARN's answer to kill_application (KILLING while the kill is in progress, KILLED once done).",
+        "An application's state, from get_app_state, or YARN's answer to kill_application (an in-progress state such as KILLING or FINAL_SAVING, then KILLED once done).",
         vec![
             op_param(),
             app_param(),

@@ -61,7 +61,7 @@ origin is the base's — so even a value that skipped validation stays a segment
 | `get_app_queue` | `GET …/apps/{app}/queue` | `yarn_app_queue` |
 | `list_nodes` | `GET …/nodes?states` | `yarn_nodes` |
 | `get_node` | `GET …/nodes/{node}` | `yarn_nodes` |
-| `kill_application` | `PUT …/apps/{app}/state` `{"state":"KILLED"}` — **only with `allow_kill`** | `yarn_app_state` (with `http_status`: 202 KILLING, 200 KILLED) |
+| `kill_application` | `PUT …/apps/{app}/state` `{"state":"KILLED"}` — **only with `allow_kill`** | `yarn_app_state` (with `http_status`: 202 and an in-progress state — KILLING or FINAL_SAVING — or 200 KILLED) |
 | `disconnect` | nothing (the API keeps no session) | none; the client ends `Disconnected` |
 
 Any failure is `yarn_error` with `operation`, `app_id`/`node_id`, `http_status`, `exception`

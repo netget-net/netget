@@ -872,9 +872,14 @@ async fn cluster_chain(cluster: &Cluster) -> E2EResult<()> {
     assert_eq!(seen["get_app_state"]["state"], "RUNNING");
     let kill = &seen["kill_application"];
     assert_eq!(kill["app_id"], sleep_id.as_str());
+    // 202 carries whatever in-progress state the application is in when the RM answers —
+    // KILLING, or FINAL_SAVING while the RM persists the outcome (seen on Linux runners);
+    // that it ended KILLED is checked through YARN's own CLI above.
     match (kill["http_status"].as_u64(), kill["state"].as_str()) {
-        (Some(202), Some("KILLING")) | (Some(200), Some("KILLED")) => {}
-        other => panic!("YARN answers a kill 202 KILLING or 200 KILLED, not {other:?}"),
+        (Some(202), Some("KILLING" | "FINAL_SAVING")) | (Some(200), Some("KILLED")) => {}
+        other => {
+            panic!("YARN answers a kill 202 with an in-progress state or 200 KILLED, not {other:?}")
+        }
     }
     let err = &seen["error"];
     assert_eq!(err["operation"], "get_application");
