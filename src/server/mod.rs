@@ -508,6 +508,10 @@ pub mod sip;
 pub use sip::actions::SipProtocol;
 pub use sip::SipServer;
 
+// H.323 gatekeeper (H.225.0 RAS) and call-signalling endpoint (H.225.0 / Q.931)
+#[cfg(not(target_arch = "wasm32"))]
+pub mod h323;
+
 pub mod rtp;
 pub use rtp::actions::RtpProtocol;
 pub use rtp::RtpServer;

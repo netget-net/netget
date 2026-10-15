@@ -162,6 +162,8 @@ fn canonical_port(protocol: &str, framing: Framing) -> u16 {
         "coap" => 5683,
         "stun" | "turn" => 3478,
         "sip" => 5060,
+        "h323" => 1720,
+        "h323_gatekeeper" => 1719,
         "mdns" => 5353,
         "llmnr" => 5355,
         "ssdp" => 1900,
@@ -634,6 +636,48 @@ impl PcapOracle {
             failures,
             decode_as,
         })
+    }
+
+    /// Dissect the same capture [`PcapOracle::check`] builds and return the values tshark
+    /// reads for `names`, one row per packet (each cell as `-T fields` prints it: repeated
+    /// occurrences joined by `,`). For asserting what the independent dissector *read* — a
+    /// sequence number, a reason, an address — not only that it raised no expert info.
+    pub fn fields(self, names: &[&str]) -> Result<Vec<Vec<String>>, String> {
+        require_tshark();
+        self.check_framing_matches_the_table()?;
+        let (pcap, _) = self.build_pcap();
+        let dir = tempfile::tempdir().map_err(|e| format!("tempdir: {e}"))?;
+        let path = dir.path().join("oracle.pcap");
+        std::fs::write(&path, &pcap).map_err(|e| format!("write pcap: {e}"))?;
+        let wire = wire_for(&self.protocol);
+        let mut cmd = Command::new("tshark");
+        cmd.arg("-r").arg(&path).arg("-n");
+        if let Some(name) = wire.decode_as {
+            let clause = match self.framing {
+                Framing::Tcp => Some(format!("tcp.port=={},{}", self.port, name)),
+                Framing::Udp => Some(format!("udp.port=={},{}", self.port, name)),
+                Framing::Ethernet | Framing::IpProto(_) => None,
+            };
+            if let Some(c) = clause {
+                cmd.arg("-d").arg(c);
+            }
+        }
+        cmd.args(["-T", "fields", "-E", "separator=/t", "-E", "occurrence=a"]);
+        for n in names {
+            cmd.arg("-e").arg(n);
+        }
+        let out = cmd.output().map_err(|e| format!("running tshark: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "tshark exited {:?}: {}",
+                out.status.code(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(|l| l.split('\t').map(str::to_string).collect())
+            .collect())
     }
 
     /// Refuse a call that frames the bytes differently from how the protocol

@@ -151,6 +151,7 @@ fn golden_duals_map() {
         "Kerberos",
         "SPICE",
         "devp2p",
+        "H323",
         "Nostr",
         "Vault",
         "Bolt",

@@ -101,6 +101,12 @@ const CONNECTIONLESS_EXCEPTIONS: &[&str] = &[
     // expiry by the server's own timer; reaping it after ten quiet seconds would drop every
     // registered device between updates.
     "LwM2M",
+    // The H.323 endpoint is TCP call signalling: one connection per call, closed when the call
+    // ends, and a connected call is legitimately silent on it for minutes while the parties
+    // talk. Its UdpSocket use is the per-call RTP/RTCP pair (owned by the call and dropped with
+    // it), plus the gatekeeper sharing its directory — which does declare .connectionless().
+    // A 10-second sweep would evict live calls.
+    "H323",
 ];
 
 /// Registry names whose source directory does not follow any of the mechanical

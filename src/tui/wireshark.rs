@@ -511,6 +511,12 @@ pub fn wire_for(protocol: &str) -> Wire {
         "gre" | "gretap" => udp("gre"),
         "bfd" => udp("bfd"),
         "sip" => either("sip"),
+        // H.225.0 call signalling is Q.931 inside TPKT, which Wireshark finds on any TCP port
+        // by itself and hands on to H.225.0 and tunnelled H.245. No decode-as: `tpkt` names
+        // the TPKT heuristic meant for RDP, and with it nothing is dissected as H.225.0.
+        "h323" => with_display(PLAIN_TCP, "q931 || h225 || h245"),
+        // RAS: one PER-encoded RasMessage per datagram.
+        "h323_gatekeeper" => udp("h225"),
         "rtp" => udp("rtp"),
         "rtsp" => tcp("rtsp"),
         "wireguard" => udp("wg"),

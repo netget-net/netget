@@ -301,6 +301,10 @@ impl ClientRegistry {
         self.register(Arc::new(crate::client::saml::SamlClientProtocol::new()));
 
         self.register(Arc::new(crate::client::sip::SipClientProtocol::new()));
+        #[cfg(not(target_arch = "wasm32"))]
+        self.register(Arc::new(
+            crate::client::h323::actions::H323ClientProtocol::new(),
+        ));
 
         #[cfg(all(unix, feature = "libsmbclient"))]
         self.register(Arc::new(crate::client::smb::SmbClientProtocol::new()));
@@ -1314,6 +1318,7 @@ pub(crate) const ALL_KNOWN_CLIENT_PROTOCOLS: &[(&str, &str)] = &[
     ("RIP", "a native build (not the browser)"),
     ("SAML", "nothing (every build has it)"),
     ("SIP", "nothing (every build has it)"),
+    ("H323", "a native build (not the browser)"),
     ("SMTP", "a native build (not the browser)"),
     ("FTP", "nothing (every build has it)"),
     ("POP3", "nothing (every build has it)"),

@@ -753,6 +753,14 @@ impl ServerRegistry {
         self.register(Arc::new(crate::server::WebSocketProtocol::new()));
 
         self.register(Arc::new(crate::server::SipProtocol::new()));
+        #[cfg(not(target_arch = "wasm32"))]
+        self.register(Arc::new(
+            crate::server::h323::actions::H323GatekeeperProtocol::new(),
+        ));
+        #[cfg(not(target_arch = "wasm32"))]
+        self.register(Arc::new(
+            crate::server::h323::actions::H323EndpointProtocol::new(),
+        ));
 
         self.register(Arc::new(crate::server::RtpProtocol::new()));
 
@@ -1606,6 +1614,8 @@ pub(crate) const ALL_KNOWN_PROTOCOLS: &[(&str, &str)] = &[
     ("WebRTC Signaling", "a native build (not the browser)"),
     ("WebSocket", "a native build (not the browser)"),
     ("SIP", "nothing (every build has it)"),
+    ("H323", "a native build (not the browser)"),
+    ("H323-Gatekeeper", "a native build (not the browser)"),
     ("RTP", "nothing (every build has it)"),
     ("RTSP", "nothing (every build has it)"),
     ("HLS", "nothing (every build has it)"),

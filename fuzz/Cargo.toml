@@ -158,6 +158,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "h323_per"
+path = "fuzz_targets/h323_per.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "bgp_message"
 path = "fuzz_targets/bgp_message.rs"
 test = false

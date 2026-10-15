@@ -363,6 +363,10 @@ pub use saml::actions::SamlClientProtocol;
 pub mod sip;
 pub use sip::actions::SipClientProtocol;
 
+// H.323 endpoint: registers with a gatekeeper and places calls
+#[cfg(not(target_arch = "wasm32"))]
+pub mod h323;
+
 // smb client
 #[cfg(all(unix, feature = "libsmbclient"))]
 pub mod smb;

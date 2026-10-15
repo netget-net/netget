@@ -7,6 +7,8 @@ pub mod ethereum;
 pub mod event_trigger;
 pub mod example_test_framework;
 pub mod grpc_peer;
+pub mod h323;
+pub mod h323_peers;
 pub mod http_bounds;
 pub mod inbound_limit;
 pub mod llm_live;

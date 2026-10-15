@@ -77,6 +77,7 @@ pub mod gopher;
 pub mod grpc;
 pub mod grpc_web;
 pub mod gtp;
+pub mod h323;
 pub mod hls;
 pub mod hsrp;
 pub mod http;
