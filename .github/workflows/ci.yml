@@ -8,10 +8,10 @@ on:
   pull_request:
   push:
     branches: [master]
-  # Every job runs on every event. Manual dispatch is kept so a run can be forced against
-  # a branch without pushing to it - no job is gated behind it any more. One used to be:
-  # `single-feature-full`, the only check that covered 109 of the 133 protocol features,
-  # which meant those 109 were never checked. See the `single-feature` job.
+  # A manual dispatch runs everything below; pushes and pull requests skip the jobs gated
+  # on `github.event_name == 'workflow_dispatch'` (single-feature, smb-evidence, clippy-wide
+  # and registry-audit), which are too slow to run on every change at this protocol count.
+  # Dispatch against a branch to get them before merging something that touches a protocol.
   workflow_dispatch:
 
 # The event name is part of the group on purpose. Without it a dispatched run and a
