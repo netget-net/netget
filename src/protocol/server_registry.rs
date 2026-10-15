@@ -515,6 +515,10 @@ impl ServerRegistry {
         ));
         #[cfg(feature = "onvif")]
         self.register(Arc::new(crate::server::onvif::actions::OnvifProtocol::new()));
+        #[cfg(feature = "kerberos")]
+        self.register(Arc::new(
+            crate::server::kerberos::actions::KerberosProtocol::new(),
+        ));
 
         #[cfg(feature = "netflow-v9")]
         self.register(Arc::new(
@@ -1763,6 +1767,7 @@ pub(crate) const ALL_KNOWN_PROTOCOLS: &[(&str, &str)] = &[
     ("SSE", "sse"),
     ("WS-Discovery", "wsdiscovery"),
     ("ONVIF", "onvif"),
+    ("Kerberos", "kerberos"),
     ("etcd", "etcd"),
     ("ZooKeeper", "zookeeper"),
     ("Tor Relay", "tor"),
