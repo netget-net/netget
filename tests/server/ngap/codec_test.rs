@@ -449,6 +449,31 @@ fn uplink_answers_decode() {
 }
 
 #[test]
+fn a_protected_message_inside_another_is_refused_without_recursing() {
+    // One security header around a plain message is valid and is looked through.
+    let once = unhex("7e 01 de ad be ef 05 7e 00 43");
+    assert_eq!(nas::message_type(&once), Some(nas::REGISTRATION_COMPLETE));
+    // A second one is not valid NAS. Seven bytes a level would otherwise buy unbounded recursion.
+    let mut twice = unhex("7e 01 de ad be ef 05");
+    twice.extend_from_slice(&once);
+    let v = nas::decode(&twice);
+    assert_eq!(v["inner"]["decoded"], false);
+    assert!(v["inner"].get("inner").is_none());
+    assert_eq!(nas::message_type(&twice), None);
+    // Deep nesting is answered the same way, from a bounded walk.
+    let mut deep = Vec::new();
+    for _ in 0..100_000 {
+        deep.extend_from_slice(&unhex("7e 01 de ad be ef 05"));
+    }
+    deep.extend_from_slice(&unhex("7e 00 43"));
+    assert_eq!(nas::message_type(&deep), None);
+    assert_eq!(nas::decode(&deep)["inner"]["decoded"], false);
+    // A cause object is unwrapped once; an object inside it is refused.
+    assert_eq!(nas::parse_cause(&json!({"name": "illegal_ue"})), Ok(3));
+    assert!(nas::parse_cause(&json!({"name": {"name": "illegal_ue"}})).is_err());
+}
+
+#[test]
 fn a_5g_guti_identity_round_trips() {
     let id = json!({"type": "5g_guti", "plmn": {"mcc": "001", "mnc": "01"}, "amf_region_id": 2,
                     "amf_set_id": 1, "amf_pointer": 0, "tmsi": 0xc0000001u32});
