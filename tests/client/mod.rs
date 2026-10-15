@@ -436,6 +436,8 @@ pub mod rtp;
 pub mod rtsp;
 #[cfg(feature = "smpp")]
 pub mod smpp;
+#[cfg(feature = "snowflake")]
+pub mod snowflake;
 #[cfg(feature = "sse")]
 pub mod sse;
 #[cfg(feature = "stratum")]

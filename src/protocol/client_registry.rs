@@ -674,6 +674,10 @@ impl ClientRegistry {
         self.register(Arc::new(
             crate::client::db2::actions::Db2ClientProtocol::new(),
         ));
+        #[cfg(feature = "snowflake")]
+        self.register(Arc::new(
+            crate::client::snowflake::actions::SnowflakeClientProtocol::new(),
+        ));
         #[cfg(feature = "matrix")]
         self.register(Arc::new(
             crate::client::matrix::actions::MatrixClientProtocol::new(),
@@ -1294,6 +1298,7 @@ pub(crate) const ALL_KNOWN_CLIENT_PROTOCOLS: &[(&str, &str)] = &[
     ("PFCP", "pfcp"),
     ("GTP", "gtp"),
     ("Db2", "db2"),
+    ("Snowflake", "snowflake"),
     ("NGAP", "ngap"),
     ("Matrix", "matrix"),
     ("libp2p", "libp2p"),

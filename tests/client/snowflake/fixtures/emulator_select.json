@@ -1,0 +1,61 @@
+{
+ "data": {
+  "queryId": "011792040612-176799cb8268a101",
+  "queryResultFormat": "json",
+  "returned": 2,
+  "rowset": [
+   [
+    "1",
+    "123.45",
+    "hello",
+    "true",
+    "1.5",
+    "3000000000"
+   ],
+   [
+    "2",
+    "",
+    "",
+    "",
+    "",
+    ""
+   ]
+  ],
+  "rowtype": [
+   {
+    "name": "id",
+    "nullable": true,
+    "type": "NUMBER"
+   },
+   {
+    "name": "amount",
+    "nullable": true,
+    "type": "TEXT"
+   },
+   {
+    "name": "body",
+    "nullable": true,
+    "type": "TEXT"
+   },
+   {
+    "name": "ok",
+    "nullable": true,
+    "type": "BOOLEAN"
+   },
+   {
+    "name": "ratio",
+    "nullable": true,
+    "type": "FLOAT"
+   },
+   {
+    "name": "big",
+    "nullable": true,
+    "type": "NUMBER"
+   }
+  ],
+  "sqlState": "00000",
+  "statementTypeId": 1,
+  "total": 2
+ },
+ "success": true
+}
