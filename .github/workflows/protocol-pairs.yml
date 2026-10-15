@@ -6586,7 +6586,7 @@ jobs:
 
   snowflake:
     if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'snowflake')
-    name: Snowflake client against fakesnow and snowflake-emulator
+    name: Snowflake client against fakesnow and snowflake-emulator, Snowflake server against snowflake-connector-python
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -6611,11 +6611,11 @@ jobs:
           sed -n 's/^export //p' "$RUNNER_TEMP/snowflake-env" >> "$GITHUB_ENV"
       - name: Compile snowflake as a standalone Cargo feature
         run: cargo check --locked --no-default-features --features snowflake --all-targets
-      - name: Client against fakesnow and snowflake-emulator
+      - name: Client against fakesnow and snowflake-emulator, server against the official Python driver
         run: |
           set -euo pipefail
           for filter in \
-            client/snowflake::; do
+            client/snowflake:: snowflake::real_client_test; do
             case "$filter" in
               client/*) target=client; filter=${filter#client/} ;;
               *) target=server ;;

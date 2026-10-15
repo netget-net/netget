@@ -347,9 +347,32 @@ fn llm_error_decision(err: &anyhow::Error) -> &'static str {
 }
 
 /// A Snowflake error envelope: `{"data":null,"code":..,"message":..,"success":false}`.
+///
+/// Used where no session exists yet (a refused login, an unknown endpoint), so `data` carries
+/// nothing at all — in particular never a token.
 fn error_envelope(code: &str, message: &str) -> String {
     json!({
         "data": Value::Null,
+        "code": code,
+        "message": message,
+        "success": false,
+    })
+    .to_string()
+}
+
+/// The error envelope for a refused query or session request, which carries
+/// `data.{errorCode, sqlState}` as Snowflake's does.
+///
+/// The drivers read a refused statement's SQLSTATE from `data.sqlState` — with `data: null`
+/// snowflake-connector-python raises the model's error with SQLSTATE `n/a` — so the model's
+/// `sql_state` travels here.
+fn statement_error_envelope(code: &str, message: &str, sql_state: Option<&str>) -> String {
+    let mut data = json!({ "errorCode": code });
+    if let Some(state) = sql_state {
+        data["sqlState"] = json!(state);
+    }
+    json!({
+        "data": data,
         "code": code,
         "message": message,
         "success": false,
@@ -413,7 +436,12 @@ async fn handle_snowflake_request(
             )
             .await
         }
-        (Method::POST, "/session/logout-request") => {
+        // The drivers end a session with `POST /session?delete=true` (snowflake-connector-
+        // python's `delete_session`, gosnowflake's close); `/session/logout-request` is kept
+        // for anything that used it.
+        (Method::POST, "/session/logout-request") | (Method::POST, "/session")
+            if path != "/session" || query.split('&').any(|kv| kv == "delete=true") =>
+        {
             handle_session(
                 connection_id,
                 server_id,
@@ -476,12 +504,26 @@ async fn handle_snowflake_request(
 /// each endpoint fails closed when the model cannot answer from those fields, an oversized
 /// or unreadable body can only ever lose a login, never grant one.
 async fn read_json_body(req: Request<Incoming>) -> Value {
+    let gzip = req
+        .headers()
+        .get(hyper::header::CONTENT_ENCODING)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("gzip"));
     match Limited::new(req.into_body(), MAX_REQUEST_BYTES)
         .collect()
         .await
     {
         Ok(collected) => {
             let bytes = collected.to_bytes();
+            if gzip {
+                return match gunzip_bounded(&bytes) {
+                    Ok(plain) => serde_json::from_slice(&plain).unwrap_or(Value::Null),
+                    Err(e) => {
+                        error!("Snowflake: gzip request body rejected: {e}");
+                        Value::Null
+                    }
+                };
+            }
             serde_json::from_slice(&bytes).unwrap_or(Value::Null)
         }
         Err(e) => {
@@ -492,6 +534,26 @@ async fn read_json_body(req: Request<Incoming>) -> Value {
             Value::Null
         }
     }
+}
+
+/// Inflate a `Content-Encoding: gzip` request body, refusing past [`MAX_REQUEST_BYTES`].
+///
+/// Every official connector compresses its request bodies — snowflake-connector-python gzips
+/// each POST — and until a real driver was pointed at this server it read the compressed bytes
+/// as JSON, found none, and refused every login. The bound applies to the **inflated** size,
+/// since a few KiB of gzip can expand to gigabytes.
+fn gunzip_bounded(compressed: &[u8]) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let mut plain = Vec::new();
+    flate2::read::GzDecoder::new(compressed)
+        .take(MAX_REQUEST_BYTES as u64 + 1)
+        .read_to_end(&mut plain)?;
+    if plain.len() > MAX_REQUEST_BYTES {
+        return Err(std::io::Error::other(format!(
+            "inflates past {MAX_REQUEST_BYTES} bytes"
+        )));
+    }
+    Ok(plain)
 }
 
 /// Find the first `snowflake_*` custom payload the executor produced.
@@ -751,7 +813,11 @@ async fn handle_query(
                     "Snowflake query conn={} decision=model_reject: {}",
                     connection_id, code
                 ));
-                Ok(json_200(error_envelope(code, message)))
+                Ok(json_200(statement_error_envelope(
+                    code,
+                    message,
+                    payload.get("sql_state").and_then(|v| v.as_str()),
+                )))
             }
             _ => {
                 Log::new(Some(&status_tx)).warn(format!(
@@ -759,9 +825,10 @@ async fn handle_query(
                      returning an error envelope",
                     connection_id
                 ));
-                Ok(json_200(error_envelope(
+                Ok(json_200(statement_error_envelope(
                     CODE_INTERNAL,
                     "netget: no query result produced",
+                    None,
                 )))
             }
         },
@@ -778,9 +845,10 @@ async fn handle_query(
             } else {
                 CODE_INTERNAL
             };
-            Ok(json_200(error_envelope(
+            Ok(json_200(statement_error_envelope(
                 code,
                 crate::utils::WireFailure::classify(&e).prefixed_text(),
+                None,
             )))
         }
     }
@@ -843,7 +911,11 @@ async fn handle_session(
                     "Snowflake session conn={} op={} decision=model_reject: {}",
                     connection_id, operation, code
                 ));
-                Ok(json_200(error_envelope(code, message)))
+                Ok(json_200(statement_error_envelope(
+                    code,
+                    message,
+                    payload.get("sql_state").and_then(|v| v.as_str()),
+                )))
             }
             _ => {
                 // A logout with no answer is harmless to ack; a token renewal with no
@@ -870,9 +942,10 @@ async fn handle_session(
                          action produced; refusing the renewal",
                         connection_id, operation
                     ));
-                    Ok(json_200(error_envelope(
+                    Ok(json_200(statement_error_envelope(
                         CODE_INTERNAL,
                         "netget: no session decision produced",
+                        None,
                     )))
                 }
             }
@@ -885,9 +958,10 @@ async fn handle_session(
                 llm_error_decision(&e),
                 e
             ));
-            Ok(json_200(error_envelope(
+            Ok(json_200(statement_error_envelope(
                 CODE_INTERNAL,
                 crate::utils::WireFailure::classify(&e).prefixed_text(),
+                None,
             )))
         }
     }
