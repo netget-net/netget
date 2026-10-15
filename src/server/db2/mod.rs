@@ -8,9 +8,9 @@
 //!
 //! **Fail closed.** An LLM outage during the security check is a refusal
 //! (SECCHKRM at severity ERROR), never an accept; a failure during a statement is
-//! an error SQLCARD, never a success. See `CLAUDE.md` for what DRDA is and is not
-//! implemented here — this is validated against spec-derived byte literals, not a
-//! real Db2 driver.
+//! an error SQLCARD, never a success. See `AGENTS.md` for what DRDA is and is not
+//! implemented here; Apache Derby's JDBC driver and IBM's CLI driver both connect to it
+//! (`tests/server/db2/real_client_test.rs`).
 
 pub mod actions;
 pub mod drda;
@@ -30,6 +30,10 @@ const FIRST_REQUEST_READ_TIMEOUT: std::time::Duration = std::time::Duration::fro
 /// hold without closing sessions a real pool considers healthy — and an unauthenticated peer
 /// never reaches this bound, which is the half that matters for an attacker.
 const IDLE_BETWEEN_REQUESTS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// DSSes one command may chain under its correlator (the command and its command data). Real
+/// commands chain two or three; past this the connection is dropped rather than buffered.
+const MAX_DSS_PER_COMMAND: usize = 16;
 
 /// Concurrent connections this server admits.
 const MAX_CONNECTIONS: usize = crate::server::accept_bounded::DEFAULT_MAX_CONNECTIONS;
@@ -230,6 +234,12 @@ impl Db2Handler {
     ) -> Result<()> {
         let mut buf: Vec<u8> = Vec::new();
         let mut tmp = [0u8; 8192];
+        let mut command: Vec<drda::ParsedDss> = Vec::new();
+        // After a refused SECCHK the rest of its request chain is ignored, as Derby's server
+        // does: the refusal ends the reply chain, and the ACCRDB chained behind it gets no
+        // answer of its own. Answering it (even with RDBATHRM) after an unchained SECCHKRM is a
+        // reply nobody asked for, which IBM's CLI driver reports as a data stream syntax error.
+        let mut discarding = false;
 
         loop {
             // Ensure a full DSS is buffered before parsing.
@@ -290,7 +300,33 @@ impl Db2Handler {
                 )
                 .await;
 
-            let reply = self.dispatch(&parsed).await;
+            // A command is its RQSDSS plus the DSSes chained to it under the same correlator
+            // (its command data: SQLSTT, SQLDTA, SQLATTR). It is answered once, when its last
+            // DSS has arrived, and the reply is chained when that DSS was chained to a further
+            // command.
+            let continues = parsed.format & 0x50 == 0x50;
+            let chained = parsed.format & 0x40 != 0;
+            command.push(parsed);
+            if continues {
+                if command.len() > MAX_DSS_PER_COMMAND {
+                    warn!(
+                        "Db2: a command chained more than {MAX_DSS_PER_COMMAND} DSSes under one \
+                         correlator decision=refused_oversized; dropping the connection"
+                    );
+                    return Ok(());
+                }
+                continue;
+            }
+            let this = std::mem::take(&mut command);
+            if discarding {
+                debug!("Db2: ignoring the rest of a request chain after a refused SECCHK");
+                discarding = chained;
+                continue;
+            }
+            let reply = self.dispatch(&this).await;
+            let refused_login = this[0].codepoint == drda::cp::SECCHK && !self.authenticated;
+            discarding = refused_login && chained;
+            let reply = reply.map(|bytes| drda::chain_reply(bytes, chained && !refused_login));
             if let Some(bytes) = reply {
                 self.app_state
                     .update_connection_stats(
@@ -309,9 +345,12 @@ impl Db2Handler {
         }
     }
 
-    /// Handle one DRDA command, returning the reply bytes to send (if any).
-    async fn dispatch(&mut self, req: &drda::ParsedDss) -> Option<Vec<u8>> {
+    /// Handle one DRDA command and its command data, returning the reply bytes to send (if
+    /// any).
+    async fn dispatch(&mut self, command: &[drda::ParsedDss]) -> Option<Vec<u8>> {
         use drda::cp;
+        let req = command.first()?;
+        let data = &command[1..];
         let corr = req.correlator;
         debug!(
             "Db2: DRDA command 0x{:04X} (correlator {})",
@@ -319,56 +358,116 @@ impl Db2Handler {
         );
 
         match req.codepoint {
-            cp::EXCSAT => Some(self.reply_excsatrd(corr)),
+            cp::EXCSAT => Some(self.reply_excsatrd(corr, &req.body)),
+            cp::RDBCMM => Some(end_unit_of_work(corr, 1)),
+            cp::RDBRLLBCK => Some(end_unit_of_work(corr, 2)),
             cp::ACCSEC => Some(self.reply_accsecrd(corr, &req.body)),
             cp::SECCHK => Some(self.handle_secchk(corr, &req.body).await),
-            cp::ACCRDB => Some(self.reply_accrdbrm(corr)),
+            cp::ACCRDB => Some(self.reply_accrdbrm(corr, &req.body)),
             cp::EXCSQLIMM | cp::EXCSQLSTT => {
-                // The SQL text may be embedded (SQLSTT param) or arrive as a
-                // following OBJDSS. Handle the embedded case here; otherwise wait.
-                if let Some(sqlstt) = drda::find_param(&req.body, cp::SQLSTT) {
-                    let sql = drda::ebcdic_to_ascii(&sqlstt);
-                    Some(self.handle_query(corr, sql).await)
-                } else {
-                    // No embedded statement — a SQLSTT OBJDSS should follow.
-                    None
+                // The SQL text is the SQLSTT command data chained to the command, or (this
+                // server's own byte-literal form) a parameter embedded in it.
+                let sqlstt = drda::find_param(&req.body, cp::SQLSTT).or_else(|| {
+                    data.iter()
+                        .find(|d| d.codepoint == cp::SQLSTT)
+                        .map(|d| d.body.clone())
+                });
+                match sqlstt {
+                    Some(sqlstt) => {
+                        let sql = drda::decode_sqlstt(&sqlstt);
+                        Some(self.handle_query(corr, sql).await)
+                    }
+                    // EXCSQLSTT of a prepared section: nothing was prepared here.
+                    None if req.codepoint == cp::EXCSQLSTT => Some(cmdnsprm(corr, req.codepoint)),
+                    // A bare EXCSQLIMM: its SQLSTT may still follow as a DSS of its own.
+                    None => None,
                 }
             }
+            cp::EXCSQLSET => Some(self.session_settings(corr, data)),
             cp::SQLSTT => {
-                let sql = drda::ebcdic_to_ascii(&req.body);
+                let sql = drda::decode_sqlstt(&req.body);
                 Some(self.handle_query(corr, sql).await)
             }
-            other => {
-                warn!("Db2: unsupported DRDA command 0x{:04X}", other);
-                // CMDNSPRM (command not supported) at severity ERROR so the client
-                // gets a real reply instead of hanging.
-                let inner = drda::encode_scalar(cp::SVRCOD, &drda::svrcod::ERROR.to_be_bytes());
-                let rm = drda::encode_object(cp::CMDNSPRM, &inner);
-                Some(drda::encode_dss(drda::DSSFMT_RPYDSS, false, corr, &rm))
-            }
+            other => Some(cmdnsprm(corr, other)),
         }
     }
 
+    /// EXCSQLSET: the special registers a driver sets for itself on connecting (`SET CLIENT
+    /// WRKSTNNAME`, `SET CURRENT LOCALE LC_CTYPE`, ...). They are acknowledged without the
+    /// model - there is no session state here for them to change, and refusing them fails
+    /// every statement IBM's CLI driver sends after them - but only once the security check
+    /// has been accepted.
+    fn session_settings(&self, corr: u16, data: &[drda::ParsedDss]) -> Vec<u8> {
+        if !self.authenticated {
+            warn!("Db2 EXCSQLSET decision=fail_closed_not_authenticated");
+            let card = drda::sqlcard_error(-30082, "08001");
+            return drda::encode_dss(drda::DSSFMT_OBJDSS, false, corr, &card);
+        }
+        for d in data.iter().filter(|d| d.codepoint == drda::cp::SQLSTT) {
+            info!(
+                "Db2 EXCSQLSET decision=session_setting {}",
+                crate::utils::truncate_for_log(&drda::decode_sqlstt(&d.body), 200)
+            );
+        }
+        drda::encode_dss(drda::DSSFMT_OBJDSS, false, corr, &drda::sqlcard_success())
+    }
+
     /// EXCSAT -> EXCSATRD: advertise the server's attributes.
-    fn reply_excsatrd(&self, corr: u16) -> Vec<u8> {
+    fn reply_excsatrd(&self, corr: u16, body: &[u8]) -> Vec<u8> {
         use drda::cp;
         let mut inner = Vec::new();
         inner.extend_from_slice(&drda::encode_scalar_str(cp::EXTNAM, "netget-db2"));
         inner.extend_from_slice(&drda::encode_scalar_str(cp::SRVCLSNM, "QDB2/NETGET"));
         inner.extend_from_slice(&drda::encode_scalar_str(cp::SRVNAM, "NETGET"));
         inner.extend_from_slice(&drda::encode_scalar_str(cp::SRVRLSLV, "SQL11055"));
-        // Echo an empty manager-level list; a real negotiation would list levels.
-        inner.extend_from_slice(&drda::encode_scalar(cp::MGRLVLLS, &[]));
+        // Answer each manager the requester listed with the level served here: up to 7 for
+        // AGENT (0x1403), SQLAM (0x2407), RDB (0x240F) and SECMGR (0x1440), 0 (not supported)
+        // for the rest - UNICODEMGR among them, so DDM strings stay EBCDIC. A driver reads an
+        // empty list as a server with no SQL application manager at all.
+        let mut levels = Vec::new();
+        if let Some(asked) = drda::find_param(body, cp::MGRLVLLS) {
+            for pair in asked.chunks_exact(4) {
+                let manager = u16::from_be_bytes([pair[0], pair[1]]);
+                let level = match manager {
+                    0x1403 | 0x2407 | 0x240F | 0x1440 => {
+                        u16::from_be_bytes([pair[2], pair[3]]).min(7)
+                    }
+                    _ => 0,
+                };
+                levels.extend_from_slice(&manager.to_be_bytes());
+                levels.extend_from_slice(&level.to_be_bytes());
+            }
+        }
+        inner.extend_from_slice(&drda::encode_scalar(cp::MGRLVLLS, &levels));
         let rd = drda::encode_object(cp::EXCSATRD, &inner);
         drda::encode_dss(drda::DSSFMT_RPYDSS, false, corr, &rd)
     }
 
-    /// ACCSEC -> ACCSECRD: accept the requested security mechanism (or offer
-    /// USRIDPWD = 3). Echoes the client's SECMEC when present.
+    /// ACCSEC -> ACCSECRD.
+    ///
+    /// Only the mechanisms whose SECCHK this server can read are accepted: USRIDPWD (3) and
+    /// USRIDONL (4), which carry USRID and PASSWORD in the clear. Any other - an encrypted one
+    /// such as EUSRIDPWD (9), whose SECCHK carries only an encrypted SECTKN - is answered with
+    /// the list this server supports and SECCHKCD 0x01 (mechanism not supported), so the
+    /// requester can retry with one of them. Accepting a mechanism the server cannot process
+    /// would put a login in front of the model whose user id it never sees; IBM's CLI driver
+    /// asks for EUSRIDPWD by default.
     fn reply_accsecrd(&self, corr: u16, body: &[u8]) -> Vec<u8> {
         use drda::cp;
-        let secmec = drda::find_param(body, cp::SECMEC).unwrap_or_else(|| vec![0x00, 0x03]);
-        let inner = drda::encode_scalar(cp::SECMEC, &secmec);
+        let requested = drda::find_param(body, cp::SECMEC).unwrap_or_else(|| vec![0x00, 0x03]);
+        let supported = matches!(requested.as_slice(), [0x00, 0x03] | [0x00, 0x04]);
+        let mut inner = if supported {
+            drda::encode_scalar(cp::SECMEC, &requested)
+        } else {
+            warn!(
+                "Db2 ACCSEC decision=refused_secmec: the requester asked for security mechanism \
+                 {requested:02X?}; offering USRIDPWD (3) and USRIDONL (4)"
+            );
+            drda::encode_scalar(cp::SECMEC, &[0x00, 0x03, 0x00, 0x04])
+        };
+        if !supported {
+            inner.extend_from_slice(&drda::encode_scalar(cp::SECCHKCD, &[0x01]));
+        }
         let rd = drda::encode_object(cp::ACCSECRD, &inner);
         drda::encode_dss(drda::DSSFMT_RPYDSS, false, corr, &rd)
     }
@@ -458,20 +557,30 @@ impl Db2Handler {
     }
 
     /// ACCRDB -> ACCRDBRM: grant access to the RDB once authenticated.
-    fn reply_accrdbrm(&self, corr: u16) -> Vec<u8> {
+    ///
+    /// Without an accepted SECCHK the answer is RDBATHRM (not authorized to the RDB) at
+    /// severity ERROR. An ACCRDBRM is never the refusal, whatever its severity: IBM's CLI
+    /// driver keys on the code point and would report the connection open.
+    fn reply_accrdbrm(&self, corr: u16, body: &[u8]) -> Vec<u8> {
         use drda::cp;
-        let severity = if self.authenticated {
-            drda::svrcod::INFO
-        } else {
-            // Not authenticated: refuse RDB access.
-            drda::svrcod::ERROR
-        };
+        if !self.authenticated {
+            warn!("Db2 ACCRDB decision=fail_closed_not_authenticated: answering RDBATHRM");
+            let mut inner = drda::encode_scalar(cp::SVRCOD, &drda::svrcod::ERROR.to_be_bytes());
+            if let Some(rdbnam) = drda::find_param(body, cp::RDBNAM) {
+                inner.extend_from_slice(&drda::encode_scalar(cp::RDBNAM, &rdbnam));
+            }
+            let rm = drda::encode_object(cp::RDBATHRM, &inner);
+            return drda::encode_dss(drda::DSSFMT_RPYDSS, false, corr, &rm);
+        }
+        let severity = drda::svrcod::INFO;
         let mut inner = Vec::new();
         inner.extend_from_slice(&drda::encode_scalar(cp::SVRCOD, &severity.to_be_bytes()));
-        inner.extend_from_slice(&drda::encode_scalar_str(cp::PRDID, "NETGET0100"));
+        inner.extend_from_slice(&drda::encode_scalar_str(cp::PRDID, "SQL11055"));
         inner.extend_from_slice(&drda::encode_scalar_str(cp::TYPDEFNAM, "QTDSQLASC"));
-        // Minimal TYPDEFOVR: CCSID single-byte override left empty here.
-        inner.extend_from_slice(&drda::encode_scalar(cp::TYPDEFOVR, &[]));
+        // The CCSIDs of the character data this server sends (SQLCA fields): UTF-8.
+        let mut ovr = drda::encode_scalar(cp::CCSIDSBC, &1208u16.to_be_bytes());
+        ovr.extend_from_slice(&drda::encode_scalar(cp::CCSIDMBC, &1208u16.to_be_bytes()));
+        inner.extend_from_slice(&drda::encode_scalar(cp::TYPDEFOVR, &ovr));
         let rm = drda::encode_object(cp::ACCRDBRM, &inner);
         drda::encode_dss(drda::DSSFMT_RPYDSS, false, corr, &rm)
     }
@@ -510,7 +619,11 @@ impl Db2Handler {
                     Some(("db2_query_ok", data)) => {
                         let sqlcode = data.get("sqlcode").and_then(|v| v.as_i64()).unwrap_or(0);
                         debug!("Db2 statement decision=model_answer sqlcode={sqlcode}");
-                        if sqlcode == 0 {
+                        let rows = data.get("rows_affected").and_then(|v| v.as_i64());
+                        if let (0, Some(rows)) = (sqlcode, rows) {
+                            // The row count travels in SQLERRD3, which needs a full SQLCA.
+                            drda::sqlcard(0, "00000", rows.clamp(0, i32::MAX as i64) as i32)
+                        } else if sqlcode == 0 {
                             drda::sqlcard_success()
                         } else if sqlcode > 0 {
                             // Positive SQLCODE (e.g. 100 = not found): warning SQLCA.
@@ -561,6 +674,35 @@ impl Db2Handler {
             }
         }
     }
+}
+
+/// CMDNSPRM (command not supported) at severity ERROR, so the client gets a real reply instead
+/// of hanging. One per command: the command data chained to it is not answered separately.
+fn cmdnsprm(corr: u16, codepoint: u16) -> Vec<u8> {
+    use drda::cp;
+    warn!("Db2: unsupported DRDA command 0x{:04X}", codepoint);
+    let mut inner = drda::encode_scalar(cp::SVRCOD, &drda::svrcod::ERROR.to_be_bytes());
+    inner.extend_from_slice(&drda::encode_scalar(0x000C, &codepoint.to_be_bytes()));
+    let rm = drda::encode_object(cp::CMDNSPRM, &inner);
+    drda::encode_dss(drda::DSSFMT_RPYDSS, false, corr, &rm)
+}
+
+/// RDBCMM / RDBRLLBCK -> ENDUOWRM + SQLCARD. There is no storage, so there is nothing to commit
+/// or undo; the reply says the unit of work ended (`uowdsp` 1 committed, 2 rolled back), which
+/// is what a JDBC driver in autocommit sends after every statement and waits for.
+fn end_unit_of_work(corr: u16, uowdsp: u8) -> Vec<u8> {
+    use drda::cp;
+    let mut inner = drda::encode_scalar(cp::SVRCOD, &drda::svrcod::WARNING.to_be_bytes());
+    inner.extend_from_slice(&drda::encode_scalar(cp::UOWDSP, &[uowdsp]));
+    let rm = drda::encode_object(cp::ENDUOWRM, &inner);
+    let mut out = drda::encode_dss(drda::DSSFMT_RPYDSS, false, corr, &rm);
+    out.extend(drda::encode_dss(
+        drda::DSSFMT_OBJDSS,
+        false,
+        corr,
+        &drda::sqlcard_success(),
+    ));
+    out
 }
 
 /// Build a SECCHKRM (security-check reply message) with the given severity and

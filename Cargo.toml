@@ -438,7 +438,7 @@ mdns = ["mdns-sd"]
 mysql = ["dep:opensrv-mysql", "dep:mysql_async"]
 mssql = ["dep:tiberius"]
 snowflake = []  # Snowflake data-warehouse server (REST/JSON login + query protocol; hand-rolled over hyper, no extra deps)
-db2 = []  # IBM Db2 DRDA wire-protocol server (hand-rolled DRDA/DDM handshake + basic query, no extra deps)
+db2 = []  # IBM Db2 DRDA wire protocol: server (handshake + basic query) and client (statements, queries with decoded rows, commit/rollback) - hand-rolled, no extra deps
 ipp = ["dep:ipp"]
 postgresql = ["dep:pgwire", "dep:tokio-postgres"]
 # NOTE: tests/server/mongodb/mod.rs gates on BOTH `mongodb-server` and `mongodb`, because its

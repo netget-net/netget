@@ -33,9 +33,10 @@
 //!
 //! Enough of the object layer for the connection handshake
 //! (EXCSAT/ACCSEC/SECCHK/ACCRDB) and the `EXCSQLIMM` → `SQLCARD` basic-query path.
-//! Character fields (user id, RDB name, SQL text) are IBM037 EBCDIC, decoded
-//! best-effort here. See `mod.rs`/`CLAUDE.md` for what is deliberately not
-//! implemented (SELECT result-set retrieval: OPNQRY/QRYDSC/QRYDTA).
+//! DDM character fields (user id, RDB name) are IBM037 EBCDIC, decoded best-effort
+//! here; SQL text is FD:OCA data in the requester's declared CCSID (`decode_sqlstt`).
+//! See `mod.rs`/`AGENTS.md` for what is deliberately not implemented (SELECT
+//! result-set retrieval: OPNQRY/QRYDSC/QRYDTA).
 
 /// DDM magic byte that opens every DSS.
 pub const DSS_MAGIC: u8 = 0xD0;
@@ -54,6 +55,9 @@ pub mod cp {
     pub const ACCRDB: u16 = 0x2001; // Access RDB
     pub const EXCSQLIMM: u16 = 0x200A; // Execute Immediate SQL
     pub const EXCSQLSTT: u16 = 0x200B; // Execute SQL Statement
+    pub const EXCSQLSET: u16 = 0x2014; // Set SQL environment (special registers)
+    pub const RDBCMM: u16 = 0x200E; // Commit unit of work
+    pub const RDBRLLBCK: u16 = 0x200F; // Roll back unit of work
 
     // Reply objects / messages (RPYDSS / OBJDSS)
     pub const EXCSATRD: u16 = 0x1443; // EXCSAT reply data
@@ -62,6 +66,8 @@ pub mod cp {
     pub const ACCRDBRM: u16 = 0x2201; // Access RDB reply message
     pub const SQLCARD: u16 = 0x2408; // SQL Communications Area Reply Data
     pub const CMDNSPRM: u16 = 0x1250; // Command Not Supported reply message
+    pub const ENDUOWRM: u16 = 0x220C; // End unit of work reply message
+    pub const RDBATHRM: u16 = 0x22CB; // Not authorized to RDB reply message
 
     // Scalar parameters
     pub const EXTNAM: u16 = 0x115E; // External name
@@ -80,6 +86,9 @@ pub mod cp {
     pub const TYPDEFOVR: u16 = 0x0035; // TYPDEF overrides
     pub const SQLSTT: u16 = 0x2414; // SQL statement
     pub const SQLSTTGRP: u16 = 0x2214; // SQL statement group (mixed/single byte)
+    pub const UOWDSP: u16 = 0x2115; // Unit of work disposition
+    pub const CCSIDSBC: u16 = 0x119C; // CCSID of single-byte characters
+    pub const CCSIDMBC: u16 = 0x119E; // CCSID of mixed-byte characters
 }
 
 /// SVRCOD severity levels.
@@ -269,34 +278,120 @@ pub fn sqlcard_success() -> Vec<u8> {
     encode_object(cp::SQLCARD, &[0xFF])
 }
 
-/// An error/warning SQLCARD carrying a minimal SQLCA: SQLCODE, SQLSTATE and
-/// SQLERRPROC, with the extended diagnostic group (SQLCAXGRP) set NULL.
-///
-/// This gives the driver the essential SQLCODE + SQLSTATE. The extended group
-/// (SQLERRD counters, warning flags, and the message text) is deliberately NULL —
-/// see the note in `CLAUDE.md`. Byte layout:
+/// An error/warning SQLCARD: SQLCODE and SQLSTATE in a complete SQLAM 7 SQLCA.
+pub fn sqlcard_error(sqlcode: i32, sqlstate: &str) -> Vec<u8> {
+    sqlcard(sqlcode, sqlstate, 0)
+}
+
+/// A complete SQLAM 7 SQLCARD: the SQLCAGRP with its SQLCAXGRP present (so SQLERRD3 can
+/// carry the rows a statement affected) and its SQLDIAGGRP null. Character fields are in
+/// the single-byte CCSID ACCRDBRM declares (UTF-8, so plain ASCII here). Byte layout:
 ///
 /// ```text
-/// 0x00                       SQLCAGRP present (not null)
-/// SQLCODE   (i32, BE)        4 bytes
-/// SQLSTATE  (5 EBCDIC bytes) 5 bytes
-/// SQLERRPROC(8 EBCDIC bytes) 8 bytes  ("NETGET  ")
-/// 0xFF                       SQLCAXGRP NULL (no extended diagnostics)
+/// 0x00                       SQLCAGRP present
+/// SQLCODE    i32 BE          4 bytes
+/// SQLSTATE   5 chars         padded with blanks
+/// SQLERRPROC 8 chars         "NETGET  "
+/// 0x00                       SQLCAXGRP present
+///   SQLERRD1..6  6 x i32     SQLERRD3 = rows affected, the rest 0
+///   SQLWARN0..A  11 chars    blanks
+///   SQLRDBNAME   u16 0       empty VCS
+///   SQLERRMSG_m  u16 0       empty VCM
+///   SQLERRMSG_s  u16 0       empty VCS
+/// 0xFF                       SQLDIAGGRP null
 /// ```
-pub fn sqlcard_error(sqlcode: i32, sqlstate: &str) -> Vec<u8> {
-    let mut data = Vec::with_capacity(19);
-    data.push(0x00); // SQLCAGRP present
+///
+/// SQLDIAGGRP's null indicator is not optional at SQLAM 7: a driver reads it after the
+/// SQLCAXGRP whether or not anything is in it.
+pub fn sqlcard(sqlcode: i32, sqlstate: &str, rows: i32) -> Vec<u8> {
+    let mut data = Vec::with_capacity(64);
+    data.push(0x00);
     data.extend_from_slice(&sqlcode.to_be_bytes());
-    // SQLSTATE is exactly 5 characters; pad/truncate then EBCDIC-encode.
     let mut state = [b' '; 5];
-    for (i, b) in sqlstate.bytes().take(5).enumerate() {
+    for (i, b) in sqlstate
+        .bytes()
+        .filter(u8::is_ascii_alphanumeric)
+        .take(5)
+        .enumerate()
+    {
         state[i] = b;
     }
-    data.extend_from_slice(&ascii_to_ebcdic_bytes(&state));
-    // SQLERRPROC: 8-byte product signature.
-    data.extend_from_slice(&ascii_to_ebcdic_bytes(b"NETGET  "));
-    data.push(0xFF); // SQLCAXGRP null
+    data.extend_from_slice(&state);
+    data.extend_from_slice(b"NETGET  ");
+    data.push(0x00);
+    for errd in [0, 0, rows, 0, 0, 0] {
+        data.extend_from_slice(&errd.to_be_bytes());
+    }
+    data.extend_from_slice(&[b' '; 11]);
+    data.extend_from_slice(&[0, 0, 0, 0, 0, 0]);
+    data.push(0xFF);
     encode_object(cp::SQLCARD, &data)
+}
+
+/// Set the chaining flags of a reply to one request DSS.
+///
+/// DRDA replies to a request chain with a reply chain: every reply DSS but the very last one
+/// of the chain says "chained", and says "same correlator" when the next reply DSS carries the
+/// same correlator. `reply` holds the DSSes answering one request; `request_chained` is that
+/// request's own chained flag, which says whether more replies follow after these. A driver
+/// that sends EXCSAT chained to ACCSEC rejects an unchained EXCSATRD as a syntax error.
+pub fn chain_reply(mut reply: Vec<u8>, request_chained: bool) -> Vec<u8> {
+    let mut starts = Vec::new();
+    let mut pos = 0;
+    while pos + 6 <= reply.len() {
+        let len = u16::from_be_bytes([reply[pos], reply[pos + 1]]) as usize;
+        if len < 6 || len & 0x8000 != 0 || pos + len > reply.len() {
+            return reply;
+        }
+        starts.push(pos);
+        pos += len;
+    }
+    for (i, &at) in starts.iter().enumerate() {
+        let next = starts.get(i + 1);
+        let chained = next.is_some() || request_chained;
+        let same = next.is_some_and(|&n| reply[n + 4..n + 6] == reply[at + 4..at + 6]);
+        let mut format = reply[at + 3] & 0x0F;
+        if chained {
+            format |= 0x40;
+            if same {
+                format |= 0x10;
+            }
+        }
+        reply[at + 3] = format;
+    }
+    reply
+}
+
+/// The SQL text in an SQLSTT body.
+///
+/// DRDA carries it as FD:OCA data: a nullable mixed-character string with a 4-byte length
+/// (`0x00 | len | bytes`), then a nullable single-byte one, of which one is null. The text is
+/// in the CCSID the requester declared, which every driver here declares as UTF-8. A body
+/// that is not shaped like that is read as bare EBCDIC, the encoding this server's own
+/// byte-literal tests use.
+pub fn decode_sqlstt(body: &[u8]) -> String {
+    let field = |b: &[u8]| -> Option<(Option<Vec<u8>>, usize)> {
+        match b.first()? {
+            0xFF => Some((None, 1)),
+            0x00 if b.len() >= 5 => {
+                let n = u32::from_be_bytes([b[1], b[2], b[3], b[4]]) as usize;
+                let end = 5usize.checked_add(n)?;
+                (end <= b.len()).then(|| (Some(b[5..end].to_vec()), end))
+            }
+            _ => None,
+        }
+    };
+    if let Some((mixed, used)) = field(body) {
+        let single = field(&body[used..]);
+        if let Some((single, used2)) = single {
+            if used + used2 == body.len() {
+                if let Some(text) = mixed.or(single) {
+                    return String::from_utf8_lossy(&text).trim_end().to_string();
+                }
+            }
+        }
+    }
+    ebcdic_to_ascii(body)
 }
 
 // ============================================================================

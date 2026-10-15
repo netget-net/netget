@@ -1,68 +1,103 @@
 # Db2 (DRDA) Server E2E Tests
 
-`drda_test.rs` + `e2e_test.rs`, declared in `tests/server/mod.rs`
-(`pub mod db2;` → `tests/server/db2/mod.rs`).
+`drda_test.rs`, `e2e_test.rs`, `peer_inject_test.rs`, `real_client_test.rs`, declared in
+`tests/server/db2/mod.rs` (`pub mod db2;` in `tests/server/mod.rs`).
 
-## Strategy — byte-literal, NOT real-client
+## Strategy
 
-A real Db2 driver is very unlikely to be available on macOS, so the evidence is
-**byte-literal**: the hand-rolled DRDA/DDM codec is asserted against spec-derived
-constant byte strings, and the running server is driven with DRDA bytes built from
-that (independently validated) codec. This proves the encoder is self-consistent
-and matches the documented wire layout; it is **not** proof of interoperability
-with a genuine Db2 connector. State this plainly anywhere results are summarised.
+The independent evidence is `real_client_test.rs`: **Apache Derby 10.17.1.0's JDBC client
+driver** (`derbyclient.jar`, driven through Derby's `ij`) and **IBM's CLI driver** (`ibm_db`
+3.3.0), against NetGet's server. Neither shares code with NetGet or with each other. The rest
+is byte-literal: the codec against spec-derived bytes, and the server driven with bytes from
+that codec.
+
+`real_client_test.rs` needs Java 21+ and the Derby jars (`NETGET_DERBY_LIB`, printed by
+`python3 tests/client/db2/install_derby.py <dir>`), a Python with `ibm_db`
+(`NETGET_IBM_DB_PYTHON`) and tshark; it **fails** rather than skips without them.
+
+## `real_client_test.rs` — two independent drivers
+
+### Derby's JDBC driver (LLM mocked, 6 calls)
+
+`ij` connects as `app` (the model accepts), creates a table, inserts a row, drops a missing
+table, disconnects, and connects as `intruder` (the model refuses). Asserted on what the
+driver printed and what the model was shown:
+
+- each `db2_query` rule matches the exact statement text — the SQLSTT decoded from the
+  driver's UTF-8 FD:OCA string (it used to arrive as EBCDIC-decoded garbage);
+- `0 rows inserted/updated/deleted` for the CREATE, `1 row` for the INSERT — the model's
+  `rows_affected` in SQLERRD3;
+- `ERROR 42704` — the model's SQLSTATE in a complete SQLAM 7 SQLCA;
+- the intruder's connect fails (`ERROR 08004 ... Userid or password invalid`);
+- tshark's `drda` dissector reads both directions of the recorded conversation.
+
+The driver also calls `SYSIBM.SQLCAMESSAGE` to fetch message text after the error; that is a
+PRPSQLSTT, answered with one CMDNSPRM and never shown to the model. The driver prints the
+SQLCODE and SQLSTATE without text.
+
+### IBM's CLI driver, `ibm_db` 3.3.0 (LLM mocked, 5 calls)
+
+`ibm_db_peer.py` (run with the interpreter `NETGET_IBM_DB_PYTHON` names; `pip install
+ibm_db==3.3.0` in a venv — it installs on macOS arm64 and Linux x86_64) prints one JSON line
+per step:
+
+- its default connection asks for encrypted EUSRIDPWD (9); the server offers `[3, 4]` and
+  the driver reports reason 17, UNSUPPORTED FUNCTION;
+- with `AUTHENTICATION=SERVER` it logs in as `app` (the model accepts), sets its special
+  registers (EXCSQLSET, acknowledged without the model), inserts (`num_rows` 1, the model's
+  `rows_affected`) and fails a drop with `SQLSTATE=42704 SQLCODE=-204`;
+- `intruder` is refused with reason 24, USERNAME AND/OR PASSWORD INVALID;
+- tshark's `drda` dissector judges NetGet's direction. IBM's direction is context only: the
+  Linux x86_64 driver puts 32 NUL bytes inside its EXCSAT's EXTNAM, which tshark's ASCII
+  view of the parameter flags as trailing stray characters (the macOS build does not).
+
+### Mutation checks (each applied, run, reverted)
+
+| mutation | result |
+|---|---|
+| no reply chaining (`chain_reply` removed) | Derby's driver: `Data Stream Syntax Error ... Reason: 0x11`, nothing reaches the model |
+| `rows_affected` not sent | Derby's driver loses `1 row inserted/updated/deleted` |
+| ACCSEC echoes any mechanism | IBM's driver logs in with an encrypted token; the model sees an empty user id (reason 24, not 17) |
+| a refused SECCHK leaves its reply chained and the chained ACCRDB answered | IBM's driver: SQL30020N data stream syntax error instead of reason 24 |
+
+Not caught: dropping only the discard of the chain's remainder (keeping the refusal
+unchained) — IBM's driver stops reading at the unchained SECCHKRM either way.
 
 ## `drda_test.rs` — pure codec (no server, no LLM)
 
-Byte-literal assertions with hardcoded expected bytes:
-
-- DDM object header (`length | codepoint`) and DSS envelope layout
-  (`length | 0xD0 | format | correlator`), including the chaining flags in the
-  format byte's high nibble.
-- `parse_dss` round-trips a SECCHK carrying an EBCDIC USRID, and reports
-  `Truncated` / `BadMagic` on malformed input.
+- DDM object header and DSS envelope layout, including the chaining flags.
+- `parse_dss` round-trips a SECCHK carrying an EBCDIC USRID, and reports `Truncated` /
+  `BadMagic` on malformed input.
 - IBM037 EBCDIC known values and `"SELECT 1"` round-trip.
-- `sqlcard_success` = the 5-byte null SQLCA; `sqlcard_error` carries SQLCODE
-  (i32 BE) + SQLSTATE (EBCDIC) with the extended group NULL.
+- `sqlcard_success` = the 5-byte null SQLCA; `sqlcard_error` is a complete SQLAM 7 SQLCA
+  (SQLCAXGRP present, SQLDIAGGRP null indicator last, character fields in UTF-8) — the
+  layout Derby's own server sends.
+- `chain_reply` sets "chained" / "same correlator" on a reply to a chained request.
+- `decode_sqlstt` reads the FD:OCA UTF-8 form and still reads bare EBCDIC.
 
-8 tests, no LLM calls, sub-millisecond.
+## `e2e_test.rs` — handshake over real TCP (LLM mocked, 3 calls)
 
-## `e2e_test.rs` — handshake over real TCP (LLM mocked)
-
-`test_db2_handshake_and_statement` opens a real TCP connection and walks the full
-DRDA handshake, asserting each reply's code point and severity:
-
-`EXCSAT→EXCSATRD`, `ACCSEC→ACCSECRD`, `SECCHK→SECCHKRM` (severity INFO / code
-SUCCESS, because the mock accepts), `ACCRDB→ACCRDBRM` (INFO once authenticated),
-then `EXCSQLIMM` with an embedded `SQLSTT` → `SQLCARD` whose body is the single
-`0xFF` null-SQLCA success indicator.
+`EXCSAT→EXCSATRD`, `ACCSEC→ACCSECRD`, `SECCHK→SECCHKRM` (INFO/SUCCESS), `ACCRDB→ACCRDBRM`,
+then `EXCSQLIMM` with an embedded SQLSTT → `SQLCARD` carrying SQLCODE 0 and the mock's
+`rows_affected` 1 in SQLERRD3.
 
 ## `peer_inject_test.rs` — dashboard peer injection (zero LLM calls)
 
-`injected_close_connection_sends_eof_and_counters_move` starts a Db2 server with
-no handlers, connects a raw `TcpStream`, waits for `has_peer_handle`, then:
-`EXCSAT→EXCSATRD` (no LLM) and asserts the connection counters moved on both
-directions; `send_to_peer` of `db2_accept_connection` → `Executed` (the wire verbs
-are correlator-bound `Custom` results, so nothing is written); `send_to_peer` of
-`close_connection` → `Disconnected`, the socket reads EOF, and the peer handle is
-removed. It does **not** assert that an unknown action name errors: the shared
-executor reports unknown names as executed, which is outside this protocol.
-
-## LLM call budget (mocked)
-
-`test_db2_handshake_and_statement`: startup + `db2_connect` (accept) + `db2_query`
-(ok) = **3** calls. Total suite **3** (well under budget). Ends with
-`server.verify_mocks().await?`.
+`injected_close_connection_sends_eof_and_counters_move`: `EXCSAT→EXCSATRD`, counters move,
+`send_to_peer` of a wire verb is `Executed` with nothing written (correlator-bound),
+`close_connection` → `Disconnected` and EOF.
 
 ## Running
 
 ```bash
-./cargo-isolated.sh test --no-default-features --features db2 \
-    --test server -- db2:: --test-threads=100
+./cargo-isolated.sh test --no-default-features --features tcp,db2 \
+    --test server -- db2:: --test-threads=4
 ```
+
+The `db2` job in `.github/workflows/protocol-pairs.yml` runs `db2::real_client_test` with
+Derby, `ibm_db` and tshark installed.
 
 ## Not covered
 
-SELECT result-set retrieval (OPNQRY/QRYDTA — not implemented), the error SQLCARD
-path end-to-end through the server, prepared statements, and TLS. See
-`src/server/db2/AGENTS.md`.
+SELECT result sets (not implemented), prepared statements, IBM's JDBC driver (JCC), TLS.
+See `src/server/db2/AGENTS.md`.

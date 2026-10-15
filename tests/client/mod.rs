@@ -378,6 +378,8 @@ pub mod capnp_rpc;
 pub mod clickhouse;
 #[cfg(feature = "consul")]
 pub mod consul;
+#[cfg(feature = "db2")]
+pub mod db2;
 #[cfg(feature = "dbus")]
 pub mod dbus;
 #[cfg(feature = "epp")]
