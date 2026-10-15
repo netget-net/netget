@@ -65,8 +65,12 @@ What is left from this document, with the reason each is still open:
     APER checked by tshark's `ngap` dissector, against UERANSIM's nr-gnb/nr-ue and Open5GS's
     AMF. NAS security (5G-AKA, Security Mode), PDU sessions, handover and paging are not
     built, so a real UE cannot complete registration.
-  - **Redis cluster and pub/sub depth**: RESP3 shipped; `CLUSTER` and pub/sub were not
-    extended.
+  - ~~**Redis cluster and pub/sub depth**~~: landed 15 October 2026 on the `redis` server
+    and client — pub/sub (channels, patterns, shard channels, RESP2 subscribed mode and RESP3
+    pushes, model-initiated publish, bounded fan-out with a slow-subscriber limit) and cluster
+    mode (CRC16 hash slots, `CLUSTER SLOTS/SHARDS/NODES`, MOVED/ASK/CROSSSLOT on the server; a
+    slot-routing client following MOVED and ASK), against redis-cli, redis-rs and a real
+    three-node cluster. No cluster bus, replicas, keyspace notifications or `CLIENT TRACKING`.
 - **Peer-limited missing clients**: gtp, db2, snowflake, spark and yarn still have no
   client. None has a clean local independent server to test against.
 - **Tier C**: all deferred, unchanged, for the reasons in the table below. This includes
