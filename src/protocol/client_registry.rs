@@ -658,6 +658,10 @@ impl ClientRegistry {
         self.register(Arc::new(
             crate::client::vxlan::actions::VxlanClientProtocol::new(),
         ));
+        #[cfg(feature = "openflow")]
+        self.register(Arc::new(
+            crate::client::openflow::actions::OpenFlowClientProtocol::new(),
+        ));
         #[cfg(feature = "rsync")]
         self.register(Arc::new(
             crate::client::rsync::actions::RsyncClientProtocol::new(),
@@ -1321,6 +1325,7 @@ pub(crate) const ALL_KNOWN_CLIENT_PROTOCOLS: &[(&str, &str)] = &[
     ("D-Bus", "dbus"),
     ("BFD", "bfd"),
     ("VXLAN", "vxlan"),
+    ("OpenFlow", "openflow"),
     ("rsync", "rsync"),
     ("RDP", "rdp-client"),
     ("SPICE", "spice"),

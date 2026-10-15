@@ -144,6 +144,7 @@ portable-base = [
     "dbus",
     "bfd",
     "vxlan",
+    "openflow",
     "rsync",
     "pfcp",
     "matrix",
@@ -409,6 +410,7 @@ radsec = ["radius", "tls"] # RADIUS over TLS (RFC 6614) server and client
 dbus = [] # D-Bus server (a small message bus) and client, hand-rolled wire protocol
 bfd = ["dep:md-5", "dep:sha1"] # BFD (RFC 5880/5881/5883) speaker and client, hand-rolled; md-5/sha1 for keyed authentication
 vxlan = [] # VXLAN (RFC 7348), Geneve (RFC 8926) and GRE-in-UDP gretap (RFC 2784/2890/8086) tunnel endpoint and overlay host, hand-rolled
+openflow = ["vxlan"] # OpenFlow 1.3 controller (server, TCP 6653) and switch (client), hand-rolled; reuses VXLAN's checksum and frame builders
 rsync = ["dep:md4"] # rsync daemon (rsync://, protocol 29) and client, hand-rolled; md4 for its checksums
 pfcp = [] # PFCP (3GPP TS 29.244, the 5G N4 interface) UPF and SMF, hand-rolled
 ngap = [] # NGAP (3GPP TS 38.413, the 5G N2 interface) AMF and gNB, hand-rolled APER; SCTP where available, refuses elsewhere
@@ -756,6 +758,7 @@ dist-windows = [
     "dbus",
     "bfd",
     "vxlan",
+    "openflow",
     "rsync",
     "pfcp",
     "matrix",
@@ -1000,6 +1003,7 @@ all-protocols = [
     "dbus",
     "bfd",
     "vxlan",
+    "openflow",
     "rsync",
     "pfcp",
     "matrix",

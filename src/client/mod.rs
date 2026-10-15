@@ -831,6 +831,8 @@ pub mod ninep;
 pub mod oci_registry;
 #[cfg(feature = "onvif")]
 pub mod onvif;
+#[cfg(feature = "openflow")]
+pub mod openflow;
 #[cfg(feature = "pfcp")]
 pub mod pfcp;
 #[cfg(feature = "pulsar")]

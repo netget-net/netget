@@ -469,6 +469,10 @@ impl ServerRegistry {
         self.register(Arc::new(crate::server::bfd::actions::BfdProtocol::new()));
         #[cfg(feature = "vxlan")]
         self.register(Arc::new(crate::server::vxlan::actions::VxlanProtocol::new()));
+        #[cfg(feature = "openflow")]
+        self.register(Arc::new(
+            crate::server::openflow::actions::OpenFlowProtocol::new(),
+        ));
         #[cfg(feature = "rsync")]
         self.register(Arc::new(crate::server::rsync::actions::RsyncProtocol::new()));
         #[cfg(feature = "pfcp")]
@@ -1770,6 +1774,7 @@ pub(crate) const ALL_KNOWN_PROTOCOLS: &[(&str, &str)] = &[
     ("D-Bus", "dbus"),
     ("BFD", "bfd"),
     ("VXLAN", "vxlan"),
+    ("OpenFlow", "openflow"),
     ("rsync", "rsync"),
     ("PFCP", "pfcp"),
     ("Matrix", "matrix"),

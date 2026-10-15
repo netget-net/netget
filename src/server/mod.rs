@@ -1384,6 +1384,8 @@ pub mod msgpack_rpc;
 pub mod ninep;
 #[cfg(feature = "onvif")]
 pub mod onvif;
+#[cfg(feature = "openflow")]
+pub mod openflow;
 #[cfg(feature = "pfcp")]
 pub mod pfcp;
 #[cfg(feature = "pulsar")]
