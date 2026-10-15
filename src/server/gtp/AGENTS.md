@@ -13,6 +13,9 @@ the sockets, the version demultiplex and every octet of encoding.
 Files: `codec.rs` (pure, no I/O), `actions.rs` (LLM vocabulary + executor), `mod.rs` (two
 sockets + the fail-closed rule).
 
+The requesting side (an SGSN, SGW or MME) is the GTP client, `src/client/gtp/`, which
+builds its requests on this codec.
+
 ## Subscriber identifiers are personal data
 
 IMSI and MSISDN identify a **person's SIM and phone number**. Two rules follow, and they are

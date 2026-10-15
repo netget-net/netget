@@ -382,6 +382,8 @@ pub mod consul;
 pub mod dbus;
 #[cfg(feature = "epp")]
 pub mod epp;
+#[cfg(feature = "gtp")]
+pub mod gtp;
 #[cfg(feature = "guacamole")]
 pub mod guacamole;
 #[cfg(feature = "hls")]
