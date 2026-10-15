@@ -559,6 +559,8 @@ pub mod sunrpc;
 pub mod tr069;
 #[cfg(feature = "vxlan")]
 pub mod vxlan;
+#[cfg(feature = "openflow")]
+pub mod openflow;
 #[cfg(feature = "webtransport")]
 pub mod webtransport;
 #[cfg(feature = "wsdiscovery")]

@@ -583,11 +583,13 @@ pub fn version_name(v: u8) -> String {
 
 // ---- ERROR ---------------------------------------------------------------------------------
 
-/// The first bytes of the offending request an ERROR carries (the spec says at least 64).
-pub const ERROR_DATA_BYTES: usize = 64;
+/// How much of the offending request an ERROR carries: all of it where it fits, as Open vSwitch
+/// does (the spec asks for at least 64 bytes). A truncated copy would carry a length its own
+/// bytes do not reach, which dissectors read as a malformed embedded message.
+pub const ERROR_DATA_BYTES: usize = MAX_MESSAGE_LEN - HEADER_LEN - 4;
 
 pub fn error_body(etype: u16, code: u16, offending: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(4 + ERROR_DATA_BYTES);
+    let mut out = Vec::with_capacity(4 + offending.len().min(ERROR_DATA_BYTES));
     out.extend_from_slice(&etype.to_be_bytes());
     out.extend_from_slice(&code.to_be_bytes());
     out.extend_from_slice(&offending[..offending.len().min(ERROR_DATA_BYTES)]);

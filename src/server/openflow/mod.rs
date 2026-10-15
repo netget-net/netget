@@ -716,7 +716,7 @@ fn take(conn: &Conn, m: &Message, want: impl Fn(Expect) -> bool) -> Option<Outst
         Some(o) if want(o.expect) => book.replies.remove(&m.header.xid),
         _ => {
             drop(book);
-            conn.log().debug(format!(
+            conn.log().info(format!(
                 "OpenFlow {} with xid {:#x} answers nothing NetGet asked; ignored \
                  decision=protocol_unsolicited_reply",
                 wire::msg_name(m.header.msg_type),
@@ -995,7 +995,7 @@ async fn multipart(conn: &Conn, m: &Message, hs: &mut Handshake, jobs: &mpsc::Se
         );
         if !matches {
             drop(book);
-            conn.log().debug(format!(
+            conn.log().info(format!(
                 "OpenFlow {} multipart reply with xid {:#x} answers nothing NetGet asked; \
                  ignored decision=protocol_unsolicited_reply",
                 wire::mp::name(mtype),
@@ -1461,7 +1461,7 @@ async fn command(conn: &Conn, c: ClientCommand) -> bool {
                 detail: "nothing to send".into(),
             }),
             Err(e) => Ok(ClientSendOutcome::Rejected {
-                error: e.to_string(),
+                error: format!("{e:#}"),
             }),
         };
     let disconnect = matches!(outcome, Ok(ClientSendOutcome::Disconnected));
