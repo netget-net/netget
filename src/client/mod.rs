@@ -407,6 +407,10 @@ pub mod sip;
 #[cfg(feature = "sip")]
 pub use sip::actions::SipClientProtocol;
 
+// H.323 endpoint: registers with a gatekeeper and places calls
+#[cfg(feature = "h323")]
+pub mod h323;
+
 // smb client
 #[cfg(feature = "smb-client")]
 pub mod smb;

@@ -323,6 +323,10 @@ impl ClientRegistry {
 
         #[cfg(feature = "sip")]
         self.register(Arc::new(crate::client::sip::SipClientProtocol::new()));
+        #[cfg(feature = "h323")]
+        self.register(Arc::new(
+            crate::client::h323::actions::H323ClientProtocol::new(),
+        ));
 
         #[cfg(feature = "smb-client")]
         self.register(Arc::new(crate::client::smb::SmbClientProtocol::new()));
@@ -1370,6 +1374,7 @@ pub(crate) const ALL_KNOWN_CLIENT_PROTOCOLS: &[(&str, &str)] = &[
     ("RIP", "rip"),
     ("SAML", "saml"),
     ("SIP", "sip"),
+    ("H323", "h323"),
     ("SMTP", "smtp"),
     ("FTP", "ftp"),
     ("POP3", "pop3"),
