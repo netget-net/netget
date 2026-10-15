@@ -23,29 +23,29 @@ use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace, warn};
 
-#[cfg(feature = "imap")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::llm::action_helper::call_llm;
-#[cfg(feature = "imap")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::llm::ollama_client::OllamaClient;
-#[cfg(feature = "imap")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::llm::ActionResult;
-#[cfg(feature = "imap")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::logging::emit::Log;
-#[cfg(feature = "imap")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::protocol::Event;
-#[cfg(feature = "imap")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::server::connection::ConnectionId;
-#[cfg(feature = "imap")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::server::ImapProtocol;
-#[cfg(feature = "imap")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::state::app_state::AppState;
-#[cfg(feature = "imap")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::state::server::{
     ConnectionStatus, ImapSessionState, ProtocolConnectionInfo, ProtocolState, ServerId,
 };
-#[cfg(feature = "imap")]
+#[cfg(not(target_arch = "wasm32"))]
 use actions::{IMAP_AUTH_EVENT, IMAP_CONNECTION_EVENT};
-#[cfg(feature = "imap")]
+#[cfg(not(target_arch = "wasm32"))]
 use serde_json::json;
 
 /// Largest single command line the server will buffer before refusing the peer.
@@ -61,7 +61,7 @@ use serde_json::json;
 /// `\n` and bounds nothing: an unauthenticated peer that connects and streams bytes with no
 /// newline made the server allocate without limit. The refusal happens here, before
 /// `handle_command` builds any event, so an oversized line never reaches a prompt.
-#[cfg(feature = "imap")]
+#[cfg(not(target_arch = "wasm32"))]
 pub const MAX_COMMAND_BYTES: usize = 8192;
 
 /// How long to wait for a peer's first command after the greeting has gone out.
@@ -74,7 +74,7 @@ pub const MAX_COMMAND_BYTES: usize = 8192;
 ///
 /// The greeting itself is sent before the loop and may involve a model round-trip; that happens
 /// outside this deadline, which wraps the `read` and nothing else.
-#[cfg(feature = "imap")]
+#[cfg(not(target_arch = "wasm32"))]
 const FIRST_COMMAND_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// How long a peer that has already sent a command may send nothing further.
@@ -89,7 +89,7 @@ const FIRST_COMMAND_READ_TIMEOUT: std::time::Duration = std::time::Duration::fro
 /// It is also far longer than the 300-second default a `manual` rule gives a human to answer,
 /// and the deadline wraps the read alone, so neither a model round-trip nor a parked question is
 /// ever inside it.
-#[cfg(feature = "imap")]
+#[cfg(not(target_arch = "wasm32"))]
 const IDLE_BETWEEN_COMMANDS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2100);
 
 /// Concurrent connections this server admits.
@@ -97,7 +97,7 @@ const IDLE_BETWEEN_COMMANDS_TIMEOUT: std::time::Duration = std::time::Duration::
 /// Each admitted connection may buffer a command line of up to [`MAX_COMMAND_BYTES`] and holds a
 /// session, a peer-command channel and an `AppState` entry before anything is authenticated, so
 /// the cap is what turns that per-connection bound into a total one.
-#[cfg(feature = "imap")]
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_CONNECTIONS: usize = crate::server::accept_bounded::DEFAULT_MAX_CONNECTIONS;
 
 /// What a peer over [`MAX_CONNECTIONS`] is told before the socket closes.
@@ -106,13 +106,13 @@ const MAX_CONNECTIONS: usize = crate::server::accept_bounded::DEFAULT_MAX_CONNEC
 /// (RFC 3501 §7.1.5), and RFC 5530's `[UNAVAILABLE]` is the machine-readable reason — the same
 /// pair this server already uses to refuse a connection whose greeting handler failed and to end
 /// one that sent an oversized command line. There is no tag to echo: the peer has sent nothing.
-#[cfg(feature = "imap")]
+#[cfg(not(target_arch = "wasm32"))]
 const CONNECTION_CAP_REFUSAL: &[u8] = b"* BYE [UNAVAILABLE] too many connections\r\n";
 
 /// IMAP server that handles mail retrieval with LLM
 pub struct ImapServer;
 
-#[cfg(feature = "imap")]
+#[cfg(not(target_arch = "wasm32"))]
 impl ImapServer {
     /// Spawn IMAP server with integrated LLM actions (plain TCP on port 143)
     pub async fn spawn_with_llm_actions(
@@ -356,7 +356,7 @@ pub fn imap_answer_with(tag: &str, command: &str, args: &str) -> Option<String> 
     })
 }
 
-#[cfg(feature = "imap")]
+#[cfg(not(target_arch = "wasm32"))]
 struct ImapSession<R, W> {
     reader: BufReader<R>,
     writer: Arc<tokio::sync::Mutex<W>>,
@@ -373,7 +373,7 @@ struct ImapSession<R, W> {
     capabilities: String,
 }
 
-#[cfg(feature = "imap")]
+#[cfg(not(target_arch = "wasm32"))]
 impl<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWrite + Unpin> ImapSession<R, W> {
     async fn handle(&mut self) -> Result<()> {
         // Send greeting via LLM. A failure here used to propagate and drop the socket without
@@ -1001,7 +1001,7 @@ impl<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWrite + Unpin> ImapSess
 ///
 /// Both are refusals. Neither can be confused with success, which is the point: an `OK` here
 /// would tell the client the command was carried out.
-#[cfg(feature = "imap")]
+#[cfg(not(target_arch = "wasm32"))]
 fn imap_failure_code(err: &anyhow::Error) -> (&'static str, String) {
     // The text is a category, never the error itself (`crate::utils::wire_failure`), which
     // also makes it structurally impossible for a newline in an error to forge a second
@@ -1023,7 +1023,7 @@ fn imap_failure_code(err: &anyhow::Error) -> (&'static str, String) {
 /// the phrase - `A001 NO LOGIN failed, expected A001 OK` - authenticated the session, and so
 /// did an untagged line that happened to contain it. RFC 3501 §7.1 puts the condition in the
 /// second field of a line whose first field is the tag, and nowhere else.
-#[cfg(feature = "imap")]
+#[cfg(not(target_arch = "wasm32"))]
 /// A single tagged status line (`<tag> OK|NO|BAD ...`) whose tag is not `tag`, rewritten to
 /// carry `tag`; `None` for anything else, including a line that already carries it.
 ///
@@ -1070,7 +1070,7 @@ fn tagged_ok_for(payload: &str, tag: &str) -> bool {
 }
 
 /// Parse IMAP command line into (tag, command, args)
-#[cfg(feature = "imap")]
+#[cfg(not(target_arch = "wasm32"))]
 fn parse_imap_command(line: &str) -> (String, String, String) {
     let trimmed = line.trim();
     let parts: Vec<&str> = trimmed.splitn(3, ' ').collect();

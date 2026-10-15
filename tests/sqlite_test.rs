@@ -7,7 +7,7 @@
 //! - Database ownership and cleanup
 //! - Connection management
 
-#![cfg(all(test, feature = "sqlite"))]
+#![cfg(feature = "sqlite")]
 
 use anyhow::Result;
 use netget::state::app_state::AppState;

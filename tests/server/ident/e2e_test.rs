@@ -21,7 +21,6 @@
 //! * a port outside `1..=65535` is refused **without an LLM call**. That is asserted by
 //!   count, not by inspection: the `ident_query` rule expects exactly one call while four
 //!   malformed queries are sent, so any of them reaching the model fails `verify_mocks()`.
-#[cfg(all(test, feature = "ident"))]
 mod ident_e2e_test {
     use crate::helpers::{start_netget_server, E2EResult, NetGetConfig};
     use std::time::Duration;

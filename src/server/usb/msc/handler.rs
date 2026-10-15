@@ -9,30 +9,30 @@
 //! thread from within a runtime". The disk sits behind a `std::sync::Mutex` and the SCSI path
 //! never awaits.
 
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use super::disk::DiskImage;
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::server::usb::descriptors::{
     scsi_opcode, scsi_sense_key, CommandBlockWrapper, CommandStatusWrapper,
 };
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use anyhow::Result;
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use std::sync::{Arc, Mutex};
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use tokio::sync::mpsc;
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use tracing::{debug, error, info, trace, warn};
 
 /// Shared handle on the mounted disk image.
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 pub type SharedDisk = Arc<Mutex<DiskImage>>;
 
 /// A completed sector transfer, reported to the connection task so it can raise an LLM event.
 ///
 /// `handle_urb` is synchronous and cannot call the LLM, so it pushes these onto a channel
 /// instead. This is the only reason `usb_msc_read` / `usb_msc_write` can fire at all.
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MscIoEvent {
     Read {
@@ -52,7 +52,7 @@ pub enum MscIoEvent {
 /// `Debug` is required by `usbip::UsbInterfaceHandler` as of 0.9. Derived rather than
 /// hand-written: none of the fields is a secret, and the disk image behind the `Mutex`
 /// prints as a handle, not as its contents.
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Debug)]
 pub struct UsbMscHandler {
     /// Virtual disk image backend
@@ -88,7 +88,7 @@ pub struct UsbMscHandler {
     io_tx: Option<mpsc::UnboundedSender<MscIoEvent>>,
 }
 
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 impl UsbMscHandler {
     /// Create new MSC handler with disk image
     pub fn new(disk_image: SharedDisk, write_protect: bool) -> Self {
@@ -565,7 +565,7 @@ impl UsbMscHandler {
 }
 
 // Implement usbip::UsbInterfaceHandler trait
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 impl usbip::UsbInterfaceHandler for UsbMscHandler {
     fn handle_urb(
         &mut self,

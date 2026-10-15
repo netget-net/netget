@@ -13,7 +13,7 @@
 //!   ./cargo-isolated.sh test --no-default-features --features icmp \
 //!       --test client -- icmp::action_codec --test-threads=100
 
-#![cfg(feature = "icmp")]
+#![cfg(unix)]
 
 use netget::client::icmp::{IcmpClient, IcmpClientProtocol};
 use netget::llm::actions::client_trait::{Client, ClientActionResult};

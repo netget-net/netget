@@ -13,7 +13,7 @@ and all response encoders. `actions.rs` declares the semantic export event and v
 
 The OpenTelemetry project's opentelemetry-proto 0.29 generated messages/services preserve
 the repository's tonic 0.12/prost 0.13 family. gRPC framing, codec/compression, status and
-trailers remain library-owned. `vendor/tonic/README.netget.md` documents its minimal
+trailers remain library-owned. the `netget-tonic` fork, github.com/netget-net/tonic (NETGET.md) documents its minimal
 receive-limit patch: 4 MiB is enforced before and after decompression in either direction.
 
 ## Requests and semantic decisions

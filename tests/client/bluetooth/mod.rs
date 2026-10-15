@@ -1,4 +1,4 @@
-#[cfg(all(test, feature = "bluetooth-ble-client"))]
+#[cfg(all(unix, feature = "bluetooth"))]
 mod command_channel_test;
-#[cfg(all(test, feature = "bluetooth-ble-client"))]
+#[cfg(all(unix, feature = "bluetooth"))]
 mod e2e_test;

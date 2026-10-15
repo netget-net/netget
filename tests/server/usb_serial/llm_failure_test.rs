@@ -25,7 +25,7 @@
 //! reassembles — which is what a real host does and what this test does below. A single URB
 //! returning all 10 bytes would be a protocol violation, not a convenience.
 
-#[cfg(all(test, feature = "usb-serial"))]
+#[cfg(all(unix, feature = "libusb"))]
 mod usb_serial_llm_failure {
     use crate::helpers::usbip_client::{UsbIpClient, DIR_IN};
     use crate::helpers::*;

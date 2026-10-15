@@ -35,8 +35,6 @@
 //! that writes and then reads is the honest peer to test against. (The same difference was
 //! measured on `ipp`: 5 failures in 8 runs with a raw socket, 5 in 5 with a hyper client.)
 
-#![cfg(all(test, feature = "mysql"))]
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use netget::server::mysql::packet_limit::{
     PacketLimitReader, PacketLimitTrip, FULL_PACKET_PAYLOAD, MAX_PACKET_BYTES,

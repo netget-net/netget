@@ -2,7 +2,7 @@
 //!
 //! Tests OSPF server with manual OSPF client
 
-#[cfg(all(test, feature = "ospf"))]
+#[cfg(unix)]
 mod tests {
     use crate::helpers::*;
     use tokio::net::UdpSocket;

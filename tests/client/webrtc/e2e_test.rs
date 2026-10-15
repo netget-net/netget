@@ -4,7 +4,6 @@
 //! the basic setup and SDP generation. Full peer-to-peer testing requires
 //! manual setup or a test peer implementation.
 
-#[cfg(all(test, feature = "webrtc"))]
 mod tests {
     use netget::llm::ollama_client::OllamaClient;
     use netget::state::app_state::AppState;

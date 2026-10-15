@@ -16,8 +16,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features imap --test client -- imap::command_channel --test-threads=100
 
-#![cfg(feature = "imap")]
-
 use std::time::Duration;
 
 use netget::cli::management::{ClientForm, ServerForm};

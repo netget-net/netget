@@ -16,8 +16,6 @@
 //! headers by hand so nothing here shares code with the server's encoder, and the requests are
 //! hand-built protobuf for the same reason.
 
-#![cfg(all(test, feature = "etcd"))]
-
 use crate::helpers::server::NetGetServer;
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;

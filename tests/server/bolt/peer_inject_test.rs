@@ -9,8 +9,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features bolt --test server -- bolt::peer_inject --test-threads=100
 
-#![cfg(feature = "bolt")]
-
 use super::common::{self, *};
 use netget::state::app_state::AppState;
 use netget::state::client_handles::ClientSendOutcome;

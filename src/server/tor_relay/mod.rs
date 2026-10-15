@@ -66,26 +66,26 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info, trace, warn};
 
-#[cfg(feature = "tor")]
+#[cfg(unix)]
 use crate::llm::action_helper::call_llm;
-#[cfg(feature = "tor")]
+#[cfg(unix)]
 use crate::llm::ollama_client::OllamaClient;
-#[cfg(feature = "tor")]
+#[cfg(unix)]
 use crate::llm::ActionResult;
-#[cfg(feature = "tor")]
+#[cfg(unix)]
 use crate::protocol::Event;
-#[cfg(feature = "tor")]
+#[cfg(unix)]
 use crate::server::TorRelayProtocol;
-#[cfg(feature = "tor")]
+#[cfg(unix)]
 use crate::state::app_state::AppState;
-#[cfg(feature = "tor")]
+#[cfg(unix)]
 use actions::{TOR_RELAY_CIRCUIT_CREATED_EVENT, TOR_RELAY_RELAY_CELL_EVENT};
-#[cfg(feature = "tor")]
+#[cfg(unix)]
 use circuit::{CircuitId, CircuitManager, StreamId};
-#[cfg(feature = "tor")]
+#[cfg(unix)]
 use stream::{build_relay_cell, connect_to_target, end_reason, parse_begin_target, relay_command};
 
-#[cfg(feature = "tor")]
+#[cfg(unix)]
 use crate::logging::emit::Log;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -95,13 +95,13 @@ use tokio_rustls::TlsAcceptor;
 
 /// The write half of a peer's TLS stream, shared between the session loop and the dashboard's
 /// peer-command task (`server::peer_support`).
-#[cfg(feature = "tor")]
+#[cfg(unix)]
 type SharedWrite = Arc<Mutex<tokio::io::WriteHalf<tokio_rustls::server::TlsStream<TcpStream>>>>;
 
 /// Tor Relay server - handles OR protocol connections
 pub struct TorRelayServer;
 
-#[cfg(feature = "tor")]
+#[cfg(unix)]
 impl TorRelayServer {
     /// Spawn Tor Relay server with LLM action integration
     pub async fn spawn_with_llm_actions(
@@ -246,7 +246,7 @@ impl TorRelayServer {
     }
 }
 
-#[cfg(not(feature = "tor"))]
+#[cfg(not(unix))]
 impl TorRelayServer {
     pub async fn spawn_with_llm_actions(
         _listen_addr: SocketAddr,

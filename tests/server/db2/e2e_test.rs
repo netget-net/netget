@@ -7,8 +7,6 @@
 //! evidence**, not interoperability with a genuine Db2 driver — no such driver is
 //! available on macOS to point at localhost.
 
-#![cfg(feature = "db2")]
-
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use netget::server::db2::drda;
 use std::time::Duration;

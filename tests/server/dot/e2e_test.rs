@@ -3,8 +3,6 @@
 //! This test spawns a single NetGet DoT server with mocks
 //! and validates multiple query types against the same server instance.
 
-#![cfg(feature = "dot")]
-
 use crate::helpers::{E2EResult, NetGetConfig};
 use hickory_proto::op::{Message as DnsMessage, Query};
 use hickory_proto::rr::{Name, RecordType};

@@ -8,7 +8,6 @@
 //! LLM budget across the file: 10 mocked calls (plus one deliberately unmatched
 //! request in the backend-failure test, which the mock answers with HTTP 500).
 
-#[cfg(all(test, feature = "webrtc"))]
 mod webrtc_server_tests {
     use crate::helpers::*;
     use futures::{SinkExt, StreamExt};

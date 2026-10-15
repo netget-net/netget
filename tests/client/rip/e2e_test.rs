@@ -6,7 +6,6 @@
 //! the protocol path is exercised by `llm_path_test.rs`, which drives the real client against
 //! a stub router and a mocked model.
 
-#[cfg(all(test, feature = "rip"))]
 mod rip_client_codec_tests {
     use std::net::Ipv4Addr;
 

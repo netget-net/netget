@@ -54,8 +54,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features imap \
 //!       --test server -- server::imap::real_client --test-threads=8
 
-#![cfg(all(test, feature = "imap"))]
-
 use crate::helpers::{self, E2EResult, NetGetConfig};
 use std::process::Stdio;
 use std::time::Duration;

@@ -8,8 +8,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features webdav --test client -- webdav::command_channel --test-threads=100
 
-#![cfg(feature = "webdav")]
-
 use std::sync::Arc;
 use std::time::Duration;
 

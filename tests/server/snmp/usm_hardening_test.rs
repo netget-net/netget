@@ -16,7 +16,6 @@
 //!   it overflows, which in a debug build panics the receive loop and takes the agent down.
 //!
 //! No LLM calls and no external tools: a static handler answers every request.
-#![cfg(all(test, feature = "snmp"))]
 
 use netget::cli::management::ServerForm;
 use netget::server::snmp::usm::{self, ReportKind, User};

@@ -10,8 +10,6 @@
 //! prefix, so a newline inside the text ends the reply early and the remainder is parsed as
 //! the next one.
 
-#![cfg(feature = "memcached")]
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};

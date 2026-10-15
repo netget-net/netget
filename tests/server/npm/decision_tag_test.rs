@@ -8,8 +8,6 @@
 //! NPM decides its own terminal outcomes in `src/server/npm/mod.rs`; nothing here is delegated
 //! to `src/server/http_common/`, so the tokens and the status codes are set in one place.
 
-#![cfg(all(test, feature = "npm"))]
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 

@@ -9,7 +9,6 @@
 //! happens to produce — several assert against byte literals written out by hand for that
 //! reason.
 
-#[cfg(all(test, feature = "stomp"))]
 mod stomp_codec_test {
     use netget::server::stomp::frame::{
         error_frame, escape_header, is_safe_unescaped_header, parse_frame, receipt_frame,

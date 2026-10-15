@@ -27,8 +27,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features smb --test server -- smb::header_layout --test-threads=100
 
-#![cfg(feature = "smb")]
-
 use std::io::Write;
 use std::net::TcpStream;
 use std::time::Duration;

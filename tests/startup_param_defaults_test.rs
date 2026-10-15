@@ -102,7 +102,6 @@ fn every_declared_default_is_a_value_its_parameter_accepts() {
 
 /// tcp is in every CI feature set; if the walk sees none of its defaults, the walk is broken
 /// rather than the tree clean.
-#[cfg(feature = "tcp")]
 #[test]
 fn the_walk_sees_tcps_declared_defaults() {
     let tcp = netget::protocol::server_registry::registry()

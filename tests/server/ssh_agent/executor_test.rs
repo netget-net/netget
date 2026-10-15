@@ -15,7 +15,7 @@
 //!   ./cargo-isolated.sh test --no-default-features --features ssh-agent \
 //!       --test server -- server::ssh_agent::executor --test-threads=100
 
-#![cfg(all(feature = "ssh-agent", unix))]
+#![cfg(unix)]
 
 use netget::llm::actions::protocol_trait::{ActionResult, Protocol, Server};
 use netget::server::ssh_agent::actions::SshAgentProtocol;

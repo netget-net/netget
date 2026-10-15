@@ -18,7 +18,7 @@
 //! reply the client discards as malformed is indistinguishable from the silence this test
 //! exists to prevent.
 
-#![cfg(feature = "nfs")]
+#![cfg(unix)]
 
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use super::test::{

@@ -4,7 +4,6 @@
 //! and testing client behavior as a black-box.
 //! Test strategy: Use netget binary to start TLS server + TLS client, < 10 LLM calls total.
 
-#[cfg(all(test, feature = "tls"))]
 mod tls_client_tests {
     use crate::helpers::*;
     use ::netget::logging::patterns;

@@ -23,8 +23,6 @@
 //! registered with the daemon" - if nothing is registered there is nothing to announce - which
 //! is the strongest statement available without a second host on the link.
 
-#![cfg(feature = "mdns")]
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 

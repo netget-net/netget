@@ -1,6 +1,6 @@
 //! One HTTP/1.1 owner polls the transport, RPC and bounded event handlers.
 use crate::server::grpc::stream_codec::{self, DynamicCodec};
-#[cfg(feature = "grpc-web")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::server::grpc_web::wire;
 use crate::{
     client::{command_support, llm_budget::call_llm_for_client},
@@ -41,17 +41,17 @@ const MAX_FOLLOWUP: u8 = 4;
 const CONNECT_DEPTH: u8 = u8::MAX;
 #[derive(Clone, Copy)]
 pub(crate) enum Binding {
-    #[cfg(feature = "grpc-web")]
+    #[cfg(not(target_arch = "wasm32"))]
     GrpcWeb,
-    #[cfg(feature = "connect_rpc")]
+    #[cfg(not(target_arch = "wasm32"))]
     ConnectRpc,
 }
 impl Binding {
     fn protocol(self) -> Arc<dyn Client> {
         match self {
-            #[cfg(feature = "grpc-web")]
+            #[cfg(not(target_arch = "wasm32"))]
             Self::GrpcWeb => Arc::new(crate::client::grpc_web::actions::GrpcWebClientProtocol),
-            #[cfg(feature = "connect_rpc")]
+            #[cfg(not(target_arch = "wasm32"))]
             Self::ConnectRpc => {
                 Arc::new(crate::client::connect_rpc::actions::ConnectRpcClientProtocol)
             }
@@ -62,31 +62,31 @@ impl Binding {
     }
     fn call(self) -> &'static str {
         match self {
-            #[cfg(feature = "grpc-web")]
+            #[cfg(not(target_arch = "wasm32"))]
             Self::GrpcWeb => "grpc_web_call",
-            #[cfg(feature = "connect_rpc")]
+            #[cfg(not(target_arch = "wasm32"))]
             Self::ConnectRpc => "connect_rpc_call",
         }
     }
     fn cancel(self) -> &'static str {
         match self {
-            #[cfg(feature = "grpc-web")]
+            #[cfg(not(target_arch = "wasm32"))]
             Self::GrpcWeb => "grpc_web_cancel",
-            #[cfg(feature = "connect_rpc")]
+            #[cfg(not(target_arch = "wasm32"))]
             Self::ConnectRpc => "connect_rpc_cancel",
         }
     }
     fn is_connect(self) -> bool {
         match self {
-            #[cfg(feature = "grpc-web")]
+            #[cfg(not(target_arch = "wasm32"))]
             Self::GrpcWeb => false,
-            #[cfg(feature = "connect_rpc")]
+            #[cfg(not(target_arch = "wasm32"))]
             Self::ConnectRpc => true,
         }
     }
     fn event(self, kind: &str) -> &'static crate::protocol::EventType {
         match self {
-            #[cfg(feature = "grpc-web")]
+            #[cfg(not(target_arch = "wasm32"))]
             Self::GrpcWeb => {
                 use crate::client::grpc_web::actions as a;
                 match kind {
@@ -96,7 +96,7 @@ impl Binding {
                     _ => &a::ENDED,
                 }
             }
-            #[cfg(feature = "connect_rpc")]
+            #[cfg(not(target_arch = "wasm32"))]
             Self::ConnectRpc => {
                 use crate::client::connect_rpc::actions as a;
                 match kind {
@@ -145,16 +145,16 @@ impl tower::Service<Request<BoxBody>> for Transport {
                 host.parse()
                     .map_err(|_| Status::invalid_argument("invalid host"))?,
             );
-            #[cfg(feature = "connect_rpc")]
+            #[cfg(not(target_arch = "wasm32"))]
             let shape = *request
                 .extensions()
                 .get::<crate::server::connect_rpc::wire::Shape>()
                 .unwrap_or(&crate::server::connect_rpc::wire::Shape::Unary);
-            #[cfg(feature = "connect_rpc")]
+            #[cfg(not(target_arch = "wasm32"))]
             if binding.is_connect() {
                 request = crate::server::connect_rpc::wire::client_request(request, shape).await?;
             }
-            #[cfg(feature = "grpc-web")]
+            #[cfg(not(target_arch = "wasm32"))]
             if !binding.is_connect() {
                 request.headers_mut().insert(
                     "content-type",
@@ -182,7 +182,7 @@ impl tower::Service<Request<BoxBody>> for Transport {
                 .await
                 .map_err(|_| Status::unavailable("HTTP/1.1 request failed"))?;
             drop(sender);
-            #[cfg(feature = "connect_rpc")]
+            #[cfg(not(target_arch = "wasm32"))]
             if binding.is_connect() {
                 return crate::server::connect_rpc::wire::client_response(
                     response.map(|body| {
@@ -194,7 +194,7 @@ impl tower::Service<Request<BoxBody>> for Transport {
                 )
                 .await;
             }
-            #[cfg(feature = "grpc-web")]
+            #[cfg(not(target_arch = "wasm32"))]
             {
                 if !wire::bounded_headers(response.headers()) {
                     return Err(Status::resource_exhausted(
@@ -241,7 +241,7 @@ impl tower::Service<Request<BoxBody>> for Transport {
                 };
                 Ok(Response::from_parts(parts, body))
             }
-            #[cfg(not(feature = "grpc-web"))]
+            #[cfg(target_arch = "wasm32")]
             unreachable!("Connect response returned above")
         }
         .boxed()
@@ -773,11 +773,11 @@ fn operation(
             if gzip {client=client.send_compressed(CompressionEncoding::Gzip);}
             client.ready().await.map_err(|_|Status::unavailable("transport not ready"))?;
             let mut request=tonic::Request::new(request);*request.metadata_mut()=metadata;request.set_timeout(timeout);
-            #[cfg(feature="connect_rpc")]
+            #[cfg(not(target_arch = "wasm32"))]
             if binding.is_connect() {request.extensions_mut().insert(if method.is_server_streaming() {crate::server::connect_rpc::wire::Shape::Stream} else {crate::server::connect_rpc::wire::Shape::Unary});}
             let response=client.server_streaming(request,path,codec).await?;
             let mut opened=json!({"call_id":id,"service":method.parent_service().full_name(),"method":method.name(),"server_streaming":method.is_server_streaming()});
-            #[cfg(feature="connect_rpc")]
+            #[cfg(not(target_arch = "wasm32"))]
             if binding.is_connect() {opened["metadata"]=crate::server::connect_rpc::wire::Metadata::from_headers(&response.metadata().clone().into_headers(),"")?.json();}
             let mut response=response.into_inner();
             events.send((depth,Event::new(binding.event("opened"),opened)))
@@ -791,14 +791,14 @@ fn operation(
                     .await.map_err(|_|Status::cancelled("client removed"))?;
             }
             if !method.is_server_streaming() && count.load(Ordering::Relaxed)!=1 {return Err(Status::internal("unary success requires one response"));}
-            #[cfg(feature="connect_rpc")]
+            #[cfg(not(target_arch = "wasm32"))]
             if binding.is_connect() {if let Some(headers)=response.trailers().await? {trailing=crate::server::connect_rpc::wire::Metadata::from_headers(&headers.into_headers(),"")?.json();}}
             Ok::<_,Status>(())
         };
         let result=Abortable::new(tokio::time::timeout(timeout,rpc),registration).await;
         let status=match result {Ok(Ok(Ok(())))=>Status::ok(""),Ok(Ok(Err(status)))=>status,
             Ok(Err(_))=>Status::deadline_exceeded("RPC deadline exceeded"),Err(_)=>Status::cancelled("RPC cancelled")};
-        #[cfg(feature="connect_rpc")]
+        #[cfg(not(target_arch = "wasm32"))]
         if binding.is_connect() && status.code()!=tonic::Code::Ok {trailing=crate::server::connect_rpc::wire::Metadata::from_headers(&status.metadata().clone().into_headers(),"").map(|m|m.json()).unwrap_or_else(|_|json!({}));}
         (id,depth,ended(binding,id,status.code(),status.message(),count.load(Ordering::Relaxed),trailing))
     }.boxed()

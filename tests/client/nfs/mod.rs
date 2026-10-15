@@ -1,4 +1,4 @@
-#[cfg(all(test, feature = "nfs"))]
+#[cfg(unix)]
 mod command_channel_test;
-#[cfg(all(test, feature = "nfs"))]
+#[cfg(unix)]
 mod e2e_test;

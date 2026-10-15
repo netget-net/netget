@@ -2,7 +2,6 @@
 
 mod helpers;
 
-#[cfg(all(test, feature = "tcp"))]
 mod minimal_test {
     use crate::helpers::common::E2EResult;
     use crate::helpers::netget::NetGetConfig;

@@ -9,7 +9,7 @@
 //! is established, and it is established to the wrong place. A client that loses its target
 //! must fail rather than pick one.
 
-#![cfg(all(test, feature = "http_proxy"))]
+#![cfg(unix)]
 
 use netget::client::http_proxy::actions::HttpProxyClientProtocol;
 use netget::llm::actions::client_trait::{Client, ClientActionResult};

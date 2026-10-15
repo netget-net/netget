@@ -25,7 +25,7 @@
 //!   ./cargo-isolated.sh test --no-default-features --features rawip \
 //!       --test server -- server::rawip::e2e_test --test-threads=100
 
-#[cfg(all(test, feature = "rawip"))]
+#[cfg(unix)]
 mod tests {
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
     use std::sync::Arc;

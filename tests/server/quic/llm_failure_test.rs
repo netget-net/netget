@@ -17,8 +17,6 @@
 //! netget's own retry text cannot leak the way they did in the ~25 protocols that were taught
 //! to answer on failure by interpolating the error into the reply.
 
-#![cfg(all(test, feature = "quic"))]
-
 use super::super::helpers::{self, E2EResult, NetGetConfig};
 use std::sync::Arc;
 use std::time::Duration;

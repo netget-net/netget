@@ -6,8 +6,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features zookeeper --test server -- zookeeper::peer_inject --test-threads=100
 
-#![cfg(feature = "zookeeper")]
-
 use std::time::Duration;
 
 use netget::cli::management::ServerForm;

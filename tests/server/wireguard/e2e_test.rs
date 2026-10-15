@@ -38,7 +38,7 @@
 //! and has no packet-sniffing honeypot path at all), and every test was
 //! `#[ignore]`d behind root, so the mismatch never surfaced.
 
-#![cfg(feature = "wireguard")]
+#![cfg(unix)]
 
 use crate::server::helpers::*;
 // `::netget::` (absolute extern-crate path) is required: `use crate::server::helpers::*`

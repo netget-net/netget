@@ -12,15 +12,12 @@ use serde_json::json;
 use std::net::Ipv4Addr;
 use std::sync::LazyLock;
 
-#[cfg(feature = "dhcp")]
 use dhcproto::{v4, Encodable, Encoder};
 
 pub struct DhcpProtocol {
-    #[cfg(feature = "dhcp")]
     request_context: std::sync::Arc<std::sync::Mutex<Option<DhcpRequestContext>>>,
 }
 
-#[cfg(feature = "dhcp")]
 #[derive(Clone)]
 pub struct DhcpRequestContext {
     pub xid: u32,        // Transaction ID
@@ -35,12 +32,10 @@ pub struct DhcpRequestContext {
 impl DhcpProtocol {
     pub fn new() -> Self {
         Self {
-            #[cfg(feature = "dhcp")]
             request_context: std::sync::Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
-    #[cfg(feature = "dhcp")]
     pub fn set_request_context(&self, context: DhcpRequestContext) {
         *self.request_context.lock().unwrap() = Some(context);
     }
@@ -200,7 +195,6 @@ impl DhcpProtocol {
     /// sent, so the echo has to be right or the exchange just looks like a timeout. The
     /// values come from the request context this instance was built with; an explicit
     /// `xid` / `client_mac` in the action overrides them for out-of-band replies.
-    #[cfg(feature = "dhcp")]
     fn base_reply(&self, action: &serde_json::Value, server_ip: Ipv4Addr) -> Result<v4::Message> {
         let context = self
             .request_context
@@ -258,7 +252,6 @@ impl DhcpProtocol {
     }
 
     /// Apply the network-configuration options shared by OFFER and ACK.
-    #[cfg(feature = "dhcp")]
     fn apply_config_options(
         msg: &mut v4::Message,
         action: &serde_json::Value,
@@ -310,7 +303,6 @@ impl DhcpProtocol {
         Ok(())
     }
 
-    #[cfg(feature = "dhcp")]
     fn encode_message(msg: &v4::Message) -> Result<ActionResult> {
         let mut buf = Vec::new();
         let mut encoder = Encoder::new(&mut buf);
@@ -318,7 +310,6 @@ impl DhcpProtocol {
         Ok(ActionResult::Output(buf))
     }
 
-    #[cfg(feature = "dhcp")]
     fn execute_send_dhcp_offer(&self, action: serde_json::Value) -> Result<ActionResult> {
         let server_ip = parse_ipv4(&action, "server_ip")?.unwrap_or(Ipv4Addr::UNSPECIFIED);
 
@@ -334,7 +325,6 @@ impl DhcpProtocol {
         Self::encode_message(&msg)
     }
 
-    #[cfg(feature = "dhcp")]
     fn execute_send_dhcp_ack(&self, action: serde_json::Value) -> Result<ActionResult> {
         let server_ip = parse_ipv4(&action, "server_ip")?.unwrap_or(Ipv4Addr::UNSPECIFIED);
 
@@ -350,7 +340,6 @@ impl DhcpProtocol {
         Self::encode_message(&msg)
     }
 
-    #[cfg(feature = "dhcp")]
     fn execute_send_dhcp_nak(&self, action: serde_json::Value) -> Result<ActionResult> {
         let server_ip = parse_ipv4(&action, "server_ip")?.unwrap_or(Ipv4Addr::UNSPECIFIED);
 
@@ -367,21 +356,6 @@ impl DhcpProtocol {
         }
 
         Self::encode_message(&msg)
-    }
-
-    #[cfg(not(feature = "dhcp"))]
-    fn execute_send_dhcp_offer(&self, _action: serde_json::Value) -> Result<ActionResult> {
-        Err(anyhow!("DHCP feature not enabled"))
-    }
-
-    #[cfg(not(feature = "dhcp"))]
-    fn execute_send_dhcp_ack(&self, _action: serde_json::Value) -> Result<ActionResult> {
-        Err(anyhow!("DHCP feature not enabled"))
-    }
-
-    #[cfg(not(feature = "dhcp"))]
-    fn execute_send_dhcp_nak(&self, _action: serde_json::Value) -> Result<ActionResult> {
-        Err(anyhow!("DHCP feature not enabled"))
     }
 
     fn execute_send_dhcp_response(&self, action: serde_json::Value) -> Result<ActionResult> {
@@ -435,7 +409,6 @@ fn decode_hex_packet(data: &str) -> Result<Vec<u8>> {
 }
 
 /// Parse an optional dotted-quad IPv4 field, reporting the field name on failure.
-#[cfg(feature = "dhcp")]
 fn parse_ipv4(action: &serde_json::Value, field: &str) -> Result<Option<Ipv4Addr>> {
     match action.get(field).and_then(|v| v.as_str()) {
         Some(s) => s.parse::<Ipv4Addr>().map(Some).map_err(|e| {
@@ -448,7 +421,6 @@ fn parse_ipv4(action: &serde_json::Value, field: &str) -> Result<Option<Ipv4Addr
 }
 
 /// Parse a transaction id given either as a JSON number or as a hex string ("0x6395a3e3").
-#[cfg(feature = "dhcp")]
 fn parse_xid(value: &serde_json::Value) -> Result<u32> {
     if let Some(n) = value.as_u64() {
         return u32::try_from(n).map_err(|_| {
@@ -467,7 +439,6 @@ fn parse_xid(value: &serde_json::Value) -> Result<u32> {
 }
 
 /// Parse a hardware address written as `00:11:22:33:44:55`, `00-11-22-...` or bare hex.
-#[cfg(feature = "dhcp")]
 fn parse_mac(mac: &str) -> Result<Vec<u8>> {
     let cleaned: String = mac
         .chars()

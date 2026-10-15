@@ -22,7 +22,7 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features nfs --test client -- nfs::command_channel --test-threads=100
 
-#![cfg(feature = "nfs")]
+#![cfg(unix)]
 
 use std::time::Duration;
 

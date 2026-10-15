@@ -6,8 +6,6 @@
 //! responses are top-level JSON *arrays*. A real Spark client is not available on the CI/dev
 //! hosts, so this is shape-conformance against the documented bodies, not real-client validation.
 
-#![cfg(all(test, feature = "spark"))]
-
 use crate::helpers::retry;
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use reqwest::Client;

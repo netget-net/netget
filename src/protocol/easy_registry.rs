@@ -24,7 +24,7 @@ impl EasyRegistry {
             event_routing: HashMap::new(),
         };
 
-        // Register all easy protocols based on feature flags
+        // Register every easy protocol this platform builds
         registry.register_protocols();
         registry.build_event_routing();
 
@@ -33,7 +33,6 @@ impl EasyRegistry {
 
     /// Register all available easy protocols based on compiled features
     fn register_protocols(&mut self) {
-        #[cfg(feature = "http")]
         self.register(Arc::new(crate::easy::http::HttpEasyProtocol));
     }
 

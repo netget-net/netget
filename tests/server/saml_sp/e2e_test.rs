@@ -15,8 +15,6 @@
 //! it deliberately instead of leaving a stale claim in the docs. See
 //! `src/server/saml_sp/CLAUDE.md`.
 
-#![cfg(all(test, feature = "saml-sp"))]
-
 use crate::server::helpers::{self, E2EResult, NetGetConfig};
 use base64::Engine;
 use std::time::Duration;

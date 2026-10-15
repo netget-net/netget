@@ -11,7 +11,7 @@
 //! over the loopback socket. Attaching from a real Linux host is the one path these tests
 //! cannot cover.
 
-#[cfg(all(test, feature = "usb-serial"))]
+#[cfg(all(unix, feature = "libusb"))]
 mod usb_serial_e2e {
     use crate::helpers::*;
     use std::time::Duration;

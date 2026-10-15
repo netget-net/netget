@@ -15,8 +15,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features rss --test server -- \
 //!       rss::connection_bounds --test-threads=100
 
-#![cfg(all(test, feature = "rss"))]
-
 use std::time::Duration;
 
 use crate::helpers::http_bounds::HttpBounds;

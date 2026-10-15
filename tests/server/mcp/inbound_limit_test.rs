@@ -18,8 +18,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features mcp --test server -- mcp::inbound_limit --test-threads=100
 
-#![cfg(feature = "mcp")]
-
 use std::time::Duration;
 
 use netget::server::mcp::MAX_REQUEST_BODY_BYTES;

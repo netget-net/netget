@@ -13,7 +13,7 @@
 //!   ./cargo-isolated.sh test --no-default-features --features arp \
 //!       --test server -- server::arp::frame_codec --test-threads=100
 
-#![cfg(feature = "arp")]
+#![cfg(all(unix, feature = "libpcap"))]
 
 use netget::llm::actions::protocol_trait::{ActionResult, Server};
 use netget::server::arp::actions::ArpProtocol;

@@ -19,8 +19,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features ssh,tcp --test server -- ssh::session_ownership --test-threads=100
 
-#![cfg(feature = "ssh")]
-
 use std::io::Read;
 use std::net::TcpStream;
 use std::time::Duration;

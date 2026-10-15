@@ -23,8 +23,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features bolt --test server -- bolt::connection_bounds --test-threads=100
 
-#![cfg(feature = "bolt")]
-
 use super::common::{self, *};
 use netget::server::bolt::packstream::{Value, MAX_MESSAGE_BYTES, MAX_PACKSTREAM_DEPTH};
 use std::time::Duration;

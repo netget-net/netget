@@ -6,8 +6,6 @@
 //! Note: DNS, DHCP, NTP, and SNMP tests are in their own dedicated test files
 //! with proper protocol client libraries.
 
-#![cfg(feature = "udp")]
-
 // Helper module imported from parent
 
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};

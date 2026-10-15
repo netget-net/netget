@@ -10,8 +10,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features zabbix --test server -- zabbix::e2e --test-threads=100
 
-#![cfg(feature = "zabbix")]
-
 use super::common::{exchange, response, sender_data};
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use netget::server::zabbix::wire;

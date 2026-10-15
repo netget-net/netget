@@ -21,7 +21,7 @@
 //! Run with:
 //!   cargo test --no-default-features --features proxy --test server -- proxy::mitm_dial_order
 
-#![cfg(feature = "proxy")]
+#![cfg(unix)]
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;

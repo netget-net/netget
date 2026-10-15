@@ -32,7 +32,7 @@
 //!     --test server -- server::datalink --ignored --test-threads=100
 //! ```
 
-#![cfg(feature = "datalink")]
+#![cfg(all(unix, feature = "libpcap"))]
 
 use netget::llm::ollama_client::OllamaClient;
 use netget::privilege::SystemCapabilities;

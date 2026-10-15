@@ -10,7 +10,7 @@
 //! The tests are designed to work with mock LLM responses by default.
 //! Use --use-ollama flag to test with real Ollama.
 
-#[cfg(all(test, feature = "isis"))]
+#[cfg(all(unix, feature = "libpcap"))]
 mod e2e_isis {
     use crate::helpers::{start_netget_server, E2EResult, NetGetConfig};
     use std::time::Duration;

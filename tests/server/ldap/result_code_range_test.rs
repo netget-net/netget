@@ -16,8 +16,6 @@
 //! needs no decoder and holds however resultCode is framed. `fail_open_action_defaults_test`
 //! makes the same argument for the sibling defect in these actions.
 
-#![cfg(all(test, feature = "ldap"))]
-
 use netget::llm::actions::protocol_trait::{ActionResult, Server};
 use netget::server::ldap::actions::LdapProtocol;
 use serde_json::json;

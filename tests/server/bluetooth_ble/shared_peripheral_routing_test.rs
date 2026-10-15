@@ -12,7 +12,7 @@
 //! logic — needs no radio, so `BleRouter` holds no `Peripheral` and is exercised directly here:
 //! register stub servers, dispatch events, assert who received what.
 
-#![cfg(all(test, feature = "bluetooth-ble"))]
+#![cfg(all(unix, feature = "bluetooth"))]
 
 use ble_peripheral_rust::gatt::peripheral_event::{
     PeripheralEvent, PeripheralRequest, ReadRequestResponse, RequestResponse,

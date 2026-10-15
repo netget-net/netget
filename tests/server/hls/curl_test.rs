@@ -17,8 +17,6 @@
 //!     --test server -- --test-threads=100 hls::curl
 //! ```
 
-#![cfg(feature = "hls")]
-
 use crate::server::helpers::*;
 use std::time::Duration;
 

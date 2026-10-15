@@ -10,7 +10,7 @@ directory's codec.
 |---|---|
 | `wire.rs` | The OpenFlow 1.3 codec, hand-written from the 1.3.5 spec: header and framing, HELLO bitmap negotiation, ERROR, FEATURES, switch config, role, async config, ports, OXM matches, the six instruction types and the 1.3 action set, PACKET_IN / PACKET_OUT, FLOW_MOD, FLOW_REMOVED, PORT_STATUS, the multipart requests and replies. Pure, no sockets. |
 | `fields.rs` | The JSON vocabulary the model reads and writes: matches as `{"field": value}` (CIDR strings and `{"value", "mask"}` for maskable fields), actions and instructions as typed objects, ports as numbers or reserved names. Prerequisite completion and checking (Table 12). |
-| `packet.rs` | `describe` turns a packet into headers (Ethernet, ≤2 VLAN tags, ARP, IPv4, IPv6 with ≤8 extension headers, TCP/UDP/SCTP/ICMP/ICMPv6, payload length and text when printable). `build` makes a frame from the model's description with every checksum computed. Reuses VXLAN's RFC 1071 checksum, Ethernet and ICMP echo builders (`openflow = ["vxlan"]`). |
+| `packet.rs` | `describe` turns a packet into headers (Ethernet, ≤2 VLAN tags, ARP, IPv4, IPv6 with ≤8 extension headers, TCP/UDP/SCTP/ICMP/ICMPv6, payload length and text when printable). `build` makes a frame from the model's description with every checksum computed. Reuses VXLAN's RFC 1071 checksum, Ethernet and ICMP echo builders, which is one reason it is native-only like VXLAN. |
 | `actions.rs` | Protocol metadata, startup parameter, the five actions and six events, and the JSON → wire conversions the executor validates with. |
 | `mod.rs` | The accept loop and the per-switch session. |
 

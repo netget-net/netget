@@ -221,9 +221,7 @@ async fn refuse<S: tokio::io::AsyncWrite + Unpin>(mut socket: S, refusal: &[u8])
 /// Bound the upload tail discarded after an HTTP response has been flushed and the write
 /// side half-closed. Two MiB covers the one-MiB overrun exercised by real HTTP clients,
 /// including framing; two seconds also bounds a silent peer. Nothing is buffered or modelled.
-#[cfg(any(feature = "ollama", feature = "saml-idp", feature = "saml-sp"))]
 const RESPONSE_DRAIN_BYTES: usize = 2 * 1024 * 1024;
-#[cfg(any(feature = "ollama", feature = "saml-idp", feature = "saml-sp"))]
 const RESPONSE_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Discard an in-flight upload tail after flushing the response and half-closing writes.
@@ -232,7 +230,6 @@ const RESPONSE_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_se
 /// before the client reads it. The absolute time and byte budgets let an ordinary upload
 /// finish without allowing an endless or silent peer to keep the connection task alive.
 /// This runs only after the HTTP connection completes, outside live handler work.
-#[cfg(any(feature = "ollama", feature = "saml-idp", feature = "saml-sp"))]
 pub(crate) async fn drain_after_response(reader: &mut (impl AsyncRead + Unpin)) {
     use tokio::io::AsyncReadExt;
 
@@ -502,7 +499,6 @@ fn now_millis() -> u64 {
 static PROCESS_START: std::sync::LazyLock<crate::utils::clock::Instant> =
     std::sync::LazyLock::new(crate::utils::clock::Instant::now);
 
-#[cfg(any(feature = "ollama", feature = "saml-idp", feature = "saml-sp"))]
 #[cfg(test)]
 mod response_drain_tests {
     use super::*;

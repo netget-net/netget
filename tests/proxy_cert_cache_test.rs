@@ -7,7 +7,7 @@
 //! The whole file is gated on `proxy` because the module (and its `rcgen` /
 //! `rustls` dependencies) are only compiled with that feature.
 
-#![cfg(feature = "proxy")]
+#![cfg(unix)]
 
 use netget::server::proxy::cert_cache::CertificateCache;
 use rcgen::{Certificate, CertificateParams, DnType, KeyPair};

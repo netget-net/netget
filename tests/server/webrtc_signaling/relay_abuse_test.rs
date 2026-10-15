@@ -19,7 +19,6 @@
 //! available to anyone — is asserted here too, so a later change that quietly adds
 //! authentication does not leave the documentation wrong in the other direction.
 
-#[cfg(all(test, feature = "webrtc"))]
 mod relay_abuse_tests {
     use crate::helpers::*;
     use futures::{SinkExt, StreamExt};

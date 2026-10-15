@@ -12,8 +12,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features bolt --test server -- bolt::packstream --test-threads=100
 
-#![cfg(feature = "bolt")]
-
 use netget::server::bolt::packstream::{
     self, chunk, decode, to_bytes, Dechunker, DecodeError, FrameError, Value, MAX_MESSAGE_BYTES,
     MAX_PACKSTREAM_DEPTH,

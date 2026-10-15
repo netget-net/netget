@@ -16,7 +16,7 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features tor --test server -- tor_relay::peer_inject --test-threads=100
 
-#![cfg(all(test, feature = "tor"))]
+#![cfg(unix)]
 
 use std::sync::Arc;
 use std::time::Duration;

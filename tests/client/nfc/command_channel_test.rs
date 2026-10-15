@@ -20,7 +20,7 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features nfc-client --test client -- nfc::command_channel --test-threads=100
 
-#![cfg(feature = "nfc-client")]
+#![cfg(all(unix, feature = "pcsc"))]
 
 use std::time::Duration;
 

@@ -3,7 +3,6 @@
 //! These tests require actual USB hardware and are ignored by default.
 //! Run with: cargo test --features usb -- --ignored
 
-#[cfg(all(test, feature = "usb"))]
 mod usb_client_tests {
     use std::env;
 

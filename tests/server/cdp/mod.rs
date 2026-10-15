@@ -9,8 +9,8 @@
 //!
 //! See `tests/server/cdp/CLAUDE.md`.
 
-#[cfg(all(test, feature = "cdp"))]
+#[cfg(all(unix, feature = "libpcap"))]
 pub mod codec_test;
 
-#[cfg(all(test, feature = "cdp"))]
+#[cfg(all(unix, feature = "libpcap"))]
 pub mod e2e_test;

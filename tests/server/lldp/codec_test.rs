@@ -29,7 +29,7 @@
 //!   ./cargo-isolated.sh test --no-default-features --features lldp \
 //!       --test server lldp::codec_test -- --test-threads=100
 
-#![cfg(all(test, feature = "lldp"))]
+#![cfg(all(unix, feature = "libpcap"))]
 
 use netget::server::lldp::codec::{
     self, AdvertisementRequest, IdKind, Lldpdu, ManagementAddress, LLDP_ETHERTYPE,

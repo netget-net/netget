@@ -11,7 +11,7 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features dynamodb --test client -- dynamodb::command_channel --test-threads=100
 
-#![cfg(all(test, feature = "dynamodb"))]
+#![cfg(unix)]
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

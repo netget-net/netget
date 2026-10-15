@@ -12,8 +12,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features grpc --test client -- grpc::command_channel --test-threads=100
 
-#![cfg(feature = "grpc")]
-
 use std::time::Duration;
 
 use netget::cli::management::{ClientForm, ServerForm};

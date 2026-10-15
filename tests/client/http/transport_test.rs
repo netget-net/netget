@@ -19,8 +19,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features http,tcp --test client -- http::transport --test-threads=100
 
-#![cfg(all(feature = "http", feature = "tcp"))]
-
 use std::time::Duration;
 
 use netget::cli::management::{ClientForm, ServerForm};

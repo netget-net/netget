@@ -1,16 +1,16 @@
 //! XMPP server E2E tests
 
-#[cfg(all(test, feature = "xmpp"))]
+#[cfg(unix)]
 pub mod test;
 
-#[cfg(all(test, feature = "xmpp"))]
+#[cfg(unix)]
 pub mod peer_inject_test;
 
-#[cfg(all(test, feature = "xmpp"))]
+#[cfg(unix)]
 pub mod llm_failure_test;
 
-#[cfg(all(test, feature = "xmpp"))]
+#[cfg(unix)]
 pub mod connection_bounds_test;
 
-#[cfg(all(test, feature = "xmpp"))]
+#[cfg(unix)]
 pub mod xml_escape_test;

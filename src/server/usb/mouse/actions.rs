@@ -1,33 +1,33 @@
 //! USB HID Mouse protocol actions implementation
 
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::llm::actions::{
     protocol_trait::{ActionResult, Protocol, Server},
     ActionDefinition, Parameter,
 };
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::protocol::log_template::LogTemplate;
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::protocol::EventType;
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::server::connection::ConnectionId;
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::server::usb::descriptors::{mouse_buttons, MouseReport};
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::state::app_state::AppState;
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 use anyhow::{Context, Result};
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 use serde_json::json;
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 use std::collections::HashMap;
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 use std::sync::{Arc, LazyLock};
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 use tokio::sync::Mutex;
 
 // Event type definitions (static for efficient reuse)
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 pub static USB_MOUSE_ATTACHED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "usb_mouse_attached",
@@ -54,7 +54,7 @@ pub static USB_MOUSE_ATTACHED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     .with_alternative_example(json!({"type": "click", "button": "left"}))
 });
 
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 pub static USB_MOUSE_DETACHED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "usb_mouse_detached",
@@ -74,7 +74,7 @@ pub static USB_MOUSE_DETACHED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
 });
 
 /// USB HID Mouse protocol action handler
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 pub struct UsbMouseProtocol {
     /// Map of active connections (for async actions)
     #[allow(dead_code)]
@@ -88,22 +88,22 @@ pub struct UsbMouseProtocol {
 }
 
 /// The handler `usbip` holds for one attached host, as this module shares it.
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 type SharedHandler = Arc<std::sync::Mutex<Box<dyn usbip::UsbInterfaceHandler + Send>>>;
 
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 pub struct ConnectionData {
     // Placeholder for mouse-specific connection data
 }
 
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 impl Default for UsbMouseProtocol {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 impl UsbMouseProtocol {
     pub fn new() -> Self {
         Self {
@@ -209,7 +209,7 @@ impl UsbMouseProtocol {
 /// four-byte reports: the executor never returns, the queue grows until the process is killed,
 /// and because `execute_action` is synchronous it takes a tokio worker with it. 65535 is far
 /// past the diagonal of any real display and still costs at most 517 reports.
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 const MAX_MOVEMENT: i64 = 65_535;
 
 /// Largest screen dimension `move_absolute` will accept.
@@ -218,11 +218,11 @@ const MAX_MOVEMENT: i64 = 65_535;
 /// a panic in debug and test builds, a wrap in release, since this crate declares no
 /// `[profile.dev]` and so gets `overflow-checks` in exactly the builds where it is least
 /// useful to find it.
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 const MAX_SCREEN_DIMENSION: i64 = 65_535;
 
 /// Read a signed coordinate and range-check it before anything does arithmetic on it.
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 fn movement_field(action: &serde_json::Value, field: &str, action_type: &str) -> Result<i64> {
     let value = action[field]
         .as_i64()
@@ -240,7 +240,7 @@ fn movement_field(action: &serde_json::Value, field: &str, action_type: &str) ->
 }
 
 /// Read a screen dimension and range-check it before it is negated and offset.
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 fn screen_dimension(action: &serde_json::Value, field: &str, default: i64) -> Result<i64> {
     let value = match action.get(field) {
         Some(v) if !v.is_null() => v
@@ -264,7 +264,7 @@ fn screen_dimension(action: &serde_json::Value, field: &str, default: i64) -> Re
 /// A boot-protocol report holds one signed byte per axis, so anything past +/-127 has to become
 /// several reports. The model is not asked to know that: it says "move 400 right" and gets four
 /// reports.
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 fn split_movement(mut x: i64, mut y: i64) -> Vec<MouseReport> {
     let mut reports = Vec::new();
     while x != 0 || y != 0 {
@@ -281,7 +281,7 @@ fn split_movement(mut x: i64, mut y: i64) -> Vec<MouseReport> {
 }
 
 /// Map a button name to its HID report bit.
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 fn button_bit(name: &str) -> Result<u8> {
     match name.to_ascii_lowercase().as_str() {
         "left" => Ok(mouse_buttons::LEFT),
@@ -295,7 +295,7 @@ fn button_bit(name: &str) -> Result<u8> {
 }
 
 // Implement Protocol trait
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 impl Protocol for UsbMouseProtocol {
     fn get_startup_parameters(&self) -> Vec<crate::llm::actions::ParameterDefinition> {
         vec![
@@ -459,7 +459,7 @@ print(json.dumps({"actions": actions}))"#;
 }
 
 // Implement Server trait
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 impl Server for UsbMouseProtocol {
     fn spawn(
         &self,
@@ -677,7 +677,7 @@ impl Server for UsbMouseProtocol {
 ///
 /// Three forms are accepted: the number, the number as a string, and the `conn-N` form the
 /// events themselves carry. Declared "string" because that last one is what events emit.
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 fn connection_id_parameter() -> Parameter {
     Parameter {
         name: "connection_id".to_string(),
@@ -689,7 +689,7 @@ fn connection_id_parameter() -> Parameter {
     }
 }
 
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 fn move_relative_action() -> ActionDefinition {
     ActionDefinition {
         name: "move_relative".to_string(),
@@ -722,7 +722,7 @@ fn move_relative_action() -> ActionDefinition {
     }
 }
 
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 fn move_absolute_action() -> ActionDefinition {
     ActionDefinition {
         name: "move_absolute".to_string(),
@@ -771,7 +771,7 @@ fn move_absolute_action() -> ActionDefinition {
     }
 }
 
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 fn click_action() -> ActionDefinition {
     ActionDefinition {
         name: "click".to_string(),
@@ -797,7 +797,7 @@ fn click_action() -> ActionDefinition {
     }
 }
 
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 fn scroll_action() -> ActionDefinition {
     ActionDefinition {
         name: "scroll".to_string(),
@@ -830,7 +830,7 @@ fn scroll_action() -> ActionDefinition {
     }
 }
 
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 fn drag_action() -> ActionDefinition {
     ActionDefinition {
         name: "drag".to_string(),
@@ -896,7 +896,7 @@ fn drag_action() -> ActionDefinition {
     }
 }
 
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 fn wait_for_more_action() -> ActionDefinition {
     ActionDefinition {
         name: "wait_for_more".to_string(),

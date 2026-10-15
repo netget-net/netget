@@ -9,8 +9,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features modbus --test server -- modbus::peer_inject --test-threads=100
 
-#![cfg(feature = "modbus")]
-
 use std::time::Duration;
 
 use netget::cli::management::ServerForm;

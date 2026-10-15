@@ -8,7 +8,7 @@
 //!
 //! Everything here talks to 127.0.0.1 only. The real Tor network is never contacted.
 
-#![cfg(all(test, feature = "tor"))]
+#![cfg(unix)]
 
 use super::super::super::helpers::server::NetGetServer;
 use super::super::super::helpers::E2EResult;

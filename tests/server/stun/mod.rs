@@ -1,10 +1,10 @@
-#[cfg(all(test, feature = "stun"))]
+#[cfg(unix)]
 pub mod e2e_test;
-#[cfg(all(test, feature = "stun"))]
+#[cfg(unix)]
 mod llm_failure_test;
-#[cfg(all(test, feature = "stun"))]
+#[cfg(unix)]
 mod real_client_test;
-#[cfg(all(test, feature = "stun"))]
+#[cfg(unix)]
 mod reflection_test;
-#[cfg(all(test, feature = "stun"))]
+#[cfg(unix)]
 mod static_default_test;

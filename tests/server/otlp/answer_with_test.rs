@@ -3,8 +3,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features otlp --test server -- otlp::answer_with --test-threads=100
 
-#![cfg(feature = "otlp")]
-
 use netget::server::otlp::actions::{answer_with, OTLP_EXPORT_EVENT};
 use netget::server::otlp::codec::Signal;
 

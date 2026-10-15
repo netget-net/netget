@@ -3,8 +3,6 @@
 //! Tests the DoT client with mock LLM responses
 //! to ensure LLM-controlled DNS query functionality works correctly.
 
-#![cfg(all(test, feature = "dot"))]
-
 use crate::helpers::{E2EResult, NetGetConfig};
 
 /// Test DoT client basic query with mocks

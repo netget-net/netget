@@ -47,8 +47,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features smb --test server -- smb::bounds --test-threads=100
 
-#![cfg(feature = "smb")]
-
 use std::time::{Duration, Instant};
 
 use netget::cli::management::ServerForm;

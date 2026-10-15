@@ -142,14 +142,11 @@ for proto in "${PROTOCOLS[@]}"; do
     fi
 done
 
-FEATURES=$(printf '%s,' "${PROTOCOLS[@]}")
-FEATURES="${FEATURES%,}"
 PROTO_LIST=$(printf '%s,' "${PROTOCOLS[@]}")
 PROTO_LIST="${PROTO_LIST%,}"
 
 if [ "$LIST_ONLY" = true ]; then
     echo "${BLUE}Protocols:${NC} ${PROTOCOLS[*]}"
-    echo "${BLUE}Features:${NC}  $FEATURES"
     echo "${BLUE}Model:${NC}     $MODEL"
     echo "${BLUE}Runs:${NC}      $RUNS per instruction"
     echo "${BLUE}Seed:${NC}      $SEED   ${BLUE}Temperature:${NC} ${TEMPERATURE:-model default}"
@@ -206,15 +203,14 @@ export NETGET_EVAL_SEED="$SEED"
 export NETGET_EVAL_TEMPERATURE="$TEMPERATURE"
 export NETGET_EVAL_OUT_DIR="$OUT_DIR"
 
-# A separate target dir by default: the eval's feature set rarely matches
-# whatever else is building, and sharing target/ means contending on the lock
-# with every other agent in this repo.
+# A separate target dir by default: sharing target/ means contending on the lock
+# with every other agent in this repo. Every protocol is compiled in; the eval
+# picks its protocols through NETGET_EVAL_PROTOCOLS.
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/tmp/netget-eval-target}"
 
 set +e
 ./cargo-isolated.sh test \
     --no-default-features \
-    --features "$FEATURES" \
     --test=eval \
     -- --nocapture --test-threads=1
 STATUS=$?

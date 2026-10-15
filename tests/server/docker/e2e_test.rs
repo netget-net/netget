@@ -9,8 +9,6 @@
 //! `inspect ghost` (which the model refuses with a 404) and the `/info` the CLI reads while
 //! deciding whether to try swarm object types for `ghost`.
 
-#![cfg(feature = "docker")]
-
 use super::real_client_test::{docker, require_tool};
 use crate::server::helpers::{self, E2EResult, NetGetConfig};
 use serde_json::json;

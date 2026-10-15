@@ -7,7 +7,6 @@
 //! Note: These tests rely on built-in mDNS responders (Avahi on Linux, mDNSResponder on macOS).
 //! Tests may not discover services if no mDNS services are available on the network.
 
-#[cfg(all(test, feature = "mdns"))]
 mod mdns_client_tests {
     use crate::helpers::*;
     use std::time::Duration;

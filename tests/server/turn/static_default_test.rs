@@ -7,7 +7,7 @@
 //! `turn_allocate_request` rule has `expect_calls(0)`: if the control path ever reaches the LLM,
 //! that rule fires and `verify_mocks()` fails.
 
-#![cfg(feature = "turn")]
+#![cfg(unix)]
 
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use tokio::net::UdpSocket;

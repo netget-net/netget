@@ -169,7 +169,6 @@ async fn private_generations_keep_sensitive_details_out_of_ui_snapshots() {
     assert!(state.llm_activity.snapshot().is_empty());
 }
 
-#[cfg(feature = "tcp")]
 #[tokio::test]
 async fn client_calls_are_attributed_to_the_client() {
     let state = AppState::new();

@@ -38,8 +38,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features dot --test server -- dot::connection_bounds --test-threads=100
 
-#![cfg(feature = "dot")]
-
 use std::sync::Arc;
 use std::time::Duration;
 

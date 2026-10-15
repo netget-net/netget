@@ -26,8 +26,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features bitcoin,tcp --test server -- bitcoin::connection_bounds --test-threads=100
 
-#![cfg(feature = "bitcoin")]
-
 use std::time::Duration;
 
 use netget::cli::management::ServerForm;

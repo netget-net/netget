@@ -2,8 +2,6 @@
 //!
 //! Tests BOOTP server with mock LLM responses.
 
-#![cfg(all(test, feature = "bootp"))]
-
 use crate::helpers::*;
 use std::net::Ipv4Addr;
 use std::time::Duration;

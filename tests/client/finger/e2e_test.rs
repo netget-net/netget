@@ -12,7 +12,6 @@
 //!   test mean something.
 //!
 //! Everything binds 127.0.0.1 on an ephemeral port. Nothing leaves the host.
-#[cfg(all(test, feature = "finger"))]
 mod finger_client_e2e_test {
     use crate::helpers::{start_netget_client, start_netget_server, E2EResult, NetGetConfig};
     use std::sync::{Arc, Mutex};

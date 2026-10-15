@@ -3,8 +3,6 @@
 //! Tests Git client protocol implementation with mocked LLM responses.
 //! Uses test helper infrastructure for consistent testing.
 
-#![cfg(all(test, feature = "git"))]
-
 use crate::helpers::*;
 use std::time::Duration;
 

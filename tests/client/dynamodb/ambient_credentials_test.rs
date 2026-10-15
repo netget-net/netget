@@ -5,7 +5,7 @@
 //! operator's ambient AWS identity, session token included. See `client::aws_support`.
 //! Zero LLM calls; the endpoint is a listener that counts what reaches it.
 
-#![cfg(feature = "dynamodb")]
+#![cfg(unix)]
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;

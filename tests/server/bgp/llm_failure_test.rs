@@ -20,8 +20,6 @@
 //! unmatched request is recorded as a harness diagnostic, which is informational and does not
 //! fail `verify_mocks()`.
 
-#![cfg(feature = "bgp")]
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;

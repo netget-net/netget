@@ -9,7 +9,6 @@
 //! count, empty tags, the escape and class syntax, unterminated classes and reversed ranges.
 //!
 //! `redis-server` is required; the test fails rather than skips without it.
-#![cfg(all(test, feature = "redis"))]
 
 use crate::helpers::real_server::{InstallHint, RealServer};
 use netget::client::redis::resp::{encode_command, read_reply};

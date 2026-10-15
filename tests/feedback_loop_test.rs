@@ -24,7 +24,6 @@
 //!     --test feedback_loop_test -- --test-threads=100
 //! ```
 
-#![cfg(feature = "tcp")]
 // `mod helpers` compiles the whole shared E2E harness into this binary; this file uses a
 // small slice of it. Same situation as `tests/server.rs`.
 #![allow(dead_code, unused_imports)]

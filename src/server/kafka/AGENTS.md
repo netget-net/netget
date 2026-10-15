@@ -248,9 +248,9 @@ check above cannot help because each lever is a tiny, legitimately sized frame:
 - **Owned byte/string decoders** — `vec![0; n]` from a declared length. No generated message
   reaches these in 0.14.1; they are bounded anyway.
 
-`vendor/kafka-protocol` bounds every count by `buf.remaining()` (each element costs at least
+The `netget-kafka-protocol` fork (github.com/netget-net/kafka-protocol-rs) bounds every count by `buf.remaining()` (each element costs at least
 one byte), refuses every declared length the buffer cannot hold before allocating it, and
-caps a snappy header at 32× the compressed input. `README.netget.md` there lists each patched
+caps a snappy header at 32× the compressed input. `NETGET.md` there lists each patched
 site and the upgrade steps; `tests/vendored_kafka_protocol_patch_test.rs` fails if Cargo
 builds anything else, if a patched line goes missing, or if any allocation-sizing call in the
 vendored source cannot be classified as bounded; and

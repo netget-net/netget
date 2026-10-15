@@ -22,7 +22,7 @@
 //! OpenSSL 3.6.2). The two server frames are the exact bytes that client
 //! accepted.
 
-#![cfg(feature = "openvpn")]
+#![cfg(unix)]
 #![allow(dead_code)]
 
 pub const OP_CONTROL_V1: u8 = 4;

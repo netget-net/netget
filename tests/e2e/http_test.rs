@@ -1,6 +1,5 @@
 //! E2E tests for HTTP protocol using the new test framework
 
-#[cfg(all(test, feature = "http"))]
 mod tests {
     use anyhow::Result;
     use reqwest::StatusCode;
@@ -145,37 +144,6 @@ mod tests {
         // Verify update
         validator1.expect_contains("/", "Updated Server 1").await?;
         validator2.expect_contains("/", "Server 2").await?; // Should be unchanged
-
-        netget.stop().await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[ignore = "Drives the real netget binary against a real Ollama (qwen2.5-coder:7b); there is no mock path through NetGetWrapper. Run with --ignored."]
-    #[cfg(feature = "scripting")]
-    async fn test_http_with_scripting() -> Result<()> {
-        let mut netget = NetGetWrapper::new();
-        netget
-            .start("qwen2.5-coder:7b", vec!["--scripting", "python"])
-            .await?;
-
-        // Create server with scripting
-        let prompt = r#"
-            Start an HTTP server on port {AVAILABLE_PORT} with scripting enabled.
-            Use Python script to:
-            - Calculate fibonacci(n) for GET /fib?n=X
-            - Return result as JSON {"n": X, "result": Y}
-        "#;
-
-        let server = netget.create_server(prompt).await?;
-        let validator = HttpValidator::new(server.port);
-        validator.wait_for_ready(20).await?;
-
-        // Test fibonacci calculations
-        let response = validator.get("/fib?n=10").await?;
-        let json: serde_json::Value = response.json().await?;
-        assert_eq!(json["n"], 10);
-        assert_eq!(json["result"], 55); // 10th fibonacci number
 
         netget.stop().await?;
         Ok(())

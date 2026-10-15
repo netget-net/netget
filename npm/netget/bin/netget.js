@@ -24,7 +24,7 @@ const pkg = require('../package.json');
 const VERSION = pkg.version;
 const DOWNLOAD_BASE =
   process.env.NETGET_DOWNLOAD_BASE ||
-  'https://github.com/smotanacom/netget/releases/download';
+  'https://github.com/netget-net/netget/releases/download';
 
 const PLATFORMS = {
   'darwin-arm64': { triple: 'aarch64-apple-darwin', ext: 'tar.gz' },
@@ -171,7 +171,7 @@ async function resolveBinary() {
   if (!key) {
     fail(
       `unsupported platform ${process.platform}-${process.arch}; ` +
-        `build from source: https://github.com/smotanacom/netget`
+        `build from source: https://github.com/netget-net/netget`
     );
   }
   const fromDep = resolveOptionalDep(key);

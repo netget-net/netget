@@ -41,7 +41,6 @@ fn encoded<P: Server>(protocol: &P, action: serde_json::Value) -> Option<Vec<u8>
     }
 }
 
-#[cfg(feature = "ldap")]
 mod ldap {
     use super::*;
     use netget::server::ldap::actions::LdapProtocol;
@@ -134,7 +133,7 @@ mod ldap {
     }
 }
 
-#[cfg(feature = "bluetooth-ble")]
+#[cfg(all(unix, feature = "bluetooth"))]
 mod bluetooth_ble {
     use netget::server::bluetooth_ble::write_response_status;
     use serde_json::json;
@@ -181,7 +180,6 @@ mod bluetooth_ble {
     }
 }
 
-#[cfg(feature = "imap")]
 mod imap {
     use super::*;
     use netget::server::imap::actions::ImapProtocol;

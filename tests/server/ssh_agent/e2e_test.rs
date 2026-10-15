@@ -3,7 +3,7 @@
 //! These tests verify SSH Agent protocol implementation with mock LLM responses.
 //! Unlike most NetGet e2e tests, SSH Agent requires Unix domain sockets.
 
-#![cfg(all(feature = "ssh-agent", unix))]
+#![cfg(unix)]
 
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

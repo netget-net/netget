@@ -10,8 +10,6 @@
 //! name, netget's own retry text and `anyhow` context chains all reached the wire in ~25
 //! protocols at once, because each one was written by copying its neighbour.
 
-#![cfg(all(test, feature = "http2"))]
-
 use super::super::helpers::{self, E2EResult};
 use std::time::Duration;
 

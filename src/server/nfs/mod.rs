@@ -31,11 +31,11 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
-#[cfg(feature = "nfs")]
+#[cfg(unix)]
 use async_trait::async_trait;
-#[cfg(feature = "nfs")]
+#[cfg(unix)]
 use nfsserve::nfs::{fattr3, fileid3, filename3, ftype3, nfspath3, nfsstat3, nfstime3, sattr3};
-#[cfg(feature = "nfs")]
+#[cfg(unix)]
 use nfsserve::vfs::{DirEntry, NFSFileSystem, ReadDirResult};
 
 use crate::llm::action_helper::call_llm;
@@ -51,7 +51,7 @@ pub struct NfsServer;
 
 impl NfsServer {
     /// Spawn NFS server with integrated LLM actions
-    #[cfg(feature = "nfs")]
+    #[cfg(unix)]
     pub async fn spawn_with_llm_actions(
         listen_addr: SocketAddr,
         llm_client: OllamaClient,
@@ -126,8 +126,8 @@ impl NfsServer {
         Ok(actual_addr)
     }
 
-    /// Spawn NFS server without the nfs feature (fallback)
-    #[cfg(not(feature = "nfs"))]
+    /// NFS needs Unix (nfsserve); elsewhere starting it fails with this error
+    #[cfg(not(unix))]
     pub async fn spawn_with_llm_actions(
         listen_addr: SocketAddr,
         _llm_client: OllamaClient,
@@ -141,7 +141,7 @@ impl NfsServer {
 }
 
 /// LLM-controlled NFS filesystem implementation
-#[cfg(feature = "nfs")]
+#[cfg(unix)]
 pub struct LlmNfsFileSystem {
     llm_client: OllamaClient,
     app_state: Arc<AppState>,
@@ -150,7 +150,7 @@ pub struct LlmNfsFileSystem {
     status_tx: mpsc::UnboundedSender<String>,
 }
 
-#[cfg(feature = "nfs")]
+#[cfg(unix)]
 impl LlmNfsFileSystem {
     /// Create a new LLM-controlled NFS filesystem
     pub fn new(
@@ -340,7 +340,7 @@ impl LlmNfsFileSystem {
     }
 }
 
-#[cfg(feature = "nfs")]
+#[cfg(unix)]
 #[async_trait]
 impl NFSFileSystem for LlmNfsFileSystem {
     fn root_dir(&self) -> fileid3 {

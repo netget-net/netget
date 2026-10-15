@@ -13,8 +13,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features dc --test server -- dc::llm_failure --test-threads=100
 
-#![cfg(feature = "dc")]
-
 use std::time::Duration;
 
 use netget::cli::management::ServerForm;

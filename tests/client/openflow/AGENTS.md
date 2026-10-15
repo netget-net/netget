@@ -10,5 +10,5 @@
 (`ovs-testcontroller` has no Homebrew formula; run on Linux).
 
 ```bash
-./cargo-isolated.sh test --no-default-features --features tcp,openflow --test client -- openflow:: --test-threads=8
+./cargo-isolated.sh test --test client -- client::openflow:: --test-threads=8
 ```

@@ -5,8 +5,6 @@
 //! ran. This pins the LLM-failure path to a 5xx RemoteException instead, structurally distinct
 //! from any real (empty) cluster response.
 
-#![cfg(all(test, feature = "yarn"))]
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use serde_json::Value;
 use std::time::Duration;

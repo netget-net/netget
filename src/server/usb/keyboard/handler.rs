@@ -20,27 +20,27 @@
 //! USB/IP session for the whole device and a host probing an optional request must not
 //! disconnect the keyboard.
 
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 use tokio::sync::mpsc::UnboundedSender;
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 use tracing::{debug, trace, warn};
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 use usbip::hid::{UsbHidKeyboardHandler, UsbHidKeyboardReport};
 
 /// HID descriptor type codes (HID 1.11 §7.1).
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 mod hid_descriptor_type {
     pub const REPORT: u8 = 0x22;
 }
 
 /// The LED byte a host writes with `SET_REPORT`, decoded (HID Usage Tables, LED page).
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LedState {
     pub raw: u8,
 }
 
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 impl LedState {
     pub fn num_lock(&self) -> bool {
         self.raw & 0x01 != 0
@@ -60,7 +60,7 @@ impl LedState {
 }
 
 /// A virtual USB HID keyboard that also reports LED changes.
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 pub struct NetGetKeyboardHandler {
     inner: UsbHidKeyboardHandler,
     /// Where LED changes are posted for the connection task. Unbounded because
@@ -75,7 +75,7 @@ pub struct NetGetKeyboardHandler {
     last_led: Option<LedState>,
 }
 
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 impl std::fmt::Debug for NetGetKeyboardHandler {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NetGetKeyboardHandler")
@@ -85,14 +85,14 @@ impl std::fmt::Debug for NetGetKeyboardHandler {
     }
 }
 
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 impl Default for NetGetKeyboardHandler {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 impl NetGetKeyboardHandler {
     pub fn new() -> Self {
         Self {
@@ -185,7 +185,7 @@ impl NetGetKeyboardHandler {
     }
 }
 
-#[cfg(feature = "usb-keyboard")]
+#[cfg(all(unix, feature = "libusb"))]
 impl usbip::UsbInterfaceHandler for NetGetKeyboardHandler {
     fn handle_urb(
         &mut self,

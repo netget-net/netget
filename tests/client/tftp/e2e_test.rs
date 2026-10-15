@@ -11,8 +11,6 @@
 //! cannot easily be driven from a test. If a standalone TFTP server becomes available here,
 //! it should replace the in-test one.
 
-#![cfg(feature = "tftp")]
-
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use netget::client::tftp::{build_request_packet, TftpPacket, OP_ACK, OP_DATA, OP_RRQ, OP_WRQ};
 use std::sync::Arc;

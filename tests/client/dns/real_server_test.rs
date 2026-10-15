@@ -11,8 +11,6 @@
 //!
 //! **No test here skips.** A missing `named` or `dig` fails with the package to install.
 
-#![cfg(all(test, feature = "dns"))]
-
 use crate::helpers::real_server::{run_tool, InstallHint, RealServer};
 use crate::helpers::E2EResult;
 use netget::cli::management::ClientForm;

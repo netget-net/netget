@@ -22,8 +22,6 @@
 //! expensive half of an unbounded inbound path is not the memory, it is that a stranger's
 //! oversize message becomes a prompt.
 
-#![cfg(feature = "coap")]
-
 use crate::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use coap_lite::{CoapOption, MessageClass, MessageType, Packet, RequestType};
 use netget::server::coap::codec;

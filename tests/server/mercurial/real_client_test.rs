@@ -24,8 +24,6 @@
 //! `src/server/mercurial/` is hand-written over NetGet's own HTTP layer and links no Mercurial
 //! library (`Cargo.toml`: `mercurial = ["http", "urlencoding"]`). `hg` is a Python program.
 
-#![cfg(feature = "mercurial")]
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 

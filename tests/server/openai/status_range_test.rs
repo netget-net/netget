@@ -8,8 +8,6 @@
 //! Out of range is refused rather than clamped, and the message names the range so the repair
 //! loop can correct the call.
 
-#![cfg(all(test, feature = "openai"))]
-
 use netget::llm::actions::protocol_trait::{ActionResult, Server};
 use netget::server::openai::actions::OpenAiProtocol;
 use serde_json::json;

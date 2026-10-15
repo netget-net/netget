@@ -23,7 +23,7 @@
 //! worker), control requests were routed to the bulk IN path, and three of the four events
 //! could never fire.
 
-#[cfg(all(test, feature = "usb-msc"))]
+#[cfg(all(unix, feature = "libusb"))]
 mod usb_msc_e2e {
     use crate::helpers::usbip_client::{Csw, UsbIpClient};
     use crate::helpers::*;

@@ -6,7 +6,6 @@ use crate::helpers::{start_netget_server, wait_for_server_startup, E2EResult, Ne
 
 /// Test comprehensive route matching with file-based OpenAPI spec
 #[tokio::test]
-#[cfg(feature = "openapi")]
 async fn test_openapi_route_matching_comprehensive() -> E2EResult<()> {
     // Get path to test spec file
     let spec_path =
@@ -194,7 +193,6 @@ async fn test_openapi_route_matching_comprehensive() -> E2EResult<()> {
 
 /// Test llm_on_invalid configuration
 #[tokio::test]
-#[cfg(feature = "openapi")]
 #[ignore = "llm_on_invalid can only be switched on by the configure_error_handling action, \
             which has to run after the server exists — a second model turn this one-prompt \
             harness cannot drive. `spec` is openapi's only startup parameter, so the flag \

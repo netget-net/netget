@@ -24,8 +24,6 @@
 //! This test is **not** `#[ignore]`d and does **not** skip when mbpoll is missing —
 //! see `require_mbpoll`.
 
-#![cfg(feature = "modbus")]
-
 use crate::server::helpers::*;
 use std::time::Duration;
 use tokio::process::Command;

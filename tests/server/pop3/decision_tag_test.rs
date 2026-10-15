@@ -13,8 +13,6 @@
 //! them an operator could not tell a denied password from an unreachable model — which is
 //! exactly the distinction the OAuth2 post-mortem says must never be lost.
 
-#![cfg(feature = "pop3")]
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};

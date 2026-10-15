@@ -9,8 +9,6 @@
 //! SqlClient's own retry logic keys off, so capacity exhaustion is retried by the driver
 //! rather than surfaced. 50000 is the generic number for everything else.
 
-#![cfg(feature = "mssql")]
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 use tiberius::{AuthMethod, Client, Config, EncryptionLevel};

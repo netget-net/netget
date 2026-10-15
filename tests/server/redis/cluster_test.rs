@@ -14,7 +14,6 @@
 //!
 //! No LLM calls: a python handler per node plays the model. redis-cli is required; the test
 //! fails rather than skips without it.
-#![cfg(all(test, feature = "redis"))]
 
 use netget::cli::management::ServerForm;
 use netget::client::redis::resp::{encode_command, read_reply};

@@ -8,8 +8,6 @@
 //! are checked. Out of range is refused rather than clamped: 599 is not what the model asked
 //! for either, and the message is what the repair loop reads.
 
-#![cfg(all(test, feature = "ipp"))]
-
 use netget::llm::actions::protocol_trait::{ActionResult, Server};
 use netget::server::ipp::actions::IppProtocol;
 use serde_json::json;

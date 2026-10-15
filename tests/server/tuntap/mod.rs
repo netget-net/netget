@@ -5,8 +5,8 @@
 //! pipeline over an in-process channel transport, because the real transport needs root and
 //! cannot run here. See `tests/server/tuntap/CLAUDE.md`.
 
-#[cfg(all(test, feature = "tuntap"))]
+#[cfg(unix)]
 pub mod e2e_test;
 
-#[cfg(all(test, feature = "tuntap"))]
+#[cfg(unix)]
 pub mod packet_test;

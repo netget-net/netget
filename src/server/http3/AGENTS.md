@@ -45,5 +45,5 @@ DATAGRAM, WebTransport, 0-RTT, migration, binary-body action or priority schedul
 Client urgency is passed as an ordinary `priority` header for handlers to inspect.
 
 The local h3-quinn pending-read cancellation patch retains original MIT licensing
-and upstream provenance. See vendor/h3-quinn/README.netget.md and
+and upstream provenance. See the `netget-h3-quinn` fork, github.com/netget-net/h3 (NETGET.md) and
 `tests/http3_cancellation_test.rs` (failed upstream, passes patched).

@@ -6,7 +6,6 @@
 //! MUST build release binary before running: `cargo build --release --all-features`
 //! Run with: `cargo test --features elasticsearch --test e2e_elasticsearch_test -- --test-threads=3`
 
-#[cfg(feature = "elasticsearch")]
 mod tests {
     use crate::helpers::retry;
     use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};

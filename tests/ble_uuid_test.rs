@@ -6,7 +6,7 @@
 //! expanded it, and `Uuid::parse_str("180D")` fails — so a model copying the protocol's
 //! own documented example got `Invalid service UUID`.
 
-#![cfg(feature = "bluetooth-ble")]
+#![cfg(all(unix, feature = "bluetooth"))]
 
 use netget::server::bluetooth_ble::parse_ble_uuid;
 

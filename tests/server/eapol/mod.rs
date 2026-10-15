@@ -14,8 +14,8 @@
 //! raw-Ethernet transport has never been executed — see `src/server/eapol/CLAUDE.md` for
 //! exactly what it would take.
 
-#[cfg(all(test, feature = "eapol"))]
+#[cfg(all(unix, feature = "libpcap"))]
 pub mod codec_test;
 
-#[cfg(all(test, feature = "eapol"))]
+#[cfg(all(unix, feature = "libpcap"))]
 pub mod e2e_test;

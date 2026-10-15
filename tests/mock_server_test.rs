@@ -6,7 +6,6 @@
 //! 3. Mocked responses are returned correctly
 //! 4. Call count verification works
 
-#[cfg(all(test, feature = "tcp"))]
 #[path = ""]
 mod tests {
     use serde_json::json;

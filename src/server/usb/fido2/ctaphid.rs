@@ -27,27 +27,27 @@
 //! - ERROR (0x3f): Error response
 //! - KEEPALIVE (0x3b): Processing status
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use anyhow::{bail, Context, Result};
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use std::collections::HashMap;
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use tracing::{debug, trace, warn};
 
 /// HID packet size (64 bytes as per CTAPHID spec)
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub const HID_PACKET_SIZE: usize = 64;
 
 /// Broadcast channel ID (used for INIT command)
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub const BROADCAST_CHANNEL: u32 = 0xffffffff;
 
 /// Payload bytes an initialization packet carries: 64 minus the 7-byte header.
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub const INIT_PAYLOAD: usize = HID_PACKET_SIZE - 7;
 
 /// Payload bytes a continuation packet carries: 64 minus the 5-byte header.
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub const CONT_PAYLOAD: usize = HID_PACKET_SIZE - 5;
 
 /// Largest CTAPHID message, in bytes.
@@ -57,7 +57,7 @@ pub const CONT_PAYLOAD: usize = HID_PACKET_SIZE - 5;
 /// `MAX_MSG_SIZE` the CTAPHID specification states. Anything longer cannot be framed —
 /// `fragment_response` would wrap the sequence number back to 0 and a host would reject the
 /// reply as out of order.
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub const MAX_MESSAGE_SIZE: usize = INIT_PAYLOAD + 128 * CONT_PAYLOAD;
 
 /// How many channels may be part-way through a message at once.
@@ -72,11 +72,11 @@ pub const MAX_MESSAGE_SIZE: usize = INIT_PAYLOAD + 128 * CONT_PAYLOAD;
 /// `MAX_MESSAGE_SIZE` bounds the per-channel cost and this bounds how many can be paid for at
 /// once. A real host uses one channel per application and completes each message before
 /// starting the next, so four in flight is already generous.
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub const MAX_ASSEMBLING_CHANNELS: usize = 4;
 
 /// CTAPHID command codes
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum CtapHidCommand {
@@ -91,7 +91,7 @@ pub enum CtapHidCommand {
     Keepalive = 0x3b,
 }
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 impl CtapHidCommand {
     pub fn from_u8(value: u8) -> Option<Self> {
         match value & !0x80 {
@@ -111,7 +111,7 @@ impl CtapHidCommand {
 }
 
 /// CTAPHID error codes
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum CtapHidError {
@@ -132,14 +132,14 @@ pub enum CtapHidError {
 /// one of them with `INVALID_SEQ` on the broadcast channel — the wrong code, on a channel the
 /// host is not listening to. Attaching the intended code and the offending channel to the
 /// error lets the handler reply in CTAPHID's own vocabulary without a second parse.
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Debug, Clone, Copy)]
 pub struct CtapHidRejection {
     pub cid: u32,
     pub error: CtapHidError,
 }
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 impl std::fmt::Display for CtapHidRejection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -150,10 +150,10 @@ impl std::fmt::Display for CtapHidRejection {
     }
 }
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 impl std::error::Error for CtapHidRejection {}
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 impl CtapHidRejection {
     fn err(cid: u32, error: CtapHidError, context: String) -> anyhow::Error {
         anyhow::Error::new(CtapHidRejection { cid, error }).context(context)
@@ -164,7 +164,7 @@ impl CtapHidRejection {
 ///
 /// Falls back to `INVALID_SEQ` on the broadcast channel for an error that carries no
 /// rejection of its own, which is what every error used to get.
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub fn rejection_of(error: &anyhow::Error) -> CtapHidRejection {
     error
         .downcast_ref::<CtapHidRejection>()
@@ -176,7 +176,7 @@ pub fn rejection_of(error: &anyhow::Error) -> CtapHidRejection {
 }
 
 /// CTAPHID packet (64 bytes)
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Debug, Clone)]
 pub struct CtapHidPacket {
     /// Channel ID (4 bytes)
@@ -187,7 +187,7 @@ pub struct CtapHidPacket {
     pub data: Vec<u8>,
 }
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 impl CtapHidPacket {
     /// Parse a CTAPHID packet from 64-byte HID report
     pub fn parse(data: &[u8]) -> Result<Self> {
@@ -316,7 +316,7 @@ impl CtapHidPacket {
 }
 
 /// CTAPHID KEEPALIVE status byte.
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum KeepaliveStatus {
@@ -327,7 +327,7 @@ pub enum KeepaliveStatus {
 }
 
 /// CTAPHID message assembler (handles fragmentation)
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Debug)]
 pub struct CtapHidMessage {
     /// Channel ID
@@ -342,7 +342,7 @@ pub struct CtapHidMessage {
     next_seq: u8,
 }
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 impl CtapHidMessage {
     /// Start a new message from an initialization packet.
     ///
@@ -420,7 +420,7 @@ impl CtapHidMessage {
 }
 
 /// CTAPHID protocol handler (manages channels and message assembly)
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub struct CtapHidHandler {
     /// Next available channel ID
     next_cid: u32,
@@ -428,7 +428,7 @@ pub struct CtapHidHandler {
     active_messages: HashMap<u32, CtapHidMessage>,
 }
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 impl CtapHidHandler {
     pub fn new() -> Self {
         Self {
@@ -576,7 +576,7 @@ impl CtapHidHandler {
     }
 }
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 impl Default for CtapHidHandler {
     fn default() -> Self {
         Self::new()

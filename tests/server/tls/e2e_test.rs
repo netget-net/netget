@@ -3,8 +3,6 @@
 //! This test spawns a single NetGet TLS server with a Python script
 //! and validates encrypted communication with custom application protocol.
 
-#![cfg(feature = "tls")]
-
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use rustls::{ClientConfig, RootCertStore};
 use std::net::SocketAddr;

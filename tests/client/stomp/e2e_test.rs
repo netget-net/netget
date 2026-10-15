@@ -27,7 +27,6 @@
 //! LLM budget: **8 calls**, all in `test_stomp_client_session_against_the_netget_broker`
 //! (5 server-side, 3 client-side). Every other test in this file makes zero.
 
-#[cfg(all(test, feature = "stomp"))]
 mod stomp_client_tests {
     use crate::helpers::{start_netget_client, start_netget_server, E2EResult, NetGetConfig};
     use netget::client::stomp::StompClient;

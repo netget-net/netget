@@ -12,8 +12,6 @@
 //! * between a 354 and the terminating `.`, a line is message text - `EHLO` in a body is not
 //!   answered by NetGet and reaches the model as a body line.
 
-#![cfg(feature = "smtp")]
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};

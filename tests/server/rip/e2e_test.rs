@@ -3,7 +3,6 @@
 //! These tests spawn the NetGet binary and test RIP protocol operations
 //! using UDP clients to send/receive RIP messages.
 
-#[cfg(all(test, feature = "rip"))]
 mod e2e_rip {
     use crate::helpers::{start_netget_server, with_client_timeout, E2EResult, NetGetConfig};
     use tokio::net::UdpSocket;

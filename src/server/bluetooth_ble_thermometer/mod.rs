@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 
 pub struct BluetoothBleThermometer;
 impl BluetoothBleThermometer {
-    #[cfg(feature = "bluetooth-ble-thermometer")]
+    #[cfg(all(unix, feature = "bluetooth"))]
     pub async fn spawn_with_llm_actions(
         device_name: String,
         llm: crate::llm::ollama_client::OllamaClient,
@@ -38,7 +38,7 @@ impl BluetoothBleThermometer {
         .await
     }
 }
-#[cfg(not(feature = "bluetooth-ble-thermometer"))]
+#[cfg(any(all(unix, not(feature = "bluetooth")), not(unix)))]
 impl BluetoothBleThermometer {
     pub async fn spawn_with_llm_actions(
         _: String,

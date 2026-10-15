@@ -31,13 +31,10 @@ use crate::server::connection::ConnectionId;
 use crate::server::openapi::actions::OpenApiProtocol;
 use crate::state::app_state::AppState;
 
-#[cfg(feature = "openapi")]
 use matchit::Router;
-#[cfg(feature = "openapi")]
 use openapi_rs::model::parse::OpenAPI;
 
 /// Metadata for a matched route
-#[cfg(feature = "openapi")]
 #[derive(Clone, Debug)]
 pub struct RouteMetadata {
     pub operation_id: Option<String>,
@@ -47,7 +44,6 @@ pub struct RouteMetadata {
 }
 
 /// Result of route matching
-#[cfg(feature = "openapi")]
 #[derive(Debug)]
 pub enum MatchResult {
     /// Route found and matched
@@ -68,10 +64,8 @@ pub struct OpenApiState {
     /// Whether the spec has been successfully parsed
     pub spec_valid: bool,
     /// Parsed OpenAPI specification
-    #[cfg(feature = "openapi")]
     pub parsed_spec: Option<OpenAPI>,
     /// Route matcher for fast path matching
-    #[cfg(feature = "openapi")]
     pub router: Option<Router<RouteMetadata>>,
     /// Whether to ask LLM for invalid requests (404/405/400)
     pub llm_on_invalid: bool,
@@ -82,9 +76,7 @@ impl OpenApiState {
         Self {
             spec: None,
             spec_valid: false,
-            #[cfg(feature = "openapi")]
             parsed_spec: None,
-            #[cfg(feature = "openapi")]
             router: None,
             llm_on_invalid: false, // Default: bypass LLM for errors
         }
@@ -92,7 +84,6 @@ impl OpenApiState {
 }
 
 /// Build matchit router from OpenAPI specification
-#[cfg(feature = "openapi")]
 fn build_router(spec: &OpenAPI) -> anyhow::Result<Router<RouteMetadata>> {
     let mut router = Router::new();
 
@@ -123,7 +114,6 @@ fn build_router(spec: &OpenAPI) -> anyhow::Result<Router<RouteMetadata>> {
 }
 
 /// Match incoming request against router
-#[cfg(feature = "openapi")]
 fn match_route(router: &Router<RouteMetadata>, method: &str, path: &str) -> MatchResult {
     // Try exact method:path match
     let route_key = format!("{}:{}", method, path);
@@ -156,7 +146,6 @@ fn match_route(router: &Router<RouteMetadata>, method: &str, path: &str) -> Matc
 }
 
 /// Find which HTTP methods are allowed for a given path
-#[cfg(feature = "openapi")]
 fn find_allowed_methods(router: &Router<RouteMetadata>, path: &str) -> Vec<String> {
     let methods = [
         "GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "TRACE",
@@ -175,7 +164,6 @@ fn find_allowed_methods(router: &Router<RouteMetadata>, path: &str) -> Vec<Strin
 
 /// Validate request against OpenAPI operation schema
 /// Returns Ok(()) if valid, Err(error_message) if invalid
-#[cfg(feature = "openapi")]
 fn validate_request(
     _operation_json: &serde_json::Value,
     _method: &str,
@@ -245,7 +233,6 @@ const CONNECTION_CAP_REFUSAL: &[u8] = b"HTTP/1.1 503 Service Unavailable\r\n\
     Content-Length: 0\r\nRetry-After: 5\r\nConnection: close\r\n\r\n";
 
 /// Create immediate 413 response for a body past [`MAX_REQUEST_BODY_BYTES`].
-#[cfg(feature = "openapi")]
 fn payload_too_large() -> Response<Full<Bytes>> {
     Response::builder()
         .status(413)
@@ -261,7 +248,6 @@ fn payload_too_large() -> Response<Full<Bytes>> {
 }
 
 /// Create immediate 404 Not Found response
-#[cfg(feature = "openapi")]
 fn immediate_404() -> Response<Full<Bytes>> {
     Response::builder()
         .status(404)
@@ -277,7 +263,6 @@ fn immediate_404() -> Response<Full<Bytes>> {
 }
 
 /// Create immediate 405 Method Not Allowed response with Allow header
-#[cfg(feature = "openapi")]
 fn immediate_405(allowed_methods: Vec<String>) -> Response<Full<Bytes>> {
     let allow_header = allowed_methods.join(", ");
 
@@ -297,7 +282,6 @@ fn immediate_405(allowed_methods: Vec<String>) -> Response<Full<Bytes>> {
 }
 
 /// Create immediate 400 Bad Request response for validation errors
-#[cfg(feature = "openapi")]
 fn immediate_400(error_message: String) -> Response<Full<Bytes>> {
     Response::builder()
         .status(400)
@@ -318,7 +302,6 @@ fn immediate_400(error_message: String) -> Response<Full<Bytes>> {
 /// chain. `Overloaded` is transient, so it is reported as 503 + `Retry-After` and a client
 /// backs off; anything else is a 500 so it is not retried forever. See
 /// `crate::utils::wire_failure`.
-#[cfg(feature = "openapi")]
 fn failure_response(failure: crate::utils::WireFailure) -> Response<Full<Bytes>> {
     let (status, reason) = if failure.is_overloaded() {
         (503, "Service Unavailable")
@@ -345,7 +328,6 @@ fn failure_response(failure: crate::utils::WireFailure) -> Response<Full<Bytes>>
 }
 
 /// The LLM call itself failed. Log the whole error, answer the peer with a category only.
-#[cfg(feature = "openapi")]
 fn llm_error_response(
     error: anyhow::Error,
     method: &str,
@@ -370,7 +352,6 @@ fn llm_error_response(
 }
 
 /// Handle LLM response and process actions
-#[cfg(feature = "openapi")]
 async fn handle_llm_response(
     execution_result: crate::llm::actions::executor::ExecutionResult,
     status_tx: mpsc::UnboundedSender<String>,
@@ -953,7 +934,6 @@ async fn handle_openapi_request(
             "spec_valid": state.spec_valid
         });
 
-        #[cfg(feature = "openapi")]
         {
             let match_result = if let Some(router) = state.router.as_ref() {
                 Some(match_route(router, &method, &path))
@@ -962,14 +942,9 @@ async fn handle_openapi_request(
             };
             (spec_info, match_result, state.llm_on_invalid)
         }
-        #[cfg(not(feature = "openapi"))]
-        {
-            (spec_info, None, false)
-        }
     };
 
     // Handle route matching results
-    #[cfg(feature = "openapi")]
     if let Some(match_result) = match_result {
         match match_result {
             MatchResult::Found { metadata, params } => {
@@ -1094,26 +1069,8 @@ async fn handle_openapi_request(
     )
     .await
     {
-        #[cfg(feature = "openapi")]
         Ok(execution_result) => {
             handle_llm_response(execution_result, status_tx, openapi_state, method, path).await
-        }
-        #[cfg(not(feature = "openapi"))]
-        Ok(execution_result) => {
-            // Fallback for when openapi feature is disabled
-            for msg in execution_result.messages {
-                let _ = status_tx.send(msg);
-            }
-            Ok(Response::builder()
-                .status(200)
-                .header("Content-Type", "application/json")
-                .body(Full::new(Bytes::from(
-                    json!({
-                        "message": "OpenAPI feature not enabled"
-                    })
-                    .to_string(),
-                )))
-                .unwrap())
         }
         Err(e) => Ok(llm_error_response(e, &method, &path, &status_tx)),
     }

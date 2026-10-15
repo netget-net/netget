@@ -27,7 +27,7 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features xmpp --test client -- xmpp::redial --test-threads=100
 
-#![cfg(feature = "xmpp")]
+#![cfg(unix)]
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};

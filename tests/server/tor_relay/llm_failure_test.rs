@@ -18,7 +18,7 @@
 //! Everything here is 127.0.0.1. The real Tor network is never contacted, and no exit stream
 //! is opened.
 
-#[cfg(all(test, feature = "tor"))]
+#[cfg(unix)]
 mod tests {
     use super::super::super::helpers::{self, E2EResult, NetGetConfig};
     use super::super::peer::{

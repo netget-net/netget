@@ -3,7 +3,7 @@
 //! These tests verify SSH Agent client functionality by connecting to a
 //! mock SSH Agent server and testing LLM-controlled client behavior.
 
-#![cfg(all(test, feature = "ssh-agent", unix))]
+#![cfg(unix)]
 
 use std::path::PathBuf;
 use std::sync::Arc;

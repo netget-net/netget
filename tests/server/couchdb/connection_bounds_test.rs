@@ -15,7 +15,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features couchdb \
 //!       --test server -- server::couchdb::connection_bounds_test --test-threads=100
 
-#[cfg(all(test, feature = "couchdb"))]
 mod couchdb_connection_bounds {
     use crate::helpers::http_bounds::{
         assert_connection_cap, assert_read_deadlines, HttpBoundsCase,

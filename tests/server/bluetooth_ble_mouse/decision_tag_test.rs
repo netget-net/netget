@@ -15,7 +15,7 @@
 //! the shape `tests/server/bluetooth_ble_beacon/llm_failure_test.rs` already uses for the same
 //! reason.
 
-#![cfg(all(test, feature = "bluetooth-ble-mouse"))]
+#![cfg(all(unix, feature = "bluetooth"))]
 
 use netget::server::bluetooth_ble_mouse::radio_start_failure;
 

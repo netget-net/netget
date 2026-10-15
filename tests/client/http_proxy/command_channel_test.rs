@@ -6,7 +6,7 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features http_proxy --test client -- http_proxy::command_channel --test-threads=100
 
-#![cfg(feature = "http_proxy")]
+#![cfg(unix)]
 
 use std::time::Duration;
 

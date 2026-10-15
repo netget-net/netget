@@ -22,7 +22,7 @@
 //! computed or verified, and there is no EXTEND — so a real `tor` binary still cannot use
 //! this relay. Those are listed in `src/server/tor_relay/CLAUDE.md`.
 
-#[cfg(all(test, feature = "tor"))]
+#[cfg(unix)]
 mod tests {
     // The Tor client itself lives in `peer.rs`, shared with `llm_failure_test.rs`.
     use super::super::super::helpers::server::NetGetServer;

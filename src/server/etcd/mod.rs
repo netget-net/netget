@@ -14,43 +14,43 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, trace};
 
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::llm::action_helper::call_llm;
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::llm::ollama_client::OllamaClient;
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::protocol::Event;
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::server::etcd::actions::ETCD_RANGE_REQUEST_EVENT;
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::state::app_state::AppState;
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 use bytes::Bytes;
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 use http_body_util::{BodyExt, Limited};
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 use hyper::{body::Incoming, header::HeaderValue, Request, Response, StatusCode};
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 use prost::Message;
 
 // Include generated protobuf code
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 mod etcdserverpb {
     include!(concat!(env!("OUT_DIR"), "/etcdserverpb.rs"));
 }
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 mod mvccpb {
     include!(concat!(env!("OUT_DIR"), "/mvccpb.rs"));
 }
 
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::logging::emit::Log;
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 use etcdserverpb::{
     CompactionRequest, CompactionResponse, DeleteRangeRequest, DeleteRangeResponse, PutRequest,
     PutResponse, RangeRequest, RangeResponse, ResponseHeader, TxnRequest, TxnResponse,
 };
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 use mvccpb::KeyValue;
 
 /// Cluster identity plus the monotonic revision counter that every etcd response header
@@ -60,7 +60,7 @@ use mvccpb::KeyValue;
 /// keys, and the handler answers every Range/Put/Delete. A `kvs: HashMap<Vec<u8>, KeyValue>`
 /// field used to sit here behind `#[allow(dead_code)]` and was never read or written; it is
 /// gone rather than left as a half-built store.
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 struct EtcdMeta {
     /// Current revision counter
     revision: i64,
@@ -70,7 +70,7 @@ struct EtcdMeta {
     member_id: u64,
 }
 
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 impl EtcdMeta {
     fn new(cluster_id: u64, member_id: u64) -> Self {
         Self {
@@ -95,7 +95,7 @@ impl EtcdMeta {
 }
 
 /// Matches etcd's own `--max-request-bytes` default (1.5 MiB).
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 /// How long to wait for a peer's first byte after it connects.
 ///
 /// HTTP/2 is client-speaks-first — the connection preface and the client's SETTINGS frame are
@@ -135,19 +135,19 @@ const CONNECTION_CAP_REFUSAL: &[u8] = b"HTTP/1.1 503 Service Unavailable\r\n\
 pub const MAX_REQUEST_BYTES: usize = 1_572_864;
 
 // gRPC status codes used by this server (google.rpc.Code).
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 const GRPC_UNKNOWN: i32 = 2;
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 const GRPC_NOT_FOUND: i32 = 5;
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 const GRPC_INVALID_ARGUMENT: i32 = 3;
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 const GRPC_RESOURCE_EXHAUSTED: i32 = 8;
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 const GRPC_UNIMPLEMENTED: i32 = 12;
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 const GRPC_INTERNAL: i32 = 13;
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 const GRPC_UNAVAILABLE: i32 = 14;
 
 /// The gRPC status a failed handler call must be reported as.
@@ -167,7 +167,7 @@ const GRPC_UNAVAILABLE: i32 = 14;
 /// `pub` so `tests/` can exercise the classification directly — the project forbids
 /// `#[cfg(test)]` modules in `src/`, and driving the rate limiter to refusal through a spawned
 /// binary needs bounds the E2E harness cannot set.
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 pub fn grpc_status_for_llm_failure(err: &anyhow::Error) -> i32 {
     if crate::llm::is_overload_error(err) {
         GRPC_UNAVAILABLE
@@ -178,7 +178,7 @@ pub fn grpc_status_for_llm_failure(err: &anyhow::Error) -> i32 {
 
 /// Build the client-visible failure for a handler call that could not be made, logging it on
 /// both channels first. Never returns anything a client could read as an answer.
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 fn llm_failure(
     status_tx: &mpsc::UnboundedSender<String>,
     method: &str,
@@ -202,13 +202,13 @@ fn llm_failure(
 }
 
 /// A failure to be reported to the client as a gRPC status rather than as a transport error.
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 struct GrpcFailure {
     status: i32,
     message: String,
 }
 
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 impl GrpcFailure {
     fn new(status: i32, message: impl Into<String>) -> Self {
         Self {
@@ -233,7 +233,7 @@ impl GrpcFailure {
     }
 }
 
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 impl From<anyhow::Error> for GrpcFailure {
     fn from(e: anyhow::Error) -> Self {
         // Classify here too, not only at the explicit call sites: `?` on an anyhow error is
@@ -247,7 +247,7 @@ impl From<anyhow::Error> for GrpcFailure {
     }
 }
 
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 impl From<prost::DecodeError> for GrpcFailure {
     fn from(e: prost::DecodeError) -> Self {
         // A body this server cannot decode is the client's malformed input, not a server bug -
@@ -257,7 +257,7 @@ impl From<prost::DecodeError> for GrpcFailure {
     }
 }
 
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 impl From<prost::EncodeError> for GrpcFailure {
     fn from(e: prost::EncodeError) -> Self {
         debug!("etcd response encoding failed: {e}");
@@ -270,7 +270,7 @@ impl From<prost::EncodeError> for GrpcFailure {
 /// `etcd_error` is offered to the model on every etcd event. Before this, no handler looked
 /// for it, so a model correctly reporting "key not found" had its answer dropped and the
 /// client saw an empty success instead.
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 fn take_etcd_error(
     results: &[crate::llm::actions::protocol_trait::ActionResult],
 ) -> Option<GrpcFailure> {
@@ -305,7 +305,7 @@ fn take_etcd_error(
 /// discarded explanation. Capped at 512 characters because a status message is a diagnostic,
 /// not a payload, and every character here is ASCII by then so the cut cannot split a
 /// codepoint.
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 fn header_safe(message: &str) -> String {
     let mut out = String::with_capacity(message.len().min(512));
     let mut last_was_space = false;
@@ -362,7 +362,7 @@ type GrpcBody = http_body_util::combinators::BoxBody<Bytes, std::convert::Infall
 ///
 /// Used for every reply that has a body. Errors do not come through here — see
 /// `grpc_status_reply`, which is deliberately Trailers-Only instead.
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 fn grpc_body_with_trailers(body: Bytes, status: i32, message: &str) -> GrpcBody {
     use http_body_util::StreamBody;
 
@@ -386,12 +386,12 @@ fn grpc_body_with_trailers(body: Bytes, status: i32, message: &str) -> GrpcBody 
 }
 
 /// An empty body, for a Trailers-Only reply whose status rides in the initial headers.
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 fn empty_grpc_body() -> GrpcBody {
     BodyExt::boxed(http_body_util::Empty::<Bytes>::new())
 }
 
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 fn grpc_status_reply(status: i32, message: &str) -> Response<GrpcBody> {
     let message = &header_safe(message);
     // **Trailers-Only**, and deliberately so. With no message to send, the specification puts the
@@ -421,7 +421,7 @@ fn grpc_status_reply(status: i32, message: &str) -> Response<GrpcBody> {
 /// etcd v3 server
 pub struct EtcdServer;
 
-#[cfg(feature = "etcd")]
+#[cfg(not(target_arch = "wasm32"))]
 impl EtcdServer {
     /// Spawn etcd server with LLM-controlled KV operations
     pub async fn spawn_with_llm_actions(

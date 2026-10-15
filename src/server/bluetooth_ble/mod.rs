@@ -22,19 +22,19 @@ use actions::{
     BLUETOOTH_STATE_CHANGED_EVENT, BLUETOOTH_SUBSCRIBE_EVENT, BLUETOOTH_WRITE_REQUEST_EVENT,
 };
 
-#[cfg(feature = "bluetooth-ble")]
+#[cfg(all(unix, feature = "bluetooth"))]
 use ble_peripheral_rust::gatt::characteristic::Characteristic;
-#[cfg(feature = "bluetooth-ble")]
+#[cfg(all(unix, feature = "bluetooth"))]
 use ble_peripheral_rust::gatt::peripheral_event::{
     PeripheralEvent, ReadRequestResponse, RequestResponse, WriteRequestResponse,
 };
-#[cfg(feature = "bluetooth-ble")]
+#[cfg(all(unix, feature = "bluetooth"))]
 use ble_peripheral_rust::gatt::properties::{AttributePermission, CharacteristicProperty};
-#[cfg(feature = "bluetooth-ble")]
+#[cfg(all(unix, feature = "bluetooth"))]
 use ble_peripheral_rust::gatt::service::Service;
-#[cfg(feature = "bluetooth-ble")]
+#[cfg(all(unix, feature = "bluetooth"))]
 use ble_peripheral_rust::{Peripheral, PeripheralImpl};
-#[cfg(feature = "bluetooth-ble")]
+#[cfg(all(unix, feature = "bluetooth"))]
 use uuid::Uuid;
 
 /// The longest LocalName that fits an AD structure inside a 31-octet legacy advertisement,
@@ -95,7 +95,7 @@ struct ServerData {
 /// distinct — that path logs `the handler failed` where this one logs `model_reject`.
 ///
 /// `pub` so `tests/` can exercise it without a Bluetooth adapter.
-#[cfg(feature = "bluetooth-ble")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub fn write_response_status(raw_actions: &[serde_json::Value]) -> RequestResponse {
     let refused = raw_actions.iter().any(|action| {
         matches!(
@@ -118,7 +118,7 @@ pub fn write_response_status(raw_actions: &[serde_json::Value]) -> RequestRespon
 ///
 /// Kept separate from the event loop so the decision is testable without a Bluetooth adapter,
 /// and so the three outcomes cannot silently collapse into one another.
-#[cfg(feature = "bluetooth-ble")]
+#[cfg(all(unix, feature = "bluetooth"))]
 #[derive(Debug, PartialEq, Eq)]
 pub enum ReadDecision {
     /// The handler named a value: serve exactly it. `decision=model_value`.
@@ -140,7 +140,7 @@ pub enum ReadDecision {
 /// `RequestResponse::Success` with nothing on the wire to say so.
 ///
 /// `pub` so `tests/` can exercise it without a Bluetooth adapter.
-#[cfg(feature = "bluetooth-ble")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub fn read_decision(raw_actions: &[serde_json::Value]) -> ReadDecision {
     let Some(action) = raw_actions.iter().find(|a| {
         matches!(
@@ -166,7 +166,7 @@ pub fn read_decision(raw_actions: &[serde_json::Value]) -> ReadDecision {
     }
 }
 
-#[cfg(feature = "bluetooth-ble")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub fn parse_ble_uuid(s: &str) -> Result<Uuid> {
     let t = s.trim();
     let is_hex = |v: &str| v.chars().all(|c| c.is_ascii_hexdigit());
@@ -215,7 +215,7 @@ pub fn parse_ble_uuid(s: &str) -> Result<Uuid> {
 /// An unparseable UUID falls back to the trimmed lowercase input rather than panicking.
 /// `add_service` rejects those before they can be filed, so this is only reachable from a
 /// lookup for a characteristic that was never added, where a miss is the correct outcome.
-#[cfg(feature = "bluetooth-ble")]
+#[cfg(all(unix, feature = "bluetooth"))]
 pub fn characteristic_key(uuid: &str) -> String {
     match parse_ble_uuid(uuid) {
         Ok(parsed) => parsed.to_string(),
@@ -245,7 +245,7 @@ pub fn characteristic_key(uuid: &str) -> String {
 /// hands each event to its [`BleRouter`], which fans it out to the owning server by characteristic
 /// UUID, falling back to the most-recently-started live server, and broadcasts adapter
 /// `StateUpdate`s to all of them.
-#[cfg(feature = "bluetooth-ble")]
+#[cfg(all(unix, feature = "bluetooth"))]
 struct BleHub {
     /// The one real radio. Its mutating methods take `&mut self`, so calls are serialised here.
     peripheral: Mutex<Peripheral>,
@@ -259,7 +259,7 @@ struct BleHub {
 /// `Peripheral`, only channels, so a test can register stub servers, dispatch events, and assert
 /// which server received what. It is `pub` for the same reason `run_event_loop_without_radio` and
 /// `parse_ble_uuid` are — the project forbids `#[cfg(test)]` modules in `src/`.
-#[cfg(feature = "bluetooth-ble")]
+#[cfg(all(unix, feature = "bluetooth"))]
 #[derive(Default)]
 pub struct BleRouter {
     /// characteristic UUID (lowercased) -> the event channel of the server that added it.
@@ -269,10 +269,10 @@ pub struct BleRouter {
     servers: std::sync::Mutex<Vec<mpsc::Sender<PeripheralEvent>>>,
 }
 
-#[cfg(feature = "bluetooth-ble")]
+#[cfg(all(unix, feature = "bluetooth"))]
 static BLE_HUB: tokio::sync::OnceCell<Arc<BleHub>> = tokio::sync::OnceCell::const_new();
 
-#[cfg(feature = "bluetooth-ble")]
+#[cfg(all(unix, feature = "bluetooth"))]
 impl BleRouter {
     /// A router with no registered servers.
     pub fn new() -> Self {
@@ -374,7 +374,7 @@ pub struct BluetoothBle;
 
 impl BluetoothBle {
     /// Spawn the BLE GATT server with integrated LLM actions
-    #[cfg(feature = "bluetooth-ble")]
+    #[cfg(all(unix, feature = "bluetooth"))]
     pub async fn spawn_with_llm_actions(
         device_name: String,
         llm_client: OllamaClient,
@@ -558,7 +558,7 @@ impl BluetoothBle {
     /// spawns the dispatcher task that fans radio events out to per-server channels. Every later
     /// call returns the same `Arc<BleHub>` immediately. On failure the `OnceCell` stays empty so
     /// a subsequent start retries rather than caching the failure.
-    #[cfg(feature = "bluetooth-ble")]
+    #[cfg(all(unix, feature = "bluetooth"))]
     async fn shared_hub(status_tx: &mpsc::UnboundedSender<String>) -> Result<Arc<BleHub>> {
         let status_tx = status_tx.clone();
         BLE_HUB
@@ -611,7 +611,7 @@ impl BluetoothBle {
     }
 
     /// Execute a single LLM action
-    #[cfg(feature = "bluetooth-ble")]
+    #[cfg(all(unix, feature = "bluetooth"))]
     async fn execute_action(
         server_data: &Arc<Mutex<ServerData>>,
         device_name: &str,
@@ -655,7 +655,7 @@ impl BluetoothBle {
     }
 
     /// Add a GATT service
-    #[cfg(feature = "bluetooth-ble")]
+    #[cfg(all(unix, feature = "bluetooth"))]
     async fn execute_add_service(
         server_data: &Arc<Mutex<ServerData>>,
         action: serde_json::Value,
@@ -840,7 +840,7 @@ impl BluetoothBle {
     }
 
     /// Start BLE advertising
-    #[cfg(feature = "bluetooth-ble")]
+    #[cfg(all(unix, feature = "bluetooth"))]
     async fn execute_start_advertising(
         server_data: &Arc<Mutex<ServerData>>,
         device_name: &str,
@@ -899,7 +899,7 @@ impl BluetoothBle {
     }
 
     /// Stop BLE advertising
-    #[cfg(feature = "bluetooth-ble")]
+    #[cfg(all(unix, feature = "bluetooth"))]
     async fn execute_stop_advertising(
         server_data: &Arc<Mutex<ServerData>>,
         status_tx: &mpsc::UnboundedSender<String>,
@@ -920,7 +920,7 @@ impl BluetoothBle {
     }
 
     /// Send notification to subscribed clients
-    #[cfg(feature = "bluetooth-ble")]
+    #[cfg(all(unix, feature = "bluetooth"))]
     async fn execute_send_notification(
         server_data: &Arc<Mutex<ServerData>>,
         action: serde_json::Value,
@@ -978,7 +978,7 @@ impl BluetoothBle {
     /// `#[cfg(test)]` modules in `src/`, and the alternative — a Bluetooth adapter plus a second
     /// radio acting as a central — is why every test in `tests/server/bluetooth_ble/e2e_test.rs`
     /// is `#[ignore]`d. `parse_ble_uuid` above is `pub` for the same reason.
-    #[cfg(feature = "bluetooth-ble")]
+    #[cfg(all(unix, feature = "bluetooth"))]
     pub async fn run_event_loop_without_radio(
         event_rx: mpsc::Receiver<PeripheralEvent>,
         server_id: crate::state::ServerId,
@@ -1037,7 +1037,7 @@ impl BluetoothBle {
     }
 
     /// Main event processing loop
-    #[cfg(feature = "bluetooth-ble")]
+    #[cfg(all(unix, feature = "bluetooth"))]
     async fn event_loop(
         mut event_rx: mpsc::Receiver<PeripheralEvent>,
         server_id: crate::state::ServerId,
@@ -1403,7 +1403,7 @@ impl BluetoothBle {
     }
 
     /// Call LLM with an event and execute resulting actions
-    #[cfg(feature = "bluetooth-ble")]
+    #[cfg(all(unix, feature = "bluetooth"))]
     async fn call_llm_for_event(
         server_id: &crate::state::ServerId,
         llm_client: &OllamaClient,
@@ -1451,7 +1451,7 @@ impl BluetoothBle {
     }
 }
 
-#[cfg(not(feature = "bluetooth-ble"))]
+#[cfg(any(all(unix, not(feature = "bluetooth")), not(unix)))]
 impl BluetoothBle {
     pub async fn spawn_with_llm_actions(
         _device_name: String,

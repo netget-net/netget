@@ -19,8 +19,6 @@
 //! **Fails rather than skips** without `NETGET_DATADOG_SPARK` (from
 //! `tests/server/spark/install_datadog_check.sh`). LLM calls: 7.
 
-#![cfg(all(test, feature = "spark"))]
-
 use crate::helpers::real_server::{run_tool, InstallHint};
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use serde_json::{json, Value};

@@ -19,8 +19,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features postgresql --test server -- postgresql::extended_query --test-threads=100
 
-#![cfg(feature = "postgresql")]
-
 use std::time::Duration;
 
 use netget::cli::management::ServerForm;

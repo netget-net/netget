@@ -22,63 +22,63 @@
 pub mod actions;
 
 // Re-export protocol struct for registration
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 pub use actions::UsbMscProtocol;
 
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 pub mod disk;
 pub mod image_dir;
 
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 pub mod fat16;
 
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 pub mod handler;
 
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use anyhow::{Context, Result};
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use std::collections::HashMap;
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use std::net::SocketAddr;
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use std::path::PathBuf;
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use std::sync::Arc;
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use tokio::sync::{mpsc, Mutex};
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use tracing::{debug, error, info, warn};
 
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::console_error;
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::llm::action_helper::call_llm;
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::llm::ollama_client::OllamaClient;
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::protocol::Event;
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::server::accept_bounded::{accept_bounded, ConnectionLimiter};
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::server::connection::ConnectionId;
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::server::usb::guard::{MAX_USBIP_CONNECTIONS, USBIP_NO_REFUSAL};
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::state::app_state::AppState;
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use actions::{
     USB_MSC_ATTACHED_EVENT, USB_MSC_DETACHED_EVENT, USB_MSC_READ_EVENT, USB_MSC_WRITE_EVENT,
 };
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 use handler::MscIoEvent;
 
 /// Default size of a disk image netget has to create itself.
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 const DEFAULT_DISK_SIZE_MB: u32 = 10;
 
 /// Connection state for LLM processing
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Debug, Clone, PartialEq)]
 enum ConnectionState {
     Idle,
@@ -86,17 +86,17 @@ enum ConnectionState {
 }
 
 /// Per-connection data for USB MSC
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Clone)]
 struct ConnectionData {
     state: ConnectionState,
 }
 
 /// USB Mass Storage Class server
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 pub struct UsbMscServer;
 
-#[cfg(feature = "usb-msc")]
+#[cfg(all(unix, feature = "libusb"))]
 impl UsbMscServer {
     /// Spawn the USB MSC server with LLM integration
     ///

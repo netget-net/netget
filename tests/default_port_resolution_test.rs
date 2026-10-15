@@ -153,7 +153,6 @@ fn no_well_known_port_means_an_os_assigned_one() {
 }
 
 /// Through the real startup path: `ServerForm::create` → `start_server_from_action`.
-#[cfg(feature = "redis")]
 mod through_startup {
     use std::time::Duration;
 

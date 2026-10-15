@@ -19,8 +19,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features torrent-tracker --test client -- torrent_tracker::followup --test-threads=100
 
-#![cfg(feature = "torrent-tracker")]
-
 use std::sync::Arc;
 use std::time::Duration;
 

@@ -13,8 +13,6 @@
 //! below that a signature was produced or validated, because none is. See
 //! `src/server/saml_idp/CLAUDE.md`.
 
-#![cfg(all(test, feature = "saml-idp"))]
-
 use crate::server::helpers::{self, E2EResult, NetGetConfig};
 use base64::Engine;
 use std::time::Duration;

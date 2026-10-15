@@ -1,6 +1,6 @@
 //! gRPC client implementation
 pub mod actions;
-#[cfg(any(feature = "grpc-web", feature = "connect_rpc"))]
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod http1;
 mod reflection;
 mod streaming;

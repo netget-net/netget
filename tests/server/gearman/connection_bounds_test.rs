@@ -16,8 +16,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features gearman --test server -- gearman::connection_bounds --test-threads=100
 
-#![cfg(feature = "gearman")]
-
 use super::common::{self, req, Peer};
 use netget::server::gearman::wire;
 use std::time::Duration;

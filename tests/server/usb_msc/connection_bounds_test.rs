@@ -15,7 +15,7 @@
 //!   ./cargo-isolated.sh test --no-default-features --features usb-msc --test server -- \
 //!       usb_msc::connection_bounds --test-threads=100
 
-#![cfg(feature = "usb-msc")]
+#![cfg(all(unix, feature = "libusb"))]
 
 use crate::helpers::usbip_bounds;
 

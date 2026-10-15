@@ -10,7 +10,7 @@ use tracing::info;
 pub struct BluetoothBleHeartRate;
 
 impl BluetoothBleHeartRate {
-    #[cfg(feature = "bluetooth-ble-heart-rate")]
+    #[cfg(all(unix, feature = "bluetooth"))]
     pub async fn spawn_with_llm_actions(
         device_name: String,
         llm_client: crate::llm::ollama_client::OllamaClient,
@@ -72,7 +72,7 @@ pub fn radio_start_failure(device_name: &str, err: &anyhow::Error) -> String {
     )
 }
 
-#[cfg(not(feature = "bluetooth-ble-heart-rate"))]
+#[cfg(any(all(unix, not(feature = "bluetooth")), not(unix)))]
 impl BluetoothBleHeartRate {
     pub async fn spawn_with_llm_actions(
         _: String,

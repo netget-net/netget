@@ -2,8 +2,6 @@
 //!
 //! Tests BOOTP client with mock LLM responses.
 
-#![cfg(all(test, feature = "bootp"))]
-
 use crate::helpers::*;
 use std::time::Duration;
 

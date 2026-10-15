@@ -36,40 +36,12 @@ hickory-proto = "0.24"
 serde_json = "1"
 
 [dependencies.netget]
+package = "netget-tool"
 path = ".."
 default-features = false
-# One feature per decoder reached below, and nothing else. `default-features = false`
-# matters: netget's default is `all-protocols`, which would compile 136 protocols in
-# order to fuzz twenty-five decoders.
-features = [
-    "amqp",
-    "bgp",
-    "bolt",
-    "cdp",
-    "coap",
-    "dns",
-    "hsrp",
-    "ldap",
-    "lldp",
-    "m3ua",
-    "h323",
-    "openflow",
-    "modbus",
-    "nats",
-    "nfc",
-    "nfc-client",
-    "nfs",
-    "radius",
-    "snmp",
-    "stomp",
-    "svn",
-    "xmlrpc",
-    "zabbix",
-    "gearman",
-    "nsq",
-    "nostr",
-    "smb",
-]
+# Protocols are not features, so every decoder is compiled. The two system-library features
+# are for the cdp/lldp (libpcap) and nfc-client (PC/SC) decoders.
+features = ["libpcap", "pcsc"]
 
 # NOT here, and it is not an oversight: `usb-fido2` (and every other USB feature).
 #

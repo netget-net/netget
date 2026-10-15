@@ -1,7 +1,5 @@
 //! BitTorrent DHT E2E tests with mocks
 
-#![cfg(all(test, feature = "torrent-dht"))]
-
 use crate::helpers::*;
 use serde_json::json;
 use std::collections::HashMap;

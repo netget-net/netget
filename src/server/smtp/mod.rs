@@ -8,23 +8,23 @@ use tokio::sync::mpsc;
 use tracing::{error, warn};
 
 use crate::console_debug;
-#[cfg(feature = "smtp")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::llm::action_helper::call_llm;
-#[cfg(feature = "smtp")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::llm::ollama_client::OllamaClient;
-#[cfg(feature = "smtp")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::llm::ActionResult;
-#[cfg(feature = "smtp")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::logging::emit::Log;
-#[cfg(feature = "smtp")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::protocol::Event;
-#[cfg(feature = "smtp")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::server::SmtpProtocol;
-#[cfg(feature = "smtp")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::state::app_state::AppState;
-#[cfg(feature = "smtp")]
+#[cfg(not(target_arch = "wasm32"))]
 use actions::SMTP_COMMAND_EVENT;
-#[cfg(feature = "smtp")]
+#[cfg(not(target_arch = "wasm32"))]
 use tokio_rustls::TlsAcceptor;
 
 /// The longest single line this server will buffer, in bytes.
@@ -36,7 +36,7 @@ use tokio_rustls::TlsAcceptor;
 /// The cap is the point. `BufReader::read_line` grows its `String` until it finds a `\n`, so
 /// a peer that connects and streams bytes without ever sending one allocates until the
 /// process dies — one unauthenticated socket, no credentials, no protocol state.
-#[cfg(feature = "smtp")]
+#[cfg(not(target_arch = "wasm32"))]
 pub const MAX_LINE_BYTES: usize = 64 * 1024;
 
 /// How long a session waits for the next line before it gives up on the peer.
@@ -44,7 +44,7 @@ pub const MAX_LINE_BYTES: usize = 64 * 1024;
 /// RFC 5321 §4.5.3.2 sets the server-side "command" timeout at 5 minutes. Without one, a peer
 /// that connects and then says nothing holds a connection task, a socket and its slot in the
 /// connection map for as long as the process runs.
-#[cfg(feature = "smtp")]
+#[cfg(not(target_arch = "wasm32"))]
 const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// Concurrent connections this server admits before it starts refusing.
@@ -56,7 +56,7 @@ const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 /// canonical target for this, which is why every real MTA ships a connection limit of its own
 /// (Postfix's `smtpd_client_connection_count_limit` defaults to 50 *per client*); 256 total is
 /// generous against a real sending host and finite against an attacker.
-#[cfg(feature = "smtp")]
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_CONNECTIONS: usize = crate::server::accept_bounded::DEFAULT_MAX_CONNECTIONS;
 
 /// What a peer over [`MAX_CONNECTIONS`] is told before the socket closes, on a **plain**
@@ -68,7 +68,7 @@ const MAX_CONNECTIONS: usize = crate::server::accept_bounded::DEFAULT_MAX_CONNEC
 /// connection-count limit with a 421 greeting, so every MTA in the world already handles it and
 /// backs off rather than recording a permanent failure. The enhanced code matches the
 /// `421 4.3.2` this server already sends when its model backend is saturated.
-#[cfg(feature = "smtp")]
+#[cfg(not(target_arch = "wasm32"))]
 const CONNECTION_CAP_REFUSAL: &[u8] = b"421 4.3.2 Too many connections, try again later\r\n";
 
 /// What a peer over [`MAX_CONNECTIONS`] gets on an **implicit-TLS (SMTPS)** listener: nothing,
@@ -81,11 +81,11 @@ const CONNECTION_CAP_REFUSAL: &[u8] = b"421 4.3.2 Too many connections, try agai
 /// correct refusal would be a TLS `alert(internal_error)`, which cannot be formed without
 /// first completing the handshake we are declining to spend a slot on, so the honest answer is
 /// an empty write and a clean close, logged as `decision=fail_closed_connection_cap`.
-#[cfg(feature = "smtp")]
+#[cfg(not(target_arch = "wasm32"))]
 const CONNECTION_CAP_REFUSAL_TLS: &[u8] = b"";
 
 /// The outcome of one bounded read.
-#[cfg(feature = "smtp")]
+#[cfg(not(target_arch = "wasm32"))]
 enum LineRead {
     Line(String),
     /// The peer closed, or sent a partial line and then closed.
@@ -109,7 +109,7 @@ enum LineRead {
 ///   here is re-emitted on the wire, so a lossy decode loses nothing a peer can observe.
 ///
 /// A partial line at EOF is reported as `Eof`, not as a line: half a command is not a command.
-#[cfg(feature = "smtp")]
+#[cfg(not(target_arch = "wasm32"))]
 async fn read_line_bounded<R>(reader: &mut tokio::io::BufReader<R>) -> Result<LineRead>
 where
     R: tokio::io::AsyncRead + Unpin,
@@ -296,7 +296,7 @@ pub fn smtp_command_event_data(command: &str, in_data: bool) -> serde_json::Valu
 /// SMTP server that forwards mail to LLM
 pub struct SmtpServer;
 
-#[cfg(feature = "smtp")]
+#[cfg(not(target_arch = "wasm32"))]
 impl SmtpServer {
     /// Spawn SMTP server with integrated LLM actions
     ///
@@ -446,10 +446,10 @@ impl SmtpServer {
     }
 }
 
-#[cfg(feature = "smtp")]
+#[cfg(not(target_arch = "wasm32"))]
 struct SmtpSession;
 
-#[cfg(feature = "smtp")]
+#[cfg(not(target_arch = "wasm32"))]
 impl SmtpSession {
     /// Handle one SMTP session, plain or SMTPS.
     ///
@@ -1037,7 +1037,7 @@ impl SmtpSession {
     }
 }
 
-#[cfg(not(feature = "smtp"))]
+#[cfg(target_arch = "wasm32")]
 impl SmtpServer {
     pub async fn spawn_with_llm_actions(
         _listen_addr: SocketAddr,

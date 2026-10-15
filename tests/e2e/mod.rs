@@ -5,8 +5,6 @@
 
 pub mod netget_wrapper;
 
-#[cfg(all(test, feature = "http"))]
 pub mod http_test;
 
-#[cfg(all(test, feature = "tcp"))]
 pub mod tcp_test;

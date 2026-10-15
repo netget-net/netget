@@ -8,7 +8,6 @@
 //! localhost:11434, and each calls `require_ollama()` first.
 //! Tests will skip if Ollama is not available.
 
-#[cfg(all(test, feature = "ollama"))]
 mod ollama_client_tests {
     use crate::helpers::*;
     use std::time::Duration;

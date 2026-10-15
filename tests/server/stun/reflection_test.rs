@@ -18,7 +18,7 @@
 //! socket must still be answered. Without it "nothing came back" is indistinguishable from a
 //! server that was never reachable.
 
-#![cfg(feature = "stun")]
+#![cfg(unix)]
 
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;

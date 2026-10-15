@@ -17,8 +17,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features beanstalkd --test server -- beanstalkd::llm_failure --test-threads=100
 
-#![cfg(feature = "beanstalkd")]
-
 use super::common::{self, Peer};
 use netget::cli::management::ServerForm;
 use tokio::sync::mpsc;

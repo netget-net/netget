@@ -9,8 +9,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features tcp,telnet --test client_handle_test -- --test-threads=100
 
-#![cfg(feature = "tcp")]
-
 use std::time::Duration;
 
 use netget::cli::management::{ClientForm, ServerForm};
@@ -249,11 +247,9 @@ async fn every_wired_client_registers_a_command_handle() {
     // with `register_command_channel` call sites in src/client/.
     let adopters: &[&str] = &[
         "tcp",
-        #[cfg(feature = "telnet")]
         "telnet",
-        #[cfg(feature = "socket_file")]
+        #[cfg(unix)]
         "SocketFile",
-        #[cfg(feature = "socks5")]
         "SOCKS5",
     ];
 
@@ -299,7 +295,6 @@ async fn every_wired_client_registers_a_command_handle() {
     }
 }
 
-#[cfg(feature = "telnet")]
 #[tokio::test]
 async fn injected_telnet_command_reaches_our_own_server() {
     let state = new_state().await;
@@ -372,7 +367,6 @@ async fn injected_telnet_command_reaches_our_own_server() {
 /// connect event is raised for every connection, and a bare `*` → manual would
 /// park it — holding the line reader, which starts only once it is answered, so
 /// the command would never be read.
-#[cfg(feature = "telnet")]
 #[tokio::test]
 async fn manual_telnet_client_answer_reaches_manual_telnet_server() {
     use netget::state::intercepts::InterceptOwner;
@@ -490,7 +484,6 @@ async fn manual_telnet_client_answer_reaches_manual_telnet_server() {
     );
 }
 
-#[cfg(feature = "telnet")]
 async fn wait_for_intercept(
     state: &AppState,
     pred: impl Fn(&netget::state::intercepts::InterceptView) -> bool,

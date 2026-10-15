@@ -14,8 +14,6 @@
 //! PrimarySteppedDown, NotWritablePrimary) and claiming one would send the driver hunting for
 //! a new primary that does not exist, so the overload distinction stays in the log.
 
-#![cfg(all(test, feature = "mongodb-server", feature = "mongodb"))]
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 

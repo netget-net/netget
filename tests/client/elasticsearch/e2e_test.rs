@@ -3,8 +3,6 @@
 //! Tests the Elasticsearch client protocol implementation with mock LLM responses.
 //! Budget: < 10 LLM calls per test suite.
 
-#![cfg(all(test, feature = "elasticsearch"))]
-
 use crate::helpers::*;
 use serde_json::json;
 use std::time::Duration;

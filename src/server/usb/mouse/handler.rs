@@ -6,22 +6,22 @@
 //! all-zero "release" report after any report that holds a button down, so a click does not
 //! stick.
 
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::server::usb::descriptors::{build_hid_mouse_report_descriptor, MouseReport};
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 use std::collections::VecDeque;
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 use tracing::{debug, trace, warn};
 
 /// HID descriptor type codes (HID 1.11 section 7.1).
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 mod hid_descriptor_type {
     pub const HID: u8 = 0x21;
     pub const REPORT: u8 = 0x22;
 }
 
 /// A virtual USB HID mouse.
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Debug)]
 pub struct UsbHidMouseHandler {
     /// HID report descriptor handed to the host on GET_DESCRIPTOR(Report)
@@ -30,14 +30,14 @@ pub struct UsbHidMouseHandler {
     pending_reports: VecDeque<[u8; 4]>,
 }
 
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 impl Default for UsbHidMouseHandler {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 impl UsbHidMouseHandler {
     pub fn new() -> Self {
         Self {
@@ -87,7 +87,7 @@ impl UsbHidMouseHandler {
     }
 }
 
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 impl usbip::UsbInterfaceHandler for UsbHidMouseHandler {
     fn handle_urb(
         &mut self,

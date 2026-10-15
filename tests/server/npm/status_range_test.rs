@@ -7,8 +7,6 @@
 //! Out of range is refused rather than clamped, and the message names the range so the repair
 //! loop can correct the call.
 
-#![cfg(all(test, feature = "npm"))]
-
 use netget::llm::actions::protocol_trait::{ActionResult, Server};
 use netget::server::npm::actions::NpmProtocol;
 use serde_json::json;

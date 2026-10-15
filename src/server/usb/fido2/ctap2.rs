@@ -2,24 +2,24 @@
 //!
 //! This module implements the CTAP2 protocol commands with full credential support.
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use anyhow::{bail, Context, Result};
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use ring::rand::SecureRandom;
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use ring::signature::{EcdsaKeyPair, KeyPair, ECDSA_P256_SHA256_FIXED_SIGNING};
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use serde_cbor::Value as CborValue;
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use std::collections::BTreeMap;
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use tracing::{debug, info, warn};
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::server::usb::fido2::approval::{ApprovalDetails, OperationType, UserPresence};
 
 /// CTAP2 command codes
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Ctap2Command {
@@ -31,7 +31,7 @@ pub enum Ctap2Command {
     GetNextAssertion = 0x08,
 }
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 impl Ctap2Command {
     pub fn from_u8(value: u8) -> Option<Self> {
         match value {
@@ -47,7 +47,7 @@ impl Ctap2Command {
 }
 
 /// CTAP2 status codes
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Ctap2Status {
@@ -82,13 +82,13 @@ pub enum Ctap2Status {
 }
 
 /// CTAP2 request
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub struct Ctap2Request {
     pub command: Ctap2Command,
     pub cbor_params: Option<CborValue>,
 }
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 impl Ctap2Request {
     pub fn parse(data: &[u8]) -> Result<Self> {
         if data.is_empty() {
@@ -111,13 +111,13 @@ impl Ctap2Request {
 }
 
 /// CTAP2 response
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub struct Ctap2Response {
     pub status: Ctap2Status,
     pub cbor_data: Option<CborValue>,
 }
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 impl Ctap2Response {
     pub fn success(cbor_data: CborValue) -> Self {
         Self {
@@ -147,7 +147,7 @@ impl Ctap2Response {
 }
 
 /// Stored CTAP2 credential
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Clone)]
 pub struct Ctap2Credential {
     /// Credential ID (opaque blob)
@@ -172,7 +172,7 @@ pub struct Ctap2Credential {
 }
 
 /// PIN management state
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Clone)]
 struct PinState {
     /// PIN hash (SHA-256)
@@ -183,7 +183,7 @@ struct PinState {
     verified: bool,
 }
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 impl PinState {
     fn new() -> Self {
         Self {
@@ -249,7 +249,7 @@ impl PinState {
 }
 
 /// CTAP2 credential store
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub struct Ctap2CredentialStore {
     /// Credentials indexed by RP ID
     credentials: std::collections::HashMap<String, Vec<Ctap2Credential>>,
@@ -261,14 +261,14 @@ pub struct Ctap2CredentialStore {
     pin_state: PinState,
 }
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 impl Default for Ctap2CredentialStore {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 impl Ctap2CredentialStore {
     pub fn new() -> Self {
         Self {
@@ -483,7 +483,7 @@ impl Ctap2CredentialStore {
 /// `NeedsApproval` is the whole point: `handle_urb` is synchronous and must not block, so a
 /// command that needs user presence returns the *question* instead of an answer. The connection
 /// task raises the event, the model decides, and the command is replayed with the decision.
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub enum Ctap2Outcome {
     /// Encoded CTAP2 response, ready for CTAPHID framing.
     Response(Vec<u8>),
@@ -492,14 +492,14 @@ pub enum Ctap2Outcome {
 }
 
 /// Internal per-command result: either finished, or blocked on user presence.
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 enum Step {
     Done(Ctap2Response),
     Ask(ApprovalDetails),
 }
 
 /// CTAP2 protocol handler
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 pub struct Ctap2Handler {
     /// AAGUID (Authenticator Attestation GUID)
     aaguid: [u8; 16],
@@ -507,7 +507,7 @@ pub struct Ctap2Handler {
     store: Ctap2CredentialStore,
 }
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 impl Ctap2Handler {
     pub fn new() -> Self {
         let aaguid = [
@@ -1002,7 +1002,7 @@ impl Ctap2Handler {
     }
 }
 
-#[cfg(feature = "usb-fido2")]
+#[cfg(all(unix, feature = "libusb"))]
 impl Default for Ctap2Handler {
     fn default() -> Self {
         Self::new()

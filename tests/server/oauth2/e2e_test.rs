@@ -3,8 +3,6 @@
 //! These tests spawn the actual NetGet binary with OAuth2 prompts
 //! and validate OAuth2 flows using HTTP clients.
 
-#![cfg(all(test, feature = "oauth2"))]
-
 use crate::server::helpers::{self, E2EResult, NetGetConfig};
 use serde_json::Value;
 use std::time::Duration;

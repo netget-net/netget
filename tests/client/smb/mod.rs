@@ -1,4 +1,3 @@
-#[cfg(all(test, feature = "smb-client"))]
+#[cfg(all(unix, feature = "libsmbclient"))]
 mod command_channel_test;
-#[cfg(all(test, feature = "smb"))]
 mod e2e_test;

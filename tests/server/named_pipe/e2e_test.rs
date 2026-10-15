@@ -5,7 +5,7 @@
 //! shell `echo > fifo` / `cat fifo` would. No NetGet-against-NetGet.
 //!
 //! Platform: Unix/Linux/macOS only.
-#![cfg(all(feature = "named_pipe", unix))]
+#![cfg(unix)]
 
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use std::io::{Read, Write};

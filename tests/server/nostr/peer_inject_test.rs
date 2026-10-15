@@ -5,8 +5,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features nostr --test server -- nostr::peer_inject --test-threads=100
 
-#![cfg(feature = "nostr")]
-
 use super::common::{self, relay_handlers, Peer, Read, RELAY_SECRET};
 use netget::server::nostr::wire::{verify_event, RelayKey};
 use netget::state::app_state::AppState;

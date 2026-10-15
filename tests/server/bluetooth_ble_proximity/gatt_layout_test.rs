@@ -9,7 +9,7 @@
 //! Nothing inside NetGet checks any of that, because the base stack builds whatever service
 //! the model describes.
 
-#![cfg(all(test, feature = "bluetooth-ble-proximity"))]
+#![cfg(all(unix, feature = "bluetooth"))]
 
 use netget::llm::actions::protocol_trait::Protocol;
 use netget::server::bluetooth_ble_proximity::actions::BluetoothBleProximityProtocol;

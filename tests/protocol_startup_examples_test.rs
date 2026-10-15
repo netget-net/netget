@@ -22,7 +22,6 @@ async fn read_docs(protocol: &str) -> ToolResult {
 /// The wiring itself: a protocol's own LLM-mode and Script-mode examples reach the
 /// rendered `read_documentation` output, with a real protocol action in the script.
 #[tokio::test]
-#[cfg(feature = "http")]
 async fn http_startup_examples_reach_read_documentation() {
     let doc = read_docs("http").await;
     assert!(doc.success, "read_documentation failed: {}", doc.result);
@@ -58,7 +57,6 @@ async fn http_startup_examples_reach_read_documentation() {
 /// runnable script example (routed on the parsed operation) and a dynamic LLM
 /// instruction — not a `<..._handler>` placeholder.
 #[tokio::test]
-#[cfg(feature = "s3")]
 async fn s3_examples_are_concrete() {
     let doc = read_docs("s3").await;
     assert!(doc.success, "{}", doc.result);
@@ -72,7 +70,6 @@ async fn s3_examples_are_concrete() {
 }
 
 #[tokio::test]
-#[cfg(feature = "sqs")]
 async fn sqs_examples_are_concrete() {
     let doc = read_docs("sqs").await;
     assert!(doc.success, "{}", doc.result);
@@ -81,7 +78,6 @@ async fn sqs_examples_are_concrete() {
 }
 
 #[tokio::test]
-#[cfg(feature = "dynamo")]
 async fn dynamo_examples_are_concrete() {
     let doc = read_docs("dynamo").await;
     assert!(doc.success, "{}", doc.result);
@@ -93,7 +89,6 @@ async fn dynamo_examples_are_concrete() {
 /// canonical stdin/switch-case style. Spot-check DNS, whose script must echo the
 /// client's transaction id.
 #[tokio::test]
-#[cfg(feature = "dns")]
 async fn dns_script_example_echoes_query_id() {
     let doc = read_docs("dns").await;
     assert!(doc.success, "{}", doc.result);

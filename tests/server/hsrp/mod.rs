@@ -5,8 +5,6 @@
 //! * `e2e_test` binds a real UDP socket (port 1985 is unprivileged, so the transport genuinely
 //!   executes) and pins both wire layouts byte for byte through a running server.
 
-#[cfg(all(test, feature = "hsrp"))]
 mod codec_test;
 
-#[cfg(all(test, feature = "hsrp"))]
 mod e2e_test;

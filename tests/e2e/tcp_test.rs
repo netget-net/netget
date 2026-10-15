@@ -1,6 +1,5 @@
 //! E2E tests for TCP protocol using the new test framework
 
-#[cfg(all(test, feature = "tcp"))]
 mod tests {
     use anyhow::Result;
     use std::time::Duration;

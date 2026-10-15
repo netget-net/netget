@@ -22,7 +22,7 @@
 //!   # privileged half, on a host with BPF access:
 //!   ./cargo-isolated.sh test --no-default-features --features datalink --test client -- datalink::command_channel --ignored
 
-#![cfg(feature = "datalink")]
+#![cfg(all(unix, feature = "libpcap"))]
 
 use std::time::Duration;
 

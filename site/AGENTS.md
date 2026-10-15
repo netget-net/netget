@@ -75,7 +75,7 @@ netget.net was not opted in until September 2026.
 
 GitHub Pages served `docs/` at netget.net via `docs/CNAME`. That stopped being an option
 when the repository went private — Pages on a private repository needs a paid plan, and the
-site's own links to `github.com/smotanacom/netget` are public-facing links into a private
+site's own links to `github.com/netget-net/netget` are public-facing links into a private
 repository regardless of where the page is hosted.
 
 ## Deploying

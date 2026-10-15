@@ -2,7 +2,7 @@
 
 LLM-controlled network protocol server & client — 240 protocol features (HTTP, DNS, SSH, MySQL, Redis, OPC UA, BACnet/IP, DNP3, IEC 104, EtherNet/IP, S7comm, NMDC/ADC peer transfers, Soulseek, Gnutella, NNTP, …) driven by an LLM, with a built-in [MCP](https://modelcontextprotocol.io) server mode.
 
-This package is a small launcher that runs the platform-native `netget` binary. The binary itself is installed via a platform-specific optional dependency (e.g. `@smotana/netget-darwin-arm64`); if that is unavailable, the launcher downloads the matching binary from [GitHub Releases](https://github.com/smotanacom/netget/releases) into your user cache.
+This package is a small launcher that runs the platform-native `netget` binary. The binary itself is installed via a platform-specific optional dependency (e.g. `@smotana/netget-darwin-arm64`); if that is unavailable, the launcher downloads the matching binary from [GitHub Releases](https://github.com/netget-net/netget/releases) into your user cache.
 
 ## Quick start (MCP server)
 
@@ -45,7 +45,7 @@ npx @smotana/netget
 
 ## Notes
 
-- Prebuilt binaries use a portable feature set (no BLE/NFC/packet-capture on Linux, no SMB client). Build from source for `all-protocols`: https://github.com/smotanacom/netget
+- Prebuilt binaries need no system library, so on Linux and Windows they leave out the protocols that link one (packet capture, Bluetooth LE, the NFC client, USB devices, the SMB client); macOS ships those libraries and its binaries include them. For every protocol everywhere: `cargo install --locked netget-tool` (see https://github.com/netget-net/netget).
 - Fallback downloads require the release's `SHA256SUMS`; the matching SHA-256 is
   verified while streaming before extracting the expected executable. Missing or
   ambiguous manifests and mismatches fail closed. Older releases without a manifest
@@ -58,4 +58,4 @@ npx @smotana/netget
 
 ## License
 
-AGPL-3.0-or-later. Source: https://github.com/smotanacom/netget
+AGPL-3.0-or-later. Source: https://github.com/netget-net/netget

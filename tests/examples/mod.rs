@@ -31,13 +31,10 @@
 // Feature-gated protocol example tests
 // Each test file tests a single protocol's examples
 
-#[cfg(all(test, feature = "tcp"))]
 pub mod tcp_examples_test;
 
-#[cfg(all(test, feature = "dns"))]
 pub mod dns_examples_test;
 
-#[cfg(all(test, feature = "http"))]
 pub mod http_examples_test;
 
 // Comprehensive tests that read ACTUAL protocol examples from protocol definitions

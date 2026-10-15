@@ -22,7 +22,7 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features ospf --test client -- ospf::command_channel --test-threads=100
 
-#![cfg(feature = "ospf")]
+#![cfg(unix)]
 
 use std::time::Duration;
 

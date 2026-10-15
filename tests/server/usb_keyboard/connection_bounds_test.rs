@@ -13,7 +13,7 @@
 //!   ./cargo-isolated.sh test --no-default-features --features usb-keyboard --test server -- \
 //!       usb_keyboard::connection_bounds --test-threads=100
 
-#![cfg(feature = "usb-keyboard")]
+#![cfg(all(unix, feature = "libusb"))]
 
 use crate::helpers::usbip_bounds;
 

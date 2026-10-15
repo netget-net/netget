@@ -8,8 +8,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features dict --test server -- dict::wire --test-threads=100
 
-#![cfg(feature = "dict")]
-
 use netget::server::dict::wire::{
     apply_mime, atom, quoted, render_definitions, split_args, text_block, text_lines, ArgError,
     Definition, MAX_LINE_BYTES, MIME_HEADER,

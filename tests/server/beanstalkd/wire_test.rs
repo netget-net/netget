@@ -8,8 +8,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features beanstalkd --test server -- beanstalkd::wire --test-threads=100
 
-#![cfg(feature = "beanstalkd")]
-
 use netget::server::beanstalkd::wire::{
     parse_command, render_inserted, render_job, render_stats, render_status, render_tube_list,
     reply_fits, valid_tube_name, Command, JobReply, MAX_JOB_BYTES, MAX_TUBE_NAME,

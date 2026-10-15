@@ -19,7 +19,7 @@ use tokio::sync::mpsc;
 
 pub struct BluetoothBlePresenter;
 impl BluetoothBlePresenter {
-    #[cfg(feature = "bluetooth-ble-presenter")]
+    #[cfg(all(unix, feature = "bluetooth"))]
     pub async fn spawn_with_llm_actions(
         device_name: String,
         llm: crate::llm::ollama_client::OllamaClient,
@@ -66,7 +66,7 @@ impl BluetoothBlePresenter {
         .await
     }
 }
-#[cfg(not(feature = "bluetooth-ble-presenter"))]
+#[cfg(any(all(unix, not(feature = "bluetooth")), not(unix)))]
 impl BluetoothBlePresenter {
     pub async fn spawn_with_llm_actions(
         _: String,

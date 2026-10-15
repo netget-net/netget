@@ -41,47 +41,47 @@
 
 pub mod actions;
 
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 pub mod handler;
 
 // Re-export protocol struct for registration
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 pub use actions::UsbMouseProtocol;
 
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 use anyhow::Result;
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 use std::collections::HashMap;
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 use std::net::SocketAddr;
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 use std::sync::Arc;
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 use tokio::sync::{mpsc, Mutex};
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 use tracing::{debug, error, info};
 
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::console_error;
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::llm::action_helper::call_llm;
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::llm::ollama_client::OllamaClient;
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::protocol::Event;
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::server::accept_bounded::{accept_bounded, ConnectionLimiter};
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::server::connection::ConnectionId;
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::server::usb::guard::{MAX_USBIP_CONNECTIONS, USBIP_NO_REFUSAL};
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::state::app_state::AppState;
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 use actions::{USB_MOUSE_ATTACHED_EVENT, USB_MOUSE_DETACHED_EVENT};
 
 /// Connection state for LLM processing
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 #[derive(Debug, Clone, PartialEq)]
 #[allow(dead_code)]
 enum ConnectionState {
@@ -91,7 +91,7 @@ enum ConnectionState {
 }
 
 /// Per-connection data for USB mouse
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 struct ConnectionData {
     state: ConnectionState,
     #[allow(dead_code)]
@@ -99,10 +99,10 @@ struct ConnectionData {
 }
 
 /// USB HID Mouse server
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 pub struct UsbMouseServer;
 
-#[cfg(feature = "usb-mouse")]
+#[cfg(all(unix, feature = "libusb"))]
 impl UsbMouseServer {
     /// Spawn the USB mouse server with LLM integration
     ///

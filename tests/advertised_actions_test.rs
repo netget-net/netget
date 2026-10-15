@@ -121,7 +121,6 @@ async fn web_search_off_is_not_advertised() {
 
 /// Everything in the advertised list is rendered in the prompt built alongside it: the
 /// prompt and the validated list come from one computation.
-#[cfg(feature = "tcp")]
 #[tokio::test]
 async fn prompt_and_advertised_list_agree() {
     use netget::state::ServerId;

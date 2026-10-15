@@ -1,19 +1,19 @@
 //! USB CDC ACM Serial protocol actions
 
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::llm::actions::{
     protocol_trait::{ActionResult, Protocol, Server},
     ActionDefinition, Parameter,
 };
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::protocol::log_template::LogTemplate;
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 use crate::{protocol::EventType, server::connection::ConnectionId, state::app_state::AppState};
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 use anyhow::{Context, Result};
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 use serde_json::json;
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 use std::{
     collections::HashMap,
     sync::{Arc, LazyLock},
@@ -28,7 +28,7 @@ use std::{
 /// asking a model to copy an id back is a reliable source of wrong answers. When exactly one
 /// port is attached the action needs no id; when several are, an omitted id is an error naming
 /// the candidates rather than a guess.
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 fn connection_id_parameter() -> Parameter {
     Parameter {
         name: "connection_id".to_string(),
@@ -44,7 +44,7 @@ fn connection_id_parameter() -> Parameter {
     }
 }
 
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 fn send_data_action() -> ActionDefinition {
     ActionDefinition {
         name: "send_data".to_string(),
@@ -71,7 +71,7 @@ fn send_data_action() -> ActionDefinition {
     }
 }
 
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 fn set_line_coding_action() -> ActionDefinition {
     ActionDefinition {
         name: "set_line_coding".to_string(),
@@ -114,7 +114,7 @@ fn set_line_coding_action() -> ActionDefinition {
     }
 }
 
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 fn wait_for_more_action() -> ActionDefinition {
     ActionDefinition {
         name: "wait_for_more".to_string(),
@@ -131,7 +131,7 @@ fn wait_for_more_action() -> ActionDefinition {
     }
 }
 
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 pub static USB_SERIAL_ATTACHED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "usb_serial_attached",
@@ -154,7 +154,7 @@ pub static USB_SERIAL_ATTACHED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     .with_alternative_example(json!({"type": "wait_for_more"}))
 });
 
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 pub static USB_SERIAL_DETACHED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "usb_serial_detached",
@@ -171,7 +171,7 @@ pub static USB_SERIAL_DETACHED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     .with_no_actions()
 });
 
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 pub static USB_SERIAL_DATA_RECEIVED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "usb_serial_data_received",
@@ -206,15 +206,15 @@ pub static USB_SERIAL_DATA_RECEIVED_EVENT: LazyLock<EventType> = LazyLock::new(|
 /// A `std::sync::Mutex` rather than a tokio one because `usbip` requires
 /// `Arc<Mutex<Box<dyn UsbInterfaceHandler + Send>>>` from `std`, and because `execute_action`
 /// is synchronous. The guard is never held across an `.await`.
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 type SharedHandler = Arc<std::sync::Mutex<Box<dyn usbip::UsbInterfaceHandler + Send>>>;
 
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 pub struct UsbSerialProtocol {
     handlers: Arc<std::sync::Mutex<HashMap<ConnectionId, SharedHandler>>>,
 }
 
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 impl UsbSerialProtocol {
     pub fn new() -> Self {
         Self {
@@ -338,7 +338,7 @@ impl UsbSerialProtocol {
     }
 }
 
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 impl Protocol for UsbSerialProtocol {
     fn get_startup_parameters(&self) -> Vec<crate::llm::actions::ParameterDefinition> {
         vec![
@@ -506,7 +506,7 @@ print(json.dumps({"actions": actions}))"#;
     }
 }
 
-#[cfg(feature = "usb-serial")]
+#[cfg(all(unix, feature = "libusb"))]
 impl Server for UsbSerialProtocol {
     fn spawn(
         &self,

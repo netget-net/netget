@@ -3,7 +3,6 @@
 //! These tests verify PyPI server functionality using mock LLM responses.
 //! Test strategy: Mock HTTP responses for PEP 503 endpoints, < 10 LLM calls total.
 
-#[cfg(all(test, feature = "pypi"))]
 mod pypi_server_tests {
     use crate::helpers::*;
     use std::time::Duration;

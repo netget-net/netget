@@ -25,7 +25,7 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features arp --test client -- arp::command_channel --test-threads=100
 
-#![cfg(feature = "arp")]
+#![cfg(all(unix, feature = "libpcap"))]
 
 use std::time::Duration;
 

@@ -4,8 +4,6 @@
 //! and perform LLM-controlled FTP operations.
 //! Test strategy: Use netget binary to start server + client, < 10 LLM calls total.
 
-#![cfg(feature = "ftp")]
-
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use std::time::Duration;
 

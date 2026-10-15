@@ -15,8 +15,6 @@
 //! `max_tokens` and the wire (`as u32`, then `as u16`), so 70000 was sent as 4464 — a budget
 //! silently replaced by a smaller one, which reads on the wire as a deliberate choice.
 
-#![cfg(all(test, feature = "openai"))]
-
 use netget::client::openai::actions::OpenAiClientProtocol;
 use netget::llm::actions::client_trait::{Client, ClientActionResult};
 use serde_json::json;

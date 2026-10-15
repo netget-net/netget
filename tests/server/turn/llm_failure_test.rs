@@ -16,7 +16,7 @@
 //! The failure is injected by giving the mock **no rule for `turn_allocate_request`**; an
 //! unmatched request is answered with HTTP 500, which is exactly the shape of a backend error.
 
-#![cfg(feature = "turn")]
+#![cfg(unix)]
 
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use tokio::net::UdpSocket;

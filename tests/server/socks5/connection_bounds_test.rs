@@ -32,8 +32,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features socks5 --test server -- socks5::connection_bounds --test-threads=100
 
-#![cfg(feature = "socks5")]
-
 use std::time::Duration;
 
 use netget::cli::management::ServerForm;

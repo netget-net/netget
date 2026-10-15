@@ -15,7 +15,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features saml-sp \
 //!       --test server -- server::saml_sp::connection_bounds_test --test-threads=100
 
-#[cfg(all(test, feature = "saml-sp"))]
 mod saml_sp_connection_bounds {
     use crate::helpers::http_bounds::{
         assert_connection_cap, assert_read_deadlines, HttpBoundsCase,

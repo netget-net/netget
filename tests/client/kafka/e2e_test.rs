@@ -37,7 +37,6 @@
 //!
 //! LLM call budget: 6 (test A) + 8 (test B) = 14.
 
-#[cfg(all(test, feature = "kafka"))]
 mod kafka_client_tests {
     use crate::helpers::*;
     use serde_json::json;

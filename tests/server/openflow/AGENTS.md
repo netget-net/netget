@@ -13,5 +13,5 @@ formula, so `real_peer_test` fails on macOS; run it on Linux (the `openflow` job
 `.github/workflows/protocol-pairs.yml`, or an `ubuntu:24.04` container).
 
 ```bash
-./cargo-isolated.sh test --no-default-features --features tcp,openflow --test server -- openflow:: --test-threads=8
+./cargo-isolated.sh test --test server -- server::openflow:: --test-threads=8
 ```

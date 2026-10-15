@@ -19,8 +19,6 @@
 //! All four now answer 5xx with an RFC 6749 5.2 error code, which says only that the request
 //! did not happen.
 
-#![cfg(all(test, feature = "oauth2"))]
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use serde_json::Value;
 use std::time::Duration;

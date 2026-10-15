@@ -108,7 +108,6 @@ async fn pipe_rejects_malformed_explicit_source_and_mapping() {
         .unwrap();
 }
 
-#[cfg(feature = "http")]
 mod http {
     use netget::client::http_fetch::transport;
     use netget::easy::http::actions::markdown_to_html;
@@ -237,7 +236,6 @@ mod http {
     }
 }
 
-#[cfg(feature = "torrent-peer")]
 mod torrent_peer {
     use netget::client::torrent_peer::{read_peer_message, MAX_PEER_MESSAGE_BYTES};
 
@@ -268,7 +266,6 @@ mod torrent_peer {
     }
 }
 
-#[cfg(feature = "vnc")]
 mod vnc {
     use netget::client::vnc::{discard_raw_rectangle, read_server_text, MAX_TEXT_BYTES};
 
@@ -301,7 +298,7 @@ mod vnc {
     }
 }
 
-#[cfg(all(feature = "ssh-agent", unix))]
+#[cfg(unix)]
 mod ssh_agent {
     use futures::StreamExt;
     use netget::client::ssh_agent::{response_reader, SshAgentClient, MAX_RESPONSE_BYTES};

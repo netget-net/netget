@@ -5,8 +5,6 @@
 //! protocol level. This mirrors what a real client (curl, ffplay) does when pulling an HLS stream.
 //! Localhost only.
 
-#![cfg(feature = "hls")]
-
 use crate::server::helpers::*;
 use std::net::SocketAddr;
 use std::time::Duration;

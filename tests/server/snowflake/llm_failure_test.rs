@@ -15,8 +15,6 @@
 //! 3. the message on the wire is a `crate::utils::WireFailure` category and nothing else — no
 //!    backend URL, no model name, no `anyhow` chain. A driver prints this string to a user.
 
-#![cfg(all(test, feature = "snowflake"))]
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use serde_json::Value;
 use std::time::Duration;

@@ -16,7 +16,7 @@
 //! no matter how wrong both were — which is how this protocol came to ship a
 //! reset reply with its fields in the wrong order.
 
-#![cfg(feature = "openvpn")]
+#![cfg(unix)]
 
 use super::wire::*;
 use netget::server::openvpn::packet::{parse_opcode_byte, ControlFrame, DataFrame, Opcode};

@@ -1,4 +1,3 @@
-#![cfg(feature = "http3")]
 //! Regression: a pending adapter read must remain cancellable and retain its ID.
 #[path = "helpers/quic_peer.rs"]
 mod peer;

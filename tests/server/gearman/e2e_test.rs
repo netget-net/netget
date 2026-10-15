@@ -12,8 +12,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features gearman --test server -- gearman::e2e --test-threads=100
 
-#![cfg(feature = "gearman")]
-
 use super::common::{req, Peer};
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use netget::server::gearman::wire;

@@ -4,8 +4,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features gearman --test server -- gearman::wire --test-threads=100
 
-#![cfg(feature = "gearman")]
-
 use netget::server::gearman::actions::Work;
 use netget::server::gearman::wire::{self, *};
 use proptest::prelude::*;

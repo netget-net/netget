@@ -1,8 +1,6 @@
 //! The dashboard's routing editor: building a handler table by hand and
 //! hot-applying it to a running server, with no LLM involved.
 
-#![cfg(feature = "tcp")]
-
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;

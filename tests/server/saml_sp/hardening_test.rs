@@ -10,8 +10,6 @@
 //!   `send_error_response` — the model's only way to refuse an assertion — therefore arrived
 //!   as the status that admits the user.
 
-#![cfg(all(test, feature = "saml-sp"))]
-
 use crate::server::helpers::{self, E2EResult, NetGetConfig};
 use std::time::Duration;
 

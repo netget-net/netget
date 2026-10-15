@@ -15,7 +15,7 @@
 //!     --test client -- client::tor::test --test-threads=100
 //! ```
 
-#![cfg(feature = "tor")]
+#![cfg(unix)]
 
 use netget::client::tor::{bootstrap_target, BootstrapTarget, ALLOW_PUBLIC_TOR_NETWORK_PARAM};
 use netget::llm::actions::client_trait::Client;

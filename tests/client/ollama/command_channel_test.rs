@@ -9,8 +9,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features ollama --test client -- ollama::command_channel --test-threads=100
 
-#![cfg(feature = "ollama")]
-
 use std::sync::Arc;
 use std::time::Duration;
 

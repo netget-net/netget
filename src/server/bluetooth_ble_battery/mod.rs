@@ -20,7 +20,7 @@ pub struct BluetoothBleBattery;
 
 impl BluetoothBleBattery {
     /// Spawn BLE battery service server
-    #[cfg(feature = "bluetooth-ble-battery")]
+    #[cfg(all(unix, feature = "bluetooth"))]
     pub async fn spawn_with_llm_actions(
         device_name: String,
         initial_level: u8,
@@ -90,7 +90,7 @@ pub fn radio_start_failure(device_name: &str, err: &anyhow::Error) -> String {
     )
 }
 
-#[cfg(not(feature = "bluetooth-ble-battery"))]
+#[cfg(any(all(unix, not(feature = "bluetooth")), not(unix)))]
 impl BluetoothBleBattery {
     pub async fn spawn_with_llm_actions(
         _device_name: String,

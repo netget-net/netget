@@ -1,7 +1,5 @@
 //! BitTorrent Peer Wire Protocol E2E tests with mocks
 
-#![cfg(all(test, feature = "torrent-peer"))]
-
 use crate::helpers::*;
 use serde_json::json;
 use std::time::Duration;

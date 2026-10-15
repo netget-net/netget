@@ -11,8 +11,6 @@
 //! SERVFAIL that fails those two checks is worth exactly as much as silence - which is why
 //! this test asserts them rather than just the response code.
 
-#![cfg(feature = "dot")]
-
 use crate::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use hickory_proto::op::{Message as DnsMessage, Query, ResponseCode};
 use hickory_proto::rr::{Name, RecordType};

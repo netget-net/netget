@@ -26,8 +26,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features http2 --test server -- \
 //!       http2::stream_bounds --test-threads=100
 
-#![cfg(all(test, feature = "http2"))]
-
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -446,7 +444,6 @@ async fn the_streams_of_one_connection_share_one_body_budget() {
 /// stream 1 — curl's WINDOW_UPDATE on it draws a GOAWAY(PROTOCOL_ERROR). That defect predates
 /// the stream bounds (it reproduces with `h2`'s default builder) and is recorded in
 /// `src/server/http/CLAUDE.md`.
-#[cfg(feature = "http")]
 #[tokio::test]
 async fn an_h2c_upgrade_from_http1_advertises_the_same_stream_limit() {
     let state = new_state().await;

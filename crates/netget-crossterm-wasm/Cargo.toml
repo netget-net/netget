@@ -3,6 +3,8 @@ name = "netget-crossterm-wasm"
 version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
+repository = "https://github.com/netget-net/netget"
+homepage = "https://netget.net"
 description = "crossterm's event and colour types, without a terminal behind them, for wasm32-unknown-unknown. NetGet's dashboard matches on crossterm::event::KeyCode in a few hundred places; on the web those keys come from a browser KeyboardEvent instead, and this crate is what `crossterm` resolves to on that target."
 
 [lib]

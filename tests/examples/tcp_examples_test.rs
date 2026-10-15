@@ -5,8 +5,6 @@
 //! - EventType response_examples execute correctly
 //! - Connection events trigger and respond properly
 
-#![cfg(all(test, feature = "tcp"))]
-
 use crate::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use serde_json::json;
 use std::time::Duration;

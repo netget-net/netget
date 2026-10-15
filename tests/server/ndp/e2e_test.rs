@@ -30,7 +30,7 @@
 //!   ./cargo-isolated.sh test --no-default-features --features ndp \
 //!       --test server ndp -- --test-threads=100
 
-#![cfg(all(test, feature = "ndp"))]
+#![cfg(unix)]
 
 use netget::llm::actions::protocol_trait::{Protocol, Server};
 use netget::llm::OllamaClient;

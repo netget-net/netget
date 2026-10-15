@@ -11,7 +11,6 @@
 //! Net-SNMP's tools (`snmp` and `snmptrapd` packages) are required; the tests fail rather than
 //! skip without them. MIB loading is switched off (`-m ''`) so everything is numeric. No LLM
 //! calls: a python handler answers every event.
-#![cfg(all(test, feature = "snmp"))]
 
 use netget::cli::management::ServerForm;
 use netget::state::app_state::AppState;

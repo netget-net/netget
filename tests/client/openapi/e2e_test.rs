@@ -2,7 +2,6 @@
 //!
 //! These tests verify OpenAPI client functionality with spec-driven requests.
 
-#[cfg(all(test, feature = "openapi"))]
 mod openapi_client_tests {
     use crate::helpers::*;
     use serde_json::json;

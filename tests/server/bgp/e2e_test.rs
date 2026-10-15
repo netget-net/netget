@@ -9,7 +9,6 @@
 //! peering against BIRD or FRR. What it does cover is the whole path: socket, framing, OPEN
 //! validation, negotiation, the FSM, the model round-trip, and route delivery.
 
-#[cfg(all(test, feature = "bgp"))]
 mod e2e_bgp {
     use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};

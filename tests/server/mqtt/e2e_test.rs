@@ -6,8 +6,6 @@
 //! payload asserted. It is not `#[ignore]`d and it cannot skip - rumqttc is a
 //! dev-dependency, so it either compiles and runs or the suite does not build.
 
-#![cfg(feature = "mqtt")]
-
 use crate::server::helpers::*;
 use std::time::Duration;
 

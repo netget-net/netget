@@ -6,8 +6,6 @@
 //! - Uses scripting mode to minimize calls for repetitive operations
 //! - Consolidates test cases into comprehensive server setups
 
-#![cfg(all(test, feature = "sqs", feature = "sqs"))]
-
 use super::super::helpers::start_netget_server;
 use aws_config::BehaviorVersion;
 use aws_sdk_sqs::Client;

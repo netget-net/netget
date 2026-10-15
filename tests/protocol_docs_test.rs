@@ -1,8 +1,6 @@
 //! `--docs` renders live protocol documentation. Guards that the renderer walks
 //! the registries and includes real per-protocol detail rather than a stub.
 
-#![cfg(feature = "http")]
-
 use netget::protocol::render_all_protocol_docs;
 
 #[test]

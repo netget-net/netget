@@ -12,8 +12,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features snmp --test client -- snmp::command_channel --test-threads=100
 
-#![cfg(all(test, feature = "snmp"))]
-
 use std::time::Duration;
 
 use netget::cli::management::ClientForm;

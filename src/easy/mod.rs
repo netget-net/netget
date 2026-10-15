@@ -7,5 +7,4 @@
 //! Easy protocols act as translation layers between network events and simplified
 //! LLM prompts, using existing Server/Client protocols underneath.
 
-#[cfg(feature = "http")]
 pub mod http;
