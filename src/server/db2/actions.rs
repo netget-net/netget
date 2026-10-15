@@ -89,18 +89,22 @@ impl Protocol for Db2Protocol {
             )
             .llm_control("Login accept/reject decision, and the SQLCA (SQLCODE/SQLSTATE) for a statement")
             .e2e_testing(
-                "Byte-literal assertions of the handshake and SQLCARD bytes against spec-derived \
-                 constants — NOT validated against a real Db2 client",
+                "tests/server/db2/real_client_test.rs: two independent drivers - Apache Derby \
+                 10.17.1.0's JDBC client (through ij) and IBM's CLI driver (ibm_db 3.3.0) - log \
+                 in, are refused when the model refuses, run statements and read back the \
+                 model's row count and SQLSTATE; IBM's driver's default encrypted security \
+                 mechanism is declined. tshark's drda dissector reads both conversations. \
+                 Byte-literal tests of the codec beside it",
             )
             .notes(
                 "Scope: the connection handshake (EXCSAT/ACCSEC/SECCHK/ACCRDB) and the \
                  EXCSQLIMM -> SQLCARD basic-query path (statement text extracted, model decides the \
                  SQLCA). NOT implemented: SELECT result-set retrieval (OPNQRY/QRYDSC/QRYDTA/FDOCA \
-                 rows), prepared-statement parameter marshalling, the SQLCA extended diagnostic group \
-                 (SQLERRD/warnings/message text are sent NULL), and TLS. This is BYTE-LITERAL evidence \
-                 only: it is validated against spec-derived DRDA bytes, not a genuine Db2 driver on a \
-                 real connection, so treat it as unverified against a real peer. Fail-closed: an LLM \
-                 outage during login is a refusal (SECCHKRM severity ERROR), never an accept.",
+                 rows), PRPSQLSTT and prepared-statement parameter marshalling (refused with \
+                 CMDNSPRM), message text in the SQLCA, and TLS. RDBCMM/RDBRLLBCK are acknowledged \
+                 (there is no storage to commit). Experimental: statements only, no result \
+                 sets. Fail-closed: an LLM outage during login is a refusal (SECCHKRM \
+                 severity ERROR), never an accept.",
             )
             .build()
     }
@@ -342,9 +346,11 @@ pub fn db2_query_ok_action() -> ActionDefinition {
     ActionDefinition {
         name: "db2_query_ok".to_string(),
         description: "Report a successful statement. The server replies with an SQLCARD carrying \
-            the SQLCA. With sqlcode 0 the SQLCA is sent NULL (the normal success reply). NOTE: \
-            row data is not returned — SELECT result-set retrieval is not implemented; use this \
-            for INSERT/UPDATE/DELETE/DDL-style statements."
+            the SQLCA. With sqlcode 0 and no rows_affected the SQLCA is sent NULL (the normal \
+            success reply); with rows_affected it carries that count in SQLERRD3, which a JDBC \
+            driver reports as the update count. NOTE: row data is not returned — SELECT \
+            result-set retrieval is not implemented; use this for INSERT/UPDATE/DELETE/DDL-style \
+            statements."
             .to_string(),
         parameters: vec![
             Parameter {
@@ -357,7 +363,8 @@ pub fn db2_query_ok_action() -> ActionDefinition {
             Parameter {
                 name: "rows_affected".to_string(),
                 type_hint: "number".to_string(),
-                description: "Rows affected, for logging (not encoded into the minimal SQLCA)"
+                description: "Rows the statement inserted, updated or deleted; sent in SQLERRD3 \
+                    (with sqlcode 0)"
                     .to_string(),
                 required: false,
             },
@@ -481,7 +488,7 @@ pub static DB2_QUERY_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         Parameter {
             name: "sql_text".to_string(),
             type_hint: "string".to_string(),
-            description: "The SQL statement text (EBCDIC-decoded)".to_string(),
+            description: "The SQL statement text, decoded from the requester's SQLSTT (UTF-8; bare EBCDIC is also read)".to_string(),
             required: true,
         },
         Parameter {

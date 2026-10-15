@@ -6504,7 +6504,7 @@ jobs:
 
   db2:
     if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'db2')
-    name: Db2 client against Apache Derby's DRDA server, with the tshark oracle
+    name: Db2 client against Apache Derby, Db2 server against Derby's JDBC and IBM's CLI drivers, with the tshark oracle
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -6519,21 +6519,25 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: protocol-pairs-${{ github.job }}
-      - name: Install Apache Derby (SHA-256-pinned jars) and tshark
+      - name: Install Apache Derby (SHA-256-pinned jars), IBM's ibm_db driver and tshark
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tshark
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tshark python3-venv
           java -version
           python3 tests/client/db2/install_derby.py "$RUNNER_TEMP/derby" | tee "$RUNNER_TEMP/derby-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/derby-env" >> "$GITHUB_ENV"
+          python3 -m venv "$RUNNER_TEMP/ibm-db"
+          "$RUNNER_TEMP/ibm-db/bin/pip" install ibm_db==3.3.0
+          "$RUNNER_TEMP/ibm-db/bin/python" -I -c 'import ibm_db'
+          echo "NETGET_IBM_DB_PYTHON=$RUNNER_TEMP/ibm-db/bin/python" >> "$GITHUB_ENV"
       - name: Compile db2 as a standalone Cargo feature
         run: cargo check --locked --no-default-features --features db2 --all-targets
-      - name: Client against Derby, bounds and fail-closed paths
+      - name: Client against Derby, server against Derby's and IBM's drivers, bounds and fail-closed paths
         run: |
           set -euo pipefail
           for filter in \
-            client/db2::; do
+            client/db2:: db2::real_client_test; do
             case "$filter" in
               client/*) target=client; filter=${filter#client/} ;;
               *) target=server ;;

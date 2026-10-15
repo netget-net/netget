@@ -12,11 +12,10 @@ a statement produces. **There is no storage** — no catalog, no tables, no rows
 **State**: Experimental. **Port**: 50000 by default (unprivileged → `None`).
 **Stack**: `ETH>IP>TCP>DRDA>Db2`.
 
-> **Byte-literal evidence only — NOT real-client validated.** A real Db2 driver is
-> very unlikely to be available on macOS, so the handshake and reply bytes are
-> asserted against **spec-derived literals** (see `tests/server/db2/drda_test.rs`),
-> not interoperability with a genuine driver on a live connection. Treat this as
-> unverified against a real peer.
+> **Two independent drivers connect to it**: Apache Derby 10.17.1.0's JDBC client and
+> IBM's own CLI driver (`ibm_db` 3.3.0), in `tests/server/db2/real_client_test.rs`.
+> Pointing them at it found seven defects, all fixed (below). It stays Experimental:
+> the statement path is the only one, and no result set can be returned.
 
 ## DRDA wire format (see `drda.rs` for the full comment)
 
@@ -25,8 +24,19 @@ a statement produces. **There is no storage** — no catalog, no tables, no rows
   object); high nibble = chaining flags.
 - **DDM object** (4-byte header): `length(u16) | codepoint(u16) | data`. The data
   region may hold nested code-pointed parameters.
-- Character fields (user id, RDB name, SQL text) are **IBM037 EBCDIC**; `drda.rs`
-  has a range-based CP037 codec both ways.
+- DDM character fields (user id, RDB name, product ids) are **IBM037 EBCDIC**;
+  `drda.rs` has a range-based CP037 codec both ways. UNICODEMGR is answered with level 0,
+  so a driver keeps them EBCDIC.
+- **SQL text is FD:OCA data**, not a DDM string: SQLSTT is a nullable mixed string with a
+  4-byte length (`0x00 | len | bytes`) then a null single-byte one, in the CCSID the driver
+  declared (UTF-8 for both drivers above). `decode_sqlstt` reads it, and still reads bare
+  EBCDIC, the form this server's own byte-literal tests send.
+- **A command is its RQSDSS plus the DSSes chained to it under the same correlator**
+  (format bit 0x10): EXCSQLIMM's SQLSTT, EXCSQLSET's statements, PRPSQLSTT's SQLATTR and
+  SQLSTT. The loop collects them (at most `MAX_DSS_PER_COMMAND`, 16) and answers the command
+  once. Replies to a request chained to a further command are chained (`chain_reply`).
+- ACCRDBRM declares `QTDSQLASC` with TYPDEFOVR CCSIDSBC/CCSIDMBC 1208, so SQLCA character
+  fields are ASCII.
 
 ## What is implemented
 
@@ -34,10 +44,13 @@ a statement produces. **There is no storage** — no catalog, no tables, no rows
 
 | Client command | Server reply | LLM? |
 |---|---|---|
-| `EXCSAT` (exchange server attributes) | `EXCSATRD` | no |
-| `ACCSEC` (access security) | `ACCSECRD` (echoes SECMEC) | no |
-| `SECCHK` (security check, carries USRID/PASSWORD/RDBNAM) | `SECCHKRM` | **yes** → `db2_connect` |
-| `ACCRDB` (access RDB) | `ACCRDBRM` (INFO if authenticated, else ERROR) | no |
+| `EXCSAT` (exchange server attributes) | `EXCSATRD`, each listed manager answered (AGENT/SQLAM/RDB/SECMGR up to 7, others 0) | no |
+| `ACCSEC` (access security) | `ACCSECRD`: SECMEC 3 or 4 accepted; any other answered with `[3, 4]` and SECCHKCD 0x01 | no |
+| `SECCHK` (security check, carries USRID/PASSWORD/RDBNAM) | `SECCHKRM`; a refusal ends the reply chain and the rest of the request chain is ignored | **yes** → `db2_connect` |
+| `ACCRDB` (access RDB) | `ACCRDBRM` (PRDID `SQL11055`) once authenticated, else `RDBATHRM` | no |
+| `EXCSQLSET` (the driver's special registers) | `SQLCARD` success once authenticated, logged `decision=session_setting` | no |
+| `RDBCMM` / `RDBRLLBCK` | `ENDUOWRM` (UOWDSP 1 / 2) + `SQLCARD` — nothing to commit | no |
+| `PRPSQLSTT`, `EXCSQLSTT` of a section, anything else | one `CMDNSPRM` naming the command | no |
 
 **The basic-query path**: `EXCSQLIMM` (execute immediate) with the SQL delivered
 as a `SQLSTT` object → `db2_query` event → the server replies with an `SQLCARD`
@@ -96,12 +109,38 @@ guaranteed: no reply DRDA builds here has a free-text field.
 
 ## SQLCARD encoding
 
-- **Success** (`sqlcode 0`): SQLCARD (0x2408) whose SQLCAGRP is the FDOCA NULL
-  indicator `0xFF` — the reply a real Db2 sends after a successful non-query
-  statement.
-- **Error**: SQLCAGRP present, then `SQLCODE(i32 BE) | SQLSTATE(5 EBCDIC) |
-  SQLERRPROC(8, "NETGET  ") | 0xFF`. The **extended diagnostic group
-  (SQLCAXGRP)** — SQLERRD counters, warning flags, message text — is sent NULL.
+- **Success** (`sqlcode 0`, no `rows_affected`): SQLCARD (0x2408) whose SQLCAGRP is the
+  FDOCA NULL indicator `0xFF`.
+- **Otherwise** a complete SQLAM 7 SQLCA (`sqlcard`): `0x00 | SQLCODE i32 | SQLSTATE(5) |
+  SQLERRPROC(8, "NETGET  ") | 0x00 SQLCAXGRP (SQLERRD1..6, SQLWARN0..A, three empty
+  strings) | 0xFF SQLDIAGGRP`. `rows_affected` travels in SQLERRD3, which JDBC and CLI
+  report as the update count. No message text is sent: Db2 sends tokens, and the model's
+  `message` is logged.
+
+## Defects the two drivers found (all fixed, October 2026)
+
+1. **Replies to chained requests were unchained.** Derby's driver sends EXCSAT chained to
+   ACCSEC and rejected the first reply: `Data Stream Syntax Error, Reason: 0x11`.
+2. **EXCSATRD listed no managers**, i.e. no SQLAM at all.
+3. **PRDID `NETGET0100` was not `pppvvrrm`**: Derby's driver parses the version digits out
+   of it and threw `NumberFormatException: For input string: "GE"`.
+4. **The error SQLCA lacked SQLDIAGGRP** and carried SQLSTATE in EBCDIC under an ASCII
+   TYPDEFNAM; a SQLAM 7 driver reads one byte past it.
+5. **SQL text was decoded as bare EBCDIC**, so the model was shown garbage for every
+   statement a real driver sent.
+6. **ACCSEC echoed whatever mechanism was asked for.** IBM's driver asks for encrypted
+   EUSRIDPWD (9) by default; its SECCHK then carries only an encrypted token, and the model
+   was asked to judge a login with an empty user id.
+7. **A refused login was not a refusal to IBM's driver.** SECCHKRM was followed by an
+   ACCRDBRM at severity ERROR, which the CLI driver took as an open connection (later
+   statements failed `-30082`); with RDBATHRM after a chained SECCHKRM it reported a data
+   stream syntax error. Now the refusal ends the reply chain, as Derby's own server does,
+   and the driver reports reason 24, USERNAME AND/OR PASSWORD INVALID.
+
+Also: `rows_affected`, declared on `db2_query_ok`, was read and never sent; RDBCMM (which
+every JDBC driver in autocommit sends after each statement) was refused with CMDNSPRM; and
+EXCSQLSET was refused, which made IBM's driver report the SET's error against the next
+statement.
 
 ## Architecture
 
@@ -144,8 +183,9 @@ Each connection registers a peer handle (`peer_support::register_peer_channel` +
   `QRYDTA` (row data) / `CNTQRY` / `CLSQRY`. Only the SQLCA (success/error
   indicator) is returned, so a driver can run INSERT/UPDATE/DELETE/DDL and read
   the SQLCODE, but **tabular rows are not delivered**.
-- Prepared statements with parameter markers (`PRPSQLSTT` + parameter marshalling).
-- The SQLCA extended diagnostic group (message text etc.).
+- Prepared statements (`PRPSQLSTT`, refused with CMDNSPRM). Derby's driver asks for error
+  message text with `CALL SYSIBM.SQLCAMESSAGE` this way and falls back to SQLCODE/SQLSTATE.
+- SQLCA message tokens and text; encrypted security mechanisms.
 - TLS, Kerberos/GSSAPI/encrypted SECMEC, connection pooling nuances, DRDA
   chaining beyond per-DSS request/reply.
 
@@ -156,10 +196,14 @@ Each connection registers a peer handle (`peer_support::register_peer_channel` +
 - `tests/server/db2/e2e_test.rs` — a real TCP connection driving the full
   handshake + an EXCSQLIMM statement against a running server with the LLM mocked,
   asserting reply code points and severities.
+- `tests/server/db2/real_client_test.rs` — Apache Derby's JDBC client and IBM's CLI
+  driver (`ibm_db`) against the server, with tshark's `drda` dissector over the recorded
+  conversation. Needs Java 21+ and `NETGET_DERBY_LIB`, and `NETGET_IBM_DB_PYTHON`; fails
+  without them.
 
 ```bash
-./cargo-isolated.sh test --no-default-features --features db2 \
-    --test server -- db2:: --test-threads=100
+./cargo-isolated.sh test --no-default-features --features tcp,db2 \
+    --test server -- db2:: --test-threads=4
 ```
 
 ## References
