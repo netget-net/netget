@@ -116,20 +116,34 @@ async fn the_models_dialogues_are_answered_by_jss7_and_each_builds_on_the_last()
     .unwrap();
 
     let state = AppState::new_with_options(false, "http://127.0.0.1:1".into());
-    let (tx, _) = mpsc::unbounded_channel();
-    let id = ClientForm {
-        protocol: "m3ua".into(),
-        remote_addr: Some(format!("127.0.0.1:{jss7_port}")),
-        instruction: Some("Be an SMSC".into()),
-        startup_params: Some(json!({"transport": "sctp", "local_port": netget_port, "opc": 1, "dpc": 2,
-            "routing_context": 100, "local_ssn": 8, "remote_ssn": 6,
-            "local_gt": "31600000100", "remote_gt": "31600000200"})),
-        event_handlers: Some(vec![json!({"event_pattern": "*", "handler": {"type": "script", "language": "python", "code": POLICY}})]),
-        ..Default::default()
-    }
-    .create(&state, netget::llm::OllamaClient::new("http://127.0.0.1:1"), tx)
-    .await
-    .unwrap();
+    // jSS7 binds its server association before its M3UA stack is started, and an association
+    // that arrives in between is accepted and closed again. NetGet's connect reports that as a
+    // failure (correctly: the SGP closed it before ASPUP ACK), so the test redials, as an ASP
+    // configured against a restarting SGP would, for up to fifteen seconds.
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    let id = loop {
+        let (tx, _) = mpsc::unbounded_channel();
+        let attempt = ClientForm {
+            protocol: "m3ua".into(),
+            remote_addr: Some(format!("127.0.0.1:{jss7_port}")),
+            instruction: Some("Be an SMSC".into()),
+            startup_params: Some(json!({"transport": "sctp", "local_port": netget_port, "opc": 1, "dpc": 2,
+                "routing_context": 100, "local_ssn": 8, "remote_ssn": 6,
+                "local_gt": "31600000100", "remote_gt": "31600000200"})),
+            event_handlers: Some(vec![json!({"event_pattern": "*", "handler": {"type": "script", "language": "python", "code": POLICY}})]),
+            ..Default::default()
+        }
+        .create(&state, netget::llm::OllamaClient::new("http://127.0.0.1:1"), tx)
+        .await;
+        match attempt {
+            Ok(id) => break id,
+            Err(e) if std::time::Instant::now() < deadline => {
+                eprintln!("jSS7 not ready yet ({e:#}); redialling");
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            Err(e) => panic!("{e:#}\n{}", peer.lines().join("\n")),
+        }
+    };
 
     // jSS7 answered the unknown subscriber with a MAP error, decoded for the model.
     let err = wait_event(&state, id, "m3ua_map_received", 60, |e| {
