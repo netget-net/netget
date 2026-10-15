@@ -14,11 +14,12 @@ unprivileged — do NOT declare `PrivilegedPort`). **Stack**: `ETH>IP>TCP>HTTP>S
 |---|---|---|
 | `GET /api/v1/version` | version | **static** (banner, no LLM) |
 | `GET /api/v1/applications` | applications | LLM → `send_spark_applications` |
-| `GET /api/v1/applications/{id}` | application | LLM → `send_spark_applications` (one element) |
+| `GET /api/v1/applications/{id}` | application | LLM → `send_spark_applications` (one element, sent as the object) |
 | `GET /api/v1/applications/{id}/jobs` | jobs | LLM → `send_spark_jobs` |
 | `GET /api/v1/applications/{id}/stages` | stages | LLM → `send_spark_stages` |
 | `GET /api/v1/applications/{id}/executors` | executors | LLM → `send_spark_executors` |
-| other `/api/v1/applications/{id}/...` | application | LLM (answer or 404 via `send_spark_error`) |
+| `GET /api/v1/applications/{id}/storage/rdd` | rdd | LLM → `send_spark_rdds` |
+| other `/api/v1/applications/{id}/...` | application_resource | LLM (answer or 404 via `send_spark_error`) |
 | anything else | unknown | **static** 404 plain text (no LLM) |
 
 **Static vs LLM split**: `/api/v1/version` is a mechanical version string, answered directly in
@@ -29,8 +30,12 @@ static plain-text 404. Everything describing (invented) application state is LLM
 
 Spark's monitoring API returns **top-level JSON arrays**, not objects. `execute_action` emits the
 array supplied by the model directly as the body (`Content-Type: application/json`):
-`[{application}]`, `[{job}]`, `[{stage}]`, `[{executor}]`. `/api/v1/version` is the one object,
-`{"spark":"<version>"}`. Errors are plain text (`Content-Type: text/plain`), matching Spark
+`[{application}]`, `[{job}]`, `[{stage}]`, `[{executor}]`, `[{rdd}]`. Two answers are objects:
+`/api/v1/version`, `{"spark":"<version>"}`, and **one application**, `GET
+/api/v1/applications/{id}`, which Spark answers `{id, name, attempts}` — the model answers it with
+`send_spark_applications` and one element, and `mod.rs` (`single_element`) sends that element.
+It used to go out as `[{...}]`, which a strict consumer reads as the wrong type. Errors are plain
+text (`Content-Type: text/plain`), matching Spark
 (e.g. `unknown app: app-1`) — except the fail-closed path, see below.
 
 ## Events / actions
@@ -40,7 +45,7 @@ short-circuit before it). It declares the full action set via `.with_actions(...
 action is reachable, so nothing is declared-but-unemitted.
 
 Actions: `send_spark_applications`, `send_spark_jobs`, `send_spark_stages`,
-`send_spark_executors`, `send_spark_error`. All parameters are structured JSON arrays — never raw
+`send_spark_executors`, `send_spark_rdds`, `send_spark_error`. All parameters are structured JSON arrays — never raw
 bytes or base64. `spark_response` is the internal `ActionResult::Custom` name, not an emittable
 action.
 
@@ -94,8 +99,10 @@ actually read in `spawn()`. `send_first` is not declared.
 ## Limitations
 
 Monitoring API only (the tractable, testable core). No standalone-master submission endpoint
-(`POST /v1/submissions/create`), no SQL/streaming/environment/storage sub-resources, no
-event-log download. HTTP/1.1 only. State is virtual and lives only in the model's context.
+(`POST /v1/submissions/create`); SQL, streaming, environment, a single job or stage and every
+other per-application path reach the model as `application_resource` with no action of their
+own (the model answers with the closest array action or 404s); no event-log download; no
+`/metrics/json` servlet (a static 404). HTTP/1.1 only. State is virtual and lives only in the model's context.
 
 **No authentication of any kind**, and nothing about the requester reaches the model: the
 `spark_request` event carries `method`, `path`, `operation` and `app_id` and nothing else, so
@@ -110,11 +117,26 @@ a `trace!` line, but it was read with an unbounded `collect()`, which made an un
 POST of any size a way to grow the process. An over-cap body is dropped, not refused — nothing
 downstream reads it and every endpoint here is a GET.
 
-**Maturity stays `Experimental`, deliberately.** The tests drive `reqwest`, a generic HTTP
-client: it proves the server answers HTTP and that the bodies are the JSON arrays Spark's API
-documents, not that a real Spark client or History Server UI accepts them. That is the
-generic-HTTP-client exclusion the root `AGENTS.md` lists, and it is the whole distance between
-this rating and Beta.
+**Datadog's Spark integration is the independent consumer.** `tests/server/spark/
+datadog_check_test.rs` runs `datadog_checks.spark` (integrations-core tag `spark-7.8.0`, each
+file's SHA-256 pinned by `install_datadog_check.sh`) once in `spark_driver_mode` against this
+server, with the Agent replaced by `datadog_checks.base`'s own stubs, and asserts what the check
+*submitted* from the model's answers: job and stage counts with their status/id tags, task
+counts, run times, the driver's and the executor's metrics kept apart, executor-level metrics,
+the cached RDD's metrics, the version metadata from the static banner, and the service checks.
+It reads, in order, the version, the applications, then per application jobs, stages,
+executors, `storage/rdd` and `streaming/statistics`, then `/metrics/json`.
+
+What it found: `storage/rdd` — read on every Agent run — had no action. It fell into the
+generic per-application path, where the only truthful answer was a 404, which the check reports
+as a CRITICAL `spark.application_master.can_connect`. It is now operation `rdd` with
+`send_spark_rdds` (a real non-streaming driver answers `[]` there and a 404 for
+`streaming/statistics`, which is what the test's model does).
+
+**Maturity stays `Experimental`.** One independent consumer, which reads the list endpoints
+only: nothing third-party has driven `/applications/{id}`, a single job or stage, the
+environment or SQL. A second consumer of those is the step to Beta; NetGet's own Spark client
+(`src/client/spark/`) is tested against real Spark and would be circular here.
 
 **Request-only.** `metadata()` declares `.request_only(…)`: "The Spark REST API is HTTP
 request/response; a server cannot send a peer anything unprompted". The dashboard's
@@ -139,8 +161,10 @@ halves; the constants and the reasoning live beside them in `src/server/spark/mo
 | `IDLE_BETWEEN_REQUESTS_TIMEOUT` | 180s | The monitoring API is read-only and polled on a seconds-to-minutes cycle, so the silence measured is a poller that has stopped. Above any scrape interval anyone configures and more than twice nginx's `keepalive_timeout` default of 75s. |
 | `MAX_CONNECTIONS` | 256 | Each admitted connection may hold one whole in-memory response body (a JSON response), so the cap turns that per-connection bound into a total one. Refusal: **HTTP/1.1 `503 Service Unavailable` with `Retry-After: 5`** — a 503 is what a monitoring client and a dashboard both already understand. Nothing of netget's reaches the wire; the reason is logged under `decision=fail_closed_connection_cap`. |
 
-**There is no NetGet Spark client**, so this bound has no peer of ours to strand — the fourth
-exemption in `PROTOCOL_QUALITY.md`'s three-state test.
+**NetGet's Spark client (`src/client/spark/`) cannot be stranded by it**: it is a reqwest
+client, so it opens a socket only to send a request (the *lazy* state in
+`PROTOCOL_QUALITY.md`'s three-state test), and its `connect()` sends `GET /api/v1/version`
+before any model turn. A pooled connection the idle watchdog closes is simply reopened.
 
 **The idle bound is a watchdog, not a read deadline, and that is not a stylistic choice.** hyper
 owns every read once `serve_connection` starts and keeps polling the connection for new frames

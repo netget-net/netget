@@ -216,6 +216,7 @@ fn normalized_duals_map() {
     assert_eq!(client_protocol_for_server("GTP"), Some("GTP"));
     assert_eq!(client_protocol_for_server("Db2"), Some("Db2"));
     assert_eq!(client_protocol_for_server("Snowflake"), Some("Snowflake"));
+    assert_eq!(client_protocol_for_server("Spark"), Some("Spark"));
 }
 
 /// Server-only protocols must return None — a false positive here would make
