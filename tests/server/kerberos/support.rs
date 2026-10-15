@@ -165,6 +165,9 @@ pub struct Tools {
     pub mit_ktutil: PathBuf,
     pub heimdal_kinit: PathBuf,
     pub heimdal_klist: PathBuf,
+    /// Arguments that select `klist` inside Heimdal 7's multi-call `heimtools` (empty for a
+    /// standalone `klist`). See [`Tools::heimdal_klist_args`].
+    pub heimdal_klist_prefix: Vec<&'static str>,
     pub heimdal_kgetcred: PathBuf,
 }
 
@@ -214,7 +217,12 @@ const MIT_KTUTIL: &[&str] = &[
     "/usr/bin/ktutil.mit",
 ];
 const HEIMDAL_KINIT: &[&str] = &["/usr/bin/kinit.heimdal", "/usr/bin/kinit"];
-const HEIMDAL_KLIST: &[&str] = &["/usr/bin/klist.heimdal", "/usr/bin/klist"];
+/// Heimdal 7's `klist` is a command of the multi-call `heimtools`, which picks the command from
+/// `argv[0]` only when the name is exactly `klist` (kuser/heimtools.c, `command_alias`). Ubuntu's
+/// `klist.heimdal` is a symlink to it under the suffixed name, so run as such it prints
+/// `Usage: klist.heimdal [--version] [--help] command ..`: call `heimtools klist` instead. macOS
+/// ships a standalone `klist` (Heimdal 1.5).
+const HEIMDAL_KLIST: &[&str] = &["/usr/bin/heimtools", "/usr/bin/klist"];
 const HEIMDAL_KGETCRED: &[&str] = &["/usr/bin/kgetcred"];
 
 /// The first candidate that exists, after the override directory.
@@ -255,14 +263,32 @@ pub fn tools() -> Tools {
         "{} is not Heimdal's kinit (its --version printed {banner:?}). {INSTALL}",
         heimdal_kinit.display()
     );
-    Tools {
+    let mut tools = Tools {
         mit_kinit: need("MIT kinit", mit(MIT_KINIT)),
         mit_klist,
         mit_kvno: need("MIT kvno", mit(MIT_KVNO)),
         mit_ktutil: need("MIT ktutil", mit(MIT_KTUTIL)),
+        heimdal_klist_prefix: Vec::new(),
         heimdal_klist: need("Heimdal klist", heimdal(HEIMDAL_KLIST)),
         heimdal_kgetcred: need("Heimdal kgetcred", heimdal(HEIMDAL_KGETCRED)),
         heimdal_kinit,
+    };
+    if tools
+        .heimdal_klist
+        .file_name()
+        .is_some_and(|n| n == "heimtools")
+    {
+        tools.heimdal_klist_prefix = vec!["klist"];
+    }
+    tools
+}
+
+impl Tools {
+    /// `args` for Heimdal's klist, behind `klist` when it is `heimtools`.
+    pub fn heimdal_klist_args<'a>(&self, args: &[&'a str]) -> Vec<&'a str> {
+        let mut v: Vec<&'a str> = self.heimdal_klist_prefix.clone();
+        v.extend_from_slice(args);
+        v
     }
 }
 

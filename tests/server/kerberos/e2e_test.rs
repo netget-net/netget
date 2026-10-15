@@ -395,11 +395,17 @@ async fn every_undecided_request_fails_closed_with_an_error_the_model_cannot_sen
     )
     .unwrap();
 
-    // The model is unreachable.
+    // The model is unreachable: KRB_ERR_GENERIC, never KDC_ERR_SVC_UNAVAILABLE, which Heimdal
+    // 7.8 clients retry against a lone KDC forever.
     let kdc = support::start(None, support::params()).await;
+    let reply = udp(kdc.addr(), &msg).await.unwrap();
+    let Reply::Error(e) = wire::parse_reply(&reply).unwrap() else {
+        panic!("a ticket with the model unreachable");
+    };
+    assert_eq!(e.error_code.0 as i32, codec::KRB_ERR_GENERIC);
     assert_eq!(
-        error_code(&udp(kdc.addr(), &msg).await.unwrap()),
-        codec::KDC_ERR_SVC_UNAVAILABLE
+        wire::error_summary(&e)["text"],
+        "no policy decision: the policy engine is unavailable"
     );
     assert!(kdc.wait_for_log("decision=fail_closed_llm_error").await);
 

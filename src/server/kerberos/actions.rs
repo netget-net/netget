@@ -422,9 +422,9 @@ impl Protocol for KerberosProtocol {
         };
         ProtocolMetadataV2::builder()
             .connectionless()
-            // Every undecided request gets a KRB-ERROR: KDC_ERR_SVC_UNAVAILABLE when the model
-            // could not be reached, KRB_ERR_GENERIC when it answered nothing usable. Never a
-            // ticket; the model's own refusals cannot use either code.
+            // Every undecided request gets a KRB-ERROR: KRB_ERR_GENERIC, with e-text saying
+            // whether the model could not be reached or answered nothing usable. Never a
+            // ticket; the model's own refusals cannot use the code.
             .answers_on_failure()
             .state(DevelopmentState::Experimental)
             .privilege_requirement(PrivilegeRequirement::PrivilegedPort(88))

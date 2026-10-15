@@ -15,7 +15,10 @@ or a static rule that admits everything (so every refusal observed is Rust's).
 - MIT krb5: macOS `brew install krb5` (keg-only, found under `/opt/homebrew/opt/krb5/bin`);
   Ubuntu `krb5-user` (`kinit.mit`, `klist.mit`, `ktutil.mit`, `kvno`).
 - Heimdal: macOS ships it in `/usr/bin` (Heimdal 1.5.1apple1); Ubuntu `heimdal-clients`
-  (`kinit.heimdal`, `klist.heimdal`, `kgetcred`), installable beside MIT.
+  (`kinit.heimdal`, `kgetcred`, and `heimtools`), installable beside MIT. Heimdal 7's `klist` is
+  a command of the multi-call `heimtools`, chosen from `argv[0]` only when that is exactly
+  `klist`, so Ubuntu's `klist.heimdal` symlink prints a usage message; the suite runs
+  `heimtools klist` (`Tools::heimdal_klist_args`).
 - `tshark`. Overrides: `NETGET_KRB5_MIT_DIR`, `NETGET_KRB5_HEIMDAL_DIR`.
 
 Every tool runs with `LC_ALL=C`. MIT `klist` formats times by trying `%c`, `%d %b %Y %T` and
@@ -28,6 +31,17 @@ MIT `krb5.conf` syntax does not accept `kdc = tcp/host:port`; TCP is forced with
 
 tshark reports "Missing keytype … usage 8 or 9" at Warn when it tries to decrypt a TGS-REP with
 no keytab; the oracle allows exactly that note and nothing else.
+
+## Checked on Ubuntu 24.04 (Heimdal 7.8.0, MIT 1.20)
+
+The first CI run failed two tests that macOS could not: `klist.heimdal` (above), and Heimdal
+7.8's `kinit` spinning forever on KDC_ERR_SVC_UNAVAILABLE, which the KDC then sent for an
+unreachable model (see `src/server/kerberos/AGENTS.md`; it now sends KRB_ERR_GENERIC). Both
+were reproduced and their fixes confirmed in an ubuntu:24.04 container with the CI job's
+packages, as an unprivileged user, driving NetGet's KDC on the host: kinit/heimtools
+klist -v/kgetcred, the wrong password ("Password incorrect"), MIT kinit -f -r 1d and klist -f -e
+(`10/15/26 09:38:14`, Flags FRIA), and both kinits against an unreachable model, which now exit
+at once with NetGet's e-text.
 
 ## Mutation-checked (October 2026)
 
