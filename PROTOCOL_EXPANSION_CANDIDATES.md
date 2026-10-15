@@ -154,7 +154,7 @@ Effort **S/M/L** covers both roles plus interoperability tests.
 
 | Protocol | Why deferred |
 |---|---|
-| **Kerberos KDC** | ASN.1 + session crypto, model contributes little; same rationale as the already-deferred IPMI/WinRM/DCERPC. Peers (MIT krb5, Heimdal) exist if ever revisited. |
+| ~~**Kerberos KDC**~~ | **Landed 15 October 2026** as the `kerberos` pair: AS and TGS over UDP and TCP with PA-ENC-TIMESTAMP, aes256/aes128-cts-hmac-sha1-96, the model deciding admission, errors, lifetimes and flags under Rust-enforced ceilings, failing closed with KRB_ERR_GENERIC. Against MIT krb5 and Heimdal (kinit, klist, kvno, kgetcred; krb5kdc and kdc) under tshark's `kerberos` dissector. Not built: RFC 8009, FAST, PKINIT, PAC, cross-realm, renewal, S4U, kpasswd. |
 | **SPICE / PCoIP** | Heavy binary display protocols; little LLM surface. |
 | **Ethereum devp2p / RLPx** | ECIES handshake + RLP, crypto-heavy, model contributes little. |
 | **SS7 / SCCP / MAP / CAMEL / H.323** | Legacy telecom, ASN.1/IDL marshalling, SCTP transport. |
