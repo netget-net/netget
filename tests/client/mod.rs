@@ -414,6 +414,8 @@ pub mod ninep;
 pub mod onvif;
 #[cfg(feature = "pfcp")]
 pub mod pfcp;
+#[cfg(feature = "gtp")]
+pub mod gtp;
 #[cfg(feature = "pulsar")]
 pub mod pulsar;
 #[cfg(feature = "radsec")]

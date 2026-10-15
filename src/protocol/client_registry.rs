@@ -666,6 +666,10 @@ impl ClientRegistry {
         self.register(Arc::new(
             crate::client::pfcp::actions::PfcpClientProtocol::new(),
         ));
+        #[cfg(feature = "gtp")]
+        self.register(Arc::new(
+            crate::client::gtp::actions::GtpClientProtocol::new(),
+        ));
         #[cfg(feature = "matrix")]
         self.register(Arc::new(
             crate::client::matrix::actions::MatrixClientProtocol::new(),
@@ -1284,6 +1288,7 @@ pub(crate) const ALL_KNOWN_CLIENT_PROTOCOLS: &[(&str, &str)] = &[
     ("rsync", "rsync"),
     ("RDP", "rdp-client"),
     ("PFCP", "pfcp"),
+    ("GTP", "gtp"),
     ("NGAP", "ngap"),
     ("Matrix", "matrix"),
     ("libp2p", "libp2p"),

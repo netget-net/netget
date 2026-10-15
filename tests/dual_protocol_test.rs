@@ -213,6 +213,7 @@ fn normalized_duals_map() {
     assert_eq!(client_protocol_for_server("RTSP"), Some("RTSP"));
     assert_eq!(client_protocol_for_server("HLS"), Some("HLS"));
     assert_eq!(client_protocol_for_server("RDP"), Some("RDP"));
+    assert_eq!(client_protocol_for_server("GTP"), Some("GTP"));
 }
 
 /// Server-only protocols must return None — a false positive here would make
