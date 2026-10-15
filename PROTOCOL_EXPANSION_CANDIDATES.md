@@ -71,7 +71,12 @@ What is left from this document, with the reason each is still open:
     mode (CRC16 hash slots, `CLUSTER SLOTS/SHARDS/NODES`, MOVED/ASK/CROSSSLOT on the server; a
     slot-routing client following MOVED and ASK), against redis-cli, redis-rs and a real
     three-node cluster. No cluster bus, replicas, keyspace notifications or `CLIENT TRACKING`.
-- **Peer-limited missing clients**: spark and yarn still have no client.
+- **Peer-limited missing clients**: yarn still has no client.
+  ~~spark~~ landed 15 October 2026 at Beta (the monitoring REST API: applications, jobs,
+  stages with attempts and task summaries, executors, environment, SQL executions), against
+  a real Apache Spark 4.2.0's live driver UI and History Server; the same pass drove the Spark
+  server with Datadog's Spark check and fixed the two defects it exposed. The REST submission
+  API is deliberately not built: it runs arbitrary code on a cluster.
   ~~snowflake~~ landed 15 October 2026 (connector REST protocol: password login, queries
   with JSON and Arrow rowsets decoded by column type, token renewal, result polling,
   logout; the target is mandatory and never derived) against fakesnow and
