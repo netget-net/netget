@@ -990,26 +990,27 @@ async fn multipart(conn: &Conn, m: &Message, hs: &mut Handshake, jobs: &mpsc::Se
         let Ok(mut book) = conn.book.lock() else {
             return;
         };
-        let matches = book.replies.get(&m.header.xid).is_some_and(
+        // The reply belongs to the request with its xid, and only if it is the same kind.
+        let xid = m.header.xid;
+        let matches = book.replies.get(&xid).is_some_and(
             |o| matches!(o.expect, Expect::Handshake(t) | Expect::Stats(t) if t == mtype),
         );
         if !matches {
             drop(book);
             conn.log().info(format!(
-                "OpenFlow {} multipart reply with xid {:#x} answers nothing NetGet asked; \
+                "OpenFlow {} multipart reply with xid {xid:#x} answers nothing NetGet asked; \
                  ignored decision=protocol_unsolicited_reply",
                 wire::mp::name(mtype),
-                m.header.xid
             ));
             return;
         }
-        let Some(o) = book.replies.get_mut(&m.header.xid) else {
+        let Some(o) = book.replies.get_mut(&xid) else {
             return;
         };
         o.n_parts += 1;
         if o.parts.len() + body.len() > MAX_MULTIPART_BYTES || o.n_parts > MAX_MULTIPART_PARTS {
             overflow = Some((o.expect, o.depth));
-            book.replies.remove(&m.header.xid);
+            book.replies.remove(&xid);
             finished = None;
         } else {
             o.parts.extend_from_slice(body);
@@ -1018,7 +1019,7 @@ async fn multipart(conn: &Conn, m: &Message, hs: &mut Handshake, jobs: &mpsc::Se
             } else {
                 finished = book
                     .replies
-                    .remove(&m.header.xid)
+                    .remove(&xid)
                     .map(|o| (o.expect, o.depth, o.parts));
             }
         }

@@ -249,9 +249,17 @@ impl RawSwitch {
     }
 
     /// The next message of `msg_type`, answering ECHO_REQUESTs on the way.
+    /// Within 30 s overall: the controller's keepalive ECHOs must not keep a wait alive.
     pub async fn expect(&mut self, msg_type: u8) -> Message {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
         loop {
-            let m = self.recv().await;
+            let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let m = self.recv_within(left).await.unwrap_or_else(|| {
+                panic!(
+                    "no {} from the controller within 30 s",
+                    wire::msg_name(msg_type)
+                )
+            });
             if m.header.msg_type == msg_type {
                 return m;
             }

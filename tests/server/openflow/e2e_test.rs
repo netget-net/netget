@@ -254,11 +254,18 @@ async fn replies_are_matched_to_requests_by_xid_and_multipart_is_reassembled() {
         .encode(&mut b);
         b
     };
-    // A reply nobody asked for (wrong xid), and a FEATURES_REPLY nobody asked for: ignored.
+    // A reply nobody asked for (wrong xid), a reply of the wrong kind on the right xid, and a
+    // FEATURES_REPLY nobody asked for: all ignored.
     sw.send(
         msg::MULTIPART_REPLY,
         xid + 1000,
         &wire::multipart_body(wire::mp::FLOW, 0, &entry(99)),
+    )
+    .await;
+    sw.send(
+        msg::MULTIPART_REPLY,
+        xid,
+        &wire::multipart_body(wire::mp::PORT_STATS, 0, &[0; 112]),
     )
     .await;
     sw.send(msg::FEATURES_REPLY, xid + 1001, &[0; 24]).await;

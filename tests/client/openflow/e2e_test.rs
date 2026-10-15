@@ -41,9 +41,15 @@ impl Ctl {
     }
 
     /// The next message of `t` (answering the switch's ECHOs on the way).
+    /// Within 30 s overall: the switch's keepalive ECHOs must not keep a wait alive.
     async fn expect(&mut self, t: u8) -> Message {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
         loop {
-            let m = self.recv().await;
+            let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let m = self
+                .recv_within(left)
+                .await
+                .unwrap_or_else(|| panic!("no {} from the switch within 30 s", wire::msg_name(t)));
             if m.header.msg_type == t {
                 return m;
             }
