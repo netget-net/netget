@@ -305,6 +305,9 @@ pub async fn run(program: &Path, args: &[&str], conf: &Path, ccache: &Path, stdi
     let mut child = tokio::process::Command::new(program)
         .args(args)
         .env("KRB5_CONFIG", conf)
+        // MIT klist formats times with the locale's `%x %X`; C makes it `10/15/26 04:43:52`
+        // on every machine, so the parser below has one shape to read.
+        .env("LC_ALL", "C")
         .env("KRB5CCNAME", format!("FILE:{}", ccache.display()))
         .env_remove("KRB5_KTNAME")
         .env_remove("KRB5_CLIENT_KTNAME")

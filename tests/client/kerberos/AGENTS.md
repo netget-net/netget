@@ -12,7 +12,11 @@ No LLM calls: a python chain is the model.
 - MIT: `brew install krb5`; Ubuntu `krb5-kdc krb5-admin-server krb5-user`.
 - Heimdal KDC: macOS ships `/System/Library/PrivateFrameworks/Heimdal.framework/Helpers/kdc`
   (needs `--no-sandbox` to bind a test port; the test adds it only there) and `/usr/sbin/kadmin`;
-  Ubuntu `heimdal-kdc heimdal-clients` (`/usr/lib/heimdal-servers/kdc`, `kadmin.heimdal`).
+  Ubuntu `heimdal-clients` (`kadmin.heimdal`) and `heimdal-kdc`'s `kdc`. **`heimdal-kdc`
+  declares `Conflicts: krb5-kdc, krb5-admin-server`**, so CI installs its libraries normally,
+  unpacks the package itself with `dpkg -x` into a private prefix and appends
+  `<prefix>/usr/lib/heimdal-servers` to `PATH`. Heimdal 7.8 logs "KDC started master process
+  pid=…" (kdc/connect.c), which the readiness regex `KDC started` matches.
   `tests/helpers/real_server.rs` searches both directories, and Homebrew's keg-only krb5 first
   (macOS's `/usr/sbin/kadmin.local` is Apple's, not MIT's).
 

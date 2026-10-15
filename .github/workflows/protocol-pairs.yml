@@ -8703,25 +8703,42 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: protocol-pairs-${{ github.job }}
-      - name: Install MIT krb5 and Heimdal side by side, and tshark
+      - name: Install MIT krb5, Heimdal's clients and libraries, and Heimdal's KDC unpacked
         run: |
           set -euo pipefail
-          # Both KDC packages start a daemon on port 88 when installed; the tests run their own
-          # in temporary directories, so service starts are refused for the install.
+          # krb5-kdc starts a daemon on port 88 when installed; the tests run their own KDCs in
+          # temporary directories, so service starts are refused for the install.
           printf '#!/bin/sh\nexit 101\n' | sudo tee /usr/sbin/policy-rc.d >/dev/null
           sudo chmod +x /usr/sbin/policy-rc.d
           echo 'krb5-config krb5-config/default_realm string NETGET.TEST' | sudo debconf-set-selections
           echo 'wireshark-common wireshark-common/install-setuid boolean false' | sudo debconf-set-selections
           sudo apt-get update
-          # MIT installs kinit.mit/klist.mit/ktutil.mit/kvno and krb5kdc, kdb5_util,
-          # kadmin.local; Heimdal installs kinit.heimdal/klist.heimdal/kgetcred/kadmin.heimdal
-          # and /usr/lib/heimdal-servers/kdc. The suites call each by its own name.
+          # MIT: kinit.mit/klist.mit/ktutil.mit/kvno, krb5kdc, kdb5_util, kadmin.local.
+          # Heimdal: kinit.heimdal/klist.heimdal/kgetcred/kadmin.heimdal. These coexist.
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            krb5-user krb5-kdc krb5-admin-server heimdal-clients heimdal-kdc tshark python3
+            krb5-user krb5-kdc krb5-admin-server heimdal-clients tshark python3
+          # heimdal-kdc declares Conflicts: krb5-kdc, krb5-admin-server (both own port 88 as a
+          # service), so it is not installed. Its shared libraries conflict with nothing and are
+          # installed normally; the package itself is unpacked into a private prefix and its
+          # kdc binary put on PATH, where tests/helpers/real_server.rs finds it as `kdc`.
+          libs=$(apt-cache depends --no-recommends --no-suggests heimdal-kdc \
+            | awk '$1 == "Depends:" && $2 ~ /^lib/ {print $2}' | sort -u)
+          echo "heimdal-kdc libraries: $libs"
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $libs
+          prefix="$RUNNER_TEMP/heimdal-kdc"
+          mkdir -p "$prefix/deb"
+          (cd "$prefix/deb" && apt-get download heimdal-kdc)
+          dpkg -x "$prefix"/deb/heimdal-kdc_*.deb "$prefix"
+          if ldd "$prefix/usr/lib/heimdal-servers/kdc" | grep 'not found'; then
+            echo "Heimdal's kdc is missing a library" >&2
+            exit 1
+          fi
+          echo "$prefix/usr/lib/heimdal-servers" >> "$GITHUB_PATH"
           sudo rm -f /usr/sbin/policy-rc.d
           klist.mit -V
           kinit.heimdal --version
-          ls -l /usr/lib/heimdal-servers/kdc /usr/sbin/krb5kdc
+          "$prefix/usr/lib/heimdal-servers/kdc" --version
+          ls -l /usr/sbin/krb5kdc /usr/sbin/kadmin.local /usr/bin/kadmin.heimdal
       - name: Compile kerberos as a standalone Cargo feature
         run: cargo check --locked --no-default-features --features kerberos --all-targets
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths

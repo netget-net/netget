@@ -18,6 +18,11 @@ or a static rule that admits everything (so every refusal observed is Rust's).
   (`kinit.heimdal`, `klist.heimdal`, `kgetcred`), installable beside MIT.
 - `tshark`. Overrides: `NETGET_KRB5_MIT_DIR`, `NETGET_KRB5_HEIMDAL_DIR`.
 
+Every tool runs with `LC_ALL=C`. MIT `klist` formats times by trying `%c`, `%d %b %Y %T` and
+then `%x %X` in a 20-byte buffer (krb5 `str_conv.c`); in the C locale only `%x %X` fits, giving
+`10/15/26 04:43:52` on macOS and Ubuntu alike. Heimdal's `klist -v` prints `ctime(3)` from the
+month on, which no locale changes.
+
 MIT `krb5.conf` syntax does not accept `kdc = tcp/host:port`; TCP is forced with
 `udp_preference_limit = 1`. Heimdal takes the `tcp/` prefix. Hence `Via::{MitTcp, HeimdalTcp}`.
 
