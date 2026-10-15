@@ -122,6 +122,10 @@ Nothing here confirms or connects on its own.
 
 `tests/server/h323/AGENTS.md`. In short: H323Plus (`simph323`) and ooh323c (Asterisk's
 `chan_ooh323`) register with the gatekeeper and call the endpoint; tshark's h225/q931/h245
-dissectors read every message from a live capture. Experimental: nobody has reviewed the H.245
-subset or the generated schema against the specifications, there is no fuzz target for the PER
-decoder, and the pair job had not run in CI when this landed.
+dissectors read every message from a live capture. `fuzz/fuzz_targets/h323_per.rs` drives the
+PER decoder from every root (and the two recursive types on their own) with a depth bomb in its
+corpus, re-encodes whatever decodes and requires it to decode the same; it ran 500 000 inputs
+clean for ten minutes on macOS, without a sanitizer (the nightly's AddressSanitizer runtime
+hangs at start-up on that Darwin). Experimental: nobody has reviewed the H.245 subset or the
+generated schema against the specifications, and the pair job had not run in CI when this
+landed.

@@ -639,8 +639,11 @@ impl Protocol for H323GatekeeperProtocol {
             )
             .notes(
                 "Experimental: two independent H.323 implementations (ooh323c and H323Plus) \
-                 complete registration and admission against it, but no fuzz target exists for \
-                 its PER decoder and nobody has reviewed it against H.225.0 clause by clause. \
+                 complete registration and admission against it in tests that fail rather than \
+                 skip, and its PER decoder has a fuzz target (fuzz/fuzz_targets/h323_per.rs, \
+                 with a depth bomb in its corpus, run once for 500 000 inputs without a \
+                 sanitizer), but nobody has reviewed it against H.225.0 clause by clause and its \
+                 pair job had not run in CI when it landed. \
                  Direct call model only (ACF names the destination; the gatekeeper does not route \
                  signalling). No H.235 security: tokens are decoded past by length and never \
                  checked. No alternate gatekeepers, no inter-gatekeeper LRQ forwarding.",
@@ -1193,9 +1196,10 @@ impl Protocol for H323EndpointProtocol {
             )
             .notes(
                 "Experimental: two independent H.323 stacks (ooh323c and H323Plus) complete \
-                 calls with it in tests that fail rather than skip, but no fuzz target exists for \
-                 the PER decoder and nobody has reviewed the H.245 subset against the \
-                 specification. No separate H.245 channel (tunnelling or fastStart only; a \
+                 calls with it in tests that fail rather than skip and the PER decoder has a fuzz \
+                 target (fuzz/fuzz_targets/h323_per.rs), but nobody has reviewed the H.245 \
+                 subset against the specification and its pair job had not run in CI when it \
+                 landed. No separate H.245 channel (tunnelling or fastStart only; a \
                  caller that offers neither still connects at the Q.931 level, with no media \
                  negotiated). G.711 only. No media is sent and none is decoded. No H.235 \
                  security, no H.450 supplementary services, no overlap sending.",
