@@ -71,8 +71,10 @@ What is left from this document, with the reason each is still open:
     mode (CRC16 hash slots, `CLUSTER SLOTS/SHARDS/NODES`, MOVED/ASK/CROSSSLOT on the server; a
     slot-routing client following MOVED and ASK), against redis-cli, redis-rs and a real
     three-node cluster. No cluster bus, replicas, keyspace notifications or `CLIENT TRACKING`.
-- **Peer-limited missing clients**: gtp, db2, snowflake, spark and yarn still have no
-  client. None has a clean local independent server to test against.
+- **Peer-limited missing clients**: db2, snowflake, spark and yarn still have no client.
+  ~~gtp~~ landed 15 October 2026 (S5/S11 GTPv2 and Gn GTPv1, control and user plane),
+  against wmnsk/go-gtp and osmo-ggsn with the kernel tun, under tshark's `gtpv2`/`gtp`
+  dissectors.
 - **Tier C**: all deferred, unchanged, for the reasons in the table below. This includes
   the LoRaWAN Semtech UDP packet-forwarder slice, which could be promoted if IoT is
   wanted.
