@@ -341,7 +341,15 @@ async fn ibm_db_client_against_netget_db2_server() -> E2EResult<()> {
     );
 
     let recording = recording.lock().unwrap().clone();
-    let mut oracle = PcapOracle::tcp("db2");
+    // Judge NetGet's direction only. IBM's Linux x86_64 CLI driver sends an EXCSAT whose
+    // EXTNAM is EBCDIC text, then 32 NUL bytes, then more text ("python  ...000039D0000",
+    // NULs, "-0001runner..."). tshark's drda dissector also shows every parameter as an ASCII
+    // string, and Wireshark flags a string holding a NUL followed by more data as "[Warn]
+    // Trailing stray characters" - IBM's bytes, in a field NetGet's server does not read.
+    // tshark 4.6.8 flags those bytes and passed the macOS arm64 driver's, so the Mac build
+    // lays EXTNAM out differently; it is the driver build, not the tshark version (CI has
+    // 4.2.2). Derby's driver above is still judged in both directions.
+    let mut oracle = PcapOracle::tcp("db2").peer_input_is_context();
     for (to_server, bytes) in &recording {
         oracle = if *to_server {
             oracle.to_server(bytes)

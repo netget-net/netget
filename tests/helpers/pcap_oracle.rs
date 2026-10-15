@@ -371,8 +371,12 @@ impl PcapOracle {
     /// about the server, so failing on it would be exactly the false positive that
     /// gets an oracle ignored.
     ///
-    /// Use this only where the peer's payload is arbitrary user traffic. It does not
-    /// weaken the check on NetGet's own direction, which is what the oracle is for.
+    /// Use this only where the peer's payload is arbitrary user traffic, or where the peer
+    /// is a third-party client whose own bytes the dissector flags in a field NetGet does
+    /// not read — IBM's Linux CLI driver puts NUL bytes inside its DRDA EXTNAM, which
+    /// tshark's ASCII view of the parameter reports as trailing stray characters
+    /// (`tests/server/db2/real_client_test.rs`). It does not weaken the check on NetGet's
+    /// own direction, which is what the oracle is for.
     pub fn peer_input_is_context(mut self) -> Self {
         self.peer_input_is_context = true;
         self
