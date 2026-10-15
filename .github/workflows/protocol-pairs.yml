@@ -6752,7 +6752,7 @@ jobs:
 
   yarn:
     if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'yarn')
-    name: YARN client against Apache Hadoop 3.5.0 (ResourceManager + NodeManager running distributed-shell applications)
+    name: YARN client against Apache Hadoop 3.5.0 (ResourceManager + NodeManager running distributed-shell applications), YARN server against Datadog's YARN check
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -6764,6 +6764,9 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - uses: Swatinem/rust-cache@v2
         with:
           key: protocol-pairs-${{ github.job }}
@@ -6777,13 +6780,18 @@ jobs:
           set -euo pipefail
           sh tests/client/yarn/install_peers.sh "$RUNNER_TEMP/hadoop-peers" | tee "$RUNNER_TEMP/hadoop-env"
           sed -n 's/^export //p' "$RUNNER_TEMP/hadoop-env" >> "$GITHUB_ENV"
+      - name: Install Datadog's YARN integration (integrations-core yarn-8.4.2, SHA-256 pinned)
+        run: |
+          set -euo pipefail
+          sh tests/server/yarn/install_datadog_check.sh "$RUNNER_TEMP/datadog-yarn" | tee "$RUNNER_TEMP/datadog-env"
+          sed -n 's/^export //p' "$RUNNER_TEMP/datadog-env" >> "$GITHUB_ENV"
       - name: Compile yarn as a standalone Cargo feature
         run: cargo check --locked --no-default-features --features yarn --all-targets
-      - name: Client against a single-node Hadoop YARN
+      - name: Client against a single-node Hadoop YARN, server against Datadog's YARN check
         run: |
           set -euo pipefail
           for filter in \
-            client/yarn::; do
+            client/yarn:: yarn::datadog_check_test; do
             case "$filter" in
               client/*) target=client; filter=${filter#client/} ;;
               *) target=server ;;

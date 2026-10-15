@@ -70,8 +70,8 @@ pub static YARN_REQUEST_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         Parameter {
             name: "operation".to_string(),
             type_hint: "string".to_string(),
-            description: "Detected operation: metrics, apps, submit, new_application, app, \
-                          nodes, node"
+            description: "Detected operation: metrics, scheduler, apps, submit, \
+                          new_application, app, nodes, node"
                 .to_string(),
             required: true,
         },
@@ -107,6 +107,7 @@ pub static YARN_REQUEST_EVENT: LazyLock<EventType> = LazyLock::new(|| {
 fn yarn_actions() -> Vec<ActionDefinition> {
     vec![
         send_yarn_metrics_action(),
+        send_yarn_scheduler_action(),
         send_yarn_apps_action(),
         send_yarn_app_action(),
         send_yarn_nodes_action(),
@@ -148,6 +149,67 @@ fn send_yarn_metrics_action() -> ActionDefinition {
         log_template: Some(
             LogTemplate::new().with_info("-> YARN metrics {metrics.totalNodes} nodes"),
         ),
+    }
+}
+
+fn send_yarn_scheduler_action() -> ActionDefinition {
+    ActionDefinition {
+        name: "send_yarn_scheduler".to_string(),
+        description: "Answer GET /ws/v1/cluster/scheduler with the scheduler and its queue tree. \
+                      Rendered in the CapacityScheduler's own shape, {\"scheduler\": \
+                      {\"schedulerInfo\": {\"type\": \"capacityScheduler\", \"queueName\": \"root\", \
+                      ..., \"queues\": {\"queue\": [...]}}}}, with each queue's children nested the \
+                      same way; or, with scheduler_type fifoScheduler, the FifoScheduler's flat \
+                      summary. Keep it consistent with the apps you report (a queue's \
+                      numApplications)."
+            .to_string(),
+        parameters: vec![
+            Parameter {
+                name: "scheduler_type".to_string(),
+                type_hint: "string".to_string(),
+                description: "capacityScheduler (default) or fifoScheduler".to_string(),
+                required: false,
+            },
+            Parameter {
+                name: "root".to_string(),
+                type_hint: "object".to_string(),
+                description: "The root queue's (or the FIFO scheduler's) own numbers: capacity \
+                              (default 100), usedCapacity (default 0), maxCapacity (default \
+                              100); for fifoScheduler also qstate, numNodes, numContainers, \
+                              usedNodeCapacity, availNodeCapacity, totalNodeCapacity, \
+                              minQueueMemoryCapacity, maxQueueMemoryCapacity."
+                    .to_string(),
+                required: false,
+            },
+            Parameter {
+                name: "queues".to_string(),
+                type_hint: "array".to_string(),
+                description: format!(
+                    "capacityScheduler only, required: the queues under root. Each is an \
+                     object with queueName (required) and capacity, usedCapacity, maxCapacity, \
+                     absoluteCapacity, absoluteUsedCapacity, absoluteMaxCapacity, state \
+                     (RUNNING/STOPPED), numApplications, numActiveApplications, \
+                     numPendingApplications, numContainers, maxApplications, userLimit, \
+                     userLimitFactor; a parent queue carries its children as a `queues` array \
+                     of the same objects, at most {MAX_QUEUE_DEPTH} levels below root. \
+                     queuePath is filled in from the names."
+                ),
+                required: false,
+            },
+        ],
+        example: json!({
+            "type": "send_yarn_scheduler",
+            "root": {"capacity": 100.0, "usedCapacity": 25.0, "maxCapacity": 100.0},
+            "queues": [
+                {"queueName": "default", "capacity": 60.0, "usedCapacity": 0.0,
+                 "maxCapacity": 100.0, "numApplications": 0},
+                {"queueName": "etl", "capacity": 40.0, "usedCapacity": 62.5,
+                 "maxCapacity": 100.0, "numApplications": 1,
+                 "queues": [{"queueName": "nightly", "capacity": 100.0,
+                             "usedCapacity": 62.5, "numApplications": 1}]}
+            ]
+        }),
+        log_template: Some(LogTemplate::new().with_info("-> YARN scheduler {queues_len} queues")),
     }
 }
 
@@ -364,6 +426,52 @@ pub fn get_yarn_event_types() -> Vec<EventType> {
     vec![YARN_REQUEST_EVENT.clone()]
 }
 
+/// How many levels of queues below root `send_yarn_scheduler` renders. A CapacityScheduler
+/// hierarchy is rarely more than three or four deep; the bound keeps the conversion of the
+/// model-supplied tree (which recurses once per level) from following an arbitrarily deep one.
+pub const MAX_QUEUE_DEPTH: usize = 8;
+
+/// One model-supplied queue in the CapacityScheduler's shape: `queuePath` from the names, the
+/// children (`queues`, an array) wrapped as `{"queue": [...]}`, `queueType` and, for a leaf,
+/// the leaf queue `type` the real scheduler reports. `depth` is this queue's level below root.
+fn capacity_queue(queue: &Value, parent_path: &str, depth: usize) -> Result<Value> {
+    if depth > MAX_QUEUE_DEPTH {
+        return Err(anyhow::anyhow!(
+            "the queue tree is deeper than {MAX_QUEUE_DEPTH} levels below root"
+        ));
+    }
+    let mut out = queue
+        .as_object()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("each queue is an object"))?;
+    let name = out
+        .get("queueName")
+        .and_then(|v| v.as_str())
+        .filter(|n| !n.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("each queue needs a queueName"))?
+        .to_string();
+    let path = format!("{parent_path}.{name}");
+    out.entry("queuePath").or_insert_with(|| json!(path));
+    out.entry("state").or_insert_with(|| json!("RUNNING"));
+    match out.remove("queues") {
+        Some(Value::Array(children)) if !children.is_empty() => {
+            let children = children
+                .iter()
+                .map(|c| capacity_queue(c, &path, depth + 1))
+                .collect::<Result<Vec<_>>>()?;
+            out.insert("queueType".into(), json!("parent"));
+            out.insert("queues".into(), json!({ "queue": children }));
+        }
+        None | Some(Value::Null) | Some(Value::Array(_)) => {
+            out.insert("queueType".into(), json!("leaf"));
+            out.entry("type")
+                .or_insert_with(|| json!("capacitySchedulerLeafQueueInfo"));
+        }
+        Some(_) => return Err(anyhow::anyhow!("a queue's `queues` is an array of queues")),
+    }
+    Ok(Value::Object(out))
+}
+
 /// Serialize a response body without a panic path (serializing a Value cannot fail).
 fn body_of(value: &Value) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| value.to_string())
@@ -447,13 +555,22 @@ impl Protocol for YarnProtocol {
             .implementation("hyper v1 HTTP/1.1 server, manual YARN RM REST envelopes")
             .llm_control("Applications, nodes and cluster metrics invented by the LLM")
             .e2e_testing(
-                "curl / reqwest asserting the documented YARN RM JSON envelopes \
-                          (shape-conformance, not a real Hadoop client)",
+                "tests/server/yarn/datadog_check_test.rs runs Datadog's YARN integration \
+                 (datadog_checks.yarn, integrations-core tag yarn-8.4.2) once against the server \
+                 and asserts the cluster, application, node and queue metrics, tags, service \
+                 checks and version it submitted from the model's answers to /metrics, /apps, \
+                 /nodes and /scheduler. e2e_test.rs checks the documented envelopes with \
+                 reqwest. NetGet's own YARN client is tested against real Hadoop, not against \
+                 this server",
             )
             .notes(
                 "Virtual cluster, no storage. GET /ws/v1/cluster/info is answered \
-                    statically; metrics/apps/nodes are LLM-driven. Fail-closed: LLM failure \
-                    returns 503/500 RemoteException, never an empty-but-200 cluster.",
+                    statically; metrics/scheduler/apps/nodes are LLM-driven, the scheduler in \
+                    the CapacityScheduler's nested queues.queue shape (or the FifoScheduler's). \
+                    Fail-closed: LLM failure returns 503/500 RemoteException, never an \
+                    empty-but-200 cluster. Experimental: one independent consumer (Datadog's \
+                    check), which reads the four list endpoints only; nothing third-party has \
+                    driven an application or node by id, new-application or submission.",
             )
             .max_inbound_bytes(crate::server::yarn::MAX_REQUEST_BODY_BYTES)
             .request_only("The YARN REST API is HTTP request/response; a server cannot send a peer anything unprompted")
@@ -611,6 +728,54 @@ impl Server for YarnProtocol {
                     }
                 }
                 custom(200, json!({ "clusterMetrics": m }))
+            }
+            "send_yarn_scheduler" => {
+                let kind = action
+                    .get("scheduler_type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("capacityScheduler");
+                let mut info = action
+                    .get("root")
+                    .and_then(|v| v.as_object())
+                    .cloned()
+                    .unwrap_or_default();
+                info.insert("type".into(), json!(kind));
+                for (key, default) in [
+                    ("capacity", 100.0),
+                    ("usedCapacity", 0.0),
+                    ("maxCapacity", 100.0),
+                ] {
+                    info.entry(key).or_insert_with(|| json!(default));
+                }
+                match kind {
+                    "capacityScheduler" => {
+                        let queues = action
+                            .get("queues")
+                            .and_then(|v| v.as_array())
+                            .filter(|q| !q.is_empty())
+                            .ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "a capacityScheduler needs a non-empty 'queues' array"
+                                )
+                            })?
+                            .iter()
+                            .map(|q| capacity_queue(q, "root", 1))
+                            .collect::<Result<Vec<_>>>()?;
+                        info.insert("queueName".into(), json!("root"));
+                        info.insert("queuePath".into(), json!("root"));
+                        info.insert("queueType".into(), json!("parent"));
+                        info.insert("queues".into(), json!({ "queue": queues }));
+                    }
+                    "fifoScheduler" => {
+                        info.entry("qstate").or_insert_with(|| json!("RUNNING"));
+                    }
+                    other => {
+                        return Err(anyhow::anyhow!(
+                            "scheduler_type {other:?}: capacityScheduler or fifoScheduler"
+                        ))
+                    }
+                }
+                custom(200, json!({ "scheduler": { "schedulerInfo": info } }))
             }
             "send_yarn_apps" => {
                 let apps = action
