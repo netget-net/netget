@@ -75,14 +75,19 @@ impl Ovs {
         let mut db = Command::new("ovsdb-server");
         env(&mut db);
         db.arg(format!("--remote=punix:{}", d.join("db.sock").display()))
-            .arg(format!("--unixctl={}", d.join("ovsdb-server.ctl").display()))
+            .arg(format!(
+                "--unixctl={}",
+                d.join("ovsdb-server.ctl").display()
+            ))
             .arg(d.join("conf.db"));
         let db = ToolProcess::spawn(db, "ovsdb-server", OVS)?;
         let sock = d.join("db.sock");
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
         while !sock.exists() {
             if std::time::Instant::now() > deadline {
-                return Err(format!("ovsdb-server never opened its socket: {:?}", db.lines()).into());
+                return Err(
+                    format!("ovsdb-server never opened its socket: {:?}", db.lines()).into(),
+                );
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
@@ -96,7 +101,10 @@ impl Ovs {
         vswitchd
             .arg("--enable-dummy=override")
             .arg(format!("unix:{}", sock.display()))
-            .arg(format!("--unixctl={}", d.join("ovs-vswitchd.ctl").display()));
+            .arg(format!(
+                "--unixctl={}",
+                d.join("ovs-vswitchd.ctl").display()
+            ));
         let vswitchd = ToolProcess::spawn(vswitchd, "ovs-vswitchd", OVS)?;
         let ovs = Ovs {
             dir,
@@ -108,14 +116,42 @@ impl Ovs {
         let target = format!("tcp:{controller}");
         ovs.vsctl(&[
             "--timeout=30",
-            "add-br", "br0", "--", "set", "bridge", "br0", "datapath_type=dummy",
-            "fail-mode=secure", "protocols=OpenFlow13",
+            "add-br",
+            "br0",
+            "--",
+            "set",
+            "bridge",
+            "br0",
+            "datapath_type=dummy",
+            "fail-mode=secure",
+            "protocols=OpenFlow13",
             "other-config:datapath-id=0000000000000abc",
-            "--", "add-port", "br0", "p1", "--", "set", "interface", "p1", "type=dummy",
-            "ofport_request=1", &p1,
-            "--", "add-port", "br0", "p2", "--", "set", "interface", "p2", "type=dummy",
-            "ofport_request=2", &p2,
-            "--", "set-controller", "br0", &target,
+            "--",
+            "add-port",
+            "br0",
+            "p1",
+            "--",
+            "set",
+            "interface",
+            "p1",
+            "type=dummy",
+            "ofport_request=1",
+            &p1,
+            "--",
+            "add-port",
+            "br0",
+            "p2",
+            "--",
+            "set",
+            "interface",
+            "p2",
+            "type=dummy",
+            "ofport_request=2",
+            &p2,
+            "--",
+            "set-controller",
+            "br0",
+            &target,
         ])
         .await
         .map_err(|e| format!("{e}\novs-vswitchd: {:?}", ovs.vswitchd.lines()))?;
@@ -143,7 +179,8 @@ impl Ovs {
     }
 
     async fn dump_flows(&self) -> E2EResult<String> {
-        self.ofctl(&["--no-names", "dump-flows", &self.mgmt()]).await
+        self.ofctl(&["--no-names", "dump-flows", &self.mgmt()])
+            .await
     }
 
     async fn wait_for_flow(&self, needle: &str) -> E2EResult<String> {
@@ -177,9 +214,20 @@ impl Ovs {
         }
         let mut cmd = Command::new("tshark");
         cmd.arg("-r").arg(&pcap).args([
-            "-T", "fields", "-E", "separator=/t",
-            "-e", "eth.src", "-e", "eth.dst", "-e", "ip.dst", "-e", "icmp.checksum.status",
-            "-e", "frame.len",
+            "-T",
+            "fields",
+            "-E",
+            "separator=/t",
+            "-e",
+            "eth.src",
+            "-e",
+            "eth.dst",
+            "-e",
+            "ip.dst",
+            "-e",
+            "icmp.checksum.status",
+            "-e",
+            "frame.len",
         ]);
         let out = run_tool(cmd, "tshark", TSHARK).await?;
         Ok(out
@@ -207,7 +255,13 @@ impl Ovs {
         Command::new("ovs-vswitchd")
             .arg("--version")
             .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).lines().next().unwrap_or("").to_string())
+            .map(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .to_string()
+            })
             .unwrap_or_default()
     }
 }
@@ -239,7 +293,8 @@ async fn open_vswitch_installs_the_models_flows_and_sends_its_packets() -> E2ERe
     assert_eq!(ev[0]["description"]["mfr_desc"], "Nicira, Inc.");
 
     // The model's table-miss flow is in OVS's table.
-    ovs.wait_for_flow("priority=0 actions=CONTROLLER:65535").await?;
+    ovs.wait_for_flow("priority=0 actions=CONTROLLER:65535")
+        .await?;
 
     // A packet for HOST_B on p1 reaches the model; its flow and its PACKET_OUT reach OVS.
     let frame = ping(HOST_B);
@@ -247,7 +302,10 @@ async fn open_vswitch_installs_the_models_flows_and_sends_its_packets() -> E2ERe
     let pi = c.wait_for_events("openflow_packet_in", 1).await;
     assert_eq!(pi.len(), 1, "{}", c.log_text());
     assert_eq!(pi[0]["in_port"], 1);
-    assert_eq!(pi[0]["buffered"], false, "SET_CONFIG asked for whole packets");
+    assert_eq!(
+        pi[0]["buffered"], false,
+        "SET_CONFIG asked for whole packets"
+    );
     assert_eq!(pi[0]["packet"]["eth_src"], HOST_A);
     assert_eq!(pi[0]["packet"]["ipv4"]["dst"], "10.0.0.2");
     assert_eq!(pi[0]["total_len"], frame.len());
@@ -277,7 +335,12 @@ async fn open_vswitch_installs_the_models_flows_and_sends_its_packets() -> E2ERe
     let mut asked = 0;
     let learned = loop {
         c.state
-            .send_to_peer(c.id, conn, json!({"type": "openflow_request_stats", "kind": "flow"}), Duration::from_secs(10))
+            .send_to_peer(
+                c.id,
+                conn,
+                json!({"type": "openflow_request_stats", "kind": "flow"}),
+                Duration::from_secs(10),
+            )
             .await?;
         asked += 1;
         let stats = c.wait_for_events("openflow_stats_reply", asked).await;
@@ -290,7 +353,10 @@ async fn open_vswitch_installs_the_models_flows_and_sends_its_packets() -> E2ERe
         if learned["packet_count"].as_u64().unwrap_or(0) >= 1 {
             break learned;
         }
-        assert!(std::time::Instant::now() < deadline, "the flow never counted a packet: {learned}");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the flow never counted a packet: {learned}"
+        );
         tokio::time::sleep(Duration::from_millis(500)).await;
     };
     assert_eq!(learned["match"]["eth_dst"], HOST_B);
@@ -311,8 +377,17 @@ async fn open_vswitch_installs_the_models_flows_and_sends_its_packets() -> E2ERe
     assert_eq!(errors[0]["request"]["type"], "FLOW_MOD", "{errors:?}");
     assert_eq!(errors[0]["error_type"], "BAD_INSTRUCTION", "{errors:?}");
     assert_eq!(errors[0]["error_code"], "BAD_TABLE_ID", "{errors:?}");
-    assert!(errors[0]["request"]["what"].as_str().unwrap().contains("table 3"), "{errors:?}");
-    println!("OVS refused the backwards goto_table with {}/{}", errors[0]["error_type"], errors[0]["error_code"]);
+    assert!(
+        errors[0]["request"]["what"]
+            .as_str()
+            .unwrap()
+            .contains("table 3"),
+        "{errors:?}"
+    );
+    println!(
+        "OVS refused the backwards goto_table with {}/{}",
+        errors[0]["error_type"], errors[0]["error_code"]
+    );
 
     // tshark's openflow_v4 dissector over everything that crossed, both ways.
     let streams = streams.lock().unwrap().clone();
@@ -340,19 +415,32 @@ async fn with_no_answer_from_the_model_open_vswitch_forwards_nothing() -> E2ERes
     let flows = ovs.dump_flows().await?;
     assert!(!flows.contains("priority="), "{flows}");
     // Install the table-miss by hand so a packet does reach NetGet, then watch it go nowhere.
-    ovs.ofctl(&["add-flow", &ovs.mgmt(), "priority=0,actions=CONTROLLER:65535"])
-        .await?;
+    ovs.ofctl(&[
+        "add-flow",
+        &ovs.mgmt(),
+        "priority=0,actions=CONTROLLER:65535",
+    ])
+    .await?;
     ovs.receive("p1", &ping(HOST_B)).await?;
     c.wait_for_events("openflow_packet_in", 1).await;
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    while c.log_text().matches("decision=fail_closed_llm_error").count() < 2 {
+    while c
+        .log_text()
+        .matches("decision=fail_closed_llm_error")
+        .count()
+        < 2
+    {
         assert!(std::time::Instant::now() < deadline, "{}", c.log_text());
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     // A probe the switch does forward (a flow added by hand to p2) proves the pcap is live,
     // and the packet NetGet failed closed on is not in it: nothing was flooded or sent.
-    ovs.ofctl(&["add-flow", &ovs.mgmt(), "priority=5,in_port=1,dl_src=02:00:00:00:00:09,actions=output:2"])
-        .await?;
+    ovs.ofctl(&[
+        "add-flow",
+        &ovs.mgmt(),
+        "priority=5,in_port=1,dl_src=02:00:00:00:00:09,actions=output:2",
+    ])
+    .await?;
     let mut probe = ping(HOST_B);
     probe[6..12].copy_from_slice(&[2, 0, 0, 0, 0, 9]);
     ovs.receive("p1", &probe).await?;

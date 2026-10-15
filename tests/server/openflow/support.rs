@@ -336,10 +336,7 @@ impl RawSwitch {
                     )
                     .await;
                 }
-                other => panic!(
-                    "unexpected {} during the handshake",
-                    wire::msg_name(other)
-                ),
+                other => panic!("unexpected {} during the handshake", wire::msg_name(other)),
             }
         }
         config.unwrap()

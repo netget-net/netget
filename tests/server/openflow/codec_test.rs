@@ -30,7 +30,8 @@ fn the_table_miss_flow_mod_is_the_spec_bytes() {
         &msg[56..80],
         &[
             0, 4, 0, 24, 0, 0, 0, 0, // apply_actions
-            0, 0, 0, 16, 0xff, 0xff, 0xff, 0xfd, 0xff, 0xff, 0, 0, 0, 0, 0, 0 // output controller
+            0, 0, 0, 16, 0xff, 0xff, 0xff, 0xfd, 0xff, 0xff, 0, 0, 0, 0, 0,
+            0 // output controller
         ]
     );
     assert_eq!(wire::FlowMod::parse(&body).unwrap(), fm);
@@ -70,11 +71,17 @@ fn prerequisites_that_cannot_be_implied_or_contradict_are_refused() {
     for (bad, needle) in [
         (json!({"ip_dscp": 4}), "eth_type"),
         (json!({"tcp_dst": 80, "ip_proto": 17}), "contradicts"),
-        (json!({"ipv4_dst": "10.0.0.1", "eth_type": "0x86dd"}), "contradicts"),
+        (
+            json!({"ipv4_dst": "10.0.0.1", "eth_type": "0x86dd"}),
+            "contradicts",
+        ),
         (json!({"vlan_pcp": 3}), "vlan_vid"),
         (json!({"in_phy_port": 1}), "in_port"),
         (json!({"no_such_field": 1}), "unknown match field"),
-        (json!({"in_port": {"value": 1, "mask": 1}}), "cannot be masked"),
+        (
+            json!({"in_port": {"value": 1, "mask": 1}}),
+            "cannot be masked",
+        ),
         (json!({"vlan_vid": 5000}), "maximum"),
     ] {
         let err = format!("{:#}", fields::match_from_json(&bad).unwrap_err());
@@ -134,7 +141,10 @@ fn every_peer_list_is_bounded() {
     let ok: Vec<Action> = (0..wire::MAX_ACTIONS).map(|_| Action::PopVlan).collect();
     let bytes = wire::encode_actions(&ok);
     let n = bytes.len();
-    assert_eq!(wire::parse_actions(&mut Rd::new(&bytes), n).unwrap().len(), wire::MAX_ACTIONS);
+    assert_eq!(
+        wire::parse_actions(&mut Rd::new(&bytes), n).unwrap().len(),
+        wire::MAX_ACTIONS
+    );
 
     // An action whose length is not a multiple of eight, or shorter than its header.
     for len in [0u16, 4, 12] {
@@ -161,10 +171,13 @@ fn every_peer_list_is_bounded() {
 
     // A message cannot be encoded past the 16-bit length.
     assert!(wire::encode(4, msg::PACKET_OUT, 1, &vec![0; wire::MAX_MESSAGE_LEN]).is_err());
-    assert!(
-        wire::encode(4, msg::PACKET_OUT, 1, &vec![0; wire::MAX_MESSAGE_LEN - wire::HEADER_LEN])
-            .is_ok()
-    );
+    assert!(wire::encode(
+        4,
+        msg::PACKET_OUT,
+        1,
+        &vec![0; wire::MAX_MESSAGE_LEN - wire::HEADER_LEN]
+    )
+    .is_ok());
 }
 
 #[tokio::test]
@@ -278,7 +291,10 @@ fn built_packets_carry_checksums_tshark_verifies() {
         let po = wire::PacketOut {
             buffer_id: wire::NO_BUFFER,
             in_port: wire::port::CONTROLLER,
-            actions: vec![Action::Output { port: 1, max_len: 0 }],
+            actions: vec![Action::Output {
+                port: 1,
+                max_len: 0,
+            }],
             data: frame.clone(),
         };
         oracle = oracle.from_server(&wire::encode(4, msg::PACKET_OUT, xid, &po.encode()).unwrap());
@@ -286,8 +302,16 @@ fn built_packets_carry_checksums_tshark_verifies() {
     let rows = oracle
         .fields(&["icmp.checksum.status", "icmpv6.checksum.status"])
         .unwrap();
-    let statuses: Vec<String> = rows.into_iter().flatten().filter(|c| !c.is_empty()).collect();
-    assert_eq!(statuses, vec!["1".to_string(), "1".to_string()], "checksum status Good");
+    let statuses: Vec<String> = rows
+        .into_iter()
+        .flatten()
+        .filter(|c| !c.is_empty())
+        .collect();
+    assert_eq!(
+        statuses,
+        vec!["1".to_string(), "1".to_string()],
+        "checksum status Good"
+    );
 }
 
 /// Every message type NetGet encodes, in both directions, through tshark's openflow_v4.
@@ -316,7 +340,10 @@ fn tshark_reads_every_message_netget_encodes() {
     let po = wire::PacketOut {
         buffer_id: wire::NO_BUFFER,
         in_port: 1,
-        actions: vec![Action::Output { port: wire::port::FLOOD, max_len: 0 }],
+        actions: vec![Action::Output {
+            port: wire::port::FLOOD,
+            max_len: 0,
+        }],
         data: frame.clone(),
     };
     let pi = wire::PacketIn {
@@ -325,7 +352,9 @@ fn tshark_reads_every_message_netget_encodes() {
         reason: 0,
         table_id: 0,
         cookie: 0,
-        matched: Match { oxms: vec![Oxm::basic(0, vec![0, 0, 0, 1])] },
+        matched: Match {
+            oxms: vec![Oxm::basic(0, vec![0, 0, 0, 1])],
+        },
         data: frame,
     };
     let features = wire::Features {
@@ -340,8 +369,20 @@ fn tshark_reads_every_message_netget_encodes() {
     let to_switch = [
         wire::encode(4, msg::HELLO, 1, &wire::hello_body(&[4])).unwrap(),
         wire::encode(4, msg::FEATURES_REQUEST, 2, &[]).unwrap(),
-        wire::encode(4, msg::SET_CONFIG, 3, &wire::config_body(0, wire::CML_NO_BUFFER)).unwrap(),
-        wire::encode(4, msg::MULTIPART_REQUEST, 4, &wire::multipart_body(wire::mp::PORT_DESC, 0, &[])).unwrap(),
+        wire::encode(
+            4,
+            msg::SET_CONFIG,
+            3,
+            &wire::config_body(0, wire::CML_NO_BUFFER),
+        )
+        .unwrap(),
+        wire::encode(
+            4,
+            msg::MULTIPART_REQUEST,
+            4,
+            &wire::multipart_body(wire::mp::PORT_DESC, 0, &[]),
+        )
+        .unwrap(),
         wire::encode(4, msg::FLOW_MOD, 5, &fm.encode()).unwrap(),
         wire::encode(4, msg::PACKET_OUT, 6, &po.encode()).unwrap(),
         wire::encode(4, msg::ECHO_REQUEST, 7, b"x").unwrap(),
@@ -349,9 +390,25 @@ fn tshark_reads_every_message_netget_encodes() {
     let to_controller = [
         wire::encode(4, msg::HELLO, 1, &wire::hello_body(&[4])).unwrap(),
         wire::encode(4, msg::FEATURES_REPLY, 2, &features.encode()).unwrap(),
-        wire::encode(4, msg::MULTIPART_REPLY, 4, &wire::multipart_body(wire::mp::PORT_DESC, 0, &ports)).unwrap(),
+        wire::encode(
+            4,
+            msg::MULTIPART_REPLY,
+            4,
+            &wire::multipart_body(wire::mp::PORT_DESC, 0, &ports),
+        )
+        .unwrap(),
         wire::encode(4, msg::PACKET_IN, 8, &pi.encode()).unwrap(),
-        wire::encode(4, msg::ERROR, 5, &wire::error_body(wire::err::BAD_MATCH, wire::err::BAD_MATCH_BAD_PREREQ, &to_switch[4])).unwrap(),
+        wire::encode(
+            4,
+            msg::ERROR,
+            5,
+            &wire::error_body(
+                wire::err::BAD_MATCH,
+                wire::err::BAD_MATCH_BAD_PREREQ,
+                &to_switch[4],
+            ),
+        )
+        .unwrap(),
         wire::encode(4, msg::ECHO_REPLY, 7, b"x").unwrap(),
     ];
     let mut oracle = PcapOracle::tcp("openflow");

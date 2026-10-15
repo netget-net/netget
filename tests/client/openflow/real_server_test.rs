@@ -119,8 +119,12 @@ async fn learning_switch_exchange(
     controller_addr: std::net::SocketAddr,
 ) -> E2EResult<(support::Switch, Vec<Vec<(bool, Vec<u8>)>>)> {
     let (relay, streams) = recording_relay::tcp_relay(controller_addr).await;
-    let sw = support::connect(&relay.to_string(), Some(support::policy()), support::params())
-        .await?;
+    let sw = support::connect(
+        &relay.to_string(),
+        Some(support::policy()),
+        support::params(),
+    )
+    .await?;
     let connected = sw.wait_for_events("openflow_controller_connected", 1).await;
     assert_eq!(connected.len(), 1, "{}", sw.log_text());
 
@@ -146,13 +150,15 @@ async fn learning_switch_exchange(
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     let learned = loop {
         let flows = sw.events("openflow_flow_mod_received").await;
-        if let Some(f) = flows
-            .iter()
-            .find(|f| f["command"] == "add" && f["priority"] != 0 && f["match"]["eth_dst"] == HOST_A)
-        {
+        if let Some(f) = flows.iter().find(|f| {
+            f["command"] == "add" && f["priority"] != 0 && f["match"]["eth_dst"] == HOST_A
+        }) {
             break f.clone();
         }
-        assert!(tokio::time::Instant::now() < deadline, "no learned flow: {flows:?}");
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no learned flow: {flows:?}"
+        );
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
     assert_eq!(learned["match"]["in_port"], 2);
@@ -188,8 +194,11 @@ async fn os_ken_learns_through_the_models_packets() -> E2EResult<()> {
         let addr: std::net::SocketAddr = ctl.addr().parse()?;
         let (sw, streams) = learning_switch_exchange(addr).await?;
         // os-ken decoded the switch and both of the model's packets itself.
-        ctl.wait_for_log("OSKEN table-miss installed on 0000000000000abc n_tables=254", Duration::from_secs(30))
-            .await?;
+        ctl.wait_for_log(
+            "OSKEN table-miss installed on 0000000000000abc n_tables=254",
+            Duration::from_secs(30),
+        )
+        .await?;
         ctl.wait_for_log("OSKEN ports ['eth1', 'eth2']", Duration::from_secs(30))
             .await?;
         ctl.wait_for_log(
@@ -232,7 +241,12 @@ async fn with_no_answer_from_the_model_os_ken_sees_no_packet() -> E2EResult<()> 
         ctl.wait_for_log("OSKEN table-miss installed", Duration::from_secs(30))
             .await?;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-        while sw.log_text().matches("decision=fail_closed_llm_error").count() < 2 {
+        while sw
+            .log_text()
+            .matches("decision=fail_closed_llm_error")
+            .count()
+            < 2
+        {
             assert!(tokio::time::Instant::now() < deadline, "{}", sw.log_text());
             tokio::time::sleep(Duration::from_millis(50)).await;
         }

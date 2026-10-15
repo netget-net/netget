@@ -526,12 +526,14 @@ pub fn parse_hello_bitmap(body: &[u8]) -> Result<Option<Vec<u32>>> {
         rd.skip(padding, "hello element padding")?;
         if etype == HELLO_ELEM_VERSIONBITMAP {
             ensure!(
-                data.len() % 4 == 0,
+                data.len().is_multiple_of(4),
                 "a version bitmap that is not whole words"
             );
             bitmap = Some(
-                data.chunks_exact(4)
-                    .map(|c| u32::from_be_bytes([c[0], c[1], c[2], c[3]]))
+                data.as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|c| u32::from_be_bytes(*c))
                     .collect(),
             );
         }
@@ -868,7 +870,7 @@ impl Oxm {
         let has_mask = fh & 1 == 1;
         if has_mask {
             ensure!(
-                len % 2 == 0 && len > 0,
+                len.is_multiple_of(2) && len > 0,
                 "a masked OXM with an odd payload length {len}"
             );
             let half = len / 2;
@@ -1092,7 +1094,7 @@ impl Action {
         let bad_len = |e: anyhow::Error| (err::BAD_ACTION_BAD_LEN, e.to_string());
         let atype = rd.u16("action type").map_err(bad_len)?;
         let len = rd.u16("action length").map_err(bad_len)? as usize;
-        if len < 8 || len % 8 != 0 {
+        if len < 8 || !len.is_multiple_of(8) {
             return Err((
                 err::BAD_ACTION_BAD_LEN,
                 format!("an action length of {len} (must be a multiple of 8, at least 8)"),
@@ -1277,7 +1279,7 @@ impl Instruction {
         };
         let itype = rd.u16("instruction type").map_err(bad)?;
         let len = rd.u16("instruction length").map_err(bad)? as usize;
-        if len < 8 || len % 8 != 0 {
+        if len < 8 || !len.is_multiple_of(8) {
             return Err((
                 err::BAD_INSTRUCTION,
                 err::BAD_INSTRUCTION_BAD_LEN,
@@ -1826,7 +1828,10 @@ impl TableStats {
     }
 
     pub fn parse_all(body: &[u8]) -> Result<Vec<TableStats>> {
-        ensure!(body.len() % 24 == 0, "table stats not in 24-byte entries");
+        ensure!(
+            body.len().is_multiple_of(24),
+            "table stats not in 24-byte entries"
+        );
         ensure!(
             body.len() / 24 <= MAX_MULTIPART_ENTRIES,
             "more than {MAX_MULTIPART_ENTRIES} table entries in one part"
@@ -1885,7 +1890,10 @@ impl PortStats {
     }
 
     pub fn parse_all(body: &[u8]) -> Result<Vec<PortStats>> {
-        ensure!(body.len() % 112 == 0, "port stats not in 112-byte entries");
+        ensure!(
+            body.len().is_multiple_of(112),
+            "port stats not in 112-byte entries"
+        );
         ensure!(
             body.len() / 112 <= MAX_MULTIPART_ENTRIES,
             "more than {MAX_MULTIPART_ENTRIES} port entries in one part"
@@ -1912,7 +1920,7 @@ impl PortStats {
 
 pub fn parse_ports(body: &[u8]) -> Result<Vec<Port>> {
     ensure!(
-        body.len() % PORT_LEN == 0,
+        body.len().is_multiple_of(PORT_LEN),
         "port descriptions not in 64-byte entries"
     );
     ensure!(

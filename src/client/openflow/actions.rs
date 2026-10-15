@@ -116,8 +116,18 @@ fn port_status_action() -> ActionDefinition {
         vec![
             p("reason", "string", "add, delete or modify", true),
             p("port_no", "number", "The port number", true),
-            p("name", "string", "The port's name, for an added port (under 16 bytes)", false),
-            p("hw_addr", "string", "The port's MAC address, for an added port", false),
+            p(
+                "name",
+                "string",
+                "The port's name, for an added port (under 16 bytes)",
+                false,
+            ),
+            p(
+                "hw_addr",
+                "string",
+                "The port's MAC address, for an added port",
+                false,
+            ),
             p("link_down", "boolean", "True when the link is down", false),
             p(
                 "admin_down",
@@ -254,8 +264,18 @@ pub static ERROR_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         "openflow_error_received",
         "The controller sent an OpenFlow ERROR, usually about something this switch sent.",
         vec![
-            p("error_type", "string", "The OpenFlow error type, e.g. BAD_REQUEST", true),
-            p("error_code", "string", "The error code within that type, e.g. BAD_TYPE", true),
+            p(
+                "error_type",
+                "string",
+                "The OpenFlow error type, e.g. BAD_REQUEST",
+                true,
+            ),
+            p(
+                "error_code",
+                "string",
+                "The error code within that type, e.g. BAD_TYPE",
+                true,
+            ),
             p(
                 "request",
                 "object",
@@ -272,7 +292,12 @@ pub static DISCONNECTED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         "The connection to the controller ended.",
         json!({"type": "disconnect"}),
     )
-    .with_parameters(vec![p("reason", "string", "Why the connection ended", true)])
+    .with_parameters(vec![p(
+        "reason",
+        "string",
+        "Why the connection ended",
+        true,
+    )])
     .with_no_actions()
     .with_log_template(LogTemplate::new().with_info("openflow: disconnected ({reason})"))
 });
@@ -282,7 +307,7 @@ pub fn port_from_json(v: &Value, defaults_from: Option<&wire::Port>) -> Result<w
     let port_no =
         fields::port_from_json(v.get("port_no").context("a port needs port_no")?, "port_no")?;
     ensure!(
-        port_no >= 1 && port_no < wire::port::MAX,
+        (1..wire::port::MAX).contains(&port_no),
         "port_no {port_no} is not a physical port (1-{})",
         wire::port::MAX - 1
     );

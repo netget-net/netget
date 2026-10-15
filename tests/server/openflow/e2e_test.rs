@@ -22,7 +22,11 @@ fn flow_mod(m: &wire::Message) -> wire::FlowMod {
 async fn connected(c: &support::Controller) -> RawSwitch {
     let mut sw = RawSwitch::connect(c.addr()).await;
     let config = sw.handshake().await;
-    assert_eq!(config, (0, wire::CML_NO_BUFFER), "whole packets were asked for");
+    assert_eq!(
+        config,
+        (0, wire::CML_NO_BUFFER),
+        "whole packets were asked for"
+    );
     let fm = flow_mod(&sw.expect(msg::FLOW_MOD).await);
     assert_eq!(fm.priority, 0);
     assert!(fm.matched.oxms.is_empty());
@@ -71,7 +75,13 @@ async fn a_packet_in_reaches_the_model_decoded_and_its_flow_and_packet_out_reach
     assert_eq!(po.buffer_id, wire::NO_BUFFER);
     assert_eq!(po.in_port, 1);
     assert_eq!(po.data, frame, "the packet went out byte for byte");
-    assert_eq!(po.actions, vec![Action::Output { port: 2, max_len: wire::CML_NO_BUFFER }]);
+    assert_eq!(
+        po.actions,
+        vec![Action::Output {
+            port: 2,
+            max_len: wire::CML_NO_BUFFER
+        }]
+    );
     let ev = c.wait_for_events("openflow_packet_in", 1).await;
     assert_eq!(ev[0]["in_port"], 1);
     assert_eq!(ev[0]["reason"], "no_match");
@@ -88,7 +98,13 @@ async fn a_packet_in_reaches_the_model_decoded_and_its_flow_and_packet_out_reach
     sw.packet_in(11, 2, &ping("02:00:00:00:00:77")).await;
     let po = wire::PacketOut::parse(&sw.expect(msg::PACKET_OUT).await.body).unwrap();
     assert_eq!(po.in_port, 2);
-    assert_eq!(po.actions, vec![Action::Output { port: wire::port::FLOOD, max_len: wire::CML_NO_BUFFER }]);
+    assert_eq!(
+        po.actions,
+        vec![Action::Output {
+            port: wire::port::FLOOD,
+            max_len: wire::CML_NO_BUFFER
+        }]
+    );
 
     // A blocked destination is dropped: nothing at all reaches the switch.
     sw.packet_in(12, 1, &ping(BLOCKED)).await;
@@ -106,7 +122,12 @@ async fn with_no_answer_from_the_model_nothing_is_sent_no_flow_and_no_flood() {
     sw.handshake().await;
     sw.packet_in(10, 1, &ping(HOST_B)).await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    while c.log_text().matches("decision=fail_closed_llm_error").count() < 2 {
+    while c
+        .log_text()
+        .matches("decision=fail_closed_llm_error")
+        .count()
+        < 2
+    {
         assert!(tokio::time::Instant::now() < deadline, "{}", c.log_text());
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
@@ -156,7 +177,10 @@ async fn only_openflow_1_3_is_negotiated() {
     let e = sw.recv().await;
     assert_eq!(e.header.msg_type, msg::ERROR);
     let e = wire::ErrorMsg::parse(&e.body).unwrap();
-    assert_eq!((e.etype, e.code), (err::HELLO_FAILED, err::HELLO_INCOMPATIBLE));
+    assert_eq!(
+        (e.etype, e.code),
+        (err::HELLO_FAILED, err::HELLO_INCOMPATIBLE)
+    );
     assert!(String::from_utf8_lossy(&e.data).contains("1.3"));
     assert!(sw.closed_within(Duration::from_secs(10)).await);
     assert!(c.wait_for_log("decision=protocol_reject_version").await);
@@ -166,22 +190,33 @@ async fn only_openflow_1_3_is_negotiated() {
     sw.send_raw(&wire::encode(6, msg::HELLO, 1, &wire::hello_body(&[1, 4, 5, 6])).unwrap())
         .await;
     assert_eq!(sw.expect(msg::HELLO).await.header.version, VERSION_1_3);
-    assert_eq!(sw.expect(msg::FEATURES_REQUEST).await.header.version, VERSION_1_3);
+    assert_eq!(
+        sw.expect(msg::FEATURES_REQUEST).await.header.version,
+        VERSION_1_3
+    );
 
     // No bitmap and a 1.4 header: the lower version, 1.3.
     let mut sw = RawSwitch::connect(c.addr()).await;
-    sw.send_raw(&wire::encode(5, msg::HELLO, 1, &[]).unwrap()).await;
+    sw.send_raw(&wire::encode(5, msg::HELLO, 1, &[]).unwrap())
+        .await;
     sw.expect(msg::HELLO).await;
-    assert_eq!(sw.expect(msg::FEATURES_REQUEST).await.header.version, VERSION_1_3);
+    assert_eq!(
+        sw.expect(msg::FEATURES_REQUEST).await.header.version,
+        VERSION_1_3
+    );
 
     // After negotiation, a message of another version is refused with BAD_VERSION.
     let mut sw = RawSwitch::connect(c.addr()).await;
     sw.handshake().await;
     sw.expect(msg::FLOW_MOD).await;
-    sw.send_raw(&wire::encode(5, msg::ECHO_REQUEST, 77, &[]).unwrap()).await;
+    sw.send_raw(&wire::encode(5, msg::ECHO_REQUEST, 77, &[]).unwrap())
+        .await;
     let e = sw.expect(msg::ERROR).await;
     let e = wire::ErrorMsg::parse(&e.body).unwrap();
-    assert_eq!((e.etype, e.code), (err::BAD_REQUEST, err::BAD_REQUEST_BAD_VERSION));
+    assert_eq!(
+        (e.etype, e.code),
+        (err::BAD_REQUEST, err::BAD_REQUEST_BAD_VERSION)
+    );
 }
 
 #[tokio::test]
@@ -220,25 +255,48 @@ async fn replies_are_matched_to_requests_by_xid_and_multipart_is_reassembled() {
         b
     };
     // A reply nobody asked for (wrong xid), and a FEATURES_REPLY nobody asked for: ignored.
-    sw.send(msg::MULTIPART_REPLY, xid + 1000, &wire::multipart_body(wire::mp::FLOW, 0, &entry(99)))
-        .await;
+    sw.send(
+        msg::MULTIPART_REPLY,
+        xid + 1000,
+        &wire::multipart_body(wire::mp::FLOW, 0, &entry(99)),
+    )
+    .await;
     sw.send(msg::FEATURES_REPLY, xid + 1001, &[0; 24]).await;
     // The real reply, in two parts.
-    sw.send(msg::MULTIPART_REPLY, xid, &wire::multipart_body(wire::mp::FLOW, wire::mp::MORE, &entry(1)))
-        .await;
-    sw.send(msg::MULTIPART_REPLY, xid, &wire::multipart_body(wire::mp::FLOW, 0, &entry(2)))
-        .await;
+    sw.send(
+        msg::MULTIPART_REPLY,
+        xid,
+        &wire::multipart_body(wire::mp::FLOW, wire::mp::MORE, &entry(1)),
+    )
+    .await;
+    sw.send(
+        msg::MULTIPART_REPLY,
+        xid,
+        &wire::multipart_body(wire::mp::FLOW, 0, &entry(2)),
+    )
+    .await;
     let ev = c.wait_for_events("openflow_stats_reply", 1).await;
     assert_eq!(ev.len(), 1, "{ev:?}");
     let entries = ev[0]["entries"].as_array().unwrap();
-    let priorities: Vec<u64> = entries.iter().map(|e| e["priority"].as_u64().unwrap()).collect();
-    assert_eq!(priorities, vec![1, 2], "both parts, and not the unsolicited one");
+    let priorities: Vec<u64> = entries
+        .iter()
+        .map(|e| e["priority"].as_u64().unwrap())
+        .collect();
+    assert_eq!(
+        priorities,
+        vec![1, 2],
+        "both parts, and not the unsolicited one"
+    );
     assert_eq!(entries[0]["packet_count"], 3);
     assert_eq!(entries[0]["instructions"][0]["actions"][0]["port"], 2);
     assert!(c.log_text().contains("decision=protocol_unsolicited_reply"));
     // The xid is spent: the same reply again raises nothing new.
-    sw.send(msg::MULTIPART_REPLY, xid, &wire::multipart_body(wire::mp::FLOW, 0, &entry(3)))
-        .await;
+    sw.send(
+        msg::MULTIPART_REPLY,
+        xid,
+        &wire::multipart_body(wire::mp::FLOW, 0, &entry(3)),
+    )
+    .await;
     sw.nothing_before_echo(905).await;
     assert_eq!(c.events("openflow_stats_reply").await.len(), 1);
 }
@@ -259,7 +317,10 @@ async fn a_switch_error_is_traced_back_to_the_models_flow_mod() {
     assert_eq!(ev[0]["error_type"], "BAD_MATCH");
     assert_eq!(ev[0]["error_code"], "BAD_PREREQ");
     assert_eq!(ev[0]["request"]["type"], "FLOW_MOD");
-    assert!(ev[0]["request"]["what"].as_str().unwrap().contains("flow_mod add priority 0"));
+    assert!(ev[0]["request"]["what"]
+        .as_str()
+        .unwrap()
+        .contains("flow_mod add priority 0"));
 }
 
 #[tokio::test]
@@ -309,7 +370,12 @@ async fn bounds_hold_against_a_hostile_switch() {
     let mut sw = connected(&c).await;
     let mut oxms = Vec::new();
     for i in 0..=wire::MAX_OXMS {
-        oxms.push(wire::Oxm { class: 1, field: (i % 127) as u8, value: vec![(i / 127) as u8], mask: None });
+        oxms.push(wire::Oxm {
+            class: 1,
+            field: (i % 127) as u8,
+            value: vec![(i / 127) as u8],
+            mask: None,
+        });
     }
     let pi = wire::PacketIn {
         buffer_id: wire::NO_BUFFER,
@@ -324,7 +390,10 @@ async fn bounds_hold_against_a_hostile_switch() {
     let e = sw.expect(msg::ERROR).await;
     assert_eq!(e.header.xid, 50);
     let e = wire::ErrorMsg::parse(&e.body).unwrap();
-    assert_eq!((e.etype, e.code), (err::BAD_REQUEST, err::BAD_REQUEST_BAD_LEN));
+    assert_eq!(
+        (e.etype, e.code),
+        (err::BAD_REQUEST, err::BAD_REQUEST_BAD_LEN)
+    );
     assert!(c.events("openflow_packet_in").await.is_empty());
 
     // A switch that stops answering ECHO is disconnected (echo_interval_secs 1).
@@ -333,7 +402,11 @@ async fn bounds_hold_against_a_hostile_switch() {
     silent.expect(msg::FLOW_MOD).await;
     let started = std::time::Instant::now();
     let echo = silent.recv().await;
-    assert_eq!(echo.header.msg_type, msg::ECHO_REQUEST, "a quiet switch is probed");
+    assert_eq!(
+        echo.header.msg_type,
+        msg::ECHO_REQUEST,
+        "a quiet switch is probed"
+    );
     assert!(silent.closed_within(Duration::from_secs(10)).await);
     assert!(started.elapsed() < Duration::from_secs(10));
     assert!(c.wait_for_log("decision=protocol_timeout").await);
@@ -348,12 +421,22 @@ async fn bounds_hold_against_a_hostile_switch() {
     let part = vec![0u8; 60_000];
     let parts = netget::server::openflow::MAX_MULTIPART_BYTES / part.len() + 1;
     for _ in 0..parts {
-        sw.send(msg::MULTIPART_REPLY, req.header.xid, &wire::multipart_body(wire::mp::FLOW, wire::mp::MORE, &part))
-            .await;
+        sw.send(
+            msg::MULTIPART_REPLY,
+            req.header.xid,
+            &wire::multipart_body(wire::mp::FLOW, wire::mp::MORE, &part),
+        )
+        .await;
     }
-    assert!(c.wait_for_log("decision=fail_closed_multipart_too_large").await);
+    assert!(
+        c.wait_for_log("decision=fail_closed_multipart_too_large")
+            .await
+    );
     let ev = c.wait_for_events("openflow_stats_reply", 1).await;
-    assert!(ev[0]["error"].as_str().unwrap().contains("discarded"), "{ev:?}");
+    assert!(
+        ev[0]["error"].as_str().unwrap().contains("discarded"),
+        "{ev:?}"
+    );
     sw.nothing_before_echo(906).await;
 }
 
@@ -373,11 +456,17 @@ async fn an_operator_can_message_and_disconnect_a_switch() {
         )
         .await
         .unwrap();
-    assert!(matches!(outcome, ClientSendOutcome::Executed { .. }), "{outcome:?}");
+    assert!(
+        matches!(outcome, ClientSendOutcome::Executed { .. }),
+        "{outcome:?}"
+    );
     let fm = flow_mod(&sw.expect(msg::FLOW_MOD).await);
     assert_eq!(fm.priority, 7);
     let m = netget::server::openflow::fields::match_to_json(&fm.matched);
-    assert_eq!(m, json!({"eth_type": "0x0800", "ip_proto": 17, "udp_dst": 53}));
+    assert_eq!(
+        m,
+        json!({"eth_type": "0x0800", "ip_proto": 17, "udp_dst": 53})
+    );
 
     let bad = c
         .state
@@ -393,7 +482,12 @@ async fn an_operator_can_message_and_disconnect_a_switch() {
 
     let gone = c
         .state
-        .send_to_peer(c.id, conn, json!({"type": "openflow_disconnect_switch"}), Duration::from_secs(10))
+        .send_to_peer(
+            c.id,
+            conn,
+            json!({"type": "openflow_disconnect_switch"}),
+            Duration::from_secs(10),
+        )
         .await
         .unwrap();
     assert!(matches!(gone, ClientSendOutcome::Disconnected));
@@ -404,34 +498,35 @@ async fn an_operator_can_message_and_disconnect_a_switch() {
 /// the NetGet binary.
 #[tokio::test]
 async fn the_model_drives_the_controller_through_the_binary() -> E2EResult<()> {
-    let config = NetGetConfig::new("listen on port {AVAILABLE_PORT} via openflow").with_mock(|mock| {
-        mock.on_instruction_containing("via openflow")
-            .respond_with_actions(json!([{
-                "type": "open_server",
-                "port": 0,
-                "base_stack": "openflow",
-                "instruction": "Install a table-miss flow; send every packet to port 2"
-            }]))
-            .expect_calls(1)
-            .and()
-            .on_event("openflow_switch_connected")
-            .respond_with_actions(json!([{
-                "type": "openflow_flow_mod", "priority": 0, "match": {},
-                "actions": [{"type": "output", "port": "controller"}]
-            }]))
-            .expect_calls(1)
-            .and()
-            .on_event("openflow_packet_in")
-            .respond_with_actions_from_event(|e| {
-                json!([{
-                    "type": "openflow_packet_out",
-                    "packet_in_id": e["packet_in_id"],
-                    "actions": [{"type": "output", "port": 2}]
-                }])
-            })
-            .expect_calls(1)
-            .and()
-    });
+    let config =
+        NetGetConfig::new("listen on port {AVAILABLE_PORT} via openflow").with_mock(|mock| {
+            mock.on_instruction_containing("via openflow")
+                .respond_with_actions(json!([{
+                    "type": "open_server",
+                    "port": 0,
+                    "base_stack": "openflow",
+                    "instruction": "Install a table-miss flow; send every packet to port 2"
+                }]))
+                .expect_calls(1)
+                .and()
+                .on_event("openflow_switch_connected")
+                .respond_with_actions(json!([{
+                    "type": "openflow_flow_mod", "priority": 0, "match": {},
+                    "actions": [{"type": "output", "port": "controller"}]
+                }]))
+                .expect_calls(1)
+                .and()
+                .on_event("openflow_packet_in")
+                .respond_with_actions_from_event(|e| {
+                    json!([{
+                        "type": "openflow_packet_out",
+                        "packet_in_id": e["packet_in_id"],
+                        "actions": [{"type": "output", "port": 2}]
+                    }])
+                })
+                .expect_calls(1)
+                .and()
+        });
     let server = helpers::start_netget_server(config).await?;
     let mut sw = RawSwitch::connect(([127, 0, 0, 1], server.port).into()).await;
     sw.handshake().await;
@@ -440,7 +535,13 @@ async fn the_model_drives_the_controller_through_the_binary() -> E2EResult<()> {
     sw.packet_in(20, 1, &frame).await;
     let po = wire::PacketOut::parse(&sw.expect(msg::PACKET_OUT).await.body).unwrap();
     assert_eq!(po.data, frame);
-    assert_eq!(po.actions, vec![Action::Output { port: 2, max_len: wire::CML_NO_BUFFER }]);
+    assert_eq!(
+        po.actions,
+        vec![Action::Output {
+            port: 2,
+            max_len: wire::CML_NO_BUFFER
+        }]
+    );
     server.wait_for_mocks(30).await;
     server.verify_mocks().await?;
     server.stop().await?;

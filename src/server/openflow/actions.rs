@@ -432,7 +432,12 @@ pub static FLOW_REMOVED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         json!({"type": "openflow_drop_packet", "reason": "nothing to do"}),
     )
     .with_parameters(vec![
-        p("datapath_id", "string", "The switch's datapath id, 16 hex digits", true),
+        p(
+            "datapath_id",
+            "string",
+            "The switch's datapath id, 16 hex digits",
+            true,
+        ),
         p(
             "reason",
             "string",
@@ -441,8 +446,18 @@ pub static FLOW_REMOVED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         ),
         p("table_id", "number", "The flow table the flow was in", true),
         p("priority", "number", "The removed flow's priority", true),
-        p("cookie", "string", "The removed flow's cookie, in hex", true),
-        p("match", "object", "The removed flow's match, by field name", true),
+        p(
+            "cookie",
+            "string",
+            "The removed flow's cookie, in hex",
+            true,
+        ),
+        p(
+            "match",
+            "object",
+            "The removed flow's match, by field name",
+            true,
+        ),
         p("packet_count", "number", "Packets it matched", true),
         p("byte_count", "number", "Bytes it matched", true),
         p("duration_sec", "number", "How long it was installed", true),
@@ -462,7 +477,12 @@ pub static PORT_STATUS_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         json!({"type": "openflow_request_stats", "kind": "port"}),
     )
     .with_parameters(vec![
-        p("datapath_id", "string", "The switch's datapath id, 16 hex digits", true),
+        p(
+            "datapath_id",
+            "string",
+            "The switch's datapath id, 16 hex digits",
+            true,
+        ),
         p("reason", "string", "add, delete or modify", true),
         p(
             "port",
@@ -486,7 +506,12 @@ pub static STATS_REPLY_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         json!({"type": "openflow_drop_packet", "reason": "statistics noted"}),
     )
     .with_parameters(vec![
-        p("datapath_id", "string", "The switch's datapath id, 16 hex digits", true),
+        p(
+            "datapath_id",
+            "string",
+            "The switch's datapath id, 16 hex digits",
+            true,
+        ),
         p(
             "kind",
             "string",
@@ -516,8 +541,9 @@ pub static STATS_REPLY_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     )
 });
 
-pub static ERROR_EVENT: LazyLock<EventType> = LazyLock::new(|| {
-    EventType::new(
+pub static ERROR_EVENT: LazyLock<EventType> =
+    LazyLock::new(|| {
+        EventType::new(
         "openflow_error",
         "The switch refused a message with an OpenFlow ERROR, usually one of yours: fix it and \
          send it again, or give up",
@@ -540,7 +566,7 @@ pub static ERROR_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             .with_info("OpenFlow error {error_type}/{error_code}")
             .with_debug("OpenFlow error: {json(.)}"),
     )
-});
+    });
 
 pub fn event_types() -> Vec<EventType> {
     vec![
@@ -567,17 +593,16 @@ fn opt_num(v: &Value, key: &str, default: u64, max: u64) -> Result<u64> {
 /// A FLOW_MOD from the model's action. Its buffer id is `NO_BUFFER`; `mod.rs` substitutes the
 /// buffer a `packet_in_id` names.
 pub fn flow_mod_from_json(v: &Value) -> Result<FlowMod> {
-    let command = match v.get("command").and_then(Value::as_str).unwrap_or("add") {
-        c => wire::flow_cmd::NAMES
-            .iter()
-            .position(|n| *n == c)
-            .with_context(|| {
-                format!(
-                    "command {c:?} is one of {}",
-                    wire::flow_cmd::NAMES.join(", ")
-                )
-            })? as u8,
-    };
+    let c = v.get("command").and_then(Value::as_str).unwrap_or("add");
+    let command = wire::flow_cmd::NAMES
+        .iter()
+        .position(|n| *n == c)
+        .with_context(|| {
+            format!(
+                "command {c:?} is one of {}",
+                wire::flow_cmd::NAMES.join(", ")
+            )
+        })? as u8;
     let deleting = matches!(
         command,
         wire::flow_cmd::DELETE | wire::flow_cmd::DELETE_STRICT
@@ -786,8 +811,8 @@ impl Protocol for OpenFlowProtocol {
             )
             .notes(
                 "Experimental: one independent switch implementation (Open vSwitch); no second \
-                 switch was available to run (ofsoftswitch13 does not build on current \
-                 distributions), no fuzz corpus has been run at length, and its pair job had not \
+                 switch implementation is packaged for Ubuntu or Homebrew (CPqD's ofsoftswitch13 \
+                 is source-only and was not attempted), no fuzz corpus has been run at length, and its pair job had not \
                  run in CI when it landed. OpenFlow 1.3 only — no 1.0 (POX- and NOX-era \
                  switches), no TLS (ssl: connections), no auxiliary connections, no \
                  GROUP_MOD/METER_MOD/TABLE_MOD/PORT_MOD actions for the model, no role \

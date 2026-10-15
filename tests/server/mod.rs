@@ -533,6 +533,8 @@ pub mod msgpack_rpc;
 pub mod ninep;
 #[cfg(feature = "onvif")]
 pub mod onvif;
+#[cfg(feature = "openflow")]
+pub mod openflow;
 #[cfg(feature = "pfcp")]
 pub mod pfcp;
 #[cfg(feature = "pulsar")]
@@ -559,8 +561,6 @@ pub mod sunrpc;
 pub mod tr069;
 #[cfg(feature = "vxlan")]
 pub mod vxlan;
-#[cfg(feature = "openflow")]
-pub mod openflow;
 #[cfg(feature = "webtransport")]
 pub mod webtransport;
 #[cfg(feature = "wsdiscovery")]

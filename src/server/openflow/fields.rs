@@ -27,7 +27,7 @@ pub enum Kind {
 }
 
 impl Kind {
-    pub fn len(self) -> usize {
+    pub fn width(self) -> usize {
         match self {
             Kind::U8 => 1,
             Kind::U16 | Kind::VlanVid | Kind::EtherType => 2,
@@ -241,7 +241,7 @@ fn value_bytes(info: &FieldInfo, v: &Value) -> Result<Vec<u8>> {
         }
         Kind::EtherType => be(ranged(v, what, 0xffff)?, 2),
         Kind::U8 | Kind::U16 | Kind::U24 | Kind::U32 | Kind::U64 => {
-            let len = info.kind.len();
+            let len = info.kind.width();
             let width_max = if len == 8 {
                 u64::MAX
             } else {
@@ -304,7 +304,7 @@ fn oxm_from_json(info: &FieldInfo, v: &Value) -> Result<Oxm> {
                 (value, None)
             } else {
                 ensure!(info.maskable, "{what} cannot be masked");
-                (value, Some(prefix_mask(bits, info.kind.len())))
+                (value, Some(prefix_mask(bits, info.kind.width())))
             }
         }
         Value::String(s) if info.kind == Kind::VlanVid && s.eq_ignore_ascii_case("present") => (
@@ -480,10 +480,14 @@ pub fn check_prerequisites(m: &Match) -> Result<(), (u16, String)> {
         }
         // Plain value checks a switch makes too.
         if let Some(info) = field_by_id(o.field) {
-            if o.value.len() != info.kind.len() {
+            if o.value.len() != info.kind.width() {
                 return Err((
                     wire::err::BAD_MATCH_BAD_LEN,
-                    format!("{name} is {} bytes, not {}", o.value.len(), info.kind.len()),
+                    format!(
+                        "{name} is {} bytes, not {}",
+                        o.value.len(),
+                        info.kind.width()
+                    ),
                 ));
             }
             if o.mask.is_some() && !info.maskable {
@@ -512,7 +516,7 @@ pub fn oxm_value_json(o: &Oxm) -> (String, Value) {
         );
     };
     let render = |b: &[u8]| -> Value {
-        if b.len() != info.kind.len() {
+        if b.len() != info.kind.width() {
             return json!(hex_string(b));
         }
         match info.kind {
