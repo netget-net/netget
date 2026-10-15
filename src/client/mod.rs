@@ -862,6 +862,8 @@ pub mod webtransport;
 pub mod wsdiscovery;
 #[cfg(feature = "x11")]
 pub mod x11;
+#[cfg(feature = "yarn")]
+pub mod yarn;
 #[cfg(feature = "zabbix")]
 pub mod zabbix;
 #[cfg(feature = "zenoh")]

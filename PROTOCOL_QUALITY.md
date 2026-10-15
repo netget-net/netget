@@ -623,7 +623,7 @@ declare, whether or not anyone has looked at it.
     `kube` SDK config, a tonic channel built with `connect_lazy`. There is no connection for
     the bound to close. Measured: `elasticsearch`, `s3`, `sqs`, `etcd`, `smb`, `http`,
     `jsonrpc`, `maven`, `npm`, `pypi`, `webdav`, `xmlrpc`, `bitcoin`, `git`, `kubernetes`,
-    `oauth2`, `openapi`, `rss`, `dynamodb`, `saml`, `ipp`, `spark`.
+    `oauth2`, `openapi`, `rss`, `dynamodb`, `saml`, `ipp`, `spark`, `yarn`.
   - **speaks inside `connect()`** — connected, and the client's own Rust or its library puts
     the first bytes on the wire before any model turn or keystroke. Measured: `postgresql`
     (StartupMessage), `mssql` (PRELOGIN), `cassandra` (OPTIONS), `mongodb`'s SDAM `hello`,
@@ -641,7 +641,7 @@ declare, whether or not anyone has looked at it.
     at the application layer.
 
   A fourth, simpler exemption: **no NetGet client of this protocol at all** — `m3ua`,
-  `memcached`, `modbus`, `oci_registry`, `rdp`, `reverse_shell`, `yarn`,
+  `memcached`, `modbus`, `oci_registry`, `rdp`, `reverse_shell`,
   `svn`, `mercurial`, `saml_sp` (the SAML client plays the SP role and targets an IdP). Note
   that `svn`, `mercurial` and `oracle` have a `src/client/<p>/` directory holding only a
   `CLAUDE.md`, so a directory listing over-reports.
