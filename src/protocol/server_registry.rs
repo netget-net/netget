@@ -808,6 +808,14 @@ impl ServerRegistry {
 
         #[cfg(feature = "sip")]
         self.register(Arc::new(crate::server::SipProtocol::new()));
+        #[cfg(feature = "h323")]
+        self.register(Arc::new(
+            crate::server::h323::actions::H323GatekeeperProtocol::new(),
+        ));
+        #[cfg(feature = "h323")]
+        self.register(Arc::new(
+            crate::server::h323::actions::H323EndpointProtocol::new(),
+        ));
 
         #[cfg(feature = "rtp")]
         self.register(Arc::new(crate::server::RtpProtocol::new()));
@@ -1683,6 +1691,8 @@ pub(crate) const ALL_KNOWN_PROTOCOLS: &[(&str, &str)] = &[
     ("WebRTC Signaling", "webrtc"),
     ("WebSocket", "websocket"),
     ("SIP", "sip"),
+    ("H323", "h323"),
+    ("H323-Gatekeeper", "h323"),
     ("RTP", "rtp"),
     ("RTSP", "rtsp"),
     ("HLS", "hls"),

@@ -62,6 +62,7 @@ jobs:
           - coap_message
           - hsrp_message
           - m3ua_message
+          - h323_per
           - bgp_message
           - ndef_message
           - nfc_apdu

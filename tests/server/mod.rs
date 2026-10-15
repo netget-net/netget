@@ -110,6 +110,8 @@ pub mod grpc;
 pub mod grpc_web;
 #[cfg(feature = "gtp")]
 pub mod gtp;
+#[cfg(feature = "h323")]
+pub mod h323;
 #[cfg(feature = "hls")]
 pub mod hls;
 #[cfg(feature = "hsrp")]

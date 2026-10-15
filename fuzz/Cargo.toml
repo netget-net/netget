@@ -52,6 +52,7 @@ features = [
     "ldap",
     "lldp",
     "m3ua",
+    "h323",
     "modbus",
     "nats",
     "nfc",
@@ -179,6 +180,13 @@ bench = false
 [[bin]]
 name = "m3ua_message"
 path = "fuzz_targets/m3ua_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "h323_per"
+path = "fuzz_targets/h323_per.rs"
 test = false
 doc = false
 bench = false
