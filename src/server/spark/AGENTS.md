@@ -139,8 +139,10 @@ halves; the constants and the reasoning live beside them in `src/server/spark/mo
 | `IDLE_BETWEEN_REQUESTS_TIMEOUT` | 180s | The monitoring API is read-only and polled on a seconds-to-minutes cycle, so the silence measured is a poller that has stopped. Above any scrape interval anyone configures and more than twice nginx's `keepalive_timeout` default of 75s. |
 | `MAX_CONNECTIONS` | 256 | Each admitted connection may hold one whole in-memory response body (a JSON response), so the cap turns that per-connection bound into a total one. Refusal: **HTTP/1.1 `503 Service Unavailable` with `Retry-After: 5`** — a 503 is what a monitoring client and a dashboard both already understand. Nothing of netget's reaches the wire; the reason is logged under `decision=fail_closed_connection_cap`. |
 
-**There is no NetGet Spark client**, so this bound has no peer of ours to strand — the fourth
-exemption in `PROTOCOL_QUALITY.md`'s three-state test.
+**NetGet's Spark client (`src/client/spark/`) cannot be stranded by it**: it is a reqwest
+client, so it opens a socket only to send a request (the *lazy* state in
+`PROTOCOL_QUALITY.md`'s three-state test), and its `connect()` sends `GET /api/v1/version`
+before any model turn. A pooled connection the idle watchdog closes is simply reopened.
 
 **The idle bound is a watchdog, not a read deadline, and that is not a stylistic choice.** hyper
 owns every read once `serve_connection` starts and keeps polling the connection for new frames
