@@ -1317,7 +1317,7 @@ pub fn inner_json(packet: &[u8]) -> Value {
         let shown = &payload[..payload.len().min(MAX_EVENT_PAYLOAD)];
         let text = std::str::from_utf8(shown)
             .ok()
-            .filter(|s| s.chars().all(|c| !c.is_control() || c.is_whitespace()));
+            .filter(|s| !crate::utils::sanitize::has_controls(&s.replace(char::is_whitespace, "")));
         match text {
             Some(t) => {
                 j["payload"] = json!(t);
