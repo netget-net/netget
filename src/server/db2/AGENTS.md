@@ -181,8 +181,10 @@ more. It now declares both halves; the constants and the reasoning live beside t
 | `IDLE_BETWEEN_REQUESTS_TIMEOUT` | 300s | Applies only once the security check has been accepted. An authenticated Db2 session legitimately idles — JDBC, pureQuery and `ibm_db` all pool connections and hold them open between statements, with idle-reap defaults in minutes. An unauthenticated peer never reaches this bound, which is the half that matters against an attacker. |
 | `MAX_CONNECTIONS` | 256 | Refusal: **a plain close.** Every DDM reply is a DSS carrying the *request's* correlation identifier, and a refused peer has sent no request — so no well-formed refusal exists. Invented bytes would be reported as a protocol violation, which tells an operator less than the WARN line tagged `decision=fail_closed_connection_cap`. |
 
-**There is no NetGet Db2 client**, so this bound has no peer of ours to strand — the fourth
-exemption in `PROTOCOL_QUALITY.md`'s three-state test.
+**NetGet's own Db2 client (`src/client/db2/`) speaks inside `connect()`**: EXCSAT, ACCSEC,
+SECCHK and ACCRDB all go out before it returns, so the first-request bound cannot strand it.
+Once authenticated it may sit idle while a human answers a parked turn; the 300s idle bound
+equals the manual-intercept default, so that wait is covered.
 
 **The deadline covers the read and nothing else.** The deadline wraps the `read()` call in this protocol's own loop, and everything that can legitimately take minutes happens after it returns. The LLM round-trip, and a `manual`
 rule parking an event for a human (`src/state/intercepts.rs`, 300s by default), are outside
