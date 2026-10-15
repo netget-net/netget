@@ -31,7 +31,11 @@ fn m3ua(class: u8, msg_type: u8, params: &[(u16, Vec<u8>)]) -> Vec<u8> {
 fn data(sccp_hex: &str) -> Vec<u8> {
     let mut pd = vec![0, 0, 0, 1, 0, 0, 0, 2, 3, 2, 0, 1];
     pd.extend(unhex(sccp_hex));
-    m3ua(1, 1, &[(0x0006, 100u32.to_be_bytes().to_vec()), (0x0210, pd)])
+    m3ua(
+        1,
+        1,
+        &[(0x0006, 100u32.to_be_bytes().to_vec()), (0x0210, pd)],
+    )
 }
 
 /// Read one message: (class, type, Protocol Data value if any).
@@ -126,19 +130,30 @@ async fn the_model_answers_jss7s_map_and_camel_requests_through_netget() -> E2ER
     let (c, _, pd) = read(&mut asp).await?;
     assert_eq!(c, 1);
     let pd = pd.ok_or("DATA without Protocol Data")?;
-    assert_eq!(&pd[..12], &[0, 0, 0, 2, 0, 0, 0, 1, 3, 2, 0, 1], "routing label swapped");
-    assert_eq!(hex::encode(&pd[12..]), jss7::SRI_SM_END, "jSS7's own answer, octet for octet");
+    assert_eq!(
+        &pd[..12],
+        &[0, 0, 0, 2, 0, 0, 0, 1, 3, 2, 0, 1],
+        "routing label swapped"
+    );
+    assert_eq!(
+        hex::encode(&pd[12..]),
+        jss7::SRI_SM_END,
+        "jSS7's own answer, octet for octet"
+    );
 
     asp.write_all(&data(jss7::IDP_BEGIN)).await?;
     let (_, _, pd) = read(&mut asp).await?;
     let ud = netget::server::m3ua::sccp::decode(&pd.ok_or("no Protocol Data")?[12..])
         .map_err(|e| e.to_string())?;
-    let tc = netget::server::m3ua::tcap::TcMessage::decode(&ud.data)
-        .map_err(|(_, e)| e.to_string())?;
+    let tc =
+        netget::server::m3ua::tcap::TcMessage::decode(&ud.data).map_err(|(_, e)| e.to_string())?;
     assert_eq!(tc.kind, netget::server::m3ua::tcap::TcKind::End);
     // Connect, destinationRoutingAddress 31677777777 as an ISUP called party number.
     let comp = hex::encode(tc.components[0].encode());
-    assert!(comp.contains("020114"), "operation code 20 (connect): {comp}");
+    assert!(
+        comp.contains("020114"),
+        "operation code 20 (connect): {comp}"
+    );
     // destinationRoutingAddress [0] { OCTET STRING: odd, international (0x84), ISDN (0x10),
     // 31677777777 in BCD with a 0 filler }.
     assert!(comp.contains("a00a04088410137677777707"), "{comp}");

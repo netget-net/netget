@@ -75,9 +75,13 @@ async fn netgets_asp_reaches_jss7_through_osmo_stp() {
         "timeout_secs=60",
     ]);
     let peer = ToolProcess::spawn(cmd, "java (jSS7 driver)", JSS7_HINT).unwrap();
-    peer.wait_for_line("jSS7 active behind osmo-stp", Duration::from_secs(30), |l| l == "READY")
-        .await
-        .unwrap_or_else(|e| panic!("{e}\nosmo-stp:\n{}", stp.lines().join("\n")));
+    peer.wait_for_line(
+        "jSS7 active behind osmo-stp",
+        Duration::from_secs(30),
+        |l| l == "READY",
+    )
+    .await
+    .unwrap_or_else(|e| panic!("{e}\nosmo-stp:\n{}", stp.lines().join("\n")));
 
     let state = AppState::new_with_options(false, "http://127.0.0.1:1".into());
     let (tx, _) = mpsc::unbounded_channel();
@@ -107,9 +111,11 @@ async fn netgets_asp_reaches_jss7_through_osmo_stp() {
         assert_eq!(c["routing_context"], 1, "{c}");
     }
 
-    peer.wait_for_line("both dialogues", Duration::from_secs(60), |l| l.starts_with("DONE"))
-        .await
-        .unwrap_or_else(|e| panic!("{e}\nosmo-stp:\n{}", stp.lines().join("\n")));
+    peer.wait_for_line("both dialogues", Duration::from_secs(60), |l| {
+        l.starts_with("DONE")
+    })
+    .await
+    .unwrap_or_else(|e| panic!("{e}\nosmo-stp:\n{}", stp.lines().join("\n")));
     let lines = peer.lines();
     let mt = lines
         .iter()
@@ -128,6 +134,11 @@ async fn netgets_asp_reaches_jss7_through_osmo_stp() {
     assert_capture(
         &frames,
         netget_local,
-        &["ASPUP", "ASPAC", "invoke sendRoutingInfoForSM", "invoke mt-forwardSM"],
+        &[
+            "ASPUP",
+            "ASPAC",
+            "invoke sendRoutingInfoForSM",
+            "invoke mt-forwardSM",
+        ],
     );
 }

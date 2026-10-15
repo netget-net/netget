@@ -431,7 +431,7 @@ files rather than discovered later by someone debugging live.
 | Protocol | Feature | Module | Transport | Privilege | Status |
 |---|---|---|---|---|---|
 | GTP-C / GTP-U | `gtp` | `gtp` | UDP 2123 / 2152 | **none** — both above 1024 | `landed` (`b1642019`) — Experimental |
-| M3UA / SIGTRAN | `m3ua` | `m3ua` | SCTP 2905 | none (port is high) | `landed` (`55f03bb6`) — Experimental; SCTP never executed |
+| M3UA / SIGTRAN | `m3ua` | `m3ua` | SCTP 2905 | none (port is high) | `landed` (`55f03bb6`) — Experimental; with SCCP, TCAP, MAP, CAMEL and an ASP client, exercised over real SCTP on Linux against Restcomm jSS7 and osmo-stp (`src/server/m3ua/AGENTS.md`) |
 
 **GTP is the pleasant surprise of this tier**: both its ports are above 1024, so
 it needs no privilege and is fully testable here. The model plays an SGW/PGW in

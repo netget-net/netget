@@ -36,7 +36,11 @@ fn m3ua(class: u8, msg_type: u8, params: &[(u16, Vec<u8>)]) -> Vec<u8> {
 fn data(sccp_bytes: &[u8]) -> Vec<u8> {
     let mut pd = vec![0, 0, 0, 2, 0, 0, 0, 1, 3, 2, 0, 0];
     pd.extend_from_slice(sccp_bytes);
-    m3ua(1, 1, &[(0x0006, 100u32.to_be_bytes().to_vec()), (0x0210, pd)])
+    m3ua(
+        1,
+        1,
+        &[(0x0006, 100u32.to_be_bytes().to_vec()), (0x0210, pd)],
+    )
 }
 
 /// Read one M3UA message: (class, type, the Protocol Data's user part if it is DATA).
@@ -68,9 +72,17 @@ async fn admit(listener: &TcpListener) -> TcpStream {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(read(&mut s).await.map(|m| (m.0, m.1)), Some((3, 1)), "ASPUP first");
+    assert_eq!(
+        read(&mut s).await.map(|m| (m.0, m.1)),
+        Some((3, 1)),
+        "ASPUP first"
+    );
     s.write_all(&m3ua(3, 4, &[])).await.unwrap();
-    assert_eq!(read(&mut s).await.map(|m| (m.0, m.1)), Some((4, 1)), "then ASPAC");
+    assert_eq!(
+        read(&mut s).await.map(|m| (m.0, m.1)),
+        Some((4, 1)),
+        "then ASPAC"
+    );
     s.write_all(&m3ua(4, 3, &[(0x0006, 100u32.to_be_bytes().to_vec())]))
         .await
         .unwrap();
@@ -110,18 +122,26 @@ async fn create(port: u16, handlers: Vec<Value>) -> (AppState, anyhow::Result<Cl
         protocol: "m3ua".into(),
         remote_addr: Some(format!("127.0.0.1:{port}")),
         instruction: Some("Be an SMSC".into()),
-        startup_params: Some(json!({"transport": "tcp", "routing_context": 100, "opc": 1, "dpc": 2,
-            "local_gt": "31600000100", "remote_gt": "31600000200"})),
+        startup_params: Some(
+            json!({"transport": "tcp", "routing_context": 100, "opc": 1, "dpc": 2,
+            "local_gt": "31600000100", "remote_gt": "31600000200"}),
+        ),
         event_handlers: Some(handlers),
         ..Default::default()
     }
-    .create(&state, netget::llm::OllamaClient::new("http://127.0.0.1:1"), tx)
+    .create(
+        &state,
+        netget::llm::OllamaClient::new("http://127.0.0.1:1"),
+        tx,
+    )
     .await;
     (state, id)
 }
 
 fn script(code: &str) -> Vec<Value> {
-    vec![json!({"event_pattern": "*", "handler": {"type": "script", "language": "python", "code": code}})]
+    vec![
+        json!({"event_pattern": "*", "handler": {"type": "script", "language": "python", "code": code}}),
+    ]
 }
 
 /// The SRI-SM answer jSS7's HLR sent, readdressed to NetGet's transaction and invoke.
@@ -152,7 +172,10 @@ async fn the_models_request_reaches_the_wire_and_its_answer_drives_the_next() {
     let (_state, _id, mut sgp) = start(listener, script(CHAIN)).await;
     let begin = next_tcap(&mut sgp).await.expect("the model's SRI-SM");
     assert_eq!(begin.kind, TcKind::Begin);
-    let Component::Invoke { invoke_id, opcode, .. } = &begin.components[0] else {
+    let Component::Invoke {
+        invoke_id, opcode, ..
+    } = &begin.components[0]
+    else {
         panic!("{begin:?}")
     };
     assert_eq!(opcode.local(), Some(45));
@@ -162,7 +185,10 @@ async fn the_models_request_reaches_the_wire_and_its_answer_drives_the_next() {
     // The next dialogue is the model acting on that answer: mt-forwardSM to the IMSI jSS7 named.
     let next = next_tcap(&mut sgp).await.expect("the model's mt-forwardSM");
     assert_eq!(next.kind, TcKind::Begin);
-    let Component::Invoke { opcode, parameter, .. } = &next.components[0] else {
+    let Component::Invoke {
+        opcode, parameter, ..
+    } = &next.components[0]
+    else {
         panic!("{next:?}")
     };
     assert_eq!(opcode.local(), Some(44));
@@ -208,9 +234,13 @@ print(json.dumps({"actions": a}))"#;
 async fn an_inbound_dialogue_the_model_cannot_answer_fails_closed() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     // Only m3ua_connected is scripted; the map event goes to the unreachable model.
-    let quiet = vec![json!({"event_pattern": "m3ua_connected", "handler": {"type": "static", "actions": []}})];
+    let quiet = vec![
+        json!({"event_pattern": "m3ua_connected", "handler": {"type": "static", "actions": []}}),
+    ];
     let (_state, _id, mut sgp) = start(listener, quiet).await;
-    sgp.write_all(&data(&unhex(jss7::SRI_SM_BEGIN))).await.unwrap();
+    sgp.write_all(&data(&unhex(jss7::SRI_SM_BEGIN)))
+        .await
+        .unwrap();
     let end = next_tcap(&mut sgp).await.expect("an answer");
     assert_eq!(end.kind, TcKind::End);
     assert_eq!(end.dtid.as_deref(), Some(&[0u8, 0, 0, 1][..]));
@@ -226,7 +256,9 @@ async fn a_silent_model_aborts_an_inbound_dialogue() {
         vec![json!({"event_pattern": "*", "handler": {"type": "static", "actions": []}})],
     )
     .await;
-    sgp.write_all(&data(&unhex(jss7::SRI_SM_BEGIN))).await.unwrap();
+    sgp.write_all(&data(&unhex(jss7::SRI_SM_BEGIN)))
+        .await
+        .unwrap();
     let abort = next_tcap(&mut sgp).await.expect("an answer");
     assert_eq!(abort.kind, TcKind::Abort);
     assert!(abort.components.is_empty());

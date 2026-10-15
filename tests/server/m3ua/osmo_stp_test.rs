@@ -8,8 +8,7 @@
 //! jSS7 decodes the MAP answers at the far end. Fails rather than skips without osmo-stp
 //! (Ubuntu: `osmo-stp`), the jSS7 driver, dumpcap or tshark.
 use super::ss7_live::{
-    assert_capture, field, free_port, jss7_command, pct_decode, osmo_stp, LiveCapture,
-    JSS7_HINT,
+    assert_capture, field, free_port, jss7_command, osmo_stp, pct_decode, LiveCapture, JSS7_HINT,
 };
 use crate::helpers::real_server::run_tool;
 use netget::cli::management::ServerForm;
@@ -105,7 +104,9 @@ async fn jss7_reaches_netgets_sgp_through_osmo_stp() {
                 )
                 .await
                 .iter()
-                .any(|e| serde_json::to_value(e).unwrap()["event_type"] == "m3ua_asp_active_received");
+                .any(|e| {
+                    serde_json::to_value(e).unwrap()["event_type"] == "m3ua_asp_active_received"
+                });
             if seen {
                 break;
             }
@@ -113,7 +114,11 @@ async fn jss7_reaches_netgets_sgp_through_osmo_stp() {
         }
     })
     .await;
-    assert!(ups.is_ok(), "osmo-stp never activated on NetGet's SGP:\n{}", stp.lines().join("\n"));
+    assert!(
+        ups.is_ok(),
+        "osmo-stp never activated on NetGet's SGP:\n{}",
+        stp.lines().join("\n")
+    );
 
     let mut cmd = jss7_command();
     cmd.args([
@@ -144,7 +149,10 @@ async fn jss7_reaches_netgets_sgp_through_osmo_stp() {
         .iter()
         .find(|l| l.starts_with("RESULT scenario=ussd"))
         .unwrap_or_else(|| panic!("{out}"));
-    assert_eq!(pct_decode(field(ussd, "text").unwrap()), "via osmo-stp: *55#");
+    assert_eq!(
+        pct_decode(field(ussd, "text").unwrap()),
+        "via osmo-stp: *55#"
+    );
     drop(stp);
 
     let frames = capture.finish().await;

@@ -8,7 +8,9 @@
 //!
 //! `install_peers.py` builds the driver and prints `NETGET_JSS7_PEER`; the tests **fail** without
 //! it, without Java, and without dumpcap/tshark. Linux only: macOS has no SCTP.
-use super::ss7_live::{assert_capture, field, free_port, jss7_command, pct_decode, LiveCapture, JSS7_HINT};
+use super::ss7_live::{
+    assert_capture, field, free_port, jss7_command, pct_decode, LiveCapture, JSS7_HINT,
+};
 use crate::helpers::real_server::run_tool;
 use netget::cli::management::ServerForm;
 use netget::state::app_state::AppState;
@@ -136,7 +138,9 @@ fn line<'a>(lines: &'a [String], prefix: &str) -> &'a str {
 
 #[tokio::test]
 async fn jss7_map_and_camel_dialogues_are_answered_by_the_model_over_sctp() {
-    let handlers = vec![json!({"event_pattern": "*", "handler": {"type": "script", "language": "python", "code": POLICY}})];
+    let handlers = vec![
+        json!({"event_pattern": "*", "handler": {"type": "script", "language": "python", "code": POLICY}}),
+    ];
     let (state, id, port) = start_sgp(handlers, "Be an SGP").await;
     let capture = LiveCapture::start(&[port]).await;
 
@@ -167,18 +171,24 @@ async fn jss7_map_and_camel_dialogues_are_answered_by_the_model_over_sctp() {
     // CAMEL: the gsmSCF armed oAnswer/oDisconnect and connected; jSS7's gsmSSF reported both
     // events on NetGet's transaction, and the oDisconnect was answered with releaseCall.
     assert!(
-        lines.iter().any(|l| l.starts_with("CAP scenario=idp op=connect")
-            && field(l, "dest") == Some("491729999999")),
+        lines
+            .iter()
+            .any(|l| l.starts_with("CAP scenario=idp op=connect")
+                && field(l, "dest") == Some("491729999999")),
         "{lines:#?}"
     );
     assert!(
-        lines.iter().any(|l| l.starts_with("CAP scenario=idp op=requestReportBCSMEvent")
-            && field(l, "events") == Some("oAnswer:notifyAndContinue,oDisconnect:interrupted")),
+        lines.iter().any(
+            |l| l.starts_with("CAP scenario=idp op=requestReportBCSMEvent")
+                && field(l, "events") == Some("oAnswer:notifyAndContinue,oDisconnect:interrupted")
+        ),
         "{lines:#?}"
     );
     assert!(
-        lines.iter().any(|l| l.starts_with("CAP scenario=idp op=releaseCall")
-            && field(l, "cause") == Some("16")),
+        lines
+            .iter()
+            .any(|l| l.starts_with("CAP scenario=idp op=releaseCall")
+                && field(l, "cause") == Some("16")),
         "{lines:#?}"
     );
     let idp = line(&lines, "RESULT scenario=idp");
@@ -194,10 +204,19 @@ async fn jss7_map_and_camel_dialogues_are_answered_by_the_model_over_sctp() {
             .map(|c| c["argument"].clone())
             .unwrap_or_else(|| panic!("no {op} reached the model: {maps:#?}"))
     };
-    assert_eq!(arg("sendRoutingInfoForSM")["msisdn"]["digits"], "31628838002");
+    assert_eq!(
+        arg("sendRoutingInfoForSM")["msisdn"]["digits"],
+        "31628838002"
+    );
     assert_eq!(arg("processUnstructuredSS-Request")["ussd_text"], "*123#");
-    assert_eq!(arg("mo-forwardSM")["sms"]["user_data"]["text"], "Grüße aus jSS7");
-    assert_eq!(arg("mt-forwardSM")["sms"]["originator"]["digits"], "31633333333");
+    assert_eq!(
+        arg("mo-forwardSM")["sms"]["user_data"]["text"],
+        "Grüße aus jSS7"
+    );
+    assert_eq!(
+        arg("mt-forwardSM")["sms"]["originator"]["digits"],
+        "31633333333"
+    );
     let caps = events(&state, id, "m3ua_cap_received").await;
     let reports: Vec<&Value> = caps
         .iter()
@@ -211,7 +230,10 @@ async fn jss7_map_and_camel_dialogues_are_answered_by_the_model_over_sctp() {
             .find(|r| r["argument"]["event_type_bcsm"] == event)
             .unwrap_or_else(|| panic!("no {event} report: {caps:#?}"))
     };
-    assert_eq!(report("oAnswer")["argument"]["message_type"], "notification");
+    assert_eq!(
+        report("oAnswer")["argument"]["message_type"],
+        "notification"
+    );
     assert_eq!(report("oDisconnect")["argument"]["message_type"], "request");
 
     let frames = capture.finish().await;

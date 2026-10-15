@@ -515,7 +515,7 @@ async fn run_session(
     .await;
     crate::server::peer_support::spawn_peer_command_task(
         peer_rx,
-        protocol.clone(),
+        Arc::new(M3uaProtocol::for_peer_commands()),
         app_state.clone(),
         server_id,
         connection_id.as_u32(),

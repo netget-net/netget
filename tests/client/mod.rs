@@ -406,6 +406,8 @@ pub mod libp2p;
 pub mod lmtp;
 #[cfg(feature = "lpd")]
 pub mod lpd;
+#[cfg(feature = "m3ua")]
+pub mod m3ua;
 #[cfg(feature = "matrix")]
 pub mod matrix;
 #[cfg(feature = "milter")]
@@ -414,8 +416,6 @@ pub mod milter;
 pub mod minecraft;
 #[cfg(feature = "msgpack-rpc")]
 pub mod msgpack_rpc;
-#[cfg(feature = "m3ua")]
-pub mod m3ua;
 #[cfg(feature = "ngap")]
 pub mod ngap;
 #[cfg(feature = "ninep")]

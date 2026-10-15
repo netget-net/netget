@@ -273,7 +273,8 @@ pub fn jss7_command() -> std::process::Command {
 pub const JSS7_HINT: crate::helpers::real_server::InstallHint =
     crate::helpers::real_server::InstallHint {
         brew: "(none: the jSS7 peer is exercised over SCTP, which macOS lacks)",
-        apt: "openjdk-17-jdk-headless maven, then python3 tests/server/m3ua/install_peers.py <dir> \
+        apt:
+            "openjdk-17-jdk-headless maven, then python3 tests/server/m3ua/install_peers.py <dir> \
               (builds the jSS7 8.0.112 driver and prints NETGET_JSS7_PEER)",
     };
 

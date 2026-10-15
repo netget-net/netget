@@ -790,3 +790,19 @@ fn a_dialogue_netget_opens_matches_its_peers_answer_by_transaction_id() {
     assert!(ev.ended);
     assert_eq!(engine.open_dialogues(), 0);
 }
+
+#[test]
+fn the_dashboards_peer_command_refuses_an_ss7_intent_by_name() {
+    use netget::llm::actions::protocol_trait::Server;
+    use netget::server::m3ua::actions::M3uaProtocol;
+    let intent = json!({"type": "send_map_result", "dialogue_id": 1, "result": {}});
+    // The session's instance turns it into an intent for the engine...
+    assert!(M3uaProtocol::new().execute_action(intent.clone()).is_ok());
+    // ...the peer command task's cannot reach the dialogue and says so, rather than reporting
+    // "executed" with nothing on the wire.
+    let e = M3uaProtocol::for_peer_commands()
+        .execute_action(intent)
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("only the association's own"), "{e}");
+}

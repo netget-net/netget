@@ -8,7 +8,9 @@
 //! answer is asserted on the far side of the wire.
 //!
 //! Fails rather than skips without the jSS7 driver (`install_peers.py`), Java, dumpcap or tshark.
-use super::live::{assert_capture, field, free_port, jss7_command, pct_decode, LiveCapture, JSS7_HINT};
+use super::live::{
+    assert_capture, field, free_port, jss7_command, pct_decode, LiveCapture, JSS7_HINT,
+};
 use crate::helpers::real_server::ToolProcess;
 use netget::cli::management::ClientForm;
 use netget::state::app_state::AppState;
@@ -79,7 +81,10 @@ async fn wait_event(
 fn has_result(e: &Value, op: &str) -> bool {
     e["components"]
         .as_array()
-        .map(|c| c.iter().any(|c| c["operation"] == op && c["component"] == "return_result_last"))
+        .map(|c| {
+            c.iter()
+                .any(|c| c["operation"] == op && c["component"] == "return_result_last")
+        })
         .unwrap_or(false)
 }
 
@@ -133,25 +138,54 @@ async fn the_models_dialogues_are_answered_by_jss7_and_each_builds_on_the_last()
     .await;
     assert_eq!(err["components"][0]["error"], "unknownSubscriber", "{err}");
     assert_eq!(err["components"][0]["matched_own_invoke"], true, "{err}");
-    let sri = wait_event(&state, id, "m3ua_map_received", 60, |e| has_result(e, "sendRoutingInfoForSM")).await;
-    assert_eq!(sri["components"][0]["result"]["imsi"], "001010123456789", "{sri}");
-    assert_eq!(sri["components"][0]["result"]["network_node_number"]["digits"], "31600000001");
-    let ati = wait_event(&state, id, "m3ua_map_received", 60, |e| has_result(e, "anyTimeInterrogation")).await;
+    let sri = wait_event(&state, id, "m3ua_map_received", 60, |e| {
+        has_result(e, "sendRoutingInfoForSM")
+    })
+    .await;
+    assert_eq!(
+        sri["components"][0]["result"]["imsi"], "001010123456789",
+        "{sri}"
+    );
+    assert_eq!(
+        sri["components"][0]["result"]["network_node_number"]["digits"],
+        "31600000001"
+    );
+    let ati = wait_event(&state, id, "m3ua_map_received", 60, |e| {
+        has_result(e, "anyTimeInterrogation")
+    })
+    .await;
     let r = &ati["components"][0]["result"];
     assert_eq!(r["subscriber_state"], "assumedIdle", "{ati}");
-    assert_eq!(r["location_information"]["vlr_number"]["digits"], "31600000002");
-    assert_eq!(r["location_information"]["cell_global_id"], json!({"mcc": "001", "mnc": "01", "lac": 4660, "cell_id": 22136}));
-    let ussd = wait_event(&state, id, "m3ua_map_received", 60, |e| has_result(e, "processUnstructuredSS-Request")).await;
-    assert_eq!(ussd["components"][0]["result"]["ussd_text"], "You sent *100*4660#", "{ussd}");
+    assert_eq!(
+        r["location_information"]["vlr_number"]["digits"],
+        "31600000002"
+    );
+    assert_eq!(
+        r["location_information"]["cell_global_id"],
+        json!({"mcc": "001", "mnc": "01", "lac": 4660, "cell_id": 22136})
+    );
+    let ussd = wait_event(&state, id, "m3ua_map_received", 60, |e| {
+        has_result(e, "processUnstructuredSS-Request")
+    })
+    .await;
+    assert_eq!(
+        ussd["components"][0]["result"]["ussd_text"], "You sent *100*4660#",
+        "{ussd}"
+    );
     let cap = wait_event(&state, id, "m3ua_cap_received", 60, |e| e["tcap"] == "end").await;
     let connect = &cap["components"][0];
     assert_eq!(connect["operation"], "connect", "{cap}");
-    assert_eq!(connect["argument"]["destination_routing_address"][0]["digits"], "31677777777");
+    assert_eq!(
+        connect["argument"]["destination_routing_address"][0]["digits"],
+        "31677777777"
+    );
 
     // On jSS7's side: each request decoded, and the ones built from earlier answers carry them.
-    peer.wait_for_line("all dialogues", Duration::from_secs(60), |l| l.starts_with("DONE"))
-        .await
-        .unwrap();
+    peer.wait_for_line("all dialogues", Duration::from_secs(60), |l| {
+        l.starts_with("DONE")
+    })
+    .await
+    .unwrap();
     let lines = peer.lines();
     let recv = |op: &str| -> String {
         lines
@@ -169,15 +203,25 @@ async fn the_models_dialogues_are_answered_by_jss7_and_each_builds_on_the_last()
         "{mt}"
     );
     let ussd = recv("ussd");
-    assert_eq!(pct_decode(field(&ussd, "text").unwrap()), "*100*4660#", "{ussd}");
+    assert_eq!(
+        pct_decode(field(&ussd, "text").unwrap()),
+        "*100*4660#",
+        "{ussd}"
+    );
     let mo = recv("mo-fsm");
-    assert_eq!(pct_decode(field(&mo, "text").unwrap()), "You sent *100*4660#", "{mo}");
+    assert_eq!(
+        pct_decode(field(&mo, "text").unwrap()),
+        "You sent *100*4660#",
+        "{mo}"
+    );
     assert_eq!(field(&mo, "to"), Some("31622222222"), "{mo}");
     let idp = recv("idp");
     assert_eq!(field(&idp, "service_key"), Some("42"), "{idp}");
     assert_eq!(field(&idp, "called"), Some("31644444441"), "{idp}");
     assert_eq!(field(&idp, "imsi"), Some("001010123456789"), "{idp}");
-    assert!(lines.iter().any(|l| l.starts_with("RECV op=ati") && field(l, "msisdn") == Some("31628838002")));
+    assert!(lines
+        .iter()
+        .any(|l| l.starts_with("RECV op=ati") && field(l, "msisdn") == Some("31628838002")));
     drop(peer);
 
     let frames = capture.finish().await;
