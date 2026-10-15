@@ -1158,7 +1158,13 @@ CARGO_INCREMENTAL=0 CARGO_PROFILE_TEST_DEBUG=0 scripts/test_batches.sh > /tmp/sw
 **Never build every test target at once.** With every protocol in every build, each of the
 ~230 test binaries is ~870 MB unoptimised (debug info off), so a plain `cargo test` needs
 ~200 GB and filled this machine's disk in October 2026. `scripts/test_batches.sh` builds ten
-at a time and deletes each batch's executables; CI's `test` job runs it.
+at a time and deletes each batch's executables; CI's `test` job runs it, split five ways with
+`SHARD=i/5` (`TARGETS` names an explicit list, as the `ratchets` job does, and anything after
+`--` goes to every test binary).
+
+**Checking the library alone peaks at ~12 GB of memory** (clippy, measured October 2026), which
+is most of a 16 GB hosted runner. The heavy CI jobs add 16 GB of swap first; without it the
+runner does not fail, it "loses communication with the server".
 
 **`--test-threads=100` is right for one protocol and wrong for the whole tree**, and the
 failure is not a test failure. `--all-features` builds ~29 test binaries that each link the
@@ -1199,7 +1205,7 @@ changes that touch a protocol, then run the workflow (Actions → Run workflow) 
 | Job | Blocking | What it does |
 |---|---|---|
 | `lint` | yes | Formatting and correctness/suspicious clippy lints over the library and every compiled test target |
-| `test` | yes | Every top-level test target, plus the `CI_PROTOCOL_TESTS` suites (tcp, http, dns, udp, redis, finger) out of `tests/server` and `tests/client`; every protocol compiles, only those run |
+| `test` | yes | Six jobs: every top-level test target split five ways (`eval::probe_check::` skipped — it drives each eval protocol's real client), and the `CI_PROTOCOL_TESTS` suites (tcp, http, dns, udp, redis, finger) out of `tests/server` and `tests/client`; every protocol compiles, only those run |
 | `ratchets` | yes | Whole-tree source checks, server/client Beta evidence declarations, fuzz target compilation |
 | `smb-evidence` | yes, *manual* | The SMB server suite, including bounds, both independent clients, and the packet oracle |
 | `wasm-web` | yes | Browser bundle build and smoke exchanges |

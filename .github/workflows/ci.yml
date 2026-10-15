@@ -63,7 +63,23 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: lint-${{ env.CI_FEATURES }}
+          key: lint
+
+      # Every protocol is in the one library crate. Checking it peaks at ~12 GB of memory (a
+      # runner has 16), and every test binary that links it is ~870 MB, so the runner's ~14 GB
+      # of free disk runs out partway through linking. A starved runner does not fail, it
+      # "loses communication with the server". Swap on /mnt, the runner's second disk, and the
+      # preinstalled SDKs nothing here uses (~30 GB) are the room.
+      - name: make room (swap and disk)
+        run: |
+          sudo swapoff -a || true
+          sudo fallocate -l 16G /mnt/netget-swap
+          sudo chmod 600 /mnt/netget-swap
+          sudo mkswap /mnt/netget-swap
+          sudo swapon /mnt/netget-swap
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          free -h
+          df -h / /mnt
 
       # BLOCKING. This was advisory while the repo carried ~2,700 pre-existing
       # fmt diffs; the repo-wide pass landed in f17b7938, so the tree is clean
@@ -169,7 +185,7 @@ jobs:
   ratchets:
     name: Whole-tree ratchets
     runs-on: ubuntu-22.04
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -179,33 +195,55 @@ jobs:
         with:
           key: ratchets
 
-      - name: cargo test (source-reading ratchets)
+      # Every protocol is in the one library crate. Checking it peaks at ~12 GB of memory (a
+      # runner has 16), and every test binary that links it is ~870 MB, so the runner's ~14 GB
+      # of free disk runs out partway through linking. A starved runner does not fail, it
+      # "loses communication with the server". Swap on /mnt, the runner's second disk, and the
+      # preinstalled SDKs nothing here uses (~30 GB) are the room.
+      - name: make room (swap and disk)
         run: |
-          cargo test --locked --no-default-features --no-fail-fast \
-            --test affirmative_default_drift_test \
-            --test audit_ci_coverage_test \
-            --test client_event_wiring_test \
-            --test decision_tag_ratchet_test \
-            --test doc_paths_exist_test \
-            --test doc_test_counts_test \
-            --test event_emit_sites_test \
-            --test example_hex_drift_test \
-            --test executable_examples_test \
-            --test failure_mode_declaration_test \
-            --test handler_result_decides_the_bound_test \
-            --test narrowing_cast_drift_test \
-            --test no_protocol_is_hidden_from_the_model_test \
-            --test recursive_decoder_depth_test \
-            --test request_only_declaration_test \
-            --test startup_param_drift_test \
-            --test tcp_server_bounds_ratchet_test \
-            --test max_inbound_bytes_declaration_test \
-            --test peer_handle_coverage_ratchet_test \
-            --test real_client_evidence_is_run_test \
-            --test test_suite_hygiene_test \
-            --test vendored_hyper_patch_test \
-            --test vendored_tonic_patch_test \
-            -- --test-threads=50
+          sudo swapoff -a || true
+          sudo fallocate -l 16G /mnt/netget-swap
+          sudo chmod 600 /mnt/netget-swap
+          sudo mkswap /mnt/netget-swap
+          sudo swapon /mnt/netget-swap
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          free -h
+          df -h / /mnt
+
+      # Ten at a time with each batch's executables deleted after it: all of them at once
+      # filled the runner's disk.
+      - name: cargo test (source-reading ratchets)
+        env:
+          CARGO_INCREMENTAL: '0'
+          CARGO_PROFILE_DEV_DEBUG: '0'
+          CARGO_PROFILE_TEST_DEBUG: '0'
+          TEST_THREADS: '50'
+          TARGETS: >-
+            affirmative_default_drift_test
+            audit_ci_coverage_test
+            client_event_wiring_test
+            decision_tag_ratchet_test
+            doc_paths_exist_test
+            doc_test_counts_test
+            event_emit_sites_test
+            example_hex_drift_test
+            executable_examples_test
+            failure_mode_declaration_test
+            handler_result_decides_the_bound_test
+            narrowing_cast_drift_test
+            no_protocol_is_hidden_from_the_model_test
+            recursive_decoder_depth_test
+            request_only_declaration_test
+            startup_param_drift_test
+            tcp_server_bounds_ratchet_test
+            max_inbound_bytes_declaration_test
+            peer_handle_coverage_ratchet_test
+            real_client_evidence_is_run_test
+            test_suite_hygiene_test
+            vendored_hyper_patch_test
+            vendored_tonic_patch_test
+        run: scripts/test_batches.sh --locked --no-default-features
 
       - name: Build wrapper and credential configuration regressions
         run: python3 tests/build_scripts_test.py -v
@@ -1197,7 +1235,7 @@ jobs:
           retention-days: 14
 
   test:
-    name: Test
+    name: Test (${{ matrix.part }})
     # ubuntu-24.04, not 22.04, and the reason is tshark. `tests/helpers/pcap_oracle.rs`
     # asks Wireshark to decode Redis with the `resp` dissector, and `resp` was added in
     # **Wireshark 4.0.0** (MR 6458, March 2022). jammy ships 3.6.2; noble ships 4.2.2.
@@ -1209,7 +1247,14 @@ jobs:
     # `src/tui/wireshark.rs` that needs Wireshark >= 4.0. Every other name has fields
     # going back to 3.6 or earlier, so nothing else in that table was riding on this.
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
+    # The top-level targets split five ways (scripts/test_batches.sh's SHARD), and the
+    # CI_PROTOCOL_TESTS suites on a sixth: one job building every target took over 30 minutes
+    # to reach the 90th of ~230.
+    strategy:
+      fail-fast: false
+      matrix:
+        part: ['1', '2', '3', '4', '5', suites]
     steps:
       - uses: actions/checkout@v4
 
@@ -1217,7 +1262,23 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: test-${{ env.CI_FEATURES }}
+          key: test-${{ matrix.part }}
+
+      # Every protocol is in the one library crate. Checking it peaks at ~12 GB of memory (a
+      # runner has 16), and every test binary that links it is ~870 MB, so the runner's ~14 GB
+      # of free disk runs out partway through linking. A starved runner does not fail, it
+      # "loses communication with the server". Swap on /mnt, the runner's second disk, and the
+      # preinstalled SDKs nothing here uses (~30 GB) are the room.
+      - name: make room (swap and disk)
+        run: |
+          sudo swapoff -a || true
+          sudo fallocate -l 16G /mnt/netget-swap
+          sudo chmod 600 /mnt/netget-swap
+          sudo mkswap /mnt/netget-swap
+          sudo swapon /mnt/netget-swap
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          free -h
+          df -h / /mnt
 
       # Every third-party binary the CI_FEATURES test binaries drive. Each of these tests
       # deliberately FAILS rather than skips when its binary is absent - a skip-when-missing
@@ -1304,15 +1365,24 @@ jobs:
       # Every protocol is in every test binary (~870 MB each, ~230 targets), so the targets
       # are built and run ten at a time with each batch's executables deleted after it; all
       # at once would not fit on the runner.
+      #
+      # `eval::probe_check::` is skipped for the reason the protocol suites are filtered: each
+      # case drives the eval's real third-party client for its protocol (cypher-shell, nak,
+      # mosquitto_sub, ...) and none of those protocols is in CI_PROTOCOL_TESTS.
       - name: cargo test (every target but the protocol suites, in batches)
+        if: matrix.part != 'suites'
         env:
           CARGO_INCREMENTAL: '0'
           CARGO_PROFILE_DEV_DEBUG: '0'
           CARGO_PROFILE_TEST_DEBUG: '0'
           TEST_THREADS: '100'
-        run: scripts/test_batches.sh --locked --no-default-features --features "$CI_FEATURES"
+          SHARD: ${{ matrix.part }}/5
+        run: |
+          scripts/test_batches.sh --locked --no-default-features --features "$CI_FEATURES" \
+            -- --skip eval::probe_check::
 
       - name: cargo test (the CI_PROTOCOL_TESTS suites)
+        if: matrix.part == 'suites'
         env:
           CARGO_INCREMENTAL: '0'
           CARGO_PROFILE_DEV_DEBUG: '0'
