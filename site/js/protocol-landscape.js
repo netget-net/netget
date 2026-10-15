@@ -18,15 +18,22 @@ if (landscape) {
         variants.get(feature).push(stack);
     }
 
+    function chooseDriver() {
+        // Choose the mode first: LLM 3/9, each other mode 2/9. Adding a script
+        // language must not make the script mode more likely.
+        const slot = Math.floor(Math.random() * 9);
+        if (slot < 3) return 'LLM-driven';
+        if (slot < 5) return 'static response';
+        if (slot < 7) return 'manual response';
+        const languages = ['Python script', 'JavaScript', 'Perl script', 'Go script'];
+        return languages[Math.floor(Math.random() * languages.length)];
+    }
+
     // Shuffle once per page load. Resizing preserves the selection and order.
-    const drivers = shuffle([
-        'LLM-driven', 'static response', 'manual response',
-        'Python script', 'JavaScript', 'Perl script', 'Go script',
-    ]);
-    const selection = shuffle([...variants]).slice(0, 8).map(([feature, stacks], index) => ({
+    const selection = shuffle([...variants]).slice(0, 8).map(([feature, stacks]) => ({
         feature,
         stack: stacks[Math.floor(Math.random() * stacks.length)],
-        driver: drivers[index % drivers.length],
+        driver: chooseDriver(),
     }));
 
     const protocolNames = new Map([...document.querySelectorAll('.proto-list a')].map(link => [

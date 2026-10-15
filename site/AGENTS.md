@@ -7,7 +7,9 @@ startup, connection, incoming requests, and sending a composer reply must not fo
 The landing page ships complete example stacks in HTML. CSS container queries fit whole
 columns to the available width, and equal grid rows keep each driver box the same height
 as its protocol layers. `js/protocol-landscape.js` optionally shuffles all protocol features
-on each page load and varies LLM-driven, static, manual, Python, JavaScript, Perl and Go labels.
+on each page load. Each stack independently chooses LLM-driven with probability 1/3, and
+static, manual or script with probability 2/9 each. Script then chooses Python, JavaScript,
+Perl or Go equally, so adding a language cannot increase the script category's probability.
 Its generated `js/protocol-stacks.js` comes from both registries and their `stack_name()`
 declarations, including platform-gated protocols. `python3 scripts/site_protocol_stacks.py`
 refreshes it; `--check` detects drift. Deployment refreshes it before hashing the assets.
