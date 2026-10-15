@@ -59,7 +59,12 @@ What is left from this document, with the reason each is still open:
     ADD_PROVIDER by the model) — with Kubo 0.43.1 fetching from NetGet and serving to it.
     Serving multi-block DAGs, Bitswap sessions, IPNS/DHT records and a second independent
     IPFS implementation are not done.
-  - **NGAP/N2**: PFCP shipped; NGAP needs SCTP and was not attempted.
+  - ~~**NGAP/N2**~~: landed 15 October 2026 as the `ngap` pair (AMF and gNB over real
+    SCTP, PPID 60, with a labelled lab-TCP transport for hosts without SCTP): NG Setup,
+    Initial UE Message, Downlink/Uplink NAS Transport, and pre-security 5GMM, hand-written
+    APER checked by tshark's `ngap` dissector, against UERANSIM's nr-gnb/nr-ue and Open5GS's
+    AMF. NAS security (5G-AKA, Security Mode), PDU sessions, handover and paging are not
+    built, so a real UE cannot complete registration.
   - **Redis cluster and pub/sub depth**: RESP3 shipped; `CLUSTER` and pub/sub were not
     extended.
 - **Peer-limited missing clients**: gtp, db2, snowflake, spark and yarn still have no
