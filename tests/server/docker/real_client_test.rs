@@ -21,7 +21,6 @@
 //! `brew install docker` (macOS) or `apt-get install -y docker-ce-cli` / the static binary from
 //! https://download.docker.com/linux/static/stable/ (Linux). No daemon is needed or used.
 
-
 use netget::cli::management::ServerForm;
 use netget::state::app_state::AppState;
 use serde_json::{json, Value};

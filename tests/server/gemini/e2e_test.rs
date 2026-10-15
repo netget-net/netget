@@ -10,7 +10,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features gemini --test server -- gemini::e2e --test-threads=100
 
-
 use super::common::{raw_request, split_response};
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 

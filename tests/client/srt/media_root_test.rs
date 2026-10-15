@@ -4,7 +4,6 @@
 //! gate was one byte). `client::media_root::MediaRoot` is that boundary, shared by both.
 //! No peer, no model: the boundary is a pure function of the filesystem.
 
-
 use netget::client::media_root::{MediaRoot, MEDIA_ROOT_PARAM};
 
 fn scratch(name: &str) -> std::path::PathBuf {

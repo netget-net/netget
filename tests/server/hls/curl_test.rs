@@ -17,7 +17,6 @@
 //!     --test server -- --test-threads=100 hls::curl
 //! ```
 
-
 use crate::server::helpers::*;
 use std::time::Duration;
 

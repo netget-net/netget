@@ -60,8 +60,15 @@ fn protocol_features() -> BTreeSet<String> {
 fn every_registration_has_a_site_id() {
     let ids = site_ids();
     let registered = registrations();
-    assert!(registered.len() > 200, "registry scan found only {}", registered.len());
-    let missing: Vec<_> = registered.iter().filter(|r| !ids.contains_key(*r)).collect();
+    assert!(
+        registered.len() > 200,
+        "registry scan found only {}",
+        registered.len()
+    );
+    let missing: Vec<_> = registered
+        .iter()
+        .filter(|r| !ids.contains_key(*r))
+        .collect();
     let stale: Vec<_> = ids.keys().filter(|k| !registered.contains(*k)).collect();
     assert!(
         missing.is_empty() && stale.is_empty(),

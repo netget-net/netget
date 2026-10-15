@@ -17,7 +17,6 @@
 //! `brew install hashicorp/tap/vault` (macOS) or HashiCorp's apt repository / release zip
 //! (Linux).
 
-
 use netget::cli::management::ServerForm;
 use netget::state::app_state::AppState;
 use serde_json::{json, Value};

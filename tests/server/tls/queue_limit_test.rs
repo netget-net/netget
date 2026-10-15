@@ -29,7 +29,6 @@
 //! The second test is what stops the first from being satisfiable by a server that hangs up on
 //! everybody: the same exchange, well under the cap, must **not** be closed.
 
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use netget::server::tls::MAX_QUEUED_BYTES;
 use rustls::{ClientConfig, RootCertStore};

@@ -345,7 +345,10 @@ fn ci_feature_clients_are_installed() {
         .find(|(i, _)| {
             let rest = &text[job_start + 1 + i + 3..];
             rest.starts_with(|c: char| c.is_ascii_lowercase())
-                && rest.split('\n').next().is_some_and(|l| l.trim_end().ends_with(':'))
+                && rest
+                    .split('\n')
+                    .next()
+                    .is_some_and(|l| l.trim_end().ends_with(':'))
         })
         .map(|(i, _)| i + job_start + 1)
         .unwrap_or(text.len());

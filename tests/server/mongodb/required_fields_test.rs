@@ -17,7 +17,6 @@
 //! example, which carries every field, so it can only find a *wrong* field, never a missing
 //! one.
 
-
 use netget::llm::actions::protocol_trait::Server;
 use netget::server::connection::ConnectionId;
 use netget::server::MongodbProtocol;

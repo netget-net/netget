@@ -8,7 +8,6 @@
 //! event is raised, no handler fires and no LLM call happens: the 400 is not
 //! NetGet declining to answer, it is the request never reaching NetGet.
 
-
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;

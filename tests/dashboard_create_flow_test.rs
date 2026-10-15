@@ -6,7 +6,6 @@
 //! servers and clients without asking the LLM to do it. The mock LLM URL is
 //! unreachable on purpose — nothing here may contact a model.
 
-
 use std::time::Duration;
 
 use netget::privilege::SystemCapabilities;

@@ -358,9 +358,6 @@ impl DhcpProtocol {
         Self::encode_message(&msg)
     }
 
-
-
-
     fn execute_send_dhcp_response(&self, action: serde_json::Value) -> Result<ActionResult> {
         let data = action
             .get("data")

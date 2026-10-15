@@ -3,7 +3,6 @@
 //! These tests validate that the LLM can create and execute scheduled tasks
 //! (both one-shot and recurring) in the context of an HTTP server.
 
-
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 
 #[tokio::test]

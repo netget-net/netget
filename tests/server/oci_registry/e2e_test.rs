@@ -14,7 +14,6 @@
 //!
 //! All traffic is to 127.0.0.1. No external registry is ever contacted.
 
-
 use super::digest_test::{CONFIG_DIGEST, CONFIG_JSON, LAYER_DIGEST, LAYER_TEXT};
 use crate::server::helpers::{self, E2EResult, NetGetConfig};
 use serde_json::{json, Value};

@@ -2,7 +2,6 @@
 //!
 //! Tests BOOTP client with mock LLM responses.
 
-
 use crate::helpers::*;
 use std::time::Duration;
 

@@ -15,7 +15,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features s3 --test server -- \
 //!       s3::connection_bounds --test-threads=100
 
-
 use std::time::Duration;
 
 use crate::helpers::http_bounds::HttpBounds;

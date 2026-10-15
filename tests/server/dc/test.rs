@@ -3,7 +3,6 @@
 //! These tests spawn the actual NetGet binary with DC prompts
 //! and validate the responses using DC protocol clients.
 
-
 // Helper module imported from parent
 
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};

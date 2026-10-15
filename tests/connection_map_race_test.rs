@@ -29,7 +29,6 @@
 //!   --test connection_map_race_test -- --test-threads=100
 //! ```
 
-
 use netget::scripting::{EventHandler, EventHandlerConfig, EventHandlerType, EventPattern};
 use netget::state::app_state::AppState;
 use netget::state::server::ServerInstance;

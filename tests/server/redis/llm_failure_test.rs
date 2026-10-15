@@ -11,7 +11,6 @@
 //! of RESP, which is what makes "the client saw an error and not a value" evidence rather than
 //! a restatement of our own encoder.
 
-
 use crate::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 

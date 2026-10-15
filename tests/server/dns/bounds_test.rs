@@ -20,7 +20,6 @@
 //! The pair is what makes it mean anything: a legal query is answered in the same test, so a
 //! server that dropped everything would fail rather than pass.
 
-
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use hickory_proto::op::{Message as DnsMessage, MessageType, OpCode, Query};
 use hickory_proto::rr::{Name, RecordType};

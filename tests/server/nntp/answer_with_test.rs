@@ -13,7 +13,6 @@
 //!   only on those fields;
 //! * a second reply to one command is dropped, logged `decision=duplicate_response_dropped`.
 
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};

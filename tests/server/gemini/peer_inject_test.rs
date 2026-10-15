@@ -5,7 +5,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features gemini --test server -- gemini::peer_inject --test-threads=100
 
-
 use super::common::{self, split_response, tls_connect};
 use netget::state::app_state::AppState;
 use netget::state::client_handles::ClientSendOutcome;

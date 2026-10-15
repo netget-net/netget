@@ -11,7 +11,6 @@
 //! bytes the client GETs are the bytes the *mock* captured off the PUT event, so if the request
 //! body never reached the model the round-trip fails.
 
-
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use reqwest_dav::list_cmd::{ListEntity, ListMultiStatus};
 use reqwest_dav::re_exports::serde_xml_rs;

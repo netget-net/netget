@@ -22,7 +22,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features dict --test server -- dict::connection_bounds --test-threads=100
 
-
 use super::common::{self, Peer};
 use std::time::Duration;
 use tokio::io::AsyncReadExt;

@@ -105,7 +105,6 @@
 //!     --test connection_soak_test -- --ignored --test-threads=1 --nocapture
 //! ```
 
-
 use std::time::Duration;
 
 use netget::cli::management::ServerForm;

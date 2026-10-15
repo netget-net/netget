@@ -21,7 +21,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features otlp --test server -- otlp::real_client --test-threads=100
 
-
 use super::common;
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::sync::{Arc, Mutex};

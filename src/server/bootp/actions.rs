@@ -276,7 +276,6 @@ impl BootpProtocol {
         Ok(ActionResult::Output(buf))
     }
 
-
     fn execute_send_bootp_response(&self, action: serde_json::Value) -> Result<ActionResult> {
         let data = action
             .get("data")

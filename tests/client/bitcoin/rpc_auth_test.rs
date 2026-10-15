@@ -25,7 +25,6 @@
 //! A stub node that records what it receives, so the assertion is on the wire rather than on
 //! our own formatting, plus the redaction in the three places a human or the model reads.
 
-
 use netget::client::bitcoin::{redact_userinfo, split_userinfo};
 use netget::state::client::{ClientId, ClientInstance};
 use std::sync::{Arc, Mutex};

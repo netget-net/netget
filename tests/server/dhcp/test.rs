@@ -9,7 +9,6 @@
 //! UDP/68, need root, and cannot be aimed at an ephemeral port on loopback. So the peer here
 //! is an independent implementation of the packet format rather than a real binary.
 
-
 use super::super::super::helpers::{self, E2EResult};
 use std::collections::HashMap;
 use std::net::Ipv4Addr;

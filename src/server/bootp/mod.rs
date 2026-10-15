@@ -68,7 +68,6 @@ impl BootpServer {
 
                         let parsed_info = Self::parse_bootp_message(&data);
 
-
                         // Add connection to ServerInstance
                         use crate::state::server::{
                             ConnectionState as ServerConnectionState, ConnectionStatus,
@@ -80,7 +79,6 @@ impl BootpServer {
                             .as_ref()
                             .map(|(desc, _)| desc.clone())
                             .unwrap_or_else(|| "unknown".to_string());
-
 
                         let conn_state = ServerConnectionState {
                             id: connection_id,
@@ -138,7 +136,6 @@ impl BootpServer {
                                             "0.0.0.0".to_string(),
                                         )
                                     };
-
 
                                 let client_mac_for_log = client_mac.clone();
 

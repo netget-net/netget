@@ -3,7 +3,6 @@
 //! These tests spawn the actual NetGet binary with SNMP prompts
 //! and validate the responses using the snmp Rust client library.
 
-
 // Helper module imported from parent
 
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};

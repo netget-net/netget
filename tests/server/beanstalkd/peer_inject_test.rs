@@ -10,7 +10,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features beanstalkd --test server -- beanstalkd::peer_inject --test-threads=100
 
-
 use super::common::{self, Peer};
 use netget::state::app_state::AppState;
 use netget::state::client_handles::ClientSendOutcome;

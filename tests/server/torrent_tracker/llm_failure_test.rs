@@ -19,7 +19,6 @@
 //! 3. That text carries **nothing** from the error: no backend URL, no model name, no path,
 //!    no `anyhow` chain. It is the fixed `WireFailure` category.
 
-
 use crate::helpers::*;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

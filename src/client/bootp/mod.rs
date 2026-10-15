@@ -527,7 +527,6 @@ impl BootpClient {
             use dhcproto::Encodable;
             msg.to_vec().context("Failed to encode BOOTP request")
         }
-
     }
 
     /// Parse a BOOTP reply message
@@ -558,6 +557,5 @@ impl BootpClient {
                 boot_filename,
             })
         }
-
     }
 }

@@ -10,7 +10,6 @@
 //! There is also a test that this server really does store nothing, because "the model is
 //! the cache" is the design claim and an accidental cache would silently invalidate it.
 
-
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use netget::server::memcached::protocol::{
     self, encode_stats, encode_values, parse_command, Command, Parsed, ValueItem,

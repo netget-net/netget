@@ -12,7 +12,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features otlp --test server -- otlp::e2e --test-threads=100
 
-
 use super::common::{gzip, post, request, traces_json, GZIP, JSON, PROTOBUF};
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use opentelemetry_proto::tonic::collector::metrics::v1::{

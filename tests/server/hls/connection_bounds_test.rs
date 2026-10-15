@@ -27,7 +27,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features hls --test server -- hls::connection_bounds --test-threads=100
 
-
 use std::time::Duration;
 
 use netget::cli::management::ServerForm;

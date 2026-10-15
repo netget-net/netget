@@ -15,7 +15,6 @@
 //!     --test client -- client::socks5::action_test --test-threads=100
 //! ```
 
-
 use netget::client::socks5::actions::{inbound_event_fields, Socks5ClientProtocol};
 use netget::llm::actions::client_trait::{Client, ClientActionResult};
 use netget::llm::actions::protocol_trait::Protocol;

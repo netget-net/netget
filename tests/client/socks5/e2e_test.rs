@@ -8,7 +8,6 @@
 //!
 //! LLM Call Budget: < 10 calls total (keep test scenarios minimal)
 
-
 use netget::llm::OllamaClient;
 use netget::protocol::CLIENT_REGISTRY;
 use netget::state::app_state::AppState;

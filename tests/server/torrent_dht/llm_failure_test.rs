@@ -17,7 +17,6 @@
 //! 2. The human-readable half carries **nothing** from the error: no backend URL, no model
 //!    name, no path, no `anyhow` chain. It is the fixed `WireFailure` category text.
 
-
 use crate::helpers::*;
 use serde_bencode::value::Value;
 use std::collections::HashMap;

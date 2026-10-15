@@ -25,7 +25,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features grpc,tcp \
 //!       --test startup_dependency_gate_test -- --test-threads=100
 
-
 use base64::Engine as _;
 use netget::cli::{client_startup, server_startup};
 use netget::llm::OllamaClient;

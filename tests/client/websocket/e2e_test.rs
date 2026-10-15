@@ -11,7 +11,6 @@
 //! LLM call budget: 4 (`open_client`, `websocket_client_connected`,
 //! `websocket_client_binary_message`, `websocket_client_closed`).
 
-
 use crate::helpers::*;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

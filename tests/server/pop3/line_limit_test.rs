@@ -14,7 +14,6 @@
 //! server with the same cap must still be answered. A guard that refused everything would
 //! satisfy the first assertion perfectly.
 
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};

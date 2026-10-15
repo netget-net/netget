@@ -12,7 +12,6 @@
 //! 2. `read_line` grows its `String` until a newline arrives, so a peer streaming bytes with
 //!    no `\n` among them made the server buffer every one of them.
 
-
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

@@ -29,7 +29,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features postgresql \
 //!       --test server -- server::postgresql::real_client --test-threads=8
 
-
 use crate::helpers::{self, E2EResult, NetGetConfig};
 use std::time::Duration;
 use tokio::time::timeout;

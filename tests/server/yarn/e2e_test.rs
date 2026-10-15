@@ -6,7 +6,6 @@
 //! A real `yarn` CLI is not available on the CI/dev hosts, so this is shape-conformance against
 //! the documented response bodies, not validation against a real Hadoop client.
 
-
 use crate::helpers::retry;
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use reqwest::Client;

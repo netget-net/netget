@@ -21,7 +21,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features modbus --test client -- modbus::real_server_test --test-threads=100
 
-
 use crate::helpers::real_server::{run_tool, InstallHint, RealServer};
 use crate::helpers::*;
 use serde_json::json;

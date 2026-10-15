@@ -21,7 +21,6 @@
 //! resolvable), and credentials, region, profile and the EC2 metadata service overridden in the
 //! child's environment so nothing is inherited from the operator's machine.
 
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use serde_json::json;
 use std::time::Duration;

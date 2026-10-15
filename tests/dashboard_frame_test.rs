@@ -6,7 +6,6 @@
 //! reaches in the two seconds a pty test waits (a running server with peers,
 //! a client with verbs, a request parked for the human).
 
-
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 

@@ -9,7 +9,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features gearman --test server -- gearman::llm_failure --test-threads=100
 
-
 use super::common::{self, req, Peer};
 use netget::cli::management::ServerForm;
 use netget::server::gearman::wire;

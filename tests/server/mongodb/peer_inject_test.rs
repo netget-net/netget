@@ -19,7 +19,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features mongodb-server \
 //!       --test server -- mongodb::peer_inject --test-threads=100
 
-
 use std::time::Duration;
 
 use netget::cli::management::ServerForm;

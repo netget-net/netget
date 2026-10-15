@@ -26,7 +26,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features nostr --test server -- nostr::real_client --test-threads=100
 
-
 use super::common::{
     self, relay_handlers, require_tool, run_nak, Chunk, Recorder, AUTHOR_PUBKEY, AUTHOR_SECRET,
     RELAY_SECRET,

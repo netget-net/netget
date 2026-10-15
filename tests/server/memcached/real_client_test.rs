@@ -19,7 +19,6 @@
 //! (Debian/Ubuntu). `memcached` is not in CI's `CI_FEATURES`, so this costs the blocking CI
 //! gate nothing; the `registry-audit` job installs the tools.
 
-
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use std::time::Duration;
 use tokio::process::Command;

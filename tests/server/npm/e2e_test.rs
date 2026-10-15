@@ -3,7 +3,6 @@
 //! These tests spawn the actual NetGet binary with NPM registry prompts
 //! and validate the responses using HTTP clients and npm CLI.
 
-
 use crate::server::helpers::{self, E2EResult, NetGetConfig};
 use serde_json::{json, Value};
 use std::fs;

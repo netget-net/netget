@@ -8,7 +8,6 @@
 //! RFC 959 defines 421 as the reply a server sends when it is declining the session, and the
 //! control connection closes afterwards. Same shape as SMTP's 421, for the same reason.
 
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};

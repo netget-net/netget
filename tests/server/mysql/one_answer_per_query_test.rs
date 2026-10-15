@@ -8,7 +8,6 @@
 //!
 //! Driven with `mysql_async`, an independent client implementation.
 
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use mysql_async::prelude::Queryable;
 use std::time::Duration;

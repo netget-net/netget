@@ -16,7 +16,6 @@
 //! The packet is decoded here byte by byte against the RFC's field layout rather than through
 //! the server's own builder, so the test is evidence and not a tautology.
 
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::net::UdpSocket;

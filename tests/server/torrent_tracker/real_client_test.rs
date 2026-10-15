@@ -30,7 +30,6 @@
 //! client. The second test asserts aria2's own parse of a `failure reason` dict, which it
 //! prints verbatim.
 
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 use tempfile::TempDir;

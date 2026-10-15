@@ -11,7 +11,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features s3 --test client -- s3::command_channel --test-threads=100
 
-
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 

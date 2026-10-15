@@ -25,7 +25,6 @@
 //! The packets below are built and decoded by hand against the spec rather than with a client
 //! library, because the assertion is about specific bytes in specific positions.
 
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

@@ -264,7 +264,6 @@ impl DhcpClient {
                                 // Parse DHCP response
                                 let parsed_info = Self::parse_dhcp_response(&data);
 
-
                                 let event_data = if let Some((message_type, details)) = parsed_info
                                 {
                                     serde_json::json!({
@@ -444,7 +443,6 @@ impl DhcpClient {
                     trace!("DHCP {} (hex): {}", label, hex::encode(&packet));
                     Ok(Applied::Sent(sent))
                 }
-
             }
             ClientActionResult::Disconnect => Ok(Applied::Disconnect),
             ClientActionResult::WaitForMore => Ok(Applied::Executed("wait_for_more".to_string())),

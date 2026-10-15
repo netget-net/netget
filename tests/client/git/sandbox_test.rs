@@ -24,7 +24,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features git --test client \
 //!       -- client::git::sandbox --test-threads=100
 
-
 use std::path::Path;
 use std::time::Duration;
 

@@ -15,7 +15,6 @@
 //! Also covered here, because both need a live server: `/api/embeddings` as a *decision*
 //! rather than a fabrication, and the request-body cap.
 
-
 use crate::server::helpers::{self, E2EResult, NetGetConfig};
 use ollama_rs::generation::chat::request::ChatMessageRequest;
 use ollama_rs::generation::chat::ChatMessage;

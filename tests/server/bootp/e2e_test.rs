@@ -2,7 +2,6 @@
 //!
 //! Tests BOOTP server with mock LLM responses.
 
-
 use crate::helpers::*;
 use std::net::Ipv4Addr;
 use std::time::Duration;

@@ -1,6 +1,5 @@
 //! Injected commands on an authenticated live HTTP/3 connection.
 
-
 use std::time::Duration;
 
 use netget::cli::management::ClientForm;

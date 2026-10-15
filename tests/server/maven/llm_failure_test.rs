@@ -5,7 +5,6 @@
 //! answers with an HTTP status and a literal body carrying only a category — never the
 //! backend error, its URL, the model name or an `anyhow` chain.
 
-
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 
 /// Nothing internal may appear in the response the peer reads.

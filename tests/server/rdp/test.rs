@@ -7,7 +7,6 @@
 //! evidence than a real client rendering a session — it proves the handshake framing, not that a
 //! client proceeds past it — and that limitation is stated here and in the protocol's metadata.
 
-
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

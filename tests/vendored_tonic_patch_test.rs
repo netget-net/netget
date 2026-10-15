@@ -8,7 +8,9 @@ fn cargo_builds_the_tonic_fork_with_its_license() {
     fork_source::assert_fork_is_built("tonic", "0.12.3");
     let manifest = fork_source::read_fork("netget-tonic", "Cargo.toml");
     assert!(manifest.contains("license = \"MIT\""));
-    assert!(fork_source::fork_dir("netget-tonic").join("LICENSE").is_file());
+    assert!(fork_source::fork_dir("netget-tonic")
+        .join("LICENSE")
+        .is_file());
     let compression = fork_source::read_fork("netget-tonic", "src/codec/compression.rs");
     assert!(
         compression.contains("limit"),

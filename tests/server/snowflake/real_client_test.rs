@@ -16,7 +16,6 @@
 //! **Fails rather than skips** without `NETGET_SNOWFLAKE_PEERS` (from
 //! `tests/client/snowflake/install_peers.sh`). LLM calls: 8.
 
-
 use super::super::super::helpers::real_server::{run_tool, InstallHint};
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use serde_json::{json, Value};

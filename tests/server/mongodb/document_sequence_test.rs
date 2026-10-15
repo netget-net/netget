@@ -18,7 +18,6 @@
 //!   MongoDB's own `Overflow` error, and a message with an unknown *required* flag bit is
 //!   refused. Zero LLM calls.
 
-
 use std::time::Duration;
 
 use netget::cli::management::ServerForm;

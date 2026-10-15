@@ -5,7 +5,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features nsq --test server -- nsq::peer_inject --test-threads=100
 
-
 use super::common::{self, static_handler, Peer};
 use netget::server::nsq::wire::Command;
 use netget::state::app_state::AppState;

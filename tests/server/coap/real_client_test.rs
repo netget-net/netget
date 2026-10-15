@@ -18,7 +18,6 @@
 //! This test is **not** `#[ignore]`d and does **not** skip when libcoap is missing —
 //! see `require_coap_client`.
 
-
 use crate::server::helpers::*;
 use std::time::Duration;
 use tokio::process::Command;

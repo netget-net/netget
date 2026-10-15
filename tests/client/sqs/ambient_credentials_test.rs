@@ -5,7 +5,6 @@
 //! operator's ambient AWS identity, session token included. See `client::aws_support`.
 //! Zero LLM calls; the endpoint is a listener that counts what reaches it.
 
-
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;

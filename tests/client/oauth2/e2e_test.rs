@@ -1,6 +1,5 @@
 //! OAuth2 client E2E tests
 
-
 use netget::cli::client_startup::start_client_by_id;
 use netget::llm::OllamaClient;
 use netget::state::app_state::AppState;
@@ -109,7 +108,6 @@ async fn test_oauth2_password_flow() {
 #[tokio::test]
 #[ignore = "Requires Ollama to be running"]
 async fn test_oauth2_client_credentials_flow() {
-
     {
         let mock_server = start_mock_oauth_server().await;
         let token_url = format!("{}/oauth/token", mock_server);
@@ -158,7 +156,6 @@ async fn test_oauth2_client_credentials_flow() {
 #[tokio::test]
 #[ignore = "Requires Ollama to be running"]
 async fn test_oauth2_token_refresh() {
-
     {
         let mock_server = start_mock_oauth_server().await;
         let token_url = format!("{}/oauth/token", mock_server);
@@ -208,7 +205,6 @@ async fn test_oauth2_token_refresh() {
 #[tokio::test]
 #[ignore = "Requires Ollama to be running"]
 async fn test_oauth2_error_handling() {
-
     {
         let mock_server = start_mock_oauth_server_with_errors().await;
         let token_url = format!("{}/oauth/token", mock_server);

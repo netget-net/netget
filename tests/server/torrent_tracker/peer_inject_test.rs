@@ -16,7 +16,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features torrent-tracker \
 //!       --test server -- torrent_tracker::peer_inject --test-threads=100
 
-
 use std::time::Duration;
 
 use netget::cli::management::ServerForm;

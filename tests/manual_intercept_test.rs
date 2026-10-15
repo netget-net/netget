@@ -13,7 +13,6 @@
 //! the server dispatcher executes them (a `set_memory` common action, which
 //! needs no protocol), so both halves are observable without a mock model.
 
-
 use std::time::Duration;
 
 use netget::llm::event_handler_executor::{

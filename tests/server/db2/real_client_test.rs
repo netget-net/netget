@@ -20,7 +20,6 @@
 //! **Fails rather than skips** without java or the Derby jars (`NETGET_DERBY_LIB`, from
 //! `tests/client/db2/install_derby.py`) or tshark. LLM calls: 6.
 
-
 use super::super::super::helpers::pcap_oracle::PcapOracle;
 use super::super::super::helpers::real_server::{run_tool, InstallHint};
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};

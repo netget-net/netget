@@ -15,7 +15,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features mongodb,mongodb-server --test client -- mongodb::command_channel --test-threads=100
 
-
 use std::time::Duration;
 
 use netget::cli::management::{ClientForm, ServerForm};

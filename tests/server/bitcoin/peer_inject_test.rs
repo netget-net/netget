@@ -6,7 +6,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features bitcoin --test server -- bitcoin::peer_inject --test-threads=100
 
-
 use std::io::Cursor;
 use std::time::Duration;
 

@@ -18,7 +18,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features vnc --test server -- vnc::inbound_limit --test-threads=100
 
-
 use std::time::Duration;
 
 use netget::server::vnc::MAX_CUT_TEXT_LEN;

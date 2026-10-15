@@ -7,7 +7,6 @@
 //! These assert emulation behaviour only: NetGet never executes the operator's commands, so the
 //! output is whatever the mocked model returns.
 
-
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

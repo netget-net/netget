@@ -16,7 +16,6 @@
 //!     --test server -- --test-threads=100 rtsp::ffprobe
 //! ```
 
-
 use crate::server::helpers::*;
 use std::time::Duration;
 

@@ -10,7 +10,6 @@
 //! over-budget datagrams get nothing, a handler-answered datagram gets media *at the same
 //! ceiling of zero*, and the window itself admits exactly N and then stops.
 
-
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;

@@ -1,6 +1,5 @@
 //! Vault routing and rendering, without a socket.
 
-
 use netget::server::vault::api::{
     preflight_mount, render_error, render_list, render_metadata, render_secret, render_write_ok,
     resolve, Route,

@@ -8,7 +8,6 @@
 //! Target: < 10 LLM calls per test suite
 //! Runtime: ~60 seconds
 
-
 use netget::client::npm::NpmClient;
 use netget::llm::OllamaClient;
 use netget::state::app_state::AppState;

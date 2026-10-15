@@ -9,7 +9,6 @@
 //!
 //! In-process with a static handler, so no model is involved.
 
-
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

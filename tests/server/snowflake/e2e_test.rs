@@ -16,7 +16,6 @@
 //! This is envelope-shape evidence driven by `reqwest`, NOT a real Snowflake
 //! driver on a live connection.
 
-
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use std::time::Duration;
 

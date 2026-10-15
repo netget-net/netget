@@ -10,7 +10,6 @@
 //!   `send_error_response` — the model's only way to refuse to authenticate — arrived with
 //!   the status that says the opposite.
 
-
 use crate::server::helpers::{self, E2EResult, NetGetConfig};
 use std::time::Duration;
 

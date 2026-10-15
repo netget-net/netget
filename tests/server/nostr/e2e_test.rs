@@ -8,7 +8,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features nostr --test server -- nostr::e2e --test-threads=100
 
-
 use super::common::{event_frame, note, Peer};
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use netget::server::nostr::wire::verify_event;

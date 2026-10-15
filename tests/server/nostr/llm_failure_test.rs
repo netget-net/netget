@@ -13,7 +13,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features nostr --test server -- nostr::llm_failure --test-threads=100
 
-
 use super::common::{self, event_frame, note, Peer};
 use netget::cli::management::ServerForm;
 use serde_json::json;

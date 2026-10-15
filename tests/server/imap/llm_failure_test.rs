@@ -13,7 +13,6 @@
 //! perfectly well formed. And neither is `OK`: the LOGIN case below is the one that matters,
 //! because an `OK` there would authenticate a session during an outage.
 
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};

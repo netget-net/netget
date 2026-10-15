@@ -4,7 +4,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features otlp --test server -- otlp::codec --test-threads=100
 
-
 use super::common::{gzip, string_attribute, traces_json, traces_protobuf};
 use netget::server::otlp::codec::{self, Encoding, Signal};
 use opentelemetry_proto::tonic::collector::logs::v1::{

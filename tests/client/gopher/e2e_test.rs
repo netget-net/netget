@@ -30,7 +30,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features gopher --test client -- gopher --test-threads=100
 
-
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

@@ -20,7 +20,6 @@
 //! SIP library behind it — `Cargo.toml` says `sip = []`, no dependencies at all. sipsak is an
 //! unrelated C binary on `PATH`.
 
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 

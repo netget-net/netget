@@ -10,7 +10,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features saml --test client -- saml::command_channel --test-threads=100
 
-
 use std::time::Duration;
 
 use netget::cli::management::ClientForm;

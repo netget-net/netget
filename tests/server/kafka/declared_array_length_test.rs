@@ -21,7 +21,6 @@
 //! Run with:
 //!   cargo test --no-default-features --features kafka --test server -- kafka::declared_array_length
 
-
 use std::time::Duration;
 
 use netget::cli::management::ServerForm;

@@ -27,7 +27,6 @@
 //! One mocked call per handshake step plus one per command: 8 for `info`, 7 for `ls`, 8 for
 //! `log`. Each test uses its own server so a failure names the subcommand that caused it.
 
-
 use crate::helpers::mock_builder::MockLlmBuilder;
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;

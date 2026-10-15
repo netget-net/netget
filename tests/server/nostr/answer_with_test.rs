@@ -8,7 +8,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features nostr --test server -- nostr::answer_with --test-threads=100
 
-
 use netget::server::nostr::actions::{
     event_answer_with, req_answer_with, NOSTR_EVENT_EVENT, NOSTR_REQ_EVENT,
 };

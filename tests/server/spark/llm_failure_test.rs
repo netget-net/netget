@@ -5,7 +5,6 @@
 //! that never ran. This pins the LLM-failure path to a 5xx JSON *object* with an `error` field,
 //! structurally distinct from any success array.
 
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use serde_json::Value;
 use std::time::Duration;

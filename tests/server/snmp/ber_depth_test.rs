@@ -15,7 +15,6 @@
 //!
 //! `parse_snmp_message` therefore screens the datagram's TLV structure before rasn sees it.
 
-
 use netget::server::snmp::SnmpServer;
 
 /// `version` (INTEGER 1) followed by a `community` OCTET STRING nested `depth` levels deep,

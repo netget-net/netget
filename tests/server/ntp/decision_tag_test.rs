@@ -19,7 +19,6 @@
 //!
 //! See `src/server/ntp/CLAUDE.md`, "Failure behaviour".
 
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 use tokio::net::UdpSocket;

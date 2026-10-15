@@ -12,7 +12,6 @@
 //! A third layer lives in `real_client_test.rs`: FreeRADIUS `radclient`, an entirely
 //! independent implementation, which is the only peer here that NetGet did not write.
 
-
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use netget::server::radius::packet::{
     self, decode_user_password, encode_response, encode_user_password, verify_accounting_request,

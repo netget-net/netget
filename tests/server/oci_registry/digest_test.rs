@@ -10,7 +10,6 @@
 //! The expected digests are known answers produced by Apple's `shasum -a 256`, not
 //! by NetGet, so this does not check an implementation against itself.
 
-
 use netget::server::oci_registry::actions::{
     apply_blob_descriptors, decode_content, manifest_media_type, oci_error_body, oci_error_status,
     resolve_blobs, sha256_digest,

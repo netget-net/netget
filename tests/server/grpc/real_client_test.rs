@@ -27,7 +27,6 @@
 //! reflection call is answered `12 UNIMPLEMENTED`. So `grpcurl` is given the same `.proto` the
 //! server was started with, via `-import-path`/`-proto`, rather than `-use-reflection`.
 
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 use tempfile::TempDir;

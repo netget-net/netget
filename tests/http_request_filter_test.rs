@@ -4,7 +4,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features http --test http_request_filter_test -- --test-threads=100
 
-
 use netget::server::http_common::handler::{RequestData, RequestFilter};
 use std::collections::HashMap;
 

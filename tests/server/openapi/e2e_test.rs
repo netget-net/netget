@@ -2,7 +2,6 @@
 //!
 //! These tests use mock LLM responses to validate OpenAPI server functionality.
 
-
 use crate::helpers::*;
 use serde_json::Value;
 use std::time::Duration;

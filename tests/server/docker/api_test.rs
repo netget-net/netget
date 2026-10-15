@@ -3,7 +3,6 @@
 //! `real_client_test.rs` shows the Docker CLI decodes what these render; this file pins the
 //! routing table, the defaults that keep the Go decoder happy, and every refusal.
 
-
 use netget::server::docker::api::{
     self, parse_version, render_container, render_container_list, render_images, render_info,
     render_networks, render_version, render_volumes, resolve, split_version, EngineIdentity, Route,

@@ -15,7 +15,6 @@
 //!
 //! See `src/server/ftp/CLAUDE.md`, "Failure behaviour".
 
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};

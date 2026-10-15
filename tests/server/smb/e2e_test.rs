@@ -4,7 +4,6 @@
 //! using raw TCP socket communication to send SMB2 packets, each framed with the Direct TCP
 //! transport header (MS-SMB2 2.1) a real client writes on port 445.
 
-
 use crate::server::helpers::{start_netget_server, E2EResult};
 
 use super::wire_util::{nbss, read_frame_into, read_frame_sync, tree_connect};

@@ -24,7 +24,6 @@
 //! socket buffers and failing when it did not. The server now drains, boundedly, before
 //! answering (`LINGER_DRAIN_BYTES`).
 
-
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use std::time::Duration;
 

@@ -8,7 +8,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features redis --test client -- redis::resp_reader_test --test-threads=100
 
-
 use netget::client::redis::resp::{
     encode_command, read_reply, split_command, MAX_AGGREGATE_LEN, MAX_REPLY_BYTES, MAX_REPLY_DEPTH,
 };

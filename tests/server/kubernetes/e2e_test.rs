@@ -13,7 +13,6 @@
 //! Everything binds to 127.0.0.1. No real cluster is contacted, and `KUBECONFIG` is passed
 //! explicitly so an operator's own cluster can never be reached.
 
-
 use crate::server::helpers::{self, E2EResult, NetGetConfig};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};

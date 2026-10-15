@@ -11,7 +11,6 @@
 //! Both are refusals. That is deliberate: a failure must never be able to look like acceptance,
 //! or an outage would silently report mail as delivered.
 
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};

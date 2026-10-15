@@ -7,7 +7,6 @@
 //! self-consistent and matches the documented wire layout — it is NOT proof of
 //! interoperability with a genuine Db2 driver.
 
-
 use netget::server::db2::drda;
 
 #[test]

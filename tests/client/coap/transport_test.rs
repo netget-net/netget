@@ -10,7 +10,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features coap --test client -- coap::transport_test --test-threads=100
 
-
 use crate::helpers::mock_builder::MockLlmBuilder;
 use crate::helpers::*;
 use ::netget::server::coap::codec::{code, CoapMessage, MessageType, CODE_EMPTY};

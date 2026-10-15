@@ -9,7 +9,6 @@
 //! disagrees with the first, the SHA advertised by `info/refs` does not match the commit
 //! actually inside the pack and `git clone` fails with "did not send all necessary objects".
 
-
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use anyhow;
 use std::process::Command;

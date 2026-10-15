@@ -18,7 +18,6 @@
 //! here: `nmblookup` is hard-wired to UDP 137 and binding 137 needs root, so the decode
 //! direction has never been checked against anything NetGet did not write.
 
-
 use std::net::SocketAddr;
 use std::time::Duration;
 

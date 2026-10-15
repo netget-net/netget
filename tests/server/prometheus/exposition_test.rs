@@ -4,7 +4,6 @@
 //! the exact bytes and, more importantly, the refusals — each one is a body a scraper would
 //! reject or mis-read, and the renderer's promise is that the model cannot produce one.
 
-
 use netget::server::prometheus::exposition::{negotiate, Format, MetricFamilies};
 use serde_json::json;
 

@@ -7,7 +7,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features nntp --test client -- nntp::command_channel --test-threads=100
 
-
 use std::time::Duration;
 
 use netget::cli::management::{ClientForm, ServerForm};

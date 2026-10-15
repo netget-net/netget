@@ -3,7 +3,6 @@
 //! These tests spawn a real NetGet instance with QUIC server
 //! and use quinn client to test QUIC functionality.
 
-
 use super::super::helpers::{self, E2EResult, NetGetConfig};
 use std::sync::Arc;
 use std::time::Duration;

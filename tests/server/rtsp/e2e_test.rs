@@ -5,7 +5,6 @@
 //! PLAY causes real RTP to arrive on the UDP port negotiated in SETUP. This proves the RTSP front
 //! door actually hands out an RTP stream. Localhost only.
 
-
 use crate::server::helpers::*;
 use std::net::SocketAddr;
 use std::time::Duration;

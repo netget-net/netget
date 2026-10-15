@@ -22,7 +22,6 @@
 //! of issuing a deliberately-bogus statement id, and the assertion is about one opcode and one
 //! four-byte code.
 
-
 use crate::helpers::server::NetGetServer;
 use crate::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;

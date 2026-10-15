@@ -25,7 +25,6 @@
 //! authenticate it (validation needs `+tls-ca`, `+tls-hostname` or `+tls-pin`), which is what
 //! lets the test run without provisioning a CA.
 
-
 use crate::helpers::{E2EResult, NetGetConfig};
 use std::time::Duration;
 use tokio::process::Command;

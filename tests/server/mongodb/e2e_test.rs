@@ -1,6 +1,5 @@
 //! MongoDB server E2E tests with mock LLM
 
-
 use crate::helpers::*;
 
 #[tokio::test]

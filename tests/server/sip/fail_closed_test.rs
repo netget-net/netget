@@ -17,7 +17,6 @@
 //! and no LLM budget is spent. The LLM endpoint points at a closed port, which makes any
 //! accidental model call fail fast and loudly rather than hanging.
 
-
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::net::UdpSocket;

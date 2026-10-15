@@ -19,7 +19,6 @@
 //! `decision=model_silent fallback=blank_200`, so an operator can find every request that
 //! was "answered" by nobody.
 
-
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use std::time::Duration;
 

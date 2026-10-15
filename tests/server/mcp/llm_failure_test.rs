@@ -10,7 +10,6 @@
 //! reply of `{"tools": []}` / `{"resources": []}`, so a failure was reported to the caller as
 //! an empty-but-valid answer. An error that looks like success is worse than silence.
 
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use serde_json::{json, Value};
 use std::time::Duration;

@@ -157,7 +157,6 @@ impl OpenApiClient {
         let parsed_spec: OpenAPI =
             serde_yaml::from_str(&spec_yaml).context("Failed to parse OpenAPI spec (YAML)")?;
 
-
         // Determine the base URL. Precedence: an explicit `base_url` parameter, then the
         // address the operator named, and the spec's own `servers[0]` only as a last resort.
         //
@@ -208,7 +207,6 @@ impl OpenApiClient {
                      parameter, or a spec declaring servers[0]"
                 ));
             };
-
 
         info!("OpenAPI client {} using base URL: {}", client_id, base_url);
 
@@ -268,12 +266,10 @@ impl OpenApiClient {
         // Extract operation list for LLM
         let operations = Self::extract_operations(&parsed_spec);
 
-
         // Call LLM with openapi_client_connected event
         if let Some(instruction) = app_state.get_instruction_for_client(client_id).await {
             let spec_title = parsed_spec.info.title.clone();
             let spec_version = parsed_spec.info.version.clone();
-
 
             let event = Event::new(
                 &OPENAPI_CLIENT_CONNECTED_EVENT,
@@ -668,7 +664,6 @@ impl OpenApiClient {
 
         // Find operation in spec
         let (path_template, method) = Self::find_operation(&parsed_spec, &operation_id)?;
-
 
         // Substitute path parameters
         let path = Self::substitute_path_params(&path_template, &path_params)?;

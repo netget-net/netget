@@ -17,7 +17,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features zabbix --test server -- zabbix::llm_failure --test-threads=100
 
-
 use super::common::{self, exchange, response, sender_data};
 use netget::cli::management::ServerForm;
 use netget::server::zabbix::wire;

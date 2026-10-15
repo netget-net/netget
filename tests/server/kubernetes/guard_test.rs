@@ -19,7 +19,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features kubernetes-server \
 //!       --test server -- --test-threads=100 kubernetes::guard
 
-
 use crate::server::helpers::{self, E2EResult, NetGetConfig};
 use netget::server::kubernetes::{model_status_code, table, MAX_REQUEST_BODY_BYTES};
 use serde_json::{json, Value};

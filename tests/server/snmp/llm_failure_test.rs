@@ -14,7 +14,6 @@
 //! RFCs, not with our own codec: `SNMPv2-PDU ::= SEQUENCE { version INTEGER, community OCTET
 //! STRING, data [2] IMPLICIT SEQUENCE { request-id, error-status, error-index, varbinds } }`.
 
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 use tokio::net::UdpSocket;

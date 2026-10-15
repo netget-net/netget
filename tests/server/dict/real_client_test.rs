@@ -21,7 +21,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features dict --test server -- dict::real_client --test-threads=100
 
-
 use super::common::{self, dictionary_handler};
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;

@@ -3,7 +3,6 @@
 //! These tests spawn the actual NetGet binary with POP3 prompts
 //! and validate the responses using POP3 protocol clients.
 
-
 // Helper module imported from parent
 
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};

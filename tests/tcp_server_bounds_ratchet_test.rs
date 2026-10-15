@@ -272,8 +272,7 @@ fn every_tcp_accept_loop_goes_through_the_shared_connection_cap() {
                 // The external stack owns its accept loop. Verify the real bounded loop in
                 // NetGet's fork (netget-async-opcua-server), rather than exempting this protocol
                 // from the connection-cap ratchet.
-                let adapter =
-                    fork_source::read_fork("netget-async-opcua-server", "src/server.rs");
+                let adapter = fork_source::read_fork("netget-async-opcua-server", "src/server.rs");
                 adapter.contains("self.connections.len() < 256")
                     && adapter.contains("if accepting =>")
             });

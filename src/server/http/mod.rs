@@ -472,9 +472,7 @@ async fn handle_http_request_inner(
     // Only the h2c upgrade below needs this, and only when that feature is compiled: the
     // upgraded connection outlives the HTTP/1 task that accepted it, so without carrying the
     // permit across, an upgrade would quietly hand the slot back while the peer was still on it.
-    connection_permit: Arc<
-        crate::server::accept_bounded::ConnectionPermit,
-    >,
+    connection_permit: Arc<crate::server::accept_bounded::ConnectionPermit>,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
     // Check for HTTP/2 upgrade request (h2c) - only when http2 feature is enabled
     {

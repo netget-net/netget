@@ -31,7 +31,10 @@ pub fn fork_dir(package: &str) -> PathBuf {
         .as_str()
         .expect("manifest_path")
         .to_string();
-    PathBuf::from(manifest).parent().expect("crate dir").to_path_buf()
+    PathBuf::from(manifest)
+        .parent()
+        .expect("crate dir")
+        .to_path_buf()
 }
 
 /// `rel` inside `package`'s source.
@@ -42,8 +45,9 @@ pub fn read_fork(package: &str, rel: &str) -> String {
 
 /// Every `[[package]]` entry in Cargo.lock named `name`: (version, source line if any).
 pub fn locked_packages(name: &str) -> Vec<(String, Option<String>)> {
-    let lock = std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.lock"))
-        .expect("Cargo.lock");
+    let lock =
+        std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.lock"))
+            .expect("Cargo.lock");
     lock.split("[[package]]")
         .skip(1)
         .filter_map(|entry| {

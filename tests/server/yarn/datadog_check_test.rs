@@ -19,7 +19,6 @@
 //! **Fails rather than skips** without `NETGET_DATADOG_YARN` (from
 //! `tests/server/yarn/install_datadog_check.sh`). LLM calls: 5.
 
-
 use crate::helpers::real_server::{run_tool, InstallHint};
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use serde_json::{json, Value};

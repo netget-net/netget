@@ -56,7 +56,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features tcp --test empty_static_handler_test -- --test-threads=100
 
-
 mod helpers;
 
 use std::io::{Read, Write};

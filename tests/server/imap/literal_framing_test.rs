@@ -24,7 +24,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features imap \
 //!       --test server -- imap::literal_framing --test-threads=100
 
-
 use netget::llm::actions::protocol_trait::{ActionResult, Server};
 use netget::server::imap::actions::{validate_imap_literals, ImapProtocol};
 

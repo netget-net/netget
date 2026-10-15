@@ -10,7 +10,6 @@
 //! What is *not* independent is the HTTP server, which is a few lines in this file rather
 //! than a real one.
 
-
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use netget::client::rss::resolve_feed_url;
 use std::sync::Arc;

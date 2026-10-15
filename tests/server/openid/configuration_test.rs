@@ -12,7 +12,6 @@
 //! credential is checked and the body is handed to the model as prompt text, so the previous
 //! unbounded `collect()` let one anonymous POST grow the process without limit.
 
-
 use crate::helpers::*;
 use serde_json::Value;
 use std::time::Duration;

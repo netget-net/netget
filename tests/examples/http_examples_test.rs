@@ -5,7 +5,6 @@
 //! - EventType response_examples execute correctly
 //! - HTTP request/response cycle works properly
 
-
 use crate::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use serde_json::json;
 use std::time::Duration;

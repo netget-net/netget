@@ -22,7 +22,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features nsq --test server -- nsq::connection_bounds --test-threads=100
 
-
 use super::common::{self, static_handler, Peer};
 use netget::server::nsq::wire::{self, Command};
 use std::time::{Duration, Instant};

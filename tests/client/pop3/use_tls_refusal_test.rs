@@ -14,7 +14,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features pop3 --test client -- pop3::use_tls --test-threads=100
 
-
 use std::sync::Arc;
 
 use netget::client::pop3::Pop3Client;

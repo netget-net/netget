@@ -16,7 +16,6 @@
 //! privileged, so `PrivilegedPort(9)` genuinely fires there — that declaration is protection,
 //! not decoration, which is exactly why these tests must not use it.
 
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 use tokio::net::UdpSocket;

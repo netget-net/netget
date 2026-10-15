@@ -838,7 +838,6 @@ impl TelnetServer {
     }
 }
 
-
 /// The line to print when the LLM backend fails.
 ///
 /// Telnet is an unstructured byte stream: there is no status code to send and no framing a

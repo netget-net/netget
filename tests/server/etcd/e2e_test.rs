@@ -1,6 +1,5 @@
 //! etcd E2E tests using real etcd-client
 
-
 use super::super::helpers::{start_netget_server, NetGetConfig};
 use etcd_client::Client;
 use serde_json::json;

@@ -10,7 +10,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features elasticsearch --test client -- elasticsearch::command_channel --test-threads=100
 
-
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 

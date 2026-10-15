@@ -5,7 +5,6 @@
 //! ordinary answer — "no containers" — so a server that fell back to it on an outage would tell
 //! a monitoring script that every container had vanished.
 
-
 use super::real_client_test::{docker, require_tool};
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 

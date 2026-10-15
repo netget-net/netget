@@ -29,7 +29,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features http2 --test server -- \
 //!       http2::connection_bounds --test-threads=100
 
-
 use std::time::Duration;
 
 use netget::cli::management::ServerForm;

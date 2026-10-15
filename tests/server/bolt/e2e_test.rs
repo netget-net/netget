@@ -13,7 +13,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features bolt --test server -- bolt::e2e --test-threads=100
 
-
 use super::common::*;
 use crate::server::helpers::{self, E2EResult, NetGetConfig};
 use netget::server::bolt::packstream::Value;

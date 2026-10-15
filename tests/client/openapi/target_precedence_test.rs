@@ -12,7 +12,6 @@
 //!
 //! Zero LLM calls: a `*` static handler with no actions answers every client event.
 
-
 use std::sync::Arc;
 use std::time::Duration;
 

@@ -26,7 +26,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features redis \
 //!       --test server -- server::redis::real_client --test-threads=8
 
-
 use crate::helpers::{self, E2EResult, NetGetConfig};
 use std::process::Stdio;
 use std::time::Duration;

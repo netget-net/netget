@@ -796,7 +796,6 @@ impl MongodbHandler {
         parse_op_msg_sections(body)
     }
 
-
     /// Encode OP_MSG response
     fn encode_op_msg_response(&self, request_id: i32, doc: Document) -> Result<Vec<u8>> {
         let mut body = vec![0u8; 5]; // flagBits (4) + section kind (1)
@@ -822,7 +821,6 @@ impl MongodbHandler {
         Ok(message)
     }
 
-
     /// Convert BSON to JSON
     fn bson_to_json(&self, bson_opt: Option<&Bson>) -> serde_json::Value {
         match bson_opt {
@@ -830,7 +828,6 @@ impl MongodbHandler {
             None => serde_json::Value::Null,
         }
     }
-
 
     /// Convert JSON action to BSON document for response
     fn json_to_bson_doc(&self, json: &serde_json::Value, namespace: &str) -> Result<Document> {
@@ -901,7 +898,6 @@ impl MongodbHandler {
             )),
         }
     }
-
 }
 
 /// MongoDB `InternalError`: "an internal server error occurred". Paired with `ok: 0`, which is

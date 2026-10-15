@@ -10,7 +10,6 @@
 //! may not. The end-to-end half (the endpoint raising `ollama_embeddings_request` and
 //! refusing when nothing answers) is in `e2e_test.rs`.
 
-
 use netget::llm::actions::protocol_trait::{ActionResult, Protocol, Server};
 use netget::server::ollama::actions::OllamaProtocol;
 use serde_json::json;

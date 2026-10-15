@@ -5,7 +5,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features zabbix --test server -- zabbix::peer_inject --test-threads=100
 
-
 use super::common::{self, response, sender_data};
 use netget::server::zabbix::wire;
 use netget::state::app_state::AppState;

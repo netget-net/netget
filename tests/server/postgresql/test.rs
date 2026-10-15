@@ -14,7 +14,6 @@
 //!
 //! TODO: Investigate pgwire ExtendedQueryHandler timeout behavior and fix LLM call completion.
 
-
 // Helper module imported from parent
 
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};

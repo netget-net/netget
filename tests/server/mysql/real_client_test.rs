@@ -34,7 +34,6 @@
 //! than a protocol defect, but it presents as one, so the rules below answer that probe the
 //! way the real server does.
 
-
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use std::process::Stdio;
 use std::time::Duration;

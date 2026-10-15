@@ -5,7 +5,6 @@
 //! in its INVITE SDP. This test proves that end-to-end: it sends an INVITE offering a UDP port,
 //! and asserts G.711 RTP shows up on that port after the 200 OK.
 
-
 use crate::server::helpers::*;
 use std::net::SocketAddr;
 use std::time::Duration;

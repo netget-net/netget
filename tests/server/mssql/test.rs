@@ -3,7 +3,6 @@
 //! These tests spawn the actual NetGet binary with MSSQL prompts
 //! and validate the responses using tiberius TDS protocol client.
 
-
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use std::time::Duration;
 use tiberius::{AuthMethod, Client, Config, EncryptionLevel, QueryItem};

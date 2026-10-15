@@ -20,7 +20,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features tcp \
 //!       --test stop_server_stops_connections_test -- --test-threads=100
 
-
 use std::sync::Arc;
 use std::time::Duration;
 

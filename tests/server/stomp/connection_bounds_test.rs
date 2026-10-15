@@ -22,7 +22,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features stomp,tcp --test server -- stomp::connection_bounds --test-threads=100
 
-
 use std::time::Duration;
 
 use netget::cli::management::ServerForm;

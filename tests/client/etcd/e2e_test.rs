@@ -2,7 +2,6 @@
 //!
 //! Tests etcd client operations against NetGet etcd server
 
-
 use crate::helpers::*;
 use serde_json::json;
 use std::time::Duration;

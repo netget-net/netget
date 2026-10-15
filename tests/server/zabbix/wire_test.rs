@@ -4,7 +4,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features zabbix --test server -- zabbix::wire --test-threads=100
 
-
 use netget::server::zabbix::wire::{
     encode, encode_large, header_len, info_string, parse_header, parse_request, read_result,
     render_failed, render_result, HeaderError, Request, RequestError, FLAG_LARGE, FLAG_PROTOCOL,

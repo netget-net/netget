@@ -14,7 +14,6 @@
 //! correct and the guards being *wired in* are different claims and only the second one
 //! matters.
 
-
 use netget::client::vnc::VncClient;
 use serde_json::json;
 

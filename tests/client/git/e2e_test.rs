@@ -3,7 +3,6 @@
 //! Tests Git client protocol implementation with mocked LLM responses.
 //! Uses test helper infrastructure for consistent testing.
 
-
 use crate::helpers::*;
 use std::time::Duration;
 

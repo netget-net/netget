@@ -33,7 +33,6 @@
 //!
 //! Everything binds to 127.0.0.1 and no real etcd cluster is contacted.
 
-
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use serde_json::json;
 use std::time::Duration;

@@ -18,7 +18,6 @@
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features dict --test server -- dict::llm_failure --test-threads=100
 
-
 use super::common::{self, Peer};
 use netget::cli::management::ServerForm;
 use tokio::sync::mpsc;

@@ -15,7 +15,6 @@
 //!   ./cargo-isolated.sh test --no-default-features --features snowflake --test server -- \
 //!       snowflake::connection_bounds --test-threads=100
 
-
 use std::time::Duration;
 
 use crate::helpers::http_bounds::HttpBounds;

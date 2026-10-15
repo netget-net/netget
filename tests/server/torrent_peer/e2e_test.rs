@@ -1,6 +1,5 @@
 //! BitTorrent Peer Wire Protocol E2E tests with mocks
 
-
 use crate::helpers::*;
 use serde_json::json;
 use std::time::Duration;

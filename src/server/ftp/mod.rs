@@ -858,5 +858,4 @@ impl FtpSession {
     }
 }
 
-
 // Stub types needed for non-feature compilation

@@ -8,7 +8,6 @@
 //! Nothing here needs the LLM: the assertion is about connection bookkeeping, and a TCP
 //! connection is tracked from the moment it is accepted, before any request is sent.
 
-
 use netget::cli::management::ServerForm;
 use netget::state::app_state::AppState;
 use netget::state::ServerId;

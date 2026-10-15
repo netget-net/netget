@@ -31,7 +31,6 @@
 //! And a control: the same rule answering a correct request correctly, so a rule that never
 //! matched cannot make every row above pass by failing closed for a different reason.
 
-
 use crate::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

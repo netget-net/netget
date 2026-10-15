@@ -39,7 +39,6 @@
 //! would be the platform tool — `dns-sd -L` on macOS, `avahi-browse -r` on Linux — which is
 //! what a promotion to Beta needs.
 
-
 // Helper module imported from parent
 
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};

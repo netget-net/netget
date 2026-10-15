@@ -18,7 +18,6 @@
 //! bytes, and the encoder clamped to `u16::MAX` and wrote a message *declaring* the truncated
 //! length. Self-consistent, parseable, and not what the model said.
 
-
 use netget::llm::actions::protocol_trait::{ActionResult, Server};
 use netget::server::ipp::actions::IppProtocol;
 use serde_json::json;
