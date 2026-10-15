@@ -47,7 +47,9 @@ per step:
   registers (EXCSQLSET, acknowledged without the model), inserts (`num_rows` 1, the model's
   `rows_affected`) and fails a drop with `SQLSTATE=42704 SQLCODE=-204`;
 - `intruder` is refused with reason 24, USERNAME AND/OR PASSWORD INVALID;
-- tshark's `drda` dissector reads both directions.
+- tshark's `drda` dissector judges NetGet's direction. IBM's direction is context only: the
+  Linux x86_64 driver puts 32 NUL bytes inside its EXCSAT's EXTNAM, which tshark's ASCII
+  view of the parameter flags as trailing stray characters (the macOS build does not).
 
 ### Mutation checks (each applied, run, reverted)
 
