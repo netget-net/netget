@@ -8,12 +8,13 @@ use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
+use llama_cpp_2::model::AddBos;
 use llama_cpp_2::model::LlamaModel;
-use llama_cpp_2::model::{AddBos, Special};
 use llama_cpp_2::sampling::LlamaSampler;
+use llama_cpp_2::TokenToStringError;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tracing::{debug, info, trace};
 
 /// Configuration for embedded LLM inference
@@ -56,13 +57,28 @@ pub struct ModelInfo {
     pub vocab_size: Option<i32>,
 }
 
+/// The process's llama.cpp backend. llama-cpp-2 refuses a second `LlamaBackend::init()` while
+/// one is alive (`BackendAlreadyInitialized`), so every model load and every inference shares
+/// this one, and it lives for the rest of the process.
+fn shared_backend() -> Result<Arc<LlamaBackend>> {
+    static BACKEND: OnceLock<std::result::Result<Arc<LlamaBackend>, String>> = OnceLock::new();
+    BACKEND
+        .get_or_init(|| {
+            LlamaBackend::init()
+                .map(Arc::new)
+                .map_err(|e| e.to_string())
+        })
+        .clone()
+        .map_err(|e| anyhow!("Failed to initialize llama.cpp backend: {e}"))
+}
+
 /// Embedded LLM backend using llama.cpp
 pub struct EmbeddedLLMBackend {
     model: Arc<LlamaModel>,
     config: InferenceConfig,
     model_path: PathBuf,
-    /// Global llama.cpp backend (must be initialized once)
-    _backend: Arc<LlamaBackend>,
+    /// The process-wide llama.cpp backend (see [`shared_backend`])
+    backend: Arc<LlamaBackend>,
 }
 
 impl EmbeddedLLMBackend {
@@ -110,10 +126,7 @@ impl EmbeddedLLMBackend {
             }
         );
 
-        // Initialize llama.cpp backend (must be done once globally)
-        // This is safe to call multiple times - llama.cpp handles initialization internally
-        let backend =
-            Arc::new(LlamaBackend::init().context("Failed to initialize llama.cpp backend")?);
+        let backend = shared_backend()?;
 
         // Load model (blocking operation, run in spawn_blocking)
         let model_path_clone = path.to_path_buf();
@@ -140,7 +153,7 @@ impl EmbeddedLLMBackend {
             model: Arc::new(model),
             config,
             model_path: path.to_path_buf(),
-            _backend: backend,
+            backend,
         })
     }
 
@@ -164,20 +177,23 @@ impl EmbeddedLLMBackend {
     /// ```
     pub async fn generate(&self, prompt: &str) -> Result<String> {
         let model = self.model.clone();
+        let backend = self.backend.clone();
         let prompt = prompt.to_string();
         let config = self.config.clone();
 
         // Run inference in blocking task (CPU/GPU-intensive)
-        let response =
-            tokio::task::spawn_blocking(move || Self::run_inference_sync(&model, &prompt, &config))
-                .await
-                .context("Inference task panicked")??;
+        let response = tokio::task::spawn_blocking(move || {
+            Self::run_inference_sync(&backend, &model, &prompt, &config)
+        })
+        .await
+        .context("Inference task panicked")??;
 
         Ok(response)
     }
 
     /// Synchronous inference (runs in blocking task)
     fn run_inference_sync(
+        backend: &LlamaBackend,
         model: &LlamaModel,
         prompt: &str,
         config: &InferenceConfig,
@@ -193,9 +209,8 @@ impl EmbeddedLLMBackend {
         }
 
         // Create inference context
-        let backend = LlamaBackend::init()?;
         let mut ctx = model
-            .new_context(&backend, ctx_params)
+            .new_context(backend, ctx_params)
             .context("Failed to create inference context")?;
 
         // Create sampler (greedy for now, can be enhanced later)
@@ -243,10 +258,14 @@ impl EmbeddedLLMBackend {
                 break;
             }
 
-            // Decode token to text (Special::Tokenize means render special tokens)
-            let output_bytes = model
-                .token_to_bytes(new_token_id, Special::Tokenize)
-                .context("Failed to decode token")?;
+            // Decode token to text, rendering special tokens. A piece longer than the first
+            // buffer is answered with its size, negated.
+            let output_bytes = match model.token_to_piece_bytes(new_token_id, 8, true, None) {
+                Err(TokenToStringError::InsufficientBufferSpace(needed)) => model
+                    .token_to_piece_bytes(new_token_id, needed.unsigned_abs() as usize, true, None),
+                other => other,
+            }
+            .context("Failed to decode token")?;
             let output_str = String::from_utf8_lossy(&output_bytes);
             generated_text.push_str(&output_str);
 

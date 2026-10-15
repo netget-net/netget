@@ -266,7 +266,7 @@ rss = { version = "2.0" }
 # sha2 already defined above for wireguard/tor
 
 # Embedded LLM inference (llama.cpp bindings)
-llama-cpp-2 = { version = "0.1", optional = true }  # Rust bindings to llama.cpp for local GGUF model inference
+llama-cpp-2 = { version = ">=0.1.127, <0.1.158", optional = true }  # Rust bindings to llama.cpp for local GGUF model inference. 0.1.127 is the first that builds on aarch64 Linux (c_char is u8 there); 0.1.158 moved tokenisation onto LlamaVocab
 hf-hub = { version = "0.3", optional = true, features = ["tokio"] }  # Hugging Face Hub API for model downloading
 
 # SQLite database support (in-memory or file-based)
