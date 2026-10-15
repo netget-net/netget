@@ -294,8 +294,7 @@ pub fn decode_argument(code: i64, p: Option<&Tlv>) -> MapResult<Value> {
     let kids = seq_children(p, "argument")?;
     let find = |tag: Tag| kids.iter().find(|c| c.tag == tag);
     let mut out = Map::new();
-    let used: Vec<Tag>;
-    match code {
+    let used: Vec<Tag> = match code {
         45 => {
             out.insert(
                 "msisdn".into(),
@@ -318,7 +317,7 @@ pub fn decode_argument(code: i64, p: Option<&Tlv>) -> MapResult<Value> {
                 "gprs_support_indicator".into(),
                 json!(find(ctx(7)).is_some()),
             );
-            used = vec![ctx(0), ctx(1), ctx(2), ctx(7)];
+            vec![ctx(0), ctx(1), ctx(2), ctx(7)]
         }
         71 => {
             let ident = find(ctxc(0)).ok_or("subscriberIdentity [0] missing")?;
@@ -348,7 +347,7 @@ pub fn decode_argument(code: i64, p: Option<&Tlv>) -> MapResult<Value> {
                 "gsm_scf_address".into(),
                 find(ctx(3)).map(addr).unwrap_or(Value::Null),
             );
-            used = vec![ctxc(0), ctxc(1), ctx(3)];
+            vec![ctxc(0), ctxc(1), ctx(3)]
         }
         59..=61 => {
             let (dcs, text) = ussd_fields(&kids)?;
@@ -358,7 +357,7 @@ pub fn decode_argument(code: i64, p: Option<&Tlv>) -> MapResult<Value> {
                 "msisdn".into(),
                 find(ctx(0)).map(addr).unwrap_or(Value::Null),
             );
-            used = vec![Tag::OCTET_STRING, ctx(0)];
+            vec![Tag::OCTET_STRING, ctx(0)]
         }
         44 | 46 => {
             let da = kids.first().ok_or("sm-RP-DA missing")?;
@@ -384,7 +383,7 @@ pub fn decode_argument(code: i64, p: Option<&Tlv>) -> MapResult<Value> {
             }
             let mut u = vec![da.tag, oa.tag, Tag::OCTET_STRING, Tag::NULL];
             u.dedup();
-            used = u;
+            u
         }
         22 => {
             out.insert(
@@ -408,7 +407,7 @@ pub fn decode_argument(code: i64, p: Option<&Tlv>) -> MapResult<Value> {
                 find(ctx(6)).map(addr).unwrap_or(Value::Null),
             );
             out.insert("or_interrogation".into(), json!(find(ctx(4)).is_some()));
-            used = vec![ctx(0), ctx(3), ctx(6), ctx(4)];
+            vec![ctx(0), ctx(3), ctx(6), ctx(4)]
         }
         2 => {
             out.insert(
@@ -433,10 +432,10 @@ pub fn decode_argument(code: i64, p: Option<&Tlv>) -> MapResult<Value> {
                     .map(|l| json!(ber::hex(&l.value)))
                     .unwrap_or(Value::Null),
             );
-            used = vec![Tag::OCTET_STRING, ctx(1), ctx(10)];
+            vec![Tag::OCTET_STRING, ctx(1), ctx(10)]
         }
         other => return Err(format!("operation {other} is not implemented")),
-    }
+    };
     out.insert("uninterpreted".into(), json!(leftovers(&kids, &used)));
     Ok(Value::Object(out))
 }
