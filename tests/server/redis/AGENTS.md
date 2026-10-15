@@ -1,6 +1,6 @@
 # Redis Protocol E2E Tests
 
-Eight files, all declared in `tests/server/redis/mod.rs`.
+Twelve files, all declared in `tests/server/redis/mod.rs`.
 
 | File | Tests | What it proves | LLM calls |
 |---|---|---|---|
@@ -12,6 +12,10 @@ Eight files, all declared in `tests/server/redis/mod.rs`.
 | `peer_inject_test.rs` | 1 | Dashboard injection reaches the socket | 0 |
 | `resp3_test.rs` | 2 | `HELLO 3` and every RESP3 type through redis-cli `-3` and redis-py 5, the RESP2 downgrades, a push, and credentials in `HELLO` | 0 |
 | `resp_depth_test.rs` | 4 | A RESP nesting bomb or an impossible declared length is refused before the decoder, and the process survives | 0 |
+| `pubsub_test.rs` | 2 | Pub/sub through redis-cli (RESP2 and `-3`) and redis-rs (RESP2 `PubSub`, RESP3 push sender) | 0 |
+| `pubsub_bounds_test.rs` | 6 | Subscribed mode, every pub/sub bound, the slow-consumer disconnect, fail-closed subscribe/publish | 0 |
+| `cluster_test.rs` | 2 | Three NetGet servers as a cluster, through `redis-cli -c`, `redis-cli --cluster check` and redis-rs's `ClusterClient`; a bad topology refuses to start | 0 |
+| `keys_oracle_test.rs` | 1 | Hash slots and glob matching equal a real `redis-server`'s `CLUSTER KEYSLOT` and `KEYS` | 0 |
 
 ## Running
 
@@ -161,6 +165,57 @@ limits lifted, the last test fails on an empty read instead.
 The same guard/decoder pair is fuzzed by `fuzz/fuzz_targets/resp_frame.rs`, whose corpus
 carries a 65 536-level `depth_bomb`.
 
+## Pub/sub — `pubsub_test.rs` and `pubsub_bounds_test.rs`
+
+The model is a python handler in `pubsub_test.rs` (its policy: a channel starting `forbidden`
+is refused with `NOPERM`, a publish to `withheld` is answered `42` and not delivered,
+`NG.ANNOUNCE <channel> <message>` makes it publish via `redis_publish_message`) and static
+rules in `pubsub_bounds_test.rs`. Subscribers are long-running `redis-cli SUBSCRIBE` processes
+whose stdout is collected line by line; every wait polls a condition (`PUBSUB NUMSUB`, a
+printed line), never a fixed sleep.
+
+Two things worth knowing before extending it:
+
+- **redis-rs 0.27's `PubSub` reports an error reply to `SUBSCRIBE` as success** — it maps the
+  reply value away (`handle_message` sends `result.map(|_| ())`, and the error is an `Ok`
+  value there). So the refusal is read by redis-cli, which prints `NOPERM …`; redis-rs only
+  confirms nothing was registered.
+- The withheld publish is proved absent by **ordering**, not by waiting: the same subscriber
+  then receives a marker published after it, and must not have printed the withheld payload
+  first.
+
+`pubsub_bounds_test.rs` reads replies with the client's own `resp::read_reply`, so each
+assertion is on the exact shape — `["unsubscribe", null, 0]` with nothing held, `["pong", ""]`
+in subscribed mode, the exact `Can't execute` and bound errors. Every bound was verified by
+mutation: removing the per-connection, distinct-pattern, server-wide, channel-length,
+message-size or output-limit check makes its test fail. The slow-consumer test publishes 1 MiB
+messages at a subscriber that never reads until a publish counts 0; it must take at least 8
+of them (the queue limit is 8 MiB, plus whatever the kernel buffers), then `NUMSUB` is 0 and
+the subscriber's socket reaches EOF.
+
+The fail-closed test points the server at an unreachable model with only `redis_subscribe`
+accepted by a rule: the `PUBLISH` gets an error, and the first thing the subscriber reads is a
+marker the test publishes afterwards through the **async** action path
+(`execute_actions` with the registry's stateless instance and a `server_id`), so the failed
+publish delivered nothing. A `SUBSCRIBE` nobody can rule on is refused and not registered.
+
+## Cluster — `cluster_test.rs` and `keys_oracle_test.rs`
+
+Three servers on probed ports, each given the same three-master topology with itself marked
+`myself`; each answers `GET k` with `value of k from <its port>`, so which node answered is in
+the value. The model's slot changes are `redis_cluster_set_slot` actions run through
+`execute_actions` on each server, exactly as a model's async action is dispatched.
+
+`redis-cli --cluster check` refuses a node whose `INFO` lacks `cluster_enabled:1`, and `INFO`
+is the model's to answer, so the handler includes it.
+
+`keys_oracle_test.rs` is what makes the slot arithmetic and the glob matcher trustworthy: a
+cluster-enabled `redis-server` (no slots needed) answers `CLUSTER KEYSLOT` for 1 500+ keys
+built to hit every hashtag rule, and a standalone one answers `KEYS` for 36 patterns over the
+same keys (the empty key excluded: `KEYS *` short-circuits where `stringmatchlen` does not).
+Mutating the CRC polynomial, ignoring the hashtag, hashing an empty tag, dropping class
+negation, or not swapping a reversed range each fails it.
+
 ## Scripting
 
 The `e2e_test.rs` suite uses `ServerConfig::new()`, which disables scripting, so
@@ -179,8 +234,10 @@ right.
   arrays decode, and both redis-cli and redis-rs always send arrays.
 - **Pipelining** — the read loop processes several frames from one read in order,
   each with its own LLM call, but no test sends two commands in one write.
-- **AUTH / SELECT / MULTI / pub-sub** reach the model as ordinary commands with no
-  special handling, and nothing asserts on them.
+- **AUTH / SELECT / MULTI** reach the model as ordinary commands with no special handling,
+  and nothing asserts on them.
+- **Cluster-wide `PUBLISH`** — a fake cluster has no bus, so nothing asserts a publish on one
+  node reaching a subscriber on another (it does not).
 
 ## Fixed, recorded so the notes are not re-added
 

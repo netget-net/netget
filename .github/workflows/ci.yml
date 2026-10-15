@@ -1112,6 +1112,7 @@ jobs:
             postgresql::real_client_test \
             prometheus::real_client_test otlp::real_client_test \
             pypi::e2e_test quic::independent_peer_test radius::real_client_test redis::real_client_test redis::resp3_test \
+            redis::pubsub_test redis::cluster_test redis::keys_oracle_test \
             rtsp::ffprobe_test s3::real_client_test sip::real_client_test \
             smb::real_client_test statsd::real_client_test graphite::real_client_test \
             sqs::real_client_test ssh::real_client_test stun::real_client_test \
@@ -1130,6 +1131,7 @@ jobs:
             client/mysql::real_server_test client/nats::e2e_test client/nut::real_server_test \
             client/postgresql::real_server_test \
             client/quic::real_server_test client/redis::real_server_test \
+            client/redis::pubsub_real_server_test client/redis::cluster_real_server_test \
             client/ssh::real_server_test client/statsd::real_server_test ; do
             echo "::group::$filter"
             # `client/<p>::<file>` is a NetGet CLIENT against a real third-party server, run
@@ -1279,10 +1281,14 @@ jobs:
       #
       #   dig       bind9-dnsutils  server::dns::dig_test        (ISC BIND)
       #   kdig      knot-dnsutils   server::dns::kdig_test       (Knot - the second resolver)
-      #   redis-cli redis-tools     server::redis::real_client_test (the C client, not redis-rs)
-      #                             and client::redis::real_server_test
-      #   redis-server redis-server client::redis::real_server_test (the real server the
-      #                             redis CLIENT is tested against)
+      #   redis-cli redis-tools     server::redis::real_client_test (the C client, not redis-rs),
+      #                             server::redis::{pubsub,cluster}_test (redis-cli SUBSCRIBE,
+      #                             -c and --cluster check), and client::redis's real-server tests
+      #   redis-server redis-server client::redis::{real_server,pubsub_real_server,
+      #                             cluster_real_server}_test (the real server, and a real
+      #                             three-node cluster, the redis CLIENT is tested against) and
+      #                             server::redis::keys_oracle_test (CLUSTER KEYSLOT and KEYS as
+      #                             the oracle for NetGet's hash slots and glob matching)
       #   nginx     nginx           client::http::real_server_test (the real server the http
       #                             CLIENT is tested against)
       #

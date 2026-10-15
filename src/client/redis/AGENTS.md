@@ -45,16 +45,29 @@ interpret responses.
     - Parameter: command (string)
     - Examples: "GET key", "SET key value", "HGETALL hash"
 - `disconnect` - Close connection
+- `redis_subscribe` - `channels`, `patterns`, `shard_channels` (arrays): `SUBSCRIBE`,
+  `PSUBSCRIBE`, `SSUBSCRIBE` for each non-empty list
+- `redis_unsubscribe` - the same fields; a named list drops those, an empty list drops every
+  subscription of that kind, no field at all drops everything held
+- `redis_publish` - `channel`, `message`, `shard`: `PUBLISH` or `SPUBLISH`
 
-**Sync Actions** (in response to Redis responses):
+**Sync Actions** (in response to Redis responses): all of the above except `disconnect`, plus
 
-- `execute_redis_command` - Execute follow-up command based on response
 - `wait_for_more` - Take no action and wait for more data (use when the reply is incomplete)
+
+**Startup parameters**: `resp3` (send `HELLO 3` on connect; the connect fails if the server
+refuses) and `cluster` (cluster mode, below). They cannot be combined.
 
 **Events:**
 
 - `redis_connected` - Fired when connection established
-- `redis_response_received` - Fired once per complete reply
+- `redis_message_received` - a pub/sub message: `kind` (`message`, `pmessage`, `smessage`),
+  `channel`, `pattern` (pmessage only), `message`, `subscriptions` (what the connection holds)
+  and `protocol`
+- `redis_subscription_changed` - a (un)subscribe confirmation: `kind`, `channel` (null when an
+  unsubscribe found nothing), `count` as the server reported it, `subscriptions`
+- `redis_response_received` - Fired once per complete reply (in cluster mode also `node`,
+  `slot`, `redirects` and, when the bound was hit, `redirects_exhausted`)
     - `response`: redis-cli-style rendering (`OK`, `(integer) 1`, `"hello"`, `(nil)`,
       `(error) ERR …`; aggregates as JSON)
     - `reply_type`: `simple_string`, `error`, `integer`, `bulk_string`, `null`, `array`, `map`,
@@ -108,6 +121,42 @@ that breaks a bound or is not RESP is a read error: the framing is gone, so the 
 }
 ```
 
+### Pub/sub (`pubsub.rs`)
+
+`Session` holds what the connection is subscribed to, built from the server's own
+confirmations, and decides what each reply is. A RESP3 push is unambiguous. A RESP2 array is
+read as pub/sub traffic only while the connection is *engaged* — from the moment a
+`(P|S)SUBSCRIBE` is written until a confirmation leaves nothing held — because an ordinary
+`LRANGE` reply can also start with `"message"`. That is the rule every client library uses.
+A `HELLO` reply (map or RESP2 flat array carrying `server` and `proto`) sets the version.
+
+**Publishing while subscribed.** A RESP2 connection in subscribed mode may send only the
+pub/sub family, `PING`, `QUIT` and `RESET`. So `redis_publish` there opens a short second
+connection to the same server (10 s end to end), publishes, reads the receiver count, logs it
+and closes — the model is not shown that count. On RESP3, or when not subscribed, it publishes
+on the connection itself and the `:N` is an ordinary `redis_response_received`.
+
+### Cluster mode (`cluster.rs`, `cluster_driver.rs`)
+
+With `cluster: true`, `remote_addr` is a seed. `Router::connect` reads `CLUSTER SLOTS` before the
+model is told the client is connected — a seed that is not a cluster node fails the connect.
+Each command goes to the owner of its keys' hash slot (`utils::redis_keys::slot_keys` and
+`key_hash_slot`, shared with NetGet's server), a keyless one to the seed. `-MOVED` corrects the
+slot at once, refreshes the whole map from the node named, and resends there; `-ASK` sends
+`ASKING` and the command to the node named, once, leaving the map alone. At most
+`MAX_REDIRECTS` (5) per command; then the last redirection error reaches the model with
+`redirects_exhausted: true`. At most `MAX_NODES` (64) node connections; each reply has
+`NODE_REPLY_TIMEOUT` (30 s). A node that fails mid-exchange ends the client with
+`ClientStatus::Error` — the command's fate is unknown and the client does not guess.
+
+Cluster mode is request/response: the model's commands and injected ones share one queue
+that a driver task runs one at a time to completion, the model's follow-ups first. So
+subscriptions (and `MONITOR`) are refused there; `redis_publish` works (a `PUBLISH` goes to
+the seed, an `SPUBLISH` to its channel's slot owner).
+
+A `-MOVED` can name any host, and the client will connect to it — that is the cluster
+protocol. The node cap bounds how many.
+
 ### Dashboard injection (`[ execute_redis_command ]`, `[ disconnect ]`)
 
 `connect_with_llm_actions` registers a command channel
@@ -136,12 +185,13 @@ status_tx.send("[CLIENT] Redis client connected");      // → TUI
 - **Lossy non-UTF-8** - a binary bulk string reaches the model through
   `String::from_utf8_lossy`; there is no hex mode
 - **No Connection Pooling** - Single connection per client
-- **Pub/Sub untested** - after `SUBSCRIBE`, each pushed message is read as its own array (or
-  RESP3 push) reply and raised as an event, but no test drives it
+- **Subscribed RESP2 publish count unseen** - the receiver count of a publish sent over the
+  side connection is logged, not shown to the model
 - **Pipelining is implicit** - several `execute_redis_command` actions in one answer are written
   back to back without waiting; each reply is then its own event, in order
 - **No Authentication** - AUTH command can be sent manually
-- **No Cluster Support** - Single server only
+- **Cluster mode is RESP2 and request/response** - no `resp3`, no subscriptions, no replicas
+  (`READONLY` routing), one command in flight at a time
 
 ## Usage Examples
 
@@ -191,7 +241,7 @@ See `tests/client/redis/AGENTS.md` for E2E testing approach.
 ## Future Enhancements
 
 - **Authentication** - Built-in AUTH handling
-- **Cluster Support** - Redis Cluster client
+- **Cluster pub/sub** - `SSUBSCRIBE` on the shard owner's connection
 - **Connection Pooling** - Multiple connections
 
 ## Maturity: Beta
@@ -208,4 +258,10 @@ Rated against the four-condition client bar in the root `AGENTS.md`, on the evid
 4. **Acts on the model's answer, asserted on the wire** — `redis-cli` reads back values the model wrote, one of them built from a reply it was shown. Verified by mutation: dropping
    the actions the model returned makes the test fail.
 
-Not covered by that evidence: AUTH/SELECT as parameters, Pub/Sub and RESP3 against a real server.
+`tests/client/redis/pubsub_real_server_test.rs` extends the evidence to pub/sub on RESP2 and
+RESP3 (a message `redis-cli` publishes reaches the model as `redis_message_received`, and its
+answer — a publish of its own — is printed by a `redis-cli SUBSCRIBE`), and
+`cluster_real_server_test.rs` to cluster mode against a real three-node Redis Cluster formed by
+`redis-cli --cluster create`, following a `MOVED` after a reshard and an `ASK` mid-migration.
+
+Not covered by that evidence: AUTH/SELECT as parameters.

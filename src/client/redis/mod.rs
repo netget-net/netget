@@ -1,5 +1,8 @@
 //! Redis client implementation
 pub mod actions;
+pub mod cluster;
+mod cluster_driver;
+pub mod pubsub;
 pub mod resp;
 
 pub use actions::RedisClientProtocol;
@@ -15,7 +18,8 @@ use tracing::{debug, error, info, trace};
 
 use crate::client::llm_budget::call_llm_for_client;
 use crate::client::redis::actions::{
-    REDIS_CLIENT_CONNECTED_EVENT, REDIS_CLIENT_RESPONSE_RECEIVED_EVENT,
+    REDIS_CLIENT_CONNECTED_EVENT, REDIS_CLIENT_MESSAGE_EVENT, REDIS_CLIENT_RESPONSE_RECEIVED_EVENT,
+    REDIS_CLIENT_SUBSCRIPTION_EVENT,
 };
 use crate::llm::ollama_client::OllamaClient;
 use crate::llm::ClientLlmResult;
@@ -23,9 +27,128 @@ use crate::logging::patterns;
 use crate::protocol::Event;
 use crate::state::app_state::AppState;
 use crate::state::{ClientId, ClientStatus};
+use pubsub::{Classified, Session};
 
 /// Redis client that connects to a Redis server
 pub struct RedisClient;
+
+/// The startup parameters `connect` reads.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RedisClientOptions {
+    /// Cluster mode: route by hash slot, follow MOVED/ASK (`cluster.rs`).
+    pub cluster: bool,
+    /// Send `HELLO 3` on connect.
+    pub resp3: bool,
+}
+
+/// How long the server has to answer the `HELLO 3` sent on connect.
+const HELLO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// What one executed action puts on the wire.
+enum Wire {
+    /// Commands for this connection, in order.
+    Commands(Vec<Vec<Vec<u8>>>),
+    /// A `PUBLISH`/`SPUBLISH`, which a subscribed RESP2 connection sends on a side connection.
+    Publish(Vec<Vec<u8>>),
+    /// Drop every subscription this connection holds.
+    UnsubscribeAll,
+    Disconnect,
+    Nothing,
+}
+
+/// Turn an executed action into what it sends. The one place the client's Custom results are
+/// decoded, shared by the stream connection and cluster mode.
+fn wire_for(action_result: ClientActionResult, client_id: ClientId) -> Result<Wire> {
+    let strings = |v: &serde_json::Value| -> Result<Vec<Vec<u8>>> {
+        v.as_array()
+            .ok_or_else(|| anyhow::anyhow!("a command is an array of strings"))?
+            .iter()
+            .map(|a| {
+                a.as_str()
+                    .map(|s| s.as_bytes().to_vec())
+                    .ok_or_else(|| anyhow::anyhow!("a command argument is a string"))
+            })
+            .collect()
+    };
+    Ok(match action_result {
+        ClientActionResult::Custom { name, data } => match name.as_str() {
+            "redis_command" => {
+                let command = data
+                    .get("command")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("Missing command in action data"))?;
+                Wire::Commands(vec![resp::split_command(command)?])
+            }
+            "redis_commands" => Wire::Commands(
+                data.get("commands")
+                    .and_then(|v| v.as_array())
+                    .ok_or_else(|| anyhow::anyhow!("Missing commands in action data"))?
+                    .iter()
+                    .map(strings)
+                    .collect::<Result<_>>()?,
+            ),
+            "redis_publish" => Wire::Publish(strings(
+                data.get("args")
+                    .ok_or_else(|| anyhow::anyhow!("Missing args in action data"))?,
+            )?),
+            "redis_unsubscribe_all" => Wire::UnsubscribeAll,
+            other => {
+                debug!(
+                    "Redis client {} ignoring unhandled custom result: {}",
+                    client_id, other
+                );
+                Wire::Nothing
+            }
+        },
+        ClientActionResult::Disconnect => Wire::Disconnect,
+        other => {
+            debug!(
+                "Redis client {} ignoring unhandled action result: {:?}",
+                client_id, other
+            );
+            Wire::Nothing
+        }
+    })
+}
+
+/// The event one reply raises: a delivered message, a subscription confirmation, or an
+/// ordinary reply.
+fn event_for(reply: &resp::Reply, session: &Session) -> Event {
+    match session.classify(reply) {
+        Classified::Message {
+            kind,
+            pattern,
+            channel,
+            message,
+        } => {
+            let mut data = serde_json::json!({
+                "kind": kind,
+                "channel": channel,
+                "message": message,
+                "subscriptions": session.snapshot(),
+                "protocol": if reply.reply_type == "push" { 3 } else { 2 },
+            });
+            if let Some(p) = pattern {
+                data["pattern"] = serde_json::Value::String(p);
+            }
+            Event::new(&REDIS_CLIENT_MESSAGE_EVENT, data)
+        }
+        Classified::Subscription {
+            kind,
+            channel,
+            count,
+        } => Event::new(
+            &REDIS_CLIENT_SUBSCRIPTION_EVENT,
+            serde_json::json!({
+                "kind": kind,
+                "channel": channel,
+                "count": count,
+                "subscriptions": session.snapshot(),
+            }),
+        ),
+        Classified::Reply => Event::new(&REDIS_CLIENT_RESPONSE_RECEIVED_EVENT, reply.event_data()),
+    }
+}
 
 impl RedisClient {
     /// Connect to a Redis server with integrated LLM actions
@@ -35,7 +158,23 @@ impl RedisClient {
         app_state: Arc<AppState>,
         status_tx: mpsc::UnboundedSender<String>,
         client_id: ClientId,
+        options: RedisClientOptions,
     ) -> Result<SocketAddr> {
+        if options.cluster {
+            anyhow::ensure!(
+                !options.resp3,
+                "resp3 is not available in cluster mode: cluster connections speak RESP2"
+            );
+            return cluster_driver::connect(
+                remote_addr,
+                llm_client,
+                app_state,
+                status_tx,
+                client_id,
+            )
+            .await;
+        }
+
         // Connect to Redis server
         let stream = TcpStream::connect(&remote_addr)
             .await
@@ -64,6 +203,28 @@ impl RedisClient {
         let write_half_arc = Arc::new(Mutex::new(write_half));
         let mut reader = BufReader::new(read_half);
         let protocol = Arc::new(RedisClientProtocol::new());
+        let session = Arc::new(Session::new(remote_addr.clone()));
+
+        // RESP3 is agreed before the model hears the client is connected, so its first command
+        // already runs on the protocol it asked for. A server that refuses fails the connect.
+        if options.resp3 {
+            write_half_arc
+                .lock()
+                .await
+                .write_all(&resp::encode_command(&[b"HELLO".to_vec(), b"3".to_vec()]))
+                .await?;
+            let reply = tokio::time::timeout(HELLO_TIMEOUT, resp::read_reply(&mut reader))
+                .await
+                .context("the server did not answer HELLO 3")??
+                .context("the server closed the connection instead of answering HELLO 3")?;
+            session.classify(&reply);
+            anyhow::ensure!(
+                session.is_resp3(),
+                "the server refused RESP3: HELLO 3 was answered with {}",
+                reply.response
+            );
+            info!("Redis client {} speaks RESP3", client_id);
+        }
 
         // Command channel for injected actions (the dashboard's [ execute_redis_command ]).
         // Registered BEFORE the connected-event LLM call, which a manual `*` rule can park
@@ -77,6 +238,7 @@ impl RedisClient {
         let cmd_tx = status_tx.clone();
         let cmd_write = write_half_arc.clone();
         let cmd_protocol = protocol.clone();
+        let cmd_session = session.clone();
         let cmd_task = tokio::spawn(async move {
             Self::command_loop(
                 command_rx,
@@ -85,6 +247,7 @@ impl RedisClient {
                 client_id,
                 cmd_state,
                 cmd_tx,
+                cmd_session,
             )
             .await;
         });
@@ -130,8 +293,13 @@ impl RedisClient {
                     for action in result.actions {
                         match protocol.execute_action(action) {
                             Ok(action_result) => {
-                                match Self::apply_action(action_result, &write_half_arc, client_id)
-                                    .await
+                                match Self::apply_action(
+                                    action_result,
+                                    &write_half_arc,
+                                    client_id,
+                                    &session,
+                                )
+                                .await
                                 {
                                     Ok(Applied::Disconnect) => {
                                         info!("LLM requested disconnect after connect");
@@ -201,10 +369,9 @@ impl RedisClient {
                         if let Some(instruction) =
                             app_state.get_instruction_for_client(client_id).await
                         {
-                            let event = Event::new(
-                                &REDIS_CLIENT_RESPONSE_RECEIVED_EVENT,
-                                reply.event_data(),
-                            );
+                            // A delivered message and a subscription confirmation are
+                            // their own events; everything else is a reply.
+                            let event = event_for(&reply, &session);
 
                             let memory = app_state
                                 .get_memory_for_client(client_id)
@@ -249,6 +416,7 @@ impl RedisClient {
                                                     action_result,
                                                     &write_half_arc,
                                                     client_id,
+                                                    &session,
                                                 )
                                                 .await
                                                 {
@@ -353,6 +521,7 @@ impl RedisClient {
         client_id: ClientId,
         app_state: Arc<AppState>,
         status_tx: mpsc::UnboundedSender<String>,
+        session: Arc<Session>,
     ) where
         W: tokio::io::AsyncWrite + Unpin + Send + 'static,
     {
@@ -366,7 +535,7 @@ impl RedisClient {
                 Err(e) => Ok(ClientSendOutcome::Rejected {
                     error: e.to_string(),
                 }),
-                Ok(result) => Self::apply_action(result, &write_half, client_id)
+                Ok(result) => Self::apply_action(result, &write_half, client_id, &session)
                     .await
                     .map(|applied| match applied {
                         Applied::Disconnect => ClientSendOutcome::Disconnected,
@@ -413,46 +582,58 @@ impl RedisClient {
     }
 
     /// Put one executed action on the wire. Shared by the connected-event path, the read
-    /// loop and injected commands so the RESP encoding of `execute_redis_command` exists
-    /// exactly once.
+    /// loop and injected commands so the RESP encoding of every client verb exists exactly
+    /// once.
     async fn apply_action<W>(
         action_result: ClientActionResult,
         write_half: &Arc<Mutex<W>>,
         client_id: ClientId,
+        session: &Session,
     ) -> Result<Applied>
     where
         W: tokio::io::AsyncWrite + Unpin,
     {
-        match action_result {
-            ClientActionResult::Custom { name, data } => {
-                if name != "redis_command" {
-                    debug!(
-                        "Redis client {} ignoring unhandled custom result: {}",
-                        client_id, name
-                    );
-                    return Ok(Applied::Sent(0));
-                }
-                let command = data
-                    .get("command")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("Missing command in action data"))?;
-                let cmd_bytes = resp::encode_command(&resp::split_command(command)?);
-
-                let mut writer = write_half.lock().await;
-                writer.write_all(&cmd_bytes).await?;
-                writer.flush().await?;
-                info!("{} {}", patterns::REDIS_CLIENT_SENT_COMMAND, command);
-                Ok(Applied::Sent(cmd_bytes.len()))
-            }
-            ClientActionResult::Disconnect => Ok(Applied::Disconnect),
-            other => {
-                debug!(
-                    "Redis client {} ignoring unhandled action result: {:?}",
-                    client_id, other
+        let commands = match wire_for(action_result, client_id)? {
+            Wire::Disconnect => return Ok(Applied::Disconnect),
+            Wire::Nothing => return Ok(Applied::Sent(0)),
+            Wire::Commands(commands) => commands,
+            Wire::UnsubscribeAll => session.unsubscribe_all_commands(),
+            Wire::Publish(args) if session.subscribed_resp2() => {
+                // Redis refuses PUBLISH on a RESP2 connection in subscribed mode, so it goes
+                // over a short second connection to the same server.
+                let receivers =
+                    pubsub::publish_on_side_connection(&session.remote_addr, &args).await?;
+                info!(
+                    "Redis client {} published on a side connection (this one is subscribed): \
+                     {} receiver(s)",
+                    client_id, receivers
                 );
-                Ok(Applied::Sent(0))
+                return Ok(Applied::Sent(resp::encode_command(&args).len()));
             }
+            Wire::Publish(args) => vec![args],
+        };
+        let mut sent = 0;
+        for args in commands {
+            let cmd_bytes = resp::encode_command(&args);
+            session.note_sent(&args);
+            let mut writer = write_half.lock().await;
+            writer.write_all(&cmd_bytes).await?;
+            writer.flush().await?;
+            info!(
+                "{} {}",
+                patterns::REDIS_CLIENT_SENT_COMMAND,
+                crate::utils::truncate_for_log(
+                    &args
+                        .iter()
+                        .map(|a| String::from_utf8_lossy(a).to_string())
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                    256
+                )
+            );
+            sent += cmd_bytes.len();
         }
+        Ok(Applied::Sent(sent))
     }
 }
 
