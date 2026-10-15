@@ -313,8 +313,6 @@ fn compiled_out_dual_protocol_guidance_names_real_cargo_features() {
     }
 }
 
-/// A small build must not pair an unavailable FTP implementation with its TCP fallback.
-
 /// A running instance keeps the operator's registry keyword, not necessarily its canonical
 /// name. Bitcoin's keyword is also the RPC client's name, so resolve the server first.
 #[test]

@@ -469,12 +469,12 @@ async fn handle_http_request_inner(
     status_tx: mpsc::UnboundedSender<String>,
     protocol: Arc<HttpProtocol>,
     filter: Arc<crate::server::http_common::handler::RequestFilter>,
-    // Only the h2c upgrade below needs this, and only when that feature is compiled: the
+    // Only the h2c upgrade below needs this: the
     // upgraded connection outlives the HTTP/1 task that accepted it, so without carrying the
     // permit across, an upgrade would quietly hand the slot back while the peer was still on it.
     connection_permit: Arc<crate::server::accept_bounded::ConnectionPermit>,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
-    // Check for HTTP/2 upgrade request (h2c) - only when http2 feature is enabled
+    // Check for an HTTP/2 upgrade request (h2c)
     {
         if let Some(upgrade_header) = req.headers().get(hyper::header::UPGRADE) {
             if let Ok(upgrade_value) = upgrade_header.to_str() {
@@ -565,8 +565,6 @@ async fn handle_http_request_inner(
             }
         }
     }
-
-    // If http2 feature is not enabled, reject upgrade requests
 
     // Use shared request extraction logic. A body over the shared cap is refused with
     // 413 here rather than being truncated: a truncated body handed to the model looks

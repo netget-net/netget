@@ -126,7 +126,7 @@ impl NfsServer {
         Ok(actual_addr)
     }
 
-    /// Spawn NFS server without the nfs feature (fallback)
+    /// NFS needs Unix (nfsserve); elsewhere starting it fails with this error
     #[cfg(not(unix))]
     pub async fn spawn_with_llm_actions(
         listen_addr: SocketAddr,

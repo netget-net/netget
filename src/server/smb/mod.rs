@@ -396,8 +396,6 @@ impl SmbServer {
         Ok(actual_addr)
     }
 
-    /// Spawn SMB server without the smb feature (fallback)
-
     /// Handle a single SMB connection
     #[allow(clippy::too_many_arguments)]
     async fn handle_connection(

@@ -976,7 +976,7 @@ impl NfsClient {
         ))
     }
 
-    /// Connect to NFS server without the nfs feature (fallback)
+    /// The NFS client needs Unix; elsewhere connecting fails with this error
     #[cfg(not(unix))]
     pub async fn connect_with_llm_actions(
         _remote_addr: String,
