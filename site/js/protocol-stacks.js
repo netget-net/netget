@@ -246,6 +246,7 @@ export const protocolStacks = [
     ["soulseek", "ETH>IP>TCP>Soulseek"],
     ["soulseek_peer", "ETH>IP>TCP>Soulseek Peer"],
     ["spark", "ETH>IP>TCP>HTTP>SPARK"],
+    ["spice", "ETH>IP>TCP>SPICE"],
     ["sqs", "ETH>IP>TCP>HTTP>SQS"],
     ["srt", "ETH>IP>UDP>SRT"],
     ["ssdp", "ETH>IP>UDP>SSDP"],
