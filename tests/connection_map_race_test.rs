@@ -41,6 +41,7 @@ use std::time::Duration;
 const BURST: usize = 64;
 
 /// Register a server instance whose events are answered by static handlers (no LLM call).
+/// A `null` action answers its event with nothing.
 async fn server_with_static_handlers(
     state: &Arc<AppState>,
     protocol: &str,
@@ -53,7 +54,11 @@ async fn server_with_static_handlers(
     for (event, action) in handlers {
         config.add_handler(EventHandler::new(
             EventPattern::specific(event),
-            EventHandlerType::static_response(vec![action]),
+            EventHandlerType::static_response(if action.is_null() {
+                vec![]
+            } else {
+                vec![action]
+            }),
         ));
     }
     state
@@ -518,10 +523,16 @@ async fn bitcoin_version_written_before_accept_is_answered() {
     let server_id = server_with_static_handlers(
         &state,
         "bitcoin",
-        vec![(
-            "bitcoin_message_received",
-            serde_json::json!({"type": "send_verack", "network": "mainnet"}),
-        )],
+        vec![
+            // Answered, with nothing: unanswered, it goes to the unreachable model below and
+            // fails closed, which disconnects the peer - and on a loaded machine that can beat
+            // the verack this test is waiting for.
+            ("bitcoin_connection_opened", serde_json::Value::Null),
+            (
+                "bitcoin_message_received",
+                serde_json::json!({"type": "send_verack", "network": "mainnet"}),
+            ),
+        ],
     )
     .await;
 
