@@ -995,10 +995,7 @@ pub fn name_of(msg_type: u8) -> &'static str {
 
 /// A peer-supplied string as events and logs show it: lossy UTF-8 with controls dropped.
 pub fn text(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(bytes)
-        .chars()
-        .filter(|c| !c.is_control())
-        .collect()
+    crate::utils::sanitize::strip_controls(&String::from_utf8_lossy(bytes))
 }
 
 /// Error codes are printable ASCII (sv2-spec §3.5), at most 255 bytes.
