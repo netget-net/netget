@@ -151,6 +151,11 @@ fn cause_json(c: u8) -> Value {
 
 /// A 5GMM cause by name or number. Undefined numbers are refused rather than put on the wire.
 pub fn parse_cause(v: &Value) -> Result<u8, String> {
+    // `{"name": …}` / `{"value": …}` is unwrapped once; a nested object is refused below.
+    let v = match v {
+        Value::Object(m) => m.get("name").or(m.get("value")).unwrap_or(&Value::Null),
+        other => other,
+    };
     match v {
         Value::Number(n) => {
             let n = n.as_u64().ok_or("cause must be a non-negative integer")?;
@@ -177,7 +182,6 @@ pub fn parse_cause(v: &Value) -> Result<u8, String> {
                     )
                 })
         }
-        Value::Object(m) => parse_cause(m.get("name").or(m.get("value")).unwrap_or(&Value::Null)),
         _ => Err("cause must be a 5GMM cause name such as \"illegal_ue\" or its number".into()),
     }
 }
@@ -407,13 +411,21 @@ fn decode_nssai(b: &[u8]) -> Value {
 /// its length and the reason, because NAS is opaque to NGAP and a 5GMM message NetGet cannot read
 /// is still a valid NGAP message.
 pub fn decode(b: &[u8]) -> Value {
-    match decode_inner(b) {
+    decode_at(b, 0)
+}
+
+/// How many security headers may wrap a plain 5GMM message: one (TS 24.501 §9.1). A protected
+/// message inside another is not valid NAS, and refusing it keeps the decoder from recursing.
+pub const MAX_NAS_DEPTH: usize = 1;
+
+fn decode_at(b: &[u8], depth: usize) -> Value {
+    match decode_inner(b, depth) {
         Ok(v) => v,
         Err(e) => json!({"decoded": false, "error": e, "length": b.len()}),
     }
 }
 
-fn decode_inner(b: &[u8]) -> Result<Value, String> {
+fn decode_inner(b: &[u8], depth: usize) -> Result<Value, String> {
     let mut c = Cursor { b, i: 0 };
     let epd = c.u8("extended protocol discriminator")?;
     if epd == EPD_5GSM {
@@ -427,6 +439,9 @@ fn decode_inner(b: &[u8]) -> Result<Value, String> {
     }
     let sht = c.u8("security header type")? & 0x0F;
     if sht != 0 {
+        if depth >= MAX_NAS_DEPTH {
+            return Err("a security-protected NAS message inside another is not valid NAS".into());
+        }
         let mac = c.take(4, "message authentication code")?;
         let sqn = c.u8("sequence number")?;
         let mut v = json!({
@@ -443,7 +458,7 @@ fn decode_inner(b: &[u8]) -> Result<Value, String> {
             "mac_verified": false,
         });
         if sht == 1 || sht == 3 {
-            v["inner"] = decode(&b[c.i..]);
+            v["inner"] = decode_at(&b[c.i..], depth + 1);
         } else {
             v["ciphered_length"] = json!(b.len() - c.i);
         }
@@ -575,14 +590,18 @@ fn decode_inner(b: &[u8]) -> Result<Value, String> {
 
 /// The plain 5GMM message type, looking through an integrity-protected (not ciphered) header.
 pub fn message_type(b: &[u8]) -> Option<u8> {
-    if b.first() != Some(&EPD_5GMM) {
-        return None;
+    let mut b = b;
+    for depth in 0..=MAX_NAS_DEPTH {
+        if b.first() != Some(&EPD_5GMM) {
+            return None;
+        }
+        match b.get(1)? & 0x0F {
+            0 => return b.get(2).copied(),
+            1 | 3 if depth < MAX_NAS_DEPTH => b = b.get(7..)?,
+            _ => return None,
+        }
     }
-    match b.get(1)? & 0x0F {
-        0 => b.get(2).copied(),
-        1 | 3 => message_type(b.get(7..)?),
-        _ => None,
-    }
+    None
 }
 
 // ============================================================================
