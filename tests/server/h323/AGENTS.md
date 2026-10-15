@@ -1,12 +1,15 @@
 # H.323 server tests
 
-No test here calls a model: python policies (`event_handlers` scripts) stand in for it, and the
-fail-closed cases point NetGet at `http://127.0.0.1:1`, where nothing answers. LLM calls: zero.
+Python policies (`event_handlers` scripts) stand in for the model almost everywhere, and the
+fail-closed cases point NetGet at `http://127.0.0.1:1`, where nothing answers. One test,
+`e2e_test::a_mocked_model_registers_and_refuses_admission`, runs the NetGet binary against the
+mocked LLM (`tests/helpers/mock_ollama.rs`) so the model's own path — `call_llm`, the action
+schema, the executor — is exercised: three model calls (open_server, RRQ, ARQ).
 
 | File | What it proves |
 |---|---|
 | `codec_test.rs` | PER and Q.931 against tshark's h225 dissector (field values, not just "no expert info"); round trips; every peer-controlled bound: a 100 000-level H.245 GenericParameter depth bomb, declared lengths past the data, fragmented lengths, normally-small > 63, oversized TPKT, truncated IEs, too many IEs |
-| `e2e_test.rs` | NetGet's own client against its gatekeeper and endpoint, with a live capture: register → admit → fastStart call → tunnelled H.245 → hang up → DRQ; refusals (RRJ, ARJ, busy, forward) reach the client decoded; a model that is down or silent never registers or connects anyone; RAS bookkeeping without the model (retransmission, keep-alive, ARQ from an unregistered endpoint, DRQ, URQ, garbage) |
+| `e2e_test.rs` | NetGet's own client against its gatekeeper and endpoint, with a live capture: register → admit → fastStart call → tunnelled H.245 → hang up → DRQ; refusals (RRJ, ARJ, busy, forward) reach the client decoded; a model that is down or silent never registers or connects anyone; RAS bookkeeping without the model (retransmission, keep-alive, ARQ from an unregistered endpoint, DRQ, URQ, garbage); a mocked model registering an endpoint on its own terms and refusing its ARQ |
 | `real_peer_test.rs` | H323Plus `simph323` registers with NetGet's gatekeeper, is admitted and calls NetGet's endpoint, with fastStart and without it (tunnelled H.245 only), and its console shows the call up and the logical channels; a refused registration and a busy rejection in its own words. Asterisk's `chan_ooh323` (ooh323c) registers, shows itself registered (`ooh323 show gk`), originates a call NetGet admits and answers, and its 4 s tone arrives at NetGet's RTP address; a refused registration appears in ooh323c's own log |
 
 `support.rs` re-exports `tests/helpers/h323.rs` (in-process nodes, `LiveCapture`, frame

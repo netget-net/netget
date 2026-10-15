@@ -571,3 +571,80 @@ async fn ras_bookkeeping_is_answered_without_the_model() -> E2EResult<()> {
     );
     Ok(())
 }
+
+/// The model's own path, for the NetGet binary: a mocked LLM opens the gatekeeper, registers
+/// an endpoint under the aliases and time-to-live it chooses, and refuses its admission
+/// request. Three model calls.
+#[tokio::test]
+async fn a_mocked_model_registers_and_refuses_admission() -> E2EResult<()> {
+    use crate::helpers::{self, NetGetConfig};
+    use netget::server::h323::h225;
+    let config = NetGetConfig::new("listen on port {AVAILABLE_PORT} via h323 gatekeeper").with_mock(|mock| {
+        mock.on_instruction_containing("via h323 gatekeeper")
+            .respond_with_actions(json!([{
+                "type": "open_server",
+                "port": 0,
+                "base_stack": "H323-Gatekeeper",
+                "instruction": "Register everyone as given for 77 seconds; admit nothing"
+            }]))
+            .expect_calls(1)
+            .and()
+            .on_event("h323_registration_request")
+            .respond_with_actions_from_event(|e| {
+                json!([{"type": "h323_confirm_registration", "aliases": e["aliases"], "time_to_live": 77}])
+            })
+            .expect_calls(1)
+            .and()
+            .on_event("h323_admission_request")
+            .respond_with_actions(json!([{"type": "h323_reject_admission", "reason": "requestDenied"}]))
+            .expect_calls(1)
+            .and()
+    });
+    let server = helpers::start_netget_server(config).await?;
+    let gk: std::net::SocketAddr = ([127, 0, 0, 1], server.port).into();
+    let sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
+    let rrq = json!({
+        "requestSeqNum": 7,
+        "protocolIdentifier": h225::PROTOCOL_ID,
+        "discoveryComplete": false,
+        "callSignalAddress": [h225::transport("127.0.0.1:1720".parse().unwrap())],
+        "rasAddress": [h225::transport(sock.local_addr()?)],
+        "terminalType": h225::endpoint_type("terminal"),
+        "terminalAlias": [h225::alias("h323-ID:carol").unwrap(), h225::alias("1005").unwrap()],
+        "endpointVendor": h225::vendor(),
+        "keepAlive": false,
+        "willSupplyUUIEs": false,
+        "maintainConnection": false,
+        "supportsAssignedGK": false,
+    });
+    let (kind, rcf) = ras_once(&sock, gk, "registrationRequest", rrq)
+        .await
+        .expect("an answer to RRQ");
+    assert_eq!(kind, "registrationConfirm", "{rcf}");
+    assert_eq!(rcf["timeToLive"], 77);
+    assert_eq!(
+        h225::aliases_text(rcf.get("terminalAlias")),
+        vec!["h323-ID:carol", "dialledDigits:1005"]
+    );
+    let arq = json!({
+        "requestSeqNum": 8,
+        "callType": {"pointToPoint": null},
+        "endpointIdentifier": rcf["endpointIdentifier"],
+        "destinationInfo": [h225::alias("1006").unwrap()],
+        "srcInfo": [h225::alias("1005").unwrap()],
+        "bandWidth": 1280,
+        "callReferenceValue": 3,
+        "conferenceID": "11".repeat(16),
+        "activeMC": false,
+        "answerCall": false,
+    });
+    let (kind, arj) = ras_once(&sock, gk, "admissionRequest", arq)
+        .await
+        .expect("an answer to ARQ");
+    assert_eq!(kind, "admissionReject", "{arj}");
+    assert_eq!(arj["rejectReason"], json!({"requestDenied": null}));
+    server.wait_for_mocks(30).await;
+    server.verify_mocks().await?;
+    server.stop().await?;
+    Ok(())
+}
