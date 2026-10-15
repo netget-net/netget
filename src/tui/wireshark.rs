@@ -459,6 +459,7 @@ pub fn wire_for(protocol: &str) -> Wire {
         // ---- remote desktop / files / industrial -------------------------
         "vnc" => tcp("vnc"),
         "rdp" => with_display(tcp("tpkt"), "rdp"),
+        "spice" => tcp("spice"),
         // SMB2 over TCP rides in the Direct TCP transport header, which Wireshark decodes as
         // `nbss`; `smb2` has no `tcp.port` entry of its own, so it cannot be the decode-as.
         "smb" => with_display(tcp("nbss"), "smb2 || smb"),

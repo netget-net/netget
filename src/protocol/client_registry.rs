@@ -658,6 +658,10 @@ impl ClientRegistry {
         self.register(Arc::new(
             crate::client::rdp::actions::RdpClientProtocol::new(),
         ));
+        #[cfg(feature = "spice")]
+        self.register(Arc::new(
+            crate::client::spice::actions::SpiceClientProtocol::new(),
+        ));
         #[cfg(feature = "ngap")]
         self.register(Arc::new(
             crate::client::ngap::actions::NgapClientProtocol::new(),
@@ -1307,6 +1311,7 @@ pub(crate) const ALL_KNOWN_CLIENT_PROTOCOLS: &[(&str, &str)] = &[
     ("VXLAN", "vxlan"),
     ("rsync", "rsync"),
     ("RDP", "rdp-client"),
+    ("SPICE", "spice"),
     ("PFCP", "pfcp"),
     ("GTP", "gtp"),
     ("Db2", "db2"),

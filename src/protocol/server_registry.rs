@@ -883,6 +883,8 @@ impl ServerRegistry {
 
         #[cfg(feature = "rdp")]
         self.register(Arc::new(crate::server::RdpProtocol::new()));
+        #[cfg(feature = "spice")]
+        self.register(Arc::new(crate::server::spice::actions::SpiceProtocol::new()));
 
         #[cfg(feature = "openapi")]
         self.register(Arc::new(crate::server::OpenApiProtocol::new()));
@@ -1774,6 +1776,7 @@ pub(crate) const ALL_KNOWN_PROTOCOLS: &[(&str, &str)] = &[
     ("VNC", "vnc"),
     ("Reverse Shell", "reverse-shell"),
     ("RDP", "rdp"),
+    ("SPICE", "spice"),
     ("OpenAPI", "openapi"),
     ("OpenID", "openid"),
     ("KAFKA", "kafka"),
