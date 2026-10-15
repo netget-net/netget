@@ -769,3 +769,38 @@ pub fn data(
         .with_opt_u32(TAG_CORRELATION_ID, correlation_id)
         .encode()
 }
+
+// ---------------------------------------------------------------------------
+// Builders for the messages an ASP sends (the NetGet M3UA client)
+// ---------------------------------------------------------------------------
+
+/// ASPUP (RFC 4666 section 3.5.1).
+pub fn aspup(asp_identifier: Option<u32>, info_string: Option<&str>) -> Result<Vec<u8>, WireError> {
+    Message::new(CLASS_ASPSM, ASPSM_ASPUP)
+        .with_opt_u32(TAG_ASP_IDENTIFIER, asp_identifier)
+        .with_opt(TAG_INFO_STRING, info_string.map(|s| s.as_bytes().to_vec()))
+        .encode()
+}
+
+/// ASPDN (RFC 4666 section 3.5.2).
+pub fn aspdn() -> Result<Vec<u8>, WireError> {
+    Message::new(CLASS_ASPSM, ASPSM_ASPDN).encode()
+}
+
+/// ASPAC (RFC 4666 section 3.7.1).
+pub fn aspac(
+    traffic_mode: Option<u32>,
+    routing_context: Option<u32>,
+) -> Result<Vec<u8>, WireError> {
+    Message::new(CLASS_ASPTM, ASPTM_ASPAC)
+        .with_opt_u32(TAG_TRAFFIC_MODE_TYPE, traffic_mode)
+        .with_opt_u32(TAG_ROUTING_CONTEXT, routing_context)
+        .encode()
+}
+
+/// BEAT (RFC 4666 section 3.5.5).
+pub fn beat(heartbeat_data: &[u8]) -> Result<Vec<u8>, WireError> {
+    Message::new(CLASS_ASPSM, ASPSM_BEAT)
+        .with(Parameter::new(TAG_HEARTBEAT_DATA, heartbeat_data.to_vec()))
+        .encode()
+}

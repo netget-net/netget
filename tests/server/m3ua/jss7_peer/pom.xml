@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The test peer for NetGet's SS7 upper layers: a small driver over Restcomm jSS7 8.0.112 (SCTP,
+  M3UA, SCCP, TCAP, MAP and CAP from Maven Central), built by tests/server/m3ua/install_peers.py.
+  NetGet shares no code with it. Only the driver's glue (Ss7Peer.java) is ours; every octet on
+  the wire is encoded and decoded by jSS7.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>net.netget.test</groupId>
+  <artifactId>jss7-peer</artifactId>
+  <version>1</version>
+  <packaging>jar</packaging>
+
+  <properties>
+    <jss7.version>8.0.112</jss7.version>
+    <maven.compiler.source>8</maven.compiler.source>
+    <maven.compiler.target>8</maven.compiler.target>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+
+  <!-- org.mobicents.commons:commons and a few of jSS7's other dependencies were only ever
+       published to the JBoss repository. jSS7's own POMs name it over plain http, which Maven
+       3.8+ refuses, so settings.xml beside this file mirrors those ids onto the https URL. -->
+  <repositories>
+    <repository>
+      <id>jboss-public</id>
+      <url>https://repository.jboss.org/nexus/repository/public/</url>
+    </repository>
+  </repositories>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.mobicents.protocols.sctp</groupId>
+      <artifactId>sctp-impl</artifactId>
+      <version>2.0.16</version>
+    </dependency>
+    <dependency>
+      <groupId>org.mobicents.protocols.ss7.m3ua</groupId>
+      <artifactId>m3ua-impl</artifactId>
+      <version>${jss7.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.mobicents.protocols.ss7.sccp</groupId>
+      <artifactId>sccp-impl</artifactId>
+      <version>${jss7.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.mobicents.protocols.ss7.tcap</groupId>
+      <artifactId>tcap-impl</artifactId>
+      <version>${jss7.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.mobicents.protocols.ss7.map</groupId>
+      <artifactId>map-impl</artifactId>
+      <version>${jss7.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.mobicents.protocols.ss7.cap</groupId>
+      <artifactId>cap-impl</artifactId>
+      <version>${jss7.version}</version>
+    </dependency>
+  </dependencies>
+
+  <!-- `mvn -q -B -s settings.xml package` leaves target/jss7-peer.jar plus target/lib/*.jar; the
+       jar's manifest names Ss7Peer and lib/ on its class path, so `java -jar target/jss7-peer.jar
+       role=... ...` is the whole invocation. -->
+  <build>
+    <finalName>jss7-peer</finalName>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <version>3.3.0</version>
+        <configuration>
+          <archive>
+            <manifest>
+              <mainClass>Ss7Peer</mainClass>
+              <addClasspath>true</addClasspath>
+              <classpathPrefix>lib/</classpathPrefix>
+            </manifest>
+          </archive>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-dependency-plugin</artifactId>
+        <version>3.6.1</version>
+        <executions>
+          <execution>
+            <id>copy-runtime-deps</id>
+            <phase>package</phase>
+            <goals>
+              <goal>copy-dependencies</goal>
+            </goals>
+            <configuration>
+              <outputDirectory>${project.build.directory}/lib</outputDirectory>
+              <includeScope>runtime</includeScope>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

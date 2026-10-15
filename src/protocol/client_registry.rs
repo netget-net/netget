@@ -666,6 +666,10 @@ impl ClientRegistry {
         self.register(Arc::new(
             crate::client::spice::actions::SpiceClientProtocol::new(),
         ));
+        #[cfg(feature = "m3ua")]
+        self.register(Arc::new(
+            crate::client::m3ua::actions::M3uaClientProtocol::new(),
+        ));
         #[cfg(feature = "ngap")]
         self.register(Arc::new(
             crate::client::ngap::actions::NgapClientProtocol::new(),
@@ -1322,6 +1326,7 @@ pub(crate) const ALL_KNOWN_CLIENT_PROTOCOLS: &[(&str, &str)] = &[
     ("Snowflake", "snowflake"),
     ("Spark", "spark"),
     ("YARN", "yarn"),
+    ("M3UA", "m3ua"),
     ("NGAP", "ngap"),
     ("Matrix", "matrix"),
     ("libp2p", "libp2p"),

@@ -790,7 +790,11 @@ impl Protocol for M3uaProtocol {
     }
 
     fn get_sync_actions(&self) -> Vec<ActionDefinition> {
-        m3ua_response_actions()
+        let mut actions = m3ua_response_actions();
+        actions.extend(super::ss7_actions::all_actions(
+            super::ss7_actions::Role::Sgp,
+        ));
+        actions
     }
 
     fn protocol_name(&self) -> &'static str {
@@ -804,6 +808,8 @@ impl Protocol for M3uaProtocol {
             M3UA_DATA_EVENT.clone(),
             M3UA_ASP_DOWN_EVENT.clone(),
             M3UA_ERROR_EVENT.clone(),
+            super::ss7_actions::SGP_MAP_EVENT.clone(),
+            super::ss7_actions::SGP_CAP_EVENT.clone(),
         ]
     }
 
@@ -812,7 +818,10 @@ impl Protocol for M3uaProtocol {
     }
 
     fn keywords(&self) -> Vec<&'static str> {
-        vec!["m3ua", "sigtran", "ss7", "mtp3", "sgp", "asp"]
+        vec![
+            "m3ua", "sigtran", "ss7", "mtp3", "sgp", "asp", "sccp", "tcap", "map", "gsm map",
+            "camel", "cap", "hlr", "ussd",
+        ]
     }
 
     fn metadata(&self) -> crate::protocol::metadata::ProtocolMetadataV2 {
@@ -1017,6 +1026,13 @@ impl Server for M3uaProtocol {
             "send_m3ua_data" => self.execute_send_data(action),
             "send_m3ua_error" => self.execute_send_error(action),
             "send_m3ua_notify" => self.execute_send_notify(action),
+            name if super::ss7::INTENTS.contains(&name) => {
+                super::ss7::check_intent(&action).map_err(|e| anyhow::anyhow!(e))?;
+                Ok(ActionResult::Custom {
+                    name: super::ss7::SS7_INTENT.to_string(),
+                    data: action,
+                })
+            }
             "wait_for_more" => Ok(ActionResult::WaitForMore),
             // Not offered to the model — refusing an ASP is send_m3ua_error, which keeps the
             // association up so the peer can retry. The dashboard's "disconnect this peer"
