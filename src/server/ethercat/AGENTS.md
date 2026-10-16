@@ -102,7 +102,12 @@ events queued for the model. Nothing recurses.
 `Experimental`. Two independent masters drive it: ethercrab 0.7 (in every environment, over
 EtherCAT-in-UDP through a bridge that only re-encapsulates, and on its own raw socket on a veth)
 and SOEM 2.0.1 (`slaveinfo -map`, `simple_ng`) on a veth, with tshark reading both directions.
-The raw-socket evidence needs CAP_NET_RAW and runs only in the `ethercat` pair job. No TwinCAT
+The raw-socket evidence needs CAP_NET_RAW and runs only in the `ethercat` pair job.
+Two things the peers showed: ethercrab 0.7 discards the data an SDO upload's initiate response
+carries when segments follow (SOEM and ETG.1000.6 keep it), so segmented uploads have no
+ethercrab evidence — the ethercrab test reads its string in one normal transfer; and SOEM's
+`simple_ng` gives a frame 2 ms, which a software slave on a loaded host occasionally misses
+(about one cycle in two hundred under emulation), so the test bars the share of good cycles. No TwinCAT
 or IgH EtherLab master has been pointed at it (IgH is a kernel module, too heavy for CI). See
 `metadata().notes` for what is not implemented: distributed clocks, bootstrap and FoE/EoE/SoE/AoE,
 SDO information, complete access, emergencies, PDO remapping, SII writes, redundancy.
