@@ -3,10 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NetGet | Network Protocol Stubbing Toolkit</title>
-    <meta name="description" content="With LLM/human driven responses">
-    <meta property="og:title" content="NetGet | Network Protocol Stubbing Toolkit">
-    <meta property="og:description" content="With LLM/human driven responses">
+    <title>NetGet | Network Protocol Stubbing</title>
+    <meta name="description" content="Protocol responses handled via Human/Static/Scripted/LLM">
+    <meta property="og:title" content="NetGet | Network Protocol Stubbing">
+    <meta property="og:description" content="Protocol responses handled via Human/Static/Scripted/LLM">
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://netget.net/">
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
@@ -29,8 +29,8 @@
 
     <main id="main">
         <header class="hero">
-            <h1>Network Protocol<br><span class="accent">Stubbing Toolkit</span></h1>
-            <p>With LLM/human driven responses</p>
+            <h1>Network Protocol<br><span class="accent">Stubbing</span></h1>
+            <p>Protocol responses handled via Human/Static/Scripted/LLM</p>
             <div class="hero-actions">
                 <a class="button button-primary" href="demo.html">Demo</a>
                 <a class="button" href="#install">Install</a>
@@ -462,39 +462,72 @@
             <h2>Install</h2>
 
             <h3 class="sub-h">CLI</h3>
-            <p class="caption">Prebuilt binary (macOS, Linux, Windows):</p>
+            <p class="caption">Prebuilt binary (macOS, Linux, Windows) via NPM:</p>
             <div class="code-block">
                 <button class="copy-btn" hidden data-target="cli">Copy</button>
                 <pre id="cli"><code>npx -y @smotana/netget</code></pre>
             </div>
+            <p class="caption">Or install <code>netget</code> globally:</p>
+            <div class="code-block">
+                <button class="copy-btn" hidden data-target="cli-global">Copy</button>
+                <pre id="cli-global"><code>npm install -g @smotana/netget</code></pre>
+            </div>
 
             <h3 class="sub-h">MCP</h3>
-            <p class="caption">Add to <code>claude_desktop_config.json</code> or any MCP client config:</p>
-            <div class="code-block">
-                <button class="copy-btn" hidden data-target="mcp-json">Copy</button>
-                <pre id="mcp-json"><code>{
+            <div class="code-block tabs">
+                <div class="tab-bar" role="tablist" hidden></div>
+                <button class="copy-btn" hidden data-target="mcp-claude-code">Copy</button>
+                <div class="tab-panel" data-tab="Claude Code" data-copy="mcp-claude-code"><pre id="mcp-claude-code"><code>claude mcp add netget -- npx -y @smotana/netget --mcp</code></pre></div>
+                <div class="tab-panel" data-tab="Codex" data-copy="mcp-codex"><pre id="mcp-codex"><code>codex mcp add netget -- npx -y @smotana/netget --mcp</code></pre></div>
+                <div class="tab-panel" data-tab="Gemini CLI" data-copy="mcp-gemini"><pre id="mcp-gemini"><code>gemini mcp add netget npx -y @smotana/netget --mcp</code></pre></div>
+                <div class="tab-panel" data-tab="VS Code" data-copy="mcp-vscode"><pre id="mcp-vscode"><code>code --add-mcp '{"name":"netget","command":"npx","args":["-y","@smotana/netget","--mcp"]}'</code></pre></div>
+                <div class="tab-panel" data-tab="Claude Desktop" data-copy="mcp-claude-desktop"><p class="tab-note">Add to <code>claude_desktop_config.json</code> (Settings → Developer → Edit Config)</p><pre id="mcp-claude-desktop"><code>{
   <span class="str">"mcpServers"</span>: {
     <span class="str">"netget"</span>: {
       <span class="str">"command"</span>: <span class="str">"npx"</span>,
       <span class="str">"args"</span>: [<span class="str">"-y"</span>, <span class="str">"@smotana/netget"</span>, <span class="str">"--mcp"</span>]
     }
   }
-}</code></pre>
+}</code></pre></div>
+                <div class="tab-panel" data-tab="Cursor" data-copy="mcp-cursor"><p class="tab-note">Add to <code>~/.cursor/mcp.json</code></p><pre id="mcp-cursor"><code>{
+  <span class="str">"mcpServers"</span>: {
+    <span class="str">"netget"</span>: {
+      <span class="str">"command"</span>: <span class="str">"npx"</span>,
+      <span class="str">"args"</span>: [<span class="str">"-y"</span>, <span class="str">"@smotana/netget"</span>, <span class="str">"--mcp"</span>]
+    }
+  }
+}</code></pre></div>
+                <div class="tab-panel" data-tab="Windsurf" data-copy="mcp-windsurf"><p class="tab-note">Add to <code>~/.codeium/windsurf/mcp_config.json</code></p><pre id="mcp-windsurf"><code>{
+  <span class="str">"mcpServers"</span>: {
+    <span class="str">"netget"</span>: {
+      <span class="str">"command"</span>: <span class="str">"npx"</span>,
+      <span class="str">"args"</span>: [<span class="str">"-y"</span>, <span class="str">"@smotana/netget"</span>, <span class="str">"--mcp"</span>]
+    }
+  }
+}</code></pre></div>
+                <div class="tab-panel" data-tab="Other" data-copy="mcp-other"><p class="tab-note">Most MCP clients take this <code>mcpServers</code> entry</p><pre id="mcp-other"><code>{
+  <span class="str">"mcpServers"</span>: {
+    <span class="str">"netget"</span>: {
+      <span class="str">"command"</span>: <span class="str">"npx"</span>,
+      <span class="str">"args"</span>: [<span class="str">"-y"</span>, <span class="str">"@smotana/netget"</span>, <span class="str">"--mcp"</span>]
+    }
+  }
+}</code></pre></div>
             </div>
 
             <h3 class="sub-h">From source</h3>
             <p class="caption">System libraries:</p>
-            <div class="code-block tabs">
+            <div class="code-block tabs" data-pick-os>
                 <div class="tab-bar" role="tablist" hidden></div>
                 <button class="copy-btn" hidden data-target="deps-macos">Copy</button>
-                <pre id="deps-macos" class="tab-panel" data-tab="macOS"><code>brew install samba libusb pkgconf cmake   <span class="c"># libpcap, PC/SC and CoreBluetooth ship with macOS</span></code></pre>
+                <pre id="deps-macos" class="tab-panel" data-tab="macOS"><code>brew install samba libusb pkgconf cmake</code></pre>
                 <pre id="deps-debian" class="tab-panel" data-tab="Debian / Ubuntu"><code>sudo apt-get install build-essential pkg-config cmake libclang-dev libssl-dev libltdl-dev \
     libpcap-dev libdbus-1-dev libusb-1.0-0-dev libpcsclite-dev libsmbclient-dev</code></pre>
                 <pre id="deps-fedora" class="tab-panel" data-tab="Fedora"><code>sudo dnf install gcc gcc-c++ make pkgconf-pkg-config cmake clang-devel openssl-devel libtool-ltdl-devel \
     libpcap-devel dbus-devel libusb1-devel pcsc-lite-devel libsmbclient-devel</code></pre>
                 <pre id="deps-arch" class="tab-panel" data-tab="Arch"><code>sudo pacman -S --needed base-devel cmake clang openssl libpcap dbus libusb pcsclite smbclient</code></pre>
             </div>
-            <p class="caption">Then:</p>
+            <p class="caption">Install from source:</p>
             <div class="code-block">
                 <button class="copy-btn" hidden data-target="cargo-install">Copy</button>
                 <pre id="cargo-install"><code>cargo install --locked netget-tool</code></pre>

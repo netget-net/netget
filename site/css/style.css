@@ -147,3 +147,11 @@ main.demo-main { width: 100%; max-width: none; }
 .tab-bar button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--green); }
 .tabs.js .tab-panel:not(.active) { display: none; }
 .tabs.js .copy-btn { top: 0.3rem; }
+.tab-note { color: var(--muted); font-size: 0.72rem; padding: 0.8rem 1.1rem 0; }
+.tab-note + pre { padding-top: 0.6rem; }
+@media (max-width: 600px) {
+    .tab-bar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+    .tab-bar button { flex: none; }
+    .tabs.js .tab-panel pre { padding-top: 1rem; }
+    .tabs.js .tab-note + pre { padding-top: 0.6rem; }
+}
