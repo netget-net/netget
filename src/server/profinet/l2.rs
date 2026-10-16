@@ -186,8 +186,20 @@ pub async fn open_udp(bind: SocketAddr, peer: Option<SocketAddr>, mac: [u8; 6]) 
 }
 
 /// Real Ethernet on `interface`.
-#[cfg(unix)]
 pub fn open_raw(interface: &str) -> Result<L2Link> {
+    open_packet_socket(interface, "PROFINET", accept)
+}
+
+/// A packet socket on `interface` whose receive side keeps only the frames `keep` returns,
+/// given the raw frame and the interface's own MAC. Shared with EtherCAT, which filters on its
+/// own EtherType and cannot drop frames by source MAC (an ESC hands the master's frame back
+/// with the master's address in it). `label` names the protocol in errors and thread names.
+#[cfg(unix)]
+pub fn open_packet_socket(
+    interface: &str,
+    label: &'static str,
+    keep: impl Fn(&[u8], &[u8; 6]) -> Option<EthFrame> + Send + 'static,
+) -> Result<L2Link> {
     use pnet::datalink::{self, Channel, Config};
     use std::time::Duration;
 
@@ -210,7 +222,7 @@ pub fn open_raw(interface: &str) -> Result<L2Link> {
         .filter(|m| *m != [0; 6])
         .with_context(|| {
             format!(
-                "interface {interface} has no Ethernet address; PROFINET needs an Ethernet \
+                "interface {interface} has no Ethernet address; {label} needs an Ethernet \
                  link (loopback and tunnels have none)"
             )
         })?;
@@ -229,8 +241,8 @@ pub fn open_raw(interface: &str) -> Result<L2Link> {
         Ok(_) => anyhow::bail!("interface {interface} did not open as an Ethernet channel"),
         Err(e) => {
             return Err(anyhow!(
-                "cannot open a packet socket on {interface}: {e}. Raw PROFINET needs \
-                 CAP_NET_RAW (Linux), BPF device access (macOS), or root; the lab transport \
+                "cannot open a packet socket on {interface}: {e}. Raw {label} needs \
+                 CAP_NET_RAW (Linux), BPF device access (macOS), or root; the UDP transport \
                  (transport: \"udp\") needs none"
             ))
         }
@@ -240,12 +252,12 @@ pub fn open_raw(interface: &str) -> Result<L2Link> {
     let dropped = Arc::new(AtomicU64::new(0));
     let (stop_rx, drops) = (stop.clone(), dropped.clone());
     std::thread::Builder::new()
-        .name(format!("profinet-rx-{interface}"))
+        .name(format!("{}-rx-{interface}", label.to_ascii_lowercase()))
         .spawn(move || {
             while !stop_rx.load(Ordering::SeqCst) {
                 match dl_rx.next() {
                     Ok(frame) => {
-                        let Some(f) = accept(frame, &mac) else {
+                        let Some(f) = keep(frame, &mac) else {
                             continue;
                         };
                         match tx.try_send(f) {
@@ -262,23 +274,23 @@ pub fn open_raw(interface: &str) -> Result<L2Link> {
                             std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
                         ) => {}
                     Err(e) => {
-                        tracing::error!("PROFINET receive on the raw link failed, stopping: {e}");
+                        tracing::error!("{label} receive on the raw link failed, stopping: {e}");
                         break;
                     }
                 }
             }
         })
-        .context("starting the PROFINET receive thread")?;
+        .with_context(|| format!("starting the {label} receive thread"))?;
     let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(RX_QUEUE);
     let stop_tx = stop.clone();
     std::thread::Builder::new()
-        .name(format!("profinet-tx-{interface}"))
+        .name(format!("{}-tx-{interface}", label.to_ascii_lowercase()))
         .spawn(move || {
             while !stop_tx.load(Ordering::SeqCst) {
                 match frame_rx.recv_timeout(Duration::from_millis(100)) {
                     Ok(frame) => {
                         if let Some(Err(e)) = dl_tx.send_to(&frame, None) {
-                            tracing::warn!("PROFINET transmit on the raw link failed: {e}");
+                            tracing::warn!("{label} transmit on the raw link failed: {e}");
                         }
                     }
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
@@ -286,7 +298,7 @@ pub fn open_raw(interface: &str) -> Result<L2Link> {
                 }
             }
         })
-        .context("starting the PROFINET transmit thread")?;
+        .with_context(|| format!("starting the {label} transmit thread"))?;
     Ok(L2Link {
         mac,
         ipv4,
@@ -304,10 +316,14 @@ pub fn open_raw(interface: &str) -> Result<L2Link> {
 }
 
 #[cfg(not(unix))]
-pub fn open_raw(interface: &str) -> Result<L2Link> {
+pub fn open_packet_socket(
+    interface: &str,
+    label: &'static str,
+    _keep: impl Fn(&[u8], &[u8; 6]) -> Option<EthFrame> + Send + 'static,
+) -> Result<L2Link> {
     anyhow::bail!(
-        "raw PROFINET on {interface} needs a Unix packet socket (AF_PACKET or BPF), which this \
-         platform does not have; use transport \"udp\" for the lab transport"
+        "raw {label} on {interface} needs a Unix packet socket (AF_PACKET or BPF), which this \
+         platform does not have; use transport \"udp\""
     )
 }
 
