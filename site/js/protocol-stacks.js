@@ -7,6 +7,7 @@ export const protocolStacks = [
     ["activitypub", "ETH>IP>TCP>HTTP>ActivityPub"],
     ["adc", "ETH>IP>TCP>ADC"],
     ["adc_peer", "ETH>IP>TCP>ADC Peer"],
+    ["afp", "ETH>IP>TCP>DSI>AFP"],
     ["amqp", "ETH>IP>TCP>AMQP"],
     ["amqp1", "ETH>IP>TCP>AMQP1"],
     ["anthropic", "ETH>IP>TCP>HTTP>Anthropic"],

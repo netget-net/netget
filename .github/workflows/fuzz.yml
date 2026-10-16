@@ -67,6 +67,7 @@ jobs:
           - profinet_frame
           - ethercat_frame
           - mbus_frame
+          - afp_dsi
           - bgp_message
           - ndef_message
           - nfc_apdu
