@@ -8741,7 +8741,7 @@ jobs:
           ovs-vswitchd --version | head -1
           ovs-testcontroller --version | head -1
           tshark --version | head -1
-          "$RUNNER_TEMP/osken/bin/python" -m pip show os-ken | head -2
+          "$RUNNER_TEMP/osken/bin/python" -m pip show os-ken | sed -n 1,2p
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
