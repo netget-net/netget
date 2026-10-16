@@ -11,6 +11,8 @@ pub mod h323;
 pub mod h323_peers;
 pub mod http_bounds;
 pub mod inbound_limit;
+#[cfg(unix)]
+pub mod live_capture;
 pub mod llm_live;
 pub mod llm_live_case;
 pub mod mock;
@@ -22,8 +24,6 @@ pub mod mock_ollama;
 pub mod netget;
 #[cfg(all(unix, target_os = "linux"))]
 pub mod netns;
-#[cfg(unix)]
-pub mod live_capture;
 pub mod ollama_test_builder;
 pub mod pcap_oracle;
 pub mod real_server;
