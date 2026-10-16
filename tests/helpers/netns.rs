@@ -41,7 +41,8 @@ pub struct Netns {
     /// The namespace end: 198.18.<subnet>.2, on interface `ns_if`.
     pub ns_ip: Ipv4Addr,
     pub ns_if: String,
-    host_if: String,
+    /// The host end of the veth, for a test that captures on it or binds a raw socket to it.
+    pub host_if: String,
 }
 
 impl Netns {

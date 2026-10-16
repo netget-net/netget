@@ -107,6 +107,11 @@ const CONNECTIONLESS_EXCEPTIONS: &[&str] = &[
     // it), plus the gatekeeper sharing its directory — which does declare .connectionless().
     // A 10-second sweep would evict live calls.
     "H323",
+    // PROFINET's connections are application relationships: a row is added when a Connect is
+    // accepted and removed on Release, the watchdog, or an abort — and a device-access AR is
+    // legitimately silent between record reads. DCP and the RPC datagrams outside an AR create
+    // no row, so the sweep would have nothing of its own to reap and live ARs to lose.
+    "PROFINET",
 ];
 
 /// Registry names whose source directory does not follow any of the mechanical

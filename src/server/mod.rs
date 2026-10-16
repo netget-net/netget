@@ -1155,6 +1155,8 @@ pub mod openflow;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod pfcp;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod profinet;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod pulsar;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod radsec;

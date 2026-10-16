@@ -203,6 +203,7 @@ export const protocolStacks = [
     ["pfcp", "ETH>IP>UDP>PFCP"],
     ["pop3", "ETH>IP>TCP>POP3"],
     ["postgresql", "ETH>IP>TCP>PostgreSQL"],
+    ["profinet", "ETH>PROFINET"],
     ["prometheus", "ETH>IP>TCP>HTTP>PROMETHEUS"],
     ["prometheus", "ETH>IP>TCP>HTTP>Prometheus"],
     ["prometheus-remote-write", "ETH>IP>TCP>HTTP>PrometheusRemoteWrite"],

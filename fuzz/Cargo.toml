@@ -172,6 +172,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "profinet_frame"
+path = "fuzz_targets/profinet_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "bgp_message"
 path = "fuzz_targets/bgp_message.rs"
 test = false
