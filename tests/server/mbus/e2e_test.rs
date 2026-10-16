@@ -117,7 +117,6 @@ async fn a_readout_too_big_for_one_telegram_is_fetched_by_toggling_the_fcb() {
     let mut fcb = true;
     let mut storages = Vec::new();
     let mut telegrams = 0;
-    let mut previous: Option<Vec<Frame>> = None;
     loop {
         let answer = m.req_ud2(1, fcb).await;
         assert_eq!(answer.len(), 1);
@@ -129,14 +128,12 @@ async fn a_readout_too_big_for_one_telegram_is_fetched_by_toggling_the_fcb() {
         let (_, d) = decode(&answer[0]);
         telegrams += 1;
         storages.extend(d.records.iter().map(|r| r["storage"].as_u64().unwrap()));
-        previous = Some(answer);
         if !d.more_records_follow {
             break;
         }
         fcb = !fcb;
         assert!(telegrams < 20, "the readout never ended");
     }
-    assert!(previous.is_some());
     assert!(telegrams > 1, "120 records fit one telegram?");
     assert_eq!(storages, (0..120).collect::<Vec<u64>>());
     assert_eq!(

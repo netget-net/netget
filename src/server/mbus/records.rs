@@ -496,7 +496,7 @@ impl Decimal {
 /// `mantissa * 10^exp` as a JSON number, printed through its decimal text so 12345 * 10^-3 is
 /// 12.345 and not the nearest binary fraction's longest form.
 pub fn number(mantissa: i128, exp: i32) -> Value {
-    if exp >= 0 && exp <= 18 {
+    if (0..=18).contains(&exp) {
         if let Some(v) = mantissa
             .checked_mul(10i128.pow(exp as u32))
             .and_then(|v| i64::try_from(v).ok())
