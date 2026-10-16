@@ -240,6 +240,10 @@ pub fn wire_for(protocol: &str) -> Wire {
             note: Some("GELF supports UDP and TCP on this port. For UDP add `-d udp.port==PORT,gelf`; the GELF dissector does not accept TCP decode-as. TCP messages are NUL-delimited JSON."),
         },
         "tls" | "dot" | "tor_relay" => tcp("tls"),
+        // AFP over TCP is DSI framing around AFP commands: `dsi` is the TCP-port dissector
+        // (548 by default) and hands each command to `afp`. Both names checked against
+        // `tshark -G protocols`.
+        "afp" => with_display(tcp("dsi"), "dsi || afp"),
         "doq" => udp("quic"),
         // RFC 7011 version 10 over UDP. Decode-as and display syntax checked with tshark.
         "ipfix" => udp("cflow"),

@@ -9058,3 +9058,84 @@ jobs:
             --test startup_privilege_transport_test \
             --test parameter_type_agreement_test \
             -- --test-threads=32
+
+  afp:
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'afp')
+    name: AFP server against netatalk's afparg and Nmap, client against netatalk's afpd
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: protocol-pairs-${{ github.job }}
+      - name: Build netatalk 4.6.1 with its test clients, install Nmap and tshark
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential meson ninja-build pkg-config libevent-dev libgcrypt20-dev \
+            libsqlite3-dev libiniparser-dev libdb-dev nmap tshark
+          # Ubuntu packages netatalk 3.x without afparg or asip-status: afpd and both test
+          # clients are built from the pinned 4.6.1 release by the script the tests name in
+          # their failure messages, and run unprivileged from its prefix.
+          sh scripts/test-peers/build-netatalk.sh "$RUNNER_TEMP/netatalk" | tee "$RUNNER_TEMP/netatalk.env"
+          sed -n 's/^NETATALK_BIN=//p' "$RUNNER_TEMP/netatalk.env" >> "$GITHUB_PATH"
+          sed -n 's/^NETATALK_SBIN=//p' "$RUNNER_TEMP/netatalk.env" >> "$GITHUB_PATH"
+          nmap --version | head -1
+          tshark --version | head -1
+      - name: Both roles with mandatory independent peers, bounds and fail-closed paths
+        run: |
+          set -euo pipefail
+          command -v afpd afparg asip-status nmap tshark
+          for filter in \
+            afp:: \
+            client/afp::; do
+            case "$filter" in
+              client/*) target=client; filter=${filter#client/} ;;
+              *) target=server ;;
+            esac
+            pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
+            cargo test --locked --no-default-features \
+              --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
+            grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
+          done
+      - name: Shared declarations, native startup, privacy and ownership
+        run: |
+          cargo test --locked --no-default-features \
+            --test event_action_declarations_test \
+            --test advertised_actions_test \
+            --test action_descriptions_test \
+            --test startup_examples_validation_test \
+            --test examples \
+            --test startup_param_defaults_test \
+            --test startup_param_drift_test \
+            --test protocol_startup_examples_test \
+            --test startup_params_result_test \
+            --test startup_constructed_input_test \
+            --test management_test \
+            --test management_form_test \
+            --test dual_protocol_test \
+            --test dashboard_wireshark_test \
+            --test client_event_wiring_test \
+            --test event_emit_sites_test \
+            --test task_registration_cancellation_test \
+            --test server_task_registry_test \
+            --test client_stop_releases_socket_test \
+            --test peer_handle_coverage_ratchet_test \
+            --test client_credential_logging_test \
+            --test client_llm_budget_test \
+            --test secret_redaction_test \
+            --test wire_failure_test \
+            --test site_protocol_list_test \
+            --test well_known_port_declaration_test \
+            --test failure_mode_declaration_test \
+            --test decision_tag_ratchet_test \
+            --test max_inbound_bytes_declaration_test \
+            --test max_inbound_bytes_bound_plus_one_test \
+            --test test_suite_hygiene_test \
+            --test real_client_evidence_is_run_test \
+            --test startup_privilege_transport_test \
+            --test parameter_type_agreement_test \
+            -- --test-threads=32

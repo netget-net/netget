@@ -295,6 +295,8 @@ ollama-rs = { version = "0.3.3", features = ["stream"] }
 socket2 = { version = "0.5", features = ["all"] }  # Socket options (SO_REUSEADDR)
 fs2 = "0.4"  # Cross-process lock for non-destructive legacy settings migration
 syntect = "5.3"
+encoding_rs = "0.8"  # AFP long names and volume names are MacRoman
+unicode-normalization = "0.1"  # AFP 3 sends UTF-8 names decomposed (NFD)
 
 # ---------------------------------------------------------------------------------------------
 # wasm32-unknown-unknown: the browser demo (crates/netget-web). `tokio` and `crossterm` are
