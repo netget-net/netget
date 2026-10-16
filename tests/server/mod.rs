@@ -320,6 +320,7 @@ pub mod lwm2m;
 
 pub mod a2s;
 pub mod activitypub;
+pub mod afp;
 pub mod anthropic;
 pub mod bfd;
 pub mod capnp_rpc;

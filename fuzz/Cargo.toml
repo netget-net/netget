@@ -305,3 +305,10 @@ path = "fuzz_targets/mbus_frame.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "afp_dsi"
+path = "fuzz_targets/afp_dsi.rs"
+test = false
+doc = false
+bench = false
