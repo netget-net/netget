@@ -75,27 +75,43 @@ async fn free_ports() -> [u16; 3] {
 
 async fn cluster() -> (AppState, [ServerId; 3], [u16; 3]) {
     let state = AppState::new_with_options(false, "http://127.0.0.1:1".into());
-    let ports = free_ports().await;
-    let mut ids = Vec::new();
-    for (i, port) in ports.iter().enumerate() {
-        let (tx, _) = mpsc::unbounded_channel();
-        let id = ServerForm {
-            protocol: "redis".into(),
-            port: Some(*port),
-            host: Some("127.0.0.1".into()),
-            instruction: Some("Cluster node".into()),
-            startup_params: Some(json!({"cluster_nodes": topology(ports, i)})),
-            event_handlers: Some(vec![json!({
-                "event_pattern":"*",
-                "handler":{"type":"script","language":"python","code":handler(*port)}
-            })]),
-            ..Default::default()
+    // Every node is told the whole topology before it binds, so the ports cannot be 0 and are
+    // probed first. Another test can take one in the gap; that is the only failure retried,
+    // with the nodes already started removed and three fresh ports.
+    let mut attempt = 0;
+    let (ports, ids) = 'start: loop {
+        attempt += 1;
+        let ports = free_ports().await;
+        let mut ids = Vec::new();
+        for (i, port) in ports.iter().enumerate() {
+            let (tx, _) = mpsc::unbounded_channel();
+            let created = ServerForm {
+                protocol: "redis".into(),
+                port: Some(*port),
+                host: Some("127.0.0.1".into()),
+                instruction: Some("Cluster node".into()),
+                startup_params: Some(json!({"cluster_nodes": topology(ports, i)})),
+                event_handlers: Some(vec![json!({
+                    "event_pattern":"*",
+                    "handler":{"type":"script","language":"python","code":handler(*port)}
+                })]),
+                ..Default::default()
+            }
+            .create(&state, tx)
+            .await;
+            match created {
+                Ok(id) => ids.push(id),
+                Err(e) if attempt < 5 && e.to_string().contains("Address already in use") => {
+                    for id in ids {
+                        state.remove_server(id).await;
+                    }
+                    continue 'start;
+                }
+                Err(e) => panic!("cluster node: {e}"),
+            }
         }
-        .create(&state, tx)
-        .await
-        .expect("cluster node");
-        ids.push(id);
-    }
+        break (ports, ids);
+    };
     for id in &ids {
         for _ in 0..1500 {
             if state
