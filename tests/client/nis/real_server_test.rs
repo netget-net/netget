@@ -145,7 +145,11 @@ async fn start_ypserv() -> (Ypserv, u32) {
     })
     .await;
     if ready.is_err() {
-        let lines = server.process.as_ref().map(|p| p.lines()).unwrap_or_default();
+        let lines = server
+            .process
+            .as_ref()
+            .map(|p| p.lines())
+            .unwrap_or_default();
         panic!("ypserv never registered with rpcbind: {lines:?}");
     }
     (server, order)
