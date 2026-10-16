@@ -137,11 +137,16 @@ PYTHON_STDLIB_PROTOCOL_MODULES = (
 # `smbprotocol` (pip `smbprotocol`) frames SMB2 over Direct TCP, runs NTLMSSP through pyspnego
 # and parses every response itself; NetGet's SMB server is hand-written and links no SMB
 # library.
+# `profinet` (pip `profinet-py`) is a PROFINET IO controller: its own DCP, DCE/RPC, PNIO-CM
+# blocks and RT_CLASS_1 cyclic frames; `pnio_dcp` (pip `pnio-dcp`, Codewerk) is a separate DCP
+# implementation. NetGet's PROFINET device is hand-written and imports neither.
 PYTHON_THIRD_PARTY_PROTOCOL_CLIENTS = (
     "ignition",
     "greenstalk",
     "nostr_sdk",
     "smbprotocol",
+    "profinet",
+    "pnio_dcp",
 )
 
 # The same exception on the other side of the wire: a Python library that is a protocol

@@ -22,6 +22,8 @@ pub mod mock_ollama;
 pub mod netget;
 #[cfg(all(unix, target_os = "linux"))]
 pub mod netns;
+#[cfg(unix)]
+pub mod live_capture;
 pub mod ollama_test_builder;
 pub mod pcap_oracle;
 pub mod real_server;
