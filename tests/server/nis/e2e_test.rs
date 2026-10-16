@@ -568,7 +568,7 @@ async fn replies_through_the_pcap_oracle() {
             "ypserv.map",
         ])
         .unwrap();
-    let row = |i: usize| rows.iter().filter(|r| r[0] != "").nth(i).cloned();
+    let row = |i: usize| rows.iter().filter(|r| !r[0].is_empty()).nth(i).cloned();
     // Replies are the even rows after each call: call i is row 2i, its reply 2i+1.
     let reply = |i: usize| row(2 * i + 1).unwrap_or_else(|| panic!("{rows:?}"));
     assert_eq!(reply(1)[2], ALICE, "MATCH value: {rows:?}");
