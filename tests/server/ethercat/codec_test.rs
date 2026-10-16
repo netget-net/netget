@@ -513,7 +513,12 @@ fn mailbox_syncmanagers_refuse_what_their_state_forbids() {
     // A send mailbox the master moved past the end of the memory takes nothing (and the
     // slave survives putting a reply there).
     let before = c[0].mailbox_dropped;
-    fpwr(&mut c, 0x1001, 0x0808, sm_bytes(0x2FC0, 0x0100, 0x22, false));
+    fpwr(
+        &mut c,
+        0x1001,
+        0x0808,
+        sm_bytes(0x2FC0, 0x0100, 0x22, false),
+    );
     fpwr(&mut c, 0x1001, 0x0808, sm_bytes(0x2FC0, 0x0100, 0x22, true));
     c[0].post_mailbox(vec![0; 256]);
     assert!(c[0].mailbox_dropped > before);

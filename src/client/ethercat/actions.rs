@@ -255,8 +255,18 @@ pub static SDO_RESULT_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     )
     .with_parameters(vec![
         slave_field(),
-        p("operation", "string", "Whether the SDO was a read or a write", true),
-        p("index", "number", "The object index that was read or written", true),
+        p(
+            "operation",
+            "string",
+            "Whether the SDO was a read or a write",
+            true,
+        ),
+        p(
+            "index",
+            "number",
+            "The object index that was read or written",
+            true,
+        ),
         p("subindex", "number", "Object subindex", true),
         p("ok", "boolean", "Whether it succeeded", true),
         p("value", "any", "The value read (or written)", false),
