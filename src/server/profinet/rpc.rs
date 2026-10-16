@@ -568,6 +568,14 @@ pub fn parse_ndr_response(body: &[u8], le: bool) -> Result<(PnioStatus, &[u8])> 
     );
     let status = PnioStatus::from_u32(get_u32(body, le));
     let args_length = get_u32(&body[4..], le) as usize;
+    let maximum_count = get_u32(&body[8..], le) as usize;
+    let offset = get_u32(&body[12..], le);
+    let actual_count = get_u32(&body[16..], le) as usize;
+    ensure!(
+        offset == 0 && actual_count == args_length && args_length <= maximum_count,
+        "NDR response header disagrees with itself: ArgsLength {args_length}, MaximumCount \
+         {maximum_count}, Offset {offset}, ActualCount {actual_count}"
+    );
     let blocks = body
         .get(NDR_HEADER_LEN..NDR_HEADER_LEN + args_length)
         .with_context(|| {
