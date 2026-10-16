@@ -291,3 +291,10 @@ path = "fuzz_targets/ntlmssp_token.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "ethercat_frame"
+path = "fuzz_targets/ethercat_frame.rs"
+test = false
+doc = false
+bench = false
