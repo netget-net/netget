@@ -1310,7 +1310,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             bind9-dnsutils knot-dnsutils redis-tools redis-server nginx \
-            bind9 bind9-utils ldnsutils
+            bind9 bind9-utils ldnsutils protobuf-compiler capnproto
           # Not decoration: these fail the step when a package silently stopped shipping
           # the binary, which is a clearer signal than three test failures later on.
           dig -v
@@ -1334,6 +1334,11 @@ jobs:
           python3 -c "import redis; print('redis-py', redis.__version__)"
           # /usr/sbin, which the real-server helper also searches.
           nginx -v
+          # startup_examples_actually_start_test starts every protocol's examples, and gRPC,
+          # gRPC-Web and ConnectRPC compile their .proto with protoc at runtime, as Cap'n Proto
+          # RPC does its schema with capnp. Without them those four are skipped as host gaps.
+          protoc --version
+          capnp --version
 
       # The pcap oracle (tests/helpers/pcap_oracle.rs) runs tshark over the bytes each
       # server emitted, as an independent decoder. It deliberately FAILS rather than

@@ -17,10 +17,12 @@
 //! * `rss` and `s3` mocked `send_http_response` against events their protocols do not answer
 //!   with it.
 //!
-//! A single-feature build cannot tell "no protocol declares this" from "that protocol is not
-//! compiled here", so this check only means something when the whole registry is loaded. It
-//! therefore skips unless the build is a wide one, which is what the `registry-audit` CI job
-//! (`--all-features`) and a local `--features all-protocols` run provide.
+//! A build cannot tell "no protocol declares this" from "that protocol is not compiled here".
+//! Every protocol compiles in every build except the ones behind a system-library feature
+//! (`libpcap`, `bluetooth`, `pcsc`, `libusb`, `libsmbclient`), and their suites are behind the
+//! same `cfg` in `tests/server/mod.rs` and `tests/client/mod.rs` — so a suite whose module is
+//! not compiled here is not scanned. The blocking CI build has none of those libraries; the
+//! `registry-audit` job (`--all-features`) checks those suites too.
 //!
 //! It found a real defect the first time it ran, and not in a test: `smb` never implemented
 //! `get_event_types`, so the trait default returned an empty vec and SMB_OPERATION_EVENT was
@@ -50,6 +52,53 @@ fn declared_event_ids() -> BTreeSet<String> {
         }
     }
     ids
+}
+
+/// Whether `cfg_expr`, the inside of a `#[cfg(...)]` on a suite's `pub mod` line, holds in this
+/// build. Those attributes are only ever `unix` and `all(unix, feature = "<library>")`.
+fn suite_cfg_holds(cfg_expr: &str) -> bool {
+    let unix_ok = !cfg_expr.contains("unix") || cfg!(unix);
+    let feature_ok = match cfg_expr.split("feature = \"").nth(1) {
+        None => true,
+        Some(rest) => match &rest[..rest.find('"').expect("closing quote")] {
+            "libpcap" => cfg!(feature = "libpcap"),
+            "bluetooth" => cfg!(feature = "bluetooth"),
+            "pcsc" => cfg!(feature = "pcsc"),
+            "libusb" => cfg!(feature = "libusb"),
+            "libsmbclient" => cfg!(feature = "libsmbclient"),
+            other => panic!("a suite in tests/*/mod.rs is gated on feature {other:?}, which this test does not know"),
+        },
+    };
+    unix_ok && feature_ok
+}
+
+/// `tests/<side>/<suite>/` for every suite whose `pub mod` is `cfg`-gated off in this build.
+fn suites_not_compiled_here() -> Vec<PathBuf> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
+    let mut skipped = Vec::new();
+    for side in ["server", "client"] {
+        let mod_rs = std::fs::read_to_string(root.join(side).join("mod.rs")).expect("read mod.rs");
+        let mut pending_cfg: Option<&str> = None;
+        for line in mod_rs.lines().map(str::trim) {
+            if let Some(expr) = line
+                .strip_prefix("#[cfg(")
+                .and_then(|l| l.strip_suffix(")]"))
+            {
+                pending_cfg = Some(expr);
+            } else if let Some(name) = line
+                .strip_prefix("pub mod ")
+                .and_then(|l| l.strip_suffix(';'))
+            {
+                if pending_cfg.is_some_and(|expr| !suite_cfg_holds(expr)) {
+                    skipped.push(root.join(side).join(name));
+                }
+                pending_cfg = None;
+            } else if !line.starts_with("#[") && !line.starts_with("//") {
+                pending_cfg = None;
+            }
+        }
+    }
+    skipped
 }
 
 fn rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -120,6 +169,8 @@ fn every_mocked_event_id_is_declared_by_some_protocol() {
         &mut sources,
     );
     sources.sort();
+    let not_compiled = suites_not_compiled_here();
+    sources.retain(|path| !not_compiled.iter().any(|suite| path.starts_with(suite)));
 
     let mut unknown: Vec<String> = Vec::new();
     for path in &sources {
