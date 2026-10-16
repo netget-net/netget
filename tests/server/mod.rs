@@ -343,6 +343,7 @@ pub mod milter;
 pub mod minecraft;
 pub mod msgpack_rpc;
 pub mod ninep;
+pub mod nis;
 pub mod onvif;
 pub mod openflow;
 pub mod pfcp;
