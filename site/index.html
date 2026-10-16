@@ -3,10 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NetGet | Network Protocol Stubbing Toolkit</title>
-    <meta name="description" content="With LLM/human driven responses">
-    <meta property="og:title" content="NetGet | Network Protocol Stubbing Toolkit">
-    <meta property="og:description" content="With LLM/human driven responses">
+    <title>NetGet | Network Protocol Stubbing</title>
+    <meta name="description" content="Protocol responses handled via Human/Static/Scripted/LLM">
+    <meta property="og:title" content="NetGet | Network Protocol Stubbing">
+    <meta property="og:description" content="Protocol responses handled via Human/Static/Scripted/LLM">
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://netget.net/">
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
@@ -29,8 +29,8 @@
 
     <main id="main">
         <header class="hero">
-            <h1>Network Protocol<br><span class="accent">Stubbing Toolkit</span></h1>
-            <p>With LLM/human driven responses</p>
+            <h1>Network Protocol<br><span class="accent">Stubbing</span></h1>
+            <p>Protocol responses handled via Human/Static/Scripted/LLM</p>
             <div class="hero-actions">
                 <a class="button button-primary" href="demo.html">Demo</a>
                 <a class="button" href="#install">Install</a>
@@ -461,10 +461,16 @@
             <h2>Install</h2>
 
             <h3 class="sub-h">CLI</h3>
-            <p class="caption">Prebuilt binary (macOS, Linux, Windows):</p>
+            <p class="caption">Prebuilt binary (macOS, Linux, Windows) via NPM:</p>
             <div class="code-block">
                 <button class="copy-btn" hidden data-target="cli">Copy</button>
                 <pre id="cli"><code>npx -y @smotana/netget</code></pre>
+            </div>
+            <p class="caption">Or install globally:</p>
+            <div class="code-block">
+                <button class="copy-btn" hidden data-target="cli-global">Copy</button>
+                <pre id="cli-global"><code>npm install -g @smotana/netget
+netget</code></pre>
             </div>
 
             <h3 class="sub-h">MCP</h3>
