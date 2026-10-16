@@ -338,6 +338,7 @@ pub mod lmtp;
 pub mod lpd;
 pub mod matrix;
 pub mod mbus;
+pub mod afp;
 pub mod milter;
 pub mod minecraft;
 pub mod msgpack_rpc;

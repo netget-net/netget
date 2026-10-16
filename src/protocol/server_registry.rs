@@ -451,6 +451,8 @@ impl ServerRegistry {
         #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::mbus::actions::MbusProtocol::new()));
         #[cfg(not(target_arch = "wasm32"))]
+        self.register(Arc::new(crate::server::afp::actions::AfpProtocol::new()));
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::rsync::actions::RsyncProtocol::new()));
         #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::pfcp::actions::PfcpProtocol::new()));
@@ -1711,6 +1713,7 @@ pub(crate) const ALL_KNOWN_PROTOCOLS: &[(&str, &str)] = &[
     ("PROFINET", "a native build (not the browser)"),
     ("EtherCAT", "a native build (not the browser)"),
     ("M-Bus", "a native build (not the browser)"),
+    ("AFP", "a native build (not the browser)"),
     ("rsync", "a native build (not the browser)"),
     ("PFCP", "a native build (not the browser)"),
     ("Matrix", "a native build (not the browser)"),
