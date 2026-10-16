@@ -63,6 +63,7 @@ jobs:
           - hsrp_message
           - m3ua_message
           - h323_per
+          - openflow_message
           - bgp_message
           - ndef_message
           - nfc_apdu

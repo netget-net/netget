@@ -149,9 +149,12 @@ PYTHON_THIRD_PARTY_PROTOCOL_CLIENTS = (
 # with the script the test writes importing it. `pymodbus` frames Modbus/TCP with its own
 # framer and answers from its own datastore; NetGet's Modbus client frames with NetGet's codec.
 # Without this entry the modbus client read as having only `mbpoll`, which is the tool that
-# reads the device back, not the device.
+# reads the device back, not the device. `os_ken` (pip `os-ken`, OpenStack's Ryu) is an
+# OpenFlow controller with its own `ofproto_v1_3_parser`, handshake and datapath bookkeeping;
+# NetGet's OpenFlow switch frames with NetGet's own codec.
 PYTHON_THIRD_PARTY_PROTOCOL_SERVERS = (
     "pymodbus",
+    "os_ken",
 )
 
 SKIP_MESSAGE = re.compile(

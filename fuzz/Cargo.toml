@@ -165,6 +165,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "openflow_message"
+path = "fuzz_targets/openflow_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "bgp_message"
 path = "fuzz_targets/bgp_message.rs"
 test = false

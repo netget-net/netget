@@ -152,6 +152,7 @@ fn golden_duals_map() {
         "SPICE",
         "devp2p",
         "H323",
+        "OpenFlow",
         "Nostr",
         "Vault",
         "Bolt",
