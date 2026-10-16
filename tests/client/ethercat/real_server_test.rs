@@ -15,8 +15,7 @@
 use super::support::*;
 use crate::helpers::live_capture::LiveCapture;
 use crate::helpers::netns::VethPair;
-use serde_json::json;
-use std::io::{BufRead, BufReader};
+use serde_json::{json, Value};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -50,6 +49,14 @@ async fn kickcat_drive_is_scanned_configured_and_enabled() {
     );
     let veth = VethPair::create("k");
     let mut cap = LiveCapture::start(&veth.a);
+    // network_simulator prints through a pipe, so its output is block-buffered and says
+    // nothing until it exits; it is ready when its packet socket exists.
+    let packet_sockets = || {
+        std::fs::read_to_string("/proc/net/packet")
+            .map(|s| s.lines().count())
+            .unwrap_or(0)
+    };
+    let before = packet_sockets();
     let mut sim = Command::new("network_simulator")
         .args(["-i", &veth.b, "-s", &config])
         .stdout(Stdio::piped())
@@ -61,28 +68,22 @@ async fn kickcat_drive_is_scanned_configured_and_enabled() {
                  `sh scripts/test-peers/build-kickcat.sh /some/dir` and put it on PATH"
             )
         });
-    let out = sim.stdout.take().unwrap();
-    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let mut r = BufReader::new(out);
-        let mut buf = Vec::new();
-        while r
-            .read_until(b'\n', &mut buf)
-            .map(|n| n > 0)
-            .unwrap_or(false)
-        {
-            let _ = ready_tx.send(String::from_utf8_lossy(&buf).to_string());
-            buf.clear();
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while packet_sockets() <= before {
+        if let Ok(Some(status)) = sim.try_wait() {
+            let mut err = String::new();
+            let _ = std::io::Read::read_to_string(&mut sim.stderr.take().unwrap(), &mut err);
+            let mut out = String::new();
+            let _ = std::io::Read::read_to_string(&mut sim.stdout.take().unwrap(), &mut out);
+            panic!("network_simulator exited {status}: {out}{err}");
         }
-    });
-    let mut started = String::new();
-    while !started.contains("Opening nominal interface") {
-        match ready_rx.recv_timeout(Duration::from_secs(30)) {
-            Ok(l) => started.push_str(&l),
-            Err(_) => panic!("network_simulator did not start: {started}"),
-        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "network_simulator opened no packet socket on {}",
+            veth.b
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    tokio::time::sleep(Duration::from_millis(500)).await;
 
     let (state, tx, log) = new_state();
     let m = start_master_in(
@@ -95,11 +96,20 @@ async fn kickcat_drive_is_scanned_configured_and_enabled() {
     )
     .await
     .unwrap();
-    let scanned = m
-        .wait_event("ethercat_segment_scanned", 60, |_| true)
-        .await
-        .unwrap_or_else(|| panic!("no scan\n{}", m.log_text()));
-    assert_eq!(scanned["count"], json!(1), "{scanned}");
+    // The simulator starts its slaves just after opening its socket: scan again until it
+    // answers, as an operator would.
+    let mut scanned = Value::Null;
+    for _ in 0..20 {
+        scanned = m
+            .wait_event("ethercat_segment_scanned", 5, |e| e["count"] == json!(1))
+            .await
+            .unwrap_or(Value::Null);
+        if !scanned.is_null() {
+            break;
+        }
+        m.send(json!({"type": "ethercat_scan"})).await;
+    }
+    assert_eq!(scanned["count"], json!(1), "{scanned}\n{}", m.log_text());
     let s = &scanned["slaves"][0];
     assert_eq!(s["vendor_id"], json!(0x29C), "Ingenia, from the SII: {s}");
     assert_eq!(s["product_code"], json!(61935618), "{s}");
@@ -128,12 +138,12 @@ async fn kickcat_drive_is_scanned_configured_and_enabled() {
             )
         });
     assert!(
-        enabled["inputs"].get("Actual position").is_some(),
-        "{enabled}"
+        enabled["inputs"].as_object().is_some_and(|o| o.len() >= 3),
+        "the whole TxPDO is decoded: {enabled}"
     );
     let mac = veth.mac(&veth.a);
     assert!(
-        cap.wait_for(&mac, "ecat.cmd", "12", 10),
+        cap.wait_for(&mac, "ecat.cmd", "0x0c", 10),
         "no LRW in the capture"
     );
     let _ = sim.kill();

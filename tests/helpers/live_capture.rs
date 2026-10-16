@@ -143,6 +143,15 @@ impl LiveCapture {
     /// Every packet whose source MAC is `ours` must carry no Expert Info at Warn or above.
     /// Returns the protocol chains of those packets.
     pub fn assert_clean_from(&self, ours: &str) -> Vec<String> {
+        self.assert_clean_from_allowing(ours, &[])
+    }
+
+    /// As [`assert_clean_from`](Self::assert_clean_from), except for Warn-level messages
+    /// containing one of `allowed` — for what NetGet is required to copy from the peer's own
+    /// frame (an ESC returns a master's frame with the master's source address, so a master
+    /// that uses a group address, as SOEM does by default, gets it back). Say why at the call
+    /// site.
+    pub fn assert_clean_from_allowing(&self, ours: &str, allowed: &[&str]) -> Vec<String> {
         let rows = self.fields(&[
             "frame.number",
             "frame.protocols",
@@ -160,7 +169,10 @@ impl LiveCapture {
                 .get(3)
                 .map(|s| s.split(',').filter_map(|x| x.trim().parse().ok()).collect())
                 .unwrap_or_default();
-            if sevs.iter().any(|s| *s >= SEV_WARN) {
+            let warns = sevs.iter().filter(|s| **s >= SEV_WARN).count();
+            let messages = r.get(4).map(String::as_str).unwrap_or("");
+            let excused: usize = allowed.iter().map(|a| messages.matches(a).count()).sum();
+            if warns > excused {
                 failures.push(format!(
                     "packet #{} ({}): {}",
                     r[1],
