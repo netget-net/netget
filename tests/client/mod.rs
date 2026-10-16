@@ -257,6 +257,7 @@ pub mod msgpack_rpc;
 #[cfg(unix)]
 pub mod ngap;
 pub mod ninep;
+pub mod nis;
 pub mod onvif;
 pub mod openflow;
 pub mod pfcp;

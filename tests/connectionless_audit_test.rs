@@ -89,6 +89,10 @@ const CONNECTIONLESS_EXCEPTIONS: &[&str] = &[
     // call, answered and forgotten — so the idle sweep has nothing to reap there, and must not
     // reap the TCP rows a slow handler is answering on.
     "SunRPC",
+    // ypserv is the same shape as the portmapper whose RPC layer it shares: tracked TCP
+    // connections (an ALL can take the whole of an LLM call) and UDP calls that create no row,
+    // each answered and forgotten. The sweep has nothing to reap on UDP and must not reap TCP.
+    "NIS",
     // SRT is a connection protocol over UDP: a handshake, then ARQ and timestamped delivery
     // owned by srt-tokio. Its row is closed when that connection ends; a quiet publisher
     // between frames is still a live session.

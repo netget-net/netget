@@ -71,6 +71,12 @@ const NO_WELL_KNOWN_PORT: &[(&str, &str)] = &[
         "SPICE registers no port with IANA and neither spice-server nor QEMU has a default: every \
          -spice port=… is the operator's, and libvirt hands them out from VNC's 5900 range",
     ),
+    (
+        "nis",
+        "ypserv has no assigned port: it binds an ephemeral one and registers it with the \
+         portmapper as ONC RPC program 100004, and clients (ypbind, ypcat -h, rpcinfo) ask port \
+         111 where it is",
+    ),
     // ---- Below the transport layer: no port exists ----
     ("arp", "link layer (EtherType 0x0806); ports do not exist here"),
     ("cdp", "link layer (802.3 LLC/SNAP); ports do not exist here"),

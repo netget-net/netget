@@ -68,6 +68,7 @@ jobs:
           - ethercat_frame
           - mbus_frame
           - afp_dsi
+          - nis_yp
           - bgp_message
           - ndef_message
           - nfc_apdu

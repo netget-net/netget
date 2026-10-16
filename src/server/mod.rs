@@ -1155,6 +1155,8 @@ pub mod msgpack_rpc;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ninep;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod nis;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod onvif;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod openflow;
