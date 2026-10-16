@@ -629,6 +629,8 @@ pub mod a2a;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod acme;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod afp;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod amqp1;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod bmp;

@@ -250,6 +250,7 @@ pub mod lpd;
 pub mod m3ua;
 pub mod matrix;
 pub mod mbus;
+pub mod afp;
 pub mod milter;
 pub mod minecraft;
 pub mod msgpack_rpc;
