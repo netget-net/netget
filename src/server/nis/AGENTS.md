@@ -44,7 +44,8 @@ NetGet `sunrpc` server. It is on the well-known-port test's `NO_WELL_KNOWN_PORT`
   map names ≤ 64; ≤ `MAX_ENTRIES` (10 000) entries per map; ≤ `MAX_MAPS` (256) maps; a reply
   ≤ `MAX_REPLY` (4 MiB) on TCP, written in 64 KiB fragments, and ≤ 65 000 bytes on UDP. A reply
   over its limit is `YP_YPERR` whole, never cut short (a truncated map reads as complete).
-  Idle TCP connections close after 120 s; at most 64 UDP calls are handled at once.
+  Idle TCP connections close after 120 s; at most 64 UDP calls are handled at once; a UDP
+  datagram longer than `MAX_CALL` is dropped unanswered.
 
 ## What the model answers
 
