@@ -153,6 +153,7 @@ fn golden_duals_map() {
         "devp2p",
         "H323",
         "OpenFlow",
+        "PROFINET",
         "Nostr",
         "Vault",
         "Bolt",
