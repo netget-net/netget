@@ -1111,7 +1111,11 @@ pub fn put_visible(out: &mut Vec<u8>, value: &str, width: usize, field: &str) ->
 }
 
 pub fn get_visible(b: &[u8]) -> String {
-    crate::utils::sanitize::line_field(String::from_utf8_lossy(b).trim_end_matches([' ', '\0']))
+    // Controls (NUL padding included) become spaces first, so trimming afterwards leaves no
+    // trailing space that a re-encode would turn into a different value.
+    crate::utils::sanitize::line_field(&String::from_utf8_lossy(b))
+        .trim_end_matches(' ')
+        .to_string()
 }
 
 impl Im0 {
