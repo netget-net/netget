@@ -360,7 +360,10 @@ impl Engine {
                 r = link.recv(&mut buf) => match r {
                     Some(r) => self.on_frame(r).await,
                     None => {
-                        self.log().error("EtherCAT link closed; the segment stops".to_string());
+                        self.log().error(format!(
+                            "EtherCAT link closed; the segment stops ({})",
+                            link.last_error().unwrap_or_else(|| "no error recorded".into())
+                        ));
                         return;
                     }
                 },

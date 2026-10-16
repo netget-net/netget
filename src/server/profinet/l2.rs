@@ -27,6 +27,8 @@ pub const TRANSPORT_LAB: &str = "udp";
 
 /// Received PROFINET frames waiting for the protocol.
 pub const RX_QUEUE: usize = 1024;
+/// Consecutive receive errors (10 ms apart) before a raw link is given up on.
+pub const RX_ERROR_LIMIT: u32 = 100;
 
 /// Sets its flag when dropped; the blocking threads of a raw link poll it.
 pub struct StopGuard(Arc<AtomicBool>);
@@ -116,6 +118,8 @@ pub struct L2Link {
     pub description: String,
     /// The lab socket's own address (lab transport only).
     pub lab_addr: Option<SocketAddr>,
+    /// The last receive error of a raw link, for whoever finds it closed.
+    pub last_error: Arc<Mutex<Option<String>>>,
     _stop: StopGuard,
     _reader: AbortOnDrop,
 }
@@ -180,6 +184,7 @@ pub async fn open_udp(bind: SocketAddr, peer: Option<SocketAddr>, mac: [u8; 6]) 
         dropped,
         description: format!("lab udp {local}"),
         lab_addr: Some(local),
+        last_error: Arc::new(Mutex::new(None)),
         _stop: StopGuard(stop),
         _reader: AbortOnDrop(Some(reader_task)),
     })
@@ -251,12 +256,17 @@ pub fn open_packet_socket(
     let (tx, rx) = mpsc::channel(RX_QUEUE);
     let dropped = Arc::new(AtomicU64::new(0));
     let (stop_rx, drops) = (stop.clone(), dropped.clone());
+    let last_error = Arc::new(Mutex::new(None));
+    let error_slot = last_error.clone();
     std::thread::Builder::new()
         .name(format!("{}-rx-{interface}", label.to_ascii_lowercase()))
         .spawn(move || {
+            let last_error = error_slot;
+            let mut failures = 0u32;
             while !stop_rx.load(Ordering::SeqCst) {
                 match dl_rx.next() {
                     Ok(frame) => {
+                        failures = 0;
                         let Some(f) = keep(frame, &mac) else {
                             continue;
                         };
@@ -272,10 +282,24 @@ pub fn open_packet_socket(
                         if matches!(
                             e.kind(),
                             std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-                        ) => {}
+                        ) =>
+                    {
+                        failures = 0;
+                    }
+                    // A link whose carrier flaps (a veth peer reconfigured, a cable re-plugged)
+                    // reports an error or two and then delivers again; only a link that keeps
+                    // failing for a second is given up on.
                     Err(e) => {
-                        tracing::error!("{label} receive on the raw link failed, stopping: {e}");
-                        break;
+                        failures += 1;
+                        *last_error.lock().expect("raw link error slot") = Some(e.to_string());
+                        if failures >= RX_ERROR_LIMIT {
+                            tracing::error!(
+                                "{label} receive on the raw link failed {failures} times in a \
+                                 row, stopping: {e}"
+                            );
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(10));
                     }
                 }
             }
@@ -310,6 +334,7 @@ pub fn open_packet_socket(
         dropped,
         description: format!("raw {interface}"),
         lab_addr: None,
+        last_error,
         _stop: StopGuard(stop),
         _reader: AbortOnDrop(None),
     })

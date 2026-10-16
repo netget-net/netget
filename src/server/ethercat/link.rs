@@ -148,6 +148,14 @@ impl Link {
         }
     }
 
+    /// Why a raw link stopped receiving, when it did.
+    pub fn last_error(&self) -> Option<String> {
+        match self {
+            Link::Raw { l2, .. } => l2.last_error.lock().ok().and_then(|e| e.clone()),
+            Link::Udp { .. } => None,
+        }
+    }
+
     pub fn local_addr(&self) -> Option<SocketAddr> {
         match self {
             Link::Raw { .. } => None,
