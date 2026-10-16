@@ -1111,11 +1111,7 @@ pub fn put_visible(out: &mut Vec<u8>, value: &str, width: usize, field: &str) ->
 }
 
 pub fn get_visible(b: &[u8]) -> String {
-    String::from_utf8_lossy(b)
-        .trim_end_matches([' ', '\0'])
-        .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect()
+    crate::utils::sanitize::line_field(String::from_utf8_lossy(b).trim_end_matches([' ', '\0']))
 }
 
 impl Im0 {

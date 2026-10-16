@@ -159,10 +159,20 @@ fn read_response() -> ActionDefinition {
          {descriptor (≤54)}. For any other record give fields: [{\"type\": \"u16\", \"value\": \
          5}, …] encoded in order, big-endian",
         vec![
-            p("im0", "object", "I&M0 contents", false),
-            p("im1", "object", "I&M1 contents", false),
-            p("im2", "object", "I&M2 contents", false),
-            p("im3", "object", "I&M3 contents", false),
+            p(
+                "im0",
+                "object",
+                "I&M0 contents, for a read of index 0xAFF0",
+                false,
+            ),
+            p(
+                "im1",
+                "object",
+                "I&M1 contents: tag_function, tag_location",
+                false,
+            ),
+            p("im2", "object", "I&M2 contents: installation_date", false),
+            p("im3", "object", "I&M3 contents: descriptor", false),
             p(
                 "fields",
                 "array",
@@ -239,7 +249,12 @@ pub static DCP_SET_REQUEST_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         json!({"type": ACCEPT_DCP_SET}),
     )
     .with_parameters(vec![
-        p("controller_mac", "string", "Who asked", true),
+        p(
+            "controller_mac",
+            "string",
+            "MAC address of the controller that sent the Set",
+            true,
+        ),
         p(
             "name_of_station",
             "string",
@@ -353,7 +368,12 @@ pub static AR_ESTABLISHED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         json!({"type": SET_INPUTS, "slot": 1, "subslot": 1, "values": {"inputs": 0}}),
     )
     .with_parameters(vec![
-        p("ar_uuid", "string", "The AR", true),
+        p(
+            "ar_uuid",
+            "string",
+            "The application relationship (AR) UUID",
+            true,
+        ),
         p("controller", "object", "station_name, mac, address", true),
         p(
             "submodules",
@@ -378,7 +398,12 @@ pub static OUTPUTS_CHANGED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         json!({"type": SET_INPUTS, "slot": 1, "subslot": 1, "values": {"inputs": 1}}),
     )
     .with_parameters(vec![
-        p("ar_uuid", "string", "The AR", true),
+        p(
+            "ar_uuid",
+            "string",
+            "The application relationship (AR) UUID",
+            true,
+        ),
         p(
             "outputs",
             "array",
@@ -404,9 +429,14 @@ pub static READ_RECORD_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             "hardware_revision": 1, "software_revision": "V1.0.0"}}),
     )
     .with_parameters(vec![
-        p("slot", "number", "Slot", true),
-        p("subslot", "number", "Subslot", true),
-        p("index", "number", "Record index", true),
+        p("slot", "number", "Slot number of the submodule", true),
+        p("subslot", "number", "Subslot number of the submodule", true),
+        p(
+            "index",
+            "number",
+            "Record index (0xAFF0 is I&M0; 0-0x7FFF are user records)",
+            true,
+        ),
         p(
             "record",
             "string",
@@ -446,11 +476,21 @@ pub static WRITE_RECORD_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         json!({"type": ACCEPT_WRITE}),
     )
     .with_parameters(vec![
-        p("slot", "number", "Slot", true),
-        p("subslot", "number", "Subslot", true),
-        p("index", "number", "Record index", true),
+        p("slot", "number", "Slot number of the submodule", true),
+        p("subslot", "number", "Subslot number of the submodule", true),
+        p(
+            "index",
+            "number",
+            "Record index (0xAFF0 is I&M0; 0-0x7FFF are user records)",
+            true,
+        ),
         p("record", "string", "What the index is", true),
-        p("length", "number", "Octets written", true),
+        p(
+            "length",
+            "number",
+            "Number of octets the controller wrote",
+            true,
+        ),
         p(
             "decoded",
             "object",
@@ -482,10 +522,15 @@ pub static AR_CLOSED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         "profinet_ar_closed",
         "An AR ended: the controller released it, its watchdog expired, or it was aborted. \
          Nothing to answer",
-        json!(null),
+        json!({"type": "show_message", "message": "PROFINET AR closed"}),
     )
     .with_parameters(vec![
-        p("ar_uuid", "string", "The AR", true),
+        p(
+            "ar_uuid",
+            "string",
+            "The application relationship (AR) UUID",
+            true,
+        ),
         p("reason", "string", "released, watchdog, aborted, …", true),
     ])
     .with_no_actions()
@@ -709,7 +754,7 @@ impl Protocol for ProfinetProtocol {
         ProtocolMetadataV2::builder()
             .state(DevelopmentState::Experimental)
             .privilege_requirement(PrivilegeRequirement::PacketCapture)
-            .well_known_udp_port(super::rpc::RPC_PORT)
+            .well_known_udp_port(34964)
             // Every refusal PROFINET defines is sent: a DCP Set the model did not approve is
             // answered "set not possible", an unanswered Connect gets a PNIO error, a record
             // read gets "resource unavailable". Inputs nobody set carry IOPS BAD.
@@ -767,6 +812,16 @@ impl Protocol for ProfinetProtocol {
             .build()
     }
 
+    fn default_binding(&self) -> Option<crate::protocol::BindingDefaults> {
+        // The RPC endpoint is a host and port (loopback and 34964 unless the caller names
+        // them); the raw transport also needs the caller's interface, which has no default —
+        // guessing one would put PROFINET frames on a link nobody chose.
+        Some(crate::protocol::BindingDefaults::port_based(
+            "127.0.0.1",
+            super::rpc::RPC_PORT,
+        ))
+    }
+
     fn get_startup_parameters(&self) -> Vec<ParameterDefinition> {
         vec![
             ParameterDefinition {
@@ -779,7 +834,7 @@ impl Protocol for ProfinetProtocol {
                 .into(),
                 required: false,
                 example: json!("raw"),
-                default: Some(json!("raw")),
+                default: Some(json!(crate::server::profinet::l2::TRANSPORT_RAW)),
             },
             ParameterDefinition {
                 name: "udp_peer".into(),

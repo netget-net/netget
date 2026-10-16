@@ -147,8 +147,9 @@ impl DeviceConfig {
             }
         };
         let lab = match params.get_optional_string("transport")?.as_deref() {
-            None | Some("raw") => false,
-            Some("udp") => true,
+            None => false,
+            Some(t) if t == crate::server::profinet::l2::TRANSPORT_RAW => false,
+            Some(t) if t == crate::server::profinet::l2::TRANSPORT_LAB => true,
             Some(other) => bail!(
                 "transport must be \"raw\" (real Ethernet) or \"udp\" (the lab transport), got \
                  {other:?}"
@@ -1315,7 +1316,7 @@ impl Engine {
                 "out of AR resources (one IO AR and one supervisor AR at a time)",
             ));
         }
-        if ar.station_name.bytes().any(|c| c.is_ascii_control()) {
+        if crate::utils::sanitize::has_controls(&ar.station_name) {
             return Err(refuse(
                 connect_error::AR_BLOCK_REQ,
                 10,

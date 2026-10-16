@@ -77,8 +77,9 @@ impl Config {
             .flatten()
             .as_deref()
         {
-            None | Some("raw") => false,
-            Some("udp") => true,
+            None => false,
+            Some(t) if t == crate::server::profinet::l2::TRANSPORT_RAW => false,
+            Some(t) if t == crate::server::profinet::l2::TRANSPORT_LAB => true,
             Some(other) => bail!("transport is raw or udp, not {other:?}"),
         };
         let station_name = p

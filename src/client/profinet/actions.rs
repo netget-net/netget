@@ -169,8 +169,8 @@ pub fn actions() -> Vec<ActionDefinition> {
              values is an object of its output field names to numbers (true/false for bool); \
              fields left out keep their value. iops good (default) or bad",
             vec![
-                p("slot", "number", "Slot", true),
-                p("subslot", "number", "Subslot", true),
+                p("slot", "number", "Slot number of the submodule", true),
+                p("subslot", "number", "Subslot number of the submodule", true),
                 p("values", "object", "Output field name → value", false),
                 p("iops", "string", "good (default) or bad", false),
             ],
@@ -203,9 +203,14 @@ pub fn actions() -> Vec<ActionDefinition> {
                 p("slot", "number", "Slot (default 0)", false),
                 p("subslot", "number", "Subslot (default 1)", false),
                 p("index", "string", "im1, im2, im3, or a number", true),
-                p("im1", "object", "I&M1 contents", false),
-                p("im2", "object", "I&M2 contents", false),
-                p("im3", "object", "I&M3 contents", false),
+                p(
+                    "im1",
+                    "object",
+                    "I&M1 contents: tag_function, tag_location",
+                    false,
+                ),
+                p("im2", "object", "I&M2 contents: installation_date", false),
+                p("im3", "object", "I&M3 contents: descriptor", false),
                 p(
                     "fields",
                     "array",
@@ -260,7 +265,7 @@ pub static DCP_SET_RESULT_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         "profinet_dcp_set_result",
         "A device answered (or did not answer) a DCP Set",
         vec![
-            p("mac", "string", "The device", true),
+            p("mac", "string", "MAC address of the device", true),
             p(
                 "results",
                 "array",
@@ -278,7 +283,12 @@ pub static CONNECT_FAILED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         "profinet_connect_failed",
         "A Connect did not produce a running AR",
         vec![
-            p("name_of_station", "string", "The device", true),
+            p(
+                "name_of_station",
+                "string",
+                "Station name of the device",
+                true,
+            ),
             p(
                 "stage",
                 "string",
@@ -302,9 +312,24 @@ pub static AR_ESTABLISHED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         "The device confirmed ApplicationReady: cyclic data is running. Outputs are BAD until \
          you set them",
         vec![
-            p("name_of_station", "string", "The device", true),
-            p("ar_uuid", "string", "The AR", true),
-            p("cycle_ms", "number", "The cycle", true),
+            p(
+                "name_of_station",
+                "string",
+                "Station name of the device",
+                true,
+            ),
+            p(
+                "ar_uuid",
+                "string",
+                "The application relationship (AR) UUID",
+                true,
+            ),
+            p(
+                "cycle_ms",
+                "number",
+                "Cyclic data period in milliseconds",
+                true,
+            ),
             p(
                 "module_diff",
                 "array",
@@ -336,9 +361,14 @@ pub static RECORD_READ_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         "profinet_record_read",
         "The answer to profinet_read_record",
         vec![
-            p("slot", "number", "Slot", true),
-            p("subslot", "number", "Subslot", true),
-            p("index", "number", "Record index", true),
+            p("slot", "number", "Slot number of the submodule", true),
+            p("subslot", "number", "Subslot number of the submodule", true),
+            p(
+                "index",
+                "number",
+                "Record index (0xAFF0 is I&M0; 0-0x7FFF are user records)",
+                true,
+            ),
             p("record", "string", "I&M0, user record 123, …", true),
             p(
                 "ok",
@@ -346,7 +376,12 @@ pub static RECORD_READ_EVENT: LazyLock<EventType> = LazyLock::new(|| {
                 "Whether the device answered with data",
                 true,
             ),
-            p("im0", "object", "Decoded I&M0", false),
+            p(
+                "im0",
+                "object",
+                "Decoded I&M0 fields, for index 0xAFF0",
+                false,
+            ),
             p(
                 "decoded",
                 "object",
@@ -365,7 +400,12 @@ pub static RECORD_WRITTEN_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         "profinet_record_written",
         "The answer to profinet_write_record",
         vec![
-            p("index", "number", "Record index", true),
+            p(
+                "index",
+                "number",
+                "Record index (0xAFF0 is I&M0; 0-0x7FFF are user records)",
+                true,
+            ),
             p("ok", "boolean", "Whether the device accepted it", true),
             p("error", "string", "The PNIO status when refused", false),
         ],
@@ -377,7 +417,12 @@ pub static AR_CLOSED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     ev(
         "profinet_ar_closed",
         "The AR ended: released, or the device stopped sending (watchdog)",
-        vec![p("reason", "string", "Why", true)],
+        vec![p(
+            "reason",
+            "string",
+            "Why the AR ended: released, watchdog, …",
+            true,
+        )],
         json!({"type": IDENTIFY}),
     )
 });
@@ -543,7 +588,7 @@ impl crate::llm::actions::protocol_trait::Protocol for ProfinetClientProtocol {
                     .into(),
                 required: false,
                 example: json!("raw"),
-                default: Some(json!("raw")),
+                default: Some(json!(crate::server::profinet::l2::TRANSPORT_RAW)),
             },
             ParameterDefinition {
                 name: "station_name".into(),

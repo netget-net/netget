@@ -11,14 +11,14 @@ use super::values::{FieldType, SubmoduleSpec};
 use std::fmt::Write as _;
 
 fn esc(s: &str) -> String {
-    s.chars()
+    crate::utils::sanitize::line_field(s)
+        .chars()
         .map(|c| match c {
             '&' => "&amp;".to_string(),
             '<' => "&lt;".to_string(),
             '>' => "&gt;".to_string(),
             '"' => "&quot;".to_string(),
             '\'' => "&apos;".to_string(),
-            c if c.is_control() => " ".to_string(),
             c => c.to_string(),
         })
         .collect()

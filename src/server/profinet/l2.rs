@@ -21,6 +21,10 @@ use std::sync::{Arc, Mutex};
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 
+/// The `transport` startup parameter: real Ethernet (the default) or the lab transport.
+pub const TRANSPORT_RAW: &str = "raw";
+pub const TRANSPORT_LAB: &str = "udp";
+
 /// Received PROFINET frames waiting for the protocol.
 pub const RX_QUEUE: usize = 1024;
 
