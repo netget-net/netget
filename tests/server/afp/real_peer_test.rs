@@ -163,7 +163,12 @@ async fn netatalks_test_client_logs_in_walks_reads_and_writes() -> E2EResult<()>
     cmd.arg("-V").kill_on_drop(true);
     let refused = tokio::time::timeout(std::time::Duration::from_secs(30), cmd.output())
         .await
-        .map_err(|_| format!("afparg with a wrong password did not finish:\n{}", s.log_text()))?
+        .map_err(|_| {
+            format!(
+                "afparg with a wrong password did not finish:\n{}",
+                s.log_text()
+            )
+        })?
         .map_err(|e| missing_binary("afparg", NETATALK, e))?;
     let out = String::from_utf8_lossy(&refused.stdout).to_string();
     assert!(!refused.status.success(), "{out}");

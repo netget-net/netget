@@ -30,6 +30,8 @@ pub const MAX_IDLE_TIMEOUT_SECS: u64 = 86_400;
 pub const MAX_DIR_ENTRIES: usize = 4096;
 /// The most bytes one file's content from the model may hold.
 pub const MAX_FILE_BYTES: usize = 16 * 1024 * 1024;
+/// Whether guests (No User Authent) may log in when `guest_access` is not given.
+pub const DEFAULT_GUEST_ACCESS: bool = true;
 /// The server name used when none is configured.
 pub const DEFAULT_SERVER_NAME: &str = "NetGet";
 
@@ -711,7 +713,7 @@ impl Protocol for AfpProtocol {
                 description: "Offer No User Authent (guest) logins".into(),
                 required: false,
                 example: json!(false),
-                default: Some(json!(true)),
+                default: Some(json!(DEFAULT_GUEST_ACCESS)),
             },
             ParameterDefinition {
                 name: "idle_timeout_secs".into(),
@@ -841,7 +843,7 @@ impl Server for AfpProtocol {
                 .map(|p| p.get_optional_bool("guest_access"))
                 .transpose()?
                 .flatten()
-                .unwrap_or(true);
+                .unwrap_or(DEFAULT_GUEST_ACCESS);
             ensure!(
                 guest || credentials.is_some(),
                 "with guest_access false a username and password are needed, or nobody can \

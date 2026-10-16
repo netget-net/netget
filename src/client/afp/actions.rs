@@ -131,7 +131,7 @@ pub fn all_actions() -> Vec<ActionDefinition> {
             vec![
                 volume_p(),
                 path_p("The file"),
-                p("content", "string", "What to write", true),
+                p("content", "string", "The file's new content (text, or hex with encoding hex)", true),
                 p(
                     "encoding",
                     "string",
@@ -196,7 +196,7 @@ pub static CONNECTED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
                 "Who NetGet logged in as (\"guest\" for No User Authent)",
                 true,
             ),
-            p("uam", "string", "The UAM used", true),
+            p("uam", "string", "The login method: No User Authent or Cleartxt Passwrd", true),
             p("version", "string", "The AFP version agreed", true),
         ],
     )
@@ -247,7 +247,7 @@ pub static FILE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             volume_p(),
             path_p("The file"),
             p("size", "number", "The file's size in bytes", true),
-            p("content", "string", "What was read", true),
+            p("content", "string", "The bytes read, as text or as hex (see encoding)", true),
             p(
                 "encoding",
                 "string",
@@ -294,7 +294,7 @@ pub static DONE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             ),
             volume_p(),
             path_p("The item"),
-            p("bytes_written", "number", "For a write", false),
+            p("bytes_written", "number", "How many bytes a write put in the file", false),
         ],
     )
 });
@@ -309,7 +309,7 @@ pub static ERROR_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             p("path", "string", "The path, when there was one", false),
             p("code", "number", "The AFP result code (e.g. -5000)", false),
             p("error", "string", "Its name (kFPAccessDenied …)", false),
-            p("message", "string", "What happened", true),
+            p("message", "string", "What the server refused, or what could not be read", true),
         ],
     )
 });

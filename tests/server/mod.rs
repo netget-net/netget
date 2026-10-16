@@ -320,6 +320,7 @@ pub mod lwm2m;
 
 pub mod a2s;
 pub mod activitypub;
+pub mod afp;
 pub mod anthropic;
 pub mod bfd;
 pub mod capnp_rpc;
@@ -338,7 +339,6 @@ pub mod lmtp;
 pub mod lpd;
 pub mod matrix;
 pub mod mbus;
-pub mod afp;
 pub mod milter;
 pub mod minecraft;
 pub mod msgpack_rpc;
