@@ -1143,6 +1143,8 @@ pub mod lwm2m;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod matrix;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod mbus;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod milter;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod minecraft;
