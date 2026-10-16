@@ -3,7 +3,7 @@
 # The library stays `netget` ([lib] below) and the installed command stays `netget`
 # (src/bin/netget.rs).
 name = "netget-tool"
-version = "0.3.4"
+version = "0.3.5"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 description = "Network protocol stubbing toolkit: ~280 protocol servers and clients whose responses come from an LLM, a script, a static rule or a person."
