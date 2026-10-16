@@ -202,6 +202,9 @@ async fn rpc_errors_bad_arguments_and_bounds() {
             nokey(proc_::ALL, DOMAIN, "bad\tmap", "all"),
             call(proc_::DOMAIN, vec![s("")], "bool"),
             key(proc_::MATCH, DOMAIN, "passwd.byname", "alice", "val"),
+            // ypmatch retries a missing key with its C terminator appended.
+            key(proc_::MATCH, DOMAIN, "passwd.byname", "mallory\u{0}", "val"),
+            key(proc_::MATCH, DOMAIN, "passwd.byname", "mal\u{1}lory", "val"),
         ]),
     )
     .await;
@@ -230,9 +233,17 @@ async fn rpc_errors_bad_arguments_and_bounds() {
     );
     assert_eq!(r[10]["result"], 0, "DOMAIN of an empty name is false");
     assert_eq!(stat(&r[11]), "YP_TRUE", "the connection survives all of it");
-    assert!(
-        support::events(&s0.state, s0.id, "nis_match").await.len() == 1,
-        "no refused call reached the model"
+    assert_eq!(
+        stat(&r[12]),
+        "YP_NOKEY",
+        "a trailing NUL is the key's terminator, not a bad argument"
+    );
+    assert_eq!(stat(&r[13]), "YP_BADARGS", "any other control character");
+    let asked: Vec<Value> = support::events(&s0.state, s0.id, "nis_match").await;
+    assert_eq!(
+        asked.iter().map(|e| e["key"].clone()).collect::<Vec<_>>(),
+        [json!("mallory"), json!("alice")],
+        "no refused call reached the model, and the NUL never does"
     );
 
     // RPC version 3: MSG_DENIED / RPC_MISMATCH.

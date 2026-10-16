@@ -244,7 +244,15 @@ fn name(b: Vec<u8>) -> std::result::Result<String, Refusal> {
 
 /// A key: non-empty UTF-8 text without control characters. NIS keys are text in every map
 /// a client looks up; anything else is a malformed request rather than data.
-fn key(b: Vec<u8>) -> std::result::Result<String, Refusal> {
+///
+/// One trailing NUL is dropped: maps built the SunOS way stored keys with their C string
+/// terminator, so yp-tools' `ypmatch` retries a key that was not found with the NUL
+/// appended. The retry then reads the same as the first try (YP_NOKEY), as it does against
+/// ypserv, instead of YP_BADARGS.
+fn key(mut b: Vec<u8>) -> std::result::Result<String, Refusal> {
+    if b.last() == Some(&0) {
+        b.pop();
+    }
     let s = String::from_utf8(b).map_err(|_| Refusal::BadArgs)?;
     if s.is_empty() || crate::utils::sanitize::has_controls(&s) {
         return Err(Refusal::BadArgs);

@@ -126,14 +126,14 @@ async fn start_ypserv() -> (Ypserv, u32) {
         .port();
     let mut c = privileged("ypserv");
     c.args(["-d", "-p", &port.to_string()]);
-    let mut server = Ypserv {
+    let server = Ypserv {
         port,
         process: Some(ToolProcess::spawn(c, "ypserv", linux::YPSERV).expect("ypserv starts")),
     };
     // Ready once rpcbind knows it.
     let ready = tokio::time::timeout(Duration::from_secs(20), async {
         loop {
-            let (_, text) = linux::rpcinfo(&["-p", "127.0.0.1"]);
+            let (_, text) = linux::rpcinfo(&["-p", "127.0.0.1"]).await;
             if linux::ypserv_rows(&text)
                 .iter()
                 .any(|(v, n, p)| v == "2" && n == "tcp" && *p == port.to_string())
@@ -145,7 +145,7 @@ async fn start_ypserv() -> (Ypserv, u32) {
     })
     .await;
     if ready.is_err() {
-        let lines = server.process.take().map(|p| p.lines()).unwrap_or_default();
+        let lines = server.process.as_ref().map(|p| p.lines()).unwrap_or_default();
         panic!("ypserv never registered with rpcbind: {lines:?}");
     }
     (server, order)
@@ -199,7 +199,7 @@ async fn reply(state: &AppState, id: ClientId, op: &str, nth: usize) -> Value {
 async fn netget_reads_ypserv_maps_through_rpcbind() {
     let _lock = linux::lock_program();
     linux::require_rpcbind();
-    let (mut ypserv, order) = start_ypserv().await;
+    let (ypserv, order) = start_ypserv().await;
 
     let (state, id) = client("127.0.0.1:111".into(), json!({"domain": DOMAIN}), CHAIN).await;
     let maps = reply(&state, id, "nis_maplist", 0).await;
@@ -316,5 +316,4 @@ print(json.dumps({'actions':a}))"#;
         flat.contains(DOMAIN) && flat.contains("dave") && flat.contains("group.byname"),
         "tshark read NetGet's calls: {flat}"
     );
-    drop(ypserv.process.take());
 }

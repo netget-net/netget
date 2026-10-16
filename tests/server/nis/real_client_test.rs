@@ -64,7 +64,7 @@ async fn yp_tools_and_ypbind_read_netget() {
     let port = s0.port.to_string();
 
     // The registration, as rpcbind holds it.
-    let (ok, text) = linux::rpcinfo(&["-p", "127.0.0.1"]);
+    let (ok, text) = linux::rpcinfo(&["-p", "127.0.0.1"]).await;
     assert!(ok, "{text}");
     let mut rows = linux::ypserv_rows(&text);
     rows.sort();
@@ -77,7 +77,7 @@ async fn yp_tools_and_ypbind_read_netget() {
         "{text}"
     );
     for t in ["-t", "-u"] {
-        let (ok, text) = linux::rpcinfo(&[t, "127.0.0.1", "ypserv", "2"]);
+        let (ok, text) = linux::rpcinfo(&[t, "127.0.0.1", "ypserv", "2"]).await;
         assert!(
             ok && text.contains("program 100004 version 2 ready and waiting"),
             "rpcinfo {t}: {text}"
@@ -257,8 +257,10 @@ async fn yp_tools_and_ypbind_read_netget() {
             .is_some_and(|t| t.contains("passwd.byuid")),
         "{text}"
     );
-    drop(ypbind);
+    // The guard kills ypbind as root first: the ToolProcess, run through sudo, cannot be
+    // signalled by an unprivileged test, and waiting on it would hang.
     drop(bind);
+    drop(ypbind);
 
     // What NetGet's model was shown: every procedure the tools used.
     let walks = support::events(&s0.state, s0.id, "nis_map_read").await;
@@ -282,7 +284,7 @@ async fn yp_tools_and_ypbind_read_netget() {
     s0.state.remove_server(s0.id).await;
     let gone = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
-            let (_, text) = linux::rpcinfo(&["-p", "127.0.0.1"]);
+            let (_, text) = linux::rpcinfo(&["-p", "127.0.0.1"]).await;
             if linux::ypserv_rows(&text).is_empty() {
                 return text;
             }

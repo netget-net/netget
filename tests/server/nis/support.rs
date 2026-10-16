@@ -254,9 +254,11 @@ pub mod linux {
             .collect()
     }
 
-    pub fn rpcinfo(args: &[&str]) -> (bool, String) {
+    /// rpcinfo, on the blocking pool: an in-process NetGet server must keep running while it
+    /// waits, and `#[tokio::test]` has one thread.
+    pub async fn rpcinfo(args: &[&str]) -> (bool, String) {
         let mut c = Command::new("rpcinfo");
         c.args(args);
-        run(c, "rpcinfo", RPCBIND)
+        run_async(c, "rpcinfo", RPCBIND).await
     }
 }
