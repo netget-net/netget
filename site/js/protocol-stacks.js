@@ -193,6 +193,7 @@ export const protocolStacks = [
     ["openai", "ETH>IP>TCP>HTTP>OPENAI"],
     ["openai", "ETH>IP>TCP>TLS>HTTPS>OpenAI"],
     ["openapi", "ETH>IP>TCP>HTTP>OPENAPI"],
+    ["openflow", "ETH>IP>TCP>OPENFLOW"],
     ["openid", "ETH>IP>TCP>HTTP>OPENID"],
     ["openidconnect", "ETH>IP>TCP>HTTP>OIDC"],
     ["openvpn", "ETH>IP>UDP>OPENVPN"],

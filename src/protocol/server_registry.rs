@@ -437,6 +437,10 @@ impl ServerRegistry {
         #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::vxlan::actions::VxlanProtocol::new()));
         #[cfg(not(target_arch = "wasm32"))]
+        self.register(Arc::new(
+            crate::server::openflow::actions::OpenFlowProtocol::new(),
+        ));
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::rsync::actions::RsyncProtocol::new()));
         #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::pfcp::actions::PfcpProtocol::new()));
@@ -1693,6 +1697,7 @@ pub(crate) const ALL_KNOWN_PROTOCOLS: &[(&str, &str)] = &[
     ("D-Bus", "a native build (not the browser)"),
     ("BFD", "a native build (not the browser)"),
     ("VXLAN", "a native build (not the browser)"),
+    ("OpenFlow", "a native build (not the browser)"),
     ("rsync", "a native build (not the browser)"),
     ("PFCP", "a native build (not the browser)"),
     ("Matrix", "a native build (not the browser)"),

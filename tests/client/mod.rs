@@ -255,6 +255,7 @@ pub mod msgpack_rpc;
 pub mod ngap;
 pub mod ninep;
 pub mod onvif;
+pub mod openflow;
 pub mod pfcp;
 pub mod pulsar;
 pub mod radsec;
