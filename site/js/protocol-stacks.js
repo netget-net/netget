@@ -180,6 +180,8 @@ export const protocolStacks = [
     ["nfs", "ETH>IP>TCP>RPC>NFS"],
     ["ngap", "ETH>IP>SCTP>NGAP"],
     ["ninep", "ETH>IP>TCP>9P"],
+    ["nis", "ETH>IP>TCP>ONC-RPC>NIS"],
+    ["nis", "ETH>IP>TCP|UDP>ONC-RPC>NIS"],
     ["nntp", "ETH>IP>TCP>NNTP"],
     ["nostr", "ETH>IP>TCP>HTTP>WS>NOSTR"],
     ["npm", "ETH>IP>TCP>HTTP>NPM"],

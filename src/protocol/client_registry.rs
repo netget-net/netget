@@ -706,6 +706,10 @@ impl ClientRegistry {
         ));
         #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
+            crate::client::nis::actions::NisClientProtocol::new(),
+        ));
+        #[cfg(not(target_arch = "wasm32"))]
+        self.register(Arc::new(
             crate::client::guacamole::actions::GuacamoleClientProtocol::new(),
         ));
         #[cfg(not(target_arch = "wasm32"))]
@@ -1304,6 +1308,7 @@ pub(crate) const ALL_KNOWN_CLIENT_PROTOCOLS: &[(&str, &str)] = &[
     ("Matrix", "a native build (not the browser)"),
     ("libp2p", "a native build (not the browser)"),
     ("SunRPC", "a native build (not the browser)"),
+    ("NIS", "a native build (not the browser)"),
     ("Guacamole", "a native build (not the browser)"),
     ("ActivityPub", "a native build (not the browser)"),
     ("Stratum", "a native build (not the browser)"),

@@ -139,6 +139,7 @@ fn golden_duals_map() {
         "Matrix",
         "libp2p",
         "SunRPC",
+        "NIS",
         "Guacamole",
         "ActivityPub",
         "Stratum",

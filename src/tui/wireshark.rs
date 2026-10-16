@@ -495,6 +495,9 @@ pub fn wire_for(protocol: &str) -> Wire {
         "nfs" => with_display(tcp("rpc"), "nfs"),
         // The portmapper is ONC RPC on TCP and UDP; rpc decodes it and portmap names its calls.
         "sunrpc" => with_display(either("rpc"), "portmap"),
+        // NIS is ONC RPC program 100004 on TCP and UDP; rpc decodes it and hands each call to
+        // `ypserv` by program number (checked against `tshark -G protocols`).
+        "nis" => with_display(either("rpc"), "ypserv"),
         "modbus" => tcp("mbtcp"),
         // IPP is an HTTP payload; Wireshark reaches it through the http
         // dissector, which picks ipp by media type.

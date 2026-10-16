@@ -738,6 +738,8 @@ pub mod msgpack_rpc;
 pub mod ngap;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ninep;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod nis;
 pub mod oci_registry;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod onvif;
