@@ -124,7 +124,21 @@ async fn start_ypserv() -> (Ypserv, u32) {
         .local_addr()
         .unwrap()
         .port();
-    let mut c = privileged("ypserv");
+    // ypserv runs as root through sudo, so a missing binary would read as a sudo error; look
+    // first, and fail naming the package.
+    let ypserv_path = crate::helpers::real_server::find_binary("ypserv")
+        .or_else(|| Some(std::path::PathBuf::from("/usr/sbin/ypserv")).filter(|p| p.exists()))
+        .unwrap_or_else(|| {
+            panic!(
+                "{}",
+                crate::helpers::real_server::missing_binary("ypserv", linux::YPSERV, "not found")
+            )
+        });
+    let mut version = std::process::Command::new(&ypserv_path);
+    version.arg("--version");
+    let (_, v) = linux::run(version, "ypserv", linux::YPSERV);
+    println!("peer: {}", v.lines().next().unwrap_or_default());
+    let mut c = privileged(&ypserv_path.to_string_lossy());
     c.args(["-d", "-p", &port.to_string()]);
     let server = Ypserv {
         port,

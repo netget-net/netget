@@ -26,8 +26,9 @@ use std::time::Duration;
 const ALICE: &str = "alice:x:1000:1000:Alice Liddell:/home/alice:/bin/bash";
 const BOB: &str = "bob:x:1001:100::/home/bob:/bin/sh";
 
-fn yp(binary: &'static str, args: &[&str]) -> Command {
-    let mut c = Command::new(binary);
+/// A yp-tools command. Each call site names its binary in `Command::new("…")`, which is what
+/// `scripts/beta_evidence_table.py` reads to learn which peers this suite drives.
+fn yp(mut c: Command, args: &[&str]) -> Command {
     c.args(args);
     c
 }
@@ -87,7 +88,7 @@ async fn yp_tools_and_ypbind_read_netget() {
     // ypcat -h: ALL over TCP, found through rpcbind, no ypbind involved.
     let (ok, text) = linux::run_async(
         yp(
-            "ypcat",
+            Command::new("ypcat"),
             &["-h", "127.0.0.1", "-d", DOMAIN, "-k", "passwd.byname"],
         ),
         "ypcat",
@@ -103,7 +104,10 @@ async fn yp_tools_and_ypbind_read_netget() {
     );
     // "hosts" is a nickname for hosts.byname: one line per key, so per host name.
     let (ok, text) = linux::run_async(
-        yp("ypcat", &["-h", "127.0.0.1", "-d", DOMAIN, "hosts"]),
+        yp(
+            Command::new("ypcat"),
+            &["-h", "127.0.0.1", "-d", DOMAIN, "hosts"],
+        ),
         "ypcat",
         linux::YP_TOOLS,
     )
@@ -119,7 +123,10 @@ async fn yp_tools_and_ypbind_read_netget() {
         "{text}"
     );
     let (ok, text) = linux::run_async(
-        yp("ypcat", &["-h", "127.0.0.1", "-d", DOMAIN, "shadow.byname"]),
+        yp(
+            Command::new("ypcat"),
+            &["-h", "127.0.0.1", "-d", DOMAIN, "shadow.byname"],
+        ),
         "ypcat",
         linux::YP_TOOLS,
     )
@@ -127,7 +134,7 @@ async fn yp_tools_and_ypbind_read_netget() {
     assert!(!ok && text.contains("No such map"), "{text}");
     let (ok, text) = linux::run_async(
         yp(
-            "ypcat",
+            Command::new("ypcat"),
             &["-h", "127.0.0.1", "-d", "other.test", "passwd.byname"],
         ),
         "ypcat",
@@ -139,7 +146,7 @@ async fn yp_tools_and_ypbind_read_netget() {
     // yppoll -h: DOMAIN, ORDER and MASTER over UDP.
     let (ok, text) = linux::run_async(
         yp(
-            "yppoll",
+            Command::new("yppoll"),
             &["-h", "127.0.0.1", "-d", DOMAIN, "passwd.byname"],
         ),
         "yppoll",
@@ -159,19 +166,40 @@ async fn yp_tools_and_ypbind_read_netget() {
     std::fs::write(config.path(), format!("domain {DOMAIN} server 127.0.0.1\n")).unwrap();
     let path = config.path().to_string_lossy().to_string();
     let bind = Ypbind { config };
+    // ypbind runs as root through sudo, so a missing binary would read as a sudo error; look
+    // first, and fail naming the package.
+    let ypbind_path = crate::helpers::real_server::find_binary("ypbind")
+        .or_else(|| Some(std::path::PathBuf::from("/usr/sbin/ypbind")).filter(|p| p.exists()))
+        .unwrap_or_else(|| {
+            panic!(
+                "{}",
+                crate::helpers::real_server::missing_binary("ypbind", linux::YPBIND, "not found")
+            )
+        });
+    let mut version = Command::new(&ypbind_path);
+    version.arg("--version");
+    let (_, v) = linux::run(version, "ypbind", linux::YPBIND);
+    println!("peer: {}", v.lines().next().unwrap_or_default());
     let mut start = privileged("unshare");
     start.args([
         "--uts",
         "sh",
         "-c",
-        &format!("domainname {DOMAIN} && exec ypbind -n -no-ping -f {path}"),
+        &format!(
+            "domainname {DOMAIN} && exec {} -n -no-ping -f {path}",
+            ypbind_path.display()
+        ),
     ]);
     let ypbind = crate::helpers::real_server::ToolProcess::spawn(start, "ypbind", linux::YPBIND)
         .expect("ypbind starts");
     let bound = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
-            let (ok, text) =
-                linux::run_async(yp("ypwhich", &["-d", DOMAIN]), "ypwhich", linux::YP_TOOLS).await;
+            let (ok, text) = linux::run_async(
+                yp(Command::new("ypwhich"), &["-d", DOMAIN]),
+                "ypwhich",
+                linux::YP_TOOLS,
+            )
+            .await;
             if ok {
                 return text;
             }
@@ -183,14 +211,20 @@ async fn yp_tools_and_ypbind_read_netget() {
     assert_eq!(bound.trim(), "127.0.0.1");
 
     let (ok, text) = linux::run_async(
-        yp("ypmatch", &["-d", DOMAIN, "alice", "passwd.byname"]),
+        yp(
+            Command::new("ypmatch"),
+            &["-d", DOMAIN, "alice", "passwd.byname"],
+        ),
         "ypmatch",
         linux::YP_TOOLS,
     )
     .await;
     assert!(ok && text.trim() == ALICE, "{text}");
     let (ok, text) = linux::run_async(
-        yp("ypmatch", &["-d", DOMAIN, "-k", "100", "10", "group.bygid"]),
+        yp(
+            Command::new("ypmatch"),
+            &["-d", DOMAIN, "-k", "100", "10", "group.bygid"],
+        ),
         "ypmatch",
         linux::YP_TOOLS,
     )
@@ -202,7 +236,10 @@ async fn yp_tools_and_ypbind_read_netget() {
         "{text}"
     );
     let (ok, text) = linux::run_async(
-        yp("ypmatch", &["-d", DOMAIN, "mallory", "passwd.byname"]),
+        yp(
+            Command::new("ypmatch"),
+            &["-d", DOMAIN, "mallory", "passwd.byname"],
+        ),
         "ypmatch",
         linux::YP_TOOLS,
     )
@@ -211,7 +248,7 @@ async fn yp_tools_and_ypbind_read_netget() {
 
     // ypwhich -m: MAPLIST, then MASTER for each map.
     let (ok, text) = linux::run_async(
-        yp("ypwhich", &["-d", DOMAIN, "-m"]),
+        yp(Command::new("ypwhich"), &["-d", DOMAIN, "-m"]),
         "ypwhich",
         linux::YP_TOOLS,
     )
@@ -227,7 +264,7 @@ async fn yp_tools_and_ypbind_read_netget() {
     // yp_all against the bound server.
     let (_, text) = linux::run_async(
         yp(
-            "yptest",
+            Command::new("yptest"),
             &["-d", DOMAIN, "-m", "passwd.byname", "-u", "alice"],
         ),
         "yptest",
