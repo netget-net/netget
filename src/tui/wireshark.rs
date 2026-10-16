@@ -184,6 +184,10 @@ which BPF rejects on a loopback device - capture on the interface the device or 
 The lab transport (`transport: \"udp\"`) carries whole frames inside UDP datagrams, which no \
 dissector unwraps; only its PNIO RPC on UDP 34964 is readable there.";
 
+const ETHERCAT_NOTE: &str = "Raw EtherCAT is Ethernet with EtherType 0x88A4, which BPF rejects \
+on a loopback device - capture on the segment's interface. The UDP transport (`transport: \
+\"udp\"`) is EtherCAT-in-UDP on port 34980, which tshark dissects as it is, loopback included.";
+
 const CARP_NOTE: &str = "If this server is running the `carp` variant, add `-d \
 ip.proto==112,carp`. CARP shares IP protocol 112 with VRRP and Wireshark registers `carp` as \
 the default for nothing, so without that clause a CARP packet is dissected as VRRP - and a \
@@ -574,6 +578,15 @@ pub fn wire_for(protocol: &str) -> Wire {
         "profinet" => with_note(
             raw("ether proto 0x8892 or udp port 34964", "pn_dcp || pn_rt || pn_io"),
             PROFINET_NOTE,
+        ),
+        // EtherCAT frames ride EtherType 0x88A4 or UDP 34980; tshark's defaults map both to
+        // `ecatf`, which hands the datagrams to `ecat` and mailboxes to `ecat_mailbox`.
+        "ethercat" => with_note(
+            raw(
+                "ether proto 0x88a4 or udp port 34980",
+                "ecatf || ecat || ecat_mailbox",
+            ),
+            ETHERCAT_NOTE,
         ),
         // Neighbor Discovery is ICMPv6 types 133-137 (RS, RA, NS, NA, Redirect).
         "ndp" => raw("icmp6", "icmpv6.type >= 133 && icmpv6.type <= 137"),

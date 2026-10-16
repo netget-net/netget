@@ -698,6 +698,8 @@ pub mod db2;
 pub mod dbus;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod epp;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod ethercat;
 pub mod gtp;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod guacamole;

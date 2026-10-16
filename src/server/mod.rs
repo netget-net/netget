@@ -1121,6 +1121,8 @@ pub mod diameter;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod epp;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod ethercat;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod guacamole;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod inetd;

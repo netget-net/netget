@@ -445,6 +445,10 @@ impl ServerRegistry {
             crate::server::profinet::actions::ProfinetProtocol::new(),
         ));
         #[cfg(not(target_arch = "wasm32"))]
+        self.register(Arc::new(
+            crate::server::ethercat::actions::EthercatProtocol::new(),
+        ));
+        #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::rsync::actions::RsyncProtocol::new()));
         #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::pfcp::actions::PfcpProtocol::new()));
@@ -1703,6 +1707,7 @@ pub(crate) const ALL_KNOWN_PROTOCOLS: &[(&str, &str)] = &[
     ("VXLAN", "a native build (not the browser)"),
     ("OpenFlow", "a native build (not the browser)"),
     ("PROFINET", "a native build (not the browser)"),
+    ("EtherCAT", "a native build (not the browser)"),
     ("rsync", "a native build (not the browser)"),
     ("PFCP", "a native build (not the browser)"),
     ("Matrix", "a native build (not the browser)"),
