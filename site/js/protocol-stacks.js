@@ -78,6 +78,7 @@ export const protocolStacks = [
     ["epp", "ETH>IP>TCP>TLS>EPP"],
     ["etcd", "ETH>IP>TCP>GRPC>ETCD"],
     ["etcd", "ETH>IP>TCP>gRPC>etcd"],
+    ["ethercat", "ETH>EtherCAT"],
     ["ethernet_ip", "ETH>IP>TCP>EtherNet/IP>CIP"],
     ["fastcgi", "ETH>IP>TCP>FastCGI"],
     ["finger", "ETH>IP>TCP>FINGER"],

@@ -1,18 +1,20 @@
 //! The startup privilege gate asks what *this* start needs, not what the protocol declares for
 //! its real transport.
 //!
-//! LLDP, STP, CDP, EAPOL, NDP, VRRP, raw IP and PROFINET declare raw-socket or packet-capture
-//! privilege, honestly, for the transport an operator uses. Each also has a UDP test transport that sends
-//! the same frames over an ordinary socket and needs nothing. The gate used to read the declared
-//! requirement before the startup parameters, so `transport: "udp"` was refused on any
-//! unprivileged host and every suite had to call `Server::spawn` directly to get past it.
+//! LLDP, STP, CDP, EAPOL, NDP, VRRP, raw IP, PROFINET and EtherCAT declare raw-socket or
+//! packet-capture privilege, honestly, for the transport an operator uses. Each also has a UDP
+//! transport that sends the same frames over an ordinary socket and needs nothing (for EtherCAT
+//! it is the standard EtherCAT-in-UDP encapsulation rather than a test transport). The gate
+//! used to read the declared requirement before the startup parameters, so `transport: "udp"`
+//! was refused on any unprivileged host and every suite had to call `Server::spawn` directly to
+//! get past it.
 //! `Protocol::startup_privilege_requirement` now carries the per-start answer.
 
 use netget::protocol::metadata::PrivilegeRequirement;
 use serde_json::json;
 
 const UDP_CAPABLE: &[&str] = &[
-    "lldp", "stp", "cdp", "eapol", "ndp", "vrrp", "rawip", "profinet",
+    "lldp", "stp", "cdp", "eapol", "ndp", "vrrp", "rawip", "profinet", "ethercat",
 ];
 
 fn key(name: &str) -> String {

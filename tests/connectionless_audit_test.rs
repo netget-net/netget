@@ -112,6 +112,12 @@ const CONNECTIONLESS_EXCEPTIONS: &[&str] = &[
     // legitimately silent between record reads. DCP and the RPC datagrams outside an AR create
     // no row, so the sweep would have nothing of its own to reap and live ARs to lose.
     "PROFINET",
+    // EtherCAT's rows are the masters driving the segment: one is added on a master's first
+    // frame and the engine closes it after 30 s without one. A master is legitimately quiet for
+    // longer than 10 s between configuration steps (and polls nothing while a person answers a
+    // parked state change), and what it configured — station addresses, SyncManagers, the AL
+    // state — lives in the slave, not in a row the sweep could usefully reap.
+    "EtherCAT",
 ];
 
 /// Registry names whose source directory does not follow any of the mechanical

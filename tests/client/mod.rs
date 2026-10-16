@@ -235,6 +235,7 @@ pub mod consul;
 pub mod db2;
 pub mod dbus;
 pub mod epp;
+pub mod ethercat;
 pub mod gtp;
 pub mod guacamole;
 pub mod hls;

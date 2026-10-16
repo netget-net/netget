@@ -205,6 +205,7 @@ fn canonical_port(protocol: &str, framing: Framing) -> u16 {
         "zookeeper" => 2181,
         "openflow" => 6653,
         "profinet" => 34964,
+        "ethercat" => 34980,
         _ => return SYNTHETIC_SERVER_PORT,
     };
     // A UDP-only port number reused on TCP (or the reverse) is harmless — the

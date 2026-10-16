@@ -327,6 +327,7 @@ pub mod clickhouse;
 pub mod consul;
 pub mod dbus;
 pub mod epp;
+pub mod ethercat;
 pub mod guacamole;
 pub mod inetd;
 pub mod jmap;

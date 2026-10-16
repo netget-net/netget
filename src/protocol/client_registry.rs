@@ -643,6 +643,10 @@ impl ClientRegistry {
         ));
         #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
+            crate::client::ethercat::actions::EthercatClientProtocol::new(),
+        ));
+        #[cfg(not(target_arch = "wasm32"))]
+        self.register(Arc::new(
             crate::client::rsync::actions::RsyncClientProtocol::new(),
         ));
         #[cfg(unix)]
@@ -1275,6 +1279,7 @@ pub(crate) const ALL_KNOWN_CLIENT_PROTOCOLS: &[(&str, &str)] = &[
     ("VXLAN", "a native build (not the browser)"),
     ("OpenFlow", "a native build (not the browser)"),
     ("PROFINET", "a native build (not the browser)"),
+    ("EtherCAT", "a native build (not the browser)"),
     ("rsync", "a native build (not the browser)"),
     ("RDP", "a Unix build (macOS or Linux)"),
     ("SPICE", "a native build (not the browser)"),
