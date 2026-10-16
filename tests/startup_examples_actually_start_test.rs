@@ -104,11 +104,15 @@ const NEEDS_A_KERNEL_FACILITY: &[(&str, &str)] = &[
     (
         "can",
         "SocketCAN needs the Linux kernel's AF_CAN address family, which macOS and Windows do \
-         not have",
+         not have, and the examples name a `vcan0` interface someone has to create",
     ),
     (
         "m3ua",
         "M3UA's transport is SCTP, and macOS ships neither kernel support nor headers for it",
+    ),
+    (
+        "ngap",
+        "NGAP's transport is SCTP, and macOS ships neither kernel support nor headers for it",
     ),
 ];
 
@@ -133,14 +137,25 @@ fn hardware_skip_reason(protocol: &str) -> Option<&'static str> {
             .map(|(_, reason)| *reason)
     };
     matches(NEEDS_HARDWARE_OR_AN_OS_OBJECT).or_else(|| {
-        // On Linux these two have their facility (with `vcan` loaded, and the `sctp` module),
+        // On Linux these have their facility (a `vcan0` interface, and the `sctp` module),
         // so the skip is the host's and lifts there rather than being a standing exemption.
-        if cfg!(target_os = "linux") {
-            None
-        } else {
-            matches(NEEDS_A_KERNEL_FACILITY)
-        }
+        let reason = matches(NEEDS_A_KERNEL_FACILITY)?;
+        let present = cfg!(target_os = "linux")
+            && (lower != "can" || std::path::Path::new("/sys/class/net/vcan0").exists());
+        (!present).then_some(reason)
     })
+}
+
+/// The tool or system library this host lacks that the protocol's own dependency probe says
+/// a start needs — the same check `server_startup` refuses on, so the protocol's refusal is
+/// the correct behaviour and the skip is the host's. CI installs `protoc` and `capnp`, so there
+/// gRPC, gRPC-Web, ConnectRPC and Cap'n Proto RPC are started rather than skipped.
+fn missing_dependency(
+    protocol: &dyn netget::llm::actions::protocol_trait::Server,
+) -> Option<String> {
+    let caps = netget::privilege::SystemCapabilities::detect();
+    netget::protocol::dependencies::startup_blocker(&protocol.get_dependencies(), &caps)
+        .map(|dep| format!("needs {}, which this host lacks", dep.name()))
 }
 
 /// Does this requirement block a start *on port 0*?
@@ -317,6 +332,10 @@ async fn every_startup_example_reaches_running() {
     for (name, protocol) in protocols {
         if let Some(reason) = hardware_skip_reason(&name) {
             skipped.push((name, reason.to_string()));
+            continue;
+        }
+        if let Some(reason) = missing_dependency(protocol.as_ref()) {
+            skipped.push((name, reason));
             continue;
         }
         let privilege = protocol.metadata().privilege_requirement;
