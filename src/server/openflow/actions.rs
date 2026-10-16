@@ -132,14 +132,14 @@ fn flow_mod_action() -> ActionDefinition {
             ),
             p(
                 "cookie",
-                "number",
-                "Opaque 64-bit value to tag the flow",
+                "string",
+                "Opaque 64-bit value to tag the flow, as hex (\"0x1f\") or decimal; a string because a JSON number cannot carry every 64-bit value exactly",
                 false,
             ),
             p(
                 "cookie_mask",
-                "number",
-                "For modify/delete: which cookie bits must match",
+                "string",
+                "For modify/delete: which cookie bits must match, as hex (\"0xffff\") or decimal",
                 false,
             ),
             p(

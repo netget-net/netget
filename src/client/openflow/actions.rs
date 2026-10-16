@@ -91,8 +91,8 @@ fn packet_in_action() -> ActionDefinition {
             ),
             p(
                 "cookie",
-                "number",
-                "Cookie of the flow that sent it up (default 0)",
+                "string",
+                "Cookie of the flow that sent it up, as hex (\"0x1f\") or decimal (default 0)",
                 false,
             ),
         ],
