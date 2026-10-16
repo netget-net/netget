@@ -52,11 +52,51 @@ document.querySelectorAll('.copy-btn').forEach(function (btn) {
 })();
 
 // Tabbed code blocks: one panel at a time, and the copy button follows it.
+// Blocks marked data-sync="pm" share the package manager: picking pnpm in one
+// picks it in the other and rewrites the MCP commands to launch through it.
+var MCP_RUNNERS = {
+    // yarn dlx logs its install to stdout, which would corrupt MCP's JSON-RPC; -q silences it.
+    npm: ['npx', '-y'], pnpm: ['pnpx'], yarn: ['yarn', 'dlx', '-q'], bun: ['bunx']
+};
+
+function escapeHtml(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function renderMcp(pm) {
+    var runner = MCP_RUNNERS[pm];
+    if (!runner) return;
+    var command = runner[0];
+    var args = runner.slice(1).concat(['@smotana/netget', '--mcp']);
+    var line = runner.concat(['@smotana/netget', '--mcp']).join(' ');
+    var str = function (v) { return '<span class="str">"' + escapeHtml(v) + '"</span>'; };
+    var render = {
+        json: function () {
+            return '{\n  ' + str('mcpServers') + ': {\n    ' + str('netget') + ': {\n      ' +
+                str('command') + ': ' + str(command) + ',\n      ' +
+                str('args') + ': [' + args.map(str).join(', ') + ']\n    }\n  }\n}';
+        },
+        claude: function () { return 'claude mcp add netget -- ' + line; },
+        codex: function () { return 'codex mcp add netget -- ' + line; },
+        gemini: function () { return 'gemini mcp add netget ' + line; },
+        vscode: function () {
+            return escapeHtml("code --add-mcp '" + JSON.stringify({ name: 'netget', command: command, args: args }) + "'");
+        }
+    };
+    document.querySelectorAll('code[data-mcp]').forEach(function (code) {
+        var fn = render[code.getAttribute('data-mcp')];
+        if (fn) code.innerHTML = fn();
+    });
+}
+
+var pmBlocks = [];
+
 document.querySelectorAll('.code-block.tabs').forEach(function (block) {
     var bar = block.querySelector('.tab-bar');
     var copy = block.querySelector('.copy-btn');
     var panels = block.querySelectorAll('.tab-panel');
     var buttons = [];
+    var synced = block.getAttribute('data-sync') === 'pm';
 
     function select(i) {
         panels.forEach(function (p, j) { p.classList.toggle('active', i === j); });
@@ -64,15 +104,26 @@ document.querySelectorAll('.code-block.tabs').forEach(function (block) {
         if (copy) copy.setAttribute('data-target', panels[i].getAttribute('data-copy') || panels[i].id);
     }
 
+    function selectPm(pm) {
+        panels.forEach(function (p, i) { if (p.getAttribute('data-pm') === pm) select(i); });
+    }
+
     panels.forEach(function (panel, i) {
         var b = document.createElement('button');
         b.type = 'button';
         b.setAttribute('role', 'tab');
         b.textContent = panel.getAttribute('data-tab');
-        b.addEventListener('click', function () { select(i); });
+        b.addEventListener('click', function () {
+            if (!synced) return select(i);
+            var pm = panel.getAttribute('data-pm');
+            pmBlocks.forEach(function (f) { f(pm); });
+            renderMcp(pm);
+        });
         bar.appendChild(b);
         buttons.push(b);
     });
+
+    if (synced) pmBlocks.push(selectPm);
 
     var ua = navigator.userAgent;
     var initial = !block.hasAttribute('data-pick-os') ? 0
