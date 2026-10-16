@@ -64,6 +64,7 @@ jobs:
           - m3ua_message
           - h323_per
           - openflow_message
+          - profinet_frame
           - bgp_message
           - ndef_message
           - nfc_apdu
