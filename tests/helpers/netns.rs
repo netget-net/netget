@@ -115,3 +115,48 @@ impl Drop for Netns {
             .output();
     }
 }
+
+/// A veth pair with both ends in the host namespace and no addresses, for raw Ethernet between
+/// two processes on one host (EtherCAT needs no IP: a master on one end, a slave on the other).
+/// IPv6 is switched off on both ends so the kernel's own neighbour discovery stays off the
+/// link. Root or passwordless sudo, and iproute2; neither is a skip.
+pub struct VethPair {
+    pub a: String,
+    pub b: String,
+}
+
+impl VethPair {
+    /// `tag` keeps names apart between tests (≤ 3 characters).
+    pub fn create(tag: &str) -> Self {
+        let pid = std::process::id() % 100_000;
+        let (a, b) = (format!("nge{tag}{pid}a"), format!("nge{tag}{pid}b"));
+        let _ = privileged("ip").args(["link", "del", &a]).output();
+        let ip = |args: &[&str]| {
+            let mut c = privileged("ip");
+            c.args(args);
+            run(c, &format!("ip {}", args.join(" ")));
+        };
+        ip(&["link", "add", &a, "type", "veth", "peer", "name", &b]);
+        for end in [&a, &b] {
+            let _ = privileged("sysctl")
+                .args(["-qw", &format!("net.ipv6.conf.{end}.disable_ipv6=1")])
+                .output();
+            ip(&["link", "set", end, "up"]);
+        }
+        VethPair { a, b }
+    }
+
+    /// The MAC address of one end, as tshark prints it.
+    pub fn mac(&self, end: &str) -> String {
+        std::fs::read_to_string(format!("/sys/class/net/{end}/address"))
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    }
+}
+
+impl Drop for VethPair {
+    fn drop(&mut self) {
+        let _ = privileged("ip").args(["link", "del", &self.a]).output();
+    }
+}

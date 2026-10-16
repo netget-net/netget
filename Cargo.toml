@@ -606,6 +606,11 @@ async-stomp = "0.6.3"
 # `std` only: no forking, no persistence file, so a failing case is reported by the test
 # binary rather than written into the source tree.
 proptest = { version = "1", default-features = false, features = ["std", "bit-set"] }
+# An independent EtherCAT MainDevice that drives the EtherCAT slave (tests/server/ethercat):
+# its frames reach the slave over EtherCAT-in-UDP through a test bridge on every platform, and
+# over its own raw socket on a veth in the pair job. NetGet's own master is hand-written and
+# does not use it, so it is evidence for the slave and never a peer for the master.
+ethercrab = { version = "0.7", default-features = false, features = ["std"] }
 
 [build-dependencies]
 # Protocol buffers for the etcd and gNMI servers. protoc comes from protoc-bin-vendored unless

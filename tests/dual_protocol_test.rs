@@ -154,6 +154,7 @@ fn golden_duals_map() {
         "H323",
         "OpenFlow",
         "PROFINET",
+        "EtherCAT",
         "Nostr",
         "Vault",
         "Bolt",
