@@ -1173,6 +1173,8 @@ pub mod rcon;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod restconf;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod rsh;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod rsync;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod smpp;
