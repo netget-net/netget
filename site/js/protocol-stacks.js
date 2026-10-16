@@ -150,6 +150,7 @@ export const protocolStacks = [
     ["managesieve", "ETH>IP>TCP>ManageSieve"],
     ["matrix", "ETH>IP>TCP>HTTP>Matrix"],
     ["maven", "ETH>IP>TCP>HTTP>Maven"],
+    ["mbus", "ETH>IP>TCP>MBUS"],
     ["mcp", "ETH>IP>TCP>HTTP>MCP"],
     ["mdns", "ETH>IP>UDP>mDNS"],
     ["memcached", "ETH>IP>TCP>Memcached"],

@@ -173,6 +173,7 @@ const NO_WELL_KNOWN_PORT: &[(&str, &str)] = &[
     ("jmap", "JMAP is served on an HTTPS server's port and found through /.well-known/jmap; RFC 8620 assigns no port of its own"),
     ("webtransport", "WebTransport sessions are extended CONNECT requests on an HTTP/3 server's port; the draft assigns none (443/UDP by convention)"),
     ("bmp", "BMP has no assigned port (RFC 7854 leaves it to configuration); collectors use 5000 or 11019 by convention"),
+    ("mbus", "M-Bus/IP is wired M-Bus (EN 13757-2) carried transparently through a serial device server; neither EN 13757 nor IANA assigns a port and libmbus names none, so each gateway uses its serial server's own default (10001, 4001, 9999)"),
     ("thrift", "Thrift has no assigned port: every service picks its own, and Apache's tutorial uses 9090 (IANA's websm) by convention only"),
     ("fix", "FIX has no assigned port: each venue publishes its own, and the QuickFIX examples use 9876 and 9878 by convention only"),
     ("acme", "ACME is JSON over HTTPS at a directory URL the CA publishes (RFC 8555 §7.1.1); no port is assigned, and test CAs such as Pebble use arbitrary ones"),

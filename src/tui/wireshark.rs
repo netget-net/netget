@@ -292,6 +292,14 @@ pub fn wire_for(protocol: &str) -> Wire {
         // nothing matching nsq. Plain TCP; its commands are text lines and "Follow TCP Stream"
         // reads them, with the size-prefixed frames in between.
         "nsq" => PLAIN_TCP,
+        // M-Bus over TCP (an M-Bus/IP gateway's transparent stream) has no dissector in this
+        // Wireshark build (4.6.8): `tshark -G protocols` lists nothing matching mbus, m-bus or
+        // meter, and Wireshark's wireless M-Bus support does not read the wired link layer.
+        // Plain TCP; the telegrams are short binary frames, so "Follow TCP Stream" in hex.
+        "mbus" => with_note(
+            PLAIN_TCP,
+            "Wireshark has no wired M-Bus (EN 13757-2) dissector; read the telegrams as hex in Follow TCP Stream: E5 is an acknowledgement, 10 C A CS 16 a short frame, 68 L L 68 C A CI ... CS 16 a long one.",
+        ),
         // Gemini (TCP 1965) runs entirely inside TLS and this Wireshark build has no gemini
         // dissector (`tshark -G protocols` lists none), so the TLS layer is the most any
         // capture can show without the session keys.
