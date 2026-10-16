@@ -179,6 +179,11 @@ Capture on a real NIC, or on the feth pair. The UDP test transport is not a way 
 neither `eth_withoutfcs` nor these link-layer names is a valid `udp.port` decode-as target, so \
 those frames cannot be dissected at all.";
 
+const PROFINET_NOTE: &str = "DCP and the cyclic data are Ethernet frames (EtherType 0x8892), \
+which BPF rejects on a loopback device - capture on the interface the device or controller uses. \
+The lab transport (`transport: \"udp\"`) carries whole frames inside UDP datagrams, which no \
+dissector unwraps; only its PNIO RPC on UDP 34964 is readable there.";
+
 const CARP_NOTE: &str = "If this server is running the `carp` variant, add `-d \
 ip.proto==112,carp`. CARP shares IP protocol 112 with VRRP and Wireshark registers `carp` as \
 the default for nothing, so without that clause a CARP packet is dissected as VRRP - and a \
@@ -564,6 +569,12 @@ pub fn wire_for(protocol: &str) -> Wire {
         ),
         "lldp" => with_note(raw("ether proto 0x88cc", "lldp"), L2_ETHER_ONLY_NOTE),
         "eapol" => with_note(raw("ether proto 0x888e", "eapol"), L2_ETHER_ONLY_NOTE),
+        // DCP and the cyclic RT frames ride EtherType 0x8892; PNIO-CM is DCE/RPC on UDP 34964,
+        // which `pn_io` claims by interface UUID once `dcerpc` recognises the datagram.
+        "profinet" => with_note(
+            raw("ether proto 0x8892 or udp port 34964", "pn_dcp || pn_rt || pn_io"),
+            PROFINET_NOTE,
+        ),
         // Neighbor Discovery is ICMPv6 types 133-137 (RS, RA, NS, NA, Redirect).
         "ndp" => raw("icmp6", "icmpv6.type >= 133 && icmpv6.type <= 137"),
         "cdp" => with_note(

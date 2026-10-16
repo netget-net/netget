@@ -343,6 +343,7 @@ pub mod ninep;
 pub mod onvif;
 pub mod openflow;
 pub mod pfcp;
+pub mod profinet;
 pub mod pulsar;
 pub mod radsec;
 pub mod rcon;
