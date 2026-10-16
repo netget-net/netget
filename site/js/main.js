@@ -61,7 +61,7 @@ document.querySelectorAll('.code-block.tabs').forEach(function (block) {
     function select(i) {
         panels.forEach(function (p, j) { p.classList.toggle('active', i === j); });
         buttons.forEach(function (b, j) { b.setAttribute('aria-selected', String(i === j)); });
-        if (copy) copy.setAttribute('data-target', panels[i].id);
+        if (copy) copy.setAttribute('data-target', panels[i].getAttribute('data-copy') || panels[i].id);
     }
 
     panels.forEach(function (panel, i) {
@@ -75,7 +75,8 @@ document.querySelectorAll('.code-block.tabs').forEach(function (block) {
     });
 
     var ua = navigator.userAgent;
-    var initial = /Mac/.test(ua) ? 0 : /Fedora/.test(ua) ? 2 : /Linux/.test(ua) ? 1 : 0;
+    var initial = !block.hasAttribute('data-pick-os') ? 0
+        : /Mac/.test(ua) ? 0 : /Fedora/.test(ua) ? 2 : /Linux/.test(ua) ? 1 : 0;
     block.classList.add('js');
     bar.hidden = false;
     select(initial);
