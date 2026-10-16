@@ -140,3 +140,10 @@ main.demo-main { width: 100%; max-width: none; }
 @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+.tab-bar { display: flex; flex-wrap: wrap; border-bottom: 1px solid var(--border); background: var(--panel-2); padding-right: 4.5rem; }
+.tab-bar[hidden] { display: none; }
+.tab-bar button { background: none; border: 0; border-bottom: 2px solid transparent; color: var(--muted); font-family: var(--mono); font-size: 0.7rem; padding: 0.55rem 0.9rem; cursor: pointer; }
+.tab-bar button:hover { color: var(--text); }
+.tab-bar button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--green); }
+.tabs.js .tab-panel:not(.active) { display: none; }
+.tabs.js .copy-btn { top: 0.3rem; }

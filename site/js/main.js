@@ -50,3 +50,33 @@ document.querySelectorAll('.copy-btn').forEach(function (btn) {
     btn.hidden = false;
     window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', render);
 })();
+
+// Tabbed code blocks: one panel at a time, and the copy button follows it.
+document.querySelectorAll('.code-block.tabs').forEach(function (block) {
+    var bar = block.querySelector('.tab-bar');
+    var copy = block.querySelector('.copy-btn');
+    var panels = block.querySelectorAll('.tab-panel');
+    var buttons = [];
+
+    function select(i) {
+        panels.forEach(function (p, j) { p.classList.toggle('active', i === j); });
+        buttons.forEach(function (b, j) { b.setAttribute('aria-selected', String(i === j)); });
+        if (copy) copy.setAttribute('data-target', panels[i].id);
+    }
+
+    panels.forEach(function (panel, i) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.setAttribute('role', 'tab');
+        b.textContent = panel.getAttribute('data-tab');
+        b.addEventListener('click', function () { select(i); });
+        bar.appendChild(b);
+        buttons.push(b);
+    });
+
+    var ua = navigator.userAgent;
+    var initial = /Mac/.test(ua) ? 0 : /Fedora/.test(ua) ? 2 : /Linux/.test(ua) ? 1 : 0;
+    block.classList.add('js');
+    bar.hidden = false;
+    select(initial);
+});

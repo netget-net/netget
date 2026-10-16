@@ -166,6 +166,19 @@ Effort **S/M/L** covers both roles plus interoperability tests.
 
 ---
 
+## Storage additions (requested 16 October 2026)
+
+Asked for after a survey of what NetGet already serves for storage — NBD and USB mass storage
+(block), SMB, NFS, WebDAV, 9P and AFP (file shares), FTP/TFTP/SFTP/rsync, and S3. Queued after
+Tier C, in this order:
+
+| Protocol | Transport | Shape | Independent peers |
+|---|---|---|---|
+| **iSCSI** | TCP 3260 | Target (server) and initiator (client); the model describes the LUNs and their contents as the NBD and USB mass-storage servers do, and SCSI is shared with `src/server/usb/msc` | libiscsi's `iscsi-ls`/`iscsi-inq`/`iscsi-readcapacity16` and its `iscsi-test-cu` compliance suite (unprivileged); Linux open-iscsi; tgtd or LIO as targets for the initiator |
+| **NVMe over TCP** | TCP 4420 | NVMe/TCP target and host; discovery controller, admin and I/O queues, namespaces the model describes | The Linux kernel's `nvme-tcp` host with `nvme-cli`, and its `nvmet-tcp` target (root, kernel modules — CI runners have them) |
+| **FUSE local filesystem** | Local mount (not a network protocol) | A directory on this machine whose every file operation the model answers | The operating system itself through ordinary file tools; Linux FUSE in CI, FUSE-T or macFUSE on macOS |
+| **HDFS** | TCP (NameNode RPC 8020, DataNode transfer 9866) | NameNode and DataNode protocols over Hadoop RPC/protobuf, model-described namespace and blocks; client role against a real cluster | The real Apache Hadoop `hdfs dfs` CLI and a single-node HDFS (Hadoop is already installed by the `yarn` pair job) |
+
 ## Existing protocols missing one role (true gaps)
 
 Registry coverage is otherwise complete — every apparent "client-only"/"server-only"
