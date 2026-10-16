@@ -66,6 +66,7 @@ jobs:
           - openflow_message
           - profinet_frame
           - ethercat_frame
+          - mbus_frame
           - bgp_message
           - ndef_message
           - nfc_apdu

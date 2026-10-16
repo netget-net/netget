@@ -298,3 +298,10 @@ path = "fuzz_targets/ethercat_frame.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "mbus_frame"
+path = "fuzz_targets/mbus_frame.rs"
+test = false
+doc = false
+bench = false
