@@ -69,6 +69,7 @@ jobs:
           - mbus_frame
           - afp_dsi
           - nis_yp
+          - rsh_handshake
           - bgp_message
           - ndef_message
           - nfc_apdu
