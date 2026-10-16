@@ -249,6 +249,7 @@ pub mod lpd;
 #[cfg(unix)]
 pub mod m3ua;
 pub mod matrix;
+pub mod mbus;
 pub mod milter;
 pub mod minecraft;
 pub mod msgpack_rpc;
