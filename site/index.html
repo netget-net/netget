@@ -466,42 +466,6 @@
                 <pre id="cli"><code>npx -y @smotana/netget</code></pre>
             </div>
 
-            <h3 class="sub-h">Cargo</h3>
-            <p class="caption">Every protocol is compiled in. Install the system libraries first:</p>
-            <p class="caption">macOS (libpcap, PC/SC and CoreBluetooth ship with the OS)</p>
-            <div class="code-block">
-                <button class="copy-btn" hidden data-target="deps-macos">Copy</button>
-                <pre id="deps-macos"><code>brew install samba libusb pkgconf cmake</code></pre>
-            </div>
-            <p class="caption">Debian / Ubuntu</p>
-            <div class="code-block">
-                <button class="copy-btn" hidden data-target="deps-debian">Copy</button>
-                <pre id="deps-debian"><code>sudo apt-get install build-essential pkg-config cmake libclang-dev libssl-dev libltdl-dev \
-    libpcap-dev libdbus-1-dev libusb-1.0-0-dev libpcsclite-dev libsmbclient-dev</code></pre>
-            </div>
-            <p class="caption">Fedora</p>
-            <div class="code-block">
-                <button class="copy-btn" hidden data-target="deps-fedora">Copy</button>
-                <pre id="deps-fedora"><code>sudo dnf install gcc gcc-c++ make pkgconf-pkg-config cmake clang-devel openssl-devel libtool-ltdl-devel \
-    libpcap-devel dbus-devel libusb1-devel pcsc-lite-devel libsmbclient-devel</code></pre>
-            </div>
-            <p class="caption">Arch</p>
-            <div class="code-block">
-                <button class="copy-btn" hidden data-target="deps-arch">Copy</button>
-                <pre id="deps-arch"><code>sudo pacman -S --needed base-devel cmake clang openssl libpcap dbus libusb pcsclite smbclient</code></pre>
-            </div>
-            <p class="caption">Then:</p>
-            <div class="code-block">
-                <button class="copy-btn" hidden data-target="cargo-install">Copy</button>
-                <pre id="cargo-install"><code>cargo install --locked netget-tool</code></pre>
-            </div>
-            <p class="caption">Without the system libraries (leaves out packet capture, Bluetooth LE, the NFC client, USB devices and the SMB client):</p>
-            <div class="code-block">
-                <button class="copy-btn" hidden data-target="cargo-install-lite">Copy</button>
-                <pre id="cargo-install-lite"><code>cargo install --locked netget-tool \
-    --no-default-features --features mcp-stdio,mcp-http,sqlite</code></pre>
-            </div>
-
             <h3 class="sub-h">MCP</h3>
             <p class="caption">Add to <code>claude_desktop_config.json</code> or any MCP client config:</p>
             <div class="code-block">
@@ -517,15 +481,21 @@
             </div>
 
             <h3 class="sub-h">From source</h3>
-            <div class="code-block">
-                <button class="copy-btn" hidden data-target="src">Copy</button>
-                <pre id="src"><code>git clone https://github.com/netget-net/netget.git
-cd netget
-cargo build --release</code></pre>
+            <p class="caption">System libraries:</p>
+            <div class="code-block tabs">
+                <div class="tab-bar" role="tablist" hidden></div>
+                <button class="copy-btn" hidden data-target="deps-macos">Copy</button>
+                <pre id="deps-macos" class="tab-panel" data-tab="macOS"><code>brew install samba libusb pkgconf cmake   <span class="c"># libpcap, PC/SC and CoreBluetooth ship with macOS</span></code></pre>
+                <pre id="deps-debian" class="tab-panel" data-tab="Debian / Ubuntu"><code>sudo apt-get install build-essential pkg-config cmake libclang-dev libssl-dev libltdl-dev \
+    libpcap-dev libdbus-1-dev libusb-1.0-0-dev libpcsclite-dev libsmbclient-dev</code></pre>
+                <pre id="deps-fedora" class="tab-panel" data-tab="Fedora"><code>sudo dnf install gcc gcc-c++ make pkgconf-pkg-config cmake clang-devel openssl-devel libtool-ltdl-devel \
+    libpcap-devel dbus-devel libusb1-devel pcsc-lite-devel libsmbclient-devel</code></pre>
+                <pre id="deps-arch" class="tab-panel" data-tab="Arch"><code>sudo pacman -S --needed base-devel cmake clang openssl libpcap dbus libusb pcsclite smbclient</code></pre>
             </div>
+            <p class="caption">Then:</p>
             <div class="code-block">
-                <button class="copy-btn" hidden data-target="src-run">Copy</button>
-                <pre id="src-run"><code>./target/release/netget          <span class="c"># interactive TUI</span></code></pre>
+                <button class="copy-btn" hidden data-target="cargo-install">Copy</button>
+                <pre id="cargo-install"><code>cargo install --locked netget-tool</code></pre>
             </div>
         </section>
 
