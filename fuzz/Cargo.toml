@@ -312,3 +312,10 @@ path = "fuzz_targets/afp_dsi.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "nis_yp"
+path = "fuzz_targets/nis_yp.rs"
+test = false
+doc = false
+bench = false
