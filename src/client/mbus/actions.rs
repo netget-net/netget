@@ -295,7 +295,12 @@ pub static SCAN_EVENT: LazyLock<EventType> = LazyLock::new(|| {
                  narrow no further",
                 true,
             ),
-            p("probes", "number", "Telegrams sent", true),
+            p(
+                "probes",
+                "number",
+                "How many telegrams the scan sent (each silent one cost a response timeout)",
+                true,
+            ),
             p(
                 "truncated",
                 "boolean",
@@ -312,7 +317,7 @@ pub static ACK_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         "The answer to mbus_write, mbus_set_primary_address, mbus_application_reset or \
          mbus_ping: acknowledged (E5) or not (silence, which is how a meter refuses)",
         vec![
-            p("operation", "string", "Which action", true),
+            p("operation", "string", "The action this answers: mbus_write, mbus_set_primary_address, mbus_application_reset or mbus_ping", true),
             p("target", "object", "address or secondary_address", true),
             p(
                 "acknowledged",
@@ -330,7 +335,12 @@ pub static ERROR_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         "An operation failed: no answer (timeout), several meters answered (collision), a \
          broken telegram, or an answer that is not what was asked",
         vec![
-            p("operation", "string", "Which action", true),
+            p(
+                "operation",
+                "string",
+                "The action that failed, e.g. mbus_read or mbus_write",
+                true,
+            ),
             p("target", "object", "address or secondary_address", false),
             p(
                 "kind",
@@ -338,7 +348,12 @@ pub static ERROR_EVENT: LazyLock<EventType> = LazyLock::new(|| {
                 "timeout, collision, bad_frame, unexpected_reply or not_selected",
                 true,
             ),
-            p("message", "string", "What happened", true),
+            p(
+                "message",
+                "string",
+                "A sentence saying what was sent and what came back, or that nothing did",
+                true,
+            ),
         ],
     )
 });

@@ -438,3 +438,102 @@ fn status_flags_are_named_both_ways() {
         vec!["application_error", "permanent_error"]
     );
 }
+
+/// The fuzz target's invariants (`fuzz/fuzz_targets/mbus_frame.rs`) as properties, so they run
+/// with the suite: whatever arrives, the parser never claims more than it was given, a parsed
+/// frame re-encodes to its own bytes, and the record walk never exceeds its bounds or panics.
+fn check_stream(data: &[u8]) -> Result<(), TestCaseError> {
+    let mut rest = data;
+    while !rest.is_empty() {
+        match frame::parse(rest) {
+            Parsed::Incomplete(n) => {
+                prop_assert!(n > 0 && rest.len() + n <= frame::MAX_FRAME_LEN);
+                break;
+            }
+            Parsed::Invalid { skip, .. } => {
+                prop_assert!(skip > 0 && skip <= frame::MAX_FRAME_LEN);
+                rest = &rest[skip.min(rest.len())..];
+            }
+            Parsed::Frame(f, used) => {
+                prop_assert!(used > 0 && used <= rest.len());
+                prop_assert_eq!(f.encode().unwrap(), rest[..used].to_vec());
+                if let (Some(ci), data) = (f.ci(), f.data()) {
+                    if let Ok((_, d)) = records::decode_response(ci, data) {
+                        prop_assert!(d.records.len() <= records::MAX_RECORDS_PER_TELEGRAM);
+                    }
+                }
+                rest = &rest[used..];
+            }
+        }
+    }
+    if let Ok(d) = records::decode_records(data) {
+        prop_assert!(d.records.len() <= records::MAX_RECORDS_PER_TELEGRAM);
+    }
+    Ok(())
+}
+
+fn heat_telegram() -> Vec<u8> {
+    let mut data = vec![
+        0x78, 0x56, 0x34, 0x12, 0x2D, 0x2C, 0x01, 0x04, 0x05, 0x00, 0x00, 0x00,
+    ];
+    for r in [
+        json!({"quantity": "energy", "unit": "kWh", "value": 12345}),
+        json!({"quantity": "volume", "unit": "m3", "value": 456.789, "encoding": "bcd"}),
+        json!({"quantity": "datetime", "value": "2026-10-16T12:30", "storage": 3, "tariff": 2}),
+        json!({"quantity": "voltage", "unit": "V", "value": 230.5, "encoding": "real"}),
+    ] {
+        data.extend(rec(r));
+    }
+    Frame::long(0x08, 1, 0x72, data).encode().unwrap()
+}
+
+use proptest::prelude::*;
+use proptest::test_runner::TestCaseError;
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(2048))]
+
+    #[test]
+    fn any_bytes_parse_without_overreach(data in proptest::collection::vec(any::<u8>(), 0..600)) {
+        check_stream(&data)?;
+    }
+
+    /// A real telegram with bytes changed: either it still parses and re-encodes, or it is
+    /// discarded; the record walk over its body never panics.
+    #[test]
+    fn a_damaged_telegram_is_parsed_or_discarded(
+        edits in proptest::collection::vec((any::<usize>(), any::<u8>()), 1..6),
+        cut in any::<usize>(),
+    ) {
+        let mut t = heat_telegram();
+        for (i, b) in edits {
+            let i = i % t.len();
+            t[i] = b;
+        }
+        let keep = 1 + cut % t.len();
+        check_stream(&t[..keep])?;
+        check_stream(&t)?;
+        let _ = records::decode_records(&t[7.min(t.len())..]);
+    }
+
+    /// Any record the encoder accepts decodes back to the same storage, tariff and value.
+    #[test]
+    fn an_encoded_integer_record_decodes_to_itself(
+        value in -9_999_999i64..=9_999_999,
+        storage in 0u64..5000,
+        tariff in 0u64..64,
+        bcd in any::<bool>(),
+    ) {
+        let r = json!({
+            "quantity": "energy", "unit": "Wh", "value": value, "storage": storage,
+            "tariff": tariff, "encoding": if bcd { "bcd" } else { "int" }
+        });
+        let bytes = records::encode_record(&r).unwrap();
+        let d = records::decode_records(&bytes).unwrap();
+        prop_assert_eq!(d.records.len(), 1);
+        let got = &d.records[0];
+        prop_assert_eq!(got["storage"].as_u64(), Some(storage));
+        prop_assert_eq!(got["tariff"].as_u64().unwrap_or(0), tariff);
+        prop_assert_eq!(got["value"].as_f64(), Some(value as f64));
+    }
+}

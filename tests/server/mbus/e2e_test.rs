@@ -457,6 +457,26 @@ async fn garbled_telegrams_are_never_answered_and_the_gateway_resynchronises() {
 }
 
 #[tokio::test]
+async fn more_than_a_telegram_of_bytes_that_are_not_m_bus_closes_the_connection() {
+    let g = policy_gateway().await;
+    // Exactly one telegram's worth of junk is tolerated (line noise); the gateway still answers.
+    let mut m = g.master().await;
+    m.write(&vec![0x41; frame::MAX_FRAME_LEN]).await;
+    assert_eq!(m.snd_nke(1).await, vec![Frame::Ack]);
+    // One byte more is a peer that does not speak M-Bus: hung up, and never shown the model.
+    let mut m = g.master().await;
+    m.write(&vec![0x41; frame::MAX_FRAME_LEN + 1]).await;
+    let mut buf = [0u8; 8];
+    let closed = tokio::time::timeout(Duration::from_secs(10), m.stream.read(&mut buf)).await;
+    assert!(
+        matches!(closed, Ok(Ok(0)) | Ok(Err(_))),
+        "the connection stayed open: {closed:?}"
+    );
+    expect_log(&g, "bytes without a valid telegram").await;
+    assert!(g.events("mbus_request_data").await.is_empty());
+}
+
+#[tokio::test]
 async fn an_idle_master_is_disconnected() {
     let g = support::start(
         support::policy(),

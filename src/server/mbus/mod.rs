@@ -286,17 +286,32 @@ async fn handle_connection(
     // a whole telegram (or a broken one) occupies.
     let mut buf: Vec<u8> = Vec::with_capacity(frame::MAX_FRAME_LEN * 2);
     let mut chunk = [0u8; frame::MAX_FRAME_LEN];
+    // Bytes discarded since the last whole telegram. Line noise on a bus is a few bytes; more
+    // than a whole telegram's worth that is not M-Bus is a peer that does not speak it, and
+    // the gateway hangs up rather than reading on for ever.
+    let mut junk = 0usize;
     let result: Result<()> = async {
         loop {
             let frame = loop {
                 match frame::parse(&buf) {
                     Parsed::Frame(f, used) => {
                         buf.drain(..used);
+                        junk = 0;
                         break f;
                     }
                     Parsed::Invalid { skip, reason } => {
                         let skip = skip.min(buf.len());
                         buf.drain(..skip);
+                        junk += skip;
+                        if junk > frame::MAX_FRAME_LEN {
+                            conn.log().warn(format!(
+                                "M-Bus {remote}: {junk} bytes without a valid telegram (more \
+                                 than the {}-byte longest one); closing \
+                                 decision=protocol_error",
+                                frame::MAX_FRAME_LEN
+                            ));
+                            return Ok(());
+                        }
                         conn.log().warn(format!(
                             "M-Bus {remote}: discarded {skip} byte(s), {reason}; no meter \
                              answers a garbled telegram decision=protocol_error"
