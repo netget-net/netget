@@ -483,6 +483,11 @@ impl Esc {
 
     fn load_into(&mut self, i: usize, mut m: Vec<u8>) {
         let s = self.sm(i);
+        if s.start + s.len > self.mem.len() {
+            // The master put the send mailbox outside the memory; there is nowhere to put it.
+            self.mailbox_dropped += 1;
+            return;
+        }
         m.resize(s.len, 0);
         self.mem[s.start..s.start + s.len].copy_from_slice(&m);
         self.full[i] = true;
