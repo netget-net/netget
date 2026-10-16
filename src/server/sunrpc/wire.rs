@@ -225,11 +225,22 @@ pub fn rpc_mismatch_reply(xid: u32) -> Vec<u8> {
 }
 
 pub fn call_message(xid: u32, version: u32, procedure: u32, args: &[u8]) -> Vec<u8> {
+    call_message_to(xid, PROGRAM, version, procedure, args)
+}
+
+/// An AUTH_NONE call to any program; [`call_message`] is the portmapper's.
+pub fn call_message_to(
+    xid: u32,
+    program: u32,
+    version: u32,
+    procedure: u32,
+    args: &[u8],
+) -> Vec<u8> {
     let mut w = Writer::default();
     w.u32(xid)
         .u32(0)
         .u32(2)
-        .u32(PROGRAM)
+        .u32(program)
         .u32(version)
         .u32(procedure);
     w.u32(0).u32(0).u32(0).u32(0); // AUTH_NONE credential and verifier
@@ -284,9 +295,20 @@ pub fn record(msg: &[u8]) -> Vec<u8> {
 
 /// Read one record, refusing before reading past the bounds.
 pub async fn read_record<R: tokio::io::AsyncRead + Unpin>(r: &mut R) -> Result<Option<Vec<u8>>> {
+    read_record_bounded(r, MAX_RECORD, MAX_FRAGMENTS).await
+}
+
+/// Read one record of at most `max_record` bytes in at most `max_fragments` fragments. Each
+/// fragment's announced length is checked against the bound before anything is read or
+/// allocated for it. Other ONC RPC programs (NIS) read through this with bounds of their own.
+pub async fn read_record_bounded<R: tokio::io::AsyncRead + Unpin>(
+    r: &mut R,
+    max_record: usize,
+    max_fragments: usize,
+) -> Result<Option<Vec<u8>>> {
     use tokio::io::AsyncReadExt;
     let mut out = Vec::new();
-    for i in 0..MAX_FRAGMENTS {
+    for i in 0..max_fragments {
         let mut h = [0u8; 4];
         match r.read_exact(&mut h).await {
             Ok(_) => {}
@@ -296,8 +318,8 @@ pub async fn read_record<R: tokio::io::AsyncRead + Unpin>(r: &mut R) -> Result<O
         let h = u32::from_be_bytes(h);
         let len = (h & 0x7fff_ffff) as usize;
         ensure!(
-            out.len() + len <= MAX_RECORD,
-            "record of more than {MAX_RECORD} bytes announced"
+            out.len() + len <= max_record,
+            "record of more than {max_record} bytes announced"
         );
         let start = out.len();
         out.resize(start + len, 0);
@@ -306,7 +328,7 @@ pub async fn read_record<R: tokio::io::AsyncRead + Unpin>(r: &mut R) -> Result<O
             return Ok(Some(out));
         }
     }
-    bail!("record split into more than {MAX_FRAGMENTS} fragments")
+    bail!("record split into more than {max_fragments} fragments")
 }
 
 // ---------------------------------------------------------------------------------------
