@@ -435,7 +435,8 @@ pub async fn call_llm_batch(
     let Some((last, earlier)) = events.split_last() else {
         return Ok(ExecutionResult::new());
     };
-    if earlier.is_empty() || !batch_goes_to_the_model(state, server_id, events).await {
+    let event_ids: Vec<&str> = events.iter().map(|e| e.id()).collect();
+    if earlier.is_empty() || !batch_goes_to_the_model(state, server_id, &event_ids).await {
         let mut combined = ExecutionResult::new();
         for event in events {
             combined.extend(
@@ -459,7 +460,16 @@ pub async fn call_llm_batch(
 /// Whether a batch may be answered by one model call: the instance batches, it is not driven
 /// by an easy-protocol layer, and no event in it matches a rule other than an `llm` one with
 /// the same instruction as the rest.
-async fn batch_goes_to_the_model(state: &AppState, server_id: ServerId, events: &[Event]) -> bool {
+///
+/// Public because a protocol that owes one reply per message must know this *before* it
+/// collects a batch (`crate::server::command_batch::one_model_call_answers`): when it is false
+/// `call_llm_batch` answers the events one by one and concatenates their results, and which
+/// reply belongs to which message is lost.
+pub async fn batch_goes_to_the_model(
+    state: &AppState,
+    server_id: ServerId,
+    event_ids: &[&str],
+) -> bool {
     let batching = state
         .server_conversation_settings(server_id)
         .await
@@ -471,8 +481,8 @@ async fn batch_goes_to_the_model(state: &AppState, server_id: ServerId, events: 
         return true;
     };
     let mut instruction: Option<Option<String>> = None;
-    for event in events {
-        let this = match config.find_handler(event.id()) {
+    for id in event_ids {
+        let this = match config.find_handler(id) {
             None => None,
             Some(crate::scripting::EventHandlerType::Llm { instruction }) => {
                 Some(instruction.clone())
