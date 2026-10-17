@@ -104,7 +104,9 @@ impl Protocol for ReverseShellProtocol {
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // Command lines already received when one is read — typed during the previous
+            // answer, or pasted together — are answered in one call (`ShellConnection::run`).
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
 

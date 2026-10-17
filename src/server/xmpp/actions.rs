@@ -191,6 +191,9 @@ impl Protocol for XmppProtocol {
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
+            // No stanza framing: an event is the connection's whole unconsumed byte buffer, so
+            // what arrives during a call is already in the next event and there are no
+            // separate events to batch — or to deliver one at a time with batching off.
             .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }

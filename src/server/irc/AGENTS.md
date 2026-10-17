@@ -302,6 +302,15 @@ loop. Test: `tests/server/irc/peer_inject_test.rs` (zero LLM calls).
   Idle/Processing/Accumulating and has no `queued_data`: the read loop awaits each LLM call
   before reading the next line, so lines are handled strictly in order and a slow model applies
   backpressure through TCP rather than being queued.
+- **Batching (`BatchingMode::On`).** After a line is read, if the instance batches,
+  `lines_already_here` (`mod.rs`) takes every further *complete* line already in the
+  `BufReader` or readable without waiting — a zero-deadline `fill_buf`, which consumes nothing
+  if it gives up — up to `MAX_BATCH_EVENTS - 1`, and the lot goes to `call_llm_batch` as one
+  call with the newest line as trigger. It stops at a partial or over-long line and leaves it
+  to the bounded `read_irc_line`. Every line is a model event (PING and registration
+  included), so NICK and USER sent together arrive together. The decision line and a failure
+  numeric name the trigger line's command. With batching off, one line per call as before.
+  Test: `tests/server/irc/batching_test.rs` (off is the control: three calls; on: two).
 - Connection stays in ServerInstance until closed
 - No startup parameters. `send_first` was declared and then discarded; an IRC server does not
   speak first, so it is no longer declared and passing it now produces a warning.

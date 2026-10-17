@@ -60,6 +60,14 @@ call. This is the same discipline the per-connection state machine enforces (no 
 call on one connection); a raw line-oriented shell does not need the Idle/Processing/Accumulating
 machine because reads are already serialized by the loop.
 
+**Batching (`BatchingMode::On`).** Complete lines wait in a small queue in `ShellConnection::run`.
+With batching on, before each call the loop also takes whatever the socket already holds
+without waiting (a zero-deadline read) and answers up to `MAX_BATCH_EVENTS` queued lines in
+one `call_llm_batch`, newest as trigger — commands typed during the previous answer, or a
+pasted block. Off, one line per call as before. Only the session's first line carries
+`first_command: true`. The `MAX_LINE_LEN` bound still closes the session, after the lines
+completed before it are answered. Test: `tests/server/reverse_shell/batching_test.rs`.
+
 Bytes are split with `tokio::io::split()`; the write half is an `Arc<Mutex<WriteHalf>>`. The
 accept-loop `JoinHandle` is registered with `AppState::register_server_task()` so `stop_server`
 releases the socket. A connection is removed from the server view on every exit path.

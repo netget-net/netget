@@ -189,7 +189,11 @@ impl Protocol for ManageSieveProtocol {
             .answers_on_failure()
             .max_inbound_bytes(super::proto::MAX_LITERAL)
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // Pipelined script commands with name/number arguments (LISTSCRIPTS, GETSCRIPT,
+            // SETACTIVE, DELETESCRIPT, RENAMESCRIPT, HAVESPACE) that arrive during a call are
+            // answered in one; an answer without exactly one per command is replaced by NO
+            // (TRYLATER) for each. PUTSCRIPT/CHECKSCRIPT literals and AUTHENTICATE never batch.
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

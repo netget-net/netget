@@ -92,9 +92,29 @@ fix.
   already on disk (an operator's `mkfifo /tmp/app.fifo`, another process's endpoint) is reused but
   never unlinked. Deleting a path we merely borrowed is deleting someone else's object.
 
+## Batching
+
+`BatchingMode::On`. A reader task drains the FIFO into a bounded channel
+(`READ_QUEUE_CHUNKS`, 32 reads of at most 8 KiB) while a dispatcher task asks the model, so
+chunks written during a call keep their own boundaries instead of coalescing in the kernel
+buffer. With batching off the dispatcher answers one chunk per call; with it on, every chunk
+waiting (up to `MAX_BATCH_EVENTS`) goes to `call_llm_batch` as one event each, the newest the
+trigger. A full channel stops the reader, the 64 KiB FIFO fills and the writer blocks — that is
+the back-pressure. `tests/server/named_pipe/batching_test.rs` asserts off and on, control first.
+
+## History
+
+The server's lifetime is one session: every writer feeds the same FIFO, so there is nothing finer
+to key on. It is registered as the server's one connection (`register_session`; addresses are
+the `127.0.0.1:0` placeholder `socket_file` uses, `protocol_info` names both FIFO paths) and its
+id goes to every model call, so the core keeps the declared `Last(40)` history and the dashboard
+shows a peer row with byte counters. It is removed when the reader ends, and with it its history;
+`stop_server` removes the whole server. The batching test also asserts the second prompt carries
+the first exchange.
+
 ## Not implemented
 
-Back-pressure, accumulation (`wait_for_more`), multiple concurrent named-pipe servers sharing a
+Accumulation (`wait_for_more`), multiple concurrent named-pipe servers sharing a
 path, and any framing — each `read()` chunk is one event. Responses to `CloseConnection` /
 `WaitForMore` are meaningless for a connectionless FIFO sink and are ignored.
 

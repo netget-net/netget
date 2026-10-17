@@ -169,6 +169,19 @@ chain last answered (usually 0) — pass `channel` explicitly. `close_connection
 the shared write half and is the one thing that touches it outside the writer task.
 `tests/server/amqp/peer_inject_test.rs` covers this with zero LLM calls.
 
+## Batching (on by default, publishes only)
+
+`Basic.Publish` owes nothing on the wire outside confirm mode, so completed publishes on one
+channel that are already waiting behind the one being answered are handed to the model in one
+call (`collect_publishes` / `flush_publishes` in `mod.rs`). The read half is buffered
+(`READ_BUFFER_BYTES`) so collection can see whole frames without waiting; it takes only
+`Basic.Publish` methods, content headers and body frames on that channel, and heartbeats, and
+stops at anything else — every synchronous method (`Queue.Declare`, `Basic.Consume`, the
+handshake) owes its own `-Ok` and is never batched. A publish whose content is still arriving
+stays pending on its channel. Publishes before a frame that breaks the protocol are answered
+before the connection exception. `tests/server/amqp/batching_test.rs` drives it with `lapin`
+against a batching-off control and asserts the deliveries arrive in order.
+
 ## Failure behaviour
 
 | Event | If the handler produces no usable action | Rationale |

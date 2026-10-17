@@ -26,7 +26,7 @@
 pub mod actions;
 pub mod codec;
 
-use crate::llm::action_helper::call_llm;
+use crate::llm::action_helper::call_llm_batch;
 use crate::llm::actions::protocol_trait::ActionResult;
 use crate::llm::ollama_client::OllamaClient;
 use crate::logging::emit::Log;
@@ -44,7 +44,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tracing::{debug, trace};
@@ -404,6 +404,7 @@ async fn handle_connection(
     ));
 
     let mut session = Session {
+        ready_publishes: Vec::new(),
         server_id,
         connection_id,
         peer_addr,
@@ -449,8 +450,12 @@ async fn handle_connection(
         status_tx.clone(),
     );
 
+    // Buffered so a batch can see which frames are already here without waiting for more
+    // (`Session::collect_publishes`). The buffer bounds nothing: `read_frame` still checks each
+    // declared size before allocating, and a frame larger than the buffer is read past it.
+    let mut reader = tokio::io::BufReader::with_capacity(READ_BUFFER_BYTES, &mut read_half);
     let result = session
-        .run(&mut read_half, offered_frame_max, offered_heartbeat)
+        .run(&mut reader, offered_frame_max, offered_heartbeat)
         .await;
 
     if let Err(e) = &result {
@@ -478,6 +483,9 @@ async fn handle_connection(
 }
 
 struct Session {
+    /// Publishes completed and not yet handed to the handler, with their channel: a batch
+    /// being collected (`collect_publishes`). Empty whenever the instance is not batching.
+    ready_publishes: Vec<(u16, Event)>,
     server_id: crate::state::ServerId,
     connection_id: ConnectionId,
     peer_addr: SocketAddr,
@@ -498,7 +506,7 @@ struct Session {
 }
 
 impl Session {
-    async fn run<R: AsyncRead + Unpin>(
+    async fn run<R: AsyncBufRead + Unpin>(
         &mut self,
         reader: &mut R,
         offered_frame_max: u32,
@@ -556,7 +564,24 @@ impl Session {
                 None => return Ok(()), // peer closed
             };
 
-            let next = match self.dispatch(frame, &mut phase, offered_heartbeat).await {
+            let mut dispatched = self.dispatch(frame, &mut phase, offered_heartbeat).await;
+            // A publish completed with batching on: take every further publish on the same
+            // channel that is already here, then answer them all in one call.
+            if matches!(dispatched, Ok(Next::Continue)) && !self.ready_publishes.is_empty() {
+                let collected = self
+                    .collect_publishes(reader, max_payload, &mut phase, offered_heartbeat)
+                    .await;
+                let answered = self.flush_publishes().await;
+                dispatched = match (collected, answered) {
+                    // The publishes before a bad frame were valid and are answered first, as
+                    // they would have been one at a time; then the bad frame is reported.
+                    (Err(e), Next::Continue) => Err(e),
+                    (Ok(Next::Close), _) | (_, Next::Close) => Ok(Next::Close),
+                    (Ok(Next::Continue), Next::Continue) => Ok(Next::Continue),
+                };
+            }
+
+            let next = match dispatched {
                 Ok(next) => next,
                 Err(e) => {
                     // A framing or decoding error desynchronises the stream; the spec's
@@ -585,6 +610,75 @@ impl Session {
             if matches!(next, Next::Close) {
                 return Ok(());
             }
+        }
+    }
+
+    /// After a publish completed with batching on, take the frames already here that belong
+    /// to further publishes on the same channel, dispatching each so complete publishes join
+    /// `ready_publishes`, up to [`crate::protocol::metadata::MAX_BATCH_EVENTS`].
+    ///
+    /// Only a frame that is wholly in the read buffer is taken, so nothing here waits on the
+    /// peer. It stops at the first frame that is anything other than a `Basic.Publish`, its
+    /// content header or a body frame on that channel, or a heartbeat - every synchronous
+    /// method owes its own reply, and frames for other channels keep their order - and leaves
+    /// that frame for the session loop. A publish whose content is still arriving simply stays
+    /// pending on its channel, as it would have without batching.
+    ///
+    /// `Ok(Next::Close)` if a dispatched frame ended the connection; `Err` for a frame that
+    /// broke the protocol, after which the session loop closes.
+    async fn collect_publishes<R: AsyncBufRead + Unpin>(
+        &mut self,
+        reader: &mut R,
+        max_payload: usize,
+        phase: &mut Phase,
+        offered_heartbeat: u16,
+    ) -> Result<Next> {
+        let Some(&(channel, _)) = self.ready_publishes.first() else {
+            return Ok(Next::Continue);
+        };
+        while self.ready_publishes.len() < crate::protocol::metadata::MAX_BATCH_EVENTS {
+            // `fill_buf` returns what is buffered without reading, and polls the socket once
+            // only when the buffer is empty; the zero deadline means that poll never waits.
+            // It is cancel-safe, so a timeout loses nothing.
+            let belongs =
+                match tokio::time::timeout(std::time::Duration::ZERO, reader.fill_buf()).await {
+                    Ok(Ok(buf)) => frame_belongs_to_publish_batch(buf, channel, max_payload),
+                    _ => false,
+                };
+            if !belongs {
+                break;
+            }
+            let frame = match read_frame(reader, max_payload).await? {
+                Some(frame) => frame,
+                None => break,
+            };
+            self.count_received(FRAME_OVERHEAD + frame.payload.len())
+                .await;
+            if let Next::Close = self.dispatch(frame, phase, offered_heartbeat).await? {
+                return Ok(Next::Close);
+            }
+        }
+        Ok(Next::Continue)
+    }
+
+    /// Hand every collected publish to the handler in one batch.
+    async fn flush_publishes(&mut self) -> Next {
+        let ready = std::mem::take(&mut self.ready_publishes);
+        let Some(&(channel, _)) = ready.first() else {
+            return Next::Continue;
+        };
+        let events: Vec<Event> = ready.into_iter().map(|(_, event)| event).collect();
+        if events.len() > 1 {
+            Log::new(Some(&self.status_tx)).debug(format!(
+                "AMQP answering {} publishes on channel {} together",
+                events.len(),
+                channel
+            ));
+        }
+        match self.run_handler(&events, channel, None, None).await {
+            HandlerOutcome::Closed => Next::Close,
+            HandlerOutcome::Wrote(mask) if mask & RESP_CONNECTION_CLOSE != 0 => Next::Close,
+            _ => Next::Continue,
         }
     }
 
@@ -790,7 +884,9 @@ impl Session {
             }),
         );
 
-        let outcome = self.run_handler(&event, 0, None, None).await;
+        let outcome = self
+            .run_handler(std::slice::from_ref(&event), 0, None, None)
+            .await;
         match outcome {
             HandlerOutcome::Closed => Ok(Next::Close),
             HandlerOutcome::Wrote(mask) if mask & RESP_CONNECTION_CLOSE != 0 => {
@@ -1082,7 +1178,10 @@ impl Session {
             }),
         );
 
-        match self.run_handler(&event, channel, None, Some(&queue)).await {
+        match self
+            .run_handler(std::slice::from_ref(&event), channel, None, Some(&queue))
+            .await
+        {
             HandlerOutcome::Closed => Ok(Next::Close),
             HandlerOutcome::Wrote(mask)
                 if mask & (RESP_QUEUE_DECLARE_OK | RESP_CHANNEL_CLOSE | RESP_CONNECTION_CLOSE)
@@ -1174,7 +1273,12 @@ impl Session {
         );
 
         match self
-            .run_handler(&event, channel, Some(&consumer_tag), Some(&queue))
+            .run_handler(
+                std::slice::from_ref(&event),
+                channel,
+                Some(&consumer_tag),
+                Some(&queue),
+            )
             .await
         {
             HandlerOutcome::Closed => Ok(Next::Close),
@@ -1333,11 +1437,26 @@ impl Session {
             }),
         );
 
-        match self.run_handler(&event, channel, None, None).await {
+        // Basic.Publish owes nothing on the wire outside confirm mode, so publishes can share
+        // a call: with batching on this one waits in `ready_publishes` for the session loop,
+        // which collects whatever else is already here and answers them together.
+        let batching = self
+            .app_state
+            .server_conversation_settings(self.server_id)
+            .await
+            .is_some_and(|(_, batching)| batching);
+        if batching {
+            self.ready_publishes.push((channel, event));
+            return Ok(Next::Continue);
+        }
+
+        match self
+            .run_handler(std::slice::from_ref(&event), channel, None, None)
+            .await
+        {
             HandlerOutcome::Closed => Ok(Next::Close),
             HandlerOutcome::Wrote(mask) if mask & RESP_CONNECTION_CLOSE != 0 => Ok(Next::Close),
-            // Basic.Publish owes nothing on the wire outside confirm mode, so a handler
-            // that produces nothing simply drops the message.
+            // A handler that produces nothing simply drops the message.
             _ => Ok(Next::Continue),
         }
     }
@@ -1418,21 +1537,26 @@ impl Session {
 
     /// Hand an event to the handler chain (script -> static -> LLM) and report which
     /// response actions it produced.
+    ///
+    /// `events` is one event, or a batch of publishes on `channel` (`flush_publishes`).
     async fn run_handler(
         &self,
-        event: &Event,
+        events: &[Event],
         channel: u16,
         consumer_tag: Option<&str>,
         queue: Option<&str>,
     ) -> HandlerOutcome {
+        let Some(event) = events.last() else {
+            return HandlerOutcome::Wrote(0);
+        };
         self.protocol.begin(channel, consumer_tag, queue);
 
-        match call_llm(
+        match call_llm_batch(
             &self.llm_client,
             &self.app_state,
             self.server_id,
             Some(self.connection_id),
-            event,
+            events,
             self.protocol.as_ref(),
         )
         .await
@@ -1512,6 +1636,35 @@ fn connection_start_args() -> Result<Vec<u8>> {
     args.long_string(b"PLAIN");
     args.long_string(b"en_US");
     Ok(args.into_vec())
+}
+
+/// Bytes the connection's read buffer holds. What a batch can see without waiting; a frame
+/// that does not fit is read normally and ends the batch.
+const READ_BUFFER_BYTES: usize = 64 * 1024;
+
+/// Whether `buf` starts with a whole frame that may join a publish batch on `channel`: a
+/// `Basic.Publish` method, a content header or body frame on that channel, or a heartbeat.
+fn frame_belongs_to_publish_batch(buf: &[u8], channel: u16, max_payload: usize) -> bool {
+    if buf.len() < 7 {
+        return false;
+    }
+    let frame_type = buf[0];
+    let frame_channel = u16::from_be_bytes([buf[1], buf[2]]);
+    let size = u32::from_be_bytes([buf[3], buf[4], buf[5], buf[6]]) as usize;
+    if size > max_payload || buf.len() < FRAME_OVERHEAD + size {
+        return false;
+    }
+    match frame_type {
+        FRAME_HEARTBEAT => true,
+        FRAME_HEADER | FRAME_BODY => frame_channel == channel,
+        FRAME_METHOD => {
+            frame_channel == channel
+                && size >= 4
+                && u16::from_be_bytes([buf[7], buf[8]]) == CLASS_BASIC
+                && u16::from_be_bytes([buf[9], buf[10]]) == BASIC_PUBLISH
+        }
+        _ => false,
+    }
 }
 
 /// Read one frame. `Ok(None)` means the peer closed cleanly between frames.

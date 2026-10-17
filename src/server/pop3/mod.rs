@@ -159,6 +159,26 @@ pub fn pop3_preferred_actions(command: &str) -> &'static [&'static str] {
     }
 }
 
+/// Whether a POP3 command may be answered as part of a batch, and whether it ends one.
+///
+/// `None` for a command that is always answered on its own: `CAPA` (NetGet answers it),
+/// `USER`/`PASS`/`APOP`/`AUTH` (credentials, and `AUTH` opens a SASL exchange), `STLS`, and
+/// anything unknown. `Some(true)` for `QUIT`, after which nothing is read; `Some(false)` for
+/// the transaction commands, which carry no framing the server reads beyond their own line.
+pub fn pop3_batch_role(command: &str) -> Option<bool> {
+    match command
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_ascii_uppercase()
+        .as_str()
+    {
+        "STAT" | "LIST" | "UIDL" | "RETR" | "TOP" | "DELE" | "NOOP" | "RSET" => Some(false),
+        "QUIT" => Some(true),
+        _ => None,
+    }
+}
+
 /// A `RETR`/`TOP` answered as a `+OK` status line and the message as raw text, framed by NetGet.
 ///
 /// The real-model eval found llama3.1:8b answering `RETR` with `send_pop3_ok` followed by
@@ -750,6 +770,68 @@ impl Pop3Session {
                 continue;
             }
 
+            // Pipelined commands already waiting behind this one are answered with it in one
+            // model call when the instance batches; see `pop3_batch_role`.
+            if let Some(ends) = pop3_batch_role(&command) {
+                let mut commands = vec![command.clone()];
+                if !ends
+                    && crate::server::command_batch::one_model_call_answers(
+                        app_state,
+                        server_id,
+                        &[POP3_COMMAND_EVENT.id.as_str()],
+                    )
+                    .await
+                {
+                    use tokio::io::AsyncBufReadExt;
+                    while commands.len() < crate::protocol::metadata::MAX_BATCH_EVENTS {
+                        let Some((next, len)) = crate::server::command_batch::peek_ready_line(
+                            &mut reader,
+                            MAX_COMMAND_BYTES,
+                        )
+                        .await
+                        else {
+                            break;
+                        };
+                        let next = next.trim().to_string();
+                        let Some(ends) = pop3_batch_role(&next) else {
+                            break;
+                        };
+                        reader.consume(len);
+                        app_state
+                            .update_connection_stats(
+                                server_id,
+                                connection_id,
+                                Some(len as u64),
+                                None,
+                                Some(1),
+                                None,
+                            )
+                            .await;
+                        commands.push(next);
+                        if ends {
+                            break;
+                        }
+                    }
+                }
+                if commands.len() > 1 {
+                    match Self::answer_batch(
+                        &commands,
+                        llm_client,
+                        app_state,
+                        status_tx,
+                        protocol,
+                        server_id,
+                        connection_id,
+                        write_half,
+                    )
+                    .await?
+                    {
+                        SessionControl::Continue => continue,
+                        SessionControl::Close => break,
+                    }
+                }
+            }
+
             let mut event_data = pop3_command_event_data(&command);
             event_data["connection_id"] = connection_id.to_string().into();
             let event = Event::new(&POP3_COMMAND_EVENT, event_data);
@@ -819,6 +901,126 @@ impl Pop3Session {
         }
 
         Ok(())
+    }
+
+    /// Answer pipelined commands with one model call, one reply per command, in order.
+    ///
+    /// The answer is used only when it holds exactly one reply per command. Anything else — a
+    /// reply short, one extra, the `+OK`-then-answer pair a small model gives `STAT` — and
+    /// every command is answered `-ERR [SYS/TEMP]` instead: a refusal per command keeps the
+    /// client in step and grants nothing, where writing what the model gave would hand some
+    /// command another command's reply. A backend failure answers `-ERR` to each and closes,
+    /// as it does for a single command.
+    #[allow(clippy::too_many_arguments)]
+    async fn answer_batch<W>(
+        commands: &[String],
+        llm_client: &OllamaClient,
+        app_state: &Arc<AppState>,
+        status_tx: &mpsc::UnboundedSender<String>,
+        protocol: &Arc<Pop3Protocol>,
+        server_id: crate::state::ServerId,
+        connection_id: crate::server::connection::ConnectionId,
+        write_half: &Arc<tokio::sync::Mutex<W>>,
+    ) -> Result<SessionControl>
+    where
+        W: tokio::io::AsyncWrite + Unpin,
+    {
+        use tokio::io::AsyncWriteExt;
+
+        let total = commands.len();
+        let events: Vec<Event> = commands
+            .iter()
+            .enumerate()
+            .map(|(i, command)| {
+                let mut data = pop3_command_event_data(command);
+                data["connection_id"] = connection_id.to_string().into();
+                crate::server::command_batch::mark_pipelined(&mut data, i + 1, total);
+                Event::new(&POP3_COMMAND_EVENT, data)
+            })
+            .collect();
+
+        let (replies, control): (Vec<Vec<u8>>, SessionControl) =
+            match crate::llm::action_helper::call_llm_batch(
+                llm_client,
+                app_state,
+                server_id,
+                Some(connection_id),
+                &events,
+                protocol.as_ref(),
+            )
+            .await
+            {
+                Ok(result) => {
+                    let answer = crate::server::command_batch::BatchReplies::from_result(&result);
+                    let control = if answer.close {
+                        SessionControl::Close
+                    } else {
+                        SessionControl::Continue
+                    };
+                    if answer.replies.len() == total {
+                        info!(
+                            "POP3 connection {} decision=model_answer: {} pipelined commands, \
+                             one reply each",
+                            connection_id, total
+                        );
+                        (answer.replies, control)
+                    } else {
+                        error!(
+                            "POP3 connection {} decision=fail_closed_batch_mismatch: {} replies \
+                             for {} pipelined commands; answering -ERR to each",
+                            connection_id,
+                            answer.replies.len(),
+                            total
+                        );
+                        let _ = status_tx.send(format!(
+                            "[ERROR] POP3 connection {} decision=fail_closed_batch_mismatch",
+                            connection_id
+                        ));
+                        let reply = format!(
+                            "-ERR [SYS/TEMP] {}\r\n",
+                            crate::utils::WireFailure::Unavailable.prefixed_text()
+                        )
+                        .into_bytes();
+                        (vec![reply; total], control)
+                    }
+                }
+                Err(e) => {
+                    let token = if crate::utils::WireFailure::classify(&e).is_overloaded() {
+                        "fail_closed_llm_overloaded"
+                    } else {
+                        "fail_closed_llm_error"
+                    };
+                    error!(
+                        "POP3 {} pipelined commands on connection {} decision={}: {}",
+                        total, connection_id, token, e
+                    );
+                    let _ = status_tx.send(format!(
+                        "[ERROR] POP3 pipelined commands on connection {} decision={}",
+                        connection_id, token
+                    ));
+                    let reply = pop3_failure_reply(&e).into_bytes();
+                    (vec![reply; total], SessionControl::Close)
+                }
+            };
+
+        for data in replies {
+            {
+                let mut writer = write_half.lock().await;
+                writer.write_all(&data).await?;
+                writer.flush().await?;
+            }
+            app_state
+                .update_connection_stats(
+                    server_id,
+                    connection_id,
+                    None,
+                    Some(data.len() as u64),
+                    None,
+                    Some(1),
+                )
+                .await;
+        }
+        Ok(control)
     }
 
     async fn process_command<W>(

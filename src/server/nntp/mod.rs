@@ -353,6 +353,98 @@ impl NntpServer {
             .await;
     }
 
+    /// Answer pipelined commands with one model call, one response per command, in order.
+    /// Returns whether the session should end.
+    ///
+    /// The answer is used only when it holds exactly one response per command. Anything else
+    /// — one short, one extra — and every command is answered `403` instead, the same reply a
+    /// single command gets when its answer is unusable: the client stays in step and is handed
+    /// no article and no group it did not ask about. A backend failure answers each the way a
+    /// single command's failure is answered (`403`, or `400` and close when overloaded).
+    #[allow(clippy::too_many_arguments)]
+    async fn answer_batch<W>(
+        commands: &[String],
+        write_half_arc: &Arc<tokio::sync::Mutex<W>>,
+        connection_id: ConnectionId,
+        server_id: crate::state::ServerId,
+        llm_client: &OllamaClient,
+        app_state: &Arc<AppState>,
+        protocol: &Arc<NntpProtocol>,
+        log: &Log<'_>,
+    ) -> bool
+    where
+        W: tokio::io::AsyncWrite + Unpin,
+    {
+        let total = commands.len();
+        let events: Vec<Event> = commands
+            .iter()
+            .enumerate()
+            .map(|(i, command)| {
+                let mut data = nntp_command_event_data(command);
+                crate::server::command_batch::mark_pipelined(&mut data, i + 1, total);
+                Event::new(&NNTP_COMMAND_RECEIVED_EVENT, data)
+            })
+            .collect();
+        let (replies, close) = match crate::llm::action_helper::call_llm_batch(
+            llm_client,
+            app_state,
+            server_id,
+            Some(connection_id),
+            &events,
+            protocol.as_ref(),
+        )
+        .await
+        {
+            Ok(result) => {
+                let answer = crate::server::command_batch::BatchReplies::from_result(&result);
+                if answer.replies.len() == total {
+                    log.info(format!(
+                        "NNTP connection {} decision=model_answer: {} pipelined commands, one \
+                         response each",
+                        connection_id, total
+                    ));
+                    (answer.replies, answer.close)
+                } else {
+                    let reply = nntp_command_failure_line_static();
+                    log.warn(format!(
+                        "NNTP connection {} decision=fail_closed_batch_mismatch: {} responses \
+                         for {} pipelined commands; replying {} to each",
+                        connection_id,
+                        answer.replies.len(),
+                        total,
+                        reply.trim_end()
+                    ));
+                    (vec![reply.into_bytes(); total], answer.close)
+                }
+            }
+            Err(e) => {
+                let (reply, close) = nntp_command_failure_line(&e);
+                log.warn(format!(
+                    "NNTP LLM error on connection {} for {} pipelined commands \
+                     (decision=fail_closed_llm_error, replying: {}): {}",
+                    connection_id,
+                    total,
+                    reply.trim_end(),
+                    e
+                ));
+                (vec![reply.into_bytes(); total], close)
+            }
+        };
+        let last = replies.len().saturating_sub(1);
+        for (i, data) in replies.iter().enumerate() {
+            Self::write_counted(
+                write_half_arc,
+                app_state,
+                server_id,
+                connection_id,
+                data,
+                close && i == last,
+            )
+            .await;
+        }
+        close
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn run_session<R, W>(
         mut reader: BufReader<R>,
@@ -649,6 +741,70 @@ impl NntpServer {
                 continue;
             }
 
+            // Pipelined commands already waiting behind this one are answered with it in one
+            // model call when the instance batches; see `nntp_batch_role`. A session that
+            // must still authenticate batches nothing: its commands are refused one by one.
+            let authenticated = !extensions.require_auth || extensions.authenticated;
+            if let (true, Some(ends)) = (authenticated, nntp_batch_role(line.trim())) {
+                let mut commands = vec![line.trim().to_string()];
+                if !ends
+                    && crate::server::command_batch::one_model_call_answers(
+                        app_state,
+                        server_id,
+                        &[NNTP_COMMAND_RECEIVED_EVENT.id.as_str()],
+                    )
+                    .await
+                {
+                    use tokio::io::AsyncBufReadExt;
+                    while commands.len() < crate::protocol::metadata::MAX_BATCH_EVENTS {
+                        let Some((next, len)) = crate::server::command_batch::peek_ready_line(
+                            &mut reader,
+                            MAX_COMMAND_BYTES,
+                        )
+                        .await
+                        else {
+                            break;
+                        };
+                        let next = next.trim().to_string();
+                        let Some(ends) = nntp_batch_role(&next) else {
+                            break;
+                        };
+                        reader.consume(len);
+                        app_state
+                            .update_connection_stats(
+                                server_id,
+                                connection_id,
+                                Some(len as u64),
+                                None,
+                                Some(1),
+                                None,
+                            )
+                            .await;
+                        commands.push(next);
+                        if ends {
+                            break;
+                        }
+                    }
+                }
+                if commands.len() > 1 {
+                    if Self::answer_batch(
+                        &commands,
+                        write_half_arc,
+                        connection_id,
+                        server_id,
+                        llm_client,
+                        app_state,
+                        protocol,
+                        &log,
+                    )
+                    .await
+                    {
+                        break;
+                    }
+                    continue;
+                }
+            }
+
             let event = Event::new(
                 &NNTP_COMMAND_RECEIVED_EVENT,
                 nntp_command_event_data(line.trim()),
@@ -816,6 +972,30 @@ pub fn netget_answer(command: &str, greeting_code: Option<&str>) -> Option<&'sta
     match (words.next(), words.next(), words.next()) {
         (Some("CAPABILITIES"), _, None) => Some(CAPABILITIES_REPLY),
         (Some("MODE"), Some("READER"), None) => Some(mode_reader_reply(greeting_code)),
+        _ => None,
+    }
+}
+
+/// Whether an NNTP command may be answered as part of a batch, and whether it ends one.
+///
+/// RFC 3977 §3.5 lets a client pipeline any command. `None` for those this server answers
+/// on its own: `CAPABILITIES` and `MODE` (NetGet answers them), `AUTHINFO` (credentials, and
+/// it changes what later commands are allowed), `POST`/`IHAVE`/`TAKETHIS`/`CHECK` (an article
+/// transfer the server reads itself), `STARTTLS`, and anything unknown. `Some(true)` for
+/// `QUIT`; `Some(false)` for the reading commands, which carry nothing beyond their own line.
+pub fn nntp_batch_role(command: &str) -> Option<bool> {
+    match command
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_ascii_uppercase()
+        .as_str()
+    {
+        "GROUP" | "LISTGROUP" | "LIST" | "ARTICLE" | "HEAD" | "BODY" | "STAT" | "NEXT" | "LAST"
+        | "OVER" | "XOVER" | "HDR" | "XHDR" | "NEWGROUPS" | "NEWNEWS" | "DATE" | "HELP" => {
+            Some(false)
+        }
+        "QUIT" => Some(true),
         _ => None,
     }
 }

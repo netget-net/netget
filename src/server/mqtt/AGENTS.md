@@ -182,6 +182,19 @@ Two cases, both pure transport bookkeeping with no semantics to decide:
 - **PUBREL → PUBCOMP**, the second half of the QoS 2 handshake, echoing the packet
   identifier.
 
+## Batching (on by default, QoS 0 PUBLISH only)
+
+QoS 0 PUBLISHes already waiting behind one being answered are answered in one call
+(`publish_batch` in `mod.rs`): they owe the client nothing on the wire, so nothing can be
+mis-acknowledged. Everything else stays one call per packet — CONNECT; QoS 1/2 PUBLISH,
+SUBSCRIBE and UNSUBSCRIBE, which each owe an acknowledgement carrying their own packet id, in
+arrival order (§4.6), where Rust's default ack for one the model skipped would land after the
+model's acks for later ones; and everything Rust answers itself (PINGREQ, PUBREL). Collection
+stops at the first packet that is not a QoS 0 PUBLISH and leaves it for the session loop. A
+batch the backend fails closes the connection, as a single QoS 0 PUBLISH does.
+`tests/server/mqtt/batching_test.rs` pins it against a batching-off control, including a QoS 1
+PUBLISH arriving behind the batch that still gets exactly one PUBACK with its own id.
+
 ## Failure behaviour
 
 MQTT stays on the wire on every path: it has a real refusal vocabulary (CONNACK return codes

@@ -365,6 +365,21 @@ netget's own `fail_closed_*` replies, so a real denial is never confused with a 
 
 Tests: `tests/server/nntp/llm_failure_test.rs` covers all four failure rows.
 
+## Batching (on by default)
+
+RFC 3977 §3.5 lets a client pipeline any command. Commands pipelined while the model is
+answering an earlier one are answered in one model call, one response each, in order. The
+reading commands (`GROUP`, `LISTGROUP`, `LIST`, `ARTICLE`/`HEAD`/`BODY`, `STAT`, `NEXT`, `LAST`,
+`OVER`/`XOVER`, `HDR`/`XHDR`, `NEWGROUPS`, `NEWNEWS`, `DATE`, `HELP`) join a batch and `QUIT`
+ends one (`nntp_batch_role`); `CAPABILITIES` and `MODE` (NetGet's), `AUTHINFO`, `POST`, `IHAVE`,
+`TAKETHIS`, `CHECK` and `STARTTLS` are always handled alone, and a session that still has to
+authenticate batches nothing. Lines join only when already buffered and only when one model call
+would answer them all. `answer_batch` writes the answer only when it holds exactly one response
+per command; otherwise every pipelined command gets `403`
+(`decision=fail_closed_batch_mismatch`), and a backend failure answers each as a single command's
+failure is answered. `tests/server/nntp/batching_test.rs` holds the control, the claim and the
+fail-closed short answer.
+
 ## Known Limitations
 
 ### 1. No Article Storage

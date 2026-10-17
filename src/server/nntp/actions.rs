@@ -281,7 +281,11 @@ impl Protocol for NntpProtocol {
             .max_inbound_bytes(crate::server::nntp::extensions::MAX_ARTICLE)
             .notes("Handler-owned articles and accounts; no persistent spool, STARTTLS, SASL or compression. Streaming commands are processed sequentially; credentials require TLS.")
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // Pipelined reading commands (GROUP, LIST, ARTICLE/HEAD/BODY, OVER and the rest,
+            // ending at QUIT) that arrive during a call are answered in one; an answer without
+            // exactly one response per command is replaced by 403 for each. AUTHINFO, MODE,
+            // CAPABILITIES and article transfers are never batched. See `nntp_batch_role`.
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
     fn description(&self) -> &'static str {

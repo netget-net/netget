@@ -3,6 +3,7 @@
 mod answer_with_test;
 mod connection_bounds_test;
 
+mod batching_test;
 pub mod e2e_test;
 pub mod llm_failure_test;
 pub mod peer_inject_test;

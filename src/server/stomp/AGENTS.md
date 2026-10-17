@@ -155,6 +155,19 @@ If the handler's output already begins with a `RECEIPT` frame, the automatic one
 so a model that answers with `send_stomp_receipt` does not produce a duplicate the client would
 have to reconcile.
 
+## Batching (on by default)
+
+Frames already waiting behind the one being answered — typically what the client sent while
+the model answered the last — are answered in one call (`frames_already_here` in `mod.rs`
+collects complete frames from the buffer and whatever is readable without waiting, up to
+`MAX_BATCH_EVENTS`). Only `SEND`, `SUBSCRIBE`, `UNSUBSCRIBE`, `ACK` and `NACK` carrying their
+required headers are batched; collection stops at the first other frame (`CONNECT`,
+`DISCONNECT`, `BEGIN`/`COMMIT`/`ABORT`, a malformed frame), which is then handled alone, in
+order. Receipts stay Rust's job per frame: after the batch's output, every frame whose
+`receipt` the model did not write itself gets its `RECEIPT`, in arrival order, and none twice.
+`tests/server/stomp/batching_test.rs` drives it with `async-stomp` against a batching-off
+control.
+
 ## Failure behaviour
 
 STOMP has an `ERROR` frame, so this server is **never silent** on failure. Two distinct paths:

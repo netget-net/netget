@@ -144,10 +144,13 @@ impl Protocol for SocketFileProtocol {
                  peer is a local descriptor, so no independent third-party client exists and \
                  nothing here supports a rating above Experimental.",
             )
+            .max_inbound_bytes(crate::server::socket_file::MAX_QUEUED_BYTES)
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // Bytes arriving during a call are the next call's payload, whole (batching on) or
+            // one read at a time (off) — `ConnectionData::take_next`, the same shape as `tcp`.
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
 

@@ -529,6 +529,9 @@ pub struct SshHandler {
     shell_buffers: Arc<Mutex<HashMap<ChannelId, Vec<u8>>>>,
     /// Track if we've sent initial data for each channel (for banner vs empty enter)
     channel_initialized: Arc<Mutex<HashMap<ChannelId, bool>>>,
+    /// Shell lines waiting for the model on each channel, when the instance batches. See
+    /// [`ShellWorker`].
+    shell_queues: Arc<Mutex<HashMap<ChannelId, ShellQueue>>>,
     /// Channels this side has already sent `SSH_MSG_CHANNEL_CLOSE` for.
     ///
     /// RFC 4254 §5.3 lets each party send `SSH_MSG_CHANNEL_CLOSE` **once**. Without this set
@@ -546,6 +549,207 @@ pub struct SshHandler {
 enum ChannelType {
     Session,
     Sftp,
+}
+
+/// The `ssh_shell_command` event for one line of shell input.
+///
+/// The control-key flags are derived here so a handler can branch on Ctrl-C/Ctrl-D without
+/// scanning the raw bytes.
+fn shell_command_event(command: &[u8], first_input: bool) -> Event {
+    let mut control: Vec<&str> = Vec::new();
+    if command.contains(&0x03) {
+        control.push("ctrl_c");
+    }
+    if command.contains(&0x04) {
+        control.push("ctrl_d");
+    }
+    if command.contains(&0x1A) {
+        control.push("ctrl_z");
+    }
+    let empty_input = command.iter().all(|&b| b == b'\n' || b == b'\r');
+    Event::new(
+        &SSH_SHELL_COMMAND_EVENT,
+        serde_json::json!({
+            "command": String::from_utf8_lossy(command).to_string(),
+            "first_input": first_input,
+            "empty_input": empty_input,
+            "control": control,
+        }),
+    )
+}
+
+/// Shell lines one channel has sent that the model has not answered yet.
+#[derive(Default)]
+struct ShellQueue {
+    /// Each line with whether it was the channel's first input, oldest first.
+    lines: std::collections::VecDeque<(Vec<u8>, bool)>,
+    /// A [`ShellWorker`] is running for this channel and will take what is queued.
+    worker_running: bool,
+}
+
+/// Answers a shell channel's input off the russh handler, so input keeps arriving while the
+/// model answers - which is what lets lines typed during a call be answered together.
+///
+/// russh calls `Handler::data` one packet at a time and not again until it returns, so a model
+/// call made inside `data` means nothing else arrives until it is over: there is never a batch
+/// to collect. With batching on, `data` echoes and queues each complete line and this worker,
+/// one per channel at most, takes everything queued (up to `MAX_BATCH_EVENTS`) into one model
+/// call and writes through the session [`russh::server::Handle`]. It exits when the queue is
+/// empty and is started again by the next line; it is spawned with `spawn_server_task` and
+/// races the connection owner's token, so stopping the server or dropping the connection ends
+/// it and any call it has parked.
+///
+/// A terminal is a stream, not request/response, so a batch's output is written in the order
+/// the model gave it, followed by one prompt.
+struct ShellWorker {
+    channel_id: ChannelId,
+    handle: russh::server::Handle,
+    queues: Arc<Mutex<HashMap<ChannelId, ShellQueue>>>,
+    channels_closed: Arc<Mutex<HashSet<ChannelId>>>,
+    llm_client: OllamaClient,
+    app_state: Arc<AppState>,
+    status_tx: mpsc::UnboundedSender<String>,
+    server_id: crate::state::ServerId,
+    connection_id: ConnectionId,
+    protocol: Arc<SshProtocol>,
+    owner: CancellationToken,
+}
+
+impl ShellWorker {
+    async fn run(self) {
+        loop {
+            let batching = self
+                .app_state
+                .server_conversation_settings(self.server_id)
+                .await
+                .is_some_and(|(_, batching)| batching);
+            let take = if batching {
+                crate::protocol::metadata::MAX_BATCH_EVENTS
+            } else {
+                1
+            };
+            let lines: Vec<(Vec<u8>, bool)> = {
+                let mut queues = self.queues.lock().await;
+                let Some(queue) = queues.get_mut(&self.channel_id) else {
+                    return;
+                };
+                let n = take.min(queue.lines.len());
+                if n == 0 {
+                    queue.worker_running = false;
+                    return;
+                }
+                queue.lines.drain(..n).collect()
+            };
+            if !self.answer(&lines).await {
+                self.queues.lock().await.remove(&self.channel_id);
+                return;
+            }
+        }
+    }
+
+    /// Answer one batch. `false` when the channel was closed and nothing more may be written.
+    async fn answer(&self, lines: &[(Vec<u8>, bool)]) -> bool {
+        let events: Vec<Event> = lines
+            .iter()
+            .map(|(line, first)| shell_command_event(line, *first))
+            .collect();
+        let log = Log::new(Some(&self.status_tx));
+        if events.len() > 1 {
+            log.debug(format!(
+                "SSH answering {} shell lines on channel {} together",
+                events.len(),
+                self.channel_id
+            ));
+        }
+        let channel_id = self.channel_id;
+        match until_owner_drops(
+            &self.owner,
+            crate::llm::action_helper::call_llm_batch(
+                &self.llm_client,
+                &self.app_state,
+                self.server_id,
+                Some(self.connection_id),
+                &events,
+                self.protocol.as_ref(),
+            ),
+        )
+        .await
+        {
+            Ok(result) => {
+                let mut close_connection = false;
+                for protocol_result in result.protocol_results {
+                    match protocol_result {
+                        ActionResult::Output(data) => {
+                            let text =
+                                SshHandler::normalize_line_endings(&String::from_utf8_lossy(&data));
+                            let _ = self
+                                .handle
+                                .data(channel_id, CryptoVec::from_slice(text.as_bytes()))
+                                .await;
+                        }
+                        ActionResult::CloseConnection => close_connection = true,
+                        _ => {}
+                    }
+                }
+                if close_connection {
+                    log.info(format!(
+                        "LLM requested shell connection close on channel {}",
+                        channel_id
+                    ));
+                    let _ = self.handle.exit_status_request(channel_id, 0).await;
+                    let _ = self.handle.eof(channel_id).await;
+                    self.close_once().await;
+                    return false;
+                }
+                let _ = self
+                    .handle
+                    .data(channel_id, CryptoVec::from_slice(b"$ "))
+                    .await;
+                true
+            }
+            Err(e) => {
+                // The same answer the one-line path gives: the category on the channel, an
+                // exit status saying whether to retry, and a disconnect with a reason code.
+                let failure = crate::utils::WireFailure::classify(&e);
+                warn!(
+                    "SSH shell command on connection {}: decision=fail_closed_backend_error \
+                     category={:?}: {}",
+                    self.connection_id, failure, e
+                );
+                let description = failure.prefixed_text();
+                let notice = CryptoVec::from_slice(format!("\r\n{}\r\n", description).as_bytes());
+                let _ = self.handle.data(channel_id, notice).await;
+                let _ = self
+                    .handle
+                    .exit_status_request(channel_id, if failure.is_overloaded() { 75 } else { 69 })
+                    .await;
+                let _ = self.handle.eof(channel_id).await;
+                self.close_once().await;
+                let _ = self
+                    .handle
+                    .disconnect(
+                        russh::Disconnect::ServiceNotAvailable,
+                        description.to_string(),
+                        "en".to_string(),
+                    )
+                    .await;
+                log.warn(format!(
+                    "SSH disconnected channel {}: decision=fail_closed_backend_error \
+                     category={:?}",
+                    channel_id, failure
+                ));
+                false
+            }
+        }
+    }
+
+    /// `SSH_MSG_CHANNEL_CLOSE` at most once, sharing the handler's record - see
+    /// `SshHandler::close_channel_once`.
+    async fn close_once(&self) {
+        if self.channels_closed.lock().await.insert(self.channel_id) {
+            let _ = self.handle.close(self.channel_id).await;
+        }
+    }
 }
 
 impl SshHandler {
@@ -572,6 +776,7 @@ impl SshHandler {
             channels: Arc::new(Mutex::new(HashMap::new())),
             shell_buffers: Arc::new(Mutex::new(HashMap::new())),
             channel_initialized: Arc::new(Mutex::new(HashMap::new())),
+            shell_queues: Arc::new(Mutex::new(HashMap::new())),
             channels_closed: Arc::new(Mutex::new(HashSet::new())),
             owner,
         }
@@ -806,6 +1011,41 @@ impl SshHandler {
     /// flags are derived here so a handler can branch on Ctrl-C/Ctrl-D without scanning the
     /// raw bytes; previously they were computed only for a log line, while the prompt claimed
     /// the model would "see CTRL_C in the context flags".
+    /// Queue a shell line for the channel's [`ShellWorker`], starting one if none is running.
+    async fn queue_shell_line(
+        &self,
+        session: &mut Session,
+        server_id: crate::state::ServerId,
+        channel_id: ChannelId,
+        line: Vec<u8>,
+        first_input: bool,
+    ) {
+        let start_worker = {
+            let mut queues = self.shell_queues.lock().await;
+            let queue = queues.entry(channel_id).or_default();
+            queue.lines.push_back((line, first_input));
+            !std::mem::replace(&mut queue.worker_running, true)
+        };
+        if start_worker {
+            let worker = ShellWorker {
+                channel_id,
+                handle: session.handle(),
+                queues: self.shell_queues.clone(),
+                channels_closed: self.channels_closed.clone(),
+                llm_client: self.llm_client.clone(),
+                app_state: self.app_state.clone(),
+                status_tx: self.status_tx.clone(),
+                server_id,
+                connection_id: self.connection_id,
+                protocol: self.protocol.clone(),
+                owner: self.owner.clone(),
+            };
+            self.app_state
+                .spawn_server_task(server_id, worker.run())
+                .await;
+        }
+    }
+
     async fn llm_shell_command(
         &self,
         command: &[u8],
@@ -819,28 +1059,7 @@ impl SshHandler {
         debug!("SSH shell command: {:?}", command_str);
         trace!("SSH shell command (full): {}", command_str);
 
-        let mut control: Vec<&str> = Vec::new();
-        if command.contains(&0x03) {
-            control.push("ctrl_c");
-        }
-        if command.contains(&0x04) {
-            control.push("ctrl_d");
-        }
-        if command.contains(&0x1A) {
-            control.push("ctrl_z");
-        }
-        let empty_input = command.iter().all(|&b| b == b'\n' || b == b'\r');
-
-        // Create shell command event with command data
-        let event = Event::new(
-            &SSH_SHELL_COMMAND_EVENT,
-            serde_json::json!({
-                "command": command_str.to_string(),
-                "first_input": first_input,
-                "empty_input": empty_input,
-                "control": control,
-            }),
-        );
+        let event = shell_command_event(command, first_input);
 
         match until_owner_drops(
             &self.owner,
@@ -1370,6 +1589,29 @@ impl russh::server::Handler for SshHandler {
                             is_first_input, is_empty_cmd, has_ctrl_c
                         );
 
+                        // With batching on, the line is queued for this channel's worker
+                        // and `data` returns, so lines typed while the model answers can be
+                        // answered together. See `ShellWorker`.
+                        let batching = match self.server_id {
+                            Some(server_id) => self
+                                .app_state
+                                .server_conversation_settings(server_id)
+                                .await
+                                .is_some_and(|(_, batching)| batching),
+                            None => false,
+                        };
+                        if let (true, Some(server_id)) = (batching, self.server_id) {
+                            self.queue_shell_line(
+                                session,
+                                server_id,
+                                channel_id,
+                                line,
+                                is_first_input,
+                            )
+                            .await;
+                            return Ok(());
+                        }
+
                         let command_result = self.llm_shell_command(&line, is_first_input).await;
 
                         // A failed handler call ends the session with a reason code rather
@@ -1488,6 +1730,7 @@ impl russh::server::Handler for SshHandler {
         self.channel_types.lock().await.remove(&channel_id);
         self.channels.lock().await.remove(&channel_id);
         self.shell_buffers.lock().await.remove(&channel_id);
+        self.shell_queues.lock().await.remove(&channel_id);
         self.channel_initialized.lock().await.remove(&channel_id);
         // The peer has closed too, so this channel number is finished with and may be reused
         // by a later channel on the same connection. Forgetting it here keeps the

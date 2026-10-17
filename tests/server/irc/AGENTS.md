@@ -5,11 +5,11 @@
 Tests IRC server implementation with various IRC protocol commands: registration (NICK/USER), keepalive (PING/PONG),
 channel operations (JOIN), and messaging (PRIVMSG). Validates LLM's ability to handle IRC protocol semantics.
 
-## The six files, and what each is for
+## The seven files, and what each is for
 
 This doc described `e2e_test.rs` alone. Five files sat beside it unmentioned — and four of the
 five exist because of a defect, which is exactly the set a reader most needs pointed at.
-`tests/server/irc/` holds **17 tests** across six files:
+`tests/server/irc/` holds **18 tests** across seven files:
 
 | file | tests | what it holds |
 |---|---|---|
@@ -19,6 +19,11 @@ five exist because of a defect, which is exactly the set a reader most needs poi
 | `decision_tag_test.rs` | 2 | every terminal outcome of a line is grep-able as `decision=<token>` |
 | `llm_failure_test.rs` | 1 | what a client gets when the backend fails: numeric 400, then a closed link |
 | `peer_inject_test.rs` | 1 | the dashboard's `[ message this peer ]` / `[ disconnect this peer ]` path |
+| `batching_test.rs` | 1 | lines sent during a model call are answered in one follow-up call (batching off is the control) |
+
+`e2e_test.rs`'s four registration tests open the server with `"batching": false`: they write
+NICK, USER and the rest back to back and pin one rule per line, which batching (the default)
+would answer together.
 
 **`framing_test.rs` is the one to read first.** IRC is line-framed over a stream, which is the
 oldest way to get a server wrong: a peer controls where the line ends, so it controls how much

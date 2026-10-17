@@ -30,7 +30,7 @@
 pub mod actions;
 pub mod v5;
 
-use crate::llm::action_helper::call_llm;
+use crate::llm::action_helper::call_llm_batch;
 use crate::llm::actions::protocol_trait::ActionResult;
 use crate::llm::ollama_client::OllamaClient;
 use crate::logging::emit::Log;
@@ -537,6 +537,51 @@ async fn handle_mqtt_connection(
                 peer_addr
             );
 
+            // A QoS 0 PUBLISH owes the client nothing on the wire, so with batching on it is
+            // answered together with every further QoS 0 PUBLISH already here - what the client
+            // sent while the model answered the last. Everything else is answered one by one.
+            let qos0_publish = packet.packet_type == PKT_PUBLISH
+                && (packet.flags >> 1) & 0x03 == 0
+                && session.client_id.is_some();
+            if qos0_publish
+                && app_state
+                    .server_conversation_settings(server_id)
+                    .await
+                    .is_some_and(|(_, batching)| batching)
+            {
+                let keep_open = publish_batch(
+                    packet,
+                    &mut buffer,
+                    &mut read_half,
+                    &mut chunk,
+                    max_packet_size,
+                    &mut session,
+                    &llm_client,
+                    &app_state,
+                    &status_tx,
+                    server_id,
+                    connection_id,
+                    protocol.as_ref(),
+                    &out_tx,
+                )
+                .await;
+                if !keep_open {
+                    finish_connection(
+                        protocol,
+                        out_tx,
+                        writer_handle,
+                        &app_state,
+                        server_id,
+                        connection_id,
+                        &session.client_id,
+                        &status_tx,
+                    )
+                    .await;
+                    return Ok(());
+                }
+                continue;
+            }
+
             let keep_open = dispatch_packet(
                 packet,
                 &mut session,
@@ -776,7 +821,7 @@ async fn dispatch_packet(
                 app_state,
                 server_id,
                 connection_id,
-                &event,
+                std::slice::from_ref(&event),
                 protocol.as_ref(),
                 status_tx,
                 Some(PKT_CONNACK),
@@ -863,98 +908,21 @@ async fn dispatch_packet(
         }
 
         PKT_PUBLISH => {
-            let qos = (packet.flags >> 1) & 0x03;
-            if qos > 2 {
-                Log::new(Some(&status_tx))
-                    .warn("MQTT PUBLISH with invalid QoS 3 decision=protocol_error, closing");
-                session.refuse(out_tx, 0x81);
-                return false;
-            }
-            let mut publish = match parse_publish(&packet.body, qos, session.v5) {
-                Ok(p) => p,
-                Err(e) => {
-                    Log::new(Some(&status_tx)).warn(format!(
-                        "MQTT malformed PUBLISH decision=protocol_error, closing connection: {e}"
-                    ));
-                    session.refuse(out_tx, e.reason_code());
-                    return false;
-                }
-            };
-
-            // Topic Alias (§3.3.2.3.4): a non-empty topic with an alias defines it, an empty
-            // topic with an alias uses it. The model always sees the topic name.
-            if let Some(alias) = publish.properties.int(v5::TOPIC_ALIAS) {
-                let alias = alias as u16;
-                if alias == 0 || alias > TOPIC_ALIAS_MAX {
-                    Log::new(Some(&status_tx)).warn(format!(
-                        "MQTT PUBLISH with topic alias {alias} outside 1..={TOPIC_ALIAS_MAX} \
-                         decision=protocol_error, closing"
-                    ));
-                    session.refuse(out_tx, 0x94);
-                    return false;
-                }
-                if publish.topic.is_empty() {
-                    match session.aliases.get(&alias) {
-                        Some(topic) => publish.topic = topic.clone(),
-                        None => {
-                            Log::new(Some(&status_tx)).warn(format!(
-                                "MQTT PUBLISH uses topic alias {alias}, which this connection \
-                                 never defined decision=protocol_error, closing"
-                            ));
-                            session.refuse(out_tx, 0x82);
-                            return false;
-                        }
+            let (event, qos, packet_id) =
+                match publish_event(&packet, session, server_id, status_tx) {
+                    Ok(prepared) => prepared,
+                    Err(code) => {
+                        session.refuse(out_tx, code);
+                        return false;
                     }
-                } else {
-                    session.aliases.insert(alias, publish.topic.clone());
-                }
-            } else if session.v5 && publish.topic.is_empty() {
-                Log::new(Some(&status_tx)).warn(
-                    "MQTT PUBLISH with an empty topic and no topic alias \
-                     decision=protocol_error, closing",
-                );
-                session.refuse(out_tx, 0x82);
-                return false;
-            }
-
-            let (payload, payload_is_text) = decode_payload(&publish.payload);
-            let name = session
-                .client_id
-                .clone()
-                .unwrap_or_else(|| "<no CONNECT>".into());
-
-            Log::new(Some(&status_tx)).debug(format!(
-                "MQTT PUBLISH from '{}' topic='{}' qos={} retain={} {} bytes",
-                name,
-                publish.topic,
-                qos,
-                (packet.flags & 0x01) == 1,
-                publish.payload.len()
-            ));
-
-            let mut data = serde_json::json!({
-                "client_id": name,
-                "topic": publish.topic,
-                "payload": payload,
-                "payload_is_text": payload_is_text,
-                "payload_size": publish.payload.len(),
-                "qos": qos,
-                "retain": (packet.flags & 0x01) == 1,
-                "duplicate": (packet.flags & 0x08) != 0,
-                "packet_id": publish.packet_id,
-                "connected_clients": actions::list_clients(server_id),
-            });
-            if session.v5 {
-                data["properties"] = publish.properties.to_json();
-            }
-            let event = Event::new(&MQTT_PUBLISH_EVENT, data);
+                };
 
             let outcome = run_llm(
                 llm_client,
                 app_state,
                 server_id,
                 connection_id,
-                &event,
+                std::slice::from_ref(&event),
                 protocol.as_ref(),
                 status_tx,
                 match qos {
@@ -975,10 +943,10 @@ async fn dispatch_packet(
                     // properties may be omitted (§3.4.2.1).
                     match qos {
                         1 => {
-                            let _ = out_tx.send(build_ack(PKT_PUBACK, publish.packet_id));
+                            let _ = out_tx.send(build_ack(PKT_PUBACK, packet_id));
                         }
                         2 => {
-                            let _ = out_tx.send(build_ack(PKT_PUBREC, publish.packet_id));
+                            let _ = out_tx.send(build_ack(PKT_PUBREC, packet_id));
                         }
                         _ => {}
                     }
@@ -1001,7 +969,7 @@ async fn dispatch_packet(
                     Log::new(Some(&status_tx)).warn(format!(
                         "MQTT closing connection: backend failed on PUBLISH (qos={}, id={}), \
                          acknowledging it would claim delivery",
-                        qos, publish.packet_id
+                        qos, packet_id
                     ));
                     if session.v5 {
                         let mut props = v5::PropertyWriter::new();
@@ -1086,7 +1054,7 @@ async fn dispatch_packet(
                 app_state,
                 server_id,
                 connection_id,
-                &event,
+                std::slice::from_ref(&event),
                 protocol.as_ref(),
                 status_tx,
                 Some(PKT_SUBACK),
@@ -1176,7 +1144,7 @@ async fn dispatch_packet(
                 app_state,
                 server_id,
                 connection_id,
-                &event,
+                std::slice::from_ref(&event),
                 protocol.as_ref(),
                 status_tx,
                 Some(PKT_UNSUBACK),
@@ -1347,6 +1315,225 @@ enum LlmOutcome {
     Failed(crate::utils::wire_failure::WireFailure),
 }
 
+/// Parse a client PUBLISH and build its `mqtt_publish` event, applying its Topic Alias.
+///
+/// `Err` carries the reason code to refuse the connection with: the packet is malformed or
+/// breaks a rule of the spec, and the caller closes. Shared by the one-at-a-time path and the
+/// QoS 0 batch, so both decode and validate a PUBLISH identically.
+fn publish_event(
+    packet: &RawPacket,
+    session: &mut Session,
+    server_id: crate::state::ServerId,
+    status_tx: &mpsc::UnboundedSender<String>,
+) -> std::result::Result<(Event, u8, u16), u8> {
+    let qos = (packet.flags >> 1) & 0x03;
+    if qos > 2 {
+        Log::new(Some(&status_tx))
+            .warn("MQTT PUBLISH with invalid QoS 3 decision=protocol_error, closing");
+        return Err(0x81);
+    }
+    let mut publish = match parse_publish(&packet.body, qos, session.v5) {
+        Ok(p) => p,
+        Err(e) => {
+            Log::new(Some(&status_tx)).warn(format!(
+                "MQTT malformed PUBLISH decision=protocol_error, closing connection: {e}"
+            ));
+            return Err(e.reason_code());
+        }
+    };
+
+    // Topic Alias (§3.3.2.3.4): a non-empty topic with an alias defines it, an empty
+    // topic with an alias uses it. The model always sees the topic name.
+    if let Some(alias) = publish.properties.int(v5::TOPIC_ALIAS) {
+        let alias = alias as u16;
+        if alias == 0 || alias > TOPIC_ALIAS_MAX {
+            Log::new(Some(&status_tx)).warn(format!(
+                "MQTT PUBLISH with topic alias {alias} outside 1..={TOPIC_ALIAS_MAX} \
+                     decision=protocol_error, closing"
+            ));
+            return Err(0x94);
+        }
+        if publish.topic.is_empty() {
+            match session.aliases.get(&alias) {
+                Some(topic) => publish.topic = topic.clone(),
+                None => {
+                    Log::new(Some(&status_tx)).warn(format!(
+                        "MQTT PUBLISH uses topic alias {alias}, which this connection \
+                             never defined decision=protocol_error, closing"
+                    ));
+                    return Err(0x82);
+                }
+            }
+        } else {
+            session.aliases.insert(alias, publish.topic.clone());
+        }
+    } else if session.v5 && publish.topic.is_empty() {
+        Log::new(Some(&status_tx)).warn(
+            "MQTT PUBLISH with an empty topic and no topic alias \
+                 decision=protocol_error, closing",
+        );
+        return Err(0x82);
+    }
+
+    let (payload, payload_is_text) = decode_payload(&publish.payload);
+    let name = session
+        .client_id
+        .clone()
+        .unwrap_or_else(|| "<no CONNECT>".into());
+
+    Log::new(Some(&status_tx)).debug(format!(
+        "MQTT PUBLISH from '{}' topic='{}' qos={} retain={} {} bytes",
+        name,
+        publish.topic,
+        qos,
+        (packet.flags & 0x01) == 1,
+        publish.payload.len()
+    ));
+
+    let mut data = serde_json::json!({
+        "client_id": name,
+        "topic": publish.topic,
+        "payload": payload,
+        "payload_is_text": payload_is_text,
+        "payload_size": publish.payload.len(),
+        "qos": qos,
+        "retain": (packet.flags & 0x01) == 1,
+        "duplicate": (packet.flags & 0x08) != 0,
+        "packet_id": publish.packet_id,
+        "connected_clients": actions::list_clients(server_id),
+    });
+    if session.v5 {
+        data["properties"] = publish.properties.to_json();
+    }
+    let event = Event::new(&MQTT_PUBLISH_EVENT, data);
+    Ok((event, qos, publish.packet_id))
+}
+
+/// Answer a QoS 0 PUBLISH together with every further QoS 0 PUBLISH already here, in one call.
+///
+/// Only QoS 0 is batched, because it is the only PUBLISH that owes the client nothing: a QoS 1
+/// or 2 PUBLISH, a SUBSCRIBE and an UNSUBSCRIBE each owe an acknowledgement carrying its own
+/// packet id, MQTT requires PUBACKs in the order the PUBLISHes arrived (§4.6), and the default
+/// acknowledgement Rust writes for one the handler skipped would land after the handler's own
+/// acknowledgements for later ones. Those stay one call each, and so does everything Rust
+/// answers itself (PINGREQ, PUBREL, the client's own acks).
+///
+/// Collection takes complete packets out of `buffer`, reading the socket only for what is
+/// readable without waiting, and stops at the first packet that is not a QoS 0 PUBLISH,
+/// leaving it for the session loop to handle after the batch. Returns whether the connection
+/// stays open.
+#[allow(clippy::too_many_arguments)]
+async fn publish_batch<R: tokio::io::AsyncRead + Unpin>(
+    first: RawPacket,
+    buffer: &mut Vec<u8>,
+    read_half: &mut R,
+    chunk: &mut [u8],
+    max_packet_size: usize,
+    session: &mut Session,
+    llm_client: &OllamaClient,
+    app_state: &Arc<AppState>,
+    status_tx: &mpsc::UnboundedSender<String>,
+    server_id: crate::state::ServerId,
+    connection_id: ConnectionId,
+    protocol: &MqttProtocol,
+    out_tx: &mpsc::UnboundedSender<Vec<u8>>,
+) -> bool {
+    let mut events = Vec::new();
+    match publish_event(&first, session, server_id, status_tx) {
+        Ok((event, _, _)) => events.push(event),
+        Err(code) => {
+            session.refuse(out_tx, code);
+            return false;
+        }
+    }
+    // A packet in the run that turns out to break the spec closes the connection, but only
+    // after the PUBLISHes before it - which were valid - have been answered.
+    let mut refusal = None;
+    while events.len() < crate::protocol::metadata::MAX_BATCH_EVENTS {
+        let next_is_qos0_publish = buffer
+            .first()
+            .is_some_and(|&b| b >> 4 == PKT_PUBLISH && (b >> 1) & 0x03 == 0);
+        if !buffer.is_empty() && !next_is_qos0_publish {
+            break;
+        }
+        match take_packet(buffer, max_packet_size) {
+            Ok(Some(packet)) => match publish_event(&packet, session, server_id, status_tx) {
+                Ok((event, _, _)) => events.push(event),
+                Err(code) => {
+                    refusal = Some(code);
+                    break;
+                }
+            },
+            Ok(None) => {
+                // A zero deadline polls the read once: whatever the kernel already holds,
+                // nothing that would mean waiting. `read` is cancel-safe.
+                match tokio::time::timeout(Duration::ZERO, read_half.read(chunk)).await {
+                    Ok(Ok(n)) if n > 0 => {
+                        app_state
+                            .update_connection_stats(
+                                server_id,
+                                connection_id,
+                                Some(n as u64),
+                                None,
+                                Some(1),
+                                None,
+                            )
+                            .await;
+                        buffer.extend_from_slice(chunk.get(..n).unwrap_or(&[]));
+                    }
+                    _ => break,
+                }
+            }
+            // Left in the buffer for the session loop, which reports it and closes.
+            Err(_) => break,
+        }
+    }
+
+    if events.len() > 1 {
+        Log::new(Some(status_tx)).debug(format!(
+            "MQTT answering {} QoS 0 PUBLISHes on {} together",
+            events.len(),
+            connection_id
+        ));
+    }
+    let outcome = run_llm(
+        llm_client,
+        app_state,
+        server_id,
+        connection_id,
+        &events,
+        protocol,
+        status_tx,
+        None,
+    )
+    .await;
+    let keep_open = match outcome {
+        LlmOutcome::Closed => false,
+        LlmOutcome::Responded | LlmOutcome::Silent => true,
+        LlmOutcome::Failed(failure) => {
+            // The same answer a single QoS 0 PUBLISH gets: nothing looked at these messages,
+            // and the spec's only channel for saying so is closing (with a v5 DISCONNECT
+            // naming the category first).
+            Log::new(Some(status_tx)).warn(format!(
+                "MQTT closing connection: backend failed on {} QoS 0 PUBLISH(es)",
+                events.len()
+            ));
+            if session.v5 {
+                let mut props = v5::PropertyWriter::new();
+                props.text(v5::REASON_STRING, failure.text());
+                let code = if failure.is_overloaded() { 0x89 } else { 0x80 };
+                let _ = out_tx.send(build_disconnect_v5(code, &props));
+            }
+            false
+        }
+    };
+    if let (true, Some(code)) = (keep_open, refusal) {
+        session.refuse(out_tx, code);
+        return false;
+    }
+    keep_open
+}
+
 /// Hand an event to the handler chain and report whether the mandatory reply was
 /// produced.
 ///
@@ -1361,21 +1548,28 @@ async fn run_llm(
     app_state: &Arc<AppState>,
     server_id: crate::state::ServerId,
     connection_id: ConnectionId,
-    event: &Event,
+    events: &[Event],
     protocol: &MqttProtocol,
     status_tx: &mpsc::UnboundedSender<String>,
     required_reply: Option<u8>,
 ) -> LlmOutcome {
     protocol.clear_written_types();
+    // One event, except for a batch of QoS 0 PUBLISHes (`publish_batch`), which owe nothing
+    // on the wire, so `required_reply` is `None` for every batch. The newest event names the
+    // decision in the log.
+    let Some(event) = events.last() else {
+        return LlmOutcome::Responded;
+    };
 
     // call_llm dispatches script and static handlers first, so a deterministic
-    // handler costs no model call.
-    match call_llm(
+    // handler costs no model call. A batch falls back to one call per event whenever any of
+    // them is routed to something other than the model.
+    match call_llm_batch(
         llm_client,
         app_state,
         server_id,
         Some(connection_id),
-        event,
+        events,
         protocol,
     )
     .await

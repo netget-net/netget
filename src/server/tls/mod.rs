@@ -198,7 +198,49 @@ enum ConnectionState {
 struct ConnectionData {
     state: ConnectionState,
     queued_data: Vec<u8>,
+    /// Where each read that was queued ended, oldest first, summing to `queued_data.len()`.
+    /// With batching off the next call answers one read rather than the whole queue.
+    queued_chunks: std::collections::VecDeque<usize>,
     write_half: Arc<Mutex<tokio::io::WriteHalf<tokio_rustls::server::TlsStream<TcpStream>>>>,
+}
+
+impl ConnectionData {
+    /// Queue a read that arrived while the model was answering. The caller has already
+    /// checked [`MAX_QUEUED_BYTES`].
+    fn queue(&mut self, data: &[u8]) {
+        if !data.is_empty() {
+            self.queued_data.extend_from_slice(data);
+            self.queued_chunks.push_back(data.len());
+        }
+    }
+
+    /// What the next call answers: the whole queue when batching, else the oldest read.
+    ///
+    /// The decrypted stream has no message boundaries, so batching is what TLS always did —
+    /// everything that arrived during a call is the next call's payload. With it off, each
+    /// read the socket delivered (in practice one TLS record each) is answered on its own, in
+    /// order. The same shape as `tcp`.
+    fn take_next(&mut self, batching: bool) -> Vec<u8> {
+        if batching || self.queued_chunks.len() <= 1 {
+            self.queued_chunks.clear();
+            return std::mem::take(&mut self.queued_data);
+        }
+        let n = self
+            .queued_chunks
+            .pop_front()
+            .unwrap_or(self.queued_data.len())
+            .min(self.queued_data.len());
+        self.queued_data.drain(..n).collect()
+    }
+
+    /// Replace the queue with one payload that must stay whole — what `wait_for_more` holds.
+    fn hold_as_one(&mut self, data: Vec<u8>) {
+        self.queued_chunks.clear();
+        if !data.is_empty() {
+            self.queued_chunks.push_back(data.len());
+        }
+        self.queued_data = data;
+    }
 }
 
 /// TLS server that listens for incoming connections
@@ -391,6 +433,7 @@ impl TlsServer {
                                             ConnectionState::Idle
                                         },
                                         queued_data: Vec::new(),
+                                        queued_chunks: Default::default(),
                                         write_half: write_half_arc.clone(),
                                     },
                                 );
@@ -1014,6 +1057,12 @@ impl TlsServer {
         connections: Arc<Mutex<HashMap<ConnectionId, ConnectionData>>>,
         protocol: Arc<TlsProtocol>,
     ) {
+        // Read per event: batching is hot-changeable.
+        let batching = app_state
+            .server_conversation_settings(server_id)
+            .await
+            .is_some_and(|(_, batching)| batching);
+
         // Check connection state
         let current_state = {
             let conns = connections.lock().await;
@@ -1053,7 +1102,7 @@ impl TlsServer {
                     if would_be > MAX_QUEUED_BYTES {
                         refused = Some(would_be);
                     } else {
-                        conn.queued_data.extend_from_slice(&data);
+                        conn.queue(&data);
                     }
                 });
             match refused {
@@ -1083,11 +1132,12 @@ impl TlsServer {
             let Some(conn_data) = conns.get_mut(&connection_id) else {
                 return; // Connection closed while we were waiting for the lock
             };
+            // Bytes held for `wait_for_more` are one message with whatever completes it, so
+            // they are always taken whole; otherwise batching decides.
+            let take_all = batching || current_state == ConnectionState::Accumulating;
             conn_data.state = ConnectionState::Processing;
-            let mut merged = conn_data.queued_data.clone();
-            merged.extend_from_slice(&data);
-            conn_data.queued_data.clear();
-            Bytes::from(merged)
+            conn_data.queue(&data);
+            Bytes::from(conn_data.take_next(take_all))
         };
 
         loop {
@@ -1231,15 +1281,72 @@ impl TlsServer {
                         ));
                     }
 
-                    // Handle wait_for_more
+                    // Handle wait_for_more.
+                    //
+                    // The fragment the model was just shown goes back to the *head* of the
+                    // queue, ahead of anything that arrived during the call, as one payload.
+                    // `wait_for_more` means "these bytes are an incomplete message"; dropping
+                    // them meant the model never saw the front of the message again. The same
+                    // repair as `tcp`.
                     if should_wait {
-                        connections
-                            .lock()
-                            .await
-                            .entry(connection_id)
-                            .and_modify(|conn| conn.state = ConnectionState::Accumulating);
-                        Log::new(Some(&status_tx))
-                            .debug(format!("Waiting for more data from {connection_id}"));
+                        let (queued_len, arrived_during_call) = {
+                            let mut conns = connections.lock().await;
+                            let Some(conn) = conns.get_mut(&connection_id) else {
+                                return;
+                            };
+                            let arrived_during_call = !conn.queued_data.is_empty();
+                            let mut merged = all_data.to_vec();
+                            merged.append(&mut conn.queued_data);
+                            conn.hold_as_one(merged);
+                            conn.state = ConnectionState::Accumulating;
+                            (conn.queued_data.len(), arrived_during_call)
+                        };
+
+                        // Same bound as the Processing queue: a model that answers
+                        // `wait_for_more` to everything must not be a way to grow memory
+                        // without limit either.
+                        if queued_len > MAX_QUEUED_BYTES {
+                            Log::new(Some(&status_tx)).warn(format!(
+                                "TLS connection {connection_id} \
+                                 decision=fail_closed_queued_data_overflow: accumulated \
+                                 {queued_len} bytes across wait_for_more, limit is \
+                                 {MAX_QUEUED_BYTES}"
+                            ));
+                            connections.lock().await.remove(&connection_id);
+                            if let Err(e) = write_half.lock().await.shutdown().await {
+                                debug!("TLS shutdown on {} returned: {}", connection_id, e);
+                            }
+                            app_state
+                                .close_connection_on_server(server_id, connection_id)
+                                .await;
+                            let _ = status_tx.send("__UPDATE_UI__".to_string());
+                            return;
+                        }
+
+                        // Bytes that arrived while the model was thinking *are* the "more" it
+                        // asked for. Returning here would park them until the next read, which
+                        // may never come — the peer has sent its whole message and is waiting.
+                        if arrived_during_call {
+                            let joined = {
+                                let mut conns = connections.lock().await;
+                                let Some(conn) = conns.get_mut(&connection_id) else {
+                                    return;
+                                };
+                                conn.state = ConnectionState::Processing;
+                                conn.take_next(true)
+                            };
+                            Log::new(Some(&status_tx)).debug(format!(
+                                "wait_for_more on {connection_id}: {} bytes already waiting, \
+                                 continuing",
+                                joined.len()
+                            ));
+                            all_data = Bytes::from(joined);
+                            continue;
+                        }
+
+                        Log::new(Some(&status_tx)).debug(format!(
+                            "Waiting for more data from {connection_id} ({queued_len} bytes held)"
+                        ));
                         return;
                     }
 
@@ -1277,7 +1384,7 @@ impl TlsServer {
                         let queued = {
                             let mut conns = connections.lock().await;
                             match conns.get_mut(&connection_id) {
-                                Some(conn) => std::mem::take(&mut conn.queued_data),
+                                Some(conn) => conn.take_next(batching),
                                 None => return,
                             }
                         };
