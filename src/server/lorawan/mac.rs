@@ -100,7 +100,7 @@ fn subkeys(key: &Key) -> ([u8; 16], [u8; 16]) {
 pub fn aes_cmac(key: &Key, message: &[u8]) -> [u8; 16] {
     let (k1, k2) = subkeys(key);
     let blocks = message.len().div_ceil(16).max(1);
-    let complete = !message.is_empty() && message.len() % 16 == 0;
+    let complete = !message.is_empty() && message.len().is_multiple_of(16);
     let mut x = [0u8; 16];
     for i in 0..blocks {
         let start = i * 16;

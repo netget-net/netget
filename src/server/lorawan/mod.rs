@@ -181,6 +181,9 @@ struct Session {
     dev_status_req: bool,
 }
 
+/// How many gateways heard one frame, shared between its copies.
+type GatewayCount = Arc<std::sync::atomic::AtomicUsize>;
+
 struct GatewayState {
     pull: Option<(SocketAddr, u8)>,
     last_seen: Instant,
@@ -198,7 +201,7 @@ struct Reception {
     rssi: i32,
     snr: f64,
     received: Instant,
-    gateways: Arc<std::sync::atomic::AtomicUsize>,
+    gateways: GatewayCount,
 }
 
 impl Reception {
@@ -222,7 +225,7 @@ struct Ns {
     sessions: Mutex<HashMap<u32, Session>>,
     nonces: Mutex<HashMap<Eui, VecDeque<u16>>>,
     gateways: Mutex<HashMap<Eui, GatewayState>>,
-    recent: Mutex<VecDeque<(Vec<u8>, Instant, Arc<std::sync::atomic::AtomicUsize>)>>,
+    recent: Mutex<VecDeque<(Vec<u8>, Instant, GatewayCount)>>,
     tx_tokens: Mutex<VecDeque<(u16, String)>>,
     in_flight: Arc<Semaphore>,
 }
@@ -497,7 +500,7 @@ async fn datagram(ctx: &SpawnContext, ns: &Arc<Ns>, d: &[u8], from: SocketAddr) 
 }
 
 /// The first sighting of a frame records it; a copy within the window counts one more gateway.
-async fn first_sighting(ns: &Ns, phy: &[u8]) -> Option<Arc<std::sync::atomic::AtomicUsize>> {
+async fn first_sighting(ns: &Ns, phy: &[u8]) -> Option<GatewayCount> {
     let mut recent = ns.recent.lock().await;
     while recent
         .front()
