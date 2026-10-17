@@ -473,6 +473,11 @@ pub async fn connect_maybe_reserved(
     Ok((stream, reserved))
 }
 
+/// Pending connections the stderr listener holds. `rcmd(3)` listens with 1, which lets a
+/// stranger who connects first fill the queue (macOS then resets the server's own connection):
+/// the client skips connections from anywhere but the server, so it needs room to reach it.
+pub const STDERR_BACKLOG: u32 = 8;
+
 /// A listener on `ip` for the stderr connection a client asks its server to open: on a
 /// reserved port when this process may bind one (`rshd` requires it), otherwise on any.
 pub async fn listen_maybe_reserved(
@@ -491,7 +496,7 @@ pub async fn listen_maybe_reserved(
         for port in (RESERVED_LOW..=RESERVED_HIGH).rev() {
             let socket = fresh()?;
             match socket.bind(std::net::SocketAddr::new(ip, port)) {
-                Ok(()) => return socket.listen(1),
+                Ok(()) => return socket.listen(STDERR_BACKLOG),
                 Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => break,
                 Err(_) => continue,
             }
@@ -499,5 +504,5 @@ pub async fn listen_maybe_reserved(
     }
     let socket = fresh()?;
     socket.bind(std::net::SocketAddr::new(ip, 0))?;
-    socket.listen(1)
+    socket.listen(STDERR_BACKLOG)
 }
