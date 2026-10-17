@@ -70,32 +70,7 @@ pub async fn one_model_call_answers(
     server_id: ServerId,
     event_ids: &[&str],
 ) -> bool {
-    let batching = state
-        .server_conversation_settings(server_id)
-        .await
-        .is_some_and(|(_, batching)| batching);
-    if !batching || state.get_easy_for_server(server_id).await.is_some() {
-        return false;
-    }
-    let Some(config) = state.get_event_handler_config(server_id).await else {
-        return true;
-    };
-    let mut instruction: Option<Option<String>> = None;
-    for id in event_ids {
-        let this = match config.find_handler(id) {
-            None => None,
-            Some(crate::scripting::EventHandlerType::Llm { instruction }) => {
-                Some(instruction.clone())
-            }
-            Some(_) => return false,
-        };
-        match &instruction {
-            None => instruction = Some(this),
-            Some(first) if *first != this => return false,
-            Some(_) => {}
-        }
-    }
-    true
+    crate::llm::action_helper::batch_goes_to_the_model(state, server_id, event_ids).await
 }
 
 /// Whether batching is switched on for this instance (read per command, so a hot change
