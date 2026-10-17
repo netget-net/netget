@@ -219,6 +219,16 @@ Per connection: **Idle → Processing → Accumulating**, in `ConnData`.
 - `wait_for_websocket_data` moves to `Accumulating` and parks the message in `pending`; the next
   message of the same kind is joined onto it (text concatenated, binary appended) and the pair is
   delivered as one event. Different kinds are processed in arrival order instead.
+- **Batching (`BatchingMode::On`).** When the handler comes back for the next queued message
+  and the instance batches, it drains every consecutive text/binary message at the front of
+  `queued` (up to `MAX_BATCH_EVENTS`) into one `call_llm_batch`, newest as trigger; off, one
+  queued message per call. A ping is a control frame and is always answered alone, and a
+  batch stops at one. `wait_for_websocket_data` on a batch parks the trigger (newest) message
+  in `pending`. Test: `tests/server/websocket/batching_test.rs`.
+- **Messages are queued by the read loop itself** (`enqueue_inbound`), and a handler task is
+  spawned only when none is running. Each message used to spawn a task that took the lock on
+  its own, so two messages read during one call could be queued in either order — the test's
+  control caught `third` answered before `second`.
 
 `tokio::io::split` is not used directly: the socket becomes a `WebSocketStream`, which is split
 with `futures::StreamExt::split()` into a `SplitSink` and a `SplitStream` — the same "one owner
