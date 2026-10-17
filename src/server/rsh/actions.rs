@@ -289,8 +289,8 @@ impl Protocol for RshProtocol {
         use crate::protocol::metadata::*;
         ProtocolMetadataV2::builder()
             .state(DevelopmentState::Experimental)
-            .privilege_requirement(PrivilegeRequirement::PrivilegedPort(wire::RSH_PORT))
-            .well_known_port(wire::RSH_PORT)
+            .privilege_requirement(PrivilegeRequirement::PrivilegedPort(514))
+            .well_known_port(514)
             .implementation("Hand-written rcmd handshake (src/server/rsh/wire.rs): the stderr port field (decimal, at most 5 digits), the connection back to the client's own address on that port (from a reserved port when NetGet may bind one, as rcmd(3) requires), client user, server user and command, each NUL-terminated and capped; the \\0 / \\1 status byte; stdout on the main connection and stderr on the second (or the main one when the client asked for none); half-close and drain before closing")
             .llm_control("Whether the request is trusted (the client and server user names, the client's address and source port, and whether that port is reserved, are all in the event) and everything the command prints")
             .e2e_testing("tests/server/rsh: raw-socket handshakes for every bound and refusal, the stderr connection's target and content, fail-closed paths and the pcap oracle (tshark's rsh dissector) in e2e_test.rs; the real clients in real_client_test.rs (Linux, as root): inetutils rsh and rsh-redone's rsh")
@@ -372,8 +372,8 @@ impl Protocol for RexecProtocol {
         use crate::protocol::metadata::*;
         ProtocolMetadataV2::builder()
             .state(DevelopmentState::Experimental)
-            .privilege_requirement(PrivilegeRequirement::PrivilegedPort(wire::REXEC_PORT))
-            .well_known_port(wire::REXEC_PORT)
+            .privilege_requirement(PrivilegeRequirement::PrivilegedPort(512))
+            .well_known_port(512)
             .implementation("Hand-written rexec handshake (src/server/rsh/wire.rs): the stderr port field, the connection back to the client's own address, user, password and command, each NUL-terminated and capped; the password compared in Rust against the accounts startup parameter (every account compared, without an early exit); the \\0 / \\1 status byte; stdout and stderr; half-close and drain before closing")
             .llm_control("What each command prints, and whether to refuse it. Authentication is NetGet's: the model is asked only after the password matched, and never sees it")
             .e2e_testing("tests/server/rsh: raw-socket handshakes for the password check, every bound, the stderr connection and fail-closed paths, and the pcap oracle (tshark's exec dissector) in e2e_test.rs; inetutils rexec in real_client_test.rs (on macOS too, where Homebrew installs it as grexec)")

@@ -90,21 +90,36 @@ pub fn rlogin_actions() -> Vec<ActionDefinition> {
         action(
             SEND_LINE,
             "Type a line and press Enter.",
-            vec![p("line", "string", "What to type", true)],
+            vec![p(
+                "line",
+                "string",
+                "The line to type; Enter (CR) is sent after it",
+                true,
+            )],
             json!({"type": SEND_LINE, "line": "ls -l"}),
         ),
         action(
             SEND_TEXT,
             "Type text without pressing Enter (a password prompt answered by send_line is the \
              usual way; this is for partial input).",
-            vec![p("text", "string", "What to type", true)],
+            vec![p(
+                "text",
+                "string",
+                "The characters to type, sent as they are with no Enter",
+                true,
+            )],
             json!({"type": SEND_TEXT, "text": "y"}),
         ),
         action(
             SEND_KEY,
             "Press a key: enter, ctrl-c (interrupt), ctrl-d (end of input / logout), ctrl-z, \
              ctrl-u (erase the line), escape, tab or backspace.",
-            vec![p("key", "string", "The key's name", true)],
+            vec![p(
+                "key",
+                "string",
+                "The key to press: enter, ctrl-c, ctrl-d, ctrl-z, ctrl-u, escape, tab or backspace",
+                true,
+            )],
             json!({"type": SEND_KEY, "key": "ctrl-c"}),
         ),
         action(
@@ -112,8 +127,8 @@ pub fn rlogin_actions() -> Vec<ActionDefinition> {
             "Resize the terminal: the server is sent the new size, as a real rlogin does on \
              SIGWINCH (only once the server has asked for window sizes).",
             vec![
-                p("rows", "number", "Rows", true),
-                p("cols", "number", "Columns", true),
+                p("rows", "number", "Terminal height in rows (1-9999)", true),
+                p("cols", "number", "Terminal width in columns (1-9999)", true),
             ],
             json!({"type": SET_WINDOW, "rows": 40, "cols": 120}),
         ),
@@ -172,7 +187,12 @@ pub static RSH_CONNECTED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         json!({"type": RSH_RUN, "command": "uname -a"}),
     )
     .with_parameters(vec![
-        p("remote_addr", "string", "The rsh server", true),
+        p(
+            "remote_addr",
+            "string",
+            "The rsh server's address and port",
+            true,
+        ),
         p(
             "local_user",
             "string",
@@ -214,7 +234,12 @@ pub static REXEC_CONNECTED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         json!({"type": REXEC_RUN, "command": "uname -a"}),
     )
     .with_parameters(vec![
-        p("remote_addr", "string", "The rexec server", true),
+        p(
+            "remote_addr",
+            "string",
+            "The rexec server's address and port",
+            true,
+        ),
         p("user", "string", "The account commands run as", true),
     ])
     .with_actions(rexec_actions())
@@ -239,7 +264,12 @@ pub static RLOGIN_CONNECTED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         json!({"type": SET_WINDOW, "rows": 24, "cols": 80}),
     )
     .with_parameters(vec![
-        p("remote_addr", "string", "The rlogin server", true),
+        p(
+            "remote_addr",
+            "string",
+            "The rlogin server's address and port",
+            true,
+        ),
         p(
             "remote_user",
             "string",
@@ -313,7 +343,7 @@ fn stderr_param() -> ParameterDefinition {
             .into(),
         required: false,
         example: json!(true),
-        default: Some(json!(true)),
+        default: Some(json!(super::DEFAULT_STDERR)),
     }
 }
 

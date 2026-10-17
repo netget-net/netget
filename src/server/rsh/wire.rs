@@ -101,16 +101,16 @@ pub fn parse_port(field: &[u8]) -> Result<Option<u16>, &'static str> {
         return Ok(None);
     }
     if field.len() > MAX_PORT_FIELD || !field.iter().all(u8::is_ascii_digit) {
-        return Err("the stderr port is not a decimal port number");
+        return Err("netget: the stderr port is not a decimal port number");
     }
     let n: u32 = std::str::from_utf8(field)
         .ok()
         .and_then(|s| s.parse().ok())
-        .ok_or("the stderr port is not a decimal port number")?;
+        .ok_or("netget: the stderr port is not a decimal port number")?;
     match n {
         0 => Ok(None),
         1..=65535 => Ok(Some(n as u16)),
-        _ => Err("the stderr port is above 65535"),
+        _ => Err("netget: the stderr port is above 65535"),
     }
 }
 
@@ -156,6 +156,22 @@ pub fn refusal(text: &str, crlf: bool) -> Vec<u8> {
     out.extend_from_slice(line.as_bytes());
     out.extend_from_slice(if crlf { b"\r\n" } else { b"\n" });
     out
+}
+
+/// The refusal line for a handshake field that ran past its cap. Fixed text per field, so
+/// nothing a peer sent or an error produced can reach the line.
+pub fn field_too_long(field: &str) -> &'static str {
+    match field {
+        "stderr port" => "netget: stderr port too long",
+        "leading NUL" => "netget: rlogin takes no stderr port",
+        "client user" => "netget: client user too long",
+        "server user" => "netget: server user too long",
+        "user" => "netget: user too long",
+        "password" => "netget: password too long",
+        "command" => "netget: command too long",
+        "terminal" => "netget: terminal too long",
+        _ => "netget: handshake field too long",
+    }
 }
 
 /// What the status byte and anything after it say, as a client reads them.

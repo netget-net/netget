@@ -505,12 +505,7 @@ async fn handshake_failed(
             log.warn(format!(
                 "{subject} decision=refused_field_too_long: the {what} field ran past its cap"
             ));
-            finish(
-                r,
-                w,
-                &wire::refusal(&format!("netget: {what} too long"), true),
-            )
-            .await;
+            finish(r, w, &wire::refusal(wire::field_too_long(what), true)).await;
         }
         FieldError::TimedOut => {
             log.info(format!(

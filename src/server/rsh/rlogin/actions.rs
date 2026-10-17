@@ -107,7 +107,12 @@ pub fn send_text_action() -> ActionDefinition {
                       command output followed by the next prompt, or a prompt alone. \
                       Newlines are sent as CRLF."
             .into(),
-        parameters: vec![p("text", "string", "The text", true)],
+        parameters: vec![p(
+            "text",
+            "string",
+            "The text to print on the client's terminal",
+            true,
+        )],
         example: json!({"type": SEND_TEXT, "text": "total 0\nalice@files:~$ "}),
         log_template: Some(LogTemplate::new().with_info("-> rlogin: {preview(text,60)}")),
     }
@@ -288,8 +293,8 @@ impl Protocol for RloginProtocol {
         use crate::protocol::metadata::*;
         ProtocolMetadataV2::builder()
             .state(DevelopmentState::Experimental)
-            .privilege_requirement(PrivilegeRequirement::PrivilegedPort(wire::RLOGIN_PORT))
-            .well_known_port(wire::RLOGIN_PORT)
+            .privilege_requirement(PrivilegeRequirement::PrivilegedPort(513))
+            .well_known_port(513)
             .implementation("Hand-written rlogin (src/server/rsh/wire.rs, src/server/rsh/rlogin/): the rcmd handshake (an empty stderr port, client user, server user, terminal/speed, each NUL-terminated and capped), the \\0 / \\1 status byte, the urgent TIOCPKT_WINDOW request after login and TIOCPKT_FLUSHWRITE on ^C, the in-band window-size message (FF FF 's' 's' + rows, cols, x and y pixels) parsed across reads, and a line editor standing in for the pty: echo (off for passwords), DEL/BS, ^U, ^C, ^D, CR/CRLF/CR-NUL line ends; passwords checked against the accounts startup parameter")
             .llm_control("Whether a login is trusted, needs a password or is refused, the banner and prompt, and every line of the session: what each command prints, echo on or off, when to close")
             .e2e_testing("tests/server/rsh: raw-socket rlogin handshakes, the password path, window-size messages split across reads, line editing, bounds, fail-closed paths and the pcap oracle (tshark's rlogin dissector) in e2e_test.rs; the real clients through a pty in real_client_test.rs (Linux, as root): inetutils rlogin and rsh-redone's rlogin")

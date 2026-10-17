@@ -31,6 +31,9 @@ pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub const COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
 /// A handler chain (result → event → command …) stops after this many follow-ups.
 pub const MAX_FOLLOWUP_DEPTH: usize = 8;
+/// Whether rsh and rexec ask for a separate stderr connection when the `stderr` parameter is
+/// not given (rsh(1) always does).
+pub const DEFAULT_STDERR: bool = true;
 /// rlogin's defaults.
 pub const DEFAULT_TERMINAL: &str = "xterm";
 pub const DEFAULT_SPEED: u32 = 38400;
@@ -310,7 +313,7 @@ pub async fn connect_exec(ctx: ConnectContext, service: Service) -> Result<Socke
         .map(|p| p.get_optional_bool("stderr"))
         .transpose()?
         .flatten()
-        .unwrap_or(true);
+        .unwrap_or(DEFAULT_STDERR);
     let (first, second, shown_user) = match service {
         Service::Rsh => {
             let local = string("local_user")?.unwrap_or_else(current_user);

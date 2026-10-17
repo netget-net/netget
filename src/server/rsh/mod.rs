@@ -344,12 +344,7 @@ pub async fn exec_connection(
         Ok(p) => p,
         Err(why) => {
             log.warn(format!("{subject} decision=refused_bad_handshake: {why}"));
-            finish(
-                &mut r,
-                &mut w,
-                &wire::refusal(&format!("netget: {why}"), false),
-            )
-            .await;
+            finish(&mut r, &mut w, &wire::refusal(why, false)).await;
             return;
         }
     };
@@ -593,12 +588,7 @@ async fn refuse_handshake<R, W>(
             log.warn(format!(
                 "{subject} decision=refused_field_too_long: the {what} field ran past its cap"
             ));
-            finish(
-                r,
-                w,
-                &wire::refusal(&format!("netget: {what} too long"), crlf),
-            )
-            .await;
+            finish(r, w, &wire::refusal(wire::field_too_long(what), crlf)).await;
         }
         FieldError::TimedOut => {
             log.info(format!(
