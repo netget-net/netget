@@ -196,6 +196,14 @@ Example:
 
 Use case: HTTP request without complete headers, fragmented protocol messages
 
+The bytes the model was just shown are kept: they go back to the head of the queue as one
+payload (`ConnectionData::hold_as_one`), and the next call is shown them joined with whatever
+completes them. If bytes arrived while the model was answering, they are the "more" it asked
+for, and the server goes round again at once with the joined payload rather than waiting for a
+read that may never come. What accumulates is bounded by `MAX_QUEUED_BYTES`; past it the
+connection is closed with `decision=fail_closed_queued_data_overflow`. Same repair as `tcp`;
+`tests/server/tls/wait_for_more_test.rs` covers it.
+
 #### `close_this_connection`
 
 Close the TLS connection.

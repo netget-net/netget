@@ -232,6 +232,15 @@ impl ConnectionData {
             .min(self.queued_data.len());
         self.queued_data.drain(..n).collect()
     }
+
+    /// Replace the queue with one payload that must stay whole — what `wait_for_more` holds.
+    fn hold_as_one(&mut self, data: Vec<u8>) {
+        self.queued_chunks.clear();
+        if !data.is_empty() {
+            self.queued_chunks.push_back(data.len());
+        }
+        self.queued_data = data;
+    }
 }
 
 /// TLS server that listens for incoming connections
@@ -1272,15 +1281,72 @@ impl TlsServer {
                         ));
                     }
 
-                    // Handle wait_for_more
+                    // Handle wait_for_more.
+                    //
+                    // The fragment the model was just shown goes back to the *head* of the
+                    // queue, ahead of anything that arrived during the call, as one payload.
+                    // `wait_for_more` means "these bytes are an incomplete message"; dropping
+                    // them meant the model never saw the front of the message again. The same
+                    // repair as `tcp`.
                     if should_wait {
-                        connections
-                            .lock()
-                            .await
-                            .entry(connection_id)
-                            .and_modify(|conn| conn.state = ConnectionState::Accumulating);
-                        Log::new(Some(&status_tx))
-                            .debug(format!("Waiting for more data from {connection_id}"));
+                        let (queued_len, arrived_during_call) = {
+                            let mut conns = connections.lock().await;
+                            let Some(conn) = conns.get_mut(&connection_id) else {
+                                return;
+                            };
+                            let arrived_during_call = !conn.queued_data.is_empty();
+                            let mut merged = all_data.to_vec();
+                            merged.append(&mut conn.queued_data);
+                            conn.hold_as_one(merged);
+                            conn.state = ConnectionState::Accumulating;
+                            (conn.queued_data.len(), arrived_during_call)
+                        };
+
+                        // Same bound as the Processing queue: a model that answers
+                        // `wait_for_more` to everything must not be a way to grow memory
+                        // without limit either.
+                        if queued_len > MAX_QUEUED_BYTES {
+                            Log::new(Some(&status_tx)).warn(format!(
+                                "TLS connection {connection_id} \
+                                 decision=fail_closed_queued_data_overflow: accumulated \
+                                 {queued_len} bytes across wait_for_more, limit is \
+                                 {MAX_QUEUED_BYTES}"
+                            ));
+                            connections.lock().await.remove(&connection_id);
+                            if let Err(e) = write_half.lock().await.shutdown().await {
+                                debug!("TLS shutdown on {} returned: {}", connection_id, e);
+                            }
+                            app_state
+                                .close_connection_on_server(server_id, connection_id)
+                                .await;
+                            let _ = status_tx.send("__UPDATE_UI__".to_string());
+                            return;
+                        }
+
+                        // Bytes that arrived while the model was thinking *are* the "more" it
+                        // asked for. Returning here would park them until the next read, which
+                        // may never come — the peer has sent its whole message and is waiting.
+                        if arrived_during_call {
+                            let joined = {
+                                let mut conns = connections.lock().await;
+                                let Some(conn) = conns.get_mut(&connection_id) else {
+                                    return;
+                                };
+                                conn.state = ConnectionState::Processing;
+                                conn.take_next(true)
+                            };
+                            Log::new(Some(&status_tx)).debug(format!(
+                                "wait_for_more on {connection_id}: {} bytes already waiting, \
+                                 continuing",
+                                joined.len()
+                            ));
+                            all_data = Bytes::from(joined);
+                            continue;
+                        }
+
+                        Log::new(Some(&status_tx)).debug(format!(
+                            "Waiting for more data from {connection_id} ({queued_len} bytes held)"
+                        ));
                         return;
                     }
 
