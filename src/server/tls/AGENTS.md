@@ -93,6 +93,13 @@ If data arrives during LLM processing:
 - Prevents data loss and maintains order
 - Loop continues until queue empty
 
+**Batching** (`BatchingMode::On`, the `tcp` shape). The queue remembers where each read ended
+(`queued_chunks`), and `ConnectionData::take_next` decides what the next call answers: with
+batching on, everything that arrived during the call is one `tls_data_received` payload; with it
+off, one read (in practice one TLS record) per call, in order. Bytes held by `wait_for_more` are
+always taken whole. `MAX_QUEUED_BYTES` bounds the queue either way.
+`tests/server/tls/batching_test.rs` asserts both, control first.
+
 ## LLM Integration
 
 ### Event Types
