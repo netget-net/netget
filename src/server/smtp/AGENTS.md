@@ -133,6 +133,22 @@ client as the answer to its *next* command and every reply after it is one step 
 terminating `.`), else the first: a model that acknowledges and *then* answers is
 answering with the second (`ExecutionResult::chosen_reply`, `src/llm/actions/executor.rs`).
 
+**Batching (on by default).** Commands a client pipelines while the model is answering an
+earlier one are answered in one model call (`call_llm_batch`), and still one reply each, in
+order. Only `MAIL`, `RCPT` and `RSET` start or continue a batch; `DATA`, `QUIT`, `NOOP`,
+`VRFY`, `EXPN` and `HELP` end one (RFC 2920 §3.1), so a 354 is only ever the last reply and a
+message body is never batched. `EHLO`/`HELO`, `AUTH`, `STARTTLS` and unknown verbs are always
+answered alone. Lines join only when already buffered (`command_batch::peek_ready_line`), and
+only when one model call would answer them all (`command_batch::one_model_call_answers` — a
+script, static or manual rule answers each command alone, because a fallen-back batch's
+concatenated replies could not be told apart). `SmtpSession::answer_batch` writes the answer
+only when it holds exactly one reply per command and a 354 only for `DATA`; otherwise every
+pipelined command gets `451 4.3.0` (`decision=fail_closed_batch_mismatch`), which keeps the
+client in step and accepts nothing. The EHLO reply still does not advertise `PIPELINING`, so
+batching applies to clients that pipeline anyway. `tests/server/smtp/batching_test.rs` holds
+the control (off: one call per command), the claim (on: one call, same replies, same order)
+and the fail-closed short answer.
+
 **Inside `DATA`** a line is message text whatever it looks like: `EHLO` in a body is not
 answered by NetGet, and its event says `wait_for_more`. The state flips on when a reply
 beginning `354` is written and off at the `.` line.
@@ -207,7 +223,8 @@ Use the `open_server` action with TLS options:
   delivers or relays anything
 - **Privileged default port** - `metadata()` declares `PrivilegedPort(25)`, so `server_startup`
   preflights the bind against `SystemCapabilities` instead of failing with a bare EPERM
-- **No PIPELINING** - Commands processed sequentially
+- **No PIPELINING advertised** - pipelined commands are read in order and, with batching on,
+  answered together (see "Batching" above)
 - **No size validation** - MESSAGE_SIZE limits not enforced. A *line* is bounded
   (`MAX_LINE_BYTES`, 64 KiB) and an idle session is bounded (`READ_TIMEOUT`, 300s, RFC 5321
   §4.5.3.2), but nothing caps the total size of a message across lines

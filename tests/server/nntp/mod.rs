@@ -1,4 +1,5 @@
 mod answer_with_test;
+mod batching_test;
 mod connection_bounds_test;
 mod e2e_test;
 mod line_ending_test;

@@ -201,7 +201,10 @@ impl Protocol for LmtpProtocol {
             .request_only("LMTP replies answer the command just read; the server never speaks first except for its greeting")
             .max_inbound_bytes(super::wire::MAX_LINE_BYTES)
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // Pipelined RCPT runs that arrive during a call are decided in one; an answer
+            // without exactly one lmtp_recipient_reply per recipient refuses each with 451.
+            // MAIL, DATA and its body are never batched. See `recipient_batch` in mod.rs.
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

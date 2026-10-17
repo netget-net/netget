@@ -427,7 +427,9 @@ impl Session<'_> {
         Ok(true)
     }
 
-    async fn script_command(&mut self, user: &str, command: &str, args: &[Arg]) -> Result<()> {
+    /// The event data for a script command, or the refusal it gets without asking anyone:
+    /// `(reply text, whether the refusal is logged as protocol_refusal)`.
+    fn script_event(user: &str, command: &str, args: &[Arg]) -> Result<Json, (String, bool)> {
         let (want, names, script, size): (usize, usize, bool, bool) = match command {
             "LISTSCRIPTS" => (0, 0, false, false),
             "GETSCRIPT" | "DELETESCRIPT" | "SETACTIVE" => (1, 1, false, false),
@@ -436,19 +438,15 @@ impl Session<'_> {
             "RENAMESCRIPT" => (2, 2, false, false),
             _ => (2, 1, false, true),
         };
-        let syntax = |m: &str| proto::status("NO", None, m);
         if args.len() != want || args[..names].iter().any(|a| a.bytes().is_none()) {
-            return self
-                .write(&syntax(&format!("{command} takes {want} argument(s)")))
-                .await;
+            return Err((format!("{command} takes {want} argument(s)"), false));
         }
         let mut data = json!({"user": user, "command": command});
         for (i, key) in ["name", "new_name"].iter().enumerate().take(names) {
             let raw = args[i].bytes().unwrap_or_default();
             let deactivate = command == "SETACTIVE" && raw.is_empty();
             if !deactivate && !proto::valid_name(raw) {
-                outcome(&self.shared.ctx, self.id, command, "protocol_refusal");
-                return self.write(&syntax("Invalid script name")).await;
+                return Err(("Invalid script name".into(), true));
             }
             data[*key] = json!(String::from_utf8_lossy(raw));
         }
@@ -459,30 +457,23 @@ impl Session<'_> {
                 .map(|b| String::from_utf8(b.to_vec()))
             {
                 Some(Ok(text)) => data["script"] = json!(text),
-                _ => {
-                    outcome(&self.shared.ctx, self.id, command, "protocol_refusal");
-                    return self
-                        .write(&syntax("The script is not a UTF-8 string"))
-                        .await;
-                }
+                _ => return Err(("The script is not a UTF-8 string".into(), true)),
             }
         }
         if size {
             match args.get(1) {
                 Some(Arg::Number(n)) => data["size"] = json!(n),
-                _ => {
-                    return self
-                        .write(&syntax("HAVESPACE takes a name and a number"))
-                        .await
-                }
+                _ => return Err(("HAVESPACE takes a name and a number".into(), false)),
             }
         }
-        let operation = command.to_ascii_lowercase();
-        let answer = self
-            .ask(Event::new(&actions::COMMAND_EVENT, data), &operation)
-            .await;
+        Ok(data)
+    }
+
+    /// The reply to a script command the handler answered (or failed to).
+    fn script_reply(&self, command: &str, answer: Result<Json, ()>) -> Vec<u8> {
         let ctx = &self.shared.ctx;
-        let reply = match answer {
+        let operation = command.to_ascii_lowercase();
+        match answer {
             Err(()) => proto::status("NO", Some("TRYLATER"), "The server cannot answer right now"),
             Ok(a) => match (a["type"].as_str().unwrap_or_default(), command) {
                 ("managesieve_no", _) => {
@@ -529,7 +520,181 @@ impl Session<'_> {
                     proto::status("NO", Some("TRYLATER"), "The server cannot answer right now")
                 }
             },
+        }
+    }
+
+    async fn script_command(&mut self, user: &str, command: &str, args: &[Arg]) -> Result<()> {
+        let data = match Self::script_event(user, command, args) {
+            Ok(data) => data,
+            Err((message, logged)) => {
+                if logged {
+                    outcome(&self.shared.ctx, self.id, command, "protocol_refusal");
+                }
+                return self.write(&proto::status("NO", None, &message)).await;
+            }
         };
+        if batchable(command) {
+            let mut batch = vec![(command.to_string(), data)];
+            self.collect_batch(user, &mut batch).await?;
+            if batch.len() > 1 {
+                return self.answer_batch(batch).await;
+            }
+            let (_, data) = batch.remove(0);
+            return self.ask_and_reply(command, data).await;
+        }
+        self.ask_and_reply(command, data).await
+    }
+
+    async fn ask_and_reply(&mut self, command: &str, data: Json) -> Result<()> {
+        let operation = command.to_ascii_lowercase();
+        let answer = self
+            .ask(Event::new(&actions::COMMAND_EVENT, data), &operation)
+            .await;
+        let reply = self.script_reply(command, answer);
         self.write(&reply).await
     }
+
+    /// Append the script commands already waiting behind `batch`'s first that may be answered
+    /// with it in one model call, consuming them. Stops at the first command that is not a
+    /// well-formed batchable script command (it is then read normally), and reads only what is
+    /// already buffered or readable without waiting.
+    async fn collect_batch(&mut self, user: &str, batch: &mut Vec<(String, Json)>) -> Result<()> {
+        if !crate::server::command_batch::one_model_call_answers(
+            &self.shared.ctx.state,
+            self.shared.ctx.server_id,
+            &[actions::COMMAND_EVENT.id.as_str()],
+        )
+        .await
+        {
+            return Ok(());
+        }
+        while batch.len() < crate::protocol::metadata::MAX_BATCH_EVENTS {
+            let parsed = match proto::parse(&self.buf) {
+                Ok(Some(parsed)) => Some(parsed),
+                Ok(None) => None,
+                Err(_) => return Ok(()),
+            };
+            let Some((args, used)) = parsed else {
+                // Nothing whole is buffered: take what the socket already holds, and wait for
+                // nothing.
+                let mut chunk = [0u8; 16 * 1024];
+                match tokio::time::timeout(Duration::ZERO, self.stream.read(&mut chunk)).await {
+                    Ok(Ok(n)) if n > 0 => {
+                        self.buf.extend_from_slice(&chunk[..n]);
+                        continue;
+                    }
+                    _ => return Ok(()),
+                }
+            };
+            let Some(Arg::Atom(command)) = args.first() else {
+                return Ok(());
+            };
+            let command = command.to_ascii_uppercase();
+            if !batchable(&command) {
+                return Ok(());
+            }
+            let Ok(data) = Self::script_event(user, &command, &args[1..]) else {
+                return Ok(());
+            };
+            self.buf.drain(..used);
+            let ctx = &self.shared.ctx;
+            ctx.state
+                .update_connection_stats(
+                    ctx.server_id,
+                    self.id,
+                    Some(used as u64),
+                    None,
+                    Some(1),
+                    None,
+                )
+                .await;
+            batch.push((command, data));
+        }
+        Ok(())
+    }
+
+    /// Answer pipelined script commands with one model call, one answer per command, in
+    /// order.
+    ///
+    /// The answer is used only when every action executed and it holds exactly one answer per
+    /// command. Anything else and every command is answered `NO (TRYLATER)`, the reply a
+    /// single command gets when its answer is unusable: the client reads one response per
+    /// command and stays in step, and no command is answered with another's script list.
+    async fn answer_batch(&mut self, batch: Vec<(String, Json)>) -> Result<()> {
+        let total = batch.len();
+        let events: Vec<Event> = batch
+            .iter()
+            .enumerate()
+            .map(|(i, (_, data))| {
+                let mut data = data.clone();
+                crate::server::command_batch::mark_pipelined(&mut data, i + 1, total);
+                Event::new(&actions::COMMAND_EVENT, data)
+            })
+            .collect();
+        let ctx = &self.shared.ctx;
+        let answers: Option<Vec<Json>> = match crate::llm::action_helper::call_llm_batch(
+            &ctx.llm_client,
+            &ctx.state,
+            ctx.server_id,
+            Some(self.id),
+            &events,
+            &actions::ManageSieveProtocol,
+        )
+        .await
+        {
+            Err(_) => {
+                outcome(ctx, self.id, "batch", "fail_closed_llm_error");
+                None
+            }
+            Ok(result) => {
+                fn walk(results: Vec<ActionResult>, out: &mut Vec<Json>) {
+                    for r in results {
+                        match r {
+                            ActionResult::Custom { data, .. } => out.push(data),
+                            ActionResult::Multiple(items) => walk(items, out),
+                            _ => {}
+                        }
+                    }
+                }
+                let failed = !result.failures.is_empty();
+                let mut answers = Vec::new();
+                walk(result.protocol_results, &mut answers);
+                if failed || answers.len() != total {
+                    outcome(ctx, self.id, "batch", "fail_closed_batch_mismatch");
+                    None
+                } else {
+                    Some(answers)
+                }
+            }
+        };
+        let mut out = Vec::new();
+        match answers {
+            Some(answers) => {
+                for ((command, _), answer) in batch.iter().zip(answers) {
+                    out.extend(self.script_reply(command, Ok(answer)));
+                }
+            }
+            None => {
+                for _ in &batch {
+                    out.extend(proto::status(
+                        "NO",
+                        Some("TRYLATER"),
+                        "The server cannot answer right now",
+                    ));
+                }
+            }
+        }
+        self.write(&out).await
+    }
+}
+
+/// Whether a script command may be answered as part of a batch: the ones whose arguments are
+/// names and numbers. `PUTSCRIPT` and `CHECKSCRIPT` carry a whole script (a literal) and are
+/// answered one at a time, as are AUTHENTICATE, STARTTLS, LOGOUT and everything NetGet answers
+/// itself.
+fn batchable(command: &str) -> bool {
+    matches!(
+        command,
+        "LISTSCRIPTS" | "GETSCRIPT" | "SETACTIVE" | "DELETESCRIPT" | "RENAMESCRIPT" | "HAVESPACE"
+    )
 }

@@ -228,6 +228,28 @@ pub fn smtp_preferred_actions(command: &str, in_data: bool) -> &'static [&'stati
     }
 }
 
+/// Whether a command line may be answered as part of a batch, and whether it ends one.
+///
+/// `None` for a line that is always answered on its own: `EHLO`/`HELO` (NetGet answers them,
+/// in order, without the model), and anything the server does not batch — `AUTH`, `STARTTLS`,
+/// `BDAT` and unknown verbs, whose replies may open an exchange of their own. `Some(true)` for
+/// the commands RFC 2920 §3.1 says end a pipelined group — `DATA` (its 354 switches the session
+/// to message text, which is never batched) and `QUIT`, `NOOP`, `VRFY`, `EXPN`, `HELP` — and
+/// `Some(false)` for those that may sit in the middle of one: `MAIL`, `RCPT`, `RSET`.
+pub fn smtp_batch_role(command: &str) -> Option<bool> {
+    match command
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_ascii_uppercase()
+        .as_str()
+    {
+        "MAIL" | "RCPT" | "RSET" => Some(false),
+        "DATA" | "QUIT" | "NOOP" | "VRFY" | "EXPN" | "HELP" => Some(true),
+        _ => None,
+    }
+}
+
 /// The event data for one SMTP line: the line itself, plus what NetGet can tell from it.
 ///
 /// `answer_with` names the action (and reply code) this particular line takes. A small model
@@ -449,6 +471,15 @@ impl SmtpServer {
 #[cfg(not(target_arch = "wasm32"))]
 struct SmtpSession;
 
+/// How a batch of pipelined commands left the session.
+#[cfg(not(target_arch = "wasm32"))]
+enum BatchEnd {
+    /// The answer asked to close the connection; its replies are written.
+    Close,
+    /// Keep reading; `in_data` is whether the last reply was the 354 that opens a message.
+    Continue { in_data: bool },
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 impl SmtpSession {
     /// Handle one SMTP session, plain or SMTPS.
@@ -657,6 +688,71 @@ impl SmtpSession {
                     .await?;
                     continue;
                 }
+
+                // Pipelined commands already waiting behind this one are answered with it in
+                // one model call when the instance batches. Only whole command lines join, and
+                // the batch stops at the first command that ends a group (DATA among them), so
+                // a message body is never part of one.
+                if let Some(ends_group) = smtp_batch_role(command) {
+                    let mut commands = vec![command.to_string()];
+                    if !ends_group
+                        && crate::server::command_batch::one_model_call_answers(
+                            app_state,
+                            server_id,
+                            &[SMTP_COMMAND_EVENT.id.as_str()],
+                        )
+                        .await
+                    {
+                        use tokio::io::AsyncBufReadExt;
+                        while commands.len() < crate::protocol::metadata::MAX_BATCH_EVENTS {
+                            let Some((next, len)) = crate::server::command_batch::peek_ready_line(
+                                &mut reader,
+                                MAX_LINE_BYTES,
+                            )
+                            .await
+                            else {
+                                break;
+                            };
+                            let next = next.trim().to_string();
+                            let Some(ends) = smtp_batch_role(&next) else {
+                                break;
+                            };
+                            reader.consume(len);
+                            app_state
+                                .update_connection_stats(
+                                    server_id,
+                                    connection_id,
+                                    Some(len as u64),
+                                    None,
+                                    Some(1),
+                                    None,
+                                )
+                                .await;
+                            commands.push(next);
+                            if ends {
+                                break;
+                            }
+                        }
+                    }
+                    if commands.len() > 1 {
+                        match Self::answer_batch(
+                            &commands,
+                            write_half,
+                            connection_id,
+                            server_id,
+                            llm_client,
+                            app_state,
+                            status_tx,
+                            protocol,
+                        )
+                        .await?
+                        {
+                            BatchEnd::Close => return Ok(()),
+                            BatchEnd::Continue { in_data: now } => in_data = now,
+                        }
+                        continue;
+                    }
+                }
             }
 
             let event = Event::new(
@@ -817,6 +913,137 @@ impl SmtpSession {
         }
 
         Ok(())
+    }
+
+    /// Answer pipelined commands with one model call, one reply per command, in order.
+    ///
+    /// The answer is used only when it holds exactly one reply per command, and a 354 only as
+    /// the reply to `DATA` (always the last command of a batch). Anything else — a reply
+    /// short, one extra, a 354 for `MAIL` — and every command is answered `451 4.3.0` instead:
+    /// a temporary refusal per command keeps the client in step and accepts nothing, where
+    /// writing what the model gave would hand some command another command's reply.
+    #[allow(clippy::too_many_arguments)]
+    async fn answer_batch<W>(
+        commands: &[String],
+        write_half: &Arc<tokio::sync::Mutex<W>>,
+        connection_id: crate::server::connection::ConnectionId,
+        server_id: crate::state::ServerId,
+        llm_client: &OllamaClient,
+        app_state: &Arc<AppState>,
+        status_tx: &mpsc::UnboundedSender<String>,
+        protocol: &Arc<SmtpProtocol>,
+    ) -> Result<BatchEnd>
+    where
+        W: tokio::io::AsyncWrite + Unpin,
+    {
+        let total = commands.len();
+        let events: Vec<Event> = commands
+            .iter()
+            .enumerate()
+            .map(|(i, command)| {
+                let mut data = smtp_command_event_data(command, false);
+                crate::server::command_batch::mark_pipelined(&mut data, i + 1, total);
+                Event::new(&SMTP_COMMAND_EVENT, data)
+            })
+            .collect();
+        Log::new(Some(status_tx)).debug(format!(
+            "SMTP connection {} answering {} pipelined commands in one call",
+            connection_id, total
+        ));
+
+        let failure: &'static [u8] = match crate::llm::action_helper::call_llm_batch(
+            llm_client,
+            app_state,
+            server_id,
+            Some(connection_id),
+            &events,
+            protocol.as_ref(),
+        )
+        .await
+        {
+            Ok(result) => {
+                let answer = crate::server::command_batch::BatchReplies::from_result(&result);
+                let in_step = answer.replies.len() == total
+                    && answer.replies.iter().zip(commands).all(|(reply, command)| {
+                        !reply.starts_with(b"354")
+                            || command
+                                .split_whitespace()
+                                .next()
+                                .is_some_and(|verb| verb.eq_ignore_ascii_case("DATA"))
+                    });
+                if in_step {
+                    let mut in_data = false;
+                    for reply in &answer.replies {
+                        in_data = reply.starts_with(b"354");
+                        Self::write_reply(
+                            write_half,
+                            reply,
+                            connection_id,
+                            server_id,
+                            app_state,
+                            status_tx,
+                        )
+                        .await?;
+                    }
+                    Log::new(Some(status_tx)).info(format!(
+                        "SMTP connection {} decision=model_answer: {} pipelined commands, one \
+                         reply each",
+                        connection_id, total
+                    ));
+                    return Ok(if answer.close {
+                        BatchEnd::Close
+                    } else {
+                        BatchEnd::Continue { in_data }
+                    });
+                }
+                Log::new(Some(status_tx)).error(format!(
+                    "SMTP connection {} decision=fail_closed_batch_mismatch: {} replies for {} \
+                     pipelined commands; answering 451 to each",
+                    connection_id,
+                    answer.replies.len(),
+                    total
+                ));
+                if answer.close {
+                    for _ in commands {
+                        Self::write_counted(
+                            write_half,
+                            b"451 4.3.0 Temporary local error, try again later\r\n",
+                            connection_id,
+                            server_id,
+                            app_state,
+                            status_tx,
+                        )
+                        .await?;
+                    }
+                    return Ok(BatchEnd::Close);
+                }
+                b"451 4.3.0 Temporary local error, try again later\r\n"
+            }
+            Err(e) => {
+                Log::new(Some(status_tx)).error(format!(
+                    "SMTP connection {} decision=fail_closed_llm_error for {} pipelined \
+                     commands: {:#}",
+                    connection_id, total, e
+                ));
+                if crate::llm::is_overload_error(&e) {
+                    b"451 4.3.2 Backend at capacity, try again later\r\n"
+                } else {
+                    b"451 4.3.0 Temporary local error, try again later\r\n"
+                }
+            }
+        };
+        for _ in commands {
+            Self::write_counted(
+                write_half,
+                failure,
+                connection_id,
+                server_id,
+                app_state,
+                status_tx,
+            )
+            .await?;
+        }
+        Ok(BatchEnd::Continue { in_data: false })
     }
 
     /// Write a fixed reply and account for it, dropping the writer guard before returning.

@@ -208,7 +208,11 @@ impl Protocol for SmtpProtocol {
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // Pipelined MAIL/RCPT/RSET runs (ended by DATA, QUIT, NOOP, VRFY, EXPN or HELP)
+            // that arrive during a call are answered in one; an answer without exactly one
+            // reply per command is replaced by a 451 for each. DATA bodies, EHLO and AUTH are
+            // never batched. See `smtp_batch_role` and `SmtpSession::answer_batch`.
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
     fn description(&self) -> &'static str {

@@ -21,3 +21,16 @@ RENAMESCRIPT, HAVESPACE) with `managesieve_scripts` (LISTSCRIPTS), `managesieve_
 (GETSCRIPT), `managesieve_ok` (optionally WARNINGS) or `managesieve_no` with a response code.
 NetGet does not parse Sieve: validation and storage are the handler's (memory or SQLite), and no
 script is ever executed. No answer, or the wrong kind, is NO (TRYLATER).
+
+## Batching (on by default)
+
+Script commands whose arguments are names and numbers - `LISTSCRIPTS`, `GETSCRIPT`, `SETACTIVE`,
+`DELETESCRIPT`, `RENAMESCRIPT`, `HAVESPACE` - that are already parsed whole in the session buffer
+(or readable without waiting) behind the one being answered are answered in one model call
+(`collect_batch` / `answer_batch`). `PUTSCRIPT` and `CHECKSCRIPT` carry a script literal and are
+answered alone, as are AUTHENTICATE, STARTTLS, LOGOUT and everything Rust answers itself; a
+command that fails Rust's own argument checks ends the batch and is refused normally. The answer
+is used only when every action executed and it holds exactly one answer per command, rendered in
+order; otherwise every command gets `NO (TRYLATER)` (`decision=fail_closed_batch_mismatch`).
+`tests/server/managesieve/batching_test.rs` holds the control, the claim and the fail-closed
+short answer.
