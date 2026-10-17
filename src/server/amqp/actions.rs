@@ -889,7 +889,11 @@ impl Protocol for AmqpProtocol {
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // Basic.Publish owes nothing on the wire, so publishes on one channel already
+            // waiting behind the one being answered share one call (`collect_publishes` in
+            // mod.rs). The handshake, Queue.Declare and Basic.Consume each owe their own -Ok
+            // and are never batched; content frames are reassembled before any event exists.
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
 
