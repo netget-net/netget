@@ -144,6 +144,10 @@ async fn lines_arriving_during_a_call_are_answered_together() {
          own model call, or the two-call result below proves nothing"
     );
 
+    // The session is a connection the core keeps history on: the second call is shown the first
+    // exchange above its own event.
+    assert_history_carries_first(&separate[1].0);
+
     // === The claim: the two lines written during the first call come back as one. ===
     let batched = calls_for_three_lines(true).await;
     let data: Vec<_> = batched.iter().map(|(_, d)| d["data"].clone()).collect();
@@ -165,5 +169,20 @@ async fn lines_arriving_during_a_call_are_answered_together() {
     assert!(
         before.contains("answers all 2 together"),
         "the model must be told it answers both:\n{prompt}"
+    );
+    assert_history_carries_first(prompt);
+}
+
+/// The prompt shows the first exchange as history ahead of the event(s) it asks about.
+fn assert_history_carries_first(prompt: &str) {
+    let history_at = prompt
+        .find("Earlier on this connection")
+        .unwrap_or_else(|| panic!("no history block in the prompt:\n{prompt}"));
+    let trigger_at = prompt
+        .rfind("Event ID: stdio_input_received")
+        .expect("trigger");
+    assert!(
+        history_at < trigger_at && prompt[history_at..trigger_at].contains(r#""data":"first"#),
+        "the history block must carry the first exchange:\n{prompt}"
     );
 }

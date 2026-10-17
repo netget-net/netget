@@ -117,6 +117,42 @@ fn set_nonblocking(fd: RawFd) -> Result<()> {
 /// one batching call can take everything that is waiting.
 const READ_QUEUE_CHUNKS: usize = crate::protocol::metadata::MAX_BATCH_EVENTS;
 
+/// Register this server's session as the one connection it has, so the core keeps the
+/// per-connection history the protocol declares (`AppState::record_access_log` records only for
+/// a connection the server holds) and the dashboard shows a peer row for it.
+///
+/// There is no IP address on either side, so both addresses are the `127.0.0.1:0` placeholder
+/// `socket_file` uses; `protocol_info` names the endpoint instead.
+async fn register_session(
+    app_state: &AppState,
+    server_id: crate::state::ServerId,
+    info: serde_json::Value,
+) -> crate::server::connection::ConnectionId {
+    use crate::state::server::{ConnectionState, ConnectionStatus, ProtocolConnectionInfo};
+    let id = crate::server::connection::ConnectionId::new(app_state.get_next_unified_id().await);
+    let now = crate::utils::clock::Instant::now();
+    let addr: std::net::SocketAddr = ([127, 0, 0, 1], 0).into();
+    app_state
+        .add_connection_to_server(
+            server_id,
+            ConnectionState {
+                id,
+                remote_addr: addr,
+                local_addr: addr,
+                bytes_sent: 0,
+                bytes_received: 0,
+                packets_sent: 0,
+                packets_received: 0,
+                last_activity: now,
+                status: ConnectionStatus::Active,
+                status_changed_at: now,
+                protocol_info: ProtocolConnectionInfo::new(info),
+            },
+        )
+        .await;
+    id
+}
+
 /// Pseudo-terminal server.
 pub struct PtyServer;
 
@@ -179,6 +215,17 @@ impl PtyServer {
 
         let protocol = Arc::new(PtyProtocol::new());
         let task_registrar = app_state.clone();
+
+        // One session for the server's lifetime. The server holds the slave open itself (so the
+        // master never sees EIO), which also means it cannot tell one terminal program attaching
+        // from the next: there is no per-client event to key a finer session on.
+        let connection_id = register_session(
+            &app_state,
+            server_id,
+            serde_json::json!({ "slave_path": slave_path.to_string_lossy() }),
+        )
+        .await;
+        let _ = status_tx.send("__UPDATE_UI__".to_string());
         // Shared by the reader (reads) and the dispatcher (writes the model's output).
         let async_master = Arc::new(async_master);
 
@@ -249,6 +296,7 @@ impl PtyServer {
                 );
                 Self::dispatch(
                     std::slice::from_ref(&event),
+                    connection_id,
                     &async_master,
                     &llm_client,
                     &app_state,
@@ -291,6 +339,17 @@ impl PtyServer {
                         encoding
                     ));
 
+                    app_state
+                        .update_connection_stats(
+                            server_id,
+                            connection_id,
+                            Some(data.len() as u64),
+                            None,
+                            Some(1),
+                            None,
+                        )
+                        .await;
+
                     events.push(Event::new(
                         &PTY_INPUT_RECEIVED_EVENT,
                         serde_json::json!({ "data": data_str, "encoding": encoding }),
@@ -298,6 +357,7 @@ impl PtyServer {
                 }
                 Self::dispatch(
                     &events,
+                    connection_id,
                     &async_master,
                     &llm_client,
                     &app_state,
@@ -308,6 +368,12 @@ impl PtyServer {
                 .await;
             }
             reader.abort();
+            // The reader has ended, so the session has: its history goes with it. (On
+            // stop_server the whole server, history included, is removed instead.)
+            app_state
+                .remove_connection_from_server(server_id, connection_id)
+                .await;
+            let _ = status_tx.send("__UPDATE_UI__".to_string());
         });
 
         task_registrar.register_server_task(server_id, handle).await;
@@ -319,6 +385,7 @@ impl PtyServer {
     #[allow(clippy::too_many_arguments)]
     async fn dispatch(
         events: &[Event],
+        connection_id: crate::server::connection::ConnectionId,
         async_master: &AsyncFd<File>,
         llm_client: &OllamaClient,
         app_state: &Arc<AppState>,
@@ -330,7 +397,16 @@ impl PtyServer {
         let Some(event) = events.last() else {
             return;
         };
-        match call_llm_batch(llm_client, app_state, server_id, None, events, protocol).await {
+        match call_llm_batch(
+            llm_client,
+            app_state,
+            server_id,
+            Some(connection_id),
+            events,
+            protocol,
+        )
+        .await
+        {
             Ok(result) => {
                 for msg in result.messages {
                     let _ = status_tx.send(msg);
@@ -340,6 +416,16 @@ impl PtyServer {
                     if let ActionResult::Output(bytes) = pr {
                         wrote += 1;
                         Self::write_master(async_master, &bytes, status_tx).await;
+                        app_state
+                            .update_connection_stats(
+                                server_id,
+                                connection_id,
+                                None,
+                                Some(bytes.len() as u64),
+                                None,
+                                Some(1),
+                            )
+                            .await;
                     }
                     // CloseConnection / WaitForMore are meaningless for a PTY and are ignored.
                 }

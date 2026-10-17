@@ -109,9 +109,14 @@ an action error not a panic — the `send_tcp_data` lesson.
 - **Batching** (`BatchingMode::On`): with it off, one read per call; with it on, every read
   waiting (up to `MAX_BATCH_EVENTS`) goes to `call_llm_batch` as one `stdio_input_received`
   each, the newest the trigger. An EOF read in the same sweep is answered after the batch as
-  its own `stdio_input_closed`. There is no connection, so `connection_id` is `None` and no
-  history is kept. `tests/server/stdio/batching_test.rs` drives the real binary
+  its own `stdio_input_closed`. `tests/server/stdio/batching_test.rs` drives the real binary
   (`--server stdio --batching false|true`) and asserts off and on, control first.
+- **History**: the stdin/stdout pair is registered as the server's one connection
+  (`register_session`, addresses the `127.0.0.1:0` placeholder `socket_file` uses,
+  `protocol_info` `{"stream": "stdin/stdout"}`), and its id goes to every model call, so the core
+  keeps the declared `Last(40)` history. The connection is removed when the session ends (EOF,
+  read error, `close_stdio`), and with it its history; `stop_server` removes the whole server.
+  The batching test also asserts the second prompt carries the first exchange.
 
 ## Verified
 
