@@ -661,8 +661,8 @@ async fn run_server_direct(protocol: &str, args: &Args) -> Result<()> {
         None,  // initial_memory
         instruction,
         startup_params,
-        None,               // event_handlers
-        None,               // scheduled_tasks
+        None, // event_handlers
+        None, // scheduled_tasks
         None, // feedback_instructions
         crate::protocol::metadata::ConversationOverrides {
             history: args.history,

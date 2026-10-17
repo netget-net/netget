@@ -101,16 +101,8 @@ pub async fn render_protocol_docs(protocol: &str, state: &AppState) -> Option<St
                  that lives until either side closes it"
             }
         );
-        let _ = writeln!(
-            out,
-            "- **history**: {}",
-            metadata.history.describe()
-        );
-        let _ = writeln!(
-            out,
-            "- **batching**: {}",
-            metadata.batching.describe()
-        );
+        let _ = writeln!(out, "- **history**: {}", metadata.history.describe());
+        let _ = writeln!(out, "- **batching**: {}", metadata.batching.describe());
         if let Some(notes) = metadata.notes {
             let _ = writeln!(out, "- **notes**: {}", notes);
         }
@@ -329,16 +321,8 @@ pub async fn render_protocol_docs(protocol: &str, state: &AppState) -> Option<St
         let _ = writeln!(out, "- **network stack**: {}", client.stack_name());
         let _ = writeln!(out, "- **implementation**: {}", metadata.implementation);
         let _ = writeln!(out, "- **LLM controls**: {}", metadata.llm_control);
-        let _ = writeln!(
-            out,
-            "- **history**: {}",
-            metadata.history.describe()
-        );
-        let _ = writeln!(
-            out,
-            "- **batching**: {}",
-            metadata.batching.describe()
-        );
+        let _ = writeln!(out, "- **history**: {}", metadata.history.describe());
+        let _ = writeln!(out, "- **batching**: {}", metadata.batching.describe());
         if let Some(notes) = metadata.notes {
             let _ = writeln!(out, "- **notes**: {}", notes);
         }
@@ -566,4 +550,3 @@ fn render_startup_param(out: &mut String, param: &ParameterDefinition) {
         example
     );
 }
-

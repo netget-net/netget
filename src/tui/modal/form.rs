@@ -646,7 +646,11 @@ impl FormModel {
     /// opens on the protocol's default (create) or the live value (edit), and re-sending
     /// either would be a no-op at best.
     fn history_value(&self) -> Result<Option<u16>> {
-        let Some(field) = self.fields.iter().find(|f| f.target == FieldTarget::History) else {
+        let Some(field) = self
+            .fields
+            .iter()
+            .find(|f| f.target == FieldTarget::History)
+        else {
             return Ok(None);
         };
         if !field.changed() {

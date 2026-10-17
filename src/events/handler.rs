@@ -1435,9 +1435,9 @@ impl EventHandler {
                         .resolve(&protocol_impl.metadata(), &protocol)
                         .map_err(|e| ActionExecutionError::InvalidActionParameters {
                             action_type: "open_client".to_string(),
-                            parameter_name: if history.is_some_and(|h| {
-                                h > crate::protocol::metadata::MAX_HISTORY_ENTRIES
-                            }) {
+                            parameter_name: if history
+                                .is_some_and(|h| h > crate::protocol::metadata::MAX_HISTORY_ENTRIES)
+                            {
                                 "history".to_string()
                             } else {
                                 "batching".to_string()

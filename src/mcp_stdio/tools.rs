@@ -982,7 +982,7 @@ impl NetGetMcpService {
                 history: params.history,
                 batching: params.batching,
             },
-            status_tx,                          // status_tx
+            status_tx, // status_tx
         )
         .await
         {

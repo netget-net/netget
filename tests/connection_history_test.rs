@@ -370,7 +370,10 @@ async fn history_and_batching_overrides_apply_and_refuse_cleanly() {
     )
     .await
     .expect("update history");
-    assert!(!outcome.restarted, "a history change must not restart the server");
+    assert!(
+        !outcome.restarted,
+        "a history change must not restart the server"
+    );
     assert_eq!(
         state.server_conversation_settings(overridden).await,
         Some((0, false))
