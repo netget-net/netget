@@ -198,7 +198,40 @@ enum ConnectionState {
 struct ConnectionData {
     state: ConnectionState,
     queued_data: Vec<u8>,
+    /// Where each read that was queued ended, oldest first, summing to `queued_data.len()`.
+    /// With batching off the next call answers one read rather than the whole queue.
+    queued_chunks: std::collections::VecDeque<usize>,
     write_half: Arc<Mutex<tokio::io::WriteHalf<tokio_rustls::server::TlsStream<TcpStream>>>>,
+}
+
+impl ConnectionData {
+    /// Queue a read that arrived while the model was answering. The caller has already
+    /// checked [`MAX_QUEUED_BYTES`].
+    fn queue(&mut self, data: &[u8]) {
+        if !data.is_empty() {
+            self.queued_data.extend_from_slice(data);
+            self.queued_chunks.push_back(data.len());
+        }
+    }
+
+    /// What the next call answers: the whole queue when batching, else the oldest read.
+    ///
+    /// The decrypted stream has no message boundaries, so batching is what TLS always did —
+    /// everything that arrived during a call is the next call's payload. With it off, each
+    /// read the socket delivered (in practice one TLS record each) is answered on its own, in
+    /// order. The same shape as `tcp`.
+    fn take_next(&mut self, batching: bool) -> Vec<u8> {
+        if batching || self.queued_chunks.len() <= 1 {
+            self.queued_chunks.clear();
+            return std::mem::take(&mut self.queued_data);
+        }
+        let n = self
+            .queued_chunks
+            .pop_front()
+            .unwrap_or(self.queued_data.len())
+            .min(self.queued_data.len());
+        self.queued_data.drain(..n).collect()
+    }
 }
 
 /// TLS server that listens for incoming connections
@@ -391,6 +424,7 @@ impl TlsServer {
                                             ConnectionState::Idle
                                         },
                                         queued_data: Vec::new(),
+                                        queued_chunks: Default::default(),
                                         write_half: write_half_arc.clone(),
                                     },
                                 );
@@ -1014,6 +1048,12 @@ impl TlsServer {
         connections: Arc<Mutex<HashMap<ConnectionId, ConnectionData>>>,
         protocol: Arc<TlsProtocol>,
     ) {
+        // Read per event: batching is hot-changeable.
+        let batching = app_state
+            .server_conversation_settings(server_id)
+            .await
+            .is_some_and(|(_, batching)| batching);
+
         // Check connection state
         let current_state = {
             let conns = connections.lock().await;
@@ -1053,7 +1093,7 @@ impl TlsServer {
                     if would_be > MAX_QUEUED_BYTES {
                         refused = Some(would_be);
                     } else {
-                        conn.queued_data.extend_from_slice(&data);
+                        conn.queue(&data);
                     }
                 });
             match refused {
@@ -1083,11 +1123,12 @@ impl TlsServer {
             let Some(conn_data) = conns.get_mut(&connection_id) else {
                 return; // Connection closed while we were waiting for the lock
             };
+            // Bytes held for `wait_for_more` are one message with whatever completes it, so
+            // they are always taken whole; otherwise batching decides.
+            let take_all = batching || current_state == ConnectionState::Accumulating;
             conn_data.state = ConnectionState::Processing;
-            let mut merged = conn_data.queued_data.clone();
-            merged.extend_from_slice(&data);
-            conn_data.queued_data.clear();
-            Bytes::from(merged)
+            conn_data.queue(&data);
+            Bytes::from(conn_data.take_next(take_all))
         };
 
         loop {
@@ -1277,7 +1318,7 @@ impl TlsServer {
                         let queued = {
                             let mut conns = connections.lock().await;
                             match conns.get_mut(&connection_id) {
-                                Some(conn) => std::mem::take(&mut conn.queued_data),
+                                Some(conn) => conn.take_next(batching),
                                 None => return,
                             }
                         };

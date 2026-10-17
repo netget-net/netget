@@ -108,7 +108,38 @@ enum ConnectionState {
 struct ConnectionData {
     state: ConnectionState,
     queued_data: Vec<u8>,
+    /// Where each read that was queued ended, oldest first, summing to `queued_data.len()`.
+    /// With batching off the next call answers one read rather than the whole queue.
+    queued_chunks: std::collections::VecDeque<usize>,
     write_half: Arc<Mutex<tokio::io::WriteHalf<UnixStream>>>,
+}
+
+impl ConnectionData {
+    /// Queue a read that arrived while the model was answering.
+    fn queue(&mut self, data: &[u8]) {
+        if !data.is_empty() {
+            self.queued_data.extend_from_slice(data);
+            self.queued_chunks.push_back(data.len());
+        }
+    }
+
+    /// What the next call answers: the whole queue when batching, else the oldest read.
+    ///
+    /// A byte stream has no message boundaries, so batching is what this server always did —
+    /// everything that arrived during a call is the next call's payload. With it off, each
+    /// read the socket delivered is answered on its own, in order. The same shape as `tcp`.
+    fn take_next(&mut self, batching: bool) -> Vec<u8> {
+        if batching || self.queued_chunks.len() <= 1 {
+            self.queued_chunks.clear();
+            return std::mem::take(&mut self.queued_data);
+        }
+        let n = self
+            .queued_chunks
+            .pop_front()
+            .unwrap_or(self.queued_data.len())
+            .min(self.queued_data.len());
+        self.queued_data.drain(..n).collect()
+    }
 }
 
 /// Describe a file type for the "refusing to unlink" error message.
@@ -304,6 +335,7 @@ impl SocketFileServer {
                             ConnectionData {
                                 state: ConnectionState::Idle,
                                 queued_data: Vec::new(),
+                                queued_chunks: Default::default(),
                                 write_half: write_half_arc.clone(),
                             },
                         );
@@ -674,6 +706,11 @@ impl SocketFileServer {
         protocol: Arc<SocketFileProtocol>,
     ) {
         let log = Log::new(Some(&status_tx));
+        // Read per event: batching is hot-changeable.
+        let batching = app_state
+            .server_conversation_settings(server_id)
+            .await
+            .is_some_and(|(_, batching)| batching);
 
         // Check connection state
         let current_state = {
@@ -702,7 +739,7 @@ impl SocketFileServer {
                 .await
                 .entry(connection_id)
                 .and_modify(|conn| {
-                    conn.queued_data.extend_from_slice(&data);
+                    conn.queue(&data);
                 });
             log.debug(format!(
                 "Queued {} bytes for socket file connection {}",
@@ -729,11 +766,12 @@ impl SocketFileServer {
                 );
                 return;
             };
+            // Bytes held for `wait_for_more` are one message with whatever completes it, so
+            // they are always taken whole; otherwise batching decides.
+            let take_all = batching || current_state == ConnectionState::Accumulating;
             conn_data.state = ConnectionState::Processing;
-            let mut merged = conn_data.queued_data.clone();
-            merged.extend_from_slice(&data);
-            conn_data.queued_data.clear();
-            Bytes::from(merged)
+            conn_data.queue(&data);
+            Bytes::from(conn_data.take_next(take_all))
         };
 
         loop {
@@ -916,7 +954,7 @@ impl SocketFileServer {
                         let queued = {
                             let mut conns = connections.lock().await;
                             match conns.get_mut(&connection_id) {
-                                Some(conn) => std::mem::take(&mut conn.queued_data),
+                                Some(conn) => conn.take_next(batching),
                                 None => return,
                             }
                         };

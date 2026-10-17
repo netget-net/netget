@@ -116,7 +116,10 @@ impl Protocol for PtyProtocol {
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // Reads from the terminal while the model is answering are queued by a separate reader
+            // task and answered together through `call_llm_batch` (batching on) or one read
+            // per call (off).
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
 

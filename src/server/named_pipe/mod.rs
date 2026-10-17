@@ -20,7 +20,7 @@ use tokio::io::unix::AsyncFd;
 use tokio::sync::mpsc;
 use tracing::error;
 
-use crate::llm::action_helper::call_llm;
+use crate::llm::action_helper::call_llm_batch;
 use crate::llm::ollama_client::OllamaClient;
 use crate::llm::ActionResult;
 use crate::logging::emit::Log;
@@ -148,6 +148,13 @@ fn open_response_fifo(path: &Path) -> Result<AsyncFd<File>> {
     })
 }
 
+/// How many chunks read from the FIFO may wait while the model answers an earlier one.
+///
+/// Each is at most one 8 KiB read, so the queue holds at most 256 KiB; past it the reader stops
+/// reading and the writer is held back by the FIFO itself. It equals the batch cap, so one
+/// batching call can take everything that is waiting.
+const READ_QUEUE_CHUNKS: usize = crate::protocol::metadata::MAX_BATCH_EVENTS;
+
 /// Named pipe server.
 pub struct NamedPipeServer;
 
@@ -200,76 +207,111 @@ impl NamedPipeServer {
         let protocol = Arc::new(NamedPipeProtocol::new());
         let task_registrar = app_state.clone();
 
-        let handle = tokio::spawn(async move {
-            // Move the cleanup guard into the task so it drops (and unlinks) on abort.
-            let _cleanup = cleanup;
-            let mut response_file = response_file;
-            let mut buffer = vec![0u8; 8192];
-
-            loop {
-                let mut guard = match async_read.readable().await {
-                    Ok(g) => g,
-                    Err(e) => {
-                        error!("Named pipe {:?} readable() error: {}", pipe_path, e);
-                        break;
-                    }
-                };
-
-                let read_result = guard.try_io(|inner| {
-                    let fd = inner.get_ref().as_raw_fd();
-                    let n = unsafe {
-                        libc::read(fd, buffer.as_mut_ptr() as *mut libc::c_void, buffer.len())
+        // The reader runs on its own so that chunks written while the model is answering are
+        // read — each keeping its own boundary — rather than coalescing in the kernel FIFO
+        // buffer. The bounded channel is the backpressure: once it holds
+        // `READ_QUEUE_CHUNKS` chunks the reader stops reading, the 64 KiB FIFO fills, and the
+        // writer blocks, which is what a FIFO does to a writer nobody is draining.
+        let (chunk_tx, mut chunk_rx) = mpsc::channel::<Vec<u8>>(READ_QUEUE_CHUNKS);
+        let reader_path = pipe_path.clone();
+        let reader = app_state
+            .spawn_server_task(server_id, async move {
+                // Move the cleanup guard into the task so it drops (and unlinks) on abort.
+                let _cleanup = cleanup;
+                let mut buffer = vec![0u8; 8192];
+                loop {
+                    let mut guard = match async_read.readable().await {
+                        Ok(g) => g,
+                        Err(e) => {
+                            error!("Named pipe {:?} readable() error: {}", reader_path, e);
+                            break;
+                        }
                     };
-                    if n < 0 {
-                        Err(std::io::Error::last_os_error())
-                    } else {
-                        Ok(n as usize)
-                    }
-                });
 
-                let n = match read_result {
-                    Ok(Ok(0)) => {
-                        // With O_RDWR a real EOF should not occur. `clear_ready()` is what makes
-                        // this `continue` safe: `try_io` only drops the cached readiness when the
-                        // closure reports WouldBlock, so continuing on any other outcome leaves
-                        // readiness set and the loop spins on a core instead of waiting.
-                        guard.clear_ready();
-                        continue;
-                    }
-                    Ok(Ok(n)) => n,
-                    Ok(Err(e)) => {
-                        error!("Named pipe {:?} read error: {}", pipe_path, e);
+                    let read_result = guard.try_io(|inner| {
+                        let fd = inner.get_ref().as_raw_fd();
+                        let n = unsafe {
+                            libc::read(fd, buffer.as_mut_ptr() as *mut libc::c_void, buffer.len())
+                        };
+                        if n < 0 {
+                            Err(std::io::Error::last_os_error())
+                        } else {
+                            Ok(n as usize)
+                        }
+                    });
+
+                    let n = match read_result {
+                        Ok(Ok(0)) => {
+                            // With O_RDWR a real EOF should not occur. `clear_ready()` is what
+                            // makes this `continue` safe: `try_io` only drops the cached readiness
+                            // when the closure reports WouldBlock, so continuing on any other
+                            // outcome leaves readiness set and the loop spins on a core instead
+                            // of waiting.
+                            guard.clear_ready();
+                            continue;
+                        }
+                        Ok(Ok(n)) => n,
+                        Ok(Err(e)) => {
+                            error!("Named pipe {:?} read error: {}", reader_path, e);
+                            break;
+                        }
+                        Err(_would_block) => continue,
+                    };
+                    if chunk_tx.send(buffer[..n].to_vec()).await.is_err() {
                         break;
                     }
-                    Err(_would_block) => continue,
-                };
+                }
+            })
+            .await;
 
-                let data = &buffer[..n];
-                let (data_str, encoding) = if data
-                    .iter()
-                    .all(|&b| b.is_ascii_graphic() || b.is_ascii_whitespace())
-                {
-                    (String::from_utf8_lossy(data).to_string(), "utf8")
-                } else {
-                    (hex::encode(data), "hex")
-                };
+        let handle = tokio::spawn(async move {
+            let mut response_file = response_file;
 
-                Log::new(Some(&status_tx)).debug(format!(
-                    "Named pipe {:?} received {} bytes ({})",
-                    pipe_path, n, encoding
-                ));
+            while let Some(first) = chunk_rx.recv().await {
+                // With batching on, every chunk that arrived while the model was answering the
+                // previous one is answered in one call; with it off, one chunk per call.
+                let batching = app_state
+                    .server_conversation_settings(server_id)
+                    .await
+                    .is_some_and(|(_, batching)| batching);
+                let mut chunks = vec![first];
+                while batching && chunks.len() < crate::protocol::metadata::MAX_BATCH_EVENTS {
+                    match chunk_rx.try_recv() {
+                        Ok(chunk) => chunks.push(chunk),
+                        Err(_) => break,
+                    }
+                }
 
-                let event = Event::new(
-                    &NAMED_PIPE_DATA_RECEIVED_EVENT,
-                    serde_json::json!({ "data": data_str, "encoding": encoding }),
-                );
+                let mut events = Vec::with_capacity(chunks.len());
+                for data in &chunks {
+                    let (data_str, encoding) = if data
+                        .iter()
+                        .all(|&b| b.is_ascii_graphic() || b.is_ascii_whitespace())
+                    {
+                        (String::from_utf8_lossy(data).to_string(), "utf8")
+                    } else {
+                        (hex::encode(data), "hex")
+                    };
 
-                match call_llm(
+                    Log::new(Some(&status_tx)).debug(format!(
+                        "Named pipe {:?} received {} bytes ({})",
+                        pipe_path,
+                        data.len(),
+                        encoding
+                    ));
+
+                    events.push(Event::new(
+                        &NAMED_PIPE_DATA_RECEIVED_EVENT,
+                        serde_json::json!({ "data": data_str, "encoding": encoding }),
+                    ));
+                }
+
+                match call_llm_batch(
                     &llm_client,
                     &app_state,
                     server_id,
                     None,
-                    &event,
+                    &events,
                     protocol.as_ref(),
                 )
                 .await
@@ -326,6 +368,7 @@ impl NamedPipeServer {
                     }
                 }
             }
+            reader.abort();
         });
 
         task_registrar.register_server_task(server_id, handle).await;

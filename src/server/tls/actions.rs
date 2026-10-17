@@ -132,7 +132,9 @@ impl Protocol for TlsProtocol {
             .e2e_testing("openssl s_client / native TLS client")
             .notes("Generic TLS server for custom protocols - LLM implements application layer. No client certificate authentication (no mTLS)")
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // Decrypted bytes arriving during a call are the next call's payload, whole
+            // (batching on) or one read at a time (off) — `ConnectionData::take_next`.
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
     fn description(&self) -> &'static str {

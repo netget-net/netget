@@ -83,6 +83,13 @@ Per connection: `ReadHalf` owned by a reader task, `WriteHalf` behind
 `Arc<Mutex<…>>` in the shared map, and an Idle → Processing → Accumulating state
 machine that serialises LLM calls and queues data that arrives mid-call.
 
+**Batching** (`BatchingMode::On`, the `tcp` shape). The queue remembers where each read ended
+(`queued_chunks`), and `ConnectionData::take_next` decides what the next call answers: with
+batching on, everything that arrived during the call is one `socket_file_data_received`
+payload; with it off, one read per call, in order. Bytes held by `wait_for_more` are always
+taken whole. The queue has no byte cap (it never had one); `MAX_CONNECTIONS` and the owner-only
+node are the bounds. `tests/server/socket_file/batching_test.rs` asserts both, control first.
+
 `update_connection_stats` is called on every read and every write, so the
 dashboard rail's `↓/↑` counters and `last_activity` reflect the connection. This
 protocol used not to call it at all and every live connection read `0B/0B`.

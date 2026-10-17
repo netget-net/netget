@@ -101,8 +101,17 @@ an action error not a panic — the `send_tcp_data` lesson.
   `model_answer` / `model_close` (the model acted), `model_silent` (the model answered with no
   actions — a real answer for a filter, which emits nothing), and
   `fail_closed_overloaded` / `fail_closed_unavailable` (the backend failed).
-- Processing is serial (a pipe is a serial stream). The read loop is registered via
-  `register_server_task`; a `StdioClaimGuard` releases the process claim on stop/abort.
+- Processing is serial (a pipe is a serial stream): one model call at a time. A reader task
+  (`spawn_server_task`) drains stdin into a bounded channel (`READ_QUEUE_CHUNKS`, 32 reads of
+  at most 8 KiB) while the dispatcher (`register_server_task`) asks the model; a full channel
+  stops the reader and the pipe holds the upstream writer back. A `StdioClaimGuard` in the
+  dispatcher releases the process claim on stop/abort.
+- **Batching** (`BatchingMode::On`): with it off, one read per call; with it on, every read
+  waiting (up to `MAX_BATCH_EVENTS`) goes to `call_llm_batch` as one `stdio_input_received`
+  each, the newest the trigger. An EOF read in the same sweep is answered after the batch as
+  its own `stdio_input_closed`. There is no connection, so `connection_id` is `None` and no
+  history is kept. `tests/server/stdio/batching_test.rs` drives the real binary
+  (`--server stdio --batching false|true`) and asserts off and on, control first.
 
 ## Verified
 

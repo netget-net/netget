@@ -4,3 +4,4 @@
 #![cfg(unix)]
 
 pub mod e2e_test;
+pub mod batching_test;
