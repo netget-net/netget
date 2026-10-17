@@ -22,6 +22,18 @@ Every handler outcome is logged with `decision=`: `model_answer`, `model_reject`
 `fail_closed_incomplete_reply`. A failure on RCPT answers `451 4.3.0` (the recipient is not
 accepted); a failure on DATA answers `451 4.3.0` for every recipient.
 
+## Batching (on by default)
+
+RFC 2033 requires PIPELINING, and a client delivering to several mailboxes sends its RCPT lines
+together. A run of well-formed `RCPT TO:` lines already buffered behind the one being read is
+decided in one model call (`recipient_batch`), up to `MAX_BATCH_EVENTS` and the recipient cap;
+anything else ends the run and is read normally, so MAIL, DATA, the message body and the
+`lmtp_message` decision are never batched. The answer is used only when every action executed
+and it holds exactly one `lmtp_recipient_reply` per recipient, applied in RCPT order; otherwise
+every recipient in the run gets `451 4.3.0` (`decision=fail_closed_batch_mismatch`) and none is
+accepted. `tests/server/lmtp/batching_test.rs` holds the control, the claim and the fail-closed
+short answer.
+
 ## Bounds
 
 `wire.rs` holds them: 1000-byte lines (refused without buffering the excess), 100 recipients,

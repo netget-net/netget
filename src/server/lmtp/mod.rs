@@ -218,6 +218,121 @@ async fn decision(
     found.context("Handler did not answer the LMTP event")
 }
 
+/// The reply to one RCPT the handler decided, recording the recipient when it is accepted.
+fn recipient_reply(
+    ctx: &SpawnContext,
+    id: ConnectionId,
+    answer: &Value,
+    address: String,
+    recipients: &mut Vec<String>,
+) -> String {
+    let reason = answer["reason"].as_str();
+    if answer["accept"] == true {
+        outcome(ctx, id, "lmtp_recipient", "model_answer");
+        let reply = wire::render(
+            250,
+            "2.1.5",
+            reason.unwrap_or(&format!("<{address}> recipient OK")),
+        );
+        recipients.push(address);
+        reply
+    } else if answer["temporary"] == true {
+        outcome(ctx, id, "lmtp_recipient", "model_reject");
+        wire::render(
+            450,
+            "4.2.1",
+            reason.unwrap_or("Mailbox temporarily unavailable"),
+        )
+    } else {
+        outcome(ctx, id, "lmtp_recipient", "model_reject");
+        wire::render(550, "5.1.1", reason.unwrap_or("No such user here"))
+    }
+}
+
+/// The address of a pipelined line that is a well-formed `RCPT TO:<address>` and may join a
+/// batch, or `None` for anything else (which ends the batch and is read normally).
+fn pipelined_recipient(line: &str) -> Option<String> {
+    let line = line.trim_end_matches(['\r', '\n']);
+    let (verb, argument) = line.split_once(' ')?;
+    if !verb.eq_ignore_ascii_case("RCPT") {
+        return None;
+    }
+    let (address, _) = wire::parse_path(argument.trim(), "TO:")?;
+    (!address.is_empty()).then_some(address)
+}
+
+/// Decide pipelined RCPTs in one model call: one `lmtp_recipient_reply` per recipient, in
+/// RCPT order.
+///
+/// The answer is used only when it holds exactly one reply per recipient and every action
+/// executed. Anything else and every recipient in the batch gets `451 4.3.0`: none is
+/// accepted, so an answer one short can never accept the wrong mailbox, and the client — which
+/// reads one reply per RCPT — stays in step.
+async fn recipient_batch(
+    ctx: &SpawnContext,
+    id: ConnectionId,
+    sender: &str,
+    lhlo: &str,
+    recipients: &mut Vec<String>,
+    batch: Vec<String>,
+) -> String {
+    let total = batch.len();
+    let accepted_so_far = recipients.len();
+    let events: Vec<Event> = batch
+        .iter()
+        .enumerate()
+        .map(|(i, address)| {
+            let mut data = json!({
+                "recipient": address,
+                "mail_from": sender,
+                "lhlo": lhlo,
+                "accepted_so_far": accepted_so_far,
+            });
+            crate::server::command_batch::mark_pipelined(&mut data, i + 1, total);
+            Event::new(&actions::RECIPIENT_EVENT, data)
+        })
+        .collect();
+    let result = match crate::llm::action_helper::call_llm_batch(
+        &ctx.llm_client,
+        &ctx.state,
+        ctx.server_id,
+        Some(id),
+        &events,
+        &actions::LmtpProtocol,
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => {
+            outcome(ctx, id, "lmtp_recipient", "fail_closed_llm_error");
+            return TEMPORARY_FAILURE.repeat(total);
+        }
+    };
+    let mut answers = Vec::new();
+    fn walk(results: Vec<ActionResult>, answers: &mut Vec<Value>) {
+        for result in results {
+            match result {
+                ActionResult::Custom { name, data } if name == "lmtp_recipient_reply" => {
+                    answers.push(data)
+                }
+                ActionResult::Multiple(items) => walk(items, answers),
+                _ => {}
+            }
+        }
+    }
+    let failed = !result.failures.is_empty();
+    walk(result.protocol_results, &mut answers);
+    if failed || answers.len() != total {
+        outcome(ctx, id, "lmtp_recipient", "fail_closed_batch_mismatch");
+        return TEMPORARY_FAILURE.repeat(total);
+    }
+    batch
+        .into_iter()
+        .zip(answers)
+        .map(|(address, answer)| recipient_reply(ctx, id, &answer, address, recipients))
+        .collect()
+}
+
 const TEMPORARY_FAILURE: &str = "451 4.3.0 Temporary local failure, try again later\r\n";
 
 /// One reply per accepted recipient, in RCPT order (RFC 2033 4.2).
@@ -484,40 +599,68 @@ async fn session(
                     wire::render(452, "4.5.3", "Too many recipients")
                 }
                 (Some(sender), Some((address, _))) => {
-                    let event = Event::new(
-                        &actions::RECIPIENT_EVENT,
-                        json!({
-                            "recipient": address,
-                            "mail_from": sender,
-                            "lhlo": lhlo.clone().unwrap_or_default(),
-                            "accepted_so_far": recipients.len(),
-                        }),
-                    );
-                    match decision(ctx, id, event, "lmtp_recipient_reply").await {
-                        Ok(answer) => {
-                            let reason = answer["reason"].as_str();
-                            if answer["accept"] == true {
-                                outcome(ctx, id, "lmtp_recipient", "model_answer");
-                                let reply = wire::render(
-                                    250,
-                                    "2.1.5",
-                                    reason.unwrap_or(&format!("<{address}> recipient OK")),
-                                );
-                                recipients.push(address);
-                                reply
-                            } else if answer["temporary"] == true {
-                                outcome(ctx, id, "lmtp_recipient", "model_reject");
-                                wire::render(
-                                    450,
-                                    "4.2.1",
-                                    reason.unwrap_or("Mailbox temporarily unavailable"),
+                    // RFC 2033 requires PIPELINING, and a client delivering to several
+                    // mailboxes sends its RCPT lines together. Those already waiting behind
+                    // this one are decided with it in one model call when the instance
+                    // batches; anything other than another well-formed RCPT ends the run and
+                    // is read normally.
+                    let mut batch = vec![address];
+                    if crate::server::command_batch::one_model_call_answers(
+                        &ctx.state,
+                        ctx.server_id,
+                        &[actions::RECIPIENT_EVENT.id.as_str()],
+                    )
+                    .await
+                    {
+                        use tokio::io::AsyncBufReadExt;
+                        while batch.len() < crate::protocol::metadata::MAX_BATCH_EVENTS
+                            && recipients.len() + batch.len() < wire::MAX_RECIPIENTS
+                        {
+                            let Some((next, len)) = crate::server::command_batch::peek_ready_line(
+                                &mut reader,
+                                wire::MAX_LINE_BYTES,
+                            )
+                            .await
+                            else {
+                                break;
+                            };
+                            let Some(next) = pipelined_recipient(&next) else {
+                                break;
+                            };
+                            reader.consume(len);
+                            ctx.state
+                                .update_connection_stats(
+                                    ctx.server_id,
+                                    id,
+                                    Some(len as u64),
+                                    None,
+                                    Some(1),
+                                    None,
                                 )
-                            } else {
-                                outcome(ctx, id, "lmtp_recipient", "model_reject");
-                                wire::render(550, "5.1.1", reason.unwrap_or("No such user here"))
-                            }
+                                .await;
+                            batch.push(next);
                         }
-                        Err(_) => TEMPORARY_FAILURE.to_string(),
+                    }
+                    let lhlo_domain = lhlo.clone().unwrap_or_default();
+                    if batch.len() > 1 {
+                        recipient_batch(ctx, id, sender, &lhlo_domain, &mut recipients, batch).await
+                    } else {
+                        let address = batch.remove(0);
+                        let event = Event::new(
+                            &actions::RECIPIENT_EVENT,
+                            json!({
+                                "recipient": address,
+                                "mail_from": sender,
+                                "lhlo": lhlo_domain,
+                                "accepted_so_far": recipients.len(),
+                            }),
+                        );
+                        match decision(ctx, id, event, "lmtp_recipient_reply").await {
+                            Ok(answer) => {
+                                recipient_reply(ctx, id, &answer, address, &mut recipients)
+                            }
+                            Err(_) => TEMPORARY_FAILURE.to_string(),
+                        }
                     }
                 }
             },
