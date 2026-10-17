@@ -75,6 +75,8 @@ impl Protocol for UdpProtocol {
             .llm_control("Full datagram control - all sent/received data")
             .e2e_testing("std::net::UdpSocket")
             .notes("Stateless, used by DNS/DHCP/NTP")
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

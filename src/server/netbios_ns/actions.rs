@@ -262,6 +262,8 @@ impl Protocol for NetbiosNsProtocol {
                  against a real client. On LLM failure this server sends NOTHING — a fabricated \
                  NBNS answer is cached by the querier and poisons its name resolution.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

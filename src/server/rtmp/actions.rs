@@ -261,6 +261,8 @@ impl Protocol for RtmpProtocol {
             .notes("Live only (no recording or VOD), AMF0 only, no RTMPS/RTMPT, no complex (digest) handshake, no enhanced-RTMP multitrack. Media is relayed, never stored.")
             .answers_on_failure()
             .max_inbound_bytes(super::chunk::MAX_MESSAGE)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

@@ -86,6 +86,8 @@ impl Protocol for TorrentTrackerProtocol {
                  completed download, there being no real swarm; and the 400/408 paths."
             )
             .notes("Bencode<->JSON conversion, compact peer format. Stores nothing: peers, swarm counts and scrape statistics all come from the model, so successive announces are not correlated unless the model correlates them.")
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

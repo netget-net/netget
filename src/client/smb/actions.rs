@@ -388,6 +388,10 @@ impl Protocol for SmbClientProtocol {
             .implementation("pavao library (libsmbclient wrapper)")
             .llm_control("Full control over file operations (list, read, write, delete)")
             .e2e_testing("Samba server container")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

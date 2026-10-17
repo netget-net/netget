@@ -66,6 +66,8 @@ impl Protocol for TorrentDhtProtocol {
             .llm_control("DHT query responses (ping, find_node, get_peers)")
             .e2e_testing("tests/server/torrent_dht/{e2e_test,llm_failure_test,bencode_depth_guard_test}.rs, 7 LLM calls, none #[ignore]d. NO third-party DHT client is involved: every query is bencode hand-built with serde_bencode over a raw UdpSocket, which is an independent *reading* of BEP 5 rather than an independent implementation. This field claimed 'Real BitTorrent clients with DHT' and no such client appears anywhere in the tree. Covered: ping/find_node/get_peers round trips, the KRPC error reply on an LLM failure (code 201 vs 202, asserted to leak nothing from netget's internals), and that a bencode depth bomb no longer kills the process. Not tested: a real DHT node, iterative lookup, token validation, IPv6/BEP 32.")
             .notes("Kademlia DHT, BEP 5. Stores nothing - no routing table, no peer table, no announced-peer record; the model answers every query, so a get_peers after an announce_peer knows nothing about it unless the model remembers. A small query can be answered with a large `nodes` or `values` list, so this is a UDP amplifier by construction: replies go only to the datagram's source address, which bounds it to whoever can receive at that address, but the amplification factor itself is whatever the model returns.")
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

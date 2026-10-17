@@ -406,6 +406,8 @@ impl Protocol for DynamoDbClientProtocol {
                 .implementation("AWS SDK for DynamoDB client library")
                 .llm_control("Full control over DynamoDB operations (PutItem, GetItem, Query, Scan, UpdateItem, DeleteItem)")
                 .e2e_testing("DynamoDB Local or LocalStack")
+                .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+                .batching(crate::protocol::metadata::BatchingMode::Unsupported)
                 .build()
     }
     fn description(&self) -> &'static str {

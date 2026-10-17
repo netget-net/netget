@@ -355,6 +355,8 @@ impl Protocol for WampClientProtocol {
             .e2e_testing("tests/client/wamp: the nexus 3.3.0 router (Go; independent) with a nexus callee, publisher and subscriber: call, error, subscribe, publish, register and answer invocations")
             .notes("JSON serializer only; anonymous authentication; ws:// only; no progressive results or cancellation.")
             .max_inbound_bytes(crate::server::wamp::MAX_MESSAGE)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

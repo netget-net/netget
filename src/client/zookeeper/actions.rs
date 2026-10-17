@@ -314,6 +314,10 @@ impl Protocol for ZookeeperClientProtocol {
                  registered as `false` on every call, so the client polls rather than being \
                  notified.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

@@ -388,6 +388,10 @@ impl Protocol for StompClientProtocol {
                  refused rather than guessed at) and TLS, so login/passcode travel in \
                  cleartext.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

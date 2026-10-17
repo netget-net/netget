@@ -205,6 +205,10 @@ impl Protocol for UdpClientProtocol {
             .implementation("Tokio UdpSocket for connectionless datagram communication")
             .llm_control("Full control over datagrams, target addresses, and responses")
             .e2e_testing("nc (netcat) with -u flag as test server")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

@@ -298,6 +298,8 @@ impl Protocol for MilterProtocol {
             .request_only("Every reply answers an MTA command")
             .answers_on_failure()
             .max_inbound_bytes(wire::MAX_PACKET)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

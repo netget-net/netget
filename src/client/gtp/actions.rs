@@ -581,6 +581,8 @@ impl Protocol for GtpClientProtocol {
             .e2e_testing("tests/client/gtp: wmnsk/go-gtp v0.8.12 as a PGW (GTPv2 S5/S8, GTP-U) decoding every request NetGet sends, and Osmocom osmo-ggsn as a GGSN (GTPv1 Gn) whose kernel tun device answers an ICMP echo NetGet tunnels to it; tshark's gtp/gtpv2 dissectors read both directions")
             .notes("Experimental: the client Beta bar's peers exist and the tests fail rather than skip without them, but osmo-ggsn runs only on Linux with a tun device, so its half of the evidence runs in the gtp-client job of protocol-pairs.yml (dispatched by hand) and not on every change. One peer per client. The inner packet is IPv4 only. No secondary PDP contexts or dedicated bearers, no handover, no GTP' or GTPv0.")
             .max_inbound_bytes(msg::MAX_DATAGRAM)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

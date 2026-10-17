@@ -240,6 +240,8 @@ impl Protocol for Http3ClientProtocol {
             .llm_control("Method, origin-form path, headers, UTF-8 body, request trailers and RFC 9218 urgency 0..7. Injected and handler requests multiplex concurrently; up to 32 active exchanges and handlers, with four follow-up levels.")
             .e2e_testing("Independent pinned aioquic 1.3.0 server tests GET/POST/header/priority/trailers, multiplexing, response bounds, trust/name failures, timeout and disconnect/removal. NetGet pair and real server tests cover both roles. No tests are ignored or skip missing peers.")
             .notes("32 KiB field sections, 8 MiB UTF-8 bodies, bounded handshake/exchange/idle deadlines. System roots plus explicit ca_cert_path; optional server_name. No 0-RTT, server push, DATAGRAM, WebTransport or migration. Experimental: no second independent implementation, pcap oracle or fuzz target.")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

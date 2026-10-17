@@ -662,6 +662,10 @@ impl Protocol for AfpProtocol {
                  again. Every failure logs decision=fail_closed_* and answers kFPMiscErr; a \
                  model refusal answers the error it named (decision=model_reject).",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

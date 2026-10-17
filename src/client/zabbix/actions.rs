@@ -229,6 +229,8 @@ impl Protocol for ZabbixClientProtocol {
             .llm_control("Which items to ask agents for and which values to send to trappers")
             .e2e_testing("tests/client/zabbix: Zabbix 7.0's own zabbix_agentd (passive checks, including an unsupported key) and zabbix_proxy with SQLite (sender data, whose log names the host and item it was sent)")
             .notes("No TLS or PSK, no compression, no active-agent protocol. A handler chain stops after 8 follow-ups.")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

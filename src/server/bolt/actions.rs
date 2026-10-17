@@ -179,6 +179,8 @@ impl Protocol for BoltProtocol {
             // LLM failure: FAILURE Neo.TransientError.General.DatabaseUnavailable with a fixed
             // message per WireFailure category; the connection stays usable after RESET.
             .answers_on_failure()
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

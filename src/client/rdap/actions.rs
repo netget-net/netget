@@ -130,6 +130,8 @@ impl Protocol for RdapClientProtocol {
             .e2e_testing("tests/client/rdap: ICANN rdap-srv 1.0.0 (independent server) for lookups, search, help, not-found and redirect; NetGet pair and malformed-server checks")
             .notes("No bootstrap (RFC 9224): the server is the one given. Redirects are reported, not followed. 1 MiB responses. One query at a time.")
             .max_inbound_bytes(crate::server::rdap::query::MAX_BODY_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

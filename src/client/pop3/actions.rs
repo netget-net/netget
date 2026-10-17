@@ -171,6 +171,10 @@ impl Protocol for Pop3ClientProtocol {
             )
             .llm_control("Full control over POP3 commands (USER, PASS, STAT, LIST, RETR, DELE)")
             .e2e_testing("NetGet POP3 server or local Dovecot server")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

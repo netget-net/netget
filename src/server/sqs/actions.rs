@@ -206,6 +206,8 @@ impl Protocol for SqsProtocol {
             .notes("Virtual queues (no persistence); no auth; visibility timeouts are the LLM's job, the server tracks nothing")
             .max_inbound_bytes(crate::server::sqs::MAX_REQUEST_BYTES)
             .request_only("SQS is HTTP request/response; a server cannot send a peer anything unprompted")
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

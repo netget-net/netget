@@ -233,6 +233,8 @@ impl Protocol for TftpProtocol {
             .llm_control("File read/write operations via memory (no disk storage)")
             .e2e_testing("Mock-based tests with RRQ/WRQ flows")
             .notes("LLM provides all file content from memory/instruction")
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

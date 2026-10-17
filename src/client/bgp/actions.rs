@@ -346,6 +346,10 @@ impl Protocol for BgpClientProtocol {
                     end to end in tests/client/bgp/hold_timer_test.rs. Never peered against a \
                     real BGP daemon.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn group_name(&self) -> &'static str {

@@ -123,7 +123,9 @@ impl Protocol for NutProtocol {
             .e2e_testing("tests/server/nut: raw-wire sessions, framing and bounds; independent client evidence is documented in CLAUDE.md")
             .notes("Plain TCP only: STARTTLS returns FEATURE-NOT-SUPPORTED. No built-in UPS storage or accounts. SET/INSTCMD require an accepted nut_auth decision and explicit handler success. ATTACH/LOGIN/PRIMARY/FSD, RANGE and tracking are not supported; unknown commands return UNKNOWN-COMMAND. 256 connections; 8192-byte lines; 4096 entries and 1 MiB replies; 30s write deadline.")
             .request_only("NUT replies require the current parsed request and authenticated session state; unsolicited replies are not part of this protocol.")
-            .max_inbound_bytes(super::wire::MAX_LINE_BYTES).build()
+            .max_inbound_bytes(super::wire::MAX_LINE_BYTES).history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            .build()
     }
     fn example_prompt(&self) -> &'static str {
         "NUT server on port 3493 simulating UPS rack1 at full battery charge"

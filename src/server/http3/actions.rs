@@ -168,7 +168,9 @@ impl Protocol for Http3Protocol {
     }
     fn metadata(&self) -> crate::protocol::metadata::ProtocolMetadataV2 {
         use crate::protocol::metadata::*;
-        ProtocolMetadataV2::builder().state(DevelopmentState::Experimental).max_inbound_bytes(MAX_INBOUND_BYTES).privilege_requirement(PrivilegeRequirement::PrivilegedPort(443)).well_known_udp_port(443).implementation("h3 0.0.8, h3-quinn 0.0.10 with local cancellation fix, quinn 0.11 and rustls 0.23; RFC 9114 HEADERS/DATA/QPACK/control streams").llm_control("Structured status, headers, UTF-8 body and trailers per request; explicit cancellation").e2e_testing("Loopback aioquic 1.3.0 clients and servers, NetGet pair, authentication, bounds and removal regressions in tests/server/http3 and tests/client/http3").notes("32 KiB fields, 8 MiB UTF-8 bodies; 64 connections, 32 requests per connection; no server push, DATAGRAM, WebTransport, migration or 0-RTT. TLS certificates require explicit client trust.").build()
+        ProtocolMetadataV2::builder().state(DevelopmentState::Experimental).max_inbound_bytes(MAX_INBOUND_BYTES).privilege_requirement(PrivilegeRequirement::PrivilegedPort(443)).well_known_udp_port(443).implementation("h3 0.0.8, h3-quinn 0.0.10 with local cancellation fix, quinn 0.11 and rustls 0.23; RFC 9114 HEADERS/DATA/QPACK/control streams").llm_control("Structured status, headers, UTF-8 body and trailers per request; explicit cancellation").e2e_testing("Loopback aioquic 1.3.0 clients and servers, NetGet pair, authentication, bounds and removal regressions in tests/server/http3 and tests/client/http3").notes("32 KiB fields, 8 MiB UTF-8 bodies; 64 connections, 32 requests per connection; no server push, DATAGRAM, WebTransport, migration or 0-RTT. TLS certificates require explicit client trust.").history(crate::protocol::metadata::HistoryMode::Off)
+        .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+        .build()
     }
     fn get_startup_examples(&self) -> StartupExamples {
         StartupExamples::new(

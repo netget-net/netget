@@ -265,6 +265,8 @@ impl Protocol for SmppClientProtocol {
             .e2e_testing("tests/client/smpp: NetGet's own SMSC; fiorix/go-smpp's smpptest server (Go) as the independent peer")
             .notes("Plain TCP, no TLS. A refused bind fails the connection with the SMSC's status. Submits may be pipelined; each result is matched by sequence number. PDUs are capped at 64 KiB of payload; each request has a 30 s deadline.")
             .max_inbound_bytes(wire::MAX_PDU)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

@@ -228,6 +228,10 @@ impl Protocol for TlsClientProtocol {
             .llm_control("Full control over encrypted data exchange")
             .e2e_testing("NetGet TLS server for testing")
             .notes("Generic TLS client for encrypted protocols - LLM implements application layer")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

@@ -329,6 +329,8 @@ impl Protocol for BfdProtocol {
             .e2e_testing("tests/server/bfd: BIRD 2 (multihop sessions brought Up and read back with birdc, timers renegotiated by Poll Sequence, AdminDown, keyed SHA1 with a right and a wrong key); a raw-socket peer for the TTL check and the bounds; the pcap oracle (tshark's bfd dissector) over the packets NetGet sent")
             .notes("DELIBERATELY SILENT: BFD has no refusal; a peer the model does not accept (or a backend failure) is never answered, so its session stays Down (logged decision=model_silent / fail_closed_*). The model is consulted per session and per state change, never per packet. No Demand mode, no Echo function, no IPv6 TTL (hop limit) check.")
             .max_inbound_bytes(packet::MAX_PACKET)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

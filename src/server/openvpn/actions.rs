@@ -243,6 +243,10 @@ impl Protocol for OpenvpnProtocol {
                  was going to authenticate with. Use WireGuard for a working tunnel.",
             )
             .max_inbound_bytes(crate::server::openvpn::packet::MAX_PACKET_SIZE)
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

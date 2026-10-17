@@ -179,6 +179,8 @@ impl Protocol for Amqp1ClientProtocol {
             .e2e_testing("tests/client/amqp1: a rhea 3.0.5 container (JavaScript, independent) acting as a broker accepts, rejects and routes the client's messages and delivers one to its receiving link")
             .notes("One session; links are attached per address on demand; no transactions or link recovery.")
             .max_inbound_bytes(crate::server::amqp1::frame::MAX_FRAME as usize)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

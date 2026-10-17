@@ -347,6 +347,8 @@ impl Protocol for WebDavProtocol {
             .request_only(
                 "WebDAV is HTTP request/response; a server cannot send a peer anything unprompted",
             )
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

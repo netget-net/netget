@@ -106,6 +106,8 @@ impl Protocol for Db2Protocol {
                  sets. Fail-closed: an LLM outage during login is a refusal (SECCHKRM \
                  severity ERROR), never an accept.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

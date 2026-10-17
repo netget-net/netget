@@ -298,6 +298,10 @@ impl Protocol for XmppClientProtocol {
                  command channel; a session against a real prosody/ejabberd exists only in \
                  #[ignore]d tests",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

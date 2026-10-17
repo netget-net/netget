@@ -264,6 +264,8 @@ impl Protocol for LldpProtocol {
                  failure is recorded with a decision= tag in the log instead. See \
                  src/server/lldp/CLAUDE.md for the feth-pair experiment that would earn Beta.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

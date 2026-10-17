@@ -197,6 +197,8 @@ impl Protocol for FixClientProtocol {
             .e2e_testing("tests/client/fix: QuickFIX/Go 0.9.12 (independent, validating against FIX44.xml) as acceptor answers a NewOrderSingle with an ExecutionReport and an OrderCancelRequest with a BusinessMessageReject; logout")
             .notes("One session per client, in memory. No FIXT.1.1/FIX 5.0 and no reconnect.")
             .max_inbound_bytes(crate::server::fix::codec::MAX_BODY)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

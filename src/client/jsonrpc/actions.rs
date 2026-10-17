@@ -221,6 +221,10 @@ impl Protocol for JsonRpcClientProtocol {
             .implementation("reqwest HTTP client with JSON-RPC 2.0 format")
             .llm_control("Full control over RPC methods, parameters, batch requests")
             .e2e_testing("Local JSON-RPC server or public JSON-RPC API")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

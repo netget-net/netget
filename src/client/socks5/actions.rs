@@ -353,6 +353,10 @@ impl Protocol for Socks5ClientProtocol {
                 "Full control over target address, authentication, and data flow through proxy",
             )
             .e2e_testing("Dante or SS5 SOCKS5 server for testing")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

@@ -288,6 +288,8 @@ impl Protocol for BluetoothBleProtocol {
                  those to be neither ignored nor hardware-bound, which the single-adapter \
                  constraint currently prevents.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

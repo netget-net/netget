@@ -194,6 +194,10 @@ impl Protocol for CassandraClientProtocol {
             .implementation("ScyllaDB Rust driver (scylla crate)")
             .llm_control("Full control over CQL queries with consistency levels")
             .e2e_testing("Docker Cassandra container")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

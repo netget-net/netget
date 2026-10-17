@@ -721,6 +721,10 @@ impl Protocol for MemcachedClientProtocol {
                  text: a non-UTF-8 value is reported as memcached_error kind non_text_value, \
                  never re-encoded. No SASL, no meta commands (mg/ms), no response timeout.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

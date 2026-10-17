@@ -722,6 +722,10 @@ impl Protocol for Devp2pProtocol {
                  Patricia trie). Nothing is stored: every header the node serves is one the \
                  model wrote.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

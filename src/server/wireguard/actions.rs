@@ -198,6 +198,8 @@ impl Protocol for WireguardProtocol {
                  closest thing to a working tunnel in NetGet - openvpn/ipsec do not carry \
                  traffic at all.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

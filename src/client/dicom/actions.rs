@@ -188,6 +188,8 @@ impl Protocol for DicomClientProtocol {
             .e2e_testing("tests/client/dicom: pynetdicom 3.0.4 (independent) as SCP answers C-ECHO, stores an instance and answers C-FIND; a wrong called AE title is rejected")
             .notes("No C-MOVE, C-GET or C-CANCEL, no compressed transfer syntaxes. 16 MiB datasets.")
             .max_inbound_bytes(crate::server::dicom::pdu::MAX_PDU as usize)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

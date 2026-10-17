@@ -100,6 +100,8 @@ impl Protocol for BluetoothBleCyclingProtocol {
             .notes(
                 "Thin profile wrapper over the bluetooth-ble base stack. It prepends an instruction describing the Cycling Speed and Cadence Service (0x1816) and otherwise reuses the base entirely: the base hardcodes BluetoothBleProtocol when it calls the LLM, so the action vocabulary, the event types and the executor are the base's. This protocol deliberately declares no actions or events of its own - one that did would be documented to the model but never reachable at runtime.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

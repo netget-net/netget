@@ -229,6 +229,8 @@ impl Protocol for RtpClientProtocol {
             .llm_control("What audio to send and when, and what to do about the streams that arrive")
             .e2e_testing("tests/client/rtp: ffmpeg receives NetGet's stream through an SDP and decodes it (its tone measured in the WAV it writes), and ffmpeg's own RTP muxer streams a sine to NetGet, whose decoded tone and packet accounting are asserted")
             .notes("Audio only, G.711 only; no SRTP, no jitter buffer, no receiver reports. Inbound streams are summarised, never reported per packet.")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

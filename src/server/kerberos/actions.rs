@@ -473,6 +473,8 @@ impl Protocol for KerberosProtocol {
                  come only from the principal_passwords startup parameter, which is redacted \
                  wherever parameters are printed, and appear in no event.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

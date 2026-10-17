@@ -381,6 +381,10 @@ impl Protocol for KubernetesClientProtocol {
                  in e2e_test.rs were placeholders that asserted nothing and have been removed, \
                  which is why this stays Experimental.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

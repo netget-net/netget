@@ -227,6 +227,8 @@ impl Protocol for ScimClientProtocol {
             .e2e_testing("tests/client/scim: scim2-server 0.4.0 (independent) answers discovery, create, filtered and sorted lists, get, PATCH, PUT, a uniqueness conflict and delete")
             .notes("No Bulk or /Me; one request at a time; 1 MiB answers.")
             .max_inbound_bytes(model_bounds::MAX_BODY_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

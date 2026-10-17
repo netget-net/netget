@@ -248,6 +248,8 @@ impl Protocol for Lwm2mClientProtocol {
             .llm_control("The values the device reports, which writes, executes, creates and deletes it accepts, and when it notifies")
             .e2e_testing("tests/client/lwm2m: the Eclipse Leshan 2.0.0-M15 server demo (independent, Java/Californium) reads, writes, executes and observes the device through its REST API")
             .notes("No DTLS, OSCORE or bootstrap; SenML JSON, text and link format only; no block-wise transfer.")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

@@ -436,6 +436,10 @@ impl Protocol for NfcServerProtocol {
                  hardware. Frames are capped at 4096 bytes and malformed APDUs are answered 6700.",
             )
             .max_inbound_bytes(crate::server::nfc::MAX_FRAME_LEN)
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

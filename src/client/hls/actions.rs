@@ -279,6 +279,8 @@ impl Protocol for HlsClientProtocol {
             .e2e_testing("tests/client/hls: an ffmpeg-authored VOD stream with a master playlist and two variants, and a live GStreamer hlssink2 stream whose playlist slides while it is played, both served by Python's http.server")
             .notes("Plays by fetching, not by decoding: no decryption (AES-128 segments are reported, not analysed), no fMP4 sample analysis, no LL-HLS partial segments, one origin. A handler chain stops after 8 follow-ups.")
             .max_inbound_bytes(super::MAX_SEGMENT_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

@@ -104,6 +104,8 @@ impl crate::llm::actions::protocol_trait::Protocol for StunProtocol {
                  authentication: MESSAGE-INTEGRITY, USERNAME, REALM, NONCE and FINGERPRINT are \
                  not implemented and no action can add them.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

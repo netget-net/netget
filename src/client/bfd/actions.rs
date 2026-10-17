@@ -127,6 +127,8 @@ impl Protocol for BfdClientProtocol {
             .e2e_testing("tests/client/bfd: BIRD 2 with a static multihop session to NetGet, read back with birdc (Up, timers renegotiated by Poll Sequence, AdminDown and back, keyed MD5)")
             .notes("No Demand mode, no Echo function. Neither side of the session is the model's per packet: the model is asked when the session starts and when its state changes.")
             .max_inbound_bytes(packet::MAX_PACKET)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

@@ -104,6 +104,10 @@ impl Protocol for StdioProtocol {
                  only one stdio server per process. Intended for headless/one-shot piped use. \
                  Validated by spawning the netget binary as a child with piped stdin/stdout.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

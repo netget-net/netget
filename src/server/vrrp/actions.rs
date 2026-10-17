@@ -701,6 +701,8 @@ impl Protocol for VrrpProtocol {
                  decision=model_reject (the model chose no_advertisement) and \
                  decision=model_silent (the model returned nothing usable).",
             )
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

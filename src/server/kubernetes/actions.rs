@@ -191,6 +191,8 @@ impl Protocol for KubernetesProtocol {
                  served), protobuf content negotiation, and server-side apply.",
             )
             .max_inbound_bytes(crate::server::kubernetes::MAX_REQUEST_BODY_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

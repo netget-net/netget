@@ -69,6 +69,8 @@ impl Protocol for JsonRpcProtocol {
             )
             .max_inbound_bytes(crate::server::jsonrpc::MAX_REQUEST_BODY_BYTES)
             .request_only("JSON-RPC over HTTP is HTTP request/response; a server cannot send a peer anything unprompted")
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

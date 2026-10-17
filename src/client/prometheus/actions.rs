@@ -115,7 +115,9 @@ impl Protocol for PrometheusClientProtocol {
         .llm_control("Explicit scrape path and format; handle typed family/sample results or scrape errors")
         .e2e_testing("tests/client/prometheus: independent Prometheus exporter, NetGet exporter pair, negotiation/parser/bounds/cancellation and event handlers")
         .notes("Exporter scraping only; no PromQL query API, remote write, protobuf/native histograms, target discovery, scrape scheduler, redirects, compression or persistent metric store. Legacy metric/label names negotiated with escaping=underscores. Native HTTPS verifies system roots; browser HTTP only. Body4MiB, samples20000, families4096, labels64, text16KiB; one active scrape, queues8 and4 handler followups. Manual handlers do not block injection/disconnect.")
-        .max_inbound_bytes(super::exposition::MAX_BODY).build()
+        .max_inbound_bytes(super::exposition::MAX_BODY).history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+        .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+        .build()
     }
     fn get_startup_examples(&self) -> crate::llm::actions::StartupExamples {
         let llm = json!({"type":"open_client","base_stack":"prometheus","protocol":"prometheus","remote_addr":"127.0.0.1:9100","instruction":"Scrape metrics once and explain them"});

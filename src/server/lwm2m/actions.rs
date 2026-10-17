@@ -308,6 +308,8 @@ impl Protocol for Lwm2mProtocol {
             .notes("No DTLS, OSCORE, bootstrap or queue mode; no TLV, CBOR or LwM2M JSON (SenML JSON, text, opaque and link format are); no block-wise transfer, so payloads stay under one datagram. 16 KiB datagrams; registrations expire 15 s after their lifetime; operation chains stop at depth 4.")
             .answers_on_failure()
             .max_inbound_bytes(super::exchange::MAX_DATAGRAM)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

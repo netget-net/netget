@@ -395,6 +395,8 @@ impl Protocol for NisClientProtocol {
             .llm_control("Which maps and keys to read and what to do with each answer; passwd, group, hosts and netgroup lines arrive parsed into fields")
             .e2e_testing("tests/client/nis: Linux ypserv 4.2 with maps built by makedbm in a temporary domain, registered with the system rpcbind and found through it; NetGet's own server as a regression only")
             .notes("Experimental: one independent server (Linux ypserv), on Linux only, and its pair job had not run in CI when it landed. TCP only, AUTH_NONE only, no ypbind protocol (it binds to the server it is given). NIS carries passwd entries, hashes included when a server serves them, in clear text. Replies are capped at 4 MiB in 1024 fragments and 10 000 entries; a call waits at most 10 s; a handler chain stops after 8 follow-ups.")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

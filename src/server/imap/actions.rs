@@ -660,6 +660,10 @@ impl Protocol for ImapProtocol {
                  no mailboxes or messages - the model answers every FETCH. No IMAPS, no STARTTLS, \
                  no SASL, no literal continuation ('+') handling.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

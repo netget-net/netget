@@ -408,6 +408,10 @@ impl Protocol for OAuth2ClientProtocol {
                      protocol_data and the actions read them back. No token is verified: an \
                      access token is an opaque string to this client.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

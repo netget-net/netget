@@ -449,6 +449,8 @@ impl Protocol for BluetoothBleBeaconProtocol {
                  run on Linux, and no scanner has confirmed a frame on air. Treat first use on \
                  Linux as bring-up. Experimental, not Beta, for exactly that reason.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

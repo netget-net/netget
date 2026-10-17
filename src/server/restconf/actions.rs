@@ -191,6 +191,8 @@ impl Protocol for RestconfProtocol {
             .request_only("RESTCONF answers each HTTP request; event streams are not offered")
             .answers_on_failure()
             .max_inbound_bytes(super::MAX_BODY)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

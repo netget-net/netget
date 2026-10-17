@@ -215,6 +215,10 @@ impl Protocol for MdnsClientProtocol {
             .implementation("mdns-sd crate for RFC 6762 and RFC 6763 compliance")
             .llm_control("Browse services, resolve hostnames, analyze service properties")
             .e2e_testing("Built-in macOS/Linux mDNS responders for testing")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

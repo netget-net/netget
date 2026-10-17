@@ -202,6 +202,10 @@ impl Protocol for NatsProtocol {
                  and nats-py complete create/publish/consume/ack/info/delete against it \
                  (tests/server/nats/jetstream_test.rs).",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

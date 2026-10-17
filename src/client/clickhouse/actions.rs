@@ -192,6 +192,8 @@ impl Protocol for ClickhouseClientProtocol {
             .e2e_testing("tests/client/clickhouse: NetGet's own server; the official ClickHouse server 24.8 as the independent peer")
             .notes("Result columns are decoded for integers, floats, Bool, String, Date, DateTime and Nullable of those; a result with another type ends the session, because its bytes cannot be skipped without knowing their layout. Strings are capped at 1 MiB, blocks at 16 MiB, 100000 rows. Use clickhouse_insert, not clickhouse_query, for INSERT.")
             .max_inbound_bytes(wire::MAX_BLOCK_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

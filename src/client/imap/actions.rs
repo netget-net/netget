@@ -320,6 +320,10 @@ impl Protocol for ImapClientProtocol {
             .implementation("async-imap library with TLS support")
             .llm_control("Full control over mailbox operations, search, and message management")
             .e2e_testing("Docker IMAP container or public test servers")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

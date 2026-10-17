@@ -450,6 +450,10 @@ impl Protocol for MbusProtocol {
                  with error status and no readings (decision=fail_closed_llm_error); a failed \
                  write or reset is not acknowledged.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

@@ -198,6 +198,8 @@ impl Protocol for OcppProtocol {
             .notes("No charging database or payload schema engine: Rust checks frame structure and the core actions' required fields; full JSON-schema validation is the peer's job. Plain ws:// (put TLS and security profiles in front). 64 KiB messages.")
             .answers_on_failure()
             .max_inbound_bytes(frame::MAX_MESSAGE_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

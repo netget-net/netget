@@ -215,6 +215,8 @@ impl Protocol for ThriftProtocol {
             .answers_on_failure()
             .max_inbound_bytes(super::codec::MAX_MESSAGE)
             .request_only("Thrift answers each call; the server pushes nothing")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

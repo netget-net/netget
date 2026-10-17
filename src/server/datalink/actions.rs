@@ -137,6 +137,8 @@ impl Protocol for DataLinkProtocol {
                  model are dropped with a counted WARN rather than queued, and packet_hex is \
                  the first 2048 bytes of the frame (packet_length is the true length).",
             )
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

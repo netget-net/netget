@@ -269,6 +269,10 @@ impl Protocol for FtpProtocol {
                  cannot complete against a real FTP client. No TLS. No E2E test.",
             )
             .max_inbound_bytes(crate::server::ftp::MAX_COMMAND_LINE)
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

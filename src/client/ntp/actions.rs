@@ -149,6 +149,10 @@ impl Protocol for NtpClientProtocol {
             .implementation("UDP-based NTP client with manual packet construction")
             .llm_control("Query time servers and interpret timestamps, stratum, precision")
             .e2e_testing("Public NTP servers (pool.ntp.org)")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

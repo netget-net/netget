@@ -125,6 +125,8 @@ impl Protocol for GopherProtocol {
                  protocol), TLS ('gophers'), binary transfers, and any filesystem serving.",
             )
             .max_inbound_bytes(crate::server::gopher::MAX_REQUEST_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

@@ -283,6 +283,10 @@ impl Protocol for OllamaClientProtocol {
                  responses at 8 MiB; the endpoint comes from remote_addr only and this \
                  protocol declares no startup parameters.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

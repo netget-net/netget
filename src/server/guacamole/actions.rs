@@ -356,6 +356,8 @@ impl Protocol for GuacamoleProtocol {
             .e2e_testing("tests/server/guacamole: pyguacamole and Apache's own guacamole-common (Java) complete the handshake, read the model's display and clipboard, type, click and send their clipboard; raw instructions for the bounds")
             .notes("NetGet is the remote desktop, not a gateway: it connects to no VNC/RDP/SSH server. Joining an existing connection ($id), audio, video, file transfer and multiple layers are not supported. Typing reaches the model a line at a time; mouse motion does not reach it at all. A model failure on connect refuses the connection (SERVER_ERROR); later failures are logged and the display stays as it was.")
             .max_inbound_bytes(wire::MAX_INSTRUCTION)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

@@ -362,6 +362,10 @@ impl Protocol for VncClientProtocol {
             .implementation("Custom RFB protocol implementation")
             .llm_control("Control mouse, keyboard, and screen updates")
             .e2e_testing("x11vnc or TigerVNC server")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

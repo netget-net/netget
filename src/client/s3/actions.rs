@@ -431,6 +431,10 @@ impl crate::llm::actions::protocol_trait::Protocol for S3ClientProtocol {
             .implementation("AWS SDK for Rust (aws-sdk-s3)")
             .llm_control("Full control over S3 operations (put, get, list, delete)")
             .e2e_testing("LocalStack, MinIO, or real AWS S3")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

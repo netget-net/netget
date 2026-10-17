@@ -893,6 +893,10 @@ impl Protocol for M3uaProtocol {
                  a routing key table is storage. No MTP3 network management (SSNM) is generated.",
             )
             .max_inbound_bytes(crate::server::m3ua::codec::MAX_MESSAGE_LEN)
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

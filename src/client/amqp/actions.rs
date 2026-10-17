@@ -206,6 +206,10 @@ impl Protocol for AmqpClientProtocol {
             .llm_control("Queue/exchange operations, message publishing/consuming")
             .e2e_testing("NetGet AMQP server or RabbitMQ")
             .notes("AMQP 0.9.1 client for RabbitMQ compatibility")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

@@ -372,6 +372,8 @@ impl Protocol for WebTransportProtocol {
             .notes("Streams are delivered whole (up to 1 MiB each, 30 s to finish); 32 streams and handler turns in flight per session; one handler turn at a time per session; follow-up chains stop at depth 4. No HTTP/3 requests other than WebTransport CONNECT, no session-level flow control capsules, no pooling of several sessions on one connection.")
             .answers_on_failure()
             .max_inbound_bytes(super::session::MAX_STREAM_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

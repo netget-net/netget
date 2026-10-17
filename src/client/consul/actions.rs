@@ -226,6 +226,8 @@ impl Protocol for ConsulClientProtocol {
             .llm_control("Which keys to read and write, which services to look up or register, and what to do with each answer")
             .e2e_testing("tests/client/consul: NetGet's own agent; the official consul agent (-dev), read back with the consul CLI")
             .notes("No blocking queries, sessions, ACL tokens or TLS. Answers are capped at 1 MiB. A handler chain stops after 8 follow-ups.")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

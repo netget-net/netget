@@ -393,6 +393,8 @@ impl Protocol for StratumV2ClientProtocol {
             .llm_control("When and how long to mine, what to submit, and which channels to open, update or close")
             .e2e_testing("tests/client/stratum_v2: SRI's pool_sv2 (sv2-apps v0.8.0) over Bitcoin Core 31.0 in regtest via IPC accepts NetGet's channel and shares; on regtest a share is a block, so the block Bitcoin Core accepts must have the exact hash NetGet computed")
             .notes("Experimental: one independent pool (SRI's) and its node agree with it; the extended-channel path is exercised only against NetGet's own pool. Mining is CPU-only, single-threaded and bounded per action (50M hashes); it exists to prove work, not to earn. No job declaration, no extensions. A handler chain stops after 8 follow-ups; frames over 256 KiB end the connection.")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

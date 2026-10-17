@@ -809,6 +809,8 @@ impl Protocol for ProfinetProtocol {
                  Connect refused with a PNIO error, record reads answered 'resource \
                  unavailable', writes refused, and inputs stay IOPS BAD.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

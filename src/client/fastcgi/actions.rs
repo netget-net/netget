@@ -209,6 +209,8 @@ impl Protocol for FastcgiClientProtocol {
             .e2e_testing("tests/client/fastcgi: flup 1.0.3 (independent WSGI FastCGI server) answers GET, POST, large and stderr-writing requests, GET_VALUES and an aborted slow request")
             .notes("Responder role only; one request at a time. Response output 1 MiB, stderr 64 KiB.")
             .max_inbound_bytes(record::MAX_BODY_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

@@ -591,6 +591,8 @@ impl Protocol for EppClientProtocol {
             .llm_control("Every command after the greeting and the configured login")
             .e2e_testing("tests/client/epp: a registry built on the Swedish Internet Foundation's epp-lib v0.2.0 (independent Go EPP server library) answers checks, creates, infos, renews and transfers")
             .notes("No extensions or poll. Handler-driven commands chain to depth 16.")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

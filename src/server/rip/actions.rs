@@ -60,6 +60,8 @@ impl Protocol for RipProtocol {
             .llm_control("Optional: which routes to advertise is a policy decision (LLM); with no policy configured the server stays silent with no LLM call")
             .e2e_testing("Manual RIP packet construction with route entries")
             .notes("Distance-vector routing protocol, 15 hop limit. A RIP response is NOT wire-determined — which routes to advertise (and their metrics, incl. 16=withdraw) is routing policy, like DNS/DHCP. So with no operator policy (no instruction, no handler) the server applies the spec-safe STATIC default of advertising nothing and answers with NO LLM round-trip; the LLM is consulted only when the operator supplies the routing policy. There is no mechanical RIP reply to synthesise (RIP has no Hello/keepalive machinery)")
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

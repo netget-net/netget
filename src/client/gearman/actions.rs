@@ -151,7 +151,9 @@ impl Protocol for GearmanClientProtocol {
         .llm_control("Priority/background job submission, status/echo/exceptions; selected worker ability registration, grab/grab_unique, sleep/noop and typed work outcomes")
         .e2e_testing("tests/client/gearman: independent gearmand plus gearman CLI producer/worker, NetGet submitter/server pair, framing/correlation/bounds/cancellation and mocked model")
         .notes("Plain TCP, UTF-8 outbound payloads; binary inbound payloads expose null text and exact byte count. No TLS/auth, admin, scheduled/reduce jobs, timed abilities, reconnect or persistent job storage. At most64 foreground jobs/assigned handles and64 abilities; frame body1MiB, partial-frame/write/request deadline15s, bounded queues16, followups4. Idle sleeping workers and jobs may wait; disconnect/removal cancels every owned task. NetGet server remains model-as-worker and refuses worker clients.")
-        .max_inbound_bytes(crate::server::gearman::wire::MAX_PACKET_BYTES).build()
+        .max_inbound_bytes(crate::server::gearman::wire::MAX_PACKET_BYTES).history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+        .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+        .build()
     }
     fn get_startup_examples(&self) -> crate::llm::actions::StartupExamples {
         let llm = json!({"type":"open_client","base_stack":"gearman","protocol":"gearman","remote_addr":"127.0.0.1:4730","instruction":"Submit reverse hello"});

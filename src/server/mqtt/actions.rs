@@ -917,6 +917,10 @@ impl Protocol for MqttProtocol {
                  lossy string with payload_is_text=false.",
             )
             .max_inbound_bytes(crate::server::mqtt::MAX_PACKET_SIZE_LIMIT)
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

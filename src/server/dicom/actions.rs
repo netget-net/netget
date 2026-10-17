@@ -209,6 +209,8 @@ impl Protocol for DicomProtocol {
             .answers_on_failure()
             .max_inbound_bytes(pdu::MAX_PDU as usize)
             .request_only("The SCP answers each DIMSE request on an association; it initiates no operation")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

@@ -177,6 +177,10 @@ impl Protocol for SmbProtocol {
                  share no state beyond the per-connection session, tree and handle tables: the \
                  model is the filesystem.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

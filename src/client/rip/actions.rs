@@ -170,6 +170,10 @@ impl Protocol for RipClientProtocol {
             .implementation("UDP socket with RIPv1/v2 packet parsing")
             .llm_control("Query routing tables, analyze routes")
             .e2e_testing("Mock RIP router or real router in test network")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

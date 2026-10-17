@@ -783,6 +783,10 @@ impl Protocol for VncProtocol {
                  button change is logged, not sent to the model. Each connection has its own \
                  framebuffer; the ClientInit shared flag is read and ignored.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

@@ -218,6 +218,10 @@ impl Protocol for SamlClientProtocol {
             .implementation("Custom SAML SP client with XML parsing")
             .llm_control("SSO initiation, assertion validation, attribute extraction")
             .e2e_testing("SAML test IdP or simplesamlphp")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

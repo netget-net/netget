@@ -220,6 +220,10 @@ impl Protocol for EtcdClientProtocol {
                 "Single-key get, put and delete only: no range or prefix reads, transactions, \
                  watches, leases, authentication or TLS.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

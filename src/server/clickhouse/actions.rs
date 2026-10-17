@@ -214,6 +214,8 @@ impl Protocol for ClickhouseProtocol {
             .request_only("Every packet answers the client's hello, ping or query")
             .answers_on_failure()
             .max_inbound_bytes(super::wire::MAX_BLOCK_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

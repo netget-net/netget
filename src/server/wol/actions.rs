@@ -167,6 +167,8 @@ impl Protocol for WolProtocol {
                  server emits is ever read by an independent implementation, so 'works against \
                  real clients' cannot be established here in the direction Beta means it",
             )
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

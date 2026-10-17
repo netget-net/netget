@@ -238,6 +238,8 @@ impl Protocol for NbdClientProtocol {
             .llm_control("Which ranges to read and describe, and when to disconnect")
             .e2e_testing("tests/client/nbd: nbdkit 1.48.1 (independent, C) serving its data plugin, with its error filter injecting EIO")
             .notes("Read-only client: no write, trim or zero commands. No TLS or extended headers. Reads up to 1 MiB.")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

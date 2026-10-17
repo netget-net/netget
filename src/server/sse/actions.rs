@@ -267,6 +267,8 @@ impl Protocol for SseProtocol {
             .notes("HTTP/1.1 only, no TLS, no request bodies (GET/HEAD); one request per connection. Request heads are capped at 16 KiB and 10 s; event data at 1 MiB.")
             .answers_on_failure()
             .max_inbound_bytes(super::MAX_REQUEST_HEAD_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

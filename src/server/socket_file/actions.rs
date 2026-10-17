@@ -144,6 +144,10 @@ impl Protocol for SocketFileProtocol {
                  peer is a local descriptor, so no independent third-party client exists and \
                  nothing here supports a rating above Experimental.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

@@ -972,6 +972,10 @@ impl Protocol for NatsClientProtocol {
                  advertises it: nats_js_api/publish/fetch/ack actions and typed reply events, \
                  driven against nats-server -js (tests/client/nats/jetstream_test.rs).",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

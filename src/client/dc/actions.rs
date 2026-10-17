@@ -375,6 +375,8 @@ impl Protocol for DcClientProtocol {
             .llm_control("Connect, authenticate, chat, search, user list management")
             .e2e_testing("Uses local DC server from src/server/dc/")
             .notes("NMDC protocol only (no ADC). No P2P file transfers. Hub interaction only. 64 KiB inbound pipe-delimited frames; 600 s whole-frame deadline; truncated frames are refused. Binary Lock/Key escaping follows NMDC.")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

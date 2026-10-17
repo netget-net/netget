@@ -79,7 +79,9 @@ impl Protocol for SoulseekPeerClientProtocol {
         EVENTS.clone()
     }
     fn metadata(&self) -> crate::protocol::ProtocolMetadataV2 {
-        crate::protocol::ProtocolMetadataV2::builder().state(crate::protocol::metadata::DevelopmentState::Experimental).implementation("Native bounded Soulseek Peer selected codec; TCP and optional implicit TLS").llm_control("Handler-supplied shared directory listings and user information").e2e_testing("Independent peer exchanges, malformed input, owner shutdown and standalone feature builds").notes("Selected Soulseek P connections with PeerInit, zlib share listings and user information. No F file transfer, D distributed search, picture uploads or obfuscation. 1 MiB decoded listing, 128 directories/files per collection. 256 connections, 30 s first frame, 600 s idle, 10 s handshake/exchange. No persistent protocol data; handlers supply content and decisions.").max_inbound_bytes(crate::server::soulseek_peer::codec::MAX_COMMAND).well_known_port(2234).build()
+        crate::protocol::ProtocolMetadataV2::builder().state(crate::protocol::metadata::DevelopmentState::Experimental).implementation("Native bounded Soulseek Peer selected codec; TCP and optional implicit TLS").llm_control("Handler-supplied shared directory listings and user information").e2e_testing("Independent peer exchanges, malformed input, owner shutdown and standalone feature builds").notes("Selected Soulseek P connections with PeerInit, zlib share listings and user information. No F file transfer, D distributed search, picture uploads or obfuscation. 1 MiB decoded listing, 128 directories/files per collection. 256 connections, 30 s first frame, 600 s idle, 10 s handshake/exchange. No persistent protocol data; handlers supply content and decisions.").max_inbound_bytes(crate::server::soulseek_peer::codec::MAX_COMMAND).well_known_port(2234).history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+        .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+        .build()
     }
 }
 impl Client for SoulseekPeerClientProtocol {

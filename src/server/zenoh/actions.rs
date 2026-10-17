@@ -283,6 +283,8 @@ impl Protocol for ZenohProtocol {
             .request_only("Zenoh traffic is not per connection: the handler publishes, deletes and queries in answer to samples and queries")
             .answers_on_failure()
             .max_inbound_bytes(super::node::MAX_PAYLOAD)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

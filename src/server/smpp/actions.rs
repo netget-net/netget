@@ -242,6 +242,8 @@ impl Protocol for SmppProtocol {
             .notes("Plain TCP, no TLS. Text is decoded for data_coding 0, 1, 3 and 8; other codings reach the handler as hex. Receipts and replies go only to sessions bound as receiver or transceiver, and receipts only when registered_delivery asked. PDUs are capped at 64 KiB of payload; the first PDU must be a bind within the idle timeout. A handler failure on a submit answers ESME_RSYSERR (ESME_RTHROTTLED when the backend is saturated), on a bind ESME_RBINDFAIL; nothing is ever accepted by default.")
             .request_only("Every response answers the ESME's PDU; receipts and replies follow a submit the handler accepted")
             .max_inbound_bytes(super::wire::MAX_PDU)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

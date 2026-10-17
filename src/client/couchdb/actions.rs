@@ -489,6 +489,10 @@ impl Protocol for CouchDbClientProtocol {
             .implementation("couch_rs library with LLM action control")
             .llm_control("Full control over CouchDB operations")
             .e2e_testing("NetGet CouchDB server")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

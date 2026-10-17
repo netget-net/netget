@@ -237,6 +237,8 @@ impl Protocol for FingerProtocol {
                  read: no passwd, no utmp, no .plan.",
             )
             .max_inbound_bytes(crate::server::finger::actions::MAX_QUERY_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

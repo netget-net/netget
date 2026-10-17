@@ -224,6 +224,10 @@ impl Protocol for MysqlClientProtocol {
                  model does not learn of the error. Text protocol only; no prepared \
                  statements.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

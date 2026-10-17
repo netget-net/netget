@@ -87,7 +87,9 @@ impl Protocol for FluentForwardProtocol {
             .implementation("Native bounded MessagePack/EventTime and gzip PackedForward via flate2")
             .llm_control("Explicit handlers process bounded batches; llm_fallback=false collects unmatched batches without model calls")
             .e2e_testing("Four carrier modes, correlated ACK and bounds/lifecycle tests; independent fluent-logger and official Fluentd peers")
-            .notes("256KiB frame/decompressed entries; 256 records, nesting depth 32, 16384 MessagePack values, tag 1024 bytes, 256 TCP peers, 30s absolute frame deadline. Typed JSON record values only. No secure-forward handshake, TLS, JSON convenience framing, UDP heartbeat, persistence, automatic retry or deduplication.").build()
+            .notes("256KiB frame/decompressed entries; 256 records, nesting depth 32, 16384 MessagePack values, tag 1024 bytes, 256 TCP peers, 30s absolute frame deadline. Typed JSON record values only. No secure-forward handshake, TLS, JSON convenience framing, UDP heartbeat, persistence, automatic retry or deduplication.").history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            .build()
     }
     fn get_startup_parameters(&self) -> Vec<ParameterDefinition> {
         vec![ParameterDefinition { name: "llm_fallback".into(), type_hint: "boolean".into(), description: "Opt unmatched event batches into model reasoning. False collects without model calls. Configured static/script/manual/LLM handlers always run.".into(), required: false, example: json!(true), default: Some(json!(DEFAULT_LLM_FALLBACK)) }]

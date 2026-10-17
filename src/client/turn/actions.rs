@@ -337,6 +337,10 @@ impl Protocol for TurnClientProtocol {
                  untrusted network. UDP allocations only: no TCP, no TLS, no ChannelBind, and \
                  no automatic refresh — the model must refresh before the lifetime expires.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

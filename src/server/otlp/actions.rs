@@ -155,6 +155,8 @@ impl Protocol for OtlpProtocol {
             // with a fixed google.rpc.Status message. Never an invented 200.
             .answers_on_failure()
             .request_only("OTLP HTTP/gRPC exports are request/response; a receiver cannot send an exporter anything unprompted")
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

@@ -208,6 +208,10 @@ impl Protocol for IgmpClientProtocol {
             .llm_control("Join/leave multicast groups, send/receive multicast data")
             .e2e_testing("UDP sender/receiver for multicast packets")
             .notes("IPv4 multicast only, uses socket options (no raw IGMP)")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

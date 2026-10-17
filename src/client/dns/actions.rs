@@ -387,6 +387,10 @@ impl Protocol for DnsClientProtocol {
                  signatures itself. A transfer stops past 100,000 records or 60 s, and the \
                  model is shown the first 200 records with the count. No TSIG.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

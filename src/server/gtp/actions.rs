@@ -379,6 +379,8 @@ impl Protocol for GtpProtocol {
                  source of any kind",
             )
             .max_inbound_bytes(crate::server::gtp::codec::MAX_GPDU_PAYLOAD_LEN)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

@@ -153,6 +153,10 @@ impl Protocol for FtpClientProtocol {
             .implementation("Tokio TcpStream with line-based FTP protocol")
             .llm_control("Full control over FTP commands")
             .e2e_testing("Local FTP server (vsftpd, netget FTP server)")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

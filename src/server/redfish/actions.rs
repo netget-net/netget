@@ -215,6 +215,8 @@ impl Protocol for RedfishProtocol {
             .request_only("Redfish answers each HTTP request; event subscriptions are not offered")
             .answers_on_failure()
             .max_inbound_bytes(model::MAX_BODY_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

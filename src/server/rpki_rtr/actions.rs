@@ -193,6 +193,8 @@ impl Protocol for RpkiRtrProtocol {
             .notes("No RPKI repository, validation engine or VRP store: the handler supplies data (persist with memory or SQLite). Plain TCP only (no SSH/TLS transports). IPv4/IPv6 prefix PDUs; Router Key and ASPA PDUs are not served. A router speaking a version above 1 is told Unsupported Protocol Version. 4096 records per answer, 4096-byte PDUs, 256 connections.")
             .answers_on_failure()
             .max_inbound_bytes(codec::MAX_PDU_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

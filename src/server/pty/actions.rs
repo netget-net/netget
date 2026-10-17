@@ -113,6 +113,10 @@ impl Protocol for PtyProtocol {
                  the exact byte stream. Validated against a std::fs client opening the slave \
                  device, not NetGet-against-NetGet.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

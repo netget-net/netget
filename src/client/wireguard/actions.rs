@@ -149,6 +149,10 @@ impl Protocol for WireguardClientProtocol {
             .e2e_testing("WireGuard server for client connections")
             .privilege_requirement(PrivilegeRequirement::Root)
             .notes("Requires root/CAP_NET_ADMIN on Linux, userspace on macOS")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

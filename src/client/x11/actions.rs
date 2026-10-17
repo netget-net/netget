@@ -497,6 +497,8 @@ impl Protocol for X11ClientProtocol {
             .e2e_testing("tests/client/x11: Xvfb (the X.Org server) as the real peer, every effect read back with xprop and xwininfo; an in-test X server for the bounds and refusals")
             .notes("No drawing, fonts, input injection or extensions beyond listing them. Replies and generic events are bounded at 1 MiB, properties at 64 KiB each way. Windows belong to the connection: the server destroys them when the client disconnects.")
             .max_inbound_bytes(super::wire::MAX_REPLY_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

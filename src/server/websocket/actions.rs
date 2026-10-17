@@ -813,6 +813,10 @@ impl Protocol for WebSocketProtocol {
                  handlers for deterministic endpoints.",
             )
             .max_inbound_bytes(crate::server::websocket::MAX_SIZE_LIMIT)
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

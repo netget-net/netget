@@ -334,6 +334,8 @@ impl Protocol for GrpcClientProtocol {
             .llm_control("Typed request/response fields and owned start/send/input-half-close/cancel controls; bounded input-ready events report queue availability")
             .e2e_testing("Mandatory generated grpcio1.75.1 peer and NetGet pair in tests/client/grpc/streaming_test.rs; reflection, stream shapes, gzip, TLS verification, cancellation, deadlines and bounded parked handlers. Legacy unary checks are retained.")
             .notes("Experimental expanded scope. Streaming bytes fields and binary metadata are excluded; legacy unary bytes behavior is preserved. One endpoint, no automatic reconnect or streaming retry, no mTLS.")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

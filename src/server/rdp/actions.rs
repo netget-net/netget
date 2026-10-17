@@ -86,6 +86,8 @@ impl Protocol for RdpProtocol {
                  test past negotiation; correctness is pinned against RFC-derived literal bytes.",
             )
             .max_inbound_bytes(crate::server::rdp::MAX_X224_LEN)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

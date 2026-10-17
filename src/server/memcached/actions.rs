@@ -515,6 +515,10 @@ impl Protocol for MemcachedProtocol {
                  one LLM call; `noreply` is honoured, so a noreply store still costs a call \
                  but sends nothing.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

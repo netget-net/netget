@@ -102,6 +102,8 @@ impl Protocol for BitcoinProtocol {
                 .e2e_testing("tests/server/bitcoin/{e2e_test,peer_inject_test}.rs, 17 LLM calls, none #[ignore]d. The peer is a raw TcpStream; the `bitcoin` crate encodes and decodes the messages on the test's side, which makes it a **codec, not a peer completing a session** - the same situation as dhcp's in-test RFC 2131 decoder, and why this is not Beta. No bitcoind, no third-party node. This field read 'Bitcoin P2P client (TBD)'. Covered: version/verack handshake, ping/pong, getaddr, a testnet magic check, and the dashboard's injected message and disconnect. Not tested: a real Bitcoin node, block or transaction relay, anything past the handshake.")
                 .notes("Not a real full node - LLM controls all responses. Supports mainnet/testnet/signet/regtest; an unrecognised network name is now an error rather than silently answering on mainnet. Stores nothing: no chain, no mempool, no peer database. Message framing is bounded (24-byte header validated before the length field is trusted, 4 MB body cap matching Bitcoin Core), and the `bitcoin` crate's consensus decoding caps its own var-int-counted allocations.")
                 .max_inbound_bytes(crate::server::bitcoin::MAX_MESSAGE_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

@@ -290,6 +290,8 @@ impl Protocol for Amqp1Protocol {
             .notes("Addresses are topics: a message reaches the receivers attached when it is accepted (a receiver without credit holds 1000). No durable storage, transactions, link recovery, filters or AMQP over WebSocket. Separate from the AMQP 0-9-1 `amqp` feature.")
             .answers_on_failure()
             .max_inbound_bytes(super::frame::MAX_FRAME as usize)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

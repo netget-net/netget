@@ -200,6 +200,10 @@ impl Protocol for NostrProtocol {
             )
             .max_inbound_bytes(wire::MAX_MESSAGE_BYTES)
             .answers_on_failure()
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

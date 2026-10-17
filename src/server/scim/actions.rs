@@ -168,6 +168,8 @@ impl Protocol for ScimProtocol {
             .request_only("SCIM answers each HTTP request; nothing is pushed")
             .answers_on_failure()
             .max_inbound_bytes(model_bounds::MAX_BODY_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

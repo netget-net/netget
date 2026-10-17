@@ -561,6 +561,8 @@ impl Protocol for OnvifProtocol {
             .request_only("Every message answers a client's HTTP request")
             .answers_on_failure()
             .max_inbound_bytes(super::wire::MAX_REQUEST)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

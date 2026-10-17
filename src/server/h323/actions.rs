@@ -648,6 +648,8 @@ impl Protocol for H323GatekeeperProtocol {
                  signalling). No H.235 security: tokens are decoded past by length and never \
                  checked. No alternate gatekeepers, no inter-gatekeeper LRQ forwarding.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 
@@ -1203,6 +1205,10 @@ impl Protocol for H323EndpointProtocol {
                  negotiated). G.711 only. No media is sent and none is decoded. No H.235 \
                  security, no H.450 supplementary services, no overlap sending.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

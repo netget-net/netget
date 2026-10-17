@@ -211,6 +211,8 @@ impl Protocol for M3uaClientProtocol {
             .e2e_testing("tests/client/m3ua: Restcomm jSS7 8.0.112 as SGW over real SCTP on Linux answers the model's MAP and CAP dialogues, and osmo-stp routes them; a canned SGP over the lab transport for bounds and wiring")
             .notes("Experimental: one independent family of MAP/CAP peer (jSS7), runnable only where SCTP exists. No segmentation, no global title translation, no MAP v1 origination, no sendAuthenticationInfo or insertSubscriberData. Handler chains stop after the follow-up depth bound.")
             .max_inbound_bytes(codec::MAX_MESSAGE_LEN)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {
