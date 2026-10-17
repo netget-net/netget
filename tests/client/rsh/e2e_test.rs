@@ -3,7 +3,7 @@
 //! answer to an urgent request), and against NetGet's own servers as a regression (the handler
 //! chain and its depth bound, injected actions). No LLM: python handlers play the model. The
 //! independent servers are in `real_server_test.rs`.
-use super::server_support::{self as server, REXEC_POLICY, RSH_POLICY};
+use super::server_support::{self as server, non_loopback_address, REXEC_POLICY, RSH_POLICY};
 use netget::cli::management::ClientForm;
 use netget::state::app_state::AppState;
 use netget::state::client_handles::ClientSendOutcome;
@@ -150,19 +150,6 @@ async fn rsh_client_runs_the_models_command_with_a_stderr_connection() {
     );
 }
 
-/// This host's address on its default route: something that is not loopback, for a
-/// connection that must not be mistaken for the server's. No packet is sent.
-fn non_loopback_address() -> std::net::IpAddr {
-    let probe = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
-    probe.connect("192.0.2.1:9").unwrap();
-    let ip = probe.local_addr().unwrap().ip();
-    assert!(
-        !ip.is_loopback() && !ip.is_unspecified(),
-        "this test needs a non-loopback address (a default route); found {ip}"
-    );
-    ip
-}
-
 /// The stderr listener takes only the server's own address: a connection from anywhere else
 /// is dropped unread, and the server's own is the one whose bytes become stderr.
 #[tokio::test]
@@ -178,7 +165,10 @@ async fn rsh_client_ignores_a_stderr_connection_from_another_address() {
     .unwrap();
     let (mut main, from) = rshd.accept().await.unwrap();
     let fields = read_fields(&mut main, 4).await;
-    let port: u16 = String::from_utf8(fields[0].clone()).unwrap().parse().unwrap();
+    let port: u16 = String::from_utf8(fields[0].clone())
+        .unwrap()
+        .parse()
+        .unwrap();
     let intruder_socket = tokio::net::TcpSocket::new_v4().unwrap();
     intruder_socket
         .bind(std::net::SocketAddr::new(non_loopback_address(), 0))

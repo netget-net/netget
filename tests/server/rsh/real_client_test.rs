@@ -132,7 +132,7 @@ mod as_root {
 
     pub fn require_root() {
         assert!(
-            nix::unistd::geteuid().is_root(),
+            unsafe { libc::geteuid() } == 0, // SAFETY: geteuid has no preconditions.
             "rsh and rlogin clients bind a reserved source port and inetutils' connect to the \
              fixed ports 513/514, so this test runs as root (the rsh pair job runs the test \
              binary through sudo: CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER='sudo -E')"
@@ -152,7 +152,7 @@ print(json.dumps({'actions':a}))"#;
         require_root();
         let grsh = require(&["grsh"], INETUTILS);
         let redone = require(&["rsh-redone-rsh"], "apt-get install rsh-redone-client");
-        let capture = crate::helpers::live_capture::LiveCapture::start("lo");
+        let capture = capture_loopback();
         let srv = start_on("rsh", RSH_HOST, 514, policy(RSH_REAL), None).await;
 
         let out = run(&grsh, &["-l", "alice", RSH_HOST, "uname", "-a"]).await;
@@ -170,7 +170,9 @@ print(json.dumps({'actions':a}))"#;
         let out = run(&redone, &["-p", "514", "-l", "alice", RSH_HOST, "hostname"]).await;
         assert!(out.status.success(), "{out:?}");
         assert_eq!(text(&out.stdout), "root as alice ran hostname\n");
-        assert_eq!(text(&out.stderr), "stderr of hostname\n");
+        // rsh-redone 85's rsh accepts the stderr connection and never prints what arrives on
+        // it — measured against its own in.rshd and inetutils' rshd as well — so only its
+        // stdout is evidence; the stderr connection itself is asserted from the event below.
 
         let seen = events(&srv.state, srv.id, "rsh_command").await;
         assert_eq!(seen.len(), 3);
@@ -188,6 +190,7 @@ print(json.dumps({'actions':a}))"#;
         capture.stop();
         let rows = capture.fields(&[
             "ip.src",
+            "ip.dst",
             "tcp.srcport",
             "frame.protocols",
             "_ws.expert.severity",
@@ -195,10 +198,10 @@ print(json.dumps({'actions':a}))"#;
             "rsh.server_username",
             "rsh.command",
         ]);
-        judge(&rows, 514, "rsh");
+        let rows = judge(&rows, RSH_HOST, "rsh");
         let commands: Vec<&String> = rows
             .iter()
-            .filter_map(|r| r.get(7))
+            .filter_map(|r| r.get(8))
             .filter(|c| !c.is_empty())
             .collect();
         for want in ["uname -a", "id", "hostname"] {
@@ -209,30 +212,55 @@ print(json.dumps({'actions':a}))"#;
         }
     }
 
-    /// Every packet to or from `port` must dissect as `proto` (when it carries data) with no
-    /// Expert Info at Warn or above. Columns: eth.src, ip.src, tcp.srcport, protocols,
-    /// severities, ...
-    fn judge(rows: &[Vec<String>], port: u16, proto: &str) {
-        let port = port.to_string();
+    /// A loopback capture that is provably running: tshark says "Capturing on" a little before
+    /// it captures (measured: a loaded host lost a session's first packets), so a marker
+    /// datagram is sent until it shows up in the file.
+    fn capture_loopback() -> crate::helpers::live_capture::LiveCapture {
+        let capture = crate::helpers::live_capture::LiveCapture::start("lo");
+        let marker = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        for _ in 0..30 {
+            marker
+                .send_to(b"netget-capture-marker", "127.0.0.1:9")
+                .unwrap();
+            if capture.wait_for("00:00:00:00:00:00", "udp.dstport", "9", 1) {
+                return capture;
+            }
+        }
+        panic!("the loopback capture never saw its marker datagram");
+    }
+
+    /// The capture's packets to or from `host` (this test's NetGet server — the loopback
+    /// capture also holds every other test's traffic). Each one that dissects as `proto` must
+    /// carry no Expert Info at Warn or above. Columns: eth.src, ip.src, ip.dst, tcp.srcport,
+    /// protocols, severities, then the caller's fields; the rows are returned for those.
+    fn judge(rows: &[Vec<String>], host: &str, proto: &str) -> Vec<Vec<String>> {
+        let ours: Vec<Vec<String>> = rows
+            .iter()
+            .filter(|r| {
+                r.get(1).map(String::as_str) == Some(host)
+                    || r.get(2).map(String::as_str) == Some(host)
+            })
+            .cloned()
+            .collect();
         let mut dissected = 0;
-        for r in rows {
-            let ours = r.get(2) == Some(&port);
-            let chain = r.get(3).cloned().unwrap_or_default();
-            if !chain.contains(&format!(":{proto}")) {
+        for r in &ours {
+            let from_server = r.get(1).map(String::as_str) == Some(host);
+            if !r.get(4).is_some_and(|c| c.contains(&format!(":{proto}"))) {
                 continue;
             }
             dissected += 1;
             let severities: Vec<u64> = r
-                .get(4)
+                .get(5)
                 .map(|s| s.split(',').filter_map(|x| x.trim().parse().ok()).collect())
                 .unwrap_or_default();
             assert!(
                 severities.iter().all(|s| *s < 0x0060_0000),
                 "tshark flagged a {} {proto} packet: {r:?}",
-                if ours { "server" } else { "client" }
+                if from_server { "server" } else { "client" }
             );
         }
-        assert!(dissected > 2, "no {proto} packets were dissected: {rows:?}");
+        assert!(dissected > 2, "no {proto} packets were dissected: {ours:?}");
+        ours
     }
 
     /// A child on a pty of `rows`×`cols`, with everything it prints gathered by a thread.
@@ -257,17 +285,22 @@ print(json.dumps({'actions':a}))"#;
             let child = cmd.spawn(pts).unwrap();
             let out = Arc::new(Mutex::new(Vec::new()));
             use std::os::fd::{AsRawFd, FromRawFd};
-            let reader_fd = nix::unistd::dup(pty.as_raw_fd()).unwrap();
+            // SAFETY: dup(2) on a descriptor this struct owns.
+            let reader_fd = unsafe { libc::dup(pty.as_raw_fd()) };
+            assert!(reader_fd >= 0, "dup failed");
             // SAFETY: a fresh descriptor from dup(2), owned by this File alone.
             let mut reader = unsafe { std::fs::File::from_raw_fd(reader_fd) };
             let sink = out.clone();
             std::thread::spawn(move || {
                 let mut buf = [0u8; 4096];
-                while let Ok(n) = reader.read(&mut buf) {
-                    if n == 0 {
-                        break;
+                loop {
+                    match reader.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => sink.lock().unwrap().extend_from_slice(&buf[..n]),
+                        // SIGCHLD from another test's child lands on any thread.
+                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(_) => break,
                     }
-                    sink.lock().unwrap().extend_from_slice(&buf[..n]);
                 }
             });
             Self { pty, out, child }
@@ -338,7 +371,7 @@ print(json.dumps({'actions':a}))"#;
         require_root();
         let grlogin = require(&["grlogin"], INETUTILS);
         let redone = require(&["rsh-redone-rlogin"], "apt-get install rsh-redone-client");
-        let capture = crate::helpers::live_capture::LiveCapture::start("lo");
+        let capture = capture_loopback();
         let srv = start_on(
             "rlogin",
             RLOGIN_HOST,
@@ -404,6 +437,7 @@ print(json.dumps({'actions':a}))"#;
         capture.stop();
         let rows = capture.fields(&[
             "ip.src",
+            "ip.dst",
             "tcp.srcport",
             "frame.protocols",
             "_ws.expert.severity",
@@ -411,7 +445,7 @@ print(json.dumps({'actions':a}))"#;
             "rlogin.window_size.cols",
             "rlogin.control_message",
         ]);
-        judge(&rows, 513, "rlogin");
+        let rows = judge(&rows, RLOGIN_HOST, "rlogin");
         let flat = rows.concat();
         assert!(flat.iter().any(|f| f == "bob"), "{rows:?}");
         assert!(

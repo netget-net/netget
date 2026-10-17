@@ -14,7 +14,13 @@ No connection stays open: `connect` validates the parameters, raises `<p>_connec
    for rsh when possible (rshd requires it), whose port is the first field;
 3. every field sent at once (works with servers that connect back before reading the rest and
    with those that read everything first);
-4. the status byte; on `\1` the refusal line (≤ 1 KiB);
+4. the status byte; on `\1` the refusal line (≤ 1 KiB). **inetutils rexecd 2.8 puts the go-ahead
+   byte on the stderr connection** when there is one (it points standard error at that
+   connection, then writes the byte to standard error), so the main stream starts with the
+   output. For rexec with a stderr connection, a main stream that opens with anything but
+   `\0`/`\1` (or ends at once) sends the client to the stderr connection for the byte, and the
+   main stream's first byte is kept as output — measured against rexecd in the real-server
+   suite;
 5. accept the stderr connection — only from the server's address (or loopback when the server
    is on loopback: a daemon's connect-back from `INADDR_ANY` leaves from 127.0.0.1 even when the
    client dialled another 127/8 address);
@@ -22,7 +28,9 @@ No connection stays open: `connect` validates the parameters, raises `<p>_connec
    the whole command at 60 s.
 
 The result event carries stdout, stderr, `accepted`, the refusal `error`, `truncated`, the source
-port and whether it was reserved. A stock rshd refuses a non-reserved source port; the connected
+port and whether it was reserved. rsh-redone's in.rshd sends the go-ahead byte *before* PAM
+decides, so its refusal arrives as `accepted: true` with "Authentication failure" as stdout —
+that is what the server said, and the event reports it as such. A stock rshd refuses a non-reserved source port; the connected
 event's `reserved_ports` says in advance whether this process can bind one, and a warning is
 logged for every command sent from an ordinary port.
 

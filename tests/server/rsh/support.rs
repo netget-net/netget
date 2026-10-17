@@ -197,6 +197,19 @@ pub fn nul_fields(fields: &[&[u8]]) -> Vec<u8> {
     out
 }
 
+/// This host's address on its default route: something that is not loopback, for a peer that
+/// must be told apart from one on 127.0.0.1. No packet is sent.
+pub fn non_loopback_address() -> std::net::IpAddr {
+    let probe = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
+    probe.connect("192.0.2.1:9").unwrap();
+    let ip = probe.local_addr().unwrap().ip();
+    assert!(
+        !ip.is_loopback() && !ip.is_unspecified(),
+        "this test needs a non-loopback address (a default route); found {ip}"
+    );
+    ip
+}
+
 // Blocking versions, for rlogin: its peer reads urgent data, and a tokio stream on macOS can
 // miss the wake-up for data that follows an urgent byte.
 
@@ -225,6 +238,8 @@ pub fn b_read_until(s: &mut std::net::TcpStream, out: &mut Vec<u8>, needle: &[u8
         }
         s.set_read_timeout(Some(left)).unwrap();
         match s.read(&mut buf) {
+            // A child of another test exiting delivers SIGCHLD to whichever thread it likes.
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Ok(0) | Err(_) => return false,
             Ok(n) => out.extend_from_slice(&buf[..n]),
         }

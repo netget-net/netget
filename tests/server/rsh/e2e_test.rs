@@ -136,17 +136,20 @@ async fn an_unreachable_stderr_port_refuses_the_request() {
 }
 
 /// The stderr connection goes to the address the request came from, never the server's own
-/// or anyone else's: a decoy on 127.0.0.1 at the same port must stay untouched while the
-/// client, on 127.0.0.2, gets it. Linux only, where all of 127/8 is loopback.
-#[cfg(target_os = "linux")]
+/// or anyone else's: the client connects to the server on 127.0.0.1 *from* this host's
+/// non-loopback address, listens for stderr there, and a decoy on 127.0.0.1 at the same port
+/// — where the server itself is — must stay untouched.
 #[tokio::test]
 async fn the_stderr_connection_goes_only_to_the_clients_own_address() {
     let srv = start("rsh", policy(RSH_POLICY), None).await;
-    let real = TcpListener::bind("127.0.0.2:0").await.unwrap();
+    let client_ip = non_loopback_address();
+    let real = TcpListener::bind((client_ip, 0)).await.unwrap();
     let port = real.local_addr().unwrap().port();
     let decoy = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
     let socket = tokio::net::TcpSocket::new_v4().unwrap();
-    socket.bind("127.0.0.2:0".parse().unwrap()).unwrap();
+    socket
+        .bind(std::net::SocketAddr::new(client_ip, 0))
+        .unwrap();
     let mut main = socket
         .connect(format!("127.0.0.1:{}", srv.port).parse().unwrap())
         .await
@@ -160,11 +163,10 @@ async fn the_stderr_connection_goes_only_to_the_clients_own_address() {
     ]))
     .await
     .unwrap();
-    let (mut err, from) = tokio::time::timeout(Duration::from_secs(10), real.accept())
+    let (mut err, _) = tokio::time::timeout(Duration::from_secs(10), real.accept())
         .await
         .expect("the client's own address is connected")
         .unwrap();
-    assert_eq!(from.ip().to_string(), "127.0.0.1");
     let out = read_to_end(&mut main).await;
     assert_eq!(out, b"\0ran pwd\n");
     let mut stderr = Vec::new();
@@ -178,7 +180,7 @@ async fn the_stderr_connection_goes_only_to_the_clients_own_address() {
     );
     assert_eq!(
         events(&srv.state, srv.id, "rsh_command").await[0]["client_address"],
-        "127.0.0.2"
+        client_ip.to_string()
     );
 }
 

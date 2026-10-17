@@ -282,8 +282,10 @@ async fn session(
                 }
             }
         }
-        if raise && (!pending.is_empty() || closed || !control.is_empty()) {
+        if raise {
             flush_at = None;
+        }
+        if raise && (!pending.is_empty() || closed || !control.is_empty()) {
             let data = super::text(&std::mem::take(&mut pending));
             let mut event = json!({"data": data, "closed": closed});
             if !control.is_empty() {

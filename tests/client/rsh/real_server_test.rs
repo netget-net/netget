@@ -54,7 +54,7 @@ fn require_daemon(names: &[&str], install: &str) -> PathBuf {
 
 fn require_root() {
     assert!(
-        nix::unistd::geteuid().is_root(),
+        unsafe { libc::geteuid() } == 0, // SAFETY: geteuid has no preconditions.
         "the r-service daemons and a reserved source port need root: the rsh pair job runs \
          this binary through sudo"
     );
@@ -152,9 +152,19 @@ async fn rsh_against(daemon: &PathBuf, args: &[&str]) {
     .await
     .unwrap();
     let r = wait_event(&state, id, "rsh_result", 0).await;
-    assert_eq!(r["accepted"], false, "{r}");
-    assert!(!r["error"].as_str().unwrap_or_default().is_empty(), "{r}");
-    assert_eq!(r["stdout"], "");
+    assert!(
+        !r["stdout"].as_str().unwrap_or_default().contains("out-42"),
+        "the command ran for an untrusted user: {r}"
+    );
+    // inetutils rshd refuses with the error byte; rsh-redone's in.rshd sends the go-ahead
+    // byte first and then PAM's message, so the refusal is in what it printed.
+    let said = format!("{} {}", r["error"], r["stdout"]);
+    assert!(
+        r["accepted"] == false && !r["error"].as_str().unwrap_or_default().is_empty()
+            || said.contains("Authentication failure")
+            || said.contains("Permission denied"),
+        "{r}"
+    );
 }
 
 #[tokio::test]

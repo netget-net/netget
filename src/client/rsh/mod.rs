@@ -93,16 +93,18 @@ pub async fn resolve(remote: &str) -> Result<SocketAddr> {
         .with_context(|| format!("{remote} resolves to no address"))
 }
 
-/// Whether this process may bind a reserved port at all. Tries a handful, as a probe.
+/// Whether this process may bind a reserved port at all: the first port that binds says yes,
+/// permission denied says no, and a port in use (other connections hold them) says nothing.
 pub fn reserved_ports_available() -> bool {
-    for port in (wire::RESERVED_HIGH - 8..=wire::RESERVED_HIGH).rev() {
+    for port in (wire::RESERVED_LOW..=wire::RESERVED_HIGH).rev() {
         match std::net::TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, port)) {
             Ok(_) => return true,
             Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => return false,
             Err(_) => continue,
         }
     }
-    false
+    // Every one is held by another socket, which an unprivileged process could not have done.
+    true
 }
 
 /// What one command produced.
@@ -175,39 +177,29 @@ pub async fn run_command(
     .await?;
 
     // The status byte, then (refused) the line after it.
+    //
+    // inetutils rexecd 2.8, asked for a stderr connection, points its standard error at that
+    // connection and *then* writes the status byte to standard error, so the byte arrives on
+    // the stderr connection and the main one starts with the command's output (inetutils' own
+    // rexec copes by stripping a leading \0 or \1 from whichever stream has it). For rexec
+    // with a stderr connection, a main stream that opens with anything else, or ends at
+    // once, sends this client to the stderr connection for the status byte.
     let mut status = [0u8; 1];
     let got = tokio::time::timeout(CONNECT_TIMEOUT, r.read(&mut status))
         .await
         .context("the server sent no status byte within 10 s")??;
-    if got == 0 {
-        bail!("the server closed the connection without answering");
-    }
-    match status[0] {
-        wire::STATUS_OK => outcome.accepted = true,
-        wire::STATUS_ERROR => {
-            let mut line = Vec::new();
-            let _ = tokio::time::timeout(CONNECT_TIMEOUT, async {
-                let mut buf = [0u8; 256];
-                loop {
-                    if let Some(text) = wire::refusal_line(&line, false) {
-                        return text;
-                    }
-                    match r.read(&mut buf).await {
-                        Ok(0) | Err(_) => {
-                            return wire::refusal_line(&line, true).unwrap_or_default()
-                        }
-                        Ok(n) => line.extend_from_slice(&buf[..n]),
-                    }
-                }
-            })
-            .await
-            .map(|text| outcome.error = Some(text));
-            if outcome.error.is_none() {
-                outcome.error = Some(String::new());
-            }
+    let status_on_stderr = service == Service::Rexec && listener.is_some();
+    let mut first_stdout: Option<u8> = None;
+    match (got, status[0]) {
+        (0, _) if status_on_stderr => {}
+        (0, _) => bail!("the server closed the connection without answering"),
+        (_, wire::STATUS_OK) => outcome.accepted = true,
+        (_, wire::STATUS_ERROR) => {
+            outcome.error = Some(refusal_from(&mut r).await);
             return Ok(outcome);
         }
-        other => bail!("not an r-service answer: status byte 0x{other:02x}"),
+        (_, other) if status_on_stderr => first_stdout = Some(other),
+        (_, other) => bail!("not an r-service answer: status byte 0x{other:02x}"),
     }
 
     // The server opened the stderr connection before it answered; accept it, from the
@@ -233,12 +225,31 @@ pub async fn run_command(
             }
         }
     }
+    if !outcome.accepted {
+        // The status byte did not come on the main connection: it must open the stderr one.
+        let Some(err) = err_stream.as_mut() else {
+            bail!("the server sent no status byte and no stderr connection");
+        };
+        let mut byte = [0u8; 1];
+        let got = tokio::time::timeout(CONNECT_TIMEOUT, err.read(&mut byte))
+            .await
+            .context("the server sent no status byte within 10 s")??;
+        match (got, byte[0]) {
+            (1, wire::STATUS_OK) => outcome.accepted = true,
+            (1, wire::STATUS_ERROR) => {
+                outcome.error = Some(refusal_from(err).await);
+                return Ok(outcome);
+            }
+            (0, _) => bail!("the server closed the connection without answering"),
+            (_, other) => bail!("not an r-service answer: status byte 0x{other:02x}"),
+        }
+    }
 
     if let Some(text) = stdin {
         w.write_all(text.as_bytes()).await?;
     }
     let _ = w.shutdown().await;
-    let mut stdout = Vec::new();
+    let mut stdout: Vec<u8> = first_stdout.into_iter().collect();
     let mut stderr = Vec::new();
     let read_all = async {
         let out = collect(&mut r, &mut stdout);
@@ -264,6 +275,26 @@ pub async fn run_command(
     outcome.stdout = stdout;
     outcome.stderr = stderr;
     Ok(outcome)
+}
+
+/// The refusal line after a `\1`: up to a newline, at most [`wire::MAX_ERROR_LINE`] bytes,
+/// within [`CONNECT_TIMEOUT`].
+async fn refusal_from<R: AsyncRead + Unpin>(r: &mut R) -> String {
+    let mut line = Vec::new();
+    let read = tokio::time::timeout(CONNECT_TIMEOUT, async {
+        let mut buf = [0u8; 256];
+        loop {
+            if let Some(text) = wire::refusal_line(&line, false) {
+                return text;
+            }
+            match r.read(&mut buf).await {
+                Ok(0) | Err(_) => return wire::refusal_line(&line, true).unwrap_or_default(),
+                Ok(n) => line.extend_from_slice(&buf[..n]),
+            }
+        }
+    })
+    .await;
+    read.unwrap_or_else(|_| wire::refusal_line(&line, true).unwrap_or_default())
 }
 
 /// An rsh or rexec client: ready at once, then one connection per command.
