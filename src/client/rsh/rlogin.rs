@@ -181,7 +181,7 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
 #[allow(clippy::too_many_arguments)]
 async fn session(
     ctx: &ConnectContext,
-    mut r: OwnedReadHalf,
+    r: OwnedReadHalf,
     mut w: OwnedWriteHalf,
     mut window: wire::WindowSize,
     mut external: mpsc::Receiver<ClientCommand>,
