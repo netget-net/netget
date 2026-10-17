@@ -301,6 +301,9 @@ impl Protocol for RloginProtocol {
             .notes(concat!("Experimental: two client families (inetutils and rsh-redone), exercised only as root on Linux, and the pair job had not run in CI when it landed. NetGet does not refuse a non-reserved source port, it reports it. A model that fails at login is refused with \\1 and a fixed line; one that fails mid-session prints a one-line notice and the session stays open; a wrong password three times closes it. No pty: line editing is NetGet's, so full-screen programs cannot be played. Bounds: handshake fields ≤ 256 bytes (terminal ≤ 64) within 60 s, lines ≤ 8 KiB, 300 s for the first line and 600 s between lines, ≤ 256 connections. ", crate::r_services_security!()))
             .answers_on_failure()
             .max_inbound_bytes(wire::MAX_LINE_BYTES)
+            // rlogin is an interactive login: each line is read against the session so far.
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {
