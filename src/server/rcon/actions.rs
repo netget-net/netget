@@ -170,7 +170,11 @@ impl Protocol for RconProtocol {
             .request_only("RCON answers each packet the client sends; the server never speaks first")
             .max_inbound_bytes(super::wire::MAX_PACKET)
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // Supported, off by default: pipelined commands share one call, but each owes its
+            // own output under its own request id and `rcon_response` names no command, so a
+            // batch is answered only with exactly one response per command, in order, and the
+            // connection closes otherwise (`answer_batch` in mod.rs).
+            .batching(crate::protocol::metadata::BatchingMode::Off)
             .build()
     }
     fn example_prompt(&self) -> &'static str {
