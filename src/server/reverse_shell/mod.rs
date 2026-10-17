@@ -19,7 +19,7 @@
 
 pub mod actions;
 
-use crate::llm::action_helper::call_llm;
+use crate::llm::action_helper::call_llm_batch;
 use crate::llm::actions::protocol_trait::ActionResult;
 use crate::llm::ollama_client::OllamaClient;
 use crate::protocol::Event;
@@ -31,6 +31,7 @@ use actions::{
     ReverseShellProtocol, REVERSE_SHELL_COMMAND_EVENT, REVERSE_SHELL_SESSION_OPENED_EVENT,
 };
 use anyhow::Result;
+use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -334,109 +335,149 @@ impl ShellConnection {
     async fn run(&mut self, read_half: &mut tokio::io::ReadHalf<TcpStream>) -> Result<()> {
         // Session-opened event.
         let open_event = Event::new(&REVERSE_SHELL_SESSION_OPENED_EVENT, serde_json::json!({}));
-        let outcome = self.consult(&open_event).await;
+        let outcome = self.consult(std::slice::from_ref(&open_event)).await;
         if self.apply(outcome).await? {
             return Ok(());
         }
 
         let mut buffer = vec![0u8; 8192];
+        // The partial line still being typed, and complete command lines not yet answered.
         let mut line: Vec<u8> = Vec::new();
+        let mut commands: VecDeque<String> = VecDeque::new();
         let mut first_command = true;
+        // Set when the stream has ended (EOF, read error) or a line outgrew `MAX_LINE_LEN`:
+        // the commands already complete are still answered, in order, before the session ends.
+        let mut ended = false;
+        let mut too_long = false;
 
         loop {
-            // The deadline wraps this read and nothing else. Everything that can legitimately
-            // take minutes — the LLM round-trip, and a `manual` rule parking the command for a
-            // human to answer — happens below, after bytes have already been read.
-            let read_timeout = if first_command {
-                FIRST_COMMAND_READ_TIMEOUT
-            } else {
-                IDLE_BETWEEN_COMMANDS_TIMEOUT
-            };
-            let read = match tokio::time::timeout(read_timeout, read_half.read(&mut buffer)).await {
-                Ok(read) => read,
-                Err(_) => {
-                    info!(
-                        "Reverse-shell operator {} sent nothing for {}s; closing idle session",
-                        self.connection_id,
-                        read_timeout.as_secs()
-                    );
-                    break;
-                }
-            };
-            let n = match read {
-                Ok(0) => {
-                    debug!("Reverse-shell operator {} disconnected", self.connection_id);
-                    break;
-                }
-                Ok(n) => {
-                    // Refresh byte/packet counters and last_activity so the rail's ↓ moves and
-                    // connection-scoped task prompts see a fresh timestamp.
-                    self.app_state
-                        .update_connection_stats(
-                            self.server_id,
-                            self.connection_id,
-                            Some(n as u64),
-                            None,
-                            Some(1),
-                            None,
-                        )
-                        .await;
-                    n
-                }
-                Err(e) => {
-                    error!("Reverse-shell read error on {}: {}", self.connection_id, e);
-                    break;
-                }
-            };
-
-            for &byte in &buffer[..n] {
-                if byte == b'\n' {
-                    // Strip a trailing CR so CRLF and LF clients look identical to the model.
-                    if line.last() == Some(&b'\r') {
-                        line.pop();
-                    }
-                    let command = String::from_utf8_lossy(&line).to_string();
-                    let empty = command.trim().is_empty();
-                    line.clear();
-
-                    console_debug!(
+            if commands.is_empty() {
+                if too_long {
+                    console_warn!(
                         self.status_tx,
-                        "Reverse-shell command from {}: {:?}",
+                        "Reverse-shell line from {} exceeded {} bytes, closing",
                         self.connection_id,
-                        command
+                        MAX_LINE_LEN
                     );
-
-                    let event = Event::new(
-                        &REVERSE_SHELL_COMMAND_EVENT,
-                        serde_json::json!({
-                            "command": command,
-                            "first_command": first_command,
-                            "empty": empty,
-                        }),
-                    );
-                    first_command = false;
-
-                    let outcome = self.consult(&event).await;
-                    if self.apply(outcome).await? {
-                        return Ok(());
-                    }
-                } else {
-                    line.push(byte);
-                    if line.len() > MAX_LINE_LEN {
-                        console_warn!(
-                            self.status_tx,
-                            "Reverse-shell line from {} exceeded {} bytes, closing",
-                            self.connection_id,
-                            MAX_LINE_LEN
-                        );
-                        self.shutdown().await;
-                        return Ok(());
-                    }
+                    self.shutdown().await;
+                    return Ok(());
                 }
+                if ended {
+                    break;
+                }
+                // The deadline wraps this read and nothing else. Everything that can
+                // legitimately take minutes — the LLM round-trip, and a `manual` rule parking
+                // the command for a human to answer — happens below, after bytes have already
+                // been read.
+                let read_timeout = if first_command {
+                    FIRST_COMMAND_READ_TIMEOUT
+                } else {
+                    IDLE_BETWEEN_COMMANDS_TIMEOUT
+                };
+                let read =
+                    match tokio::time::timeout(read_timeout, read_half.read(&mut buffer)).await {
+                        Ok(read) => read,
+                        Err(_) => {
+                            info!(
+                                "Reverse-shell operator {} sent nothing for {}s; closing idle \
+                                 session",
+                                self.connection_id,
+                                read_timeout.as_secs()
+                            );
+                            break;
+                        }
+                    };
+                match self.received(read).await {
+                    Some(n) => {
+                        too_long = !split_commands(&buffer[..n], &mut line, &mut commands);
+                    }
+                    None => ended = true,
+                }
+                continue;
+            }
+
+            // With batching on, everything else the operator already sent — typed while the
+            // model was answering the previous command, or pasted as several lines — is
+            // answered in the same call. Read without waiting, so batching never delays a
+            // reply.
+            let batching = self
+                .app_state
+                .server_conversation_settings(self.server_id)
+                .await
+                .is_some_and(|(_, batching)| batching);
+            let max = crate::protocol::metadata::MAX_BATCH_EVENTS;
+            while batching && !ended && !too_long && commands.len() < max {
+                // A zero deadline polls the read once: whatever the kernel already holds.
+                let Ok(read) =
+                    tokio::time::timeout(Duration::ZERO, read_half.read(&mut buffer)).await
+                else {
+                    break;
+                };
+                match self.received(read).await {
+                    Some(n) => {
+                        too_long = !split_commands(&buffer[..n], &mut line, &mut commands);
+                    }
+                    None => ended = true,
+                }
+            }
+            let take = if batching { commands.len().min(max) } else { 1 };
+
+            let mut events = Vec::with_capacity(take);
+            for command in commands.drain(..take) {
+                console_debug!(
+                    self.status_tx,
+                    "Reverse-shell command from {}: {:?}",
+                    self.connection_id,
+                    command
+                );
+                let empty = command.trim().is_empty();
+                events.push(Event::new(
+                    &REVERSE_SHELL_COMMAND_EVENT,
+                    serde_json::json!({
+                        "command": command,
+                        "first_command": first_command,
+                        "empty": empty,
+                    }),
+                ));
+                first_command = false;
+            }
+
+            let outcome = self.consult(&events).await;
+            if self.apply(outcome).await? {
+                return Ok(());
             }
         }
 
         Ok(())
+    }
+
+    /// Account for one read: `Some(n)` for `n` bytes, `None` once the stream has ended.
+    async fn received(&self, read: std::io::Result<usize>) -> Option<usize> {
+        match read {
+            Ok(0) => {
+                debug!("Reverse-shell operator {} disconnected", self.connection_id);
+                None
+            }
+            Ok(n) => {
+                // Refresh byte/packet counters and last_activity so the rail's ↓ moves and
+                // connection-scoped task prompts see a fresh timestamp.
+                self.app_state
+                    .update_connection_stats(
+                        self.server_id,
+                        self.connection_id,
+                        Some(n as u64),
+                        None,
+                        Some(1),
+                        None,
+                    )
+                    .await;
+                Some(n)
+            }
+            Err(e) => {
+                error!("Reverse-shell read error on {}: {}", self.connection_id, e);
+                None
+            }
+        }
     }
 
     /// Ask the event handlers (script → static → LLM) what to do.
@@ -445,15 +486,19 @@ impl ShellConnection {
     /// is carried back in `Outcome::no_answer` and the caller closes the socket. Silence is never
     /// treated as approval — there is nothing to approve here, but the same discipline keeps the
     /// "no answer" path distinct from a deliberate "no output" (`no_shell_output`).
-    async fn consult(&self, event: &Event) -> Outcome {
+    async fn consult(&self, events: &[Event]) -> Outcome {
         let mut outcome = Outcome::default();
+        // The newest event is the batch's trigger; it is the one a failure is logged under.
+        let Some(event) = events.last() else {
+            return outcome;
+        };
 
-        let execution = match call_llm(
+        let execution = match call_llm_batch(
             &self.llm_client,
             &self.app_state,
             self.server_id,
             Some(self.connection_id),
-            event,
+            events,
             &self.protocol,
         )
         .await
@@ -616,4 +661,25 @@ impl ShellConnection {
         let mut writer = self.write_half.lock().await;
         let _ = writer.shutdown().await;
     }
+}
+
+/// Append `bytes` to the command line being typed, moving each completed line onto `commands`
+/// with its newline (and a CR before it) stripped, so CRLF and LF clients look identical to
+/// the model. Returns `false` once the line being typed outgrows [`MAX_LINE_LEN`].
+fn split_commands(bytes: &[u8], line: &mut Vec<u8>, commands: &mut VecDeque<String>) -> bool {
+    for &byte in bytes {
+        if byte == b'\n' {
+            if line.last() == Some(&b'\r') {
+                line.pop();
+            }
+            commands.push_back(String::from_utf8_lossy(line).to_string());
+            line.clear();
+        } else {
+            line.push(byte);
+            if line.len() > MAX_LINE_LEN {
+                return false;
+            }
+        }
+    }
+    true
 }
