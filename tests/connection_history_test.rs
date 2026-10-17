@@ -293,3 +293,123 @@ fn history_off_records_nothing() {
     assert!(history.is_empty());
     assert!(history.render(0).is_none());
 }
+
+/// An instance's history and batching come from the protocol's declaration, can be overridden
+/// at start and in place, and a request the protocol cannot honour is refused without touching
+/// the running instance.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn history_and_batching_overrides_apply_and_refuse_cleanly() {
+    let mock = MockOllamaServer::start(
+        MockLlmBuilder::new()
+            .on_any()
+            .respond_with_actions(serde_json::json!([]))
+            .expect_at_least(0)
+            .build(),
+    )
+    .await
+    .expect("mock ollama");
+    let state = AppState::new_with_options(false, mock.base_url());
+    let (tx, _rx) = mpsc::unbounded_channel();
+
+    // Declared default: telnet shows 40 earlier entries and cannot batch.
+    let declared = ServerForm {
+        protocol: "telnet".to_string(),
+        port: Some(0),
+        instruction: Some("x".to_string()),
+        ..Default::default()
+    }
+    .create(&state, tx.clone())
+    .await
+    .expect("create with defaults");
+    assert_eq!(
+        state.server_conversation_settings(declared).await,
+        Some((netget::protocol::metadata::SESSION_HISTORY_ENTRIES, false))
+    );
+
+    // Overridden at start.
+    let overridden = ServerForm {
+        protocol: "telnet".to_string(),
+        port: Some(0),
+        instruction: Some("x".to_string()),
+        history: Some(5),
+        ..Default::default()
+    }
+    .create(&state, tx.clone())
+    .await
+    .expect("create with history 5");
+    assert_eq!(
+        state.server_conversation_settings(overridden).await,
+        Some((5, false))
+    );
+
+    // Batching on a protocol that cannot batch is refused at start, naming the reason.
+    let refused = ServerForm {
+        protocol: "telnet".to_string(),
+        port: Some(0),
+        instruction: Some("x".to_string()),
+        batching: Some(true),
+        ..Default::default()
+    }
+    .create(&state, tx.clone())
+    .await
+    .expect_err("batching on telnet must be refused while telnet cannot batch");
+    assert!(
+        refused.to_string().contains("cannot batch"),
+        "the refusal must say why: {refused}"
+    );
+
+    // Hot update: in place, same id, no restart.
+    let outcome = netget::cli::management::update_server(
+        &state,
+        overridden,
+        ServerForm {
+            history: Some(0),
+            ..Default::default()
+        },
+        tx.clone(),
+    )
+    .await
+    .expect("update history");
+    assert!(!outcome.restarted, "a history change must not restart the server");
+    assert_eq!(
+        state.server_conversation_settings(overridden).await,
+        Some((0, false))
+    );
+
+    // A refused update leaves the instance exactly as it was.
+    netget::cli::management::update_server(
+        &state,
+        overridden,
+        ServerForm {
+            history: Some(7),
+            batching: Some(true),
+            ..Default::default()
+        },
+        tx.clone(),
+    )
+    .await
+    .expect_err("batching on telnet must be refused on update too");
+    assert_eq!(
+        state.server_conversation_settings(overridden).await,
+        Some((0, false)),
+        "a refused update changed the instance"
+    );
+
+    // The model's own open_client / update_server actions accept the fields.
+    let action: netget::llm::actions::common::CommonAction = serde_json::from_value(
+        serde_json::json!({"type": "update_server", "server_id": 1, "history": 12, "batching": false}),
+    )
+    .expect("update_server with history/batching parses");
+    match action {
+        netget::llm::actions::common::CommonAction::UpdateServer {
+            history, batching, ..
+        } => {
+            assert_eq!(history, Some(12));
+            assert_eq!(batching, Some(false));
+        }
+        other => panic!("parsed as {other:?}"),
+    }
+
+    let _ = state.remove_server(declared).await;
+    let _ = state.remove_server(overridden).await;
+}

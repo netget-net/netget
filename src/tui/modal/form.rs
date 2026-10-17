@@ -30,6 +30,10 @@ pub enum FieldTarget {
     Instruction,
     InitialMemory,
     FeedbackInstructions,
+    /// Earlier entries per connection the model is shown (`history`).
+    History,
+    /// Batch events arriving during a call (`batching`), a toggle.
+    Batching,
     /// A protocol-declared startup parameter, by name.
     StartupParam(String),
     /// Raw JSON of the whole event-handler list (the routing editor is the
@@ -41,6 +45,13 @@ pub enum FieldTarget {
     DraftInstruction,
     /// The routing draft's static action list, as a JSON array.
     DraftActions,
+}
+
+impl FieldTarget {
+    /// A field Enter or Space flips between `true` and `false` instead of editing as text.
+    pub fn is_toggle(&self) -> bool {
+        matches!(self, Self::SendFirst | Self::Batching)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -272,6 +283,7 @@ impl FormModel {
             &row.startup_params,
             &row.instruction,
             row.routing.as_ref(),
+            (row.history_entries, row.batching),
         )
     }
 
@@ -293,6 +305,7 @@ impl FormModel {
             &row.startup_params,
             &row.instruction,
             row.routing.as_ref(),
+            (row.history_entries, row.batching),
         )
     }
 
@@ -304,6 +317,9 @@ impl FormModel {
     ) -> Self {
         push_param_fields(&mut fields, &params, None);
         push_text_fields(&mut fields, "", None);
+        if let FormMode::Create(section) = &mode {
+            push_conversation_fields(&mut fields, *section, protocol, None);
+        }
         Self {
             mode,
             protocol: protocol.to_string(),
@@ -325,9 +341,15 @@ impl FormModel {
         startup_params: &Option<serde_json::Value>,
         instruction: &str,
         routing: Option<&crate::scripting::EventHandlerConfig>,
+        conversation: (u16, bool),
     ) -> Self {
         push_param_fields(&mut fields, &params, startup_params.as_ref());
         push_text_fields(&mut fields, instruction, routing);
+        let section = match key {
+            UiKey::Server(_) => Section::Servers,
+            UiKey::Client(_) => Section::Clients,
+        };
+        push_conversation_fields(&mut fields, section, protocol, Some(conversation));
         Self {
             mode: FormMode::Edit(key),
             protocol: protocol.to_string(),
@@ -600,6 +622,8 @@ impl FormModel {
             event_handlers: self.event_handlers()?,
             scheduled_tasks: None,
             feedback_instructions: self.value_of(&FieldTarget::FeedbackInstructions),
+            history: self.history_value()?,
+            batching: self.batching_value(),
         })
     }
 
@@ -613,7 +637,38 @@ impl FormModel {
             event_handlers: self.event_handlers()?,
             scheduled_tasks: None,
             feedback_instructions: self.value_of(&FieldTarget::FeedbackInstructions),
+            history: self.history_value()?,
+            batching: self.batching_value(),
         })
+    }
+
+    /// The `history` to submit: only when the operator changed it, in both modes — the field
+    /// opens on the protocol's default (create) or the live value (edit), and re-sending
+    /// either would be a no-op at best.
+    fn history_value(&self) -> Result<Option<u16>> {
+        let Some(field) = self.fields.iter().find(|f| f.target == FieldTarget::History) else {
+            return Ok(None);
+        };
+        if !field.changed() {
+            return Ok(None);
+        }
+        let text = field.value.trim();
+        let text = if text.is_empty() { "0" } else { text };
+        text.parse::<u16>().map(Some).map_err(|_| {
+            anyhow::anyhow!(
+                "history must be a whole number of earlier entries (0 turns it off), not {:?}",
+                field.value.trim()
+            )
+        })
+    }
+
+    /// The `batching` to submit, only when the operator flipped it.
+    fn batching_value(&self) -> Option<bool> {
+        self.fields
+            .iter()
+            .find(|f| f.target == FieldTarget::Batching)
+            .filter(|f| f.changed())
+            .map(|f| f.value.trim() == "true")
     }
 
     /// Apply the form: create or update, returning a line for the chat log.
@@ -788,6 +843,71 @@ fn push_param_fields(
             multiline: param.name == "spec",
         });
     }
+}
+
+/// The `history` and `batching` fields, opened on the live value (edit) or the protocol's
+/// declared default (create), and saying what that default is.
+fn push_conversation_fields(
+    fields: &mut Vec<Field>,
+    section: Section,
+    protocol: &str,
+    current: Option<(u16, bool)>,
+) {
+    let metadata = match section {
+        Section::Servers => crate::protocol::server_registry::registry()
+            .resolve(protocol)
+            .ok()
+            .map(|p| p.metadata()),
+        Section::Clients => crate::protocol::CLIENT_REGISTRY
+            .resolve(protocol)
+            .ok()
+            .map(|p| p.metadata()),
+    };
+    let Some(metadata) = metadata else {
+        return;
+    };
+    let default_entries = metadata.history.entries();
+    let (entries, batching) =
+        current.unwrap_or((default_entries, metadata.batching.default_enabled()));
+
+    let default_text = if default_entries == 0 {
+        "off".to_string()
+    } else {
+        format!("{default_entries}")
+    };
+    let mut history = Field::simple(
+        FieldTarget::History,
+        "history",
+        &format!(
+            "How many earlier exchanges on the same connection the model is shown with each \
+             event; 0 turns it off. {protocol}'s default: {default_text}. Memory is separate \
+             and outlives the connection."
+        ),
+    );
+    history.value = entries.to_string();
+    history.original = history.value.clone();
+    fields.push(history);
+
+    let help = if metadata.batching.is_supported() {
+        format!(
+            "Hold events that arrive while the model is still answering and give them to it \
+             together afterwards. {protocol}'s default: {}.",
+            if metadata.batching.default_enabled() {
+                "on"
+            } else {
+                "off"
+            }
+        )
+    } else {
+        format!(
+            "{protocol} answers each event as it arrives and cannot batch them; turning this \
+             on is refused."
+        )
+    };
+    let mut batching_field = Field::simple(FieldTarget::Batching, "batching", &help);
+    batching_field.value = batching.to_string();
+    batching_field.original = batching_field.value.clone();
+    fields.push(batching_field);
 }
 
 fn push_text_fields(

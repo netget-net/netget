@@ -61,6 +61,16 @@ fn server_to_action(server: &crate::state::server::ServerInstance) -> Value {
     if let Some(ref instruction) = server.feedback_instructions {
         action["feedback_instructions"] = json!(instruction);
     }
+    let declared = crate::protocol::server_registry::registry()
+        .resolve(&server.protocol_name)
+        .ok()
+        .map(|p| p.metadata());
+    record_conversation(
+        &mut action,
+        declared.as_ref(),
+        server.history_entries,
+        server.batching,
+    );
 
     // Note: send_first is protocol-specific and not stored in ServerInstance
     // It will use protocol defaults when recreated
@@ -92,8 +102,37 @@ fn client_to_action(client: &crate::state::client::ClientInstance) -> Value {
     if let Some(ref instruction) = client.feedback_instructions {
         action["feedback_instructions"] = json!(instruction);
     }
+    let declared = crate::protocol::CLIENT_REGISTRY
+        .resolve(&client.protocol_name)
+        .ok()
+        .map(|p| p.metadata());
+    record_conversation(
+        &mut action,
+        declared.as_ref(),
+        client.history_entries,
+        client.batching,
+    );
 
     action
+}
+
+/// Save `history` / `batching` only where the instance departs from its protocol's declared
+/// default, so a saved file follows the protocol if the default is later changed.
+fn record_conversation(
+    action: &mut Value,
+    declared: Option<&crate::protocol::metadata::ProtocolMetadataV2>,
+    history_entries: u16,
+    batching: bool,
+) {
+    let (default_history, default_batching) = declared
+        .map(|m| (m.history.entries(), m.batching.default_enabled()))
+        .unwrap_or((0, false));
+    if history_entries != default_history {
+        action["history"] = json!(history_entries);
+    }
+    if batching != default_batching {
+        action["batching"] = json!(batching);
+    }
 }
 
 /// Save all servers and clients to a file

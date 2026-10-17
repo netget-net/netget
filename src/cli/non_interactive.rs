@@ -616,6 +616,8 @@ pub async fn run_with_actions(
                     event_handlers,
                     scheduled_tasks,
                     feedback_instructions,
+                    history,
+                    batching,
                 } => {
                     // Execute open_server action
                     match server_startup::start_server_from_action(
@@ -632,7 +634,7 @@ pub async fn run_with_actions(
                         event_handlers,
                         scheduled_tasks,
                         feedback_instructions,
-                        Default::default(),
+                        crate::protocol::metadata::ConversationOverrides { history, batching },
                         status_tx.clone(),
                     )
                     .await
@@ -670,6 +672,8 @@ pub async fn run_with_actions(
                     event_handlers,
                     scheduled_tasks,
                     feedback_instructions,
+                    history,
+                    batching,
                 } => {
                     // Execute open_client action
                     match client_startup::start_client_from_action(
@@ -682,7 +686,7 @@ pub async fn run_with_actions(
                         event_handlers,
                         scheduled_tasks,
                         feedback_instructions,
-                        Default::default(),
+                        crate::protocol::metadata::ConversationOverrides { history, batching },
                         llm.clone(),
                         None, // status_tx: headless, drain to tracing
                     )

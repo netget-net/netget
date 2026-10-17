@@ -541,6 +541,23 @@ pub struct Args {
     )]
     pub server_params: Option<String>,
 
+    /// History length for --server / --client
+    #[clap(
+        long = "history",
+        value_name = "ENTRIES",
+        help = "For --server or --client: how many earlier exchanges on the same connection the model is shown with each event; 0 turns it off. Omit for the protocol's default (40 for conversational protocols, 0 for independent requests such as DNS and HTTP; --docs names each)."
+    )]
+    pub history: Option<u16>,
+
+    /// Event batching for --server / --client
+    #[clap(
+        long = "batching",
+        value_name = "true|false",
+        action = clap::ArgAction::Set,
+        help = "For --server or --client: hold events that arrive while the model is still answering and give them to it together afterwards. Omit for the protocol's default; refused where the protocol cannot batch."
+    )]
+    pub batching: Option<bool>,
+
     /// Print documentation for every protocol and exit
     #[clap(
         long = "docs",

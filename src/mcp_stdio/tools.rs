@@ -221,6 +221,17 @@ pub struct StartServerParams {
     /// adjusts this server's behaviour as it runs.
     #[serde(default)]
     pub feedback_instructions: Option<String>,
+    /// How many earlier exchanges on the same connection the model is shown with each
+    /// event (each event and what answered it); 0 turns it off. Omit for the protocol's
+    /// default, which get_protocol_docs names: 40 for conversational protocols, 0 for
+    /// independent requests such as DNS and HTTP. Applied in place on update.
+    #[serde(default)]
+    pub history: Option<u16>,
+    /// Hold events that arrive on a connection while the model is still answering, and give
+    /// them to it together in one follow-up call. Omit for the protocol's default; refused
+    /// where the protocol answers each event as it arrives. Applied in place on update.
+    #[serde(default)]
+    pub batching: Option<bool>,
     /// Server-scoped scheduled LLM tasks, removed when the server stops. Array of
     /// objects: {"task_id":"...", "recurring":true, "interval_secs":60,
     /// "instruction":"..."} for a repeating task, or {"task_id":"...",
@@ -263,6 +274,17 @@ pub struct StartClientParams {
     /// this client's behaviour as it runs.
     #[serde(default)]
     pub feedback_instructions: Option<String>,
+    /// How many earlier exchanges on the same connection the model is shown with each
+    /// event (each event and what answered it); 0 turns it off. Omit for the protocol's
+    /// default, which get_protocol_docs names: 40 for conversational protocols, 0 for
+    /// independent requests such as DNS and HTTP. Applied in place on update.
+    #[serde(default)]
+    pub history: Option<u16>,
+    /// Hold events that arrive on a connection while the model is still answering, and give
+    /// them to it together in one follow-up call. Omit for the protocol's default; refused
+    /// where the protocol answers each event as it arrives. Applied in place on update.
+    #[serde(default)]
+    pub batching: Option<bool>,
     /// Client-scoped scheduled LLM tasks. Same shape as start_server's:
     /// {"task_id":"...", "recurring":true, "interval_secs":60, "instruction":"..."}
     /// or {"task_id":"...", "recurring":false, "delay_secs":10, "instruction":"..."}.
@@ -360,6 +382,17 @@ pub struct UpdateServerParams {
     /// New feedback-loop instructions (hot-applied).
     #[serde(default)]
     pub feedback_instructions: Option<String>,
+    /// How many earlier exchanges on the same connection the model is shown with each
+    /// event (each event and what answered it); 0 turns it off. Omit for the protocol's
+    /// default, which get_protocol_docs names: 40 for conversational protocols, 0 for
+    /// independent requests such as DNS and HTTP. Applied in place on update.
+    #[serde(default)]
+    pub history: Option<u16>,
+    /// Hold events that arrive on a connection while the model is still answering, and give
+    /// them to it together in one follow-up call. Omit for the protocol's default; refused
+    /// where the protocol answers each event as it arrives. Applied in place on update.
+    #[serde(default)]
+    pub batching: Option<bool>,
     /// Scheduled tasks to add (hot-applied). Same shape as start_server's.
     #[serde(default)]
     pub scheduled_tasks: Option<Vec<serde_json::Value>>,
@@ -388,6 +421,17 @@ pub struct UpdateClientParams {
     /// New feedback-loop instructions (hot-applied).
     #[serde(default)]
     pub feedback_instructions: Option<String>,
+    /// How many earlier exchanges on the same connection the model is shown with each
+    /// event (each event and what answered it); 0 turns it off. Omit for the protocol's
+    /// default, which get_protocol_docs names: 40 for conversational protocols, 0 for
+    /// independent requests such as DNS and HTTP. Applied in place on update.
+    #[serde(default)]
+    pub history: Option<u16>,
+    /// Hold events that arrive on a connection while the model is still answering, and give
+    /// them to it together in one follow-up call. Omit for the protocol's default; refused
+    /// where the protocol answers each event as it arrives. Applied in place on update.
+    #[serde(default)]
+    pub batching: Option<bool>,
     /// Scheduled tasks to add (hot-applied).
     #[serde(default)]
     pub scheduled_tasks: Option<Vec<serde_json::Value>>,
@@ -934,7 +978,10 @@ impl NetGetMcpService {
             params.event_handlers,              // event_handlers
             scheduled_tasks,                    // scheduled_tasks
             params.feedback_instructions,       // feedback_instructions
-            Default::default(),                 // history / batching overrides
+            crate::protocol::metadata::ConversationOverrides {
+                history: params.history,
+                batching: params.batching,
+            },
             status_tx,                          // status_tx
         )
         .await
@@ -1216,7 +1263,7 @@ impl NetGetMcpService {
     }
 
     #[tool(
-        description = "Update a RUNNING server in place, by its id, instead of starting a second one. Supply only the fields to change. instruction / event_handlers / initial_memory / feedback_instructions / scheduled_tasks are hot-applied WITHOUT dropping connections; port / host / startup_params require a clean stop+start (connections dropped, server gets a NEW id). Unknown id and invalid startup_params error cleanly and leave the running server untouched. Prefer this over start_server when a server already exists."
+        description = "Update a RUNNING server in place, by its id, instead of starting a second one. Supply only the fields to change. instruction / event_handlers / initial_memory / feedback_instructions / scheduled_tasks / history / batching are hot-applied WITHOUT dropping connections; port / host / startup_params require a clean stop+start (connections dropped, server gets a NEW id). Unknown id and invalid startup_params error cleanly and leave the running server untouched. Prefer this over start_server when a server already exists."
     )]
     async fn update_server(
         &self,
@@ -1251,6 +1298,8 @@ impl NetGetMcpService {
             event_handlers: params.event_handlers,
             scheduled_tasks,
             feedback_instructions: params.feedback_instructions,
+            history: params.history,
+            batching: params.batching,
         };
 
         let (status_tx, _status_rx) = mpsc::unbounded_channel();
@@ -1270,7 +1319,7 @@ impl NetGetMcpService {
     }
 
     #[tool(
-        description = "Update a RUNNING client in place, by its id, instead of connecting a second one. Supply only the fields to change. instruction / event_handlers / initial_memory / feedback_instructions / scheduled_tasks are hot-applied; remote_addr / startup_params trigger a reconnect (new id). Unknown id and invalid startup_params error cleanly and leave the running client untouched."
+        description = "Update a RUNNING client in place, by its id, instead of connecting a second one. Supply only the fields to change. instruction / event_handlers / initial_memory / feedback_instructions / scheduled_tasks / history / batching are hot-applied; remote_addr / startup_params trigger a reconnect (new id). Unknown id and invalid startup_params error cleanly and leave the running client untouched."
     )]
     async fn update_client(
         &self,
@@ -1300,6 +1349,8 @@ impl NetGetMcpService {
             event_handlers: params.event_handlers,
             scheduled_tasks,
             feedback_instructions: params.feedback_instructions,
+            history: params.history,
+            batching: params.batching,
         };
 
         let (status_tx, _status_rx) = mpsc::unbounded_channel();
@@ -1478,7 +1529,10 @@ impl NetGetMcpService {
             params.event_handlers,
             scheduled_tasks,
             params.feedback_instructions,
-            Default::default(),
+            crate::protocol::metadata::ConversationOverrides {
+                history: params.history,
+                batching: params.batching,
+            },
             self.state.llm_client.clone(),
             None, // status_tx: MCP has no status stream, drain to tracing
         )

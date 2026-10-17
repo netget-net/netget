@@ -318,6 +318,21 @@ impl HistoryMode {
         }
     }
 
+    /// One line for documentation: what the model is shown by default.
+    pub fn describe(self) -> String {
+        match self {
+            Self::Off => {
+                "off by default — each event reaches the model alone (pass `history` to change it)"
+                    .to_string()
+            }
+            Self::Last(n) => format!(
+                "the model is shown up to {n} earlier exchanges on the same connection with each \
+                 event, within a {} KB budget (pass `history` to change it; 0 turns it off)",
+                crate::state::exchange_history::HISTORY_PROMPT_BUDGET_CHARS / 1024
+            ),
+        }
+    }
+
     pub fn from_entries(entries: u16) -> Self {
         if entries == 0 {
             Self::Off
@@ -358,6 +373,22 @@ impl BatchingMode {
 
     pub const fn default_enabled(self) -> bool {
         matches!(self, Self::On)
+    }
+
+    /// One line for documentation: what happens to events arriving during a call.
+    pub fn describe(self) -> &'static str {
+        match self {
+            Self::Unsupported => "unsupported — each event is answered as it arrives",
+            Self::Off => {
+                "off by default — events arriving during a call can instead be delivered \
+                 together afterwards (pass `batching: true`)"
+            }
+            Self::On => {
+                "on by default — events arriving while the model is answering are delivered \
+                 together in one follow-up call (pass `batching: false` to answer each \
+                 separately)"
+            }
+        }
     }
 }
 
