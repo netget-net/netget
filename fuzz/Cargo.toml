@@ -319,3 +319,10 @@ path = "fuzz_targets/nis_yp.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "rsh_handshake"
+path = "fuzz_targets/rsh_handshake.rs"
+test = false
+doc = false
+bench = false

@@ -352,6 +352,7 @@ pub mod pulsar;
 pub mod radsec;
 pub mod rcon;
 pub mod restconf;
+pub mod rsh;
 pub mod rsync;
 pub mod smpp;
 pub mod sse;
