@@ -41,7 +41,15 @@ cd "$base/src"
     --enable-rshd --enable-rlogind --enable-rexecd \
     --disable-dependency-tracking >/dev/null
 make -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu)" >/dev/null
-make install >/dev/null
+# inetutils installs rsh and rlogin setuid root (`install -o root`), which only root can do. As
+# an ordinary user with passwordless sudo (a CI runner) install through sudo and take the tree
+# back; the tests run these clients as root anyway, since they bind reserved source ports.
+if [ "$(id -u)" -ne 0 ] && sudo -n true 2>/dev/null; then
+    sudo make install >/dev/null
+    sudo chown -R "$(id -u):$(id -g)" "$prefix"
+else
+    make install >/dev/null
+fi
 for p in bin/grsh bin/grlogin bin/grexec libexec/grshd libexec/grlogind libexec/grexecd; do
     test -x "$prefix/$p" || { echo "inetutils did not install $p" >&2; exit 1; }
 done
