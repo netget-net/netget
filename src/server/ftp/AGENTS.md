@@ -177,6 +177,20 @@ There are no async (user-triggered) actions.
 331 need password · 421 service unavailable · 425 cannot open data connection ·
 500 syntax error · 530 not logged in · 550 file unavailable
 
+## Batching (supported, off by default)
+
+With `batching: true`, command lines a pipelining client sent while the model was answering
+are answered in one call (`lines_already_here`, `write_batch_answer` in `mod.rs`). FTP owes
+each command exactly one completion reply and a client matches them by position alone, so a
+batch is written only when the handler gave exactly one completion reply (2xx–5xx) per command,
+in order — 1xx and non-numeric writes pass through, a handler that says nothing leaves every
+command unanswered as it would one, and `close_connection` may end it early. Any other count
+cannot be matched to commands: nothing of it is written, the client gets `421` and the
+connection closes, logged `decision=fail_closed_batch_mismatch`. A small model miscounting
+would therefore close sessions, which is why it is not on by default; real clients rarely
+pipeline anyway. The greeting is never batched. `tests/server/ftp/batching_test.rs` covers the
+off control, the matched batch and the refused mismatch.
+
 ## Storage
 
 None, by design. The protocol holds no files, no directory tree and no cwd. Directory listings

@@ -4,3 +4,4 @@ mod llm_failure_test;
 mod one_reply_test;
 mod peer_injection_test;
 mod test;
+mod batching_test;

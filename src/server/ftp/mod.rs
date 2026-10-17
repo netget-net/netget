@@ -12,7 +12,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 
-use crate::llm::action_helper::call_llm;
+use crate::llm::action_helper::{call_llm, call_llm_batch};
 use crate::llm::ollama_client::OllamaClient;
 use crate::llm::ActionResult;
 use crate::logging::emit::Log;
@@ -443,6 +443,51 @@ fn classify_ftp_outcome(result: &crate::llm::ExecutionResult) -> (&'static str, 
     )
 }
 
+/// The `ftp_command` event for one command line.
+fn command_event(command: &str) -> Event {
+    Event::new(&FTP_COMMAND_EVENT, {
+        let mut data = serde_json::json!({ "command": command });
+        if let Some(hint) = actions::answer_with_for_command(command) {
+            data["answer_with"] = serde_json::json!(hint);
+        }
+        data
+    })
+}
+
+/// Complete command lines already here - buffered, or readable without waiting - up to `max`,
+/// each with the bytes it consumed.
+///
+/// What a batch collects after the first command: everything a pipelining client sent while
+/// the model was answering. `fill_buf` returns what is buffered without reading, polls the
+/// socket only when the buffer is empty, and is cancel-safe, so the zero deadline never waits
+/// and never loses a byte. It stops at a partial line or one over [`MAX_COMMAND_LINE`], leaving
+/// either for [`read_command_line`] to read and report.
+async fn lines_already_here<R>(
+    reader: &mut tokio::io::BufReader<R>,
+    max: usize,
+) -> Vec<(String, usize)>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    use tokio::io::AsyncBufReadExt;
+    let mut lines = Vec::new();
+    while lines.len() < max {
+        let line = match tokio::time::timeout(Duration::ZERO, reader.fill_buf()).await {
+            Ok(Ok(buf)) => match buf.iter().position(|&b| b == b'\n') {
+                Some(idx) if idx < MAX_COMMAND_LINE => {
+                    String::from_utf8_lossy(&buf[..=idx]).into_owned()
+                }
+                _ => break,
+            },
+            _ => break,
+        };
+        let consumed = line.len();
+        reader.consume(consumed);
+        lines.push((line, consumed));
+    }
+    lines
+}
+
 struct FtpSession;
 
 impl FtpSession {
@@ -658,6 +703,98 @@ impl FtpSession {
         Ok(())
     }
 
+    /// Write the answer to a batch of command lines, one completion reply per command.
+    ///
+    /// RFC 959 owes each command exactly one completion reply (2xx-5xx), and a client matches
+    /// replies to commands by position alone. So a batch is written only when the handler gave
+    /// exactly one completion reply per command, in the order the commands arrived (1xx
+    /// replies and non-numeric text pass through, as `OneReply` lets them); a handler that
+    /// says nothing at all leaves every command unanswered, as it would one; and a handler that
+    /// closes the connection may stop early. Any other count cannot be matched to commands,
+    /// so nothing of it is written: the connection is refused with `421` and closed, logged
+    /// `decision=fail_closed_batch_mismatch`, rather than risk a client reading one command's
+    /// reply as another's. This is why batching is off by default here.
+    ///
+    /// Returns `Ok(false)` when the connection is to close.
+    #[allow(clippy::too_many_arguments)]
+    async fn write_batch_answer<W>(
+        execution_result: crate::llm::ExecutionResult,
+        commands: &[String],
+        write_half: &Arc<Mutex<W>>,
+        app_state: &AppState,
+        server_id: crate::state::ServerId,
+        connection_id: crate::server::connection::ConnectionId,
+        log: &Log<'_>,
+    ) -> std::io::Result<bool>
+    where
+        W: tokio::io::AsyncWrite + Unpin,
+    {
+        let completions = execution_result
+            .protocol_results
+            .iter()
+            .filter_map(|r| match r {
+                ActionResult::Output(data) => reply_code_of(data),
+                _ => None,
+            })
+            .filter(|code| *code >= 200)
+            .count();
+        let closes = execution_result
+            .protocol_results
+            .iter()
+            .any(|r| matches!(r, ActionResult::CloseConnection));
+        let (decision, detail) = classify_ftp_outcome(&execution_result);
+        let n = commands.len();
+
+        if completions == 0 && !closes {
+            // Nothing answered any of them: the same outcome a single command gets.
+            let line = format!(
+                "FTP {commands:?} on connection {connection_id} decision={decision} ({detail})"
+            );
+            match decision {
+                "model_wait_for_more" => log.info(line),
+                "fail_closed_bad_action" => log.error(line),
+                _ => log.warn(line),
+            }
+            return Ok(true);
+        }
+        if completions > n || (completions < n && !closes) {
+            log.error(format!(
+                "FTP {commands:?} on connection {connection_id} \
+                 decision=fail_closed_batch_mismatch: {completions} completion reply(ies) for \
+                 {n} commands ({detail}); none written, refused with 421"
+            ));
+            let reply = "421 Service not available, closing control connection \
+                         (replies could not be matched to commands)\r\n";
+            let _ = Self::write_out(
+                write_half,
+                reply.as_bytes(),
+                app_state,
+                server_id,
+                connection_id,
+            )
+            .await;
+            return Ok(false);
+        }
+
+        log.info(format!(
+            "FTP {commands:?} on connection {connection_id} decision={decision} ({detail})"
+        ));
+        for protocol_result in execution_result.protocol_results {
+            match protocol_result {
+                ActionResult::Output(data) => {
+                    Self::write_out(write_half, &data, app_state, server_id, connection_id).await?;
+                    log.debug(format!(
+                        "FTP sent: {}",
+                        String::from_utf8_lossy(&data).trim()
+                    ));
+                }
+                ActionResult::CloseConnection => return Ok(false),
+                _ => {}
+            }
+        }
+        Ok(true)
+    }
+
     /// Handle FTP session commands
     #[allow(clippy::too_many_arguments)]
     async fn handle_session_commands<R, W>(
@@ -745,26 +882,60 @@ impl FtpSession {
             // FileOnly: the ftp_command event template surfaces the command on the TUI.
             log.debug(format!("FTP received: {}", command));
 
-            // Create FTP command event
-            let event = Event::new(&FTP_COMMAND_EVENT, {
-                let mut data = serde_json::json!({ "command": command });
-                if let Some(hint) = actions::answer_with_for_command(&command) {
-                    data["answer_with"] = serde_json::json!(hint);
+            // With batching on (off by default - see `write_batch_answer`), every further
+            // command line already here is answered in the same call.
+            let batching = app_state
+                .server_conversation_settings(server_id)
+                .await
+                .is_some_and(|(_, batching)| batching);
+            let mut commands = vec![command.to_string()];
+            if batching {
+                for (more, consumed) in
+                    lines_already_here(&mut reader, crate::protocol::metadata::MAX_BATCH_EVENTS - 1)
+                        .await
+                {
+                    app_state
+                        .update_connection_stats(
+                            server_id,
+                            connection_id,
+                            Some(consumed as u64),
+                            None,
+                            Some(1),
+                            None,
+                        )
+                        .await;
+                    log.debug(format!("FTP received: {}", more.trim()));
+                    commands.push(more.trim().to_string());
                 }
-                data
-            });
+            }
+            let events: Vec<Event> = commands.iter().map(|c| command_event(c)).collect();
 
             // Get handler/LLM response
-            match call_llm(
+            match call_llm_batch(
                 &llm_client,
                 app_state,
                 server_id,
                 Some(connection_id),
-                &event,
+                &events,
                 protocol.as_ref(),
             )
             .await
             {
+                Ok(execution_result) if commands.len() > 1 => {
+                    if !Self::write_batch_answer(
+                        execution_result,
+                        &commands,
+                        write_half,
+                        app_state,
+                        server_id,
+                        connection_id,
+                        &log,
+                    )
+                    .await?
+                    {
+                        return Ok(());
+                    }
+                }
                 Ok(execution_result) => {
                     let (decision, detail) = classify_ftp_outcome(&execution_result);
                     match decision {

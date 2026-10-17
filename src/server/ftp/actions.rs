@@ -272,7 +272,11 @@ impl Protocol for FtpProtocol {
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // Supported, off by default: a pipelined batch of command lines is one call, but
+            // each command owes exactly one completion reply matched by position alone, so a
+            // batch is written only when the handler gave exactly one per command and is
+            // refused with 421 otherwise (`write_batch_answer` in mod.rs).
+            .batching(crate::protocol::metadata::BatchingMode::Off)
             .build()
     }
 
