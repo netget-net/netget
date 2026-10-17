@@ -209,7 +209,7 @@ pub static UPLINK_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             "The decrypted application payload, as text or hex per payload_encoding",
             true,
         ),
-        p("payload_encoding", "string", "utf8 or hex", true),
+        p("payload_encoding", "string", "How payload is written: utf8 when the bytes are clean text, otherwise hex", true),
         p(
             "mac_commands",
             "array",

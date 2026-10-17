@@ -157,7 +157,7 @@ pub static JOINED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         p("dev_addr", "string", "The DevAddr the network assigned", true),
         p("net_id", "string", "The network's NetID", true),
         p("rx1_dr_offset", "number", "RX1 data-rate offset", true),
-        p("rx2_data_rate", "number", "RX2 data rate", true),
+        p("rx2_data_rate", "number", "The data rate index (DR0..DR6) the device listens on in its second receive window", true),
         p("rx_delay", "number", "Seconds before RX1", true),
     ])
     .with_actions(actions())
@@ -171,12 +171,12 @@ pub static DOWNLINK_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     )
     .with_parameters(vec![
         p("device", "string", "The device's name, DevEUI or DevAddr", true),
-        p("dev_addr", "string", "Its DevAddr", true),
+        p("dev_addr", "string", "The DevAddr the downlink is addressed to, 8 hex digits", true),
         p("confirmed", "boolean", "The network asks for an acknowledgement (NetGet sets ACK on the device's next uplink)", true),
         p("f_cnt", "number", "Downlink frame counter", true),
         p("f_port", "number", "Application port; null for MAC commands only", false),
         p("payload", "string", "The decrypted payload, text or hex per payload_encoding", true),
-        p("payload_encoding", "string", "utf8 or hex", true),
+        p("payload_encoding", "string", "How payload is written: utf8 when the bytes are clean text, otherwise hex", true),
         p("mac_commands", "array", "MAC commands from the network, decoded (e.g. link_check_ans, dev_status_req)", true),
         p("ack", "boolean", "The network acknowledges the device's last confirmed uplink", true),
         p("f_pending", "boolean", "More downlinks wait for the device's next uplink", true),
