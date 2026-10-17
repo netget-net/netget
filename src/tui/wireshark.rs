@@ -403,6 +403,13 @@ pub fn wire_for(protocol: &str) -> Wire {
         "irc" => tcp("irc"),
         "xmpp" => tcp("xmpp"),
         "telnet" => tcp("telnet"),
+        // The BSD r-services. rexec's dissector is `exec` (tcp.port 512), rlogin's `rlogin`
+        // (513), rsh's `rsh` (514); all three checked against `tshark -G protocols` and
+        // `tshark -G decodes`. The stderr connection back to the client is a second TCP stream
+        // on a port the client chose, which none of them follows.
+        "rsh" => tcp("rsh"),
+        "rlogin" => tcp("rlogin"),
+        "rexec" => tcp("exec"),
         "ssh" => tcp("ssh"),
         // No NETCONF dissector exists in this Wireshark build (4.6.8: `tshark -G protocols`
         // lists none), and NETCONF over SSH is inside the encrypted channel anyway, so the

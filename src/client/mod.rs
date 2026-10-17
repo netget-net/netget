@@ -760,6 +760,8 @@ pub mod rdp;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod restconf;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod rsh;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod rsync;
 pub mod rtp;
 pub mod rtsp;

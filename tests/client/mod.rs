@@ -268,6 +268,7 @@ pub mod rcon;
 #[cfg(unix)]
 pub mod rdp;
 pub mod restconf;
+pub mod rsh;
 pub mod rsync;
 pub mod rtp;
 pub mod rtsp;

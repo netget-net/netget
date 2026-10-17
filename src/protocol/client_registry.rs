@@ -710,6 +710,18 @@ impl ClientRegistry {
         ));
         #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
+            crate::client::rsh::actions::RshClientProtocol::new(),
+        ));
+        #[cfg(not(target_arch = "wasm32"))]
+        self.register(Arc::new(
+            crate::client::rsh::actions::RexecClientProtocol::new(),
+        ));
+        #[cfg(not(target_arch = "wasm32"))]
+        self.register(Arc::new(
+            crate::client::rsh::actions::RloginClientProtocol::new(),
+        ));
+        #[cfg(not(target_arch = "wasm32"))]
+        self.register(Arc::new(
             crate::client::guacamole::actions::GuacamoleClientProtocol::new(),
         ));
         #[cfg(not(target_arch = "wasm32"))]
@@ -1309,6 +1321,9 @@ pub(crate) const ALL_KNOWN_CLIENT_PROTOCOLS: &[(&str, &str)] = &[
     ("libp2p", "a native build (not the browser)"),
     ("SunRPC", "a native build (not the browser)"),
     ("NIS", "a native build (not the browser)"),
+    ("RSH", "a native build (not the browser)"),
+    ("REXEC", "a native build (not the browser)"),
+    ("RLOGIN", "a native build (not the browser)"),
     ("Guacamole", "a native build (not the browser)"),
     ("ActivityPub", "a native build (not the browser)"),
     ("Stratum", "a native build (not the browser)"),
