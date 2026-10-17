@@ -663,7 +663,13 @@ impl Protocol for ImapProtocol {
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // Supported, off by default. A batch's answer is split at its tagged completions
+            // and refused (`<tag> NO` for each) unless every tag is completed once, in order;
+            // alone, NetGet writes the completion for LIST/SELECT/STATUS/FETCH/SEARCH itself,
+            // so a model following the single-command hints would have every pipelined command
+            // refused. LOGIN, AUTHENTICATE, IDLE, APPEND and literals are never batched. See
+            // `imap_batch_role` and `split_batch_answer`.
+            .batching(crate::protocol::metadata::BatchingMode::Off)
             .build()
     }
     fn description(&self) -> &'static str {

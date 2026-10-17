@@ -295,6 +295,7 @@ removed, and `tests/accept_bounded_test.rs` covers the shared helper.
 ## Limitations
 
 - **No message persistence** - LLM manages mailbox data in memory/context
+- **Batching is opt-in** - see "Batching" below for why it is not on by default
 - **No TLS** - plain TCP only; neither IMAPS nor STARTTLS
 - **No SASL AUTH** - Only LOGIN authentication supported
 - **No IMAP extensions** - IDLE, CONDSTORE, QRESYNC not implemented
@@ -427,3 +428,25 @@ makes `* BYE` the server's way of ending a session unilaterally. Logged
 The refusal happens **before** `handle_command` builds any event, so an oversized line never
 reaches a prompt. `tests/server/imap/line_limit_test.rs` asserts exactly that — zero model
 calls, not merely a BYE — and its second test asserts a 4 KiB command is still answered.
+
+## Batching (supported, off by default)
+
+With `batching: true`, commands a client pipelines while the model is answering an earlier one
+are answered in one model call. `collect_batch` takes only whole, distinctly tagged lines that
+are already buffered and that one model call would answer (`imap_batch_role`): `LOGIN`,
+`AUTHENTICATE`, `STARTTLS`, `IDLE`, `APPEND`, any line ending in a literal and `CAPABILITY` are
+always answered alone, and `SELECT`/`EXAMINE`/`CLOSE`/`UNSELECT`/`LOGOUT` end a batch so the next
+command's event reports the new session state. Each batched event's `answer_with` tells the
+model to end that command with its own tagged completion. `split_batch_answer` then divides the
+answer at the completions and uses it only when every tag is completed exactly once, in order,
+with untagged data before its own completion and nothing after the last; a completion for a
+tag outside the batch is not rewritten as it is for a single command. Otherwise every command
+gets `<tag> NO [SERVERBUG]` (`decision=fail_closed_batch_mismatch`) and no session state
+changes.
+
+It is off by default because the single-command path writes the tagged `OK` itself for
+`LIST`/`SELECT`/`STATUS`/`FETCH`/`SEARCH`, and the event hints say so: a model answering a batch
+the way it answers one command leaves completions out, and in a batch nothing can say which
+command each untagged line belongs to, so every pipelined command would be refused. Turn it on
+for a model that follows the batched hint. `tests/server/imap/batching_test.rs` holds the
+control, the claim (one call, every line and tag in order) and the fail-closed short answer.

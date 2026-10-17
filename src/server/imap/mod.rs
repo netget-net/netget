@@ -495,8 +495,12 @@ impl<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWrite + Unpin> ImapSess
                     )
                     .await;
 
-                // Parse and handle IMAP command
-                if let Err(e) = self.handle_command(&line).await {
+                // Pipelined commands already waiting behind this one are answered with it in
+                // one model call when the instance batches; see `imap_batch_role`.
+                let batch = self.collect_batch(&line).await;
+                if batch.len() > 1 {
+                    self.handle_batch(&batch).await;
+                } else if let Err(e) = self.handle_command(&line).await {
                     // NO, not BAD. BAD means "I did not understand the command", which
                     // invites the client to give up on the command permanently; a backend
                     // failure is a refusal to execute a command we understood fine. The
@@ -602,6 +606,199 @@ impl<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWrite + Unpin> ImapSess
                 fixed
             }
             None => data.to_vec(),
+        }
+    }
+
+    /// `line` and the pipelined command lines already waiting behind it that may be answered
+    /// with it in one model call, consumed from the reader. Just `line` when batching is off,
+    /// when `line` is not batchable or ends a batch, or when nothing batchable is waiting.
+    async fn collect_batch(&mut self, line: &str) -> Vec<String> {
+        let first = line.trim().to_string();
+        let mut batch = vec![first.clone()];
+        let (_, first_command, _) = parse_imap_command(&first);
+        if imap_batch_role(&first) != Some(false) {
+            return batch;
+        }
+        let first_event = actions::command_event(&first_command).id.clone();
+        if !crate::server::command_batch::one_model_call_answers(
+            &self.app_state,
+            self.server_id,
+            &[first_event.as_str()],
+        )
+        .await
+        {
+            return batch;
+        }
+        use tokio::io::AsyncBufReadExt;
+        while batch.len() < crate::protocol::metadata::MAX_BATCH_EVENTS {
+            let Some((next, len)) =
+                crate::server::command_batch::peek_ready_line(&mut self.reader, MAX_COMMAND_BYTES)
+                    .await
+            else {
+                break;
+            };
+            let next = next.trim().to_string();
+            let Some(ends) = imap_batch_role(&next) else {
+                break;
+            };
+            // Every tag in a batch must be distinct, or a completion cannot say which command
+            // it ends.
+            let (tag, command, _) = parse_imap_command(&next);
+            if batch.iter().any(|b| parse_imap_command(b).0 == tag) {
+                break;
+            }
+            let event = actions::command_event(&command).id.clone();
+            if !crate::server::command_batch::one_model_call_answers(
+                &self.app_state,
+                self.server_id,
+                &[first_event.as_str(), event.as_str()],
+            )
+            .await
+            {
+                break;
+            }
+            self.reader.consume(len);
+            self.app_state
+                .update_connection_stats(
+                    self.server_id,
+                    self.connection_id,
+                    Some(len as u64),
+                    None,
+                    Some(1),
+                    None,
+                )
+                .await;
+            batch.push(next);
+            if ends {
+                break;
+            }
+        }
+        batch
+    }
+
+    /// Answer pipelined commands with one model call: each command's untagged data, then its
+    /// own tagged completion, in the order the commands were sent.
+    ///
+    /// The answer is split at the completions, so it is used only when it reads as exactly
+    /// that (see [`split_batch_answer`]). A completion with a foreign tag is not rewritten here
+    /// as it is for a single command - with several in flight there is no telling which one it
+    /// meant. Anything else and every command is answered `NO [SERVERBUG]` with its own tag,
+    /// and no session state changes.
+    async fn handle_batch(&mut self, lines: &[String]) {
+        let commands: Vec<(String, String, String)> =
+            lines.iter().map(|l| parse_imap_command(l)).collect();
+        let total = commands.len();
+        let (session_state, authenticated_user, selected_mailbox) = self
+            .app_state
+            .get_imap_connection_state(self.server_id, self.connection_id)
+            .await
+            .unwrap_or((ImapSessionState::NotAuthenticated, None, None));
+        let events: Vec<Event> = commands
+            .iter()
+            .enumerate()
+            .map(|(i, (tag, command, args))| {
+                let mut data = json!({
+                    "tag": tag,
+                    "command": command,
+                    "args": args,
+                    "session_state": format!("{:?}", session_state),
+                    "authenticated_user": authenticated_user,
+                    "selected_mailbox": selected_mailbox,
+                });
+                // Alone, NetGet completes a command whose answer is untagged data; in a batch
+                // the completions are what split the answer between commands, so the model
+                // writes each one itself.
+                let completion =
+                    format!("then end it with send_imap_response with tag {tag} and status OK");
+                let answer_with = imap_answer_with(tag, command, args)
+                    .map(|hint| hint.replace("NetGet adds the tagged OK", &completion))
+                    .unwrap_or_else(|| format!("send_imap_response with tag {tag} to complete it"));
+                data["answer_with"] = answer_with.into();
+                crate::server::command_batch::mark_pipelined(&mut data, i + 1, total);
+                Event::new(actions::command_event(command), data)
+            })
+            .collect();
+
+        let result = match crate::llm::action_helper::call_llm_batch(
+            &self.llm_client,
+            &self.app_state,
+            self.server_id,
+            Some(self.connection_id),
+            &events,
+            self.protocol.as_ref(),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(e) => {
+                let (code, detail) = imap_failure_code(&e);
+                Log::new(Some(&self.status_tx)).error(format!(
+                    "IMAP connection {} refusing {} pipelined commands with NO [{}] \
+                     decision=fail_closed_llm_error: {}",
+                    self.connection_id, total, code, e
+                ));
+                for (tag, command, args) in &commands {
+                    let reply = format!("{} NO [{}] {}\r\n", tag, code, detail);
+                    let _ = self.send_response(reply.as_bytes()).await;
+                    let _ = self.update_session_state(command, args, false).await;
+                }
+                return;
+            }
+        };
+
+        let tags: Vec<&str> = commands.iter().map(|(t, _, _)| t.as_str()).collect();
+        let split = split_batch_answer(&result.protocol_results, &tags);
+        let close = result
+            .protocol_results
+            .iter()
+            .any(|r| matches!(r, ActionResult::CloseConnection));
+        match split {
+            Some(answers) => {
+                Log::new(Some(&self.status_tx)).info(format!(
+                    "IMAP connection {} decision=model_answer: {} pipelined commands, each \
+                     completed with its own tag",
+                    self.connection_id, total
+                ));
+                for ((tag, command, args), (untagged, completion)) in commands.iter().zip(answers) {
+                    let mut written: Vec<Vec<u8>> = Vec::new();
+                    for data in untagged {
+                        // The same untagged block twice is one answer repeated.
+                        if !written.contains(&data) {
+                            let _ = self.send_response(&data).await;
+                            written.push(data);
+                        }
+                    }
+                    let _ = self.send_response(&completion).await;
+                    let ok = tagged_ok_for(&String::from_utf8_lossy(&completion), tag);
+                    let _ = self.update_session_state(command, args, ok).await;
+                }
+            }
+            None => {
+                Log::new(Some(&self.status_tx)).error(format!(
+                    "IMAP connection {} decision=fail_closed_batch_mismatch: the answer to {} \
+                     pipelined commands does not complete each with its own tag, in order; \
+                     answering NO to each",
+                    self.connection_id, total
+                ));
+                for (tag, command, args) in &commands {
+                    let reply = format!(
+                        "{} NO [SERVERBUG] {}\r\n",
+                        tag,
+                        crate::utils::WireFailure::Unavailable.prefixed_text()
+                    );
+                    let _ = self.send_response(reply.as_bytes()).await;
+                    let _ = self.update_session_state(command, args, false).await;
+                }
+            }
+        }
+        if close {
+            self.app_state
+                .update_imap_session_state(
+                    self.server_id,
+                    self.connection_id,
+                    ImapSessionState::Logout,
+                )
+                .await;
         }
     }
 
@@ -1067,6 +1264,94 @@ fn tagged_ok_for(payload: &str, tag: &str) -> bool {
         let mut fields = line.trim().split_whitespace();
         fields.next() == Some(tag) && fields.next().is_some_and(|status| status == "OK")
     })
+}
+
+/// Whether an IMAP command line may be answered as part of a batch, and whether it ends one.
+///
+/// `None` for a line always answered on its own: `LOGIN` and `AUTHENTICATE` (credentials and
+/// a SASL exchange), `STARTTLS`, `IDLE` (a continuation the client answers with `DONE`),
+/// `APPEND` and any line ending in a literal (`{n}`), `CAPABILITY` (NetGet answers it), an
+/// untagged or empty line, and anything unknown. `Some(true)` for the commands that change
+/// the session state the next command's event reports - `SELECT`, `EXAMINE`, `CLOSE`,
+/// `UNSELECT`, `LOGOUT` - so a batch ends with them and what follows sees the new state.
+/// `Some(false)` for the rest, whose answer is untagged data and one tagged completion.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn imap_batch_role(line: &str) -> Option<bool> {
+    let line = line.trim();
+    if line.ends_with('}') {
+        return None;
+    }
+    let (tag, command, _) = parse_imap_command(line);
+    if tag.is_empty() || tag == "*" || tag == "+" || command.is_empty() {
+        return None;
+    }
+    match command.to_ascii_uppercase().as_str() {
+        "NOOP" | "LIST" | "LSUB" | "STATUS" | "CREATE" | "DELETE" | "RENAME" | "SUBSCRIBE"
+        | "UNSUBSCRIBE" | "CHECK" | "EXPUNGE" | "SEARCH" | "FETCH" | "STORE" | "COPY" | "MOVE"
+        | "UID" | "NAMESPACE" => Some(false),
+        "SELECT" | "EXAMINE" | "CLOSE" | "UNSELECT" | "LOGOUT" => Some(true),
+        _ => None,
+    }
+}
+
+/// A batch's answer split into each command's untagged replies and its tagged completion, or
+/// `None` when it does not read as one completion per tag, in order.
+///
+/// A reply is a completion when one of its lines starts with one of the batch's tags, and it
+/// must hold exactly one such line, naming the next tag still owed. A reply that is a lone
+/// `<tag> OK|NO|BAD` line for a tag outside the batch is a misnamed completion. Untagged replies belong to the command whose
+/// completion follows them. A reply after the last completion, a completion out of order, twice
+/// or for a tag outside the batch, `wait_for_more`, or a command left without a completion all
+/// make the answer unusable.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn split_batch_answer(
+    results: &[ActionResult],
+    tags: &[&str],
+) -> Option<Vec<(Vec<Vec<u8>>, Vec<u8>)>> {
+    fn flatten(results: &[ActionResult], out: &mut Vec<Option<Vec<u8>>>) {
+        for result in results {
+            match result {
+                ActionResult::Output(data) => out.push(Some(data.clone())),
+                ActionResult::WaitForMore => out.push(None),
+                ActionResult::Multiple(inner) => flatten(inner, out),
+                _ => {}
+            }
+        }
+    }
+    let mut outputs = Vec::new();
+    flatten(results, &mut outputs);
+
+    let mut answers = Vec::with_capacity(tags.len());
+    let mut untagged: Vec<Vec<u8>> = Vec::new();
+    for output in outputs {
+        let data = output?;
+        let text = String::from_utf8_lossy(&data).into_owned();
+        let tagged: Vec<String> = text
+            .lines()
+            .filter_map(|line| {
+                let first = line.split_whitespace().next()?;
+                tags.contains(&first).then(|| first.to_string())
+            })
+            .collect();
+        // A lone status line for a tag outside the batch is a completion for some command
+        // the model did not name correctly; there is no telling which.
+        if tagged.is_empty() && retag_completion(&data, tags[0]).is_some() {
+            return None;
+        }
+        match tagged.as_slice() {
+            [] => {
+                if answers.len() == tags.len() {
+                    return None;
+                }
+                untagged.push(data);
+            }
+            [tag] if tags.get(answers.len()) == Some(&tag.as_str()) => {
+                answers.push((std::mem::take(&mut untagged), data));
+            }
+            _ => return None,
+        }
+    }
+    (answers.len() == tags.len() && untagged.is_empty()).then_some(answers)
 }
 
 /// Parse IMAP command line into (tag, command, args)
