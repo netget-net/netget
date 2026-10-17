@@ -85,7 +85,9 @@ impl Protocol for IrcProtocol {
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // Lines sent while the model is answering are read together afterwards
+            // (`lines_already_here` in mod.rs) and answered in one call.
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
     fn description(&self) -> &'static str {
