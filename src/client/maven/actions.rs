@@ -378,6 +378,10 @@ impl Protocol for MavenClientProtocol {
             .implementation("reqwest HTTP client with Maven repository protocol")
             .llm_control("Full control over artifact resolution, POM parsing, version search")
             .e2e_testing("Maven Central or local Maven repository")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

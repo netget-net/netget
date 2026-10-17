@@ -367,6 +367,8 @@ impl Protocol for Db2ClientProtocol {
             .llm_control("Which statements and queries to run, how many rows to fetch, and when to commit or roll back; it reads SQLCODE, SQLSTATE, row counts, column descriptions and decoded rows")
             .e2e_testing("tests/client/db2/real_server_test.rs drives Apache Derby 10.17.1.0's network server (a Java DRDA implementation sharing no code with NetGet) with the model mocked: create a table of ten types, insert, commit, select the rows back typed, insert a row built from them, commit, insert and roll back, and a bad statement's error SQLCA. Derby's own ij client reads the table back, a recording proxy feeds both directions to tshark's drda dissector, Derby's statement log shows what ran, and a refused login, the follow-up bound and an LLM failure are tested against it too. Fails rather than skips without java or the Derby jars")
             .notes("Experimental: one independent server (Derby), not the two the client Beta bar asks for. IBM Db2 itself is not tested: its Community image is linux/amd64 only and needs a privileged container. No LOBs, XML, DECFLOAT, user-defined types or parameter markers; no encrypted security mechanisms (passwords go in the clear, as USRIDPWD sends them); DDM strings are EBCDIC CCSID 37 (UNICODEMGR is not negotiated); S/390 hexadecimal floats are refused. The product id defaults to DNC10170 because Derby refuses any other prefix")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

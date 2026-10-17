@@ -325,6 +325,10 @@ impl Protocol for WebRtcClientProtocol {
             .implementation("webrtc-rs for data channels with WebSocket signaling support")
             .llm_control("Full control over data channels, signaling, and binary/text messaging")
             .e2e_testing("Manual SDP exchange or WebSocket signaling with local/remote peers")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

@@ -598,6 +598,10 @@ impl Protocol for FingerClientProtocol {
                  text and is deliberately not parsed; the 'best_effort' block is a guess and \
                  says so.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

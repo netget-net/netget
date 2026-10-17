@@ -111,6 +111,8 @@ impl Protocol for A2sClientProtocol {
             .e2e_testing("tests/client/a2s: scripted fixture with challenges and splits; woozymasta/a2s's server (Go) as the independent peer")
             .notes("Uncompressed Source responses only (no GoldSource, no bzip2 splits). Each reply datagram has a 5 s deadline, a challenge is retried once, and responses are bounded to 64 KiB in at most 64 packets.")
             .max_inbound_bytes(wire::MAX_RESPONSE)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

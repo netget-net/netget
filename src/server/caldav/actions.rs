@@ -71,6 +71,8 @@ impl Protocol for CalDavProtocol {
             .request_only("CalDAV answers each HTTP request; push and sync-collection are not offered")
             .answers_on_failure()
             .max_inbound_bytes(crate::server::dav_common::xml::MAX_BODY)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

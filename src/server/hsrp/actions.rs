@@ -207,6 +207,8 @@ impl Protocol for HsrpProtocol {
                  nor generated.",
             )
             .max_inbound_bytes(crate::server::hsrp::MAX_DATAGRAM_LEN)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

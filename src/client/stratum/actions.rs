@@ -310,6 +310,8 @@ impl Protocol for StratumClientProtocol {
             .llm_control("When and how long to mine, what to submit, which workers to authorize and what difficulty to ask for")
             .e2e_testing("tests/client/stratum: ckpool (solo mode) over Bitcoin Core 28.1 in regtest; ckpool's own hash of every submitted share is read from its log and must equal NetGet's")
             .notes("Mining is CPU-only, single-threaded and bounded per action (50M hashes); it exists to prove work, not to earn. No version rolling, no extranonce subscription. A handler chain stops after 8 follow-ups.")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

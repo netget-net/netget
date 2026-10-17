@@ -64,6 +64,8 @@ fn specific(id: &str) -> EventHandler {
 
 fn server(conns: Vec<ConnRow>, requests: Vec<AccessLogEntry>) -> ServerRow {
     ServerRow {
+        history_entries: 0,
+        batching: false,
         id: ServerId::new(1),
         protocol: "TCP".into(),
         port: 8080,
@@ -86,6 +88,8 @@ fn server(conns: Vec<ConnRow>, requests: Vec<AccessLogEntry>) -> ServerRow {
 
 fn client(status: ClientStatus, send_state: SendState) -> ClientRow {
     ClientRow {
+        history_entries: 0,
+        batching: false,
         id: ClientId::new(4),
         protocol: "telnet".into(),
         remote_addr: "127.0.0.1:2323".into(),

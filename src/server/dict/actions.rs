@@ -130,6 +130,8 @@ impl Protocol for DictProtocol {
                  Wireshark build has no DICT dissector.",
             )
             .max_inbound_bytes(wire::MAX_LINE_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

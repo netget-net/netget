@@ -245,6 +245,8 @@ impl Protocol for LpdProtocol {
             .notes("No spool: the handler sees every job's control fields and the text of each data file (first 64 KiB, null when binary) and decides; nothing is printed or kept. Source ports are not checked against the RFC's 721-731 range. A data file must declare its exact size (no count-0 streaming). Bounds: 1024-byte command lines, 64 KiB control files, 52 data files and max_job_bytes per job, per-read idle deadline. A handler failure refuses the job (nonzero acknowledgement), answers a queue query with an unavailable line, and removes nothing.")
             .request_only("LPD answers the one command each connection carries; the server never speaks first")
             .max_inbound_bytes(super::wire::MAX_COMMAND_LINE)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

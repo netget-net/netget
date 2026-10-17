@@ -370,6 +370,10 @@ impl Protocol for WebdavClientProtocol {
             .implementation("reqwest HTTP client with WebDAV methods")
             .llm_control("Full control over WebDAV operations (PROPFIND, MKCOL, COPY, MOVE, etc.)")
             .e2e_testing("Local WebDAV server or public WebDAV endpoint")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

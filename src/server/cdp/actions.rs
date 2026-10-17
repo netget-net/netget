@@ -413,6 +413,8 @@ impl Protocol for CdpProtocol {
                  fail_closed_llm_error, and no LLM error text ever reaches the wire.",
             )
             .max_inbound_bytes(crate::server::cdp::codec::MAX_8023_LENGTH)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

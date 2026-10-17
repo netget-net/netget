@@ -198,6 +198,10 @@ impl crate::llm::actions::protocol_trait::Protocol for TftpClientProtocol {
                  transfers are LLM-driven block by block, so a large upload costs one \
                  LLM call per 512 bytes.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

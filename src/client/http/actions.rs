@@ -246,6 +246,10 @@ impl Protocol for HttpClientProtocol {
                  (transport.rs) is exercised against NetGet's own servers only, chunked \
                  responses included.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

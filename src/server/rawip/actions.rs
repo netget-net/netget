@@ -345,6 +345,8 @@ impl Protocol for RawIpProtocol {
                  (47) from a Linux `ip tunnel` endpoint is the obvious case — and assert both \
                  directions.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

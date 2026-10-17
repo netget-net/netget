@@ -676,6 +676,8 @@ impl Protocol for SsdpProtocol {
                  from one fails with EADDRNOTAVAIL, which is what notify_target is for.",
             )
             .max_inbound_bytes(crate::server::ssdp::message::MAX_MESSAGE_LEN)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

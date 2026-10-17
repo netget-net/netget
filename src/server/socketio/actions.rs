@@ -294,6 +294,8 @@ impl Protocol for SocketIoProtocol {
             .notes("Text packets only: binary events and attachments are refused. No CORS headers, no Engine.IO v3 / Socket.IO v4 protocol revisions, no adapter for several processes. 256 sessions, 1 MB payloads, 256 queued packets per session.")
             .answers_on_failure()
             .max_inbound_bytes(packet::MAX_PAYLOAD)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

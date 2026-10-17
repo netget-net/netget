@@ -193,6 +193,8 @@ impl Protocol for A2aClientProtocol {
             .e2e_testing("tests/client/a2a: an a2a-sdk 1.2.1 agent (independent) answers a direct message, a streamed task, GetTask and CancelTask; NetGet pair and refusals")
             .notes("JSON-RPC binding only (no HTTP+JSON or gRPC, no push notifications, no 0.3). Streams are collected whole (1 MiB, 256 events, 30 s). A card pointing at another host is refused unless allow_card_redirect.")
             .max_inbound_bytes(crate::server::a2a::model::MAX_BODY_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

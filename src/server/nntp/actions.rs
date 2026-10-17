@@ -280,6 +280,8 @@ impl Protocol for NntpProtocol {
             .e2e_testing("Independent Python nntplib reader/post/feed and NNTP_SSL authentication; malformed input and owner shutdown")
             .max_inbound_bytes(crate::server::nntp::extensions::MAX_ARTICLE)
             .notes("Handler-owned articles and accounts; no persistent spool, STARTTLS, SASL or compression. Streaming commands are processed sequentially; credentials require TLS.")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

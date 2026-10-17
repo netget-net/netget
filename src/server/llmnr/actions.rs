@@ -212,6 +212,8 @@ impl Protocol for LlmnrProtocol {
                  the querier's resolver, so a guess is cache poisoning.",
             )
             .max_inbound_bytes(crate::server::llmnr::MAX_MESSAGE_LEN)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

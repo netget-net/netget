@@ -436,6 +436,10 @@ impl Protocol for KerberosClientProtocol {
                  has reviewed it beyond its tests and the pair job has not run in CI. No FAST, \
                  PKINIT, renewal, cross-realm, AP exchange or RFC 8009 enctypes.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

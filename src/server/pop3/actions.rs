@@ -662,6 +662,8 @@ impl Protocol for Pop3Protocol {
                 "No mailbox storage: the model answers STAT/LIST/RETR itself. Plain TCP only - \
                  neither POP3S nor STLS is available.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

@@ -96,6 +96,10 @@ impl Protocol for MssqlProtocol {
                  heuristically from the packet, so parameterised queries arrive with their \
                  placeholders intact",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

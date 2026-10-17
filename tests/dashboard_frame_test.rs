@@ -61,6 +61,8 @@ fn populated() -> RailSnapshot {
         })
         .collect();
     let server = ServerRow {
+        history_entries: 0,
+        batching: false,
         id: ServerId::new(1),
         protocol: "HTTP".into(),
         port: 8080,
@@ -96,6 +98,8 @@ fn populated() -> RailSnapshot {
         }],
     };
     let broken = ServerRow {
+        history_entries: 0,
+        batching: false,
         id: ServerId::new(2),
         protocol: "DNS".into(),
         port: 53,
@@ -115,6 +119,8 @@ fn populated() -> RailSnapshot {
         intercepts: Vec::new(),
     };
     let client = ClientRow {
+        history_entries: 0,
+        batching: false,
         id: ClientId::new(3),
         protocol: "telnet".into(),
         remote_addr: "127.0.0.1:2323".into(),

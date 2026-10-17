@@ -73,6 +73,8 @@ impl Protocol for McpProtocol {
                  session state is kept and nothing is gated on the initialized \
                  notification. No storage: the handler answers every request.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

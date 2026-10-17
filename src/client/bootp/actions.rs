@@ -179,6 +179,10 @@ impl Protocol for BootpClientProtocol {
             .implementation("dhcproto crate for BOOTP packet encoding/decoding")
             .llm_control("Full control over BOOTP requests and reply interpretation")
             .e2e_testing("dnsmasq or isc-dhcp-server for BOOTP testing")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

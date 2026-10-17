@@ -179,6 +179,10 @@ impl Protocol for XmlRpcClientProtocol {
             .implementation("xmlrpc crate for method calls")
             .llm_control("Full control over method calls with structured parameters")
             .e2e_testing("Public XML-RPC test servers or local implementation")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

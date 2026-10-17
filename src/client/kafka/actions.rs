@@ -640,6 +640,10 @@ impl Protocol for KafkaClientProtocol {
                  SSL/SASL, no transactions, no compression on the produce path (compressed \
                  batches are decoded on the fetch path).",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn get_startup_examples(&self) -> crate::llm::actions::StartupExamples {

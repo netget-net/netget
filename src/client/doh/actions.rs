@@ -230,6 +230,10 @@ impl Protocol for DohClientProtocol {
             .implementation("hickory-client with DNS-over-HTTPS support")
             .llm_control("Full control over DNS queries with LLM-driven decision making")
             .e2e_testing("Public DoH servers (Google, Cloudflare)")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

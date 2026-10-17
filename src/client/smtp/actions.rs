@@ -242,6 +242,10 @@ impl Protocol for SmtpClientProtocol {
             .implementation("lettre library with STARTTLS support")
             .llm_control("Full control over email composition (from, to, subject, body, auth)")
             .e2e_testing("Local SMTP server or test mail service")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

@@ -255,6 +255,8 @@ impl Protocol for SnmpClientProtocol {
             .llm_control("Full control over SNMP operations (GET, GETNEXT, GETBULK, SET); SNMPv3 reports reach the handler as usm_report")
             .e2e_testing("tests/client/snmp/real_server_test.rs: Net-SNMP's snmpd, unprivileged in a temp dir, with a SHA-256/AES and an MD5/DES user. NetGet discovers its engine, GETs, and a handler SETs sysContact from the reply; the value is read back with Net-SNMP's snmpget as the other user. A wrong password is snmpd's own wrongDigests report. Fails, not skips, without snmpd")
             .notes("v1/v2c with a community; v3 with one USM user per client. No AES-192/256 (expired drafts with two incompatible key extensions), no VACM on this side, no v3 informs or traps")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

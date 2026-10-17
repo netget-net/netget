@@ -278,6 +278,8 @@ impl Protocol for WampProtocol {
             .notes("JSON serializer only (no MessagePack, CBOR or RawSocket); anonymous authentication only; no progressive results, call cancellation, shared registrations, meta API or event history.")
             .answers_on_failure()
             .max_inbound_bytes(super::MAX_MESSAGE)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

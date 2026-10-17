@@ -383,6 +383,8 @@ impl Protocol for LdapClientProtocol {
                  whose values are not UTF-8 (jpegPhoto, certificates) are left out of them. Bind credentials come \
                  from the model or the operator; no key material or system account is read.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

@@ -100,6 +100,8 @@ impl Protocol for MilterClientProtocol {
             .e2e_testing("tests/client/milter: NetGet's own filter; a pymilter (libmilter) filter and emersion/go-milter's server as independent filters")
             .notes("Macros are not sent. A stage the filter asked to be left out or not answered is reported as an implicit continue. A stage the filter answers with anything but continue ends the message; the handler decides what follows. A handler chain stops after 8 follow-ups.")
             .max_inbound_bytes(wire::MAX_PACKET)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

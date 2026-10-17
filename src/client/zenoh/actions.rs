@@ -107,6 +107,8 @@ impl Protocol for ZenohClientProtocol {
             .llm_control("What to publish, delete and query, and how to react to samples and answer queries")
             .e2e_testing("tests/client/zenoh: zenoh-pico 1.10.1 (independent C implementation) peers listening: one subscribes to what NetGet publishes, one serves a queryable NetGet queries, one publishes to NetGet's subscriber")
             .notes("No TLS, QUIC or UDP transports. Gets time out after 10 s with at most 256 replies; chains stop at depth 4.")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

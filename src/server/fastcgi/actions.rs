@@ -174,6 +174,8 @@ impl Protocol for FastcgiProtocol {
             .request_only("FastCGI answers each request the web server forwards; nothing is pushed")
             .answers_on_failure()
             .max_inbound_bytes(record::MAX_BODY_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

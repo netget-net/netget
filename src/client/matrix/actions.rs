@@ -402,6 +402,8 @@ impl Protocol for MatrixClientProtocol {
             .llm_control("Which rooms to create, join or leave, whom to invite, what to say, and how to answer every message and invite")
             .e2e_testing("tests/client/matrix: Synapse (the reference homeserver), with a matrix-nio user as the other participant reading what NetGet said")
             .notes("No end-to-end encryption (encrypted rooms' messages arrive as m.room.encrypted and cannot be read), no media, no registration. Events from before login are not replayed. Answers are capped at 4 MiB. A handler chain stops after 8 follow-ups.")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

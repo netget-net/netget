@@ -666,6 +666,8 @@ impl Protocol for Dhcpv6Protocol {
             )
             .e2e_testing("tests/server/dhcpv6/e2e_test.rs, 9 LLM calls. The peer is an RFC 8415 encoder/decoder written in the test file, independent of the dhcproto codec the server encodes with. It asserts SOLICIT->ADVERTISE->REQUEST->REPLY, the Rapid Commit two-message exchange, INFORMATION-REQUEST->REPLY, and that an LLM failure puts nothing on the wire. Checked per reply: message type, the echoed 3-octet transaction id, the echoed Client Identifier, a Server Identifier, the IA_NA IAID, IA_ADDR address and lifetimes, IA_PD/IAPREFIX, options 23 and 24, and option 14 on the rapid-commit REPLY. Not covered: a real client, multicast delivery to FF02::1:2, relay (RELAY-FORW/RELAY-REPL), CONFIRM and DECLINE")
             .notes("No lease database of any kind: the model picks every address, prefix and lifetime, and nothing stops it handing the same address to two clients. The transaction id is 3 octets, the Client Identifier and the IA_NA/IA_PD IAIDs are echoed from the request automatically. CONFIRM, DECLINE, RECONFIGURE and RELAY-FORW are dropped without reaching the model. An LLM failure sends nothing — a DHCPv6 reply writes an address, lifetimes and resolvers into the client's stack, and the protocol has no way to say 'ask again later'")
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

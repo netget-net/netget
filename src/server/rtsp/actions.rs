@@ -135,6 +135,8 @@ impl Protocol for RtspProtocol {
                  Default port 8554 (unprivileged); pass port 554 explicitly if you have privilege.",
             )
             .max_inbound_bytes(crate::server::rtsp::MAX_REQUEST_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

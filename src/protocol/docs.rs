@@ -55,6 +55,8 @@ fn render_protocol_doc<P: Protocol + ?Sized>(name: &str, p: &P) -> String {
     if !keywords.is_empty() {
         s.push_str(&format!("- Keywords: {}\n", keywords.join(", ")));
     }
+    s.push_str(&format!("- History: {}\n", meta.history.describe()));
+    s.push_str(&format!("- Batching: {}\n", meta.batching.describe()));
     if let Some(notes) = meta.notes {
         s.push_str(&format!("- Notes: {}\n", notes));
     }

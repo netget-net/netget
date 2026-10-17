@@ -143,6 +143,8 @@ impl Protocol for OpenApiProtocol {
             .notes("Dynamic spec loading, intentional violations for testing")
             .max_inbound_bytes(crate::server::openapi::MAX_REQUEST_BODY_BYTES)
             .request_only("An OpenAPI service is HTTP request/response; a server cannot send a peer anything unprompted")
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

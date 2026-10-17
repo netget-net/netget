@@ -104,6 +104,12 @@ impl Protocol for TcpProtocol {
             .e2e_testing("tokio::net::TcpStream")
             .notes("Basis for FTP, SMTP, custom protocols")
             .max_inbound_bytes(crate::server::tcp::MAX_QUEUED_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            // Bytes arriving during a call are the next call's payload, whole (batching on) or
+            // one read at a time (off) — `ConnectionData::take_next`.
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
     fn description(&self) -> &'static str {

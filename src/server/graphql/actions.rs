@@ -226,6 +226,8 @@ impl Protocol for GraphqlProtocol {
             .notes("Subscriptions only over graphql-transport-ws (no SSE, no legacy subscriptions-transport-ws); connection_init is always acknowledged (no auth hook). No batching, persisted queries, file uploads or @defer/@stream. No resolvers in Rust: the handler supplies the data, Rust executes the query over it. 1 MiB bodies and messages, 64 KiB queries, parser depth 64, 64 subscriptions per socket.")
             .answers_on_failure()
             .max_inbound_bytes(engine::MAX_BODY_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

@@ -886,6 +886,10 @@ impl Protocol for AmqpProtocol {
                  LLM outage cannot silently open the broker.",
             )
             .max_inbound_bytes(crate::server::amqp::MAX_BODY_SIZE as usize)
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

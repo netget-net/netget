@@ -404,10 +404,11 @@ async fn probe_protocol(
             false, // send_first: a connect-time banner needs an LLM we deliberately do not have
             None,  // initial_memory
             "smoke test: verify this protocol starts, listens and stops".to_string(),
-            None, // startup_params — exercise the protocol's own defaults
-            None, // event_handlers
-            None, // scheduled_tasks
-            None, // feedback_instructions
+            None,               // startup_params — exercise the protocol's own defaults
+            None,               // event_handlers
+            None,               // scheduled_tasks
+            None,               // feedback_instructions
+            Default::default(), // history / batching overrides
             status_tx,
         )
         .await

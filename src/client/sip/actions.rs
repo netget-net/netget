@@ -69,6 +69,10 @@ impl Protocol for SipClientProtocol {
             .llm_control("REGISTER, INVITE, BYE, OPTIONS, CANCEL methods")
             .e2e_testing("Self-testing against NetGet SIP server - < 10 LLM calls")
             .notes("VoIP signaling, no RTP media streams")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

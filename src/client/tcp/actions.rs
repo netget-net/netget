@@ -177,6 +177,10 @@ impl Protocol for TcpClientProtocol {
             .implementation("Tokio TcpStream for raw TCP connections")
             .llm_control("Full control over sent/received bytes")
             .e2e_testing("nc (netcat) as test server")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

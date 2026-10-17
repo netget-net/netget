@@ -117,6 +117,10 @@ impl Protocol for SipProtocol {
                  decisions and fail closed - an LLM error is 503, an action with no \
                  status_code or no SIP response action at all is 500, never a defaulted 200",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

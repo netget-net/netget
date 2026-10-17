@@ -277,6 +277,8 @@ impl Protocol for OtlpClientProtocol {
             .llm_control("Typed spans, UTF-8 logs and one gauge metric per export; semantic receiver verdicts, partial success and retry hints; injected actions and shared static/script/manual/model handlers")
             .e2e_testing("tests/client/otlp requires official OpenTelemetry Collector0.162.0 for both transports and all three signals; direct NetGet pairing and transport/response/cancellation bounds")
             .notes("128 items/export, 32 scalar attributes/object, 1 MiB encoded export, 4 MiB response before/after inflation, 16 total exports/handlers, four follow-up levels. Socket guard closes internally spawned tonic transport tasks. No automatic retry/reconnect, persistent telemetry, raw protobuf/JSON actions, histogram/sum/exemplar/profile export, span events/links, mTLS or proxy. Expanded subset remains Experimental")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn get_startup_examples(&self) -> StartupExamples {

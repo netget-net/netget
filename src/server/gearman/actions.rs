@@ -140,6 +140,10 @@ impl Protocol for GearmanProtocol {
             .max_inbound_bytes(wire::MAX_PACKET_BYTES)
             // WORK_FAIL for the job, which every Gearman client reports as a failed job.
             .answers_on_failure()
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

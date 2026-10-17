@@ -162,6 +162,10 @@ impl Protocol for SshProtocol {
                  not translate - so `ssh host cmd` returns CRLF and `$(ssh host cmd)` keeps a \
                  trailing CR.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

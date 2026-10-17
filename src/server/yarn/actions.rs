@@ -574,6 +574,8 @@ impl Protocol for YarnProtocol {
             )
             .max_inbound_bytes(crate::server::yarn::MAX_REQUEST_BODY_BYTES)
             .request_only("The YARN REST API is HTTP request/response; a server cannot send a peer anything unprompted")
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

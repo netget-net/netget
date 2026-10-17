@@ -82,7 +82,9 @@ impl Protocol for NutClientProtocol {
         .llm_control("UPS/variable queries, authentication, SET and instant commands; response events and injected actions")
         .e2e_testing("tests/client/nut: independent wire fixture, malformed/mismatched replies, command injection and event handlers; see CLAUDE.md for real upsd evidence")
         .notes("Plain TCP only; no TLS negotiation, attachment/primary/FSD or command tracking. Connect/response/write deadlines 30s, 8192-byte lines, 1 MiB/4096-entry replies. All tasks are registered and event/request queues are bounded at 16.")
-        .max_inbound_bytes(crate::server::nut::wire::MAX_RESPONSE_BYTES).build()
+        .max_inbound_bytes(crate::server::nut::wire::MAX_RESPONSE_BYTES).history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+        .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+        .build()
     }
     fn example_prompt(&self) -> &'static str {
         "Connect to NUT at localhost:3493 and read ups.status"

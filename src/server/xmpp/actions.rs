@@ -188,6 +188,10 @@ impl Protocol for XmppProtocol {
                  TLS/STARTTLS, and no credential checking - the model decides every auth outcome.",
             )
             .max_inbound_bytes(crate::server::xmpp::MAX_XMPP_BUFFER_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

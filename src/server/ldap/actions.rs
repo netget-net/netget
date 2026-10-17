@@ -347,6 +347,10 @@ impl Protocol for LdapProtocol {
                  the model chooses.",
             )
             .max_inbound_bytes(crate::server::ldap::MAX_LDAP_MESSAGE)
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

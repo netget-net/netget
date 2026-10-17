@@ -330,6 +330,8 @@ impl Protocol for SunRpcClientProtocol {
             .llm_control("Which programs to look up, register and remove, and what to do with each answer")
             .e2e_testing("tests/client/sunrpc: the system rpcbind (libtirpc) on 127.0.0.1:111, read back with rpcinfo")
             .notes("TCP only, AUTH_NONE only. Replies are capped at 256 KiB. A call waits at most 10 s. A handler chain stops after 8 follow-ups.")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

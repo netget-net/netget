@@ -294,6 +294,10 @@ impl Protocol for IrcClientProtocol {
                  any other independent server, which is why this is Experimental rather than \
                  Beta.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

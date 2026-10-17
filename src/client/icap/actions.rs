@@ -144,6 +144,8 @@ impl Protocol for IcapClientProtocol {
             .e2e_testing("tests/client/icap: c-icap 0.6.5's echo service (independent server) answers OPTIONS, REQMOD and RESPMOD with preview; NetGet pair and malformed-server refusals")
             .notes("Bodies are text (UTF-8) in actions and events, bounded at 1 MiB; binary response bodies are reported by size. No ICAP over TLS, no 206.")
             .max_inbound_bytes(wire::MAX_BODY_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

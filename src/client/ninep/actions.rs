@@ -310,6 +310,8 @@ impl Protocol for NinepClientProtocol {
             .e2e_testing("tests/client/ninep: NetGet's own server for every operation; knusbaum/go9p's file server (Go) as the independent peer")
             .notes("9P2000 only, no authentication. msize is offered at 65536; a file read is capped at 1 MiB, a listing at 1024 entries, a path at 16 elements per walk (longer paths walk in steps). Requests run one at a time; each has a 30 s deadline.")
             .max_inbound_bytes(wire::MAX_MSIZE as usize)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

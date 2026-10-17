@@ -221,6 +221,8 @@ impl Protocol for RestconfClientProtocol {
             .llm_control("Which resources to read and edit and which operations to invoke")
             .e2e_testing("tests/client/restconf: a FreeCONF RESTCONF server (independent, Go) serving its car example: reads, edits, a missing resource and an operation")
             .notes("Plain HTTP only; JSON only; no event streams.")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

@@ -387,6 +387,8 @@ impl Protocol for BluetoothClientProtocol {
             .implementation("btleplug library for cross-platform BLE")
             .llm_control("Full control over scanning, connecting, service discovery, read/write/subscribe operations")
             .e2e_testing("Real BLE device or simulator required")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

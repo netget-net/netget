@@ -108,6 +108,8 @@ impl Protocol for Http2Protocol {
             )
             .max_inbound_bytes(crate::server::http_common::MAX_REQUEST_BODY_BYTES)
             .request_only("HTTP/2 only answers requests; every response and push rides a stream the peer opened")
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

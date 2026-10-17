@@ -374,6 +374,10 @@ impl Protocol for MqttClientProtocol {
                  TLS, username/password against a broker that enforces it, Last Will, \
                  persistent sessions (clean_session false) and reconnection.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

@@ -493,6 +493,8 @@ impl Protocol for SpiceClientProtocol {
             .llm_control("What to type, which keys to press, where to click, and when to look; the display comes back as size, colours, a checksum, sampled points and counts of what the server drew")
             .e2e_testing("tests/client/spice: QEMU's spice-server (qemu-system-x86_64 -spice, no disk, SeaBIOS on the VGA console) — the surface size, the firmware screen appearing after the VM is resumed, keystrokes and mouse buttons read back from QEMU's input trace events, and a wrong password refused; tshark's spice dissector over both directions")
             .notes("Experimental: one independent server (spice-server through QEMU). No TLS (tls-port), no SASL, no cursor, audio, agent, USB or smartcard channels. Compressed images (QUIC, LZ, GLZ, JPEG, LZ4) and video streams are counted but not decoded, so a reading says exact: false when they were drawn; the client asks for uncompressed images, which spice-server honours. One primary surface; off-screen surfaces are counted, not kept. Typing is US layout only; SPICE has no Unicode key event.")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

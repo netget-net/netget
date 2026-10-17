@@ -513,6 +513,10 @@ impl Protocol for OspfClientProtocol {
             well_known_transport: PortTransport::Tcp,
             // A client has no peers of its own to message; the declaration is a server's.
             request_only: None,
+            // An adjacency is a session: each hello and LSA is read against the last.
+            history: HistoryMode::Last(SESSION_HISTORY_ENTRIES),
+            // Packets are handled one by one inside the client's read loop.
+            batching: BatchingMode::Unsupported,
         }
     }
     fn description(&self) -> &'static str {

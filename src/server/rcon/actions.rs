@@ -169,6 +169,8 @@ impl Protocol for RconProtocol {
             .notes("Plain TCP, as RCON is. A configured password is compared in Rust in constant time and never shown to the handler; without one the handler decides and sees the attempt. Three failed logins close the connection; a command before login closes it. Packets are capped at 4096 bytes and output at 1 MiB. A handler failure on a command closes the connection rather than inventing output.")
             .request_only("RCON answers each packet the client sends; the server never speaks first")
             .max_inbound_bytes(super::wire::MAX_PACKET)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

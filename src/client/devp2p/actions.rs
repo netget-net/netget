@@ -177,6 +177,8 @@ impl Protocol for Devp2pClientProtocol {
             .llm_control("This node's Status (eth_status, with the peer's Status when it has sent one), the header, body and pooled-transaction requests to send, answers to the peer's requests, and when to disconnect")
             .e2e_testing("tests/client/devp2p: go-ethereum 1.17 and reth 2.7, each on a private dev chain with blocks, accept NetGet's handshake and eth/69 Status and serve headers whose computed hashes match their own eth_getBlockByNumber")
             .notes("Experimental: two independent servers (go-ethereum and reth) drive it in tests that fail rather than skip, but nobody has reviewed it and its pair job had not run in CI when it landed. No discovery: the peer is named by its enode URL. No snap protocol. Received bodies are decoded (transaction hashes, uncles, withdrawals) but not checked against the header's transactionsRoot.")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

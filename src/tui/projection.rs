@@ -50,6 +50,10 @@ pub struct ServerRow {
     pub request_only: Option<String>,
     /// Requests a `manual` rule parked, waiting for the operator's answer.
     pub intercepts: Vec<crate::state::intercepts::InterceptView>,
+    /// Earlier entries per connection the model is shown (0 = off) — the edit form's value.
+    pub history_entries: u16,
+    /// Whether events arriving during a call are batched — the edit form's value.
+    pub batching: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -80,6 +84,10 @@ pub struct ClientRow {
     pub send_actions: Vec<SendVerb>,
     /// Replies a `manual` rule parked, waiting for the operator's answer.
     pub intercepts: Vec<crate::state::intercepts::InterceptView>,
+    /// Earlier entries per connection the model is shown (0 = off) — the edit form's value.
+    pub history_entries: u16,
+    /// Whether events arriving during a call are batched — the edit form's value.
+    pub batching: bool,
 }
 
 /// One verb a client can send, as the send section lists it.
@@ -229,6 +237,8 @@ pub async fn build_snapshot(state: &AppState) -> RailSnapshot {
             intercepts: server_intercepts
                 .remove(&server.id.as_u32())
                 .unwrap_or_default(),
+            history_entries: server.history_entries,
+            batching: server.batching,
         });
     }
     server_rows.sort_by_key(|s| s.id.as_u32());
@@ -283,6 +293,8 @@ pub async fn build_snapshot(state: &AppState) -> RailSnapshot {
             intercepts: client_intercepts
                 .remove(&client.id.as_u32())
                 .unwrap_or_default(),
+            history_entries: client.history_entries,
+            batching: client.batching,
         });
     }
     client_rows.sort_by_key(|c| c.id.as_u32());

@@ -131,6 +131,8 @@ impl Protocol for MdnsProtocol {
             .llm_control("Service registration at startup only - no query handling, no runtime updates")
             .e2e_testing("tests/server/mdns/test.rs, not #[ignore]d: an mdns-sd ServiceDaemon browses the group and each test asserts its own instance resolves, by name, with its TXT properties intact. Circular evidence, though - mdns-sd is also what this server registers through. An independent peer (dns-sd -L on macOS, avahi-browse -r on Linux) is what a Beta rating needs.")
             .notes("Multicast service discovery; advertisement-only. Services are registered once, from the mdns_server_startup event, and cannot be added, changed or removed afterwards - register_mdns_service is a no-op outside that pass because the daemon handle is not reachable from an action. Incoming mDNS queries are answered by mdns-sd, not by the LLM.")
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

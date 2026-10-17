@@ -547,6 +547,10 @@ impl Protocol for NgapProtocol {
                  configuration update.",
             )
             .max_inbound_bytes(codec::MAX_PDU_LEN)
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

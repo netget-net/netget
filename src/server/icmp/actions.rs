@@ -120,6 +120,8 @@ impl Protocol for IcmpProtocol {
                  answers echo requests itself, so a userspace reply is a second reply on the \
                  wire.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

@@ -107,6 +107,10 @@ impl Protocol for PostgresqlProtocol {
             .notes(
                 "No authentication, no TLS; simple and extended query protocols, text format only",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

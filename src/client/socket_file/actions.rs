@@ -279,6 +279,10 @@ impl Protocol for SocketFileClientProtocol {
                  Experimental on the usual evidence. The tests drive a real UnixListener peer \
                  in-process: connect, connect-time send, the peer's reply, the client's answer.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

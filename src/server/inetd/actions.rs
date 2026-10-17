@@ -496,7 +496,11 @@ pub fn metadata(service: Service) -> crate::protocol::metadata::ProtocolMetadata
     } else {
         builder
     };
-    builder.build()
+    // Each service answers one connection or datagram and has no conversation to remember.
+    builder
+        .history(crate::protocol::metadata::HistoryMode::Off)
+        .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+        .build()
 }
 
 pub fn startup_examples(service: Service) -> crate::llm::actions::StartupExamples {

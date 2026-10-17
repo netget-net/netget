@@ -255,6 +255,8 @@ impl Protocol for StratumProtocol {
             .request_only("Every message answers a miner's request, except the work and difficulty that follow an answer")
             .answers_on_failure()
             .max_inbound_bytes(super::wire::MAX_LINE)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

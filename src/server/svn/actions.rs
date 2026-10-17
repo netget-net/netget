@@ -105,6 +105,10 @@ impl Protocol for SvnProtocol {
                  send_svn_response escape hatch.",
             )
             .max_inbound_bytes(crate::server::svn::MAX_COMMAND_BYTES as usize)
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

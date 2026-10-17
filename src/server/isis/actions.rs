@@ -144,6 +144,8 @@ impl Protocol for IsisProtocol {
                  pcap path needs root and the E2E suite is #[ignore]d. LSP/CSNP/PSNP are parsed \
                  and logged but not handled; there is no LSP database or SPF.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

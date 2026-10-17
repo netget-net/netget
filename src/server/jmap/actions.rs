@@ -189,6 +189,8 @@ impl Protocol for JmapProtocol {
             .request_only("JMAP is HTTP request/response; with no EventSource or WebSocket push there is nothing a server can send outside an answer")
             .answers_on_failure()
             .max_inbound_bytes(super::MAX_BODY)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

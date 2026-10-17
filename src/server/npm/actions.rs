@@ -108,6 +108,8 @@ impl Protocol for NpmProtocol {
                 .e2e_testing("The real npm CLI, in tests/server/npm/e2e_test.rs::test_npm_with_real_cli, which is not #[ignore]d: `npm view --json` resolves netget-test-pkg@1.0.0 from the packument this server serves, and `npm install` then downloads the tarball, verifies its integrity and unpacks it into node_modules/. Both are asserted; the test also fails rather than skipping if the npm CLI is absent.")
                 .notes("Implements NPM registry protocol: package metadata (GET /{package}), tarballs (GET /{package}/-/{tarball}), listing (GET /-/all), and search (GET /-/v1/search). Beta because npm itself completes both a metadata resolution and a full install against it - not merely that an HTTP client got a 200.")
                 .request_only("The npm registry is HTTP request/response; a server cannot send a peer anything unprompted")
+                .history(crate::protocol::metadata::HistoryMode::Off)
+                .batching(crate::protocol::metadata::BatchingMode::Unsupported)
                 .build()
     }
     fn description(&self) -> &'static str {

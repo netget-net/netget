@@ -851,6 +851,8 @@ impl EventHandler {
                 event_handlers,
                 scheduled_tasks,
                 feedback_instructions,
+                history,
+                batching,
             } => {
                 // Documentation gate (off by default, see REQUIRE_DOCS_FOR_OPEN_ACTIONS):
                 // when enabled, the first open_server of the process fetches the
@@ -958,6 +960,7 @@ impl EventHandler {
                     event_handlers,
                     scheduled_tasks,
                     feedback_instructions,
+                    crate::protocol::metadata::ConversationOverrides { history, batching },
                     status_tx.clone(),
                 )
                 .await
@@ -1281,6 +1284,8 @@ impl EventHandler {
                 event_handlers,
                 scheduled_tasks,
                 feedback_instructions,
+                history,
+                batching,
             } => {
                 // Documentation gate (off by default, see REQUIRE_DOCS_FOR_OPEN_ACTIONS):
                 // when enabled, the first open_client of the process fetches the
@@ -1423,6 +1428,32 @@ impl EventHandler {
                 }
                 client.startup_params = startup_params.clone();
                 client.feedback_instructions = feedback_instructions;
+                if let Some(protocol_impl) = crate::protocol::CLIENT_REGISTRY.get(&protocol) {
+                    let overrides =
+                        crate::protocol::metadata::ConversationOverrides { history, batching };
+                    let (history_entries, batching) = overrides
+                        .resolve(&protocol_impl.metadata(), &protocol)
+                        .map_err(|e| ActionExecutionError::InvalidActionParameters {
+                            action_type: "open_client".to_string(),
+                            parameter_name: if history
+                                .is_some_and(|h| h > crate::protocol::metadata::MAX_HISTORY_ENTRIES)
+                            {
+                                "history".to_string()
+                            } else {
+                                "batching".to_string()
+                            },
+                            error_message: e.to_string(),
+                            original_action: serde_json::json!({
+                                "type": "open_client",
+                                "protocol": protocol,
+                                "remote_addr": remote_addr,
+                                "history": history,
+                                "batching": batching,
+                            }),
+                        })?;
+                    client.history_entries = history_entries;
+                    client.batching = batching;
+                }
 
                 // Add client to state (this allocates the real client ID)
                 let client_id = self.state.add_client(client).await;
@@ -1629,6 +1660,8 @@ impl EventHandler {
                 event_handlers,
                 scheduled_tasks,
                 feedback_instructions,
+                history,
+                batching,
             } => {
                 use crate::cli::management::{self, ServerForm};
                 let form = ServerForm {
@@ -1644,6 +1677,8 @@ impl EventHandler {
                     event_handlers,
                     scheduled_tasks,
                     feedback_instructions,
+                    history,
+                    batching,
                 };
                 match management::update_server(
                     &self.state,
@@ -1671,6 +1706,8 @@ impl EventHandler {
                 event_handlers,
                 scheduled_tasks,
                 feedback_instructions,
+                history,
+                batching,
             } => {
                 use crate::cli::management::{self, ClientForm};
                 let form = ClientForm {
@@ -1682,6 +1719,8 @@ impl EventHandler {
                     event_handlers,
                     scheduled_tasks,
                     feedback_instructions,
+                    history,
+                    batching,
                 };
                 match management::update_client(
                     &self.state,
@@ -2529,6 +2568,8 @@ impl EventHandler {
                         event_handlers,
                         scheduled_tasks,
                         feedback_instructions,
+                        history,
+                        batching,
                     } => {
                         // Create status channel for server startup messages
                         // Messages will be logged via tracing macros in the spawn method
@@ -2549,6 +2590,7 @@ impl EventHandler {
                             event_handlers,
                             scheduled_tasks,
                             feedback_instructions,
+                            crate::protocol::metadata::ConversationOverrides { history, batching },
                             status_tx,
                         )
                         .await
@@ -2585,6 +2627,8 @@ impl EventHandler {
                         event_handlers,
                         scheduled_tasks,
                         feedback_instructions,
+                        history,
+                        batching,
                     } => {
                         // Execute open_client action via client startup
                         use crate::cli::client_startup;
@@ -2599,6 +2643,7 @@ impl EventHandler {
                             event_handlers,
                             scheduled_tasks,
                             feedback_instructions,
+                            crate::protocol::metadata::ConversationOverrides { history, batching },
                             self.llm.clone(),
                             None, // status_tx: /load path, drain to tracing
                         )

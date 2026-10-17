@@ -125,7 +125,9 @@ impl Protocol for BeanstalkdClientProtocol {
         .llm_control("Job put/reserve/release/bury/kick/delete, tube selection/watch/pause, and structured statistics")
         .e2e_testing("tests/client/beanstalkd: installed independent beanstalkd daemon, NetGet server pair, wire bounds, command injection and cleanup")
         .notes("Plain TCP; no authentication (the wire protocol defines none). UTF-8 job payloads only. Connect/response/write deadlines 30s; reservation wait at most25s, response headers224 bytes, jobs65535 bytes and total payload1MiB. All tasks tracked; injected disconnect interrupts pending replies.")
-        .max_inbound_bytes(super::wire::MAX_REPLY_BYTES).build()
+        .max_inbound_bytes(super::wire::MAX_REPLY_BYTES).history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+        .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+        .build()
     }
     fn example_prompt(&self) -> &'static str {
         "Connect to Beanstalkd at localhost:11300 and inspect queue statistics"

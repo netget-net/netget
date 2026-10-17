@@ -82,6 +82,10 @@ impl Protocol for IrcProtocol {
                  between connections, no TLS. The model tracks all of that itself.",
             )
             .max_inbound_bytes(crate::server::irc::wire::MAX_IRC_READ_LINE)
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

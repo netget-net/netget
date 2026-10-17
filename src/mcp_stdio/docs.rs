@@ -101,6 +101,8 @@ pub async fn render_protocol_docs(protocol: &str, state: &AppState) -> Option<St
                  that lives until either side closes it"
             }
         );
+        let _ = writeln!(out, "- **history**: {}", metadata.history.describe());
+        let _ = writeln!(out, "- **batching**: {}", metadata.batching.describe());
         if let Some(notes) = metadata.notes {
             let _ = writeln!(out, "- **notes**: {}", notes);
         }
@@ -233,6 +235,14 @@ pub async fn render_protocol_docs(protocol: &str, state: &AppState) -> Option<St
              \"instruction\":\"…\"}` (or `\"recurring\":false` with `\"delay_secs\"`). \
              Removed when the server stops.\n",
         );
+        out.push_str(
+            "- `history` (number) — earlier exchanges on the same connection the model is shown \
+             with each event; 0 turns it off. Omit for the default above.\n",
+        );
+        out.push_str(
+            "- `batching` (boolean) — deliver events that arrive during a call together \
+             afterwards. Omit for the default above.\n",
+        );
         out.push('\n');
 
         // --- events ----------------------------------------------------------
@@ -311,6 +321,8 @@ pub async fn render_protocol_docs(protocol: &str, state: &AppState) -> Option<St
         let _ = writeln!(out, "- **network stack**: {}", client.stack_name());
         let _ = writeln!(out, "- **implementation**: {}", metadata.implementation);
         let _ = writeln!(out, "- **LLM controls**: {}", metadata.llm_control);
+        let _ = writeln!(out, "- **history**: {}", metadata.history.describe());
+        let _ = writeln!(out, "- **batching**: {}", metadata.batching.describe());
         if let Some(notes) = metadata.notes {
             let _ = writeln!(out, "- **notes**: {}", notes);
         }
@@ -357,6 +369,14 @@ pub async fn render_protocol_docs(protocol: &str, state: &AppState) -> Option<St
         out.push_str(
             "- `scheduled_tasks` (array) — client-scoped recurring/delayed LLM tasks, same \
              shape as for `start_server`.\n",
+        );
+        out.push_str(
+            "- `history` (number) — earlier exchanges on the same connection the model is shown \
+             with each event; 0 turns it off. Omit for the default above.\n",
+        );
+        out.push_str(
+            "- `batching` (boolean) — deliver events that arrive during a call together \
+             afterwards. Omit for the default above.\n",
         );
         out.push('\n');
 

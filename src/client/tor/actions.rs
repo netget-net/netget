@@ -431,6 +431,10 @@ impl Protocol for TorClientProtocol {
                  `allow_public_tor_network: true`. Passing both is refused rather than \
                  guessed. Bootstrap is 10-30s even when permitted.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

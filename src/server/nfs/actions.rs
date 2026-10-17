@@ -88,6 +88,10 @@ impl Protocol for NfsProtocol {
                  static handlers for anything beyond a demo.",
             )
             .max_inbound_bytes(crate::server::nfs::guard::MAX_RECORD_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

@@ -91,6 +91,8 @@ impl Protocol for DhcpProtocol {
             .llm_control("Discover→Offer, Request→Ack flow + lease options")
             .e2e_testing("tests/server/dhcp/test.rs, 6 LLM calls. No real DHCP client can be pointed at these servers (dhclient/ipconfig bind UDP/68, need root, and cannot target an ephemeral loopback port), so the peer is an RFC 2131/2132 decoder written in the test file, independent of the dhcproto codec the server encodes with. It asserts OFFER, ACK and NAK against RFC 2131 table 3: op/htype/hlen, the echoed xid, chaddr and broadcast flag, yiaddr, and options 1/3/6/51/54/56. Not covered: a full DORA exchange against a real client, relayed (giaddr) delivery, and option 82")
             .notes("No lease database: the LLM picks every address. xid, chaddr, giaddr and the broadcast flag are echoed from the request automatically. A datagram that does not decode, or carries no message-type option, is dropped without reaching the model")
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

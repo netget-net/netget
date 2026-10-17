@@ -362,6 +362,10 @@ impl Protocol for BitcoinClientProtocol {
                 "Full control over Bitcoin RPC commands (blockchain, wallet, network queries)",
             )
             .e2e_testing("Bitcoin Core regtest node or testnet")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

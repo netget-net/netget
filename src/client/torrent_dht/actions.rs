@@ -234,6 +234,10 @@ impl Protocol for TorrentDhtClientProtocol {
                 "Full control over DHT queries (ping, find_node, get_peers, announce_peer)",
             )
             .e2e_testing("Mock DHT node")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

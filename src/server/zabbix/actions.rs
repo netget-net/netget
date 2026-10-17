@@ -119,6 +119,8 @@ impl Protocol for ZabbixProtocol {
             .max_inbound_bytes(wire::MAX_DATA_BYTES)
             // A `success` response counting every value as failed: zabbix_sender exits 2.
             .answers_on_failure()
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

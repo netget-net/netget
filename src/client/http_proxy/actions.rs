@@ -320,6 +320,10 @@ impl Protocol for HttpProxyClientProtocol {
             .implementation("Tokio TcpStream with HTTP CONNECT protocol")
             .llm_control("Full control over tunnel establishment and data transmission")
             .e2e_testing("Squid proxy or tinyproxy as test proxy")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

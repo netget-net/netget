@@ -225,6 +225,10 @@ impl Protocol for DotClientProtocol {
             .implementation("hickory-dns with rustls for TLS transport")
             .llm_control("Full control over DNS queries (domain, type, recursive flag)")
             .e2e_testing("Public DoT servers (dns.google:853, 1.1.1.1:853)")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

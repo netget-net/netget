@@ -139,6 +139,8 @@ impl Protocol for MsgpackRpcClientProtocol {
             .e2e_testing("tests/client/msgpack_rpc: NetGet's own server; Neovim (--listen) and ugorji/go's MsgpackSpecRpc server as independent peers")
             .notes("A request from the server is answered with an error: this client serves no methods. At most 64 calls may await their responses. Messages are capped at 1 MiB, nesting at 32 levels.")
             .max_inbound_bytes(crate::server::msgpack_rpc::wire::MAX_MESSAGE)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

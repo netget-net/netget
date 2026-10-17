@@ -146,6 +146,8 @@ impl Protocol for CapnpRpcClientProtocol {
             .e2e_testing("tests/client/capnp_rpc: NetGet's own server; pycapnp (the C++ Cap'n Proto runtime) and capnproto.org/go/capnp v3 as independent servers")
             .notes("Only the bootstrap capability is called; capabilities in results are not followed. The client exports nothing, so a call from the server is answered with an exception. At most 64 calls may await answers; a handler chain stops after 8 follow-ups. Same message bounds as the server.")
             .max_inbound_bytes(crate::server::capnp_rpc::layout::MAX_MESSAGE_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

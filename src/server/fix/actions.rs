@@ -354,6 +354,8 @@ impl Protocol for FixProtocol {
             .notes("One session per connection, in memory; sequence numbers restart with each connection. No FIXT.1.1/FIX 5.0, no message persistence across restarts, no encryption (EncryptMethod 0 only). Application messages are not validated against the dictionary.")
             .answers_on_failure()
             .max_inbound_bytes(super::codec::MAX_BODY)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

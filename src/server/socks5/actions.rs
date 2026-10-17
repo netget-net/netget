@@ -89,6 +89,10 @@ impl Protocol for Socks5Protocol {
                  each direction; the handshake reads time out after 30s but the number of \
                  concurrent connections is unbounded.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

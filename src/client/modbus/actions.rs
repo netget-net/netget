@@ -505,6 +505,10 @@ impl Protocol for ModbusClientProtocol {
                  against its request: function code, byte count, and a write's echo. \
                  A request unanswered after 5s is reported as modbus_error kind timeout.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

@@ -2046,6 +2046,11 @@ async fn execute_read_server_documentation(protocols: &[String]) -> ToolResult {
         result.push_str(&format!("**Stack:** {}\n", server_protocol.stack_name()));
         result.push_str(&format!("**Group:** {}\n", server_protocol.group_name()));
         result.push_str(&format!("**State:** {:?}\n\n", metadata.state));
+        result.push_str(&format!(
+            "**History:** {}\n**Batching:** {}\n\n",
+            metadata.history.describe(),
+            metadata.batching.describe()
+        ));
 
         result.push_str("## Description\n\n");
         result.push_str(&format!("{}\n\n", server_protocol.description()));
@@ -2211,6 +2216,11 @@ async fn execute_read_client_documentation(protocols: &[String]) -> ToolResult {
         result.push_str(&format!("**Stack:** {}\n", client_protocol.stack_name()));
         result.push_str(&format!("**Group:** {}\n", client_protocol.group_name()));
         result.push_str(&format!("**State:** {:?}\n\n", metadata.state));
+        result.push_str(&format!(
+            "**History:** {}\n**Batching:** {}\n\n",
+            metadata.history.describe(),
+            metadata.batching.describe()
+        ));
 
         result.push_str("## Description\n\n");
         result.push_str(&format!("{}\n\n", client_protocol.description()));
@@ -2425,6 +2435,11 @@ async fn execute_read_documentation(protocols: &[String]) -> ToolResult {
             result.push_str(&format!("**Stack:** {}\n", server.stack_name()));
             result.push_str(&format!("**Group:** {}\n", server.group_name()));
             result.push_str(&format!("**State:** {:?}\n\n", metadata.state));
+            result.push_str(&format!(
+                "**History:** {}\n**Batching:** {}\n\n",
+                metadata.history.describe(),
+                metadata.batching.describe()
+            ));
 
             result.push_str("## Description\n\n");
             result.push_str(&format!("{}\n\n", server.description()));
@@ -2492,6 +2507,11 @@ async fn execute_read_documentation(protocols: &[String]) -> ToolResult {
             result.push_str(&format!("**Stack:** {}\n", client.stack_name()));
             result.push_str(&format!("**Group:** {}\n", client.group_name()));
             result.push_str(&format!("**State:** {:?}\n\n", metadata.state));
+            result.push_str(&format!(
+                "**History:** {}\n**Batching:** {}\n\n",
+                metadata.history.describe(),
+                metadata.batching.describe()
+            ));
 
             result.push_str("## Description\n\n");
             result.push_str(&format!("{}\n\n", client.description()));

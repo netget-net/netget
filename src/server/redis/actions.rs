@@ -220,6 +220,8 @@ impl Protocol for RedisProtocol {
             )
             .notes("RESP2, and RESP3 after HELLO 3 (no attributes, no streamed types, no client-side caching); HELLO with AUTH is judged by the handler. Pub/sub: SUBSCRIBE/PSUBSCRIBE/SSUBSCRIBE (model-approved), UNSUBSCRIBE family, PUBLISH/SPUBLISH (model decides delivery), PUBSUB introspection, RESP2 subscribed mode, redis_publish_message for the model's own messages; bounded per connection, per server and per message, and a subscriber 8 MiB behind is disconnected. Cluster mode (cluster_nodes): CLUSTER SLOTS/SHARDS/NODES/INFO/KEYSLOT/MYID, MOVED/ASK/CROSSSLOT/CLUSTERDOWN routing by CRC16 hash slot, redis_cluster_set_slot; no bus, no replicas. No SELECT/MULTI semantics, no inline commands")
             .max_inbound_bytes(crate::server::redis::MAX_PENDING_FRAME_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

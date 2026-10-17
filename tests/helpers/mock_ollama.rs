@@ -250,12 +250,39 @@ fn classify_request(template_text: &str, latest_message: &str) -> RequestKind {
     RequestKind::Unknown
 }
 
+/// The current event's trigger: from the **last** line that opens one to the end of the prompt.
+///
+/// A prompt can carry earlier exchanges on the same connection ahead of the event being
+/// answered (`src/state/exchange_history.rs`), so the first trigger-looking text is not
+/// necessarily the current one. The server trigger opens with `Event ID:`, the client one with
+/// `Event:`; only a line that *starts* with the label counts, which history entries and
+/// pretty-printed event data never do.
+fn current_trigger(text: &str) -> &str {
+    let mut offset = 0usize;
+    let mut event_id_at = None;
+    let mut event_at = None;
+    for line in text.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("Event ID:") {
+            event_id_at = Some(offset);
+        } else if trimmed.starts_with("Event:") {
+            event_at = Some(offset);
+        }
+        offset += line.len();
+    }
+    match event_id_at.or(event_at) {
+        Some(at) => &text[at..],
+        None => text,
+    }
+}
+
 /// Extract the event id from a network-event trigger message.
 ///
 /// Only ever called for requests classified as network events, so the
 /// `Event:` fallback cannot latch onto a `### Event: <id>` heading inside
 /// embedded protocol documentation.
 fn extract_event_type(text: &str) -> Option<String> {
+    let text = current_trigger(text);
     // Preferred: "Event ID: <id>" (PromptBuilder::build_event_trigger_message_with_id)
     if let Some(event_id_line) = text.lines().find(|line| line.contains("Event ID:")) {
         if let Some(event_id) = event_id_line.split("Event ID:").nth(1) {
@@ -1258,13 +1285,19 @@ fn extract_context_from_prompt(prompt: &str) -> LlmContext {
         }
     }
 
-    // Try to extract event data
-    if let Some(data_start_idx) = prompt
+    // Try to extract event data — from the current trigger, not from an earlier exchange
+    // rendered ahead of it.
+    let trigger = if request_kind.carries_network_event() {
+        current_trigger(prompt)
+    } else {
+        prompt
+    };
+    if let Some(data_start_idx) = trigger
         .find("Context data:")
-        .or_else(|| prompt.find("Event data:"))
-        .or_else(|| prompt.find("Data:"))
+        .or_else(|| trigger.find("Event data:"))
+        .or_else(|| trigger.find("Data:"))
     {
-        let after_data = &prompt[data_start_idx..];
+        let after_data = &trigger[data_start_idx..];
         if let Some(json_start) = after_data.find('{') {
             let json_str = &after_data[json_start..];
             use serde_json::Deserializer;

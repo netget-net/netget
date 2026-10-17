@@ -160,6 +160,8 @@ impl Protocol for DohProtocol {
             .notes("GET/POST, HTTP/2 only (no HTTP/1.1), self-signed certs, any request path accepted. Advertises ALPN h2 - without it a negotiating client falls back to HTTP/1.1, which this server does not speak")
             .max_inbound_bytes(crate::server::doh::MAX_DOH_BODY_BYTES as usize)
             .request_only("DNS over HTTPS only answers queries; a server cannot send a peer anything unprompted")
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

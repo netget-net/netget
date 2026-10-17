@@ -227,6 +227,8 @@ impl Protocol for IdentProtocol {
                  safe way to run a protocol whose purpose is disclosing account identity.",
             )
             .max_inbound_bytes(crate::server::ident::MAX_QUERY_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

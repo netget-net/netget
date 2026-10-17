@@ -301,6 +301,8 @@ impl Protocol for LmtpClientProtocol {
             .e2e_testing("tests/client/lmtp: scripted wire fixture, injected sends, malformed replies; aiosmtpd's LMTP server as the independent peer")
             .notes("Plain TCP only (no STARTTLS or AUTH). Replies are bounded to 1000-byte lines and 64 lines; every connect, write and reply has a 30 s deadline; bodies up to 1 MiB.")
             .max_inbound_bytes(wire::MAX_LINE_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

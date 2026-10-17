@@ -197,6 +197,8 @@ impl Protocol for SrtClientProtocol {
             .e2e_testing("tests/client/srt: libsrt 1.5 (srt-live-transmit, independent) as listener sends a paced H.264/AAC MPEG-TS stream the client reads and reports, and writes the file the client publishes, which ffprobe decodes")
             .notes("Live mode, caller only; no rendezvous. Files are paced by bitrate, not PCR.")
             .max_inbound_bytes(1500)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

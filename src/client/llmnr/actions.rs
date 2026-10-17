@@ -221,6 +221,10 @@ impl Protocol for LlmnrClientProtocol {
                  because loopback carries no multicast route), IPv6/FF02::1:3 entirely, and TCP \
                  queries (RFC 4795 2.4), which this querier does not implement.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

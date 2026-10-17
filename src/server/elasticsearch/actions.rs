@@ -474,6 +474,8 @@ impl Protocol for ElasticsearchProtocol {
             )
             .max_inbound_bytes(crate::server::elasticsearch::MAX_REQUEST_BODY_BYTES)
             .request_only("Elasticsearch is HTTP request/response; a server cannot send a peer anything unprompted")
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

@@ -235,6 +235,10 @@ impl Protocol for Http2ClientProtocol {
             .implementation("reqwest HTTP/2 client library with http2_prior_knowledge")
             .llm_control("Full control over requests (method, path, headers, body)")
             .e2e_testing("HTTP/2 test server or nghttp2.org")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

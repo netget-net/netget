@@ -92,6 +92,8 @@ impl Protocol for WebTransportClientProtocol {
             .llm_control("What the client sends on streams and datagrams, its answers to server-opened streams, and when it closes")
             .e2e_testing("tests/client/webtransport: an aioquic 1.3.0 (independent, Python) WebTransport server echoes the client's streams and datagrams and opens streams to it")
             .notes("A refused session reports only that it was refused (wtransport does not surface the status). Streams are delivered whole, up to 1 MiB within 30 s.")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

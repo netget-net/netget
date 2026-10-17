@@ -250,6 +250,42 @@ impl<R: tokio::io::AsyncRead + Unpin> TelnetLineReader<R> {
         }
     }
 
+    /// Lines that are already here — buffered, or readable without waiting — up to `max`.
+    ///
+    /// What batching collects after the first line: everything the peer typed while the model
+    /// was answering the previous one has been sitting in the socket, and this takes it without
+    /// waiting for anything new. It stops at a line longer than [`MAX_LINE_BYTES`] or the end
+    /// of the stream and leaves either for [`Self::next_line`] to report.
+    async fn lines_already_here(&mut self, max: usize) -> Vec<(Vec<u8>, usize)> {
+        use tokio::io::AsyncReadExt;
+        let mut lines = Vec::new();
+        while lines.len() < max {
+            if let Some(idx) = self.pending.iter().position(|b| *b == b'\n') {
+                let mut line: Vec<u8> = self.pending.drain(..=idx).collect();
+                let consumed = line.len();
+                line.pop();
+                if line.last() == Some(&b'\r') {
+                    line.pop();
+                }
+                lines.push((line, consumed));
+                continue;
+            }
+            if self.pending.len() > MAX_LINE_BYTES {
+                break;
+            }
+            // A zero deadline polls the read once: whatever the kernel already holds, nothing
+            // that would mean waiting.
+            match tokio::time::timeout(Duration::ZERO, self.reader.read(&mut self.chunk)).await {
+                Ok(Ok(n)) if n > 0 => {
+                    let raw = self.chunk[..n].to_vec();
+                    self.absorb(&raw);
+                }
+                _ => break,
+            }
+        }
+        lines
+    }
+
     /// The `bound` limits the wait for *more bytes*, not the whole line: a peer that is still
     /// typing keeps the connection alive, which is what a person on a slow link needs.
     async fn next_line(&mut self, bound: Duration) -> LineRead {
@@ -587,6 +623,39 @@ impl TelnetServer {
                                 let line = String::from_utf8_lossy(&line_bytes).into_owned();
                                 answered_one = true;
 
+                                // With batching on, everything else the peer already sent —
+                                // typically what they typed while the model was answering the
+                                // previous line — is answered in the same call.
+                                let batching = state_clone
+                                    .server_conversation_settings(server_id)
+                                    .await
+                                    .is_some_and(|(_, batching)| batching);
+                                let more_lines = if batching {
+                                    reader
+                                        .lines_already_here(crate::protocol::metadata::MAX_BATCH_EVENTS - 1)
+                                        .await
+                                } else {
+                                    Vec::new()
+                                };
+                                let mut events = Vec::with_capacity(1 + more_lines.len());
+                                for (bytes, consumed) in more_lines {
+                                    let text = String::from_utf8_lossy(&bytes).into_owned();
+                                    state_clone
+                                        .update_connection_stats(
+                                            server_id,
+                                            connection_id,
+                                            Some(consumed as u64),
+                                            None,
+                                            Some(1),
+                                            None,
+                                        )
+                                        .await;
+                                    events.push(Event::new(
+                                        &TELNET_MESSAGE_RECEIVED_EVENT,
+                                        serde_json::json!({ "message": text.trim() }),
+                                    ));
+                                }
+
                                 // Counters and last_activity: the rail shows ↓/↑ per peer,
                                 // and until this was added every telnet peer read 0/0.
                                 state_clone
@@ -619,18 +688,19 @@ impl TelnetServer {
                                         "message": line.trim()
                                     }),
                                 );
+                                events.insert(0, event);
 
                                 log.debug(format!(
                                     "Telnet calling LLM for connection {}",
                                     connection_id
                                 ));
 
-                                match call_llm(
+                                match crate::llm::action_helper::call_llm_batch(
                                     &llm_clone,
                                     &state_clone,
                                     server_id,
                                     Some(connection_id),
-                                    &event,
+                                    &events,
                                     protocol_clone.as_ref(),
                                 )
                                 .await

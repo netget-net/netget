@@ -216,6 +216,8 @@ impl Protocol for AnthropicClientProtocol {
             .e2e_testing("tests/client/anthropic: NetGet's own server; llama.cpp's llama-server (its Anthropic-compatible /v1/messages, with a 260K-parameter test model) as an independent server")
             .notes("Plain HTTP only (no TLS), so it reaches a local or proxied server, not api.anthropic.com directly. Responses are capped at 8 MiB and 120 s. Image and document blocks pass through as given. A handler chain stops after 8 follow-ups.")
             .max_inbound_bytes(crate::server::anthropic::wire::MAX_BODY)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

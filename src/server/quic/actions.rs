@@ -117,6 +117,8 @@ impl Protocol for QuicProtocol {
                  aioquic and quic-go in tests/server/quic/datagram_test.rs.",
             )
             .max_inbound_bytes(crate::server::quic::MAX_STREAM_QUEUE_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

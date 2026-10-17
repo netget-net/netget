@@ -200,6 +200,8 @@ impl Protocol for LmtpProtocol {
             .notes("Plain TCP only: no STARTTLS or AUTH. No mailbox storage: the handler decides delivery and keeps whatever it needs in memory or the SQLite facility. HELO/EHLO are refused as RFC 2033 requires. Lines are 1000 bytes, 100 recipients per transaction, 10 MiB messages by default, 20 consecutive bad commands close the session with 421. A handler failure answers 451 4.3.0, never a false delivery.")
             .request_only("LMTP replies answer the command just read; the server never speaks first except for its greeting")
             .max_inbound_bytes(super::wire::MAX_LINE_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

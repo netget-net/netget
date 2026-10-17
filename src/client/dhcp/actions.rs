@@ -207,6 +207,8 @@ impl Protocol for DhcpClientProtocol {
                 .llm_control("DISCOVER, REQUEST, INFORM message control")
                 .e2e_testing("NetGet DHCP server as test target")
                 .notes("Requires elevated privileges to bind port 68. For testing only, does NOT configure OS network.")
+                .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+                .batching(crate::protocol::metadata::BatchingMode::Unsupported)
                 .build()
     }
     fn description(&self) -> &'static str {

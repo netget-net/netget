@@ -95,7 +95,9 @@ impl Protocol for GelfClientProtocol {
         vec![transport_parameter(),ParameterDefinition{name:"compression".into(),type_hint:"string".into(),description:"auto chooses UDP gzip/TCP none; none, gzip or zlib. Explicit TCP compression is rejected.".into(),required:false,example:json!("zlib"),default:Some(json!(DEFAULT_COMPRESSION))},ParameterDefinition{name:"chunk_size".into(),type_hint:"number".into(),description:"UDP datagram size, including 12-byte chunk header; 13..8192. TCP ignores this validated setting.".into(),required:false,example:json!(1420),default:Some(json!(DEFAULT_CHUNK_SIZE))}]
     }
     fn metadata(&self) -> ProtocolMetadataV2 {
-        ProtocolMetadataV2::builder().state(DevelopmentState::Experimental).well_known_udp_port(12201).implementation("Native GELF JSON encoder, bounded UDP compression/chunks and TCP NUL frames").llm_control("Connected event with standard memory updates, typed send action and live command injection").e2e_testing("Both transports and independent official Graylog go-gelf UDP/TCP readers; pygelf emitters in server tests").notes("256KiB message, 128 UDP chunks, 10s connect/write deadline. No TLS, HTTP, acknowledgments, storage or retry; transport success is not end-to-end delivery.").build()
+        ProtocolMetadataV2::builder().state(DevelopmentState::Experimental).well_known_udp_port(12201).implementation("Native GELF JSON encoder, bounded UDP compression/chunks and TCP NUL frames").llm_control("Connected event with standard memory updates, typed send action and live command injection").e2e_testing("Both transports and independent official Graylog go-gelf UDP/TCP readers; pygelf emitters in server tests").notes("256KiB message, 128 UDP chunks, 10s connect/write deadline. No TLS, HTTP, acknowledgments, storage or retry; transport success is not end-to-end delivery.").history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+        .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+        .build()
     }
     fn get_startup_examples(&self) -> StartupExamples {
         StartupExamples::new(

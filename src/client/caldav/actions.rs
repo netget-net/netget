@@ -181,6 +181,8 @@ impl Protocol for CalDavClientProtocol {
             .e2e_testing("tests/client/caldav: Radicale 3.8.1 (independent) answers discovery, collection creation, PUT, list, query, GET, conditional PUT and DELETE")
             .notes("No sync-collection or scheduling; one request at a time.")
             .max_inbound_bytes(crate::server::dav_common::xml::MAX_BODY * 4)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

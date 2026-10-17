@@ -124,6 +124,10 @@ impl Protocol for StompProtocol {
                  (ActiveMQ/RabbitMQ STOMP), and concurrent sessions.",
             )
             .max_inbound_bytes(crate::server::stomp::frame::MAX_FRAME_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

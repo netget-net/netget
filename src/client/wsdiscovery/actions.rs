@@ -280,6 +280,8 @@ impl Protocol for WsDiscoveryClientProtocol {
             .e2e_testing("tests/client/wsdiscovery: wsdd (the Linux WSD host daemon) and python WSDiscovery publishing services; NetGet's own target service for the directed path")
             .notes("A probe is sent once; on a lossy network a missed answer is a missing match, not an error. Answers whose RelatesTo names no probe of ours are dropped. No discovery-proxy mode.")
             .max_inbound_bytes(wire::MAX_DATAGRAM)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

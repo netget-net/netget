@@ -182,6 +182,8 @@ impl Protocol for VaultProtocol {
             // {"errors": [category]} - the CLI prints it after "Error making API request".
             .answers_on_failure()
             .request_only("The Vault API is HTTP request/response; a server cannot send a peer anything unprompted")
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

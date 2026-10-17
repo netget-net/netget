@@ -283,6 +283,10 @@ impl Protocol for NfcClientProtocol {
                  decoded - deliberately, since a recursive NDEF decoder is the stack-overflow \
                  class the root CLAUDE.md describes.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

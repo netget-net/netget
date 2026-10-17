@@ -142,6 +142,16 @@ pub async fn run() -> Result<()> {
         return run_server_direct(protocol, &args).await;
     }
 
+    // --history and --batching describe the instance --server or --client starts. Anywhere
+    // else nothing reads them, and a flag that silently does nothing is worse than a refusal.
+    if args.history.is_some() || args.batching.is_some() {
+        anyhow::bail!(
+            "--history and --batching apply to the instance --server or --client starts; \
+             with neither, ask for them in the prompt or pass them to start_server / \
+             start_client over MCP"
+        );
+    }
+
     // Handle --mcp-stdio flag (run as MCP STDIO server)
     #[cfg(feature = "mcp-stdio")]
     if args.mcp_stdio {
@@ -467,6 +477,10 @@ async fn run_client(protocol: &str, args: &Args) -> Result<()> {
         event_handlers,
         None, // scheduled_tasks
         None, // feedback_instructions
+        crate::protocol::metadata::ConversationOverrides {
+            history: args.history,
+            batching: args.batching,
+        },
         llm,
         None, // status_tx: direct --client mode, drain to tracing
     )
@@ -650,6 +664,10 @@ async fn run_server_direct(protocol: &str, args: &Args) -> Result<()> {
         None, // event_handlers
         None, // scheduled_tasks
         None, // feedback_instructions
+        crate::protocol::metadata::ConversationOverrides {
+            history: args.history,
+            batching: args.batching,
+        },
         status_tx,
     )
     .await?;

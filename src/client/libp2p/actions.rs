@@ -385,6 +385,8 @@ impl Protocol for Libp2pClientProtocol {
             .llm_control("Which protocols to open streams on, what to send, when to ping, identify, close and disconnect, and how to answer the remote's messages. With ipfs: which CIDs to want or cancel (a dag-pb block's links let it walk a chunked file or directory), and what to ask the remote's DHT")
             .e2e_testing("tests/client/libp2p: go-libp2p listening (TCP, Noise, yamux), which identifies NetGet, answers its chat stream and opens one of its own to NetGet; Kubo 0.43.1 (loopback only) serves files it added — a CIDv0 UnixFS file, a CIDv1 raw block, and a chunked file whose leaves NetGet wants from the root's links — and answers FIND_NODE and GET_PROVIDERS; a go-libp2p peer answering wants with tampered bytes is refused before the model hears of it")
             .notes("TCP only; Ed25519 identities only; no gossipsub, relay or hole punching. remote_addr is host:port or /ip4|ip6|dns/…/tcp/…[/p2p/<id>]. A handler chain stops after 8 follow-ups. IPFS limits: sha2-256 and the raw and dag-pb codecs only (other CIDs are refused before anything is sent); at most 1024 outstanding wants; block content shown to the model is cut at 64 KiB (the block is verified whole); the client serves no blocks and answers no DHT requests; Kubo keeps its own provider records in its LAN DHT while its WAN DHT is inactive, so ask /ipfs/lan/kad/1.0.0 on a private network.")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

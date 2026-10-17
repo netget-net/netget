@@ -537,6 +537,10 @@ impl Protocol for SsdpClientProtocol {
                  join_multicast); with an ephemeral port only unicast replies to our own \
                  searches arrive.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

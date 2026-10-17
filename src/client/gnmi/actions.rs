@@ -123,6 +123,12 @@ impl Protocol for GnmiClientProtocol {
         let mut m = crate::llm::actions::protocol_trait::Protocol::metadata(
             &crate::server::gnmi::actions::GnmiProtocol,
         );
+        // The server's metadata says what the gNMI target declares; a client is one session
+        // pursuing one instruction, so it keeps its history like every other client.
+        m.history = crate::protocol::metadata::HistoryMode::Last(
+            crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+        );
+        m.batching = crate::protocol::metadata::BatchingMode::Unsupported;
         m.notes=Some("Experimental typed gNMI client; Capabilities/Get/Set and ONCE/POLL/STREAM, TLS certificate/name verification with optional bounded CA, explicit cleartext local-fixture mode. No automatic reconnect/retry; no opaque values, extensions, SAMPLE, YANG execution, storage, authentication, reflection, fuzz or pcap evidence.".into());
         m
     }

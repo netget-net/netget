@@ -532,6 +532,10 @@ impl Protocol for NetbiosNsClientProtocol {
                  registration or release, NetBIOS scopes beyond echoing, the datagram service \
                  (UDP 138) and the session service (TCP 139).",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

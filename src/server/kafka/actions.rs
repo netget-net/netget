@@ -657,6 +657,8 @@ impl Protocol for KafkaProtocol {
                  fabricated success.",
             )
             .max_inbound_bytes(crate::server::kafka::MAX_REQUEST_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

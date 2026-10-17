@@ -209,6 +209,10 @@ impl Protocol for NsqProtocol {
             // PUB/MPUB/DPUB get E_*PUB_FAILED and SUB gets E_INVALID; RDY, FIN and REQ take no
             // reply in nsqd, so a failure there delivers nothing, which is the honest answer.
             .answers_on_failure()
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

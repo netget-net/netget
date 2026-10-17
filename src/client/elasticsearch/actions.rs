@@ -361,6 +361,10 @@ impl Protocol for ElasticsearchClientProtocol {
             .implementation("elasticsearch official Rust crate (HTTP-based)")
             .llm_control("Full control over indexing, searching, and document operations")
             .e2e_testing("Local Elasticsearch instance or Docker container")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

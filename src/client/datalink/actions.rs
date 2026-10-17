@@ -629,6 +629,10 @@ impl Protocol for DataLinkClientProtocol {
                  datalink_frame_injected -> inject chain is capped at 4 hops; captured frames \
                  arriving while a model turn is running are dropped and counted, not queued.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

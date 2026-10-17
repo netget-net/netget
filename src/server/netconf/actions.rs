@@ -205,6 +205,8 @@ impl Protocol for NetconfProtocol {
             .request_only("NETCONF replies answer a pending <rpc> with its message-id; notifications are not implemented, so nothing is sent unprompted")
             .answers_on_failure()
             .max_inbound_bytes(super::wire::MAX_MESSAGE_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

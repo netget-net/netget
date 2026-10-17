@@ -235,6 +235,8 @@ impl Protocol for DockerProtocol {
             // LLM failure: 503 + Retry-After (overloaded) or 500, each with Docker's
             // {"message": ...} carrying a fixed category - the CLI prints it as the error.
             .answers_on_failure()
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

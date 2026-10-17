@@ -85,6 +85,8 @@ impl Protocol for BootpProtocol {
             .llm_control("BOOTREQUEST→BOOTREPLY flow + boot file location")
             .e2e_testing("Manual BOOTP packet construction - 3 LLM calls")
             .notes("Bootstrap Protocol (RFC 951) - DHCP predecessor")
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {
