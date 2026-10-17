@@ -92,9 +92,15 @@ an `EIO` (or a `read()==0`) would have spun in exactly the way this heading call
   boundaries; a full channel stops the reader and the PTY's input queue holds the typist back.
 - **Batching** (`BatchingMode::On`): with it off, one read per call; with it on, every read
   waiting (up to `MAX_BATCH_EVENTS`) goes to `call_llm_batch` as one `pty_input_received` each,
-  the newest the trigger. There is no connection, so `connection_id` is `None` and no history is
-  kept. `tests/server/pty/batching_test.rs` opens the slave in-process and asserts off and on,
-  control first.
+  the newest the trigger. `tests/server/pty/batching_test.rs` opens the slave in-process and
+  asserts off and on, control first.
+- **History**: one session per server, registered as its one connection (`register_session`;
+  addresses are the `127.0.0.1:0` placeholder `socket_file` uses, `protocol_info` names the slave
+  device), and its id goes to every model call, so the core keeps the declared `Last(40)`
+  history. Per server rather than per terminal client because the server holds the slave open
+  itself, so the master cannot tell one client attaching from the next. The connection is removed
+  when the reader ends; `stop_server` removes the whole server. The batching test also asserts
+  the second prompt carries the first exchange.
 
 ## Not implemented
 

@@ -66,7 +66,7 @@ impl rustls::client::danger::ServerCertVerifier for NoCertificateVerification {
     }
 }
 
-async fn handshaked_peer(port: u16) -> tokio_rustls::client::TlsStream<TcpStream> {
+pub(super) async fn handshaked_peer(port: u16) -> tokio_rustls::client::TlsStream<TcpStream> {
     use rustls::crypto::CryptoProvider;
     let _ = CryptoProvider::install_default(rustls::crypto::ring::default_provider());
 
@@ -87,7 +87,7 @@ async fn handshaked_peer(port: u16) -> tokio_rustls::client::TlsStream<TcpStream
         .expect("TLS handshake with the NetGet server")
 }
 
-async fn wait_for_port(state: &AppState, id: ServerId) -> u16 {
+pub(super) async fn wait_for_port(state: &AppState, id: ServerId) -> u16 {
     for _ in 0..300 {
         if let Some(s) = state.get_server(id).await {
             if let Some(addr) = s.local_addr {

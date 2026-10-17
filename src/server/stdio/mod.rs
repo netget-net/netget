@@ -72,6 +72,42 @@ enum StdinInput {
     Closed,
 }
 
+/// Register this server's session as the one connection it has, so the core keeps the
+/// per-connection history the protocol declares (`AppState::record_access_log` records only for
+/// a connection the server holds) and the dashboard shows a peer row for it.
+///
+/// There is no IP address on either side, so both addresses are the `127.0.0.1:0` placeholder
+/// `socket_file` uses; `protocol_info` names the endpoint instead.
+async fn register_session(
+    app_state: &AppState,
+    server_id: crate::state::ServerId,
+    info: serde_json::Value,
+) -> crate::server::connection::ConnectionId {
+    use crate::state::server::{ConnectionState, ConnectionStatus, ProtocolConnectionInfo};
+    let id = crate::server::connection::ConnectionId::new(app_state.get_next_unified_id().await);
+    let now = crate::utils::clock::Instant::now();
+    let addr: std::net::SocketAddr = ([127, 0, 0, 1], 0).into();
+    app_state
+        .add_connection_to_server(
+            server_id,
+            ConnectionState {
+                id,
+                remote_addr: addr,
+                local_addr: addr,
+                bytes_sent: 0,
+                bytes_received: 0,
+                packets_sent: 0,
+                packets_received: 0,
+                last_activity: now,
+                status: ConnectionStatus::Active,
+                status_changed_at: now,
+                protocol_info: ProtocolConnectionInfo::new(info),
+            },
+        )
+        .await;
+    id
+}
+
 /// Standard I/O server.
 pub struct StdioServer;
 
@@ -118,6 +154,15 @@ impl StdioServer {
         let protocol = Arc::new(StdioProtocol::new());
         let task_registrar = app_state.clone();
 
+        // The process's stdin/stdout pair is the one session this server will ever have.
+        let connection_id = register_session(
+            &app_state,
+            server_id,
+            serde_json::json!({ "stream": "stdin/stdout" }),
+        )
+        .await;
+        let _ = status_tx.send("__UPDATE_UI__".to_string());
+
         // The reader runs on its own so that input arriving while the model is answering is
         // read as it arrives — each read keeping its own boundary — rather than piling up in the
         // pipe until the call returns. The bounded channel is the backpressure: once it holds
@@ -154,6 +199,7 @@ impl StdioServer {
                 let event = Event::new(&STDIO_STARTED_EVENT, serde_json::json!({}));
                 let _ = Self::dispatch(
                     std::slice::from_ref(&event),
+                    connection_id,
                     &llm_client,
                     &app_state,
                     server_id,
@@ -211,6 +257,17 @@ impl StdioServer {
                         encoding
                     ));
 
+                    app_state
+                        .update_connection_stats(
+                            server_id,
+                            connection_id,
+                            Some(data.len() as u64),
+                            None,
+                            Some(1),
+                            None,
+                        )
+                        .await;
+
                     events.push(Event::new(
                         &STDIO_INPUT_RECEIVED_EVENT,
                         serde_json::json!({ "data": data_str, "encoding": encoding }),
@@ -218,6 +275,7 @@ impl StdioServer {
                 }
                 let should_close = Self::dispatch(
                     &events,
+                    connection_id,
                     &llm_client,
                     &app_state,
                     server_id,
@@ -227,8 +285,10 @@ impl StdioServer {
                 .await;
                 if should_close {
                     info!("stdio session closed by model (close_stdio)");
-                    reader.abort();
-                    return;
+                    // The model ended the session; an EOF seen in the same sweep is not
+                    // reported after that.
+                    input_closed = false;
+                    break;
                 }
             }
 
@@ -238,6 +298,7 @@ impl StdioServer {
                 let event = Event::new(&STDIO_INPUT_CLOSED_EVENT, serde_json::json!({}));
                 let _ = Self::dispatch(
                     std::slice::from_ref(&event),
+                    connection_id,
                     &llm_client,
                     &app_state,
                     server_id,
@@ -247,6 +308,12 @@ impl StdioServer {
                 .await;
             }
             reader.abort();
+            // The session is over — EOF, a read error or close_stdio — and its history goes
+            // with it. (On stop_server the whole server, history included, is removed instead.)
+            app_state
+                .remove_connection_from_server(server_id, connection_id)
+                .await;
+            let _ = status_tx.send("__UPDATE_UI__".to_string());
         });
 
         task_registrar.register_server_task(server_id, handle).await;
@@ -257,6 +324,7 @@ impl StdioServer {
     /// call) and act on the results. Returns true if the model asked to close the stdio session.
     async fn dispatch(
         events: &[Event],
+        connection_id: crate::server::connection::ConnectionId,
         llm_client: &OllamaClient,
         app_state: &Arc<AppState>,
         server_id: crate::state::ServerId,
@@ -267,7 +335,16 @@ impl StdioServer {
         let Some(event) = events.last() else {
             return false;
         };
-        match call_llm_batch(llm_client, app_state, server_id, None, events, protocol).await {
+        match call_llm_batch(
+            llm_client,
+            app_state,
+            server_id,
+            Some(connection_id),
+            events,
+            protocol,
+        )
+        .await
+        {
             Ok(result) => {
                 for msg in result.messages {
                     let _ = status_tx.send(msg);

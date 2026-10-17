@@ -51,6 +51,17 @@ const FIRST_BYTE_READ_TIMEOUT: Duration = Duration::from_secs(300);
 /// Declared as the `idle_timeout_secs` startup parameter.
 const IDLE_BETWEEN_MESSAGES_TIMEOUT: Duration = Duration::from_secs(900);
 
+/// Most bytes that may pile up in one connection's queue while its LLM call is in flight, and
+/// the most `wait_for_more` may accumulate.
+///
+/// Every byte the peer sends during a call is queued, so without a ceiling a peer streaming for
+/// the length of one call decides how much memory its connection costs. 8 MiB, the same as
+/// `tcp`, is far more than any exchange this server is for; reaching it means the peer is not
+/// waiting for answers, so the connection is closed (`decision=queue_overflow`) rather than the
+/// queue trimmed, which would hand the model a truncated message it could not know was
+/// truncated.
+pub const MAX_QUEUED_BYTES: usize = 8 * 1024 * 1024;
+
 /// Concurrent connections this server admits.
 ///
 /// [`crate::server::accept_bounded::DEFAULT_MAX_CONNECTIONS`]. Each connection may queue bytes
@@ -121,6 +132,15 @@ impl ConnectionData {
             self.queued_data.extend_from_slice(data);
             self.queued_chunks.push_back(data.len());
         }
+    }
+
+    /// Replace the queue with one payload that must stay whole — what `wait_for_more` holds.
+    fn hold_as_one(&mut self, data: Vec<u8>) {
+        self.queued_chunks.clear();
+        if !data.is_empty() {
+            self.queued_chunks.push_back(data.len());
+        }
+        self.queued_data = data;
     }
 
     /// What the next call answers: the whole queue when batching, else the oldest read.
@@ -694,6 +714,34 @@ impl SocketFileServer {
         }
     }
 
+    /// Close a connection whose queue passed [`MAX_QUEUED_BYTES`]: shut the write half so the
+    /// peer reads EOF now instead of waiting on an answer that is never coming.
+    #[allow(clippy::too_many_arguments)]
+    async fn close_for_queue_overflow(
+        connection_id: ConnectionId,
+        server_id: crate::state::ServerId,
+        queued_len: usize,
+        when: &str,
+        write_half: &Arc<Mutex<tokio::io::WriteHalf<UnixStream>>>,
+        connections: &Arc<Mutex<HashMap<ConnectionId, ConnectionData>>>,
+        app_state: &Arc<AppState>,
+        status_tx: &mpsc::UnboundedSender<String>,
+    ) {
+        Log::new(Some(status_tx)).warn(format!(
+            "Socket file connection {connection_id} queued {queued_len} bytes {when} (limit \
+             {MAX_QUEUED_BYTES}); closing: decision=queue_overflow"
+        ));
+        {
+            let mut write = write_half.lock().await;
+            let _ = write.shutdown().await;
+        }
+        connections.lock().await.remove(&connection_id);
+        app_state
+            .close_connection_on_server(server_id, connection_id)
+            .await;
+        let _ = status_tx.send("__UPDATE_UI__".to_string());
+    }
+
     /// Handle data received on a connection with LLM actions
     async fn handle_data_with_actions(
         connection_id: ConnectionId,
@@ -732,19 +780,35 @@ impl SocketFileServer {
             }
         };
 
-        // If processing, queue the data
+        // If processing, queue the data — up to MAX_QUEUED_BYTES.
         if current_state == ConnectionState::Processing {
-            connections
-                .lock()
-                .await
-                .entry(connection_id)
-                .and_modify(|conn| {
-                    conn.queue(&data);
-                });
+            let (queued_len, write_half) = {
+                let mut conns = connections.lock().await;
+                let Some(conn) = conns.get_mut(&connection_id) else {
+                    return; // Connection closed while we were waiting for the lock
+                };
+                conn.queue(&data);
+                (conn.queued_data.len(), conn.write_half.clone())
+            };
+            if queued_len > MAX_QUEUED_BYTES {
+                Self::close_for_queue_overflow(
+                    connection_id,
+                    server_id,
+                    queued_len,
+                    "while awaiting a response",
+                    &write_half,
+                    &connections,
+                    &app_state,
+                    &status_tx,
+                )
+                .await;
+                return;
+            }
             log.debug(format!(
-                "Queued {} bytes for socket file connection {}",
+                "Queued {} bytes for socket file connection {} ({} queued)",
                 data.len(),
-                connection_id
+                connection_id,
+                queued_len
             ));
             return;
         }
@@ -903,15 +967,68 @@ impl SocketFileServer {
                         }
                     }
 
-                    // Handle wait_for_more
+                    // Handle wait_for_more.
+                    //
+                    // The fragment the model was just shown goes back to the *head* of the
+                    // queue, ahead of anything that arrived during the call, as one payload:
+                    // `wait_for_more` means "these bytes are an incomplete message", so they
+                    // must be shown again with whatever completes them. The same as `tcp`.
                     if should_wait {
-                        connections
-                            .lock()
-                            .await
-                            .entry(connection_id)
-                            .and_modify(|conn| conn.state = ConnectionState::Accumulating);
+                        let (queued_len, arrived_during_call) = {
+                            let mut conns = connections.lock().await;
+                            let Some(conn) = conns.get_mut(&connection_id) else {
+                                return;
+                            };
+                            let arrived_during_call = !conn.queued_data.is_empty();
+                            let mut merged = all_data.to_vec();
+                            merged.append(&mut conn.queued_data);
+                            conn.hold_as_one(merged);
+                            conn.state = ConnectionState::Accumulating;
+                            (conn.queued_data.len(), arrived_during_call)
+                        };
+
+                        // Same bound as the Processing queue: a model that answers
+                        // `wait_for_more` to everything must not be a way to grow memory
+                        // without limit either.
+                        if queued_len > MAX_QUEUED_BYTES {
+                            Self::close_for_queue_overflow(
+                                connection_id,
+                                server_id,
+                                queued_len,
+                                "across wait_for_more",
+                                &write_half,
+                                &connections,
+                                &app_state,
+                                &status_tx,
+                            )
+                            .await;
+                            return;
+                        }
+
+                        // Bytes that arrived while the model was thinking *are* the "more" it
+                        // asked for; go round again with the joined payload rather than park
+                        // them until a read that may never come.
+                        if arrived_during_call {
+                            let joined = {
+                                let mut conns = connections.lock().await;
+                                let Some(conn) = conns.get_mut(&connection_id) else {
+                                    return;
+                                };
+                                conn.state = ConnectionState::Processing;
+                                conn.take_next(true)
+                            };
+                            log.debug(format!(
+                                "wait_for_more on socket file connection {connection_id}: {} \
+                                 bytes already waiting, continuing",
+                                joined.len()
+                            ));
+                            all_data = Bytes::from(joined);
+                            continue;
+                        }
+
                         log.debug(format!(
-                            "Waiting for more data from socket file connection {connection_id}"
+                            "Waiting for more data from socket file connection {connection_id} \
+                             ({queued_len} bytes held)"
                         ));
                         return;
                     }

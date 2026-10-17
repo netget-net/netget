@@ -155,6 +155,42 @@ fn open_response_fifo(path: &Path) -> Result<AsyncFd<File>> {
 /// batching call can take everything that is waiting.
 const READ_QUEUE_CHUNKS: usize = crate::protocol::metadata::MAX_BATCH_EVENTS;
 
+/// Register this server's session as the one connection it has, so the core keeps the
+/// per-connection history the protocol declares (`AppState::record_access_log` records only for
+/// a connection the server holds) and the dashboard shows a peer row for it.
+///
+/// There is no IP address on either side, so both addresses are the `127.0.0.1:0` placeholder
+/// `socket_file` uses; `protocol_info` names the endpoint instead.
+async fn register_session(
+    app_state: &AppState,
+    server_id: crate::state::ServerId,
+    info: serde_json::Value,
+) -> crate::server::connection::ConnectionId {
+    use crate::state::server::{ConnectionState, ConnectionStatus, ProtocolConnectionInfo};
+    let id = crate::server::connection::ConnectionId::new(app_state.get_next_unified_id().await);
+    let now = crate::utils::clock::Instant::now();
+    let addr: std::net::SocketAddr = ([127, 0, 0, 1], 0).into();
+    app_state
+        .add_connection_to_server(
+            server_id,
+            ConnectionState {
+                id,
+                remote_addr: addr,
+                local_addr: addr,
+                bytes_sent: 0,
+                bytes_received: 0,
+                packets_sent: 0,
+                packets_received: 0,
+                last_activity: now,
+                status: ConnectionStatus::Active,
+                status_changed_at: now,
+                protocol_info: ProtocolConnectionInfo::new(info),
+            },
+        )
+        .await;
+    id
+}
+
 /// Named pipe server.
 pub struct NamedPipeServer;
 
@@ -206,6 +242,21 @@ impl NamedPipeServer {
 
         let protocol = Arc::new(NamedPipeProtocol::new());
         let task_registrar = app_state.clone();
+
+        // The server's whole lifetime is one session: every writer feeds the same FIFO and one
+        // reader drains the response FIFO, so there is nothing finer to key history on.
+        let connection_id = register_session(
+            &app_state,
+            server_id,
+            serde_json::json!({
+                "pipe_path": pipe_path.to_string_lossy(),
+                "response_pipe_path": response_pipe_path
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().into_owned()),
+            }),
+        )
+        .await;
+        let _ = status_tx.send("__UPDATE_UI__".to_string());
 
         // The reader runs on its own so that chunks written while the model is answering are
         // read — each keeping its own boundary — rather than coalescing in the kernel FIFO
@@ -300,6 +351,17 @@ impl NamedPipeServer {
                         encoding
                     ));
 
+                    app_state
+                        .update_connection_stats(
+                            server_id,
+                            connection_id,
+                            Some(data.len() as u64),
+                            None,
+                            Some(1),
+                            None,
+                        )
+                        .await;
+
                     events.push(Event::new(
                         &NAMED_PIPE_DATA_RECEIVED_EVENT,
                         serde_json::json!({ "data": data_str, "encoding": encoding }),
@@ -310,7 +372,7 @@ impl NamedPipeServer {
                     &llm_client,
                     &app_state,
                     server_id,
-                    None,
+                    Some(connection_id),
                     &events,
                     protocol.as_ref(),
                 )
@@ -325,6 +387,18 @@ impl NamedPipeServer {
                             if let ActionResult::Output(bytes) = pr {
                                 wrote += bytes.len();
                                 Self::write_response(&mut response_file, &bytes, &status_tx).await;
+                                if response_file.is_some() {
+                                    app_state
+                                        .update_connection_stats(
+                                            server_id,
+                                            connection_id,
+                                            None,
+                                            Some(bytes.len() as u64),
+                                            None,
+                                            Some(1),
+                                        )
+                                        .await;
+                                }
                             }
                             // CloseConnection / WaitForMore / others are meaningless for a
                             // connectionless FIFO sink and are intentionally ignored.
@@ -369,6 +443,12 @@ impl NamedPipeServer {
                 }
             }
             reader.abort();
+            // The reader has ended, so the session has: its history goes with it. (On
+            // stop_server the whole server, history included, is removed instead.)
+            app_state
+                .remove_connection_from_server(server_id, connection_id)
+                .await;
+            let _ = status_tx.send("__UPDATE_UI__".to_string());
         });
 
         task_registrar.register_server_task(server_id, handle).await;

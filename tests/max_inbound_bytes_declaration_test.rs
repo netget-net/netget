@@ -115,7 +115,6 @@ const UNDECLARED_BASELINE: &[(&str, &str)] = &[
         "UDP only; single recv_from into a fixed 65535-byte buffer",
     ),
     ("snmp", "single recv_from into a fixed 65535-byte buffer"),
-    ("socket_file", "single read into a fixed 8192-byte buffer"),
     ("stdio", "single read into a fixed 8192-byte buffer"),
     ("stun", "single recv_from into a fixed 2048-byte buffer"),
     (
