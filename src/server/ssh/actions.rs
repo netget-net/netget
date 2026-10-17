@@ -165,7 +165,11 @@ impl Protocol for SshProtocol {
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // Interactive shell lines typed while the model answers are answered together by
+            // the channel's `ShellWorker` (mod.rs); a terminal is a stream, so the batch's
+            // output is written in order with one prompt. Login, exec and SFTP are never
+            // batched.
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
     fn description(&self) -> &'static str {

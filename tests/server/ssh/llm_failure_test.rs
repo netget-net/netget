@@ -163,6 +163,15 @@ async fn test_ssh_disconnects_when_shell_command_llm_fails() -> E2EResult<()> {
                 .map_err(|e| format!("channel never closed: {e}"))?;
             let exit_status = channel.exit_status().ok();
 
+            // The shell answers off russh's handler (`ShellWorker`), so the teardown reaches
+            // the wire as separate writes, and libssh2 may surface the channel's EOF (`Ok(0)`
+            // above) before the SSH_MSG_DISCONNECT behind it. The session must still be gone:
+            // a live session would open another channel here.
+            if !session_ended {
+                session.set_timeout(10_000);
+                session_ended = session.channel_session().is_err();
+            }
+
             Ok((transcript, session_ended, exit_status))
         })
         .await
