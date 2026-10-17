@@ -95,7 +95,9 @@ async fn join_uplinks_downlinks_and_mac_commands() {
     assert_eq!(ups[0]["dev_addr"], mac::dev_addr_hex(dev.dev_addr));
     assert_eq!(ups[0]["max_downlink_payload"], 241);
 
-    // The same frame again (a replay, or a retransmission) reaches nobody.
+    // The same frame again (a replay, or a retransmission) reaches nobody. Sent after the
+    // deduplication window, so it is the frame counter that refuses it, not the copy cache.
+    tokio::time::sleep(netget::server::lorawan::DEDUP_WINDOW * 2).await;
     fwd.push(&up, 2_500_000).await.expect("PUSH_ACK");
     assert!(fwd.pull_resp(QUIET).await.is_none());
     assert_eq!(events(&s.state, s.id, "lorawan_uplink").await.len(), 1);
