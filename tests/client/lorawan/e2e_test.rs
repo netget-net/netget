@@ -268,12 +268,14 @@ impl RawNs {
     /// Answer datagrams until a PUSH_DATA with an rxpk arrives; returns its PHYPayload and tmst.
     async fn next_uplink(&mut self) -> (Vec<u8>, u32) {
         let mut buf = vec![0u8; 65536];
+        // One deadline for the whole wait: keepalives arrive every second, so a per-datagram
+        // timeout would never fire while the gateway stays alive and sends nothing else.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         loop {
-            let (n, from) =
-                tokio::time::timeout(Duration::from_secs(10), self.sock.recv_from(&mut buf))
-                    .await
-                    .expect("an uplink")
-                    .unwrap();
+            let (n, from) = tokio::time::timeout_at(deadline, self.sock.recv_from(&mut buf))
+                .await
+                .expect("an uplink")
+                .unwrap();
             let d = &buf[..n];
             match d[3] {
                 0x02 => {
@@ -307,12 +309,12 @@ impl RawNs {
         d.extend(serde_json::to_vec(&json!({ "txpk": txpk })).unwrap());
         self.sock.send_to(&d, self.gateway.unwrap()).await.unwrap();
         let mut buf = vec![0u8; 65536];
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {
-            let (n, _) =
-                tokio::time::timeout(Duration::from_secs(5), self.sock.recv_from(&mut buf))
-                    .await
-                    .expect("a TX_ACK")
-                    .unwrap();
+            let (n, _) = tokio::time::timeout_at(deadline, self.sock.recv_from(&mut buf))
+                .await
+                .expect("a TX_ACK")
+                .unwrap();
             let d = &buf[..n];
             if d[3] == 0x05 {
                 assert_eq!(&d[1..3], &t, "TX_ACK echoes the PULL_RESP token");
