@@ -663,7 +663,11 @@ impl Protocol for Pop3Protocol {
                  neither POP3S nor STLS is available.",
             )
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // Pipelined transaction commands (STAT, LIST, UIDL, RETR, TOP, DELE, NOOP, RSET,
+            // ending at QUIT) that arrive during a call are answered in one; an answer without
+            // exactly one reply per command is replaced by -ERR [SYS/TEMP] for each. CAPA and
+            // USER/PASS/APOP/AUTH/STLS are never batched. See `pop3_batch_role`.
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
 
