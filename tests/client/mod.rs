@@ -246,6 +246,7 @@ pub mod kerberos;
 pub mod knx;
 pub mod libp2p;
 pub mod lmtp;
+pub mod lorawan;
 pub mod lpd;
 #[cfg(unix)]
 pub mod m3ua;

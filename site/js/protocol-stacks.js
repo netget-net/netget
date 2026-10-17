@@ -145,6 +145,7 @@ export const protocolStacks = [
     ["llmnr", "ETH>IP>UDP>LLMNR"],
     ["lmtp", "ETH>IP>TCP>LMTP"],
     ["loki", "ETH>IP>TCP>HTTP>Loki"],
+    ["lorawan", "ETH>IP>UDP>SEMTECH-UDP>LORAWAN"],
     ["lpd", "ETH>IP>TCP>LPD"],
     ["lwm2m", "ETH>IP>UDP>CoAP>LwM2M"],
     ["m3ua", "ETH>IP>SCTP>M3UA"],

@@ -336,6 +336,7 @@ pub mod kerberos;
 pub mod knx;
 pub mod libp2p;
 pub mod lmtp;
+pub mod lorawan;
 pub mod lpd;
 pub mod matrix;
 pub mod mbus;

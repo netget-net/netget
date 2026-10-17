@@ -722,6 +722,10 @@ impl ClientRegistry {
         ));
         #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
+            crate::client::lorawan::actions::LorawanClientProtocol::new(),
+        ));
+        #[cfg(not(target_arch = "wasm32"))]
+        self.register(Arc::new(
             crate::client::guacamole::actions::GuacamoleClientProtocol::new(),
         ));
         #[cfg(not(target_arch = "wasm32"))]
@@ -1324,6 +1328,7 @@ pub(crate) const ALL_KNOWN_CLIENT_PROTOCOLS: &[(&str, &str)] = &[
     ("RSH", "a native build (not the browser)"),
     ("REXEC", "a native build (not the browser)"),
     ("RLOGIN", "a native build (not the browser)"),
+    ("LoRaWAN", "a native build (not the browser)"),
     ("Guacamole", "a native build (not the browser)"),
     ("ActivityPub", "a native build (not the browser)"),
     ("Stratum", "a native build (not the browser)"),

@@ -36,6 +36,16 @@ pub const SENSITIVE_KEY_PARTS: &[&str] = &[
     // A credential that is not called one: the HTTP proxy client's `proxy_auth`
     // (`user:password`).
     "proxy_auth",
+    // LoRaWAN root and session keys (the `devices` of the network server and the gateway):
+    // the AppKey admits a device, the session keys read and forge its traffic.
+    "app_key",
+    "appkey",
+    "nwk_key",
+    "nwkkey",
+    "nwk_s_key",
+    "nwkskey",
+    "app_s_key",
+    "appskey",
 ];
 
 /// Substrings of a key name whose value is masked wherever it is displayed, without making

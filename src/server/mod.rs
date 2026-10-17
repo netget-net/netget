@@ -1140,6 +1140,8 @@ pub mod libp2p;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod lmtp;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod lorawan;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod lpd;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod lwm2m;
