@@ -255,6 +255,8 @@ impl Protocol for MqttSnProtocol {
             .notes("The gateway is the broker: no MQTT broker behind it and no retained-message store (answer a subscription with mqttsn_publish to deliver one). 256 sessions, 10 000 topic ids, 100 held messages per session, one outstanding QoS 1/2 delivery per client retried 3 times.")
             .answers_on_failure()
             .max_inbound_bytes(65_535)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

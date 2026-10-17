@@ -165,6 +165,8 @@ impl Protocol for ThriftClientProtocol {
             .e2e_testing("tests/client/thrift: a thriftpy2 0.7.1 server (independent) answers calls in framed binary and buffered compact, including a declared exception and an unknown method")
             .notes("One outstanding call at a time; no multiplexed protocol.")
             .max_inbound_bytes(crate::server::thrift::codec::MAX_MESSAGE)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

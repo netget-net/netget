@@ -217,6 +217,10 @@ impl Protocol for TelnetClientProtocol {
             .implementation("Raw TCP with Telnet option negotiation")
             .llm_control("Send commands and respond to server output, automatic option negotiation")
             .e2e_testing("telnetd or netcat as test server")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

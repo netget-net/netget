@@ -294,6 +294,10 @@ impl Protocol for PypiClientProtocol {
             .implementation("reqwest HTTP client with PyPI JSON API")
             .llm_control("Search, download packages, query metadata via JSON API")
             .e2e_testing("Real PyPI API (pypi.org)")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

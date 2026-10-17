@@ -347,6 +347,10 @@ impl Protocol for OpenApiClientProtocol {
                  written in the test, never a third-party OpenAPI implementation.",
             )
             .notes("Spec-driven request construction, path parameter substitution")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

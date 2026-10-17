@@ -254,13 +254,14 @@ async fn handle_form_key(app: &mut DashboardApp, key: KeyEvent, state: &AppState
                     editor: Box::new(editor),
                     target: field.target,
                 });
-            } else if field.target == FieldTarget::SendFirst {
+            } else if field.target.is_toggle() {
                 let toggled = if field.value == "true" {
                     "false"
                 } else {
                     "true"
                 };
-                form.set_field_value(&FieldTarget::SendFirst, toggled.to_string());
+                let target = field.target.clone();
+                form.set_field_value(&target, toggled.to_string());
             } else {
                 form.begin_edit();
             }
@@ -271,7 +272,7 @@ async fn handle_form_key(app: &mut DashboardApp, key: KeyEvent, state: &AppState
         KeyCode::Char(c) if !ctrl && form.focused_button.is_none() => {
             if form
                 .selected_field()
-                .is_some_and(|field| !field.multiline && field.target != FieldTarget::SendFirst)
+                .is_some_and(|field| !field.multiline && !field.target.is_toggle())
             {
                 form.begin_edit();
                 if let Some(buffer) = form.editing.as_mut() {
@@ -284,7 +285,7 @@ async fn handle_form_key(app: &mut DashboardApp, key: KeyEvent, state: &AppState
             // silently doing nothing until Enter is pressed.
             if form
                 .selected_field()
-                .is_some_and(|field| !field.multiline && field.target != FieldTarget::SendFirst)
+                .is_some_and(|field| !field.multiline && !field.target.is_toggle())
             {
                 form.begin_edit();
                 if let Some(buffer) = form.editing.as_mut() {

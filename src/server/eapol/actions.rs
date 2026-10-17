@@ -611,6 +611,8 @@ impl Protocol for EapolProtocol {
                  identity.",
             )
             .max_inbound_bytes(crate::server::eapol::MAX_FRAME_LEN)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

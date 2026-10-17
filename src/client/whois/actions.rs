@@ -195,6 +195,10 @@ impl Protocol for WhoisClientProtocol {
             .implementation("Direct TCP to port 43 with text protocol")
             .llm_control("Full control over WHOIS queries and response parsing")
             .e2e_testing("Public WHOIS servers (whois.iana.org, etc.)")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

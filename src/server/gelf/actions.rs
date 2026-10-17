@@ -71,7 +71,9 @@ impl Protocol for GelfProtocol {
  .implementation("Native bounded GELF 1.1 JSON, UDP chunks/gzip/zlib and NUL-delimited TCP; flate2 compression")
  .llm_control("Explicit static/script/manual/model handlers; llm_fallback=false collects unmatched messages without model calls")
  .e2e_testing("Codec bounds/negative cases, both transports, lifecycle and independent pygelf emitter / official Graylog go-gelf readers")
- .notes("256KiB JSON/compressed message, 8192-byte datagrams, 128 chunks within 5s, 128 pending messages/4MiB payload plus bounded metadata/recent IDs, 256 TCP peers, 30s absolute frame deadline. No TLS, HTTP input, authentication, persistence, acknowledgment or retry. No Stable/fuzz/pcap or complete Graylog platform claim. Metadata is not connectionless because TCP sessions and UDP reassembly must remain live.").build()
+ .notes("256KiB JSON/compressed message, 8192-byte datagrams, 128 chunks within 5s, 128 pending messages/4MiB payload plus bounded metadata/recent IDs, 256 TCP peers, 30s absolute frame deadline. No TLS, HTTP input, authentication, persistence, acknowledgment or retry. No Stable/fuzz/pcap or complete Graylog platform claim. Metadata is not connectionless because TCP sessions and UDP reassembly must remain live.").history(crate::protocol::metadata::HistoryMode::Off)
+ .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+ .build()
     }
     fn get_startup_parameters(&self) -> Vec<ParameterDefinition> {
         vec![

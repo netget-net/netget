@@ -215,6 +215,8 @@ impl Protocol for PostgresqlClientProtocol {
                  event, so the model does not learn of the error. Cells of types other than \
                  bool, integers, floats and text-like types reach the model as null.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

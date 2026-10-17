@@ -248,6 +248,8 @@ impl Protocol for BmpProtocol {
             // a failure closes the session, which is the only signal the router can see.
             .deliberately_silent()
             .max_inbound_bytes(super::codec::MAX_MESSAGE)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

@@ -421,6 +421,10 @@ impl Protocol for UsbClientProtocol {
             .implementation("nusb pure-Rust USB library for device access")
             .llm_control("Full control over USB transfers (control, bulk, interrupt)")
             .e2e_testing("Requires actual USB device for testing")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

@@ -176,6 +176,10 @@ impl Protocol for WebSocketClientProtocol {
                  rather than surfaced as an event. Validated against websocat 1.14.1 running as \
                  the server.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

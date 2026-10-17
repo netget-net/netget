@@ -110,6 +110,8 @@ impl Protocol for SflowClientProtocol {
             .llm_control("Typed export actions and transport-only events through common handlers/shared memory; command injection independent of parked handlers")
             .e2e_testing("Required pinned unmodified BSD Cistern exporter/decoder, actual GoFlow2 collector, literal wire/typed goldens and native lifecycle/bounds checks")
             .notes("Experimental manually supplied telemetry subset, not a full sFlow agent: no packet capture, statistical sampler, automatic counter polling, SNMP configuration, aggregation/store, ACK, reliability or authentication. v5 only; four sample formats; selected flow records1/2/3/4/1001 and counters1/2/5. Synthesized raw headers use typed IPv4/IPv6 TCP/UDP summaries; no payload, transport-checksum or capture-integrity claim. 8192bytes/datagram,32samples,64records/sample,256records;32declared agent/sub-agent sequence states, modulo2^32 datagram count starting0. Explicit sample sequence numbers describe caller-owned sFlow instances, not inferred from source alone; uptime optional caller value or elapsed logical client time modulo2^32.10s resolve/write deadlines,oneinflight,32queued events/actions,followup depth8. Required Cistern peer source-ID encoder defect compensated through public arguments; VLAN encoder excluded, evidence uses literal and GoFlow2. No fuzz/pcap/full compliance claim.")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn get_startup_examples(&self) -> StartupExamples {

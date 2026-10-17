@@ -163,6 +163,8 @@ impl Protocol for NetconfClientProtocol {
             .e2e_testing("tests/client/netconf: the Python netconf 2.1.0 server (independent) over base 1.0 and 1.1, plus framing, correlation, pin-refusal and command-injection checks")
             .notes("One outstanding RPC at a time; replies are matched on message-id. Password authentication only. Notifications, NETCONF over TLS, url and confirmed commit are excluded. 1 MiB messages.")
             .max_inbound_bytes(crate::server::netconf::wire::MAX_MESSAGE_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

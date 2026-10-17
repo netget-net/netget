@@ -280,6 +280,10 @@ impl Protocol for McpClientProtocol {
             .implementation("Custom JSON-RPC 2.0 client over HTTP")
             .llm_control("Full control over MCP operations (tools, resources, prompts)")
             .e2e_testing("Local MCP server or public MCP endpoint")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

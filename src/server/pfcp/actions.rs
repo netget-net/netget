@@ -209,6 +209,8 @@ impl Protocol for PfcpProtocol {
             .e2e_testing("tests/server/pfcp: wmnsk/go-pfcp as the SMF (association, heartbeat, a session established with CHOOSE F-TEIDs, modified, deleted, its retransmission answered identically, and the refusals before association and after deletion); the pcap oracle (tshark's pfcp dissector) over NetGet's responses")
             .notes("Every request gets a response, so a model that says nothing, or fails, answers request_rejected (logged decision=model_silent / fail_closed_*). No user plane: NetGet does not forward GTP-U. UPF-initiated Session Report Requests are not sent.")
             .max_inbound_bytes(wire::MAX_DATAGRAM)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

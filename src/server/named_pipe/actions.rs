@@ -116,6 +116,10 @@ impl Protocol for NamedPipeProtocol {
                  NetGet-against-NetGet. Windows named pipes are a different primitive and are out \
                  of scope (a #[cfg(windows)] follow-up).",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

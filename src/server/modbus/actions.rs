@@ -190,6 +190,10 @@ impl Protocol for ModbusProtocol {
                  0x04 either way. Untested: any real PLC, and pymodbus",
             )
             .max_inbound_bytes(crate::server::modbus::codec::MAX_ADU_LEN)
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

@@ -81,6 +81,10 @@ impl Protocol for IcmpClientProtocol {
                  version of this field claimed 'real ICMP pings to public IPs' as evidence; no \
                  such test exists and the repo forbids contacting external endpoints.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

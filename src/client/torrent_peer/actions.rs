@@ -232,6 +232,8 @@ impl Protocol for TorrentPeerClientProtocol {
                 .implementation("TCP-based peer wire protocol with handshake and message framing")
                 .llm_control("Full control over peer messages (choke, unchoke, interested, request, piece, etc.)")
                 .e2e_testing("Mock peer server")
+                .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+                .batching(crate::protocol::metadata::BatchingMode::Unsupported)
                 .build()
     }
     fn description(&self) -> &'static str {

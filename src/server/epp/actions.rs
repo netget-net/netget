@@ -275,6 +275,8 @@ impl Protocol for EppProtocol {
             .request_only("EPP is command/response: the server never speaks except to answer a command")
             .answers_on_failure()
             .max_inbound_bytes(super::wire::MAX_FRAME)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

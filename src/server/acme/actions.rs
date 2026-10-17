@@ -238,6 +238,8 @@ impl Protocol for AcmeProtocol {
             .answers_on_failure()
             .max_inbound_bytes(super::MAX_BODY)
             .request_only("ACME answers each HTTP request; the CA pushes nothing")
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

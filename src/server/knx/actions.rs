@@ -232,6 +232,8 @@ impl Protocol for KnxProtocol {
             .notes("Tunnelling only: no routing (multicast), no device management, no secure tunnelling, no tunnelling v2 over TCP. Telegrams NetGet sends are not retransmitted. Frames are capped at 512 bytes; a tunnel silent for 120 s is dropped, as the specification's heartbeat requires. A handler failure on a read sends nothing — an invented value would be a device that does not exist.")
             .deliberately_silent()
             .max_inbound_bytes(wire::MAX_FRAME)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

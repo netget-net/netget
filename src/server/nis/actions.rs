@@ -362,6 +362,8 @@ impl Protocol for NisProtocol {
             .answers_on_failure()
             .request_only("Every reply answers an RPC call")
             .max_inbound_bytes(wire::MAX_CALL)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

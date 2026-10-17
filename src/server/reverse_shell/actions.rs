@@ -101,6 +101,10 @@ impl Protocol for ReverseShellProtocol {
                  nc/socat connect directly.",
             )
             .max_inbound_bytes(crate::server::reverse_shell::MAX_LINE_LEN)
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

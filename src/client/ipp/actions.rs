@@ -239,6 +239,8 @@ impl Protocol for IppClientProtocol {
                 .implementation("ipp crate 5.3 with AsyncIppClient")
                 .llm_control("Full control over print operations: get-printer-attributes, print-job, get-job-attributes")
                 .e2e_testing("CUPS test server or local IPP printer")
+                .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+                .batching(crate::protocol::metadata::BatchingMode::Unsupported)
                 .build()
     }
     fn description(&self) -> &'static str {

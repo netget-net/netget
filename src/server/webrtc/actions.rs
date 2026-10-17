@@ -386,6 +386,10 @@ impl Protocol for WebRtcProtocol {
                  data-channel frames are surfaced to the model as lossy UTF-8; replies are \
                  always text.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

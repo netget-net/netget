@@ -107,6 +107,8 @@ impl Protocol for GitProtocol {
             )
             .max_inbound_bytes(crate::server::git::MAX_UPLOAD_PACK_BYTES)
             .request_only("Git smart HTTP is HTTP request/response; a server cannot send a peer anything unprompted")
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

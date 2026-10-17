@@ -100,7 +100,9 @@ impl Protocol for ConnectRpcProtocol {
             .llm_control("Typed stream-open and tick events for unary and server-streaming methods; explicit send/finish/cancel/wait/error. No application storage.")
             .e2e_testing("Mandatory pinned independent Connect-ES peers in both roles, NetGet pairs and bounded framing/cancellation tests.")
             .notes("Binary protobuf only: JSON message codecs and GET are rejected. Client streaming, bidi, reflection, WebSocket, receiver TLS, browser execution, pcap and fuzz evidence are outside this Experimental scope. Origin requests are rejected; no browser or CORS claim.")
-            .max_inbound_bytes(super::wire::MAX_MESSAGE_BYTES + 5).build()
+            .max_inbound_bytes(super::wire::MAX_MESSAGE_BYTES + 5).history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            .build()
     }
     fn get_startup_examples(&self) -> StartupExamples {
         let schema = "syntax=\"proto3\"; package demo; message Greeting { string name=1; } service Greeter { rpc Hello(Greeting) returns (Greeting); }";

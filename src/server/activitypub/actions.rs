@@ -263,6 +263,8 @@ impl Protocol for ActivityPubProtocol {
             .request_only("Every response answers an HTTP request; deliveries are separate requests")
             .answers_on_failure()
             .max_inbound_bytes(super::instance::MAX_DOCUMENT)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

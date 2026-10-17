@@ -186,6 +186,8 @@ impl Protocol for DcProtocol {
                 .e2e_testing("tokio::net::TcpStream speaking NMDC by hand (tests/server/dc/): the $Lock handshake, chat, search, kick/redirect, the injected-peer path, and the fail-closed reply when the model is unreachable. No third-party DC++ client, so this stays Experimental")
                 .notes("NMDC protocol only (ADC not supported). No key validation or P2P connection handling. Commands are bounded at 64 KiB; interpolated action values have | \\r \\n stripped so one field cannot inject a second command.")
                 .max_inbound_bytes(crate::server::dc::MAX_COMMAND_LEN)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

@@ -189,6 +189,8 @@ impl Protocol for ZipkinProtocol {
             .request_only("Every response answers an HTTP request")
             .answers_on_failure()
             .max_inbound_bytes(super::wire::MAX_BODY_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

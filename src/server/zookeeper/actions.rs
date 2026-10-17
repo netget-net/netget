@@ -477,6 +477,10 @@ impl Protocol for ZookeeperProtocol {
                  structured action. No storage: the handler answers every request.",
             )
             .max_inbound_bytes(crate::server::zookeeper::MAX_REQUEST_BYTES as usize)
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

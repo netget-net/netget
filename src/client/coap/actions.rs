@@ -559,6 +559,10 @@ impl Protocol for CoapClientProtocol {
                  model as text or parsed JSON; a non-UTF-8 payload is reported by size only, \
                  never re-encoded.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

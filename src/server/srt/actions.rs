@@ -211,6 +211,8 @@ impl Protocol for SrtProtocol {
             .notes("Live mode only, single publisher per resource, no rendezvous, no bidirectional mode, no FEC or bonding. The relay forwards payloads; it does not parse MPEG-TS. srt-tokio announces SRT 1.3 and puts its payload size in the handshake MSS field; the payload size is raised to 1456 so libsrt peers can send 1316-byte messages.")
             .answers_on_failure()
             .max_inbound_bytes(1500)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

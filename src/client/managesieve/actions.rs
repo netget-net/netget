@@ -181,6 +181,8 @@ impl Protocol for ManageSieveClientProtocol {
             .llm_control("Which scripts to list, read, upload, check, activate, rename and delete")
             .e2e_testing("tests/client/managesieve: Dovecot 2.4.5 with Pigeonhole 2.4.5 (independent, C), which compiles every uploaded script")
             .notes("No STARTTLS: use it only on trusted networks. One command at a time.")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

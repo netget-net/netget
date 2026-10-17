@@ -193,6 +193,8 @@ impl Protocol for CoapProtocol {
             // `MAX_PAYLOAD_LEN` was declared here and governs the outbound direction only,
             // so the number named nothing the inbound path checked.
             .max_inbound_bytes(crate::server::coap::codec::MAX_MESSAGE_LEN)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

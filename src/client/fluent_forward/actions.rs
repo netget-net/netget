@@ -85,7 +85,9 @@ impl Protocol for FluentForwardClientProtocol {
         vec![FORWARD_CONNECTED_EVENT.clone(), FORWARD_ACK_EVENT.clone()]
     }
     fn metadata(&self) -> ProtocolMetadataV2 {
-        ProtocolMetadataV2::builder().state(DevelopmentState::Experimental).well_known_port(24224).implementation("Native bounded MessagePack/EventTime and gzip PackedForward encoder/ACK correlation").llm_control("Connected and correlated ACK events with standard memory, bounded follow-ups and live command injection").e2e_testing("Four event carriers against official Fluentd in_forward; independent fluent-logger emits to collector").notes("256KiB frame; 256 records; depth32/16384 values; 32 pending ACKs/events, 8 follow-up depth, 32 handler actions; 10s connect/write/ACK deadlines. No secure-forward handshake/TLS, UDP heartbeat, JSON framing, persistence or retry. ACK confirms handler acceptance, not durable delivery.").build()
+        ProtocolMetadataV2::builder().state(DevelopmentState::Experimental).well_known_port(24224).implementation("Native bounded MessagePack/EventTime and gzip PackedForward encoder/ACK correlation").llm_control("Connected and correlated ACK events with standard memory, bounded follow-ups and live command injection").e2e_testing("Four event carriers against official Fluentd in_forward; independent fluent-logger emits to collector").notes("256KiB frame; 256 records; depth32/16384 values; 32 pending ACKs/events, 8 follow-up depth, 32 handler actions; 10s connect/write/ACK deadlines. No secure-forward handshake/TLS, UDP heartbeat, JSON framing, persistence or retry. ACK confirms handler acceptance, not durable delivery.").history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+        .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+        .build()
     }
     fn get_startup_examples(&self) -> StartupExamples {
         StartupExamples::new(

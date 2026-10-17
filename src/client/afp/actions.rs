@@ -627,6 +627,10 @@ impl Protocol for AfpClientProtocol {
                  it landed. No DHX/DHX2 logins, no resource forks, no rename, no reconnect; \
                  server attention messages are read and ignored.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn get_startup_examples(&self) -> StartupExamples {

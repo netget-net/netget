@@ -70,10 +70,11 @@ async fn start_with_no_llm(protocol: &str) -> Started {
         false, // send_first
         None,  // initial_memory
         "startup must not depend on the LLM being up".to_string(),
-        None, // startup_params
-        None, // event_handlers
-        None, // scheduled_tasks
-        None, // feedback_instructions
+        None,               // startup_params
+        None,               // event_handlers
+        None,               // scheduled_tasks
+        None,               // feedback_instructions
+        Default::default(), // history / batching overrides
         status_tx,
     )
     .await

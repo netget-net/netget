@@ -131,6 +131,8 @@ impl Protocol for TlsProtocol {
             .llm_control("Full control over application protocol on top of TLS; text or hex payloads")
             .e2e_testing("openssl s_client / native TLS client")
             .notes("Generic TLS server for custom protocols - LLM implements application layer. No client certificate authentication (no mTLS)")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

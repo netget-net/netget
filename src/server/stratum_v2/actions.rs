@@ -301,6 +301,8 @@ impl Protocol for StratumV2Protocol {
             .request_only("Every message answers a device's request, except the jobs, prev-hash and targets that follow an accepted channel")
             .answers_on_failure()
             .max_inbound_bytes(super::MAX_INBOUND_PAYLOAD)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

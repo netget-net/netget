@@ -226,6 +226,10 @@ impl Protocol for MongodbProtocol {
                  endSessions",
             )
             .max_inbound_bytes(crate::server::mongodb::MAX_MESSAGE_SIZE as usize)
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

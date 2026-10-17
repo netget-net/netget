@@ -110,6 +110,8 @@ impl Protocol for NtpProtocol {
                  broadcast and symmetric modes, and the NTP control protocol.",
             )
             .notes("Client/server mode only (mode 3 -> mode 4). A normal time response is mechanical (stratum 2, LOCL, current-time timestamps, origin+version echoed from the request), so it is answered STATICALLY with no LLM round-trip by default. The LLM is consulted only when the operator opts in with a server instruction or per-event handler — the way to make the server skew or lie about the time. On LLM failure in opt-in mode the server falls back to the correct static time response. Sub-ms with scripting")
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

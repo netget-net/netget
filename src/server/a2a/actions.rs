@@ -181,6 +181,8 @@ impl Protocol for A2aProtocol {
             .request_only("A2A answers each JSON-RPC request; push notifications are not offered")
             .answers_on_failure()
             .max_inbound_bytes(model::MAX_BODY_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

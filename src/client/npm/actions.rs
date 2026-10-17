@@ -304,6 +304,10 @@ impl Protocol for NpmClientProtocol {
             .implementation("reqwest HTTP client for NPM Registry API")
             .llm_control("Full control over package queries, searches, and downloads")
             .e2e_testing("Public NPM registry (registry.npmjs.org)")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

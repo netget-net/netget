@@ -229,6 +229,8 @@ impl Protocol for Tr069Protocol {
             .request_only("Every message answers a device's HTTP request: CWMP sessions are device-initiated")
             .answers_on_failure()
             .max_inbound_bytes(super::wire::MAX_ENVELOPE)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

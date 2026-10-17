@@ -155,6 +155,10 @@ impl Protocol for SyslogClientProtocol {
             .implementation("RFC 5424 syslog over TCP or UDP")
             .llm_control("Full control over facility, severity, and message content")
             .e2e_testing("rsyslog or syslog-ng as test server")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

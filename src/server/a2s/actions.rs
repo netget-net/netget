@@ -247,6 +247,8 @@ impl Protocol for A2sProtocol {
             // Each query stands alone: the challenge is recomputed from the address, never stored.
             .connectionless()
             .max_inbound_bytes(super::wire::MAX_REQUEST)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

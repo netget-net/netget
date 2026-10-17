@@ -292,6 +292,10 @@ impl Protocol for MongodbClientProtocol {
                  its result is not reported. One operation at a time - no aggregation \
                  pipeline, GridFS, change streams or transactions.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

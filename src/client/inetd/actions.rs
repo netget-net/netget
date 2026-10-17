@@ -330,6 +330,8 @@ pub fn metadata(service: Service) -> crate::protocol::metadata::ProtocolMetadata
         .e2e_testing("tests/client/inetd: xinetd's own built-in services (and an external QOTD program) as the independent server")
         .notes("Replies are bounded to 64 KiB on TCP and 8 KiB per datagram; connect, write and reply deadlines are 30 s on TCP, 5 s for a UDP reply. A UDP query that gets no reply raises no event and is logged.")
         .max_inbound_bytes(wire::MAX_STREAM_REPLY)
+        .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+        .batching(crate::protocol::metadata::BatchingMode::Unsupported)
         .build()
 }
 

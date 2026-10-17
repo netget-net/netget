@@ -359,6 +359,10 @@ impl Protocol for GopherClientProtocol {
                  TLS ('gophers'), binary item transfer (types 4/5/6/9/g/I are listed but not \
                  downloaded, since that would mean base64 in an event) and CSO (type 2).",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

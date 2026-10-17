@@ -226,6 +226,7 @@ pub async fn start_client_from_action(
     event_handlers: Option<Vec<serde_json::Value>>,
     scheduled_tasks: Option<Vec<crate::llm::actions::common::ServerTaskDefinition>>,
     feedback_instructions: Option<String>,
+    conversation: crate::protocol::metadata::ConversationOverrides,
     llm_client: OllamaClient,
     status_tx: Option<mpsc::UnboundedSender<String>>,
 ) -> Result<ClientId> {
@@ -248,6 +249,9 @@ pub async fn start_client_from_action(
         Some(p) => p,
         None => return Err(unknown_client_protocol_error(&protocol)),
     };
+
+    // History and batching, resolved and refused exactly as for a server.
+    let (history_entries, batching) = conversation.resolve(&protocol_impl.metadata(), &protocol)?;
 
     // === --min-stability gate ===
     // Refuse a protocol below the operator's maturity floor before building
@@ -335,6 +339,9 @@ pub async fn start_client_from_action(
         feedback_buffer: Vec::new(),
         last_feedback_processed: None,
         connection_history: Default::default(),
+        history_entries,
+        batching,
+        exchange_history: Default::default(),
     };
 
     let client_id = state.add_client(client).await;

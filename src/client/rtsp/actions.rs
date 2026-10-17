@@ -203,6 +203,8 @@ impl Protocol for RtspClientProtocol {
             .llm_control("Which requests to make in which order, which track to set up, and what to do with the media that arrives")
             .e2e_testing("tests/client/rtsp: mediamtx 1.9.3 serving a G.711 stream that ffmpeg publishes into it; NetGet describes, sets up, plays and tears down, and the tone it decodes is asserted")
             .notes("UDP transport only (no TCP interleaving), no authentication, no RTSP 2.0, no requests from the server. A handler chain stops after 8 follow-ups.")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

@@ -78,6 +78,8 @@ impl Protocol for IgmpProtocol {
                  packet. Experimental for that reason - do not read the codec tests as \
                  validation against a real IGMP router.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

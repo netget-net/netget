@@ -116,6 +116,8 @@ impl Protocol for RadsecProtocol {
             .request_only("Every packet NetGet writes answers a RADIUS request; no CoA or Disconnect-Request is sent")
             .answers_on_failure()
             .max_inbound_bytes(crate::server::radius::packet::MAX_PACKET_LEN)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

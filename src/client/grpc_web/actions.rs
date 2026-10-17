@@ -237,7 +237,9 @@ impl Protocol for GrpcWebClientProtocol {
             .llm_control("Call, observe typed response messages and final status, cancel or disconnect; one RPC per connection, responsive injected controls.")
             .e2e_testing("Mandatory independent Connect-ES HTTP/1.1 server, paired NetGet binding and malformed framing/deadline/lifecycle tests.")
             .notes("Binary only, cleartext only. Text, client/bidirectional streaming, reflection, WebSocket, automatic retries/reconnect, TLS, browser execution and pcap/fuzz evidence are excluded. Cancellation disconnects the HTTP/1.1 session.")
-            .max_inbound_bytes(crate::server::grpc_web::wire::MAX_MESSAGE_BYTES).build()
+            .max_inbound_bytes(crate::server::grpc_web::wire::MAX_MESSAGE_BYTES).history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            .build()
     }
     fn get_startup_examples(&self) -> StartupExamples {
         let schema = "syntax=\"proto3\"; package demo; message Greeting { string name=1; } service Greeter { rpc Hello(Greeting) returns (Greeting); }";

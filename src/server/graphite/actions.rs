@@ -71,7 +71,9 @@ impl Protocol for GraphiteProtocol {
             .implementation("Native bounded Carbon plaintext TCP codec, no added dependencies")
             .llm_control("Explicit handlers process bounded batches; llm_fallback=false collects unmatched batches without model calls")
             .e2e_testing("Structured codec, fragmented/coalesced stream and lifecycle tests; independent Graphyte and official Carbon peers")
-            .notes("TCP only; 4096 bytes per line, 256 metrics per dispatch, 256 connections, 30s frame read deadline excluding handler time. No Pickle, UDP, Whisper storage, query API, TLS or authentication. Tags in metric paths pass through without interpretation.").build()
+            .notes("TCP only; 4096 bytes per line, 256 metrics per dispatch, 256 connections, 30s frame read deadline excluding handler time. No Pickle, UDP, Whisper storage, query API, TLS or authentication. Tags in metric paths pass through without interpretation.").history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            .build()
     }
     fn get_startup_parameters(&self) -> Vec<ParameterDefinition> {
         vec![ParameterDefinition { name: "llm_fallback".into(), type_hint: "boolean".into(), description: "Opt unmatched metric batches into model reasoning. False collects without model calls. Configured static/script/manual/LLM handlers always run.".into(), required: false, example: json!(true), default: Some(json!(DEFAULT_LLM_FALLBACK)) }]

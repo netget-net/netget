@@ -543,6 +543,8 @@ impl Protocol for CanProtocol {
                  is cheap and is written down in src/server/can/CLAUDE.md: Linux vcan needs no \
                  hardware and can-utils' cansend/candump are real third-party peers.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

@@ -201,6 +201,10 @@ impl Protocol for RssClientProtocol {
                  pending the call_llm_for_client signature change. Chained fetches are \
                  capped at 16 per client.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

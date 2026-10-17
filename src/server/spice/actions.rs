@@ -434,6 +434,8 @@ impl Protocol for SpiceProtocol {
                  Without a password any ticket is accepted and admission is the model's alone. \
                  Key releases and pointer movement are logged, not sent to the model.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

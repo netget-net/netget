@@ -158,7 +158,9 @@ impl Protocol for QuicClientProtocol {
         ProtocolMetadataV2::builder().state(DevelopmentState::Experimental).implementation("quinn 0.11/rustls; raw netget-quic ALPN, distinct from HTTP/3")
   .llm_control("Explicit text/hex/base64 stream payloads, response/error events, bounded follow-ups and disconnect")
   .e2e_testing("Independent aioquic 1.3.0 echo server; authenticated binary exchanges, multiplexing, injection/follow-ups and cleanup")
-  .notes("Each send_quic_data opens one FIN-delimited bidirectional exchange; send_quic_datagram sends an RFC 9221 DATAGRAM and incoming datagrams arrive as quic_datagram_received. No append to existing streams, incoming server streams, 0-RTT, reconnect or application framing. Certificates and hostname always verified; custom PEM trust supported. 1 MiB per direction, 32 exchanges, four queries per automatic chain.").build()
+  .notes("Each send_quic_data opens one FIN-delimited bidirectional exchange; send_quic_datagram sends an RFC 9221 DATAGRAM and incoming datagrams arrive as quic_datagram_received. No append to existing streams, incoming server streams, 0-RTT, reconnect or application framing. Certificates and hostname always verified; custom PEM trust supported. 1 MiB per direction, 32 exchanges, four queries per automatic chain.").history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+  .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+  .build()
     }
     fn get_startup_examples(&self) -> StartupExamples {
         StartupExamples::new(

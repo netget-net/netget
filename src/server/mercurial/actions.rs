@@ -150,6 +150,8 @@ impl Protocol for MercurialProtocol {
             )
             .max_inbound_bytes(crate::server::mercurial::MAX_REQUEST_BODY_BYTES)
             .request_only("Mercurial is HTTP request/response; a server cannot send a peer anything unprompted")
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

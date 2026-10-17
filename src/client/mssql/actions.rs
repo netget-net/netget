@@ -191,6 +191,10 @@ impl Protocol for MssqlClientProtocol {
             .implementation("tiberius TDS client library v0.12")
             .llm_control("Full control over SQL queries")
             .e2e_testing("Local MSSQL server or Docker container")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

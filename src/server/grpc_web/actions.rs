@@ -81,7 +81,9 @@ impl Protocol for GrpcWebProtocol {
             .llm_control("Typed stream-open and tick events for unary and server-streaming methods; explicit send/finish/cancel/wait/error. No application storage.")
             .e2e_testing("Mandatory pinned independent Connect-ES peers in both roles, NetGet pairs and bounded framing/cancellation tests.")
             .notes("Binary only: text mode is rejected. Client streaming, bidi, reflection, WebSocket, receiver TLS, browser execution, pcap and fuzz evidence are outside this Experimental scope. CORS requires one explicitly configured origin; no credentials.")
-            .max_inbound_bytes(super::wire::MAX_MESSAGE_BYTES + 5).build()
+            .max_inbound_bytes(super::wire::MAX_MESSAGE_BYTES + 5).history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            .build()
     }
     fn get_startup_examples(&self) -> StartupExamples {
         let schema = "syntax=\"proto3\"; package demo; message Greeting { string name=1; } service Greeter { rpc Hello(Greeting) returns (Greeting); }";

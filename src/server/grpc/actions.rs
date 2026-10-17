@@ -156,6 +156,8 @@ impl Protocol for GrpcProtocol {
             .e2e_testing("Mandatory independent grpcurl1.9.4 and generated grpcio1.75.1 peers exercise unary success/error, all three stream shapes, gzip and v1/v1alpha reflection; paired NetGet client/server and cancellation/bounds regressions in tests/server/grpc and tests/client/grpc. Peers fail when absent.")
             .notes("Experimental expanded scope. New streams exclude schemas containing bytes fields; legacy unary bytes/base64 behavior remains. Reflection is enabled by default and can be disabled. Receiver TLS, mTLS, streaming retries, load balancing, reflection authentication and pcap/fuzz evidence are outside the validated scope. Legacy unary request compression remains rejected.")
             .max_inbound_bytes(crate::server::grpc::MAX_REQUEST_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

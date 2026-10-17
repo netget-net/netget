@@ -116,6 +116,10 @@ impl Protocol for MysqlProtocol {
                  about security. No TLS either. Prepared statements work and report their `?` \
                  count, but parameter values are not substituted - the model sees the `?`.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

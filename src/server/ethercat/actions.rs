@@ -516,6 +516,8 @@ impl Protocol for EthercatProtocol {
                  refused (AL status error, code 0x0001), SDO reads and writes are aborted \
                  (0x08000020), and inputs the model never set are never reported valid.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

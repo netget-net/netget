@@ -267,6 +267,8 @@ impl Protocol for SocketIoClientProtocol {
             .e2e_testing("tests/client/socketio: python-socketio 5.17.0's server (independent) over WebSocket and polling: connects, emits with acks, receives broadcasts and server acks, joins a second namespace and is refused a forbidden one")
             .notes("No transport upgrade from polling to WebSocket, no binary attachments, no automatic reconnection. 1 MB payloads.")
             .max_inbound_bytes(packet::MAX_PAYLOAD)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

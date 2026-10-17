@@ -116,7 +116,9 @@ impl Protocol for GeminiClientProtocol {
         .llm_control("URLs, explicit input replies and redirect decisions; parsed status/meta/text/links")
         .e2e_testing("tests/client/gemini: independent Agate server, NetGet pair, certificate rejection, wire bounds and lifecycle")
         .notes("Text MIME bodies only, UTF-8/US-ASCII; no binary downloads or client certificate authentication. TLS verified with Mozilla roots or explicit custom CA, no hidden TOFU state. Fresh TLS connection per request;30s complete transaction deadline, body1MiB, header1029 bytes, gemtext8192 lines. Redirects never followed automatically.")
-        .max_inbound_bytes(super::wire::MAX_BODY_BYTES).build()
+        .max_inbound_bytes(super::wire::MAX_BODY_BYTES).history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+        .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+        .build()
     }
     fn get_startup_parameters(&self) -> Vec<crate::llm::actions::ParameterDefinition> {
         [("server_name", "TLS server name and required URL hostname; derived from remote_addr when omitted",json!("localhost")),

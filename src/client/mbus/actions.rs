@@ -642,6 +642,10 @@ impl Protocol for MbusClientProtocol {
                  serial port), wired M-Bus only (no wireless EN 13757-4), CI 0x72 variable data \
                  only (fixed data CI 0x73 is reported, not decoded), no encryption.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn get_startup_examples(&self) -> StartupExamples {

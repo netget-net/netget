@@ -213,6 +213,8 @@ impl Protocol for ZipkinClientProtocol {
             .llm_control("Which spans to report and which queries to run, and what to do with each answer")
             .e2e_testing("tests/client/zipkin: the official Zipkin server (zipkin-server 3.5.1, in-memory storage) and Jaeger all-in-one's Zipkin collector, each read back through its own query API")
             .notes("JSON v2 only, cleartext HTTP. Request and response bodies are capped at 1 MiB, reports at 1000 spans. A handler chain stops after 8 follow-ups.")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

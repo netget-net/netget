@@ -140,6 +140,10 @@ impl Protocol for BeanstalkdProtocol {
             .max_inbound_bytes(wire::MAX_JOB_BYTES)
             // INTERNAL_ERROR / OUT_OF_MEMORY, which every beanstalkd client already handles.
             .answers_on_failure()
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

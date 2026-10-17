@@ -125,6 +125,8 @@ impl Protocol for RdapProtocol {
             .request_only("RDAP answers each HTTP request; nothing is sent unprompted")
             .answers_on_failure()
             .max_inbound_bytes(super::MAX_HEADER_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

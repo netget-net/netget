@@ -180,6 +180,10 @@ impl crate::llm::actions::protocol_trait::Protocol for StunClientProtocol {
             .implementation("stunclient library for NAT traversal discovery")
             .llm_control("Control when to send binding requests and interpret external address")
             .e2e_testing("Google STUN servers (stun.l.google.com:19302)")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

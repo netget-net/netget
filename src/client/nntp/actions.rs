@@ -296,6 +296,8 @@ impl Protocol for NntpClientProtocol {
             .e2e_testing("Independent nntpserver posting and TLS authentication, nntplib server tests, negative/lifecycle checks")
             .max_inbound_bytes(crate::server::nntp::extensions::MAX_ARTICLE)
             .notes("No STARTTLS, SASL, compression or persistent article spool. Credentials require TLS; certificate verification is mandatory. MODE STREAM/CHECK/TAKETHIS are sequential transactions.")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

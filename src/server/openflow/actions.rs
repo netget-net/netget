@@ -821,6 +821,8 @@ impl Protocol for OpenFlowProtocol {
                  packet_in_id. On LLM failure nothing is sent and the packet is not forwarded \
                  (decision=fail_closed_llm_error).",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

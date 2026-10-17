@@ -88,7 +88,9 @@ impl Protocol for StatsdClientProtocol {
             .implementation("Native UTF-8 UDP codec shared with collector; no additional dependencies")
             .llm_control("One connected event; structured batch actions also available via command injection")
             .e2e_testing("Exact UDP wire fixtures, handler and lifecycle tests; independent receiver evidence in tests/client/statsd/AGENTS.md")
-            .notes("8 KiB / 256 records per datagram. No delivery acknowledgment, retries, TCP, Unix sockets, aggregation or sampling decisions; sample_rate is metadata. Default dialect dogstatsd.").build()
+            .notes("8 KiB / 256 records per datagram. No delivery acknowledgment, retries, TCP, Unix sockets, aggregation or sampling decisions; sample_rate is metadata. Default dialect dogstatsd.").history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            .build()
     }
     fn get_startup_examples(&self) -> StartupExamples {
         let action = json!({"type":"send_statsd_batch","records":[{"kind":"metric","name":"requests","value":"1","metric_type":"c"}]});

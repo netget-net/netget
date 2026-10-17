@@ -478,6 +478,8 @@ impl crate::llm::actions::protocol_trait::Protocol for EthercatClientProtocol {
             .llm_control("Which state to walk the segment (or one slave) to; every output value; which CoE objects to read and write and with what values. Identity, layouts, inputs and SDO results arrive as typed values")
             .e2e_testing("tests/client/ethercat: on Linux over a veth, KickCAT's network_simulator (an independent C++ software ESC and slave stack) running an emulated CiA 402 drive from its ESI: scan, identity from the SII, PDO layout over CoE, walk to OP, cyclic process data, the drive's statusword answering the controlword the model sets, SDO reads of 0x1018, with tshark reading a live capture; in-process against NetGet's own slave over EtherCAT-in-UDP")
             .notes("Experimental: one independent slave implementation (KickCAT's emulated ESC; no other software EtherCAT slave exists without an ESC chip — SOES needs one), no real ESC has been on the wire, its pair job had not run in CI when it landed, and the raw transport needs CAP_NET_RAW. Not implemented: distributed clocks, topology beyond a line, redundancy, ENI files, FoE/EoE/SoE/AoE, SDO information, complete access, PDO remapping, EEPROM writes, mailbox polling through an FMMU. Outputs are zero and OP is refused until the model sets them; on LLM failure nothing is sent.")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

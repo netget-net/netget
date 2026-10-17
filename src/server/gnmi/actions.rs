@@ -177,6 +177,8 @@ impl Protocol for GnmiProtocol {
             .well_known_port(9339)
             .max_inbound_bytes(super::codec::MAX_MESSAGE_BYTES).answers_on_failure()
             .request_only("gNMI updates belong to an established Subscribe RPC; no unprompted connection-level messages")
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn get_sync_actions(&self) -> Vec<ActionDefinition> {

@@ -305,6 +305,8 @@ impl Protocol for DbusProtocol {
             .notes("FAILS CLOSED: a call expecting a reply that the model does not answer gets org.freedesktop.DBus.Error.Failed (LimitsExceeded when the backend is overloaded), never silence. Messages over 1 MiB and values nested past 32 (variants count; the specification allows 64, but NetGet's event pipeline holds 64 JSON levels) close the connection. No Unix file descriptors, no DBUS_COOKIE_SHA1, no routing between peers: each connection talks to NetGet only.")
             .answers_on_failure()
             .max_inbound_bytes(wire::MAX_MESSAGE_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

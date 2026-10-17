@@ -706,6 +706,10 @@ impl Protocol for RadiusClientProtocol {
                  A challenge's State is carried back automatically on the next Access-Request \
                  for the same user; that path is not exercised against a real server.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

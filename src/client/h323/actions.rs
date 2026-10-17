@@ -543,6 +543,8 @@ impl Protocol for H323ClientProtocol {
             .llm_control("When to register and under which aliases, who to call (alias, number or address) in which codec, when to hang up, and what to do after a reject, a forward or a release")
             .e2e_testing("tests/client/h323: GNU Gatekeeper (H323Plus) confirms NetGet's GRQ and RRQ, lists it in its status port's registrations and admits its ARQ; Asterisk's chan_ooh323 (ooh323c) and H323Plus's simph323 answer NetGet's Setup and the call connects with fastStart media; tshark's h225, q931 and h245 dissectors read every message both ways")
             .notes("Experimental: one gatekeeper implementation (GNU Gatekeeper) and two call peers (ooh323c, H323Plus) drive it in tests that fail rather than skip, but nobody has reviewed it against H.225.0 and its pair job had not run in CI when it landed. One call at a time. No H.235 security, no separate H.245 channel, G.711 only, no media sent.")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

@@ -259,6 +259,8 @@ impl Protocol for GraphqlClientProtocol {
             .e2e_testing("tests/client/graphql: strawberry-graphql 0.330.2 (independent) answers introspection, POST and GET queries, variables, a union, a mutation, a field error and a validation error, and serves graphql-transport-ws subscriptions (completion, cancellation, refusal)")
             .notes("Plain HTTP and ws://; no batching, uploads or persisted queries, no SSE or legacy subscriptions-transport-ws. 1 MiB answers and messages, 30 s per request, 64 subscriptions per socket.")
             .max_inbound_bytes(engine::MAX_BODY_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

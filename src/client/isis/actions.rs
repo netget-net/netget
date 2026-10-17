@@ -132,6 +132,10 @@ impl Protocol for IsisClientProtocol {
             .implementation("pcap for raw packet capture, custom IS-IS PDU parsing")
             .llm_control("Passive capture and analysis of IS-IS topology")
             .e2e_testing("Requires IS-IS router or packet replay")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

@@ -618,6 +618,8 @@ impl Protocol for BgpProtocol {
                  against a live BGP daemon.",
             )
             .max_inbound_bytes(crate::server::bgp::wire::BGP_MAX_MESSAGE_LEN)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

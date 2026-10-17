@@ -283,6 +283,10 @@ impl Protocol for OpenAiClientProtocol {
                  port. No test contacts api.openai.com and no real key is involved, so this \
                  is not validation against the real API.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

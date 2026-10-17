@@ -170,6 +170,15 @@ pub struct ClientInstance {
     /// [`CLIENT_CONNECTION_HISTORY_CAPACITY`]. Maintained by
     /// `AppState::update_client_status` via [`Self::record_status_transition`].
     pub connection_history: std::collections::VecDeque<ClientConnectionAttempt>,
+    /// How many earlier entries the model is shown; 0 is off. Starts at the protocol's
+    /// declared [`crate::protocol::metadata::HistoryMode`]; hot-applied.
+    pub history_entries: u16,
+    /// Whether events arriving during a call are delivered together afterwards — see
+    /// [`crate::protocol::metadata::BatchingMode`].
+    pub batching: bool,
+    /// What has happened on this client's session — a client is one connection, so one
+    /// history. See [`crate::state::exchange_history`].
+    pub exchange_history: crate::state::exchange_history::ExchangeHistory,
 }
 
 impl ClientInstance {
@@ -199,6 +208,9 @@ impl ClientInstance {
             feedback_buffer: Vec::new(),
             last_feedback_processed: None,
             connection_history: std::collections::VecDeque::new(),
+            history_entries: 0,
+            batching: false,
+            exchange_history: Default::default(),
         }
     }
 

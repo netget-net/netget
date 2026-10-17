@@ -168,6 +168,8 @@ impl Protocol for ZeromqProtocol {
             .notes("NULL security only (no PLAIN or CURVE). One message is handled at a time per connection; REP answers strictly in turn, and a REP request the handler does not answer closes the connection rather than leaving the peer to wait forever. Frames and messages are capped at 1 MiB, 64 frames per message; each connection may be silent idle_timeout_secs. Binding is the server's role: NetGet never connects out from here.")
             .request_only("A ZeroMQ server socket only ever answers a message it received")
             .max_inbound_bytes(super::wire::MAX_MESSAGE_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

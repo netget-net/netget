@@ -187,6 +187,8 @@ impl Protocol for MinecraftProtocol {
             .notes("No game: a login is always ended with a Disconnect, so no encryption, compression or play state. No favicon (it is base64 image data). Serverbound packets are capped at 2048 bytes, a handshake address at 255 characters and a name at 16; each read has a 30 s deadline. A handler failure on a ping closes the connection without a fabricated status; on a login it disconnects the player with a generic reason.")
             .request_only("Every reply answers the packet just read; the server never speaks first")
             .max_inbound_bytes(super::wire::MAX_SERVERBOUND_PACKET)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

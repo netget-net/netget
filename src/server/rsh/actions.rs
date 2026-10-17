@@ -298,6 +298,9 @@ impl Protocol for RshProtocol {
             .answers_on_failure()
             .request_only("Every rsh connection carries exactly one command and its answer")
             .max_inbound_bytes(wire::MAX_HANDSHAKE)
+            // rsh runs one command per connection; nothing earlier to read it against.
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {
@@ -381,6 +384,9 @@ impl Protocol for RexecProtocol {
             .answers_on_failure()
             .request_only("Every rexec connection carries exactly one command and its answer")
             .max_inbound_bytes(wire::MAX_HANDSHAKE)
+            // rexec runs one command per connection; nothing earlier to read it against.
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

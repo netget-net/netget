@@ -61,7 +61,9 @@ impl Protocol for S7commProtocol {
     }
     fn metadata(&self) -> crate::protocol::ProtocolMetadataV2 {
         use crate::protocol::metadata::*;
-        ProtocolMetadataV2::builder().state(DevelopmentState::Experimental).privilege_requirement(PrivilegeRequirement::PrivilegedPort(102)).implementation("Hand-written TPKT/COTP/S7comm, setup negotiation and selected S7ANY byte items").llm_control("Selected data-area read values, write acceptance and address/access errors; client read/write operations").e2e_testing("Independent python-snap7 peer, malformed framing, error replies and stop/rebind lifecycle").notes("Legacy byte reads/writes only: DB, inputs, outputs, markers. No S7plus, block upload/download, PLC control or persistence. 480-byte PDU, 16 items per request, 200 bytes per item. 30 s first frame, 600 s idle, 256 connections, 10 s client exchange.").max_inbound_bytes(crate::server::s7comm::codec::MAX_FRAME).well_known_port(102).answers_on_failure().build()
+        ProtocolMetadataV2::builder().state(DevelopmentState::Experimental).privilege_requirement(PrivilegeRequirement::PrivilegedPort(102)).implementation("Hand-written TPKT/COTP/S7comm, setup negotiation and selected S7ANY byte items").llm_control("Selected data-area read values, write acceptance and address/access errors; client read/write operations").e2e_testing("Independent python-snap7 peer, malformed framing, error replies and stop/rebind lifecycle").notes("Legacy byte reads/writes only: DB, inputs, outputs, markers. No S7plus, block upload/download, PLC control or persistence. 480-byte PDU, 16 items per request, 200 bytes per item. 30 s first frame, 600 s idle, 256 connections, 10 s client exchange.").max_inbound_bytes(crate::server::s7comm::codec::MAX_FRAME).well_known_port(102).answers_on_failure().history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+        .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+        .build()
     }
 }
 impl Server for S7commProtocol {

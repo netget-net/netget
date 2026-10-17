@@ -77,6 +77,8 @@ impl Protocol for RadsecClientProtocol {
             .e2e_testing("tests/client/radsec: NetGet's own RadSec server; FreeRADIUS with a TLS listener, and radsecproxy in front of FreeRADIUS, as independent servers")
             .notes("One connection carries authentication and accounting. Nothing is retransmitted; a request waits timeout_ms and is then reported as a timeout. A connection that closes ends the client.")
             .max_inbound_bytes(crate::server::radius::packet::MAX_PACKET_LEN)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

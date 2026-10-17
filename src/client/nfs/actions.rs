@@ -369,6 +369,10 @@ impl Protocol for NfsClientProtocol {
             .implementation("nfs3_client crate for NFSv3 protocol")
             .llm_control("Full control over file operations (read, write, create, delete)")
             .e2e_testing("NetGet NFS server as test target")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

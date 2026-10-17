@@ -355,6 +355,8 @@ impl Protocol for VxlanClientProtocol {
             .e2e_testing("tests/client/vxlan: the Linux kernel's vxlan driver, and its gretap driver over a fou port (GRE key, checksum and sequence numbers on), each in a network namespace, which answers ARP and ping itself, with a UDP service behind it and a closed port for the ICMP error")
             .notes("No TCP, no IPv6, no IP fragmentation; the tunnel goes to one remote endpoint (no flooding or learning of others). GRE is GRE-in-UDP only: GRE directly on IP protocol 47 needs a raw socket and is not implemented.")
             .max_inbound_bytes(frame::MAX_DATAGRAM)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

@@ -430,6 +430,8 @@ impl Protocol for RdpClientProtocol {
             .llm_control("What to type, which keys to press, where to click, and when to look at the screen; the screen comes back as its size, most common colour and a grid of each cell's most common colour")
             .e2e_testing("tests/client/rdp: two independent servers — FreeRDP's shadow server (freerdp-shadow-cli3) sharing an Xvfb display, with NLA against an NTLM SAM file, where the model's clicks and keystrokes are read back from xev on that display and the screen colours are checked against xsetroot; and xrdp 0.9 with TLS, whose login screen colour is checked")
             .notes("No certificate verification and no Kerberos (NTLM only). security defaults to nla, so the password is proven through CredSSP; security tls sends it in the Client Info PDU to a server whose certificate is not verified, which an interceptor can read, and security any refuses a server selecting TLS-only while a password is set. A desktop size the server grants above 4096 pixels a side is refused, at connection and at reactivation. No clipboard, audio, drive or other virtual channels. The screen is described by colour, not text. Standard RDP security (RC4) is not offered.")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

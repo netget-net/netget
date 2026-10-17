@@ -136,6 +136,8 @@ impl Protocol for IpsecProtocol {
                  auth, ESP and kernel XFRM programming - deliberately out of scope.",
             )
             .max_inbound_bytes(crate::server::ipsec::MAX_PACKET_SIZE)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

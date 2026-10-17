@@ -74,7 +74,9 @@ impl Protocol for GraphiteClientProtocol {
             .implementation("Native UTF-8 Carbon plaintext TCP encoder with bounded action batches")
             .llm_control("One connected event; structured metric batches also available via command injection")
             .e2e_testing("Exact wire, handler, rejection and lifecycle tests; official Carbon MetricLineReceiver interoperability")
-            .notes("TCP only; no UDP, Pickle, TLS, authentication, storage/query API, acknowledgment or retry. 4096 bytes per line, 64KiB/256 metrics per action; 10s connect/write deadline.").build()
+            .notes("TCP only; no UDP, Pickle, TLS, authentication, storage/query API, acknowledgment or retry. 4096 bytes per line, 64KiB/256 metrics per action; 10s connect/write deadline.").history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            .build()
     }
     fn get_startup_examples(&self) -> StartupExamples {
         StartupExamples::new(

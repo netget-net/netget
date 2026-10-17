@@ -150,7 +150,9 @@ impl Protocol for DictClientProtocol {
         .llm_control("Dictionary definitions, match searches, database and strategy discovery, information and session commands")
         .e2e_testing("tests/client/dict: independent dictd daemon, NetGet server pair, malformed framing, command injection and cleanup")
         .notes("Plain UTF-8 DICT. No AUTH/SASL or MIME negotiation. Connect/write/greeting/response deadlines30s; commands1024 bytes, response lines64KiB, total response1MiB, entries4096. Tracked tasks; injected disconnect interrupts greeting and pending replies.")
-        .max_inbound_bytes(super::wire::MAX_RESPONSE_BYTES).build()
+        .max_inbound_bytes(super::wire::MAX_RESPONSE_BYTES).history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+        .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+        .build()
     }
     fn example_prompt(&self) -> &'static str {
         "Connect to DICT at localhost:2628 and discover dictionary databases"

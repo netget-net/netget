@@ -153,6 +153,8 @@ impl Protocol for OcppClientProtocol {
             .e2e_testing("tests/client/ocpp: python ocpp 2.1.0 central systems (independent, schema-validating) over 1.6 and 2.0.1, including CSMS-initiated calls; NetGet pair and refusals")
             .notes("Plain ws:// only, no security profiles. No meter or connector simulation in Rust: the handler supplies every payload. 64 KiB messages.")
             .max_inbound_bytes(crate::server::ocpp::frame::MAX_MESSAGE_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

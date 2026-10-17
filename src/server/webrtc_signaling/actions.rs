@@ -294,6 +294,10 @@ impl Protocol for WebRtcSignalingProtocol {
                  time. Undeliverable messages are dropped and the sender gets an error; \
                  nothing is queued. Plain ws:// only, no TLS.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

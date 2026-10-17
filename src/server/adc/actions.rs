@@ -79,7 +79,9 @@ impl Protocol for AdcProtocol {
         EVENTS.clone()
     }
     fn metadata(&self) -> crate::protocol::ProtocolMetadataV2 {
-        crate::protocol::ProtocolMetadataV2::builder().state(crate::protocol::metadata::DevelopmentState::Experimental).implementation("Native bounded ADC selected codec; TCP and optional implicit TLS").llm_control("Handler-approved identities, public/private chat, search and peer-connect routing").e2e_testing("Independent peer exchanges, malformed input, owner shutdown and standalone feature builds").notes("ADC 1.0 BASE/TIGR, anonymous identities with CID/PID validation and per-connection IDs. ADCS uses verified implicit TLS. Selected BINF/BMSG/DMSG/BSCH/DRES/DCTM/DRCM routing. No GPA/PAS password login, UDP search, NAT traversal or persistent hub account database. 256 connections, 30 s first frame, 600 s idle, 10 s handshake/exchange. No persistent protocol data; handlers supply content and decisions.").max_inbound_bytes(super::codec::MAX_COMMAND).well_known_port(1511).build()
+        crate::protocol::ProtocolMetadataV2::builder().state(crate::protocol::metadata::DevelopmentState::Experimental).implementation("Native bounded ADC selected codec; TCP and optional implicit TLS").llm_control("Handler-approved identities, public/private chat, search and peer-connect routing").e2e_testing("Independent peer exchanges, malformed input, owner shutdown and standalone feature builds").notes("ADC 1.0 BASE/TIGR, anonymous identities with CID/PID validation and per-connection IDs. ADCS uses verified implicit TLS. Selected BINF/BMSG/DMSG/BSCH/DRES/DCTM/DRCM routing. No GPA/PAS password login, UDP search, NAT traversal or persistent hub account database. 256 connections, 30 s first frame, 600 s idle, 10 s handshake/exchange. No persistent protocol data; handlers supply content and decisions.").max_inbound_bytes(super::codec::MAX_COMMAND).well_known_port(1511).history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+        .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+        .build()
     }
 }
 impl Server for AdcProtocol {

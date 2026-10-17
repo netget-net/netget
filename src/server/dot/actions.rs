@@ -128,6 +128,8 @@ impl Protocol for DotProtocol {
                  `+tls` does not authenticate it), client auth, and record types beyond A.",
             )
             .notes("Self-signed certs only, no client auth, TLS overhead")
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

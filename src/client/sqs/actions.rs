@@ -308,6 +308,10 @@ impl Protocol for SqsClientProtocol {
             .implementation("AWS SDK for SQS with HTTP/JSON protocol")
             .llm_control("Full control over queue operations")
             .e2e_testing("LocalStack SQS container")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

@@ -236,6 +236,8 @@ impl Protocol for DnsProtocol {
                  workspace), and dig and kdig must be on PATH wherever the suite runs, since \
                  both tests hard-fail by design.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

@@ -204,6 +204,8 @@ impl Protocol for BmpClientProtocol {
             .llm_control("Which peers come up and go down, the routes and counters reported for them, and when the session ends")
             .e2e_testing("tests/client/bmp: gobmp 1.1.0 (independent, Go) collects and parses every message type the exporter sends")
             .notes("IPv4 unicast routes only; no Route Mirroring; peers are remembered by address from bmp_peer_up until bmp_peer_down.")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

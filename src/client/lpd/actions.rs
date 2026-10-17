@@ -348,6 +348,8 @@ impl Protocol for LpdClientProtocol {
             .e2e_testing("tests/client/lpd: scripted fixture asserting control files and acknowledgements; LPRng lpd as the independent server")
             .notes("Connects from an unprivileged source port, so a server enforcing RFC 1179's 721-731 source ports will refuse it. Text documents only (up to 4 MiB). Replies are bounded to 1 MiB; connect, write and acknowledgement deadlines are 30 s.")
             .max_inbound_bytes(wire::MAX_REPLY_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

@@ -284,6 +284,8 @@ impl Protocol for OnvifClientProtocol {
             .e2e_testing("tests/client/onvif: RPOS (the Node.js ONVIF camera, BreeeZe/rpos), which verifies the PasswordDigest itself and refuses a wrong one with ter:NotAuthorized; the model's chosen profile token is asserted in RPOS's own request log")
             .notes("Experimental: one third-party device, nobody has reviewed beyond its test. ver10 Device and Media only; no PTZ, Imaging, Events, Media2 or Set* operations. http only (no TLS) and no HTTP Digest. XAddrs are followed by path on the address the client was given, never to another host.")
             .max_inbound_bytes(crate::server::onvif::wire::MAX_RESPONSE)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

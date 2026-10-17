@@ -79,6 +79,8 @@ impl Protocol for StatsdProtocol {
             .llm_control("Explicit handlers process entire batches; llm_fallback=false collects unmatched batches without model calls")
             .e2e_testing("Typed codec vectors and real UDP wire/lifecycle tests; see tests/server/statsd/AGENTS.md for independent implementation evidence")
             .notes("8 KiB / 256 records per datagram. No aggregation, persistence, replies, origin metadata or packed values. DogStatsD is the default dialect.")
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn get_startup_parameters(&self) -> Vec<ParameterDefinition> {

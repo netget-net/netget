@@ -228,6 +228,8 @@ impl Protocol for Tr069ClientProtocol {
             .llm_control("When to inform, and the answer to every RPC: parameter values, data-model names, set/add/delete outcomes, faults")
             .e2e_testing("tests/client/tr069: GenieACS 1.2.16 (cwmp and nbi) over MongoDB 8.0.4 registers the device, sends it queued tasks and a connection request, and its NBI is read back")
             .notes("No ACS authentication (Basic or Digest), no TLS, no Download/Upload, no persistence: the data model is whatever the model answers. An RPC the model does not answer within 60 s is refused with fault 9002. A handler chain stops after 8 follow-ups.")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

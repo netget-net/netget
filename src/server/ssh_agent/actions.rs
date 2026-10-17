@@ -791,6 +791,10 @@ impl Protocol for SshAgentProtocol {
                  Lock/unlock and key constraints are reported but never enforced.",
             )
             .max_inbound_bytes(crate::server::ssh_agent::MAX_AGENT_MESSAGE_LEN)
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

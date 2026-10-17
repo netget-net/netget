@@ -225,6 +225,10 @@ impl Protocol for SshAgentClientProtocol {
                  operator's identities and have them sign model-chosen bytes, so reaching a \
                  live agent has to be asked for by path.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

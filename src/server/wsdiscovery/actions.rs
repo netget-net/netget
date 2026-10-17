@@ -318,6 +318,8 @@ impl Protocol for WsDiscoveryProtocol {
             .e2e_testing("tests/server/wsdiscovery: python WSDiscovery (directed and multicast probes, the resolve it sends for a match without addresses, and both protocol versions by raw socket); raw tests for the bounds")
             .notes("DELIBERATELY SILENT: WS-Discovery has no negative reply, so a probe the model does not answer, or a backend failure, sends nothing (logged decision=model_silent / fail_closed_*). Each answer goes unicast to the asker. No WS-Discovery proxy mode, no metadata exchange (WS-Transfer Get) — that is HTTP on the XAddrs.")
             .max_inbound_bytes(wire::MAX_DATAGRAM)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

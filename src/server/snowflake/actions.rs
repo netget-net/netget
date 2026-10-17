@@ -107,6 +107,8 @@ impl Protocol for SnowflakeProtocol {
             )
             .max_inbound_bytes(crate::server::snowflake::MAX_REQUEST_BYTES)
             .request_only("The Snowflake API is HTTP request/response; a server cannot send a peer anything unprompted")
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

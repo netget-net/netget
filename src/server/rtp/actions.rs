@@ -105,6 +105,8 @@ impl Protocol for RtpProtocol {
                  there is no TTS; ask for a tone/DTMF/silence, or supply raw codec bytes hex-encoded. \
                  RTCP is a minimal SR with no report blocks.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

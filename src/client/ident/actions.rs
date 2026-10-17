@@ -414,6 +414,10 @@ impl Protocol for IdentClientProtocol {
                  with a configurable port exists (see src/server/ident/CLAUDE.md for the \
                  search), because RFC 1413 has no notion of one. Same-project evidence only.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

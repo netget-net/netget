@@ -256,6 +256,8 @@ impl Protocol for RedfishClientProtocol {
             .e2e_testing("tests/client/redfish: DMTF Redfish-Mockup-Server 1.3.0 (independent) with its public-rackmount1 mockup: login, systems, a PATCH, a reset action, a 404")
             .notes("No $expand/$select, ETag caching or event subscriptions. disconnect deletes the session; a client stopped from outside leaves it to expire. 1 MiB answers; task monitors are followed for up to 60 s.")
             .max_inbound_bytes(model::MAX_BODY_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

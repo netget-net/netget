@@ -61,6 +61,8 @@ impl Protocol for SyslogProtocol {
             .llm_control("Message filtering, forwarding, alerting")
             .e2e_testing("logger command (Linux/macOS built-in)")
             .notes("RFC 3164 and RFC 5424 over UDP. Receive-only: nothing is ever sent back to the sender. No E2E test coverage")
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

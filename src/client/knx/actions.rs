@@ -147,6 +147,8 @@ impl Protocol for KnxClientProtocol {
             .e2e_testing("tests/client/knx: NetGet's own gateway; knxd as the gateway, observed with knxtool and answered by xknx on the same bus")
             .notes("Tunnelling v1 over UDP only. A request is retransmitted once if its ack does not come within a second, and the tunnel closes if the second goes unanswered too. Heartbeat every 60 s. A handler chain stops after 8 follow-ups.")
             .max_inbound_bytes(wire::MAX_FRAME)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

@@ -200,6 +200,8 @@ impl Protocol for MsgpackRpcProtocol {
             .request_only("Every response answers a request; notifications go back only as part of an answer")
             .answers_on_failure()
             .max_inbound_bytes(super::wire::MAX_MESSAGE)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

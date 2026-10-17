@@ -266,6 +266,8 @@ fn the_button_is_a_wireshark_action_on_servers_and_clients() {
             .any(|b| b.action == InstanceAction::Wireshark && b.label.contains("wireshark"))
     };
     let server = ServerRow {
+        history_entries: 0,
+        batching: false,
         id: ServerId::new(1),
         protocol: "HTTP".into(),
         port: 8080,
@@ -290,6 +292,8 @@ fn the_button_is_a_wireshark_action_on_servers_and_clients() {
     )));
 
     let client = ClientRow {
+        history_entries: 0,
+        batching: false,
         id: ClientId::new(1),
         protocol: "telnet".into(),
         remote_addr: "127.0.0.1:2323".into(),

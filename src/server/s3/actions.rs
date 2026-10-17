@@ -445,6 +445,8 @@ impl crate::llm::actions::protocol_trait::Protocol for S3Protocol {
             .notes("Virtual objects (no persistence); no SigV4 auth; binary bodies via encoding=base64")
             .max_inbound_bytes(crate::server::s3::MAX_REQUEST_BYTES)
             .request_only("S3 is HTTP request/response; a server cannot send a peer anything unprompted")
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

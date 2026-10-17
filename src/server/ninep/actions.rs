@@ -351,6 +351,8 @@ impl Protocol for NinepProtocol {
             .request_only("Every reply answers the T-message with the same tag; the server never speaks first")
             .answers_on_failure()
             .max_inbound_bytes(super::wire::MAX_MSIZE as usize)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

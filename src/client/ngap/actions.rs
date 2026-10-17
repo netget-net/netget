@@ -342,6 +342,8 @@ impl Protocol for NgapClientProtocol {
             .e2e_testing("tests/client/ngap: Open5GS's AMF (open5gs-amfd) over real SCTP on Linux accepts NG Setup and processes the model's Registration Request; a canned AMF over the lab transport for bounds, follow-up depth and the model's actions")
             .notes("Experimental: one independent AMF (Open5GS), runnable only where SCTP exists. No NAS security: RES* cannot be computed without a subscriber key, so registration ends at authentication. No PDU sessions or user plane. Handler chains stop after 8 follow-ups.")
             .max_inbound_bytes(codec::MAX_PDU_LEN)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

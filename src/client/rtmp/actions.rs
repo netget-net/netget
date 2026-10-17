@@ -194,6 +194,8 @@ impl Protocol for RtmpClientProtocol {
             .e2e_testing("tests/client/rtmp: MediaMTX (independent Go RTMP) serves a stream FFmpeg publishes, which the client plays; the client publishes an FLV that MediaMTX reports with its tracks")
             .notes("AMF0 only, no RTMPS, simple handshake; publishes FLV files only.")
             .max_inbound_bytes(crate::server::rtmp::chunk::MAX_MESSAGE)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

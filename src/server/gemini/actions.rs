@@ -141,6 +141,8 @@ impl Protocol for GeminiProtocol {
                  nothing, 40.",
             )
             .max_inbound_bytes(wire::MAX_REQUEST_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

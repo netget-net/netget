@@ -172,6 +172,8 @@ impl Protocol for RpkiRtrClientProtocol {
             .e2e_testing("tests/client/rpki_rtr: StayRTR 0.6.4 (independent Go cache) with reset, notify-driven incremental and version-0 sessions; NetGet cache pair; malformed and out-of-order cache PDUs")
             .notes("No VRP table and no route-origin validation: events report counts and up to 256 records per exchange. Plain TCP; no SSH/TLS. Router Key PDUs are counted and ignored; ASPA is not supported. No reconnect: the session ends on a fatal Error Report or disconnect. 1,000,000 PDUs per exchange.")
             .max_inbound_bytes(crate::server::rpki_rtr::codec::MAX_PDU_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

@@ -363,6 +363,8 @@ impl Protocol for DbusClientProtocol {
             .e2e_testing("tests/client/dbus: dbus-daemon (the reference bus) with a python dbus-next service, dbus-send calling the names NetGet owns, and dbus-monitor; NetGet's own D-Bus server for the peer-to-peer path")
             .notes("No Unix file descriptors and no DBUS_COOKIE_SHA1, so a TCP bus must allow ANONYMOUS. At most 64 calls await replies at once. Messages are bounded at 1 MiB and nesting at 32 like the server. Model turns follow from one another at most eight deep.")
             .max_inbound_bytes(wire::MAX_MESSAGE_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

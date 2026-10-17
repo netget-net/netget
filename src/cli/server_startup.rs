@@ -374,6 +374,7 @@ pub async fn start_server_from_action(
     event_handlers: Option<Vec<serde_json::Value>>,
     scheduled_tasks: Option<Vec<crate::llm::actions::common::ServerTaskDefinition>>,
     feedback_instructions: Option<String>,
+    conversation: crate::protocol::metadata::ConversationOverrides,
     status_tx: mpsc::UnboundedSender<String>,
 ) -> Result<ServerId> {
     use crate::state::server::ServerStatus;
@@ -390,6 +391,14 @@ pub async fn start_server_from_action(
     let protocol_impl = registry
         .resolve(protocol)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    // History and batching: the protocol's declared defaults, overridden where the caller
+    // chose. Refused here, before anything is registered, like an invalid startup parameter.
+    let (history_entries, batching) = conversation
+        .resolve(&protocol_impl.metadata(), protocol)
+        .inspect_err(|e| {
+            let _ = status_tx.send(format!("[ERROR] {}", e));
+        })?;
 
     // === --min-stability gate ===
     // Refuse a protocol below the operator's maturity floor before building
@@ -668,6 +677,9 @@ pub async fn start_server_from_action(
         last_feedback_processed: None,
         recent_connections: Default::default(),
         connection_opened_at: Default::default(),
+        history_entries,
+        batching,
+        exchange_history: Default::default(),
     };
 
     let server_id = state.add_server(server).await;

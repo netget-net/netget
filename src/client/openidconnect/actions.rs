@@ -391,6 +391,10 @@ impl Protocol for OpenIdConnectClientProtocol {
                      forged or expired id_token is accepted exactly as readily as a genuine \
                      one. Access, refresh and ID tokens reach the model only as \"[REDACTED]\".",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

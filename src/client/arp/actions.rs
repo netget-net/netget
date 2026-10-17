@@ -291,6 +291,10 @@ impl Protocol for ArpClientProtocol {
                  standing in for the pcap injection thread. Only the branch proving libpcap \
                  itself accepted the frame needs root, and it is #[ignore]d.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

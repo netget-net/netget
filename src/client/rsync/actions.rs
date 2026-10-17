@@ -356,6 +356,8 @@ impl Protocol for RsyncClientProtocol {
             .e2e_testing("tests/client/rsync: a stock rsync 3.2.7 daemon (rsync --daemon) — module listing with MOTD, a recursive listing, a fetch whose contents the model acts on, a password-protected module, an unknown module, and rsync_push of a tree (text, hex, a multi-token file, a symlink, an empty directory) read back from the daemon's own directory, plus a push refused by a read-only module")
             .notes("Files come back into the event, bounded by max_fetch_bytes; nothing is written to disk. rsync_push sends files whose contents the model supplies (whole, at most 1000 files and 8 MiB) and never deletes anything on the daemon. Devices and special files in a listing are skipped.")
             .max_inbound_bytes(MAX_FETCH_BYTES_LIMIT as usize)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

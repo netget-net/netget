@@ -439,6 +439,10 @@ impl Protocol for RedisClientProtocol {
                  both are reachable only as explicit commands. Non-UTF-8 bulk strings reach the \
                  model through a lossy conversion. No connect timeout.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

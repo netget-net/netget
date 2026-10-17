@@ -500,6 +500,8 @@ impl Protocol for Libp2pProtocol {
             .e2e_testing("tests/server/libp2p: go-libp2p (TCP, Noise, yamux) dials NetGet, verifies its peer id, runs identify and ping, and talks on /netget/chat/1.0.0; Kubo 0.43.1 (loopback only) fetches model-served content with ipfs cat and ipfs block get (raw, CIDv0 UnixFS, a 200 KB block), finds NetGet as a provider through its LAN DHT and sends it ADD_PROVIDER; over go-libp2p, go-cid recomputes the CID of every block sent, a block that does not hash is never sent, a failed model answers DONT_HAVE, and oversized, malformed and unknown-codec messages are refused before the model")
             .notes("TCP only: no QUIC, WebTransport, WebRTC, TLS security or mplex. Ed25519 identities only (RSA/secp256k1/ECDSA peers are refused). No gossipsub, no relay, no hole punching, no signed peer records. Messages are uvarint-length-prefixed, at most 1 MiB (Bitswap 4 MiB, DHT 64 KiB). A model failure resets the stream it was answering; a failed Bitswap answer is DONT_HAVE, never a block. IPFS limits: sha2-256 only; raw and dag-pb only (dag-cbor and others answered DONT_HAVE); the model serves raw blocks and single-block UnixFS files, not chunked DAGs or directories; DHT records (PUT_VALUE, GET_VALUE values, IPNS) are not stored; provider records are not kept by Rust (the model may remember ADD_PROVIDER); no Bitswap sessions, ledgers or want rebroadcast.")
             .max_inbound_bytes(host::MAX_MESSAGE)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

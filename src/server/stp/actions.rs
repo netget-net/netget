@@ -681,6 +681,8 @@ impl Protocol for StpProtocol {
                  error emits nothing and records decision=fail_closed_* in the log instead.",
             )
             .max_inbound_bytes(crate::server::stp::codec::MAX_8023_LENGTH)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

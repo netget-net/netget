@@ -196,6 +196,8 @@ impl Protocol for ZeromqClientProtocol {
             .e2e_testing("tests/client/zeromq: NetGet's own server for REQ and DEALER; pyzmq (libzmq 4.3.5) REP, ROUTER, PULL and PUB as the independent peers")
             .notes("NULL security only. One connection, no reconnection: if the server goes away the client ends. A REQ socket refuses a second send before its reply arrives. Frames and messages are capped at 1 MiB, 64 frames per message.")
             .max_inbound_bytes(wire::MAX_MESSAGE_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

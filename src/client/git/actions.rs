@@ -491,6 +491,10 @@ impl Protocol for GitClientProtocol {
             .implementation("git2 library (libgit2 wrapper)")
             .llm_control("Full control over Git operations")
             .e2e_testing("Local Git repository testing")
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

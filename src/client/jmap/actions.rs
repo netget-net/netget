@@ -190,6 +190,8 @@ impl Protocol for JmapClientProtocol {
             .llm_control("Every request: which methods, arguments and result references")
             .e2e_testing("tests/client/jmap: Stalwart 0.16.24 (independent mail server) — mailboxes, email creation, query with result references, changes, updates and errors")
             .notes("No blob upload/download, EventSource push or WebSocket. apiUrl must be on the session's origin.")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

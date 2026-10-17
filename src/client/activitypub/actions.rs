@@ -197,6 +197,8 @@ impl Protocol for ActivityPubClientProtocol {
             .llm_control("Whom to look up, follow and unfollow, what to post and like, and how to answer what arrives at the inbox")
             .e2e_testing("tests/client/activitypub: an actor built on the Fedify 2.4.2 library, which verifies NetGet's signed Follow, answers it with a signed Accept NetGet verifies, receives NetGet's signed Create, and serves the WebFinger a lookup resolves")
             .notes("The remote must be able to reach the actor's listen address. No media, no boosts, no persistence. A handler chain stops after 8 follow-ups.")
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

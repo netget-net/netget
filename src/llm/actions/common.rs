@@ -203,6 +203,12 @@ pub enum CommonAction {
         // Feedback instructions for automatic server adjustment
         #[serde(default)]
         feedback_instructions: Option<String>,
+        /// Earlier entries per connection the model is shown; 0 = off; omitted = protocol default
+        #[serde(default)]
+        history: Option<u16>,
+        /// Batch events arriving during a call; omitted = protocol default
+        #[serde(default)]
+        batching: Option<bool>,
     },
 
     /// Close a specific server
@@ -234,6 +240,12 @@ pub enum CommonAction {
         // Feedback instructions for automatic client adjustment
         #[serde(default)]
         feedback_instructions: Option<String>,
+        /// Earlier entries on the session the model is shown; 0 = off; omitted = protocol default
+        #[serde(default)]
+        history: Option<u16>,
+        /// Batch events arriving during a call; omitted = protocol default
+        #[serde(default)]
+        batching: Option<bool>,
     },
 
     /// Close a specific client
@@ -297,6 +309,10 @@ pub enum CommonAction {
         scheduled_tasks: Option<Vec<ServerTaskDefinition>>,
         #[serde(default)]
         feedback_instructions: Option<String>,
+        #[serde(default)]
+        history: Option<u16>,
+        #[serde(default)]
+        batching: Option<bool>,
     },
 
     /// Update a running client in place, by id. Mirror of `update_server`: a
@@ -319,6 +335,10 @@ pub enum CommonAction {
         scheduled_tasks: Option<Vec<ServerTaskDefinition>>,
         #[serde(default)]
         feedback_instructions: Option<String>,
+        #[serde(default)]
+        history: Option<u16>,
+        #[serde(default)]
+        batching: Option<bool>,
     },
 
     /// Update the server instruction (combines with existing)
@@ -327,10 +347,10 @@ pub enum CommonAction {
     /// Change the LLM model
     ChangeModel { model: String },
 
-    /// Replace global memory completely
+    /// Replace this instance's memory completely
     SetMemory { value: String },
 
-    /// Append to global memory
+    /// Append to this instance's memory
     AppendMemory { value: String },
 
     /// Append content to a log file
@@ -738,6 +758,20 @@ Example LLM handler:\\n\
         required: false,
     });
 
+    parameters.push(Parameter {
+        name: "history".to_string(),
+        type_hint: "number".to_string(),
+        description: "Optional: how many earlier exchanges on the same connection you are shown with each new event (each event and what answered it). 0 turns it off. Omit to keep the protocol's default — conversational protocols (telnet, IRC, SMTP, databases) show 40, independent requests (DNS, HTTP) none; get_protocol_docs names the default. Memory is separate: use it for anything that must outlive the connection.".to_string(),
+        required: false,
+    });
+
+    parameters.push(Parameter {
+        name: "batching".to_string(),
+        type_hint: "boolean".to_string(),
+        description: "Optional: when events arrive on a connection while you are still answering an earlier one, hold them and give them to you together in one follow-up call. Omit to keep the protocol's default. Refused on a protocol that answers each event as it arrives.".to_string(),
+        required: false,
+    });
+
     let example = json!({
         "type": "open_server",
         "port": 21,
@@ -888,6 +922,20 @@ Example LLM handler: {{\\\"event_pattern\\\": \\\"http_response_received\\\", \\
         required: false,
     });
 
+    parameters.push(Parameter {
+        name: "history".to_string(),
+        type_hint: "number".to_string(),
+        description: "Optional: how many earlier exchanges on this client's session you are shown with each new event (each event and what answered it). 0 turns it off. Omit to keep the protocol's default — conversational protocols (telnet, IRC, SMTP, databases) show 40, independent requests (DNS, HTTP) none; get_protocol_docs names the default. Memory is separate: use it for anything that must outlive the connection.".to_string(),
+        required: false,
+    });
+
+    parameters.push(Parameter {
+        name: "batching".to_string(),
+        type_hint: "boolean".to_string(),
+        description: "Optional: when events arrive on a connection while you are still answering an earlier one, hold them and give them to you together in one follow-up call. Omit to keep the protocol's default. Refused on a protocol that answers each event as it arrives.".to_string(),
+        required: false,
+    });
+
     let example = json!({
         "type": "open_client",
         "protocol": "http",
@@ -1010,7 +1058,8 @@ pub fn update_server_action() -> ActionDefinition {
         name: "update_server".to_string(),
         description: "Update a RUNNING server in place, by its id, instead of opening a second \
             one. Supply only the fields you want to change. Changing the instruction, memory, \
-            event_handlers, feedback_instructions or scheduled_tasks is applied WITHOUT dropping \
+            event_handlers, feedback_instructions, scheduled_tasks, history or batching is applied \
+            WITHOUT dropping \
             connections. Changing the port, host, interface, mac_address or startup_params \
             requires a clean stop+start (connections are dropped and the server gets a new id). \
             Prefer this over open_server when a server for the protocol already exists."
@@ -1051,6 +1100,22 @@ pub fn update_server_action() -> ActionDefinition {
                 description: "New port to bind. Triggers a restart.".to_string(),
                 required: false,
             },
+            Parameter {
+                name: "history".to_string(),
+                type_hint: "number".to_string(),
+                description: "Earlier exchanges per connection shown with each event; 0 turns \
+                    it off (hot-applied)."
+                    .to_string(),
+                required: false,
+            },
+            Parameter {
+                name: "batching".to_string(),
+                type_hint: "boolean".to_string(),
+                description: "Batch events arriving during a call (hot-applied; refused where \
+                    the protocol cannot batch)."
+                    .to_string(),
+                required: false,
+            },
         ],
         example: json!({
             "type": "update_server",
@@ -1067,7 +1132,8 @@ pub fn update_client_action() -> ActionDefinition {
         name: "update_client".to_string(),
         description: "Update a RUNNING client in place, by its id, instead of opening a second \
             one. Supply only the fields you want to change. Changing the instruction, memory, \
-            event_handlers, feedback_instructions or scheduled_tasks is applied in place. \
+            event_handlers, feedback_instructions, scheduled_tasks, history or batching is applied \
+            in place. \
             Changing the remote_addr or startup_params reconnects (new id)."
             .to_string(),
         parameters: vec![
@@ -1093,6 +1159,22 @@ pub fn update_client_action() -> ActionDefinition {
                 name: "remote_addr".to_string(),
                 type_hint: "string".to_string(),
                 description: "New remote address 'host:port'. Triggers a reconnect.".to_string(),
+                required: false,
+            },
+            Parameter {
+                name: "history".to_string(),
+                type_hint: "number".to_string(),
+                description: "Earlier exchanges per connection shown with each event; 0 turns \
+                    it off (hot-applied)."
+                    .to_string(),
+                required: false,
+            },
+            Parameter {
+                name: "batching".to_string(),
+                type_hint: "boolean".to_string(),
+                description: "Batch events arriving during a call (hot-applied; refused where \
+                    the protocol cannot batch)."
+                    .to_string(),
                 required: false,
             },
         ],
@@ -1148,7 +1230,7 @@ pub fn change_model_action() -> ActionDefinition {
 pub fn set_memory_action() -> ActionDefinition {
     ActionDefinition {
         name: "set_memory".to_string(),
-        description: "Replace the entire global memory with new content. Any existing memory is discarded. Use this to reset or completely rewrite memory state.".to_string(),
+        description: "Replace this server's (or client's) memory with new content. Any existing memory is discarded. Memory is shared by every connection and outlives each one; the bounded history of the current connection is shown to you separately and ends with it, so keep here anything you will need later.".to_string(),
         parameters: vec![
             Parameter {
                 name: "value".to_string(),
@@ -1169,7 +1251,7 @@ pub fn set_memory_action() -> ActionDefinition {
 pub fn append_memory_action() -> ActionDefinition {
     ActionDefinition {
         name: "append_memory".to_string(),
-        description: "Add new content to the end of global memory. Existing memory is preserved and a newline is automatically added before the new content. Use this to incrementally build up memory state.".to_string(),
+        description: "Add new content to the end of this server's (or client's) memory. Existing memory is preserved and a newline is automatically added before the new content. Memory is shared by every connection and outlives each one; the history of the current connection is bounded and ends with it.".to_string(),
         parameters: vec![
             Parameter {
                 name: "value".to_string(),

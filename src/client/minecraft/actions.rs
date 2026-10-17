@@ -261,6 +261,8 @@ impl Protocol for MinecraftClientProtocol {
             .e2e_testing("tests/client/minecraft: NetGet's own server for every path; node-minecraft-protocol's createServer as the independent peer for status, a login it accepts and one it kicks")
             .notes("Offline probing only: no Mojang authentication or encryption, so an online-mode server is reported as encryption_required, and an accepted login is reported and closed before play. Status responses are bounded to 32767 characters and decompressed packets to the same size; each read has a 30 s deadline.")
             .max_inbound_bytes(wire::MAX_CLIENTBOUND_PACKET)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

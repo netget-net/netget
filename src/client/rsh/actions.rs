@@ -491,6 +491,8 @@ impl Protocol for RshClientProtocol {
             .llm_control("Which commands to run, with what on standard input, and what to do with each result")
             .e2e_testing("tests/client/rsh: NetGet's own server for the handshake shapes and bounds, a test-owned listener for a refusal and a missing stderr connection; inetutils rshd and rsh-redone's rshd under a one-line inetd in real_server_test.rs (Linux, as root)")
             .notes(concat!("Experimental: two server families (inetutils and rsh-redone), on Linux as root only, and the pair job had not run in CI when it landed. A stock rshd refuses a connection from an ordinary source port, so unprivileged NetGet (on Linux) is refused; the connected event says whether reserved ports are available and each result names the port used. One command per connection; a command waits at most 60 s; output is capped at 1 MiB per stream; a handler chain stops after 8 follow-ups. ", crate::r_services_security!()))
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {
@@ -592,6 +594,8 @@ impl Protocol for RexecClientProtocol {
             .llm_control("Which commands to run, with what on standard input, and what to do with each result")
             .e2e_testing("tests/client/rsh: NetGet's own rexec server for the handshake and password refusal, bounds and the stderr connection; inetutils rexecd under a one-line inetd in real_server_test.rs (Linux, as root)")
             .notes(concat!("Experimental: one server family (inetutils rexecd; no other is packaged), on Linux as root only, and the pair job had not run in CI when it landed. One command per connection; a command waits at most 60 s; output is capped at 1 MiB per stream; a handler chain stops after 8 follow-ups. ", crate::r_services_security!()))
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {
@@ -702,6 +706,8 @@ impl Protocol for RloginClientProtocol {
             .llm_control("What to type and when, keys such as ^C and ^D, the window size, when to leave")
             .e2e_testing("tests/client/rsh: NetGet's own rlogin server for the handshake, password prompt, window size and line editing; inetutils rlogind and rsh-redone's rlogind under a one-line inetd in real_server_test.rs (Linux, as root)")
             .notes(concat!("Experimental: two server families (inetutils and rsh-redone), on Linux as root only, and the pair job had not run in CI when it landed. A stock rlogind refuses an ordinary source port. Output is raised to the model after 300 ms of quiet or 16 KiB, escape sequences removed; a session's handler chain stops after 32 model turns without an operator's input. ", crate::r_services_security!()))
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

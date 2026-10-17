@@ -66,6 +66,16 @@ pub struct ServerForm {
     pub scheduled_tasks: Option<Vec<ServerTaskDefinition>>,
     /// Instructions for the automatic feedback loop.
     pub feedback_instructions: Option<String>,
+    /// How many earlier entries of a connection's exchange the model is shown with each event;
+    /// `0` turns history off. Omitted keeps the protocol's declared default
+    /// ([`crate::protocol::metadata::HistoryMode`]). Applied in place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history: Option<u16>,
+    /// Deliver events arriving during a call together, in one follow-up call. Omitted keeps
+    /// the protocol's declared default; refused on a protocol that cannot batch
+    /// ([`crate::protocol::metadata::BatchingMode`]). Applied in place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batching: Option<bool>,
 }
 
 /// The management form for a client instance. Mirrors [`ServerForm`] against the
@@ -90,6 +100,16 @@ pub struct ClientForm {
     pub scheduled_tasks: Option<Vec<ServerTaskDefinition>>,
     /// Instructions for the automatic feedback loop.
     pub feedback_instructions: Option<String>,
+    /// How many earlier entries of a connection's exchange the model is shown with each event;
+    /// `0` turns history off. Omitted keeps the protocol's declared default
+    /// ([`crate::protocol::metadata::HistoryMode`]). Applied in place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history: Option<u16>,
+    /// Deliver events arriving during a call together, in one follow-up call. Omitted keeps
+    /// the protocol's declared default; refused on a protocol that cannot batch
+    /// ([`crate::protocol::metadata::BatchingMode`]). Applied in place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batching: Option<bool>,
 }
 
 /// Outcome of an update: which instance it now is, and whether applying it
@@ -209,6 +229,10 @@ impl ServerForm {
             self.event_handlers,
             self.scheduled_tasks,
             self.feedback_instructions,
+            crate::protocol::metadata::ConversationOverrides {
+                history: self.history,
+                batching: self.batching,
+            },
             status_tx,
         )
         .await
@@ -245,6 +269,10 @@ impl ClientForm {
             self.event_handlers,
             self.scheduled_tasks,
             self.feedback_instructions,
+            crate::protocol::metadata::ConversationOverrides {
+                history: self.history,
+                batching: self.batching,
+            },
             llm_client,
             Some(status_tx),
         )
@@ -295,7 +323,7 @@ fn server_needs_restart(form: &ServerForm) -> bool {
 /// - Protocol mismatch → error (protocol is immutable; recreate to change it).
 /// - `startup_params` / `event_handlers` are validated **before** the running
 ///   instance is touched, so a bad update leaves the old instance working.
-/// - Hot fields (instruction, memory, event handlers, feedback instructions,
+/// - Hot fields (instruction, memory, event handlers, feedback instructions, history, batching,
 ///   scheduled tasks) are applied in place, preserving live connections.
 /// - Binding fields (port, host, interface, mac) or a `startup_params` change
 ///   force a clean stop+start; this drops connections and is reported as such.
@@ -354,6 +382,13 @@ pub async fn update_server(
         crate::events::handler::EventHandler::parse_event_handlers(handlers.clone())
             .map_err(|e| anyhow::anyhow!("Invalid event_handlers: {}", e))?;
     }
+
+    // History and batching: what is asked for, else what the instance already has.
+    let (history_entries, batching) = crate::protocol::metadata::ConversationOverrides {
+        history: form.history.or(Some(current.history_entries)),
+        batching: form.batching.or(Some(current.batching)),
+    }
+    .resolve(&protocol_impl.metadata(), &current.protocol_name)?;
 
     if server_needs_restart(&form) {
         // === Restart path: clean stop + start with merged config ===
@@ -423,6 +458,10 @@ pub async fn update_server(
             event_handlers,
             form.scheduled_tasks,
             feedback_instructions,
+            crate::protocol::metadata::ConversationOverrides {
+                history: Some(history_entries),
+                batching: Some(batching),
+            },
             status_tx.clone(),
         )
         .await?;
@@ -471,6 +510,17 @@ pub async fn update_server(
             })
             .await;
         changed.push("feedback_instructions");
+    }
+    if form.history.is_some() || form.batching.is_some() {
+        state
+            .set_server_conversation_settings(server_id, history_entries, batching)
+            .await;
+        if form.history.is_some() {
+            changed.push("history");
+        }
+        if form.batching.is_some() {
+            changed.push("batching");
+        }
     }
     if let Some(tasks) = form.scheduled_tasks {
         let n = tasks.len();
@@ -561,6 +611,13 @@ pub async fn update_client(
         validate_client_handlers(handlers)?;
     }
 
+    // History and batching: what is asked for, else what the client already has.
+    let (history_entries, batching) = crate::protocol::metadata::ConversationOverrides {
+        history: form.history.or(Some(current.history_entries)),
+        batching: form.batching.or(Some(current.batching)),
+    }
+    .resolve(&protocol_impl.metadata(), &current.protocol_name)?;
+
     if client_needs_restart(&form) {
         let mut changed = Vec::new();
         if form.remote_addr.is_some() {
@@ -615,6 +672,10 @@ pub async fn update_client(
             event_handlers,
             form.scheduled_tasks,
             feedback_instructions,
+            crate::protocol::metadata::ConversationOverrides {
+                history: Some(history_entries),
+                batching: Some(batching),
+            },
             llm_client,
             Some(status_tx.clone()),
         )
@@ -663,6 +724,17 @@ pub async fn update_client(
             })
             .await;
         changed.push("feedback_instructions");
+    }
+    if form.history.is_some() || form.batching.is_some() {
+        state
+            .set_client_conversation_settings(client_id, history_entries, batching)
+            .await;
+        if form.history.is_some() {
+            changed.push("history");
+        }
+        if form.batching.is_some() {
+            changed.push("batching");
+        }
     }
     if let Some(tasks) = form.scheduled_tasks {
         let n = tasks.len();

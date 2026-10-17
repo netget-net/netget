@@ -117,6 +117,8 @@ impl Protocol for ArpProtocol {
                  NO LLM round-trip per captured packet; the LLM is consulted only when the \
                  operator supplies the mapping. Zero-LLM path is compile-verified; e2e needs a NIC.",
             )
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

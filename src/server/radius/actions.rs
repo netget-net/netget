@@ -739,6 +739,8 @@ impl Protocol for RadiusProtocol {
                  Authenticator does not verify are dropped.",
             )
             .max_inbound_bytes(crate::server::radius::packet::MAX_PACKET_LEN)
+            .history(crate::protocol::metadata::HistoryMode::Off)
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
 

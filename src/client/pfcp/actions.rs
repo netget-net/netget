@@ -310,6 +310,8 @@ impl Protocol for PfcpClientProtocol {
             .e2e_testing("tests/client/pfcp: wmnsk/go-pfcp as the UPF, which decodes every request NetGet sends and heartbeats NetGet back")
             .notes("One UPF per client. The model writes rule IEs as JSON; Node ID, F-SEID and Recovery Time Stamp are added in Rust.")
             .max_inbound_bytes(wire::MAX_DATAGRAM)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

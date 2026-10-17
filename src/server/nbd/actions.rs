@@ -140,6 +140,8 @@ impl Protocol for NbdProtocol {
             .request_only("NBD answers each request; the server pushes nothing")
             .answers_on_failure()
             .max_inbound_bytes(super::wire::MAX_OPTION)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

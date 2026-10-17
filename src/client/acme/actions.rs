@@ -190,6 +190,8 @@ impl Protocol for AcmeClientProtocol {
             .e2e_testing("tests/client/acme: Pebble 2.10.1 (independent) with pebble-challtestsrv as its DNS: register, order, http-01 validated by Pebble against this client's responder, dns-01 with the TXT record published through challtestsrv, finalize, download, revoke")
             .notes("ES256 account keys only; no keyChange, external account binding, pre-authorization, tls-alpn-01, profiles or ARI.")
             .max_inbound_bytes(super::MAX_RESPONSE)
+            .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn example_prompt(&self) -> &'static str {
