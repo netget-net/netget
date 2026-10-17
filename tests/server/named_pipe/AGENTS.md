@@ -46,9 +46,10 @@ so the deliberate miss is safe.
 
 ## LLM call budget
 
-2 tests: 2 mocked calls in the round-trip (startup + one event), plus 1 mocked startup call and
-a handful of deliberately-unmatched retry calls in the failure test = **well under** the 10-call
-budget.
+3 tests: 2 mocked calls in the round-trip (startup + one event), 1 mocked startup call and a
+handful of deliberately-unmatched retry calls in the failure test, and 5 in `batching_test.rs`
+(three writes answered in 3 calls with batching off, 2 with it on) = **within** the 10-call
+budget per test.
 
 ## Running
 
