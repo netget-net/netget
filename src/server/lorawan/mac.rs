@@ -140,7 +140,10 @@ pub fn mic(key: &Key, message: &[u8]) -> [u8; 4] {
 // ---------------------------------------------------------------------------------------
 
 fn parse_hex<const N: usize>(what: &str, s: &str) -> Result<[u8; N]> {
-    let cleaned: String = s.chars().filter(|c| !matches!(c, ':' | '-' | ' ')).collect();
+    let cleaned: String = s
+        .chars()
+        .filter(|c| !matches!(c, ':' | '-' | ' '))
+        .collect();
     let bytes = hex::decode(&cleaned).with_context(|| format!("{what} is not hex"))?;
     ensure!(
         bytes.len() == N,
@@ -661,5 +664,9 @@ pub fn link_check_ans(margin_db: u8, gateway_count: u8) -> [u8; 3] {
 /// DevStatusAns (device → network): battery 0 = external power, 1..254 level, 255 unknown;
 /// margin is the last downlink's SNR, a 6-bit signed value.
 pub fn dev_status_ans(battery: u8, margin_db: i8) -> [u8; 3] {
-    [CID_DEV_STATUS, battery, (margin_db.clamp(-32, 31) as u8) & 0x3f]
+    [
+        CID_DEV_STATUS,
+        battery,
+        (margin_db.clamp(-32, 31) as u8) & 0x3f,
+    ]
 }

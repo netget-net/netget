@@ -235,9 +235,8 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
                         }
                     }
                 }
-                Err(e) => Log::new(Some(&events_ctx.status_tx)).warn(format!(
-                    "LoRaWAN gateway handler failed; nothing sent: {e}"
-                )),
+                Err(e) => Log::new(Some(&events_ctx.status_tx))
+                    .warn(format!("LoRaWAN gateway handler failed; nothing sent: {e}")),
             }
         }
     });
@@ -497,10 +496,9 @@ impl Gateway<'_> {
             actions::SEND_UPLINK => {
                 let d = &mut self.devices[i];
                 let label = d.label();
-                let s = d
-                    .session
-                    .as_mut()
-                    .with_context(|| format!("{label} has not joined: send a Join Request first"))?;
+                let s = d.session.as_mut().with_context(|| {
+                    format!("{label} has not joined: send a Join Request first")
+                })?;
                 let port = ns::actions::port_of(v)?;
                 let payload = ns::actions::payload_bytes(v)?;
                 let confirmed = ns::actions::confirmed_of(v)?;
@@ -509,7 +507,10 @@ impl Gateway<'_> {
                     f_opts.push(mac::CID_LINK_CHECK);
                 }
                 if s.status_due {
-                    f_opts.extend(mac::dev_status_ans(actions::battery_of(v)?, snr.round() as i8));
+                    f_opts.extend(mac::dev_status_ans(
+                        actions::battery_of(v)?,
+                        snr.round() as i8,
+                    ));
                 }
                 let max = region::max_frm_payload(dr, f_opts.len());
                 ensure!(
@@ -661,29 +662,32 @@ impl Gateway<'_> {
                         "LoRaWAN {label} joined as {}",
                         mac::dev_addr_hex(ja.dev_addr)
                     ));
-                    return raise(Event::new(
-                        &actions::JOINED_EVENT,
-                        json!({
-                            "device": label,
-                            "dev_eui": d.config.dev_eui.as_ref().map(mac::eui_hex),
-                            "dev_addr": mac::dev_addr_hex(ja.dev_addr),
-                            "net_id": format!("{:06x}", ja.net_id),
-                            "rx1_dr_offset": ja.rx1_dr_offset,
-                            "rx2_data_rate": ja.rx2_data_rate,
-                            "rx_delay": ja.rx_delay,
-                        }),
-                    ), d.chain_depth);
+                    return raise(
+                        Event::new(
+                            &actions::JOINED_EVENT,
+                            json!({
+                                "device": label,
+                                "dev_eui": d.config.dev_eui.as_ref().map(mac::eui_hex),
+                                "dev_addr": mac::dev_addr_hex(ja.dev_addr),
+                                "net_id": format!("{:06x}", ja.net_id),
+                                "rx1_dr_offset": ja.rx1_dr_offset,
+                                "rx2_data_rate": ja.rx2_data_rate,
+                                "rx_delay": ja.rx_delay,
+                            }),
+                        ),
+                        d.chain_depth,
+                    );
                 }
                 log.warn("LoRaWAN Join Accept for no device with a pending join (or its MIC does not verify)");
                 Ok(())
             }
             mac::MTYPE_UNCONFIRMED_DOWN | mac::MTYPE_CONFIRMED_DOWN => {
                 let frame = mac::parse_data(&phy)?;
-                let Some(d) = self
-                    .devices
-                    .iter_mut()
-                    .find(|d| d.session.as_ref().is_some_and(|s| s.dev_addr == frame.dev_addr))
-                else {
+                let Some(d) = self.devices.iter_mut().find(|d| {
+                    d.session
+                        .as_ref()
+                        .is_some_and(|s| s.dev_addr == frame.dev_addr)
+                }) else {
                     log.debug(format!(
                         "LoRaWAN downlink for DevAddr {} (no device here)",
                         mac::dev_addr_hex(frame.dev_addr)
@@ -696,18 +700,31 @@ impl Gateway<'_> {
                 let full = match mac::classify_fcnt(s.fcnt_down, frame.f_cnt) {
                     mac::FcntCheck::Fresh(f) => f,
                     other => {
-                        log.warn(format!("LoRaWAN downlink to {label} dropped: counter {other:?}"));
+                        log.warn(format!(
+                            "LoRaWAN downlink to {label} dropped: counter {other:?}"
+                        ));
                         return Ok(());
                     }
                 };
                 if !mac::data_mic_ok(&phy, &s.nwk, mac::DIR_DOWN, frame.dev_addr, full) {
-                    log.warn(format!("LoRaWAN downlink to {label} dropped: MIC does not verify"));
+                    log.warn(format!(
+                        "LoRaWAN downlink to {label} dropped: MIC does not verify"
+                    ));
                     return Ok(());
                 }
                 s.fcnt_down = Some(full);
-                let key = if frame.f_port == Some(0) { s.nwk } else { s.app };
-                let plain =
-                    mac::crypt_frm(&key, mac::DIR_DOWN, frame.dev_addr, full, &frame.frm_payload);
+                let key = if frame.f_port == Some(0) {
+                    s.nwk
+                } else {
+                    s.app
+                };
+                let plain = mac::crypt_frm(
+                    &key,
+                    mac::DIR_DOWN,
+                    frame.dev_addr,
+                    full,
+                    &frame.frm_payload,
+                );
                 let (payload, commands) = if frame.f_port == Some(0) {
                     (Vec::new(), mac::decode_mac_commands(&plain, false))
                 } else {
@@ -721,24 +738,27 @@ impl Gateway<'_> {
                 }
                 let (payload, encoding) = payload_field(&payload);
                 let data_rate = txpk.datr.as_str().unwrap_or_default().to_string();
-                raise(Event::new(
-                    &actions::DOWNLINK_EVENT,
-                    json!({
-                        "device": label,
-                        "dev_addr": mac::dev_addr_hex(frame.dev_addr),
-                        "confirmed": frame.confirmed(),
-                        "f_cnt": full,
-                        "f_port": frame.f_port,
-                        "payload": payload,
-                        "payload_encoding": encoding,
-                        "mac_commands": commands,
-                        "ack": frame.ack,
-                        "f_pending": frame.f_pending,
-                        "frequency_mhz": txpk.freq,
-                        "data_rate": data_rate,
-                        "immediate": txpk.imme,
-                    }),
-                ), depth)
+                raise(
+                    Event::new(
+                        &actions::DOWNLINK_EVENT,
+                        json!({
+                            "device": label,
+                            "dev_addr": mac::dev_addr_hex(frame.dev_addr),
+                            "confirmed": frame.confirmed(),
+                            "f_cnt": full,
+                            "f_port": frame.f_port,
+                            "payload": payload,
+                            "payload_encoding": encoding,
+                            "mac_commands": commands,
+                            "ack": frame.ack,
+                            "f_pending": frame.f_pending,
+                            "frequency_mhz": txpk.freq,
+                            "data_rate": data_rate,
+                            "immediate": txpk.imme,
+                        }),
+                    ),
+                    depth,
+                )
             }
             other => bail!("a {} in a PULL_RESP", mac::mtype_name(other)),
         }

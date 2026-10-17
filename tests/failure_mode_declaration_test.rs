@@ -90,6 +90,9 @@ const DOCUMENTED_SILENT: &[&str] = &[
     // A group read answered by nobody is silence on a real bus; an invented value would be a
     // device that does not exist.
     "knx",
+    // Every LoRaWAN downlink is a positive assertion: a Join Accept admits a device, a data
+    // downlink speaks for the application. LoRaWAN has no refusal frame at all.
+    "lorawan",
     // sFlow v5 UDP collection has no application reply or negative acknowledgement.
     "sflow",
     // BFD has no refusal: a session the model does not accept is one the speaker never

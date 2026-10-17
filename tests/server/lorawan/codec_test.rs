@@ -38,7 +38,13 @@ fn lora_packet_readme_uplink() {
     assert_eq!(f.f_cnt, 2);
     assert_eq!(f.f_port, Some(1));
     assert!(mac::data_mic_ok(&phy, &nwk, mac::DIR_UP, f.dev_addr, 2));
-    assert!(!mac::data_mic_ok(&phy, &nwk, mac::DIR_UP, f.dev_addr, 0x1_0002));
+    assert!(!mac::data_mic_ok(
+        &phy,
+        &nwk,
+        mac::DIR_UP,
+        f.dev_addr,
+        0x1_0002
+    ));
     assert_eq!(
         mac::crypt_frm(&app, mac::DIR_UP, f.dev_addr, 2, &f.frm_payload),
         b"test"
@@ -171,7 +177,11 @@ fn push(body: &[u8]) -> Vec<u8> {
 #[test]
 fn packet_forwarder_bounds() {
     // A depth bomb is refused before serde sees it.
-    let bomb = format!("{{\"rxpk\":[],\"x\":{}{}}}", "[".repeat(4000), "]".repeat(4000));
+    let bomb = format!(
+        "{{\"rxpk\":[],\"x\":{}{}}}",
+        "[".repeat(4000),
+        "]".repeat(4000)
+    );
     let err = semtech::parse(&push(bomb.as_bytes())).unwrap_err();
     assert!(format!("{err:#}").contains("deeper"), "{err:#}");
     // A bracket inside a string is not nesting.

@@ -48,7 +48,12 @@ fn free_port() -> u16 {
 }
 
 async fn post(client: &reqwest::Client, url: &str, body: Value) -> Value {
-    let r = client.post(url).body(body.to_string()).send().await.unwrap();
+    let r = client
+        .post(url)
+        .body(body.to_string())
+        .send()
+        .await
+        .unwrap();
     assert!(r.status().is_success(), "{url}: {}", r.status());
     r.json().await.unwrap()
 }
@@ -96,14 +101,21 @@ async fn lwn_device_joins_and_talks_through_lwn_gateway() {
     )
     .await;
     let location = json!({"latitude": 45.0, "longitude": 9.0, "altitude": 0});
-    let gw = post(&http, &format!("{api}/add-gateway"), json!({"id": -1, "info": {
+    let gw = post(
+        &http,
+        &format!("{api}/add-gateway"),
+        json!({"id": -1, "info": {
         "active": true, "name": "gw1", "macAddress": hex::encode(GATEWAY), "keepAlive": 5,
-        "typeGateway": false, "ip": "", "port": "", "location": location}}))
+        "typeGateway": false, "ip": "", "port": "", "location": location}}),
+    )
     .await;
     assert_eq!(gw["code"], 0, "{gw}");
     // Region 1 is EU868 in LWN's numbering. Confirmed uplinks of "lwn-hello" on port 2 every
     // 4 s; RX windows held open for 3 s.
-    let dev = post(&http, &format!("{api}/add-device"), json!({"id": -1, "info": {
+    let dev = post(
+        &http,
+        &format!("{api}/add-device"),
+        json!({"id": -1, "info": {
         "name": "lwn-dev", "devEUI": LWN_DEV_EUI, "appKey": APP_KEY,
         "devAddr": "00000000", "nwkSKey": "0".repeat(32), "appSKey": "0".repeat(32),
         "location": location,
@@ -115,7 +127,8 @@ async fn lwn_device_joins_and_talks_through_lwn_gateway() {
             "sendInterval": 4, "nbRetransmission": 1},
         "rxs": [{"delay": 1000, "durationOpen": 3000},
                 {"channel": {"active": true, "freqDownlink": 869525000}, "delay": 1000,
-                 "durationOpen": 3000, "dataRate": 0}]}}))
+                 "durationOpen": 3000, "dataRate": 0}]}}),
+    )
     .await;
     assert_eq!(dev["code"], 0, "{dev}");
     let started = http.get(format!("{api}/start")).send().await.unwrap();
@@ -139,9 +152,8 @@ async fn lwn_device_joins_and_talks_through_lwn_gateway() {
     let lwn_log = std::fs::read_to_string(&log_path).unwrap_or_default();
     let _ = http.get(format!("{api}/stop")).send().await;
     let _ = child.kill().await;
-    let ups = found.unwrap_or_else(|_| {
-        panic!("no DevStatusAns reached the model.\nLWN log:\n{lwn_log}")
-    });
+    let ups =
+        found.unwrap_or_else(|_| panic!("no DevStatusAns reached the model.\nLWN log:\n{lwn_log}"));
 
     let joins = events(&s.state, s.id, "lorawan_join_request").await;
     assert!(!joins.is_empty(), "{lwn_log}");
@@ -150,8 +162,15 @@ async fn lwn_device_joins_and_talks_through_lwn_gateway() {
     // LWN decrypted the Join Accept and verified its MIC, then accepted the downlink.
     assert!(lwn_log.contains("Joined"), "{lwn_log}");
     assert!(lwn_log.contains("Downlink Received"), "{lwn_log}");
-    for bad in ["Invalid MIC", "Invalid downlink counter", "MACPayload expected"] {
-        assert!(!lwn_log.contains(bad), "LWN refused NetGet's frame ({bad}):\n{lwn_log}");
+    for bad in [
+        "Invalid MIC",
+        "Invalid downlink counter",
+        "MACPayload expected",
+    ] {
+        assert!(
+            !lwn_log.contains(bad),
+            "LWN refused NetGet's frame ({bad}):\n{lwn_log}"
+        );
     }
     // NetGet verified and decrypted LWN's uplinks with the session keys both sides derived.
     let first = ups.iter().find(|u| u["f_cnt"] == 0).expect("FCnt 0");

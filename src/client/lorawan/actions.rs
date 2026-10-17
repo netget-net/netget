@@ -206,7 +206,10 @@ pub fn radio_of(v: &Value) -> Result<(u64, u8, i32, f64)> {
         None => -60,
         Some(r) => {
             let r = r.as_i64().context("rssi is a whole number of dBm")?;
-            ensure!((-200..=0).contains(&r), "rssi {r} dBm is not a received level");
+            ensure!(
+                (-200..=0).contains(&r),
+                "rssi {r} dBm is not a received level"
+            );
             r as i32
         }
     };
@@ -236,11 +239,15 @@ pub fn check(v: &Value) -> Result<()> {
     match v["type"].as_str().unwrap_or_default() {
         DISCONNECT => {}
         SEND_JOIN => {
-            v["device"].as_str().context("device names a configured device")?;
+            v["device"]
+                .as_str()
+                .context("device names a configured device")?;
             radio_of(v)?;
         }
         SEND_UPLINK => {
-            v["device"].as_str().context("device names a configured device")?;
+            v["device"]
+                .as_str()
+                .context("device names a configured device")?;
             check_payload(v)?;
             radio_of(v)?;
             battery_of(v)?;

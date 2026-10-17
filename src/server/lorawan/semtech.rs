@@ -222,7 +222,10 @@ pub enum Packet {
 
 fn gateway_of(d: &[u8]) -> Result<Eui> {
     let mut g = [0u8; 8];
-    g.copy_from_slice(d.get(4..12).context("datagram shorter than its gateway EUI")?);
+    g.copy_from_slice(
+        d.get(4..12)
+            .context("datagram shorter than its gateway EUI")?,
+    );
     Ok(g)
 }
 
@@ -381,7 +384,9 @@ pub fn b64_decode(s: &str) -> Result<Vec<u8>> {
     ensure!(s.len() <= MAX_DATA_B64, "frame data exceeds 255 bytes");
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(s.trim_end_matches('='))
-        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(s.trim_end_matches('=')))
+        .or_else(|_| {
+            base64::engine::general_purpose::STANDARD_NO_PAD.decode(s.trim_end_matches('='))
+        })
         .context("frame data is not base64")?;
     ensure!(
         bytes.len() <= mac::MAX_PHY_PAYLOAD,

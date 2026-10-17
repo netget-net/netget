@@ -70,6 +70,7 @@ jobs:
           - afp_dsi
           - nis_yp
           - rsh_handshake
+          - lorawan_semtech
           - bgp_message
           - ndef_message
           - nfc_apdu

@@ -142,6 +142,26 @@ fn credentials_that_are_not_called_one_are_redacted_and_their_describers_are_not
     assert_eq!(shown["key_type"], json!("ed25519"));
 }
 
+/// LoRaWAN's keys sit inside the `devices` array of both roles; the EUIs that name a device
+/// are shown, the keys never are.
+#[test]
+fn lorawan_device_keys_are_redacted_and_their_euis_are_not() {
+    let shown = redact_sensitive(&json!({"devices": [
+        {"name": "meter-1", "dev_eui": "0102030405060708", "app_eui": "0000000000000000",
+         "app_key": "2b7e151628aed2a6abf7158809cf4f3c"},
+        {"dev_addr": "26011bda", "nwk_s_key": "000102030405060708090a0b0c0d0e0f",
+         "app_s_key": "0f0e0d0c0b0a09080706050403020100"}
+    ]}));
+    let d = &shown["devices"];
+    for (i, key) in [(0, "app_key"), (1, "nwk_s_key"), (1, "app_s_key")] {
+        assert_eq!(d[i][key], json!(REDACTED), "{key} must be hidden");
+    }
+    assert_eq!(d[0]["dev_eui"], json!("0102030405060708"));
+    assert_eq!(d[0]["app_eui"], json!("0000000000000000"));
+    assert_eq!(d[0]["name"], json!("meter-1"));
+    assert_eq!(d[1]["dev_addr"], json!("26011bda"));
+}
+
 /// A startup parameter's diagnostic applies the redactor's own key/value rule. A string-valued
 /// `auth` (`username:password`) is a credential by its value, not its name, so the name-only
 /// check let it into the "expected …, got …" error a mistyped `auth` produces.

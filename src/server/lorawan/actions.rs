@@ -141,7 +141,12 @@ fn radio_params() -> Vec<Parameter> {
 pub static JOIN_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     let mut params = vec![
         p("dev_eui", "string", "The device's EUI-64, hex", true),
-        p("app_eui", "string", "The JoinEUI/AppEUI it asked for, hex", true),
+        p(
+            "app_eui",
+            "string",
+            "The JoinEUI/AppEUI it asked for, hex",
+            true,
+        ),
         p(
             "dev_nonce",
             "number",
@@ -252,9 +257,7 @@ pub fn payload_bytes(v: &Value) -> Result<Vec<u8>> {
 }
 
 pub fn port_of(v: &Value) -> Result<u8> {
-    let port = v["f_port"]
-        .as_u64()
-        .context("f_port is a number 1..223")?;
+    let port = v["f_port"].as_u64().context("f_port is a number 1..223")?;
     ensure!(
         (1..=223).contains(&port),
         "f_port {port} is not an application port (1..223)"

@@ -246,6 +246,7 @@ pub mod kerberos;
 pub mod knx;
 pub mod libp2p;
 pub mod lmtp;
+pub mod lorawan;
 pub mod lpd;
 #[cfg(unix)]
 pub mod m3ua;
@@ -268,7 +269,6 @@ pub mod rcon;
 #[cfg(unix)]
 pub mod rdp;
 pub mod restconf;
-pub mod lorawan;
 pub mod rsh;
 pub mod rsync;
 pub mod rtp;

@@ -276,8 +276,18 @@ impl Device {
             mac::data_mic_ok(phy, &self.nwk, mac::DIR_DOWN, f.dev_addr, expected_fcnt),
             "downlink MIC"
         );
-        let key = if f.f_port == Some(0) { self.nwk } else { self.app };
-        let plain = mac::crypt_frm(&key, mac::DIR_DOWN, f.dev_addr, expected_fcnt, &f.frm_payload);
+        let key = if f.f_port == Some(0) {
+            self.nwk
+        } else {
+            self.app
+        };
+        let plain = mac::crypt_frm(
+            &key,
+            mac::DIR_DOWN,
+            f.dev_addr,
+            expected_fcnt,
+            &f.frm_payload,
+        );
         let cmds = mac::decode_mac_commands(&f.f_opts, false);
         (f, plain, cmds)
     }

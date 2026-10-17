@@ -145,7 +145,10 @@ marshaler="protobuf"
 }
 
 async fn peer(python: &PathBuf, args: &[&str]) -> Value {
-    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/client/lorawan/chirpstack_peer.py");
+    let script = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/client/lorawan/chirpstack_peer.py"
+    );
     let out = tokio::time::timeout(
         Duration::from_secs(60),
         tokio::process::Command::new(python)
@@ -173,7 +176,15 @@ async fn netget_gateway_against_chirpstack() {
     let python = env_path("NETGET_CHIRPSTACK_PYTHON");
     let redis = RealServer::builder("redis-server", REDIS)
         .args([
-            "--port", "{port}", "--bind", "127.0.0.1", "--save", "", "--appendonly", "no", "--dir",
+            "--port",
+            "{port}",
+            "--bind",
+            "127.0.0.1",
+            "--save",
+            "",
+            "--appendonly",
+            "no",
+            "--dir",
             "{dir}",
         ])
         .ready_when_log_matches("Ready to accept connections")
@@ -192,7 +203,10 @@ async fn netget_gateway_against_chirpstack() {
         .expect("start mosquitto");
     let mqtt = mosquitto.addr();
     let cs = RealServer::builder(chirpstack.to_str().unwrap(), CHIRPSTACK)
-        .config_file("chirpstack.toml", &chirpstack_toml("{port}", &redis.addr(), &mqtt))
+        .config_file(
+            "chirpstack.toml",
+            &chirpstack_toml("{port}", &redis.addr(), &mqtt),
+        )
         .config_file("region_eu868.toml", &region_toml(&mqtt))
         .args(["-c", "{dir}"])
         .startup_timeout(Duration::from_secs(60))
@@ -210,7 +224,13 @@ async fn netget_gateway_against_chirpstack() {
 
     // A global API key, then the application, device profile, device and gateway.
     let key_out = tokio::process::Command::new(&chirpstack)
-        .args(["-c", cs.dir().to_str().unwrap(), "create-api-key", "--name", "netget"])
+        .args([
+            "-c",
+            cs.dir().to_str().unwrap(),
+            "create-api-key",
+            "--name",
+            "netget",
+        ])
         .output()
         .await
         .unwrap();
@@ -218,7 +238,12 @@ async fn netget_gateway_against_chirpstack() {
     let token = key_text
         .lines()
         .find_map(|l| l.strip_prefix("token: "))
-        .unwrap_or_else(|| panic!("no API token: {key_text}{}", String::from_utf8_lossy(&key_out.stderr)))
+        .unwrap_or_else(|| {
+            panic!(
+                "no API token: {key_text}{}",
+                String::from_utf8_lossy(&key_out.stderr)
+            )
+        })
         .to_string();
     let api = cs.addr();
     let provisioned = peer(
@@ -230,11 +255,17 @@ async fn netget_gateway_against_chirpstack() {
 
     // ChirpStack's application events, as its MQTT integration publishes them.
     let mut sub = tokio::process::Command::new(
-        crate::helpers::real_server::find_binary("mosquitto_sub")
-            .unwrap_or_else(|| panic!("mosquitto_sub is required: apt-get install mosquitto-clients")),
+        crate::helpers::real_server::find_binary("mosquitto_sub").unwrap_or_else(|| {
+            panic!("mosquitto_sub is required: apt-get install mosquitto-clients")
+        }),
     )
     .args([
-        "-h", "127.0.0.1", "-p", mqtt.rsplit(':').next().unwrap(), "-v", "-t",
+        "-h",
+        "127.0.0.1",
+        "-p",
+        mqtt.rsplit(':').next().unwrap(),
+        "-v",
+        "-t",
         &format!("application/{app_id}/device/{DEV_EUI}/event/#"),
     ])
     .stdout(Stdio::piped())
@@ -299,13 +330,27 @@ async fn netget_gateway_against_chirpstack() {
     let data = base64::engine::general_purpose::STANDARD
         .decode(up["data"].as_str().unwrap())
         .unwrap();
-    assert_eq!(data, b"hello chirpstack", "ChirpStack decrypted NetGet's FRMPayload: {up}");
+    assert_eq!(
+        data, b"hello chirpstack",
+        "ChirpStack decrypted NetGet's FRMPayload: {up}"
+    );
     assert_eq!(up["fPort"], 2);
     assert_eq!(up["deviceInfo"]["devEui"], DEV_EUI);
     assert_eq!(up["rxInfo"][0]["gatewayId"], GATEWAY_EUI);
 
     // A downlink queued in ChirpStack goes out on the device's next uplink.
-    peer(&python, &["enqueue", &api, &token, DEV_EUI, "10", &hex::encode(b"from chirpstack")]).await;
+    peer(
+        &python,
+        &[
+            "enqueue",
+            &api,
+            &token,
+            DEV_EUI,
+            "10",
+            &hex::encode(b"from chirpstack"),
+        ],
+    )
+    .await;
     let mut got = None;
     for n in 0..5 {
         let sent = state
@@ -317,7 +362,10 @@ async fn netget_gateway_against_chirpstack() {
             .await
             .unwrap();
         assert!(
-            matches!(sent, netget::state::client_handles::ClientSendOutcome::Sent { .. }),
+            matches!(
+                sent,
+                netget::state::client_handles::ClientSendOutcome::Sent { .. }
+            ),
             "{sent:?}"
         );
         let downs = wait_client_events(&state, id, "lorawan_downlink", 1, 4).await;
@@ -346,8 +394,12 @@ async fn netget_gateway_against_chirpstack() {
         }
     })
     .await
-    .unwrap_or_else(|_| panic!("no txack event. Events: {seen:?}\nBridge log:\n{}", bridge.log()));
+    .unwrap_or_else(|_| {
+        panic!(
+            "no txack event. Events: {seen:?}\nBridge log:\n{}",
+            bridge.log()
+        )
+    });
     assert_eq!(txack["deviceInfo"]["devEui"], DEV_EUI, "{txack}");
     state.remove_client(id).await;
 }
-

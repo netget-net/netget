@@ -326,7 +326,11 @@ pub async fn spawn(ctx: SpawnContext) -> Result<SocketAddr> {
                         .info(format!("LoRaWAN gateway {} timed out", mac::eui_hex(&eui)));
                     reaper_ctx
                         .state
-                        .update_connection_status(reaper_ctx.server_id, id, ConnectionStatus::Closed)
+                        .update_connection_status(
+                            reaper_ctx.server_id,
+                            id,
+                            ConnectionStatus::Closed,
+                        )
                         .await;
                 }
             }
@@ -411,10 +415,8 @@ async fn touch_gateway(
                 },
             )
             .await;
-        Log::new(Some(&ctx.status_tx)).info(format!(
-            "LoRaWAN gateway {} at {from}",
-            mac::eui_hex(&eui)
-        ));
+        Log::new(Some(&ctx.status_tx))
+            .info(format!("LoRaWAN gateway {} at {from}", mac::eui_hex(&eui)));
     }
     ctx.state
         .update_connection_stats(ctx.server_id, id, Some(bytes as u64), None, Some(1), None)
@@ -434,10 +436,7 @@ async fn datagram(ctx: &SpawnContext, ns: &Arc<Ns>, d: &[u8], from: SocketAddr) 
         } => {
             touch_gateway(ctx, ns, gateway, from, d.len(), None).await?;
             ns.socket
-                .send_to(
-                    &semtech::encode(&Packet::PushAck { version, token })?,
-                    from,
-                )
+                .send_to(&semtech::encode(&Packet::PushAck { version, token })?, from)
                 .await?;
             if let Some(stat) = stat {
                 Log::new(Some(&ctx.status_tx)).debug(format!(
@@ -465,10 +464,7 @@ async fn datagram(ctx: &SpawnContext, ns: &Arc<Ns>, d: &[u8], from: SocketAddr) 
         } => {
             touch_gateway(ctx, ns, gateway, from, d.len(), Some(version)).await?;
             ns.socket
-                .send_to(
-                    &semtech::encode(&Packet::PullAck { version, token })?,
-                    from,
-                )
+                .send_to(&semtech::encode(&Packet::PullAck { version, token })?, from)
                 .await?;
         }
         Packet::TxAck {
@@ -488,9 +484,7 @@ async fn datagram(ctx: &SpawnContext, ns: &Arc<Ns>, d: &[u8], from: SocketAddr) 
             };
             let log = Log::new(Some(&ctx.status_tx));
             match error.as_deref() {
-                None | Some("NONE") => {
-                    log.debug(format!("LoRaWAN TX_ACK for {what}: transmitted"))
-                }
+                None | Some("NONE") => log.debug(format!("LoRaWAN TX_ACK for {what}: transmitted")),
                 Some(e) => log.warn(format!(
                     "LoRaWAN gateway {} refused {what}: {e}",
                     mac::eui_hex(&gateway)
@@ -524,7 +518,11 @@ async fn first_sighting(ns: &Ns, phy: &[u8]) -> Option<Arc<std::sync::atomic::At
 }
 
 async fn uplink(ctx: &SpawnContext, ns: &Arc<Ns>, gateway: Eui, r: &Rxpk) -> Result<()> {
-    ensure!(r.stat == 1, "CRC status {} (only CRC-OK frames are used)", r.stat);
+    ensure!(
+        r.stat == 1,
+        "CRC status {} (only CRC-OK frames are used)",
+        r.stat
+    );
     let dr = semtech::lora_data_rate(&r.modu, &r.datr)?;
     let phy = semtech::b64_decode(&r.data)?;
     ensure!(
@@ -631,8 +629,13 @@ async fn uplink(ctx: &SpawnContext, ns: &Arc<Ns>, gateway: Eui, r: &Rxpk) -> Res
                     return Ok(());
                 }
                 s.fcnt_up = Some(full);
-                let key = if frame.f_port == Some(0) { s.nwk } else { s.app };
-                let plain = mac::crypt_frm(&key, mac::DIR_UP, frame.dev_addr, full, &frame.frm_payload);
+                let key = if frame.f_port == Some(0) {
+                    s.nwk
+                } else {
+                    s.app
+                };
+                let plain =
+                    mac::crypt_frm(&key, mac::DIR_UP, frame.dev_addr, full, &frame.frm_payload);
                 let (payload, commands) = if frame.f_port == Some(0) {
                     (Vec::new(), mac::decode_mac_commands(&plain, true))
                 } else {
@@ -737,7 +740,11 @@ fn window(rx: &Reception, rx1_us: u32, rx2_us: u32) -> Option<(Option<u32>, u64,
             region::rx1_data_rate(rx.data_rate, 0),
         ))
     } else if elapsed < rx2 {
-        Some((tmst(rx2_us), region::RX2_FREQUENCY_HZ, region::RX2_DATA_RATE))
+        Some((
+            tmst(rx2_us),
+            region::RX2_FREQUENCY_HZ,
+            region::RX2_DATA_RATE,
+        ))
     } else {
         None
     }
@@ -756,7 +763,8 @@ async fn send_pull_resp(
         let g = gws.get(gateway).context("the gateway is gone")?;
         (g.pull, g.connection)
     };
-    let (addr, version) = pull.context("the gateway has sent no PULL_DATA, so it has no downlink path")?;
+    let (addr, version) =
+        pull.context("the gateway has sent no PULL_DATA, so it has no downlink path")?;
     let (tmst, freq_hz, dr) = timing;
     let txpk = Txpk {
         imme: tmst.is_none(),
@@ -788,7 +796,14 @@ async fn send_pull_resp(
         tokens.push_back((token, what));
     }
     ctx.state
-        .update_connection_stats(ctx.server_id, connection, None, Some(bytes.len() as u64), None, Some(1))
+        .update_connection_stats(
+            ctx.server_id,
+            connection,
+            None,
+            Some(bytes.len() as u64),
+            None,
+            Some(1),
+        )
         .await;
     Ok(())
 }
@@ -822,7 +837,11 @@ async fn join(
             ctx,
             "join",
             &label,
-            if reject { "model_reject" } else { "model_silent" },
+            if reject {
+                "model_reject"
+            } else {
+                "model_silent"
+            },
         );
         return;
     }
@@ -998,8 +1017,9 @@ async fn data_uplink(ctx: &SpawnContext, ns: &Ns, up: Uplink, rx: Reception) {
     .await
     {
         Ok(()) => {
-            Log::new(Some(&ctx.status_tx))
-                .info(format!("LoRaWAN downlink FCnt {fcnt} to {label}: {summary}"));
+            Log::new(Some(&ctx.status_tx)).info(format!(
+                "LoRaWAN downlink FCnt {fcnt} to {label}: {summary}"
+            ));
             decision(ctx, "uplink", &label, verdict);
         }
         Err(e) => {

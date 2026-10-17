@@ -4,7 +4,9 @@
 use base64::Engine;
 use netget::cli::management::{ClientForm, ServerForm};
 use netget::server::lorawan::mac;
-use netget::state::{app_state::AppState, client_handles::ClientSendOutcome, AccessLogOwner, ClientId};
+use netget::state::{
+    app_state::AppState, client_handles::ClientSendOutcome, AccessLogOwner, ClientId,
+};
 use serde_json::{json, Value};
 use std::time::Duration;
 use tokio::net::UdpSocket;
@@ -74,7 +76,11 @@ pub async fn client(remote: String, handlers: Vec<Value>, extra: Value) -> (AppS
         event_handlers: Some(handlers),
         ..Default::default()
     }
-    .create(&state, netget::llm::OllamaClient::new("http://127.0.0.1:1"), tx)
+    .create(
+        &state,
+        netget::llm::OllamaClient::new("http://127.0.0.1:1"),
+        tx,
+    )
     .await
     .unwrap();
     tokio::time::timeout(Duration::from_secs(10), async {
@@ -209,13 +215,31 @@ async fn against_netget_network_server() {
 
     // Refused before anything is sent.
     for (bad, why) in [
-        (json!({"type":"lorawan_send_uplink","device":"nobody","f_port":2,"payload":"x"}), "no configured device"),
-        (json!({"type":"lorawan_send_join_request","device":"abp-node"}), "ABP"),
-        (json!({"type":"lorawan_send_uplink","device":"meter-1","f_port":2,"payload":"a".repeat(52),"data_rate":"SF12BW125"}), "does not fit DR0"),
-        (json!({"type":"lorawan_send_uplink","device":"meter-1","f_port":0,"payload":"x"}), "application port"),
-        (json!({"type":"lorawan_send_uplink","device":"meter-1","f_port":2,"payload":"x","frequency_mhz":915.0}), "outside EU868"),
+        (
+            json!({"type":"lorawan_send_uplink","device":"nobody","f_port":2,"payload":"x"}),
+            "no configured device",
+        ),
+        (
+            json!({"type":"lorawan_send_join_request","device":"abp-node"}),
+            "ABP",
+        ),
+        (
+            json!({"type":"lorawan_send_uplink","device":"meter-1","f_port":2,"payload":"a".repeat(52),"data_rate":"SF12BW125"}),
+            "does not fit DR0",
+        ),
+        (
+            json!({"type":"lorawan_send_uplink","device":"meter-1","f_port":0,"payload":"x"}),
+            "application port",
+        ),
+        (
+            json!({"type":"lorawan_send_uplink","device":"meter-1","f_port":2,"payload":"x","frequency_mhz":915.0}),
+            "outside EU868",
+        ),
     ] {
-        let out = state.send_to_client(id, bad.clone(), Duration::from_secs(10)).await.unwrap();
+        let out = state
+            .send_to_client(id, bad.clone(), Duration::from_secs(10))
+            .await
+            .unwrap();
         match out {
             ClientSendOutcome::Rejected { error } => assert!(error.contains(why), "{bad}: {error}"),
             other => panic!("{bad}: {other:?}"),
@@ -245,18 +269,25 @@ impl RawNs {
     async fn next_uplink(&mut self) -> (Vec<u8>, u32) {
         let mut buf = vec![0u8; 65536];
         loop {
-            let (n, from) = tokio::time::timeout(Duration::from_secs(10), self.sock.recv_from(&mut buf))
-                .await
-                .expect("an uplink")
-                .unwrap();
+            let (n, from) =
+                tokio::time::timeout(Duration::from_secs(10), self.sock.recv_from(&mut buf))
+                    .await
+                    .expect("an uplink")
+                    .unwrap();
             let d = &buf[..n];
             match d[3] {
                 0x02 => {
                     self.gateway = Some(from);
-                    self.sock.send_to(&[d[0], d[1], d[2], 0x04], from).await.unwrap();
+                    self.sock
+                        .send_to(&[d[0], d[1], d[2], 0x04], from)
+                        .await
+                        .unwrap();
                 }
                 0x00 => {
-                    self.sock.send_to(&[d[0], d[1], d[2], 0x01], from).await.unwrap();
+                    self.sock
+                        .send_to(&[d[0], d[1], d[2], 0x01], from)
+                        .await
+                        .unwrap();
                     let body: Value = serde_json::from_slice(&d[12..]).unwrap();
                     if let Some(r) = body["rxpk"].as_array().and_then(|r| r.first()) {
                         let phy = base64::engine::general_purpose::STANDARD
@@ -277,10 +308,11 @@ impl RawNs {
         self.sock.send_to(&d, self.gateway.unwrap()).await.unwrap();
         let mut buf = vec![0u8; 65536];
         loop {
-            let (n, _) = tokio::time::timeout(Duration::from_secs(5), self.sock.recv_from(&mut buf))
-                .await
-                .expect("a TX_ACK")
-                .unwrap();
+            let (n, _) =
+                tokio::time::timeout(Duration::from_secs(5), self.sock.recv_from(&mut buf))
+                    .await
+                    .expect("a TX_ACK")
+                    .unwrap();
             let d = &buf[..n];
             if d[3] == 0x05 {
                 assert_eq!(&d[1..3], &t, "TX_ACK echoes the PULL_RESP token");
@@ -288,7 +320,10 @@ impl RawNs {
                 return body["txpk_ack"]["error"].as_str().unwrap().to_string();
             }
             if d[3] == 0x02 {
-                self.sock.send_to(&[d[0], d[1], d[2], 0x04], self.gateway.unwrap()).await.unwrap();
+                self.sock
+                    .send_to(&[d[0], d[1], d[2], 0x04], self.gateway.unwrap())
+                    .await
+                    .unwrap();
             }
         }
     }
@@ -343,16 +378,37 @@ async fn tx_ack_and_downlink_refusals() {
     };
     let accept = mac::encode_join_accept(&ja, &key);
     // Refused by the gateway: off-band, over power, already past.
-    assert_eq!(ns.pull_resp(txpk(&accept, Some(tmst + 5_000_000), 915.0, 14), 1).await, "TX_FREQ");
-    assert_eq!(ns.pull_resp(txpk(&accept, Some(tmst + 5_000_000), 868.1, 30), 2).await, "TX_POWER");
-    assert_eq!(ns.pull_resp(txpk(&accept, Some(tmst.wrapping_sub(1)), 868.1, 14), 3).await, "TOO_LATE");
+    assert_eq!(
+        ns.pull_resp(txpk(&accept, Some(tmst + 5_000_000), 915.0, 14), 1)
+            .await,
+        "TX_FREQ"
+    );
+    assert_eq!(
+        ns.pull_resp(txpk(&accept, Some(tmst + 5_000_000), 868.1, 30), 2)
+            .await,
+        "TX_POWER"
+    );
+    assert_eq!(
+        ns.pull_resp(txpk(&accept, Some(tmst.wrapping_sub(1)), 868.1, 14), 3)
+            .await,
+        "TOO_LATE"
+    );
     // A Join Accept under another key is transmitted but no device takes it.
     let forged = mac::encode_join_accept(&ja, &[9; 16]);
-    assert_eq!(ns.pull_resp(txpk(&forged, None, 868.1, 14), 4).await, "NONE");
+    assert_eq!(
+        ns.pull_resp(txpk(&forged, None, 868.1, 14), 4).await,
+        "NONE"
+    );
     tokio::time::sleep(Duration::from_millis(300)).await;
-    assert!(client_events(&state, id, "lorawan_join_accepted").await.is_empty());
+    assert!(client_events(&state, id, "lorawan_join_accepted")
+        .await
+        .is_empty());
     // The real one (with a CFList, 33 bytes) joins.
-    assert_eq!(ns.pull_resp(txpk(&accept, Some(tmst + 5_000_000), 868.1, 14), 5).await, "NONE");
+    assert_eq!(
+        ns.pull_resp(txpk(&accept, Some(tmst + 5_000_000), 868.1, 14), 5)
+            .await,
+        "NONE"
+    );
     let joined = wait_client_events(&state, id, "lorawan_join_accepted", 1, 10).await;
     assert_eq!(joined[0]["dev_addr"], "26000001");
 
@@ -389,7 +445,10 @@ async fn tx_ack_and_downlink_refusals() {
     wait_client_events(&state, id, "lorawan_downlink", 2, 10).await;
     tokio::time::sleep(Duration::from_millis(300)).await;
     let downs = client_events(&state, id, "lorawan_downlink").await;
-    let payloads: Vec<&str> = downs.iter().map(|d| d["payload"].as_str().unwrap()).collect();
+    let payloads: Vec<&str> = downs
+        .iter()
+        .map(|d| d["payload"].as_str().unwrap())
+        .collect();
     assert_eq!(payloads, ["first", "second"], "{downs:?}");
     assert_eq!(downs[0]["immediate"], true);
     state.remove_client(id).await;
@@ -418,13 +477,17 @@ print(json.dumps({'actions':a}))"#,
     let mut last = 0;
     for _ in 0..40 {
         tokio::time::sleep(Duration::from_millis(250)).await;
-        let n = server_events(&ns_state, ns_id, "lorawan_uplink").await.len();
+        let n = server_events(&ns_state, ns_id, "lorawan_uplink")
+            .await
+            .len();
         if n == last && n > 0 {
             break;
         }
         last = n;
     }
-    let n = server_events(&ns_state, ns_id, "lorawan_uplink").await.len();
+    let n = server_events(&ns_state, ns_id, "lorawan_uplink")
+        .await
+        .len();
     assert!(
         (1..=netget::client::lorawan::MAX_FOLLOWUP_DEPTH).contains(&n),
         "{n} uplinks: the chain was not bounded"

@@ -74,10 +74,16 @@ async fn join_uplinks_downlinks_and_mac_commands() {
     // "hello" on port 2 → "world" on port 10, in RX1.
     let up = dev.uplink(2, b"hello", false, &[]);
     fwd.push(&up, 2_000_000).await.expect("PUSH_ACK");
-    let (_, txpk) = fwd.pull_resp(Duration::from_secs(10)).await.expect("downlink");
+    let (_, txpk) = fwd
+        .pull_resp(Duration::from_secs(10))
+        .await
+        .expect("downlink");
     assert_eq!(txpk["tmst"], 3_000_000, "RECEIVE_DELAY1");
     let (f, plain, _) = dev.decode(&Forwarder::phy_of(&txpk), 0);
-    assert_eq!((f.mtype, f.f_port, plain.as_slice()), (mac::MTYPE_UNCONFIRMED_DOWN, Some(10), &b"world"[..]));
+    assert_eq!(
+        (f.mtype, f.f_port, plain.as_slice()),
+        (mac::MTYPE_UNCONFIRMED_DOWN, Some(10), &b"world"[..])
+    );
     assert!(!f.ack && !f.f_pending);
     let ups = wait_events(&s.state, s.id, "lorawan_uplink", 1).await;
     assert_eq!(ups[0]["payload"], "hello");
@@ -98,13 +104,19 @@ async fn join_uplinks_downlinks_and_mac_commands() {
     // carries ACK, LinkCheckAns and DevStatusReq.
     let up = dev.uplink(2, b"status?", true, &[mac::CID_LINK_CHECK]);
     fwd.push(&up, 4_000_000).await.expect("PUSH_ACK");
-    let (_, txpk) = fwd.pull_resp(Duration::from_secs(10)).await.expect("downlink");
+    let (_, txpk) = fwd
+        .pull_resp(Duration::from_secs(10))
+        .await
+        .expect("downlink");
     let (f, plain, cmds) = dev.decode(&Forwarder::phy_of(&txpk), 1);
     assert!(f.ack, "a confirmed uplink is acknowledged");
     assert!(plain.is_empty() && f.f_port.is_none());
     assert_eq!(cmds[0]["command"], "link_check_ans");
     assert_eq!(cmds[0]["gateway_count"], 1);
-    assert_eq!(cmds[0]["margin_db"], 17, "9.5 dB SNR at SF7 is 17 dB above the floor");
+    assert_eq!(
+        cmds[0]["margin_db"], 17,
+        "9.5 dB SNR at SF7 is 17 dB above the floor"
+    );
     assert_eq!(cmds[1], json!({"command": "dev_status_req"}));
 
     // The answer to DevStatusReq reaches the model decoded; nothing is due, nothing is sent.
@@ -120,21 +132,37 @@ async fn join_uplinks_downlinks_and_mac_commands() {
     // Two downlinks: the first now with FPending, the second (confirmed, hex) at the next uplink.
     let up = dev.uplink(2, b"twice", false, &[]);
     fwd.push(&up, 8_000_000).await.expect("PUSH_ACK");
-    let (_, txpk) = fwd.pull_resp(Duration::from_secs(10)).await.expect("downlink");
+    let (_, txpk) = fwd
+        .pull_resp(Duration::from_secs(10))
+        .await
+        .expect("downlink");
     let (f, plain, _) = dev.decode(&Forwarder::phy_of(&txpk), 2);
-    assert_eq!((f.f_port, plain.as_slice(), f.f_pending), (Some(11), &b"one"[..], true));
+    assert_eq!(
+        (f.f_port, plain.as_slice(), f.f_pending),
+        (Some(11), &b"one"[..], true)
+    );
     let up = dev.uplink(2, b"nothing", false, &[]);
     fwd.push(&up, 10_000_000).await.expect("PUSH_ACK");
-    let (_, txpk) = fwd.pull_resp(Duration::from_secs(10)).await.expect("queued downlink");
+    let (_, txpk) = fwd
+        .pull_resp(Duration::from_secs(10))
+        .await
+        .expect("queued downlink");
     let (f, plain, _) = dev.decode(&Forwarder::phy_of(&txpk), 3);
-    assert_eq!((f.mtype, f.f_port, plain), (mac::MTYPE_CONFIRMED_DOWN, Some(12), vec![2, 3]));
+    assert_eq!(
+        (f.mtype, f.f_port, plain),
+        (mac::MTYPE_CONFIRMED_DOWN, Some(12), vec![2, 3])
+    );
     assert!(!f.f_pending);
 
     // A model that answers nothing, or answers what NetGet cannot send: no downlink.
     for p in [&b"silent"[..], b"badport"] {
         let up = dev.uplink(2, p, false, &[]);
         fwd.push(&up, 12_000_000).await.expect("PUSH_ACK");
-        assert!(fwd.pull_resp(QUIET).await.is_none(), "{}", String::from_utf8_lossy(p));
+        assert!(
+            fwd.pull_resp(QUIET).await.is_none(),
+            "{}",
+            String::from_utf8_lossy(p)
+        );
     }
 
     // A forged MIC, then a counter beyond MAX_FCNT_GAP: dropped before the model.
@@ -152,7 +180,10 @@ async fn join_uplinks_downlinks_and_mac_commands() {
     dev.fcnt_up -= mac::MAX_FCNT_GAP + 2;
     let up = dev.uplink(2, b"hello", false, &[]);
     fwd.push(&up, 15_000_000).await.expect("PUSH_ACK");
-    let (_, txpk) = fwd.pull_resp(Duration::from_secs(10)).await.expect("downlink");
+    let (_, txpk) = fwd
+        .pull_resp(Duration::from_secs(10))
+        .await
+        .expect("downlink");
     let (_, plain, _) = dev.decode(&Forwarder::phy_of(&txpk), 4);
     assert_eq!(plain, b"world");
 
@@ -173,11 +204,17 @@ async fn join_uplinks_downlinks_and_mac_commands() {
     fwd.push(&stale.uplink(2, b"hello", false, &[]), 17_000_000)
         .await
         .expect("PUSH_ACK");
-    assert!(fwd.pull_resp(QUIET).await.is_none(), "the old session is gone");
+    assert!(
+        fwd.pull_resp(QUIET).await.is_none(),
+        "the old session is gone"
+    );
     fwd.push(&dev2.uplink(2, b"hello", false, &[]), 18_000_000)
         .await
         .expect("PUSH_ACK");
-    let (_, txpk) = fwd.pull_resp(Duration::from_secs(10)).await.expect("downlink");
+    let (_, txpk) = fwd
+        .pull_resp(Duration::from_secs(10))
+        .await
+        .expect("downlink");
     assert_eq!(dev2.decode(&Forwarder::phy_of(&txpk), 0).1, b"world");
 }
 
@@ -216,7 +253,8 @@ async fn joins_fail_closed() {
 async fn model_failure_admits_nobody() {
     let state_policy = r#"import json,sys
 print(json.dumps({'actions':[]}))"#;
-    let state = netget::state::app_state::AppState::new_with_options(false, "http://127.0.0.1:1".into());
+    let state =
+        netget::state::app_state::AppState::new_with_options(false, "http://127.0.0.1:1".into());
     state
         .set_llm_client(netget::llm::OllamaClient::new("http://127.0.0.1:1"))
         .await;
@@ -293,9 +331,15 @@ async fn datagram_bounds() {
     let bad = dev.uplink(3, b"nothing", false, &[]);
     let mut r = rxpk(&bad, 1, "SF7BW125");
     r["stat"] = json!(-1);
-    assert!(fwd.push_raw(&fwd.push_datagram(&json!({"rxpk": [r]}), 8)).await.is_some());
+    assert!(fwd
+        .push_raw(&fwd.push_datagram(&json!({"rxpk": [r]}), 8))
+        .await
+        .is_some());
     tokio::time::sleep(QUIET).await;
-    assert_eq!(events(&s.state, s.id, "lorawan_uplink").await.len(), before + 1);
+    assert_eq!(
+        events(&s.state, s.id, "lorawan_uplink").await.len(),
+        before + 1
+    );
 
     // The 65th gateway is refused.
     let sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
@@ -310,7 +354,10 @@ async fn datagram_bounds() {
             acked += 1;
         }
     }
-    assert_eq!(acked, 63, "64 gateways in all, one of them the forwarder above");
+    assert_eq!(
+        acked, 63,
+        "64 gateways in all, one of them the forwarder above"
+    );
 }
 
 /// A Join Accept and a data downlink, written into a LoRaTap capture, read by tshark's
@@ -357,21 +404,40 @@ async fn tshark_lorawan_dissector_oracle() {
     let pcap = dir.path().join("lorawan.pcap");
     std::fs::write(&pcap, loratap_pcap(&frames)).unwrap();
     let out = std::process::Command::new(&tshark)
-        .args(["-r", pcap.to_str().unwrap(), "-T", "fields", "-E", "separator=|"])
-        .args(["-o", &format!("uat:root_keys_lorawan:\"{DEV_EUI}\",\"{APP_KEY}\"")])
-        .args(["-o", &format!(
-            "uat:session_keys_lorawan:\"{}\",\"{}\",\"{}\"",
-            mac::dev_addr_hex(dev.dev_addr),
-            hex::encode(dev.nwk),
-            hex::encode(dev.app)
-        )])
         .args([
-            "-e", "lorawan.msgtype",
-            "-e", "lorawan.mic.status",
-            "-e", "lorawan.join_accept.devaddr",
-            "-e", "lorawan.frmpayload_decrypted",
-            "-e", "lorawan.link_check_answer.gwcnt",
-            "-e", "_ws.expert.severity",
+            "-r",
+            pcap.to_str().unwrap(),
+            "-T",
+            "fields",
+            "-E",
+            "separator=|",
+        ])
+        .args([
+            "-o",
+            &format!("uat:root_keys_lorawan:\"{DEV_EUI}\",\"{APP_KEY}\""),
+        ])
+        .args([
+            "-o",
+            &format!(
+                "uat:session_keys_lorawan:\"{}\",\"{}\",\"{}\"",
+                mac::dev_addr_hex(dev.dev_addr),
+                hex::encode(dev.nwk),
+                hex::encode(dev.app)
+            ),
+        ])
+        .args([
+            "-e",
+            "lorawan.msgtype",
+            "-e",
+            "lorawan.mic.status",
+            "-e",
+            "lorawan.join_accept.devaddr",
+            "-e",
+            "lorawan.frmpayload_decrypted",
+            "-e",
+            "lorawan.link_check_answer.gwcnt",
+            "-e",
+            "_ws.expert.severity",
         ])
         .output()
         .unwrap();
