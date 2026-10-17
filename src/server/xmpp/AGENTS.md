@@ -287,6 +287,11 @@ See `actions.rs` for complete action list including `send_iq_error`, `send_auth_
 
 - **No per-connection state machine.** XMPP does not implement Idle/Processing/Accumulating and
   has no `queued_data`; the read loop awaits each LLM call before reading again.
+- **Batching is `Unsupported`, because there is nothing separate to batch.** An event is the
+  connection's whole unconsumed byte buffer, not a stanza, so whatever arrives during a call is
+  read in one go afterwards and delivered in the next single event already — and with batching
+  off there would be no way to hand it over one stanza at a time either. Real batching needs
+  stanza framing (a top-level-element splitter under the stream root) first.
 - **Read buffer**: bytes accumulate in one `Vec<u8>` per connection. It is cleared once the
   model has acted on it, but **kept** when the model answers `wait_for_more` (that is the whole
   point of the action - clearing it unconditionally threw away the partial stanza the model

@@ -816,7 +816,9 @@ impl Protocol for WebSocketProtocol {
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // Data messages queued while the model is answering are drained into one call
+            // (`handle_inbound`); pings are always answered alone.
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
 

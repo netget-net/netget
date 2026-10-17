@@ -50,7 +50,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 use tracing::{debug, trace};
 
-use crate::llm::action_helper::call_llm;
+use crate::llm::action_helper::{call_llm, call_llm_batch};
 use crate::llm::actions::protocol_trait::ActionResult;
 use crate::llm::ollama_client::OllamaClient;
 use crate::logging::emit::Log;
@@ -462,6 +462,40 @@ impl Inbound {
                 Ok(Inbound::Binary(a))
             }
             (a, b) => Err((a, b)),
+        }
+    }
+}
+
+/// The event the model is asked about for one inbound message.
+fn inbound_event(message: &Inbound, sub: &str) -> Event {
+    match message {
+        Inbound::Text(text) => Event::new(
+            &WEBSOCKET_TEXT_MESSAGE_EVENT,
+            serde_json::json!({
+                "text": text,
+                "message_bytes": text.len(),
+                "subprotocol": sub,
+                "answer_with": actions::TEXT_MESSAGE_ANSWER_WITH,
+            }),
+        ),
+        Inbound::Binary(bytes) => {
+            let (data, encoding) = encode_inbound_payload(bytes);
+            Event::new(
+                &WEBSOCKET_BINARY_MESSAGE_EVENT,
+                serde_json::json!({
+                    "data": data,
+                    "encoding": encoding,
+                    "message_bytes": bytes.len(),
+                    "subprotocol": sub,
+                }),
+            )
+        }
+        Inbound::Ping(payload) => {
+            let (data, encoding) = encode_inbound_payload(payload);
+            Event::new(
+                &WEBSOCKET_PING_EVENT,
+                serde_json::json!({ "payload": data, "encoding": encoding }),
+            )
         }
     }
 }
@@ -1179,12 +1213,16 @@ impl WebSocketServer {
             match message {
                 Ok(Message::Text(text)) => {
                     trace!("WebSocket {} <- text {:?}", ctx.connection_id, text);
-                    let ctx = ctx.clone();
-                    let busy = activity.busy();
-                    handlers.spawn(async move {
-                        let _busy = busy;
-                        Self::handle_inbound(ctx, Inbound::Text(text)).await;
-                    });
+                    // Queued here, in the read loop, so messages keep their arrival
+                    // order; a handler task is started only when none is running.
+                    if Self::enqueue_inbound(&ctx, Inbound::Text(text)).await {
+                        let ctx = ctx.clone();
+                        let busy = activity.busy();
+                        handlers.spawn(async move {
+                            let _busy = busy;
+                            Self::handle_inbound(ctx).await;
+                        });
+                    }
                 }
                 Ok(Message::Binary(bytes)) => {
                     trace!(
@@ -1193,21 +1231,29 @@ impl WebSocketServer {
                         bytes.len(),
                         hex::encode(&bytes)
                     );
-                    let ctx = ctx.clone();
-                    let busy = activity.busy();
-                    handlers.spawn(async move {
-                        let _busy = busy;
-                        Self::handle_inbound(ctx, Inbound::Binary(bytes)).await;
-                    });
+                    // Queued here, in the read loop, so messages keep their arrival
+                    // order; a handler task is started only when none is running.
+                    if Self::enqueue_inbound(&ctx, Inbound::Binary(bytes)).await {
+                        let ctx = ctx.clone();
+                        let busy = activity.busy();
+                        handlers.spawn(async move {
+                            let _busy = busy;
+                            Self::handle_inbound(ctx).await;
+                        });
+                    }
                 }
                 Ok(Message::Ping(payload)) => {
                     // The pong is already queued by the framing layer.
-                    let ctx = ctx.clone();
-                    let busy = activity.busy();
-                    handlers.spawn(async move {
-                        let _busy = busy;
-                        Self::handle_inbound(ctx, Inbound::Ping(payload)).await;
-                    });
+                    // Queued here, in the read loop, so messages keep their arrival
+                    // order; a handler task is started only when none is running.
+                    if Self::enqueue_inbound(&ctx, Inbound::Ping(payload)).await {
+                        let ctx = ctx.clone();
+                        let busy = activity.busy();
+                        handlers.spawn(async move {
+                            let _busy = busy;
+                            Self::handle_inbound(ctx).await;
+                        });
+                    }
                 }
                 Ok(Message::Pong(_)) => {
                     debug!("WebSocket {} <- pong", ctx.connection_id);
@@ -1265,82 +1311,84 @@ impl WebSocketServer {
         drop(permit);
     }
 
-    /// Handle one inbound message through the Idle -> Processing -> Accumulating machine.
-    async fn handle_inbound(ctx: Arc<ConnCtx>, frame: Inbound) {
-        {
-            let mut data = ctx.data.lock().await;
-            if data.state == HandlerState::Processing {
-                data.queued.push_back(frame);
-                Log::new(Some(&ctx.status_tx))
-                    .debug(format!("Queued a message for {}", ctx.connection_id));
-                return;
-            }
-            data.state = HandlerState::Processing;
-
-            // Join onto anything the model deferred with wait_for_websocket_data.
-            match data.pending.take() {
-                Some(pending) => match pending.merge(frame) {
-                    Ok(merged) => data.queued.push_front(merged),
-                    Err((held, new)) => {
-                        // Different kinds cannot be joined; process them in arrival order.
-                        data.queued.push_front(new);
-                        data.queued.push_front(held);
-                    }
-                },
-                None => data.queued.push_front(frame),
-            }
+    /// Put one inbound message on the queue through the Idle -> Processing -> Accumulating
+    /// machine. `true` when no handler is running and the caller must start
+    /// [`Self::handle_inbound`].
+    ///
+    /// Called from the read loop itself, not from a spawned task: two tasks racing for the
+    /// lock could queue the second message after the third.
+    async fn enqueue_inbound(ctx: &ConnCtx, frame: Inbound) -> bool {
+        let mut data = ctx.data.lock().await;
+        if data.state == HandlerState::Processing {
+            data.queued.push_back(frame);
+            Log::new(Some(&ctx.status_tx))
+                .debug(format!("Queued a message for {}", ctx.connection_id));
+            return false;
         }
+        data.state = HandlerState::Processing;
 
+        // Join onto anything the model deferred with wait_for_websocket_data.
+        match data.pending.take() {
+            Some(pending) => match pending.merge(frame) {
+                Ok(merged) => data.queued.push_front(merged),
+                Err((held, new)) => {
+                    // Different kinds cannot be joined; process them in arrival order.
+                    data.queued.push_front(new);
+                    data.queued.push_front(held);
+                }
+            },
+            None => data.queued.push_front(frame),
+        }
+        true
+    }
+
+    /// Answer queued messages until the queue is empty, then go back to Idle.
+    async fn handle_inbound(ctx: Arc<ConnCtx>) {
         loop {
-            let next = {
+            // With batching on, every data message queued while the model was answering the
+            // previous one is answered in one call; off, one queued message per call. A ping
+            // is a control frame, not conversation, and is always answered alone.
+            let batching = ctx
+                .app_state
+                .server_conversation_settings(ctx.server_id)
+                .await
+                .is_some_and(|(_, batching)| batching);
+            let mut batch: Vec<Inbound> = {
                 let mut data = ctx.data.lock().await;
-                match data.queued.pop_front() {
-                    Some(f) => f,
-                    None => {
-                        data.state = HandlerState::Idle;
-                        return;
+                let Some(first) = data.queued.pop_front() else {
+                    data.state = HandlerState::Idle;
+                    return;
+                };
+                let batch_data = batching && !matches!(first, Inbound::Ping(_));
+                let mut batch = vec![first];
+                while batch_data
+                    && batch.len() < crate::protocol::metadata::MAX_BATCH_EVENTS
+                    && matches!(
+                        data.queued.front(),
+                        Some(Inbound::Text(_) | Inbound::Binary(_))
+                    )
+                {
+                    if let Some(more) = data.queued.pop_front() {
+                        batch.push(more);
                     }
                 }
+                batch
             };
 
             let sub = ctx.subprotocol.clone().unwrap_or_default();
-            let event = match &next {
-                Inbound::Text(text) => Event::new(
-                    &WEBSOCKET_TEXT_MESSAGE_EVENT,
-                    serde_json::json!({
-                        "text": text,
-                        "message_bytes": text.len(),
-                        "subprotocol": sub,
-                        "answer_with": actions::TEXT_MESSAGE_ANSWER_WITH,
-                    }),
-                ),
-                Inbound::Binary(bytes) => {
-                    let (data, encoding) = encode_inbound_payload(bytes);
-                    Event::new(
-                        &WEBSOCKET_BINARY_MESSAGE_EVENT,
-                        serde_json::json!({
-                            "data": data,
-                            "encoding": encoding,
-                            "message_bytes": bytes.len(),
-                            "subprotocol": sub,
-                        }),
-                    )
-                }
-                Inbound::Ping(payload) => {
-                    let (data, encoding) = encode_inbound_payload(payload);
-                    Event::new(
-                        &WEBSOCKET_PING_EVENT,
-                        serde_json::json!({ "payload": data, "encoding": encoding }),
-                    )
-                }
+            let events: Vec<Event> = batch.iter().map(|m| inbound_event(m, &sub)).collect();
+            // The newest message is the batch's trigger: it names the decision line, and it
+            // is the one `wait_for_websocket_data` holds back.
+            let (Some(next), Some(event)) = (batch.pop(), events.last()) else {
+                continue;
             };
 
-            match call_llm(
+            match call_llm_batch(
                 &ctx.llm_client,
                 &ctx.app_state,
                 ctx.server_id,
                 Some(ctx.connection_id),
-                &event,
+                &events,
                 ctx.protocol.as_ref(),
             )
             .await

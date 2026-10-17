@@ -2,5 +2,6 @@
 
 pub mod test;
 
+pub mod batching_test;
 pub mod connection_bounds_test;
 pub mod peer_inject_test;

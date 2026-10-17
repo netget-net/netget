@@ -7,11 +7,11 @@ use anyhow::Result;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace};
 
-use crate::llm::action_helper::call_llm;
+use crate::llm::action_helper::call_llm_batch;
 use crate::llm::actions::protocol_trait::ActionResult;
 use crate::llm::ollama_client::OllamaClient;
 use crate::protocol::Event;
@@ -265,25 +265,67 @@ impl IrcServer {
                                 let _ = status_clone
                                     .send(format!("[TRACE] IRC data (text): {:?}", line.trim()));
 
-                                let event = Event::new(
-                                    &IRC_MESSAGE_RECEIVED_EVENT,
-                                    serde_json::json!({
-                                        "message": line.trim()
-                                    }),
-                                );
+                                // With batching on, every other complete line the peer has
+                                // already sent — typically what it sent while the model was
+                                // answering the previous one, or a NICK and USER written
+                                // together — is answered in the same call. Read without
+                                // waiting, so batching never delays a reply.
+                                let batching = state_clone
+                                    .server_conversation_settings(server_id)
+                                    .await
+                                    .is_some_and(|(_, batching)| batching);
+                                let mut lines = vec![line];
+                                if batching {
+                                    for (more, consumed) in lines_already_here(
+                                        &mut reader,
+                                        crate::protocol::metadata::MAX_BATCH_EVENTS - 1,
+                                    )
+                                    .await
+                                    {
+                                        state_clone
+                                            .update_connection_stats(
+                                                server_id,
+                                                connection_id,
+                                                Some(consumed as u64),
+                                                None,
+                                                Some(1),
+                                                None,
+                                            )
+                                            .await;
+                                        trace!("IRC data (text, batched): {:?}", more.trim());
+                                        lines.push(more);
+                                    }
+                                }
+                                let events: Vec<Event> = lines
+                                    .iter()
+                                    .map(|l| {
+                                        Event::new(
+                                            &IRC_MESSAGE_RECEIVED_EVENT,
+                                            serde_json::json!({ "message": l.trim() }),
+                                        )
+                                    })
+                                    .collect();
+                                // The newest line is the batch's trigger, and the one the
+                                // decision line and a failure numeric name.
+                                let line = lines.pop().unwrap_or_default();
 
-                                debug!("IRC calling LLM for connection {}", connection_id);
+                                debug!(
+                                    "IRC calling LLM for connection {} ({} line(s))",
+                                    connection_id,
+                                    events.len()
+                                );
                                 let _ = status_clone.send(format!(
-                                    "[DEBUG] IRC calling LLM for connection {}",
-                                    connection_id
+                                    "[DEBUG] IRC calling LLM for connection {} ({} line(s))",
+                                    connection_id,
+                                    events.len()
                                 ));
 
-                                match call_llm(
+                                match call_llm_batch(
                                     &llm_clone,
                                     &state_clone,
                                     server_id,
                                     Some(connection_id),
-                                    &event,
+                                    &events,
                                     protocol_clone.as_ref(),
                                 )
                                 .await
@@ -512,6 +554,37 @@ impl IrcServer {
 
         Ok(local_addr)
     }
+}
+
+/// Complete lines that are already here — buffered, or readable without waiting — up to `max`.
+///
+/// What batching collects after the first line. It never waits: a zero deadline polls
+/// `fill_buf` once, and `fill_buf` consumes nothing, so giving up on it loses no bytes. It
+/// stops at a partial line, an over-long one or the end of the stream and leaves each for the
+/// next bounded `read_irc_line` to report, so every existing bound still applies.
+async fn lines_already_here<R>(reader: &mut BufReader<R>, max: usize) -> Vec<(String, usize)>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut lines = Vec::new();
+    while lines.len() < max {
+        if reader.buffer().is_empty() {
+            match tokio::time::timeout(Duration::ZERO, reader.fill_buf()).await {
+                Ok(Ok(available)) if !available.is_empty() => {}
+                _ => break,
+            }
+        }
+        match reader.buffer().iter().position(|b| *b == b'\n') {
+            Some(idx) if idx < MAX_IRC_READ_LINE => {}
+            _ => break,
+        }
+        // A newline is buffered, so this returns without touching the socket.
+        match read_irc_line(reader, MAX_IRC_READ_LINE).await {
+            Ok((IrcLine::Line(line), consumed)) => lines.push((line, consumed)),
+            _ => break,
+        }
+    }
+    lines
 }
 
 /// The command token of an IRC message, uppercased, for echoing back in a numeric.

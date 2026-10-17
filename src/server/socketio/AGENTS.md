@@ -34,3 +34,9 @@ actions: `socketio_emit` to the session's socket in a namespace, `socketio_disco
 
 Not implemented: binary attachments, CORS headers, Engine.IO v3 / Socket.IO v4 protocol
 revisions, multi-process adapters, connection state recovery.
+
+**Batching is `Unsupported`.** A `socketio_event` can carry an ack id the client waits on and
+is owed exactly one `ACK`, and `socketio_ack` names no id: `apply` answers the one event it was
+called for. In a batch the model could not say which event an ack belongs to, and events in one
+session may belong to sockets in different namespaces. Each packet stays one call, in order
+(`Session::inbound` serialises them).

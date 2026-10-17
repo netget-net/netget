@@ -28,6 +28,10 @@ async fn test_irc_welcome() -> E2EResult<()> {
                     "type": "open_server",
                     "port": 0,
                     "base_stack": "IRC",
+                    // One call per line, so each rule below answers its own line: the
+                    // lines are written back to back, and with batching (IRC's default)
+                    // they would be answered together. batching_test.rs covers that.
+                    "batching": false,
                     "instruction": "IRC server - respond with welcome (001) after NICK and USER"
                 }
             ]))
@@ -232,6 +236,10 @@ async fn test_irc_join_channel() -> E2EResult<()> {
                     "type": "open_server",
                     "port": 0,
                     "base_stack": "IRC",
+                    // One call per line, so each rule below answers its own line: the
+                    // lines are written back to back, and with batching (IRC's default)
+                    // they would be answered together. batching_test.rs covers that.
+                    "batching": false,
                     "instruction": "IRC server - confirm channel joins"
                 }
             ]))
@@ -342,6 +350,10 @@ async fn test_irc_privmsg() -> E2EResult<()> {
                     "type": "open_server",
                     "port": 0,
                     "base_stack": "IRC",
+                    // One call per line, so each rule below answers its own line: the
+                    // lines are written back to back, and with batching (IRC's default)
+                    // they would be answered together. batching_test.rs covers that.
+                    "batching": false,
                     "instruction": "IRC server - echo private messages"
                 }
             ]))
@@ -452,6 +464,10 @@ async fn test_irc_multiple_clients() -> E2EResult<()> {
                     "type": "open_server",
                     "port": 0,
                     "base_stack": "IRC",
+                    // One call per line, so each rule below answers its own line: the
+                    // lines are written back to back, and with batching (IRC's default)
+                    // they would be answered together. batching_test.rs covers that.
+                    "batching": false,
                     "instruction": "IRC server - send welcome to all clients"
                 }
             ]))
