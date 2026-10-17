@@ -934,6 +934,7 @@ impl NetGetMcpService {
             params.event_handlers,              // event_handlers
             scheduled_tasks,                    // scheduled_tasks
             params.feedback_instructions,       // feedback_instructions
+            Default::default(),                 // history / batching overrides
             status_tx,                          // status_tx
         )
         .await
@@ -1477,6 +1478,7 @@ impl NetGetMcpService {
             params.event_handlers,
             scheduled_tasks,
             params.feedback_instructions,
+            Default::default(),
             self.state.llm_client.clone(),
             None, // status_tx: MCP has no status stream, drain to tracing
         )

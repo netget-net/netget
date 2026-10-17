@@ -680,6 +680,13 @@ async fn call_llm_inner(
         &event_description,
         event.data.clone(),
     );
+    // What has already happened on this connection, ahead of the event being answered. The
+    // block carries no `Event ID:` / `Context data:` labels, so the trigger stays the last —
+    // and only — event in the prompt. Credentials were dropped when the history was recorded.
+    let event_trigger = match state.render_server_history(server_id, connection_id).await {
+        Some(history) => format!("{}\n{}", history, event_trigger),
+        None => event_trigger,
+    };
     conversation.add_user_message(apply_handler_instruction(
         event_trigger,
         handler_instruction.as_deref(),
@@ -848,6 +855,16 @@ async fn call_llm_for_client_inner(
         )
     } else {
         "Waiting for instructions".to_string()
+    };
+
+    // What has already happened on this client's session, ahead of what it is answering now.
+    // Rendered with no `Event:`/`Data:` labels, so the current event stays the only one.
+    let user_message = match crate::state::ClientId::from_string(&client_id) {
+        Some(cid) => match state.render_client_history(cid).await {
+            Some(history) => format!("{}\n{}", history, user_message),
+            None => user_message,
+        },
+        None => user_message,
     };
 
     // Add memory context if present

@@ -65,6 +65,7 @@ async fn start_grpc_server(state: &AppState, schema: &str) -> anyhow::Result<()>
         None,
         None,
         None,
+        Default::default(),
         tx,
     )
     .await?;
@@ -142,6 +143,7 @@ async fn startup_refuses_only_a_definitively_missing_dependency() {
         None,
         None,
         None,
+        Default::default(),
         OllamaClient::new("http://127.0.0.1:1".to_string()),
         None,
     )

@@ -287,6 +287,132 @@ impl PortTransport {
     }
 }
 
+/// How much of a connection's earlier exchange the model is shown with each new event.
+///
+/// Every event used to reach the model alone: a telnet peer asking "what did I say?" was
+/// answered from a prompt holding only that question. History is the record of what happened
+/// on the connection — each event and what answered it, whoever did (the model, a script, a
+/// static rule, a person) — rendered ahead of the current event and bounded twice: by entry
+/// count here and by [`crate::state::exchange_history::HISTORY_PROMPT_BUDGET_CHARS`] in the
+/// prompt. It is not memory: memory is what the model chooses to keep, and outlives the
+/// connection; history is what happened, and ends with it.
+///
+/// A protocol declares its default with [`ProtocolMetadataV2Builder::history`]; an instance
+/// can override it when it is started or updated. Declare [`Self::Off`] where each request
+/// stands alone (DNS, HTTP — a keep-alive connection is not a session) and
+/// [`SESSION_HISTORY_ENTRIES`] wherever a peer's next message is read in the light of its last.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HistoryMode {
+    /// The model sees only the current event.
+    Off,
+    /// The model sees up to this many earlier entries from the same connection.
+    Last(u16),
+}
+
+impl HistoryMode {
+    /// The entry count this mode allows; `0` for [`Self::Off`].
+    pub const fn entries(self) -> u16 {
+        match self {
+            Self::Off => 0,
+            Self::Last(n) => n,
+        }
+    }
+
+    pub fn from_entries(entries: u16) -> Self {
+        if entries == 0 {
+            Self::Off
+        } else {
+            Self::Last(entries)
+        }
+    }
+}
+
+/// The history length a session protocol declares unless it has a reason to differ.
+pub const SESSION_HISTORY_ENTRIES: u16 = 40;
+
+/// Whether events that arrive on a connection while the model is still answering an earlier
+/// one are held and delivered together, in one follow-up call, once it finishes.
+///
+/// For a conversation (telnet, IRC, SMTP's pipelined commands) that is what a person would do:
+/// read everything that came in, then decide what — if anything — to answer. For independent
+/// requests (DNS, HTTP) each one needs its own correlated reply, and batching them would be
+/// wrong. Delivering a batch takes the protocol's own cooperation — a connection read in sequence
+/// has to collect what is already waiting, a queue has to keep events apart rather than gluing
+/// their bytes together — so a protocol that has not done that work declares
+/// [`Self::Unsupported`], and asking for batching there is refused at start rather than
+/// silently ignored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatchingMode {
+    /// The protocol cannot deliver a batch; a request to enable it is refused.
+    Unsupported,
+    /// Supported, off unless the instance asks for it.
+    Off,
+    /// Supported and on unless the instance turns it off.
+    On,
+}
+
+impl BatchingMode {
+    pub const fn is_supported(self) -> bool {
+        !matches!(self, Self::Unsupported)
+    }
+
+    pub const fn default_enabled(self) -> bool {
+        matches!(self, Self::On)
+    }
+}
+
+/// The most earlier entries an instance may ask to be shown; beyond this the prompt budget
+/// ([`crate::state::exchange_history::HISTORY_PROMPT_BUDGET_CHARS`]) cuts it anyway.
+pub const MAX_HISTORY_ENTRIES: u16 = 500;
+
+/// An instance's choices about history and batching, where it makes any. `None` keeps the
+/// protocol's declared default.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ConversationOverrides {
+    /// Earlier entries shown per connection; `0` turns history off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history: Option<u16>,
+    /// Deliver events that arrive during a call together afterwards.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batching: Option<bool>,
+}
+
+impl ConversationOverrides {
+    /// The settings an instance of `protocol` starts with: the declared defaults, overridden
+    /// where the caller chose. Refuses batching on a protocol that cannot deliver a batch and
+    /// a history longer than [`MAX_HISTORY_ENTRIES`], naming why, rather than quietly doing
+    /// something else.
+    pub fn resolve(
+        &self,
+        metadata: &ProtocolMetadataV2,
+        protocol: &str,
+    ) -> anyhow::Result<(u16, bool)> {
+        let history = match self.history {
+            Some(n) if n > MAX_HISTORY_ENTRIES => anyhow::bail!(
+                "history {} is more than the {} earlier entries an instance may be shown",
+                n,
+                MAX_HISTORY_ENTRIES
+            ),
+            Some(n) => n,
+            None => metadata.history.entries(),
+        };
+        let batching = match self.batching {
+            Some(true) if !metadata.batching.is_supported() => anyhow::bail!(
+                "{} cannot batch events: its server or client answers each one as it arrives, \
+                 so batching cannot be turned on for it",
+                protocol
+            ),
+            Some(on) => on,
+            None => metadata.batching.default_enabled(),
+        };
+        Ok((history, batching))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.history.is_none() && self.batching.is_none()
+    }
+}
+
 /// Enhanced protocol metadata with detailed implementation information
 #[derive(Debug, Clone)]
 pub struct ProtocolMetadataV2 {
@@ -402,6 +528,14 @@ pub struct ProtocolMetadataV2 {
     /// Write the reason as the sentence a person reads: "HTTP only answers requests; a server
     /// cannot send a peer anything unprompted".
     pub request_only: Option<&'static str>,
+
+    /// How much earlier exchange on the same connection the model sees — see [`HistoryMode`].
+    /// The default an instance starts with; the instance may override it.
+    pub history: HistoryMode,
+
+    /// Whether events arriving during a call are delivered together afterwards — see
+    /// [`BatchingMode`].
+    pub batching: BatchingMode,
 }
 
 impl ProtocolMetadataV2 {
@@ -440,6 +574,8 @@ pub struct ProtocolMetadataV2Builder {
     well_known_port: Option<u16>,
     well_known_transport: PortTransport,
     request_only: Option<&'static str>,
+    history: HistoryMode,
+    batching: BatchingMode,
 }
 
 impl Default for ProtocolMetadataV2Builder {
@@ -463,6 +599,8 @@ impl ProtocolMetadataV2Builder {
             well_known_port: None,
             well_known_transport: PortTransport::Tcp,
             request_only: None,
+            history: HistoryMode::Off,
+            batching: BatchingMode::Unsupported,
         }
     }
 
@@ -571,6 +709,20 @@ impl ProtocolMetadataV2Builder {
         self
     }
 
+    /// Declare how much earlier exchange the model sees on a connection — see [`HistoryMode`].
+    /// `tests/history_batching_declaration_test.rs` requires every protocol to declare it.
+    pub const fn history(mut self, history: HistoryMode) -> Self {
+        self.history = history;
+        self
+    }
+
+    /// Declare whether events arriving during a call are batched — see [`BatchingMode`].
+    /// `tests/history_batching_declaration_test.rs` requires every protocol to declare it.
+    pub const fn batching(mut self, batching: BatchingMode) -> Self {
+        self.batching = batching;
+        self
+    }
+
     pub const fn build(self) -> ProtocolMetadataV2 {
         ProtocolMetadataV2 {
             state: self.state,
@@ -585,6 +737,8 @@ impl ProtocolMetadataV2Builder {
             well_known_port: self.well_known_port,
             well_known_transport: self.well_known_transport,
             request_only: self.request_only,
+            history: self.history,
+            batching: self.batching,
         }
     }
 }

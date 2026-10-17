@@ -467,6 +467,7 @@ async fn run_client(protocol: &str, args: &Args) -> Result<()> {
         event_handlers,
         None, // scheduled_tasks
         None, // feedback_instructions
+        Default::default(),
         llm,
         None, // status_tx: direct --client mode, drain to tracing
     )
@@ -647,9 +648,10 @@ async fn run_server_direct(protocol: &str, args: &Args) -> Result<()> {
         None,  // initial_memory
         instruction,
         startup_params,
-        None, // event_handlers
-        None, // scheduled_tasks
-        None, // feedback_instructions
+        None,               // event_handlers
+        None,               // scheduled_tasks
+        None,               // feedback_instructions
+        Default::default(), // history / batching overrides
         status_tx,
     )
     .await?;

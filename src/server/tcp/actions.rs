@@ -104,6 +104,10 @@ impl Protocol for TcpProtocol {
             .e2e_testing("tokio::net::TcpStream")
             .notes("Basis for FTP, SMTP, custom protocols")
             .max_inbound_bytes(crate::server::tcp::MAX_QUEUED_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

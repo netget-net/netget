@@ -632,6 +632,7 @@ pub async fn run_with_actions(
                         event_handlers,
                         scheduled_tasks,
                         feedback_instructions,
+                        Default::default(),
                         status_tx.clone(),
                     )
                     .await
@@ -681,6 +682,7 @@ pub async fn run_with_actions(
                         event_handlers,
                         scheduled_tasks,
                         feedback_instructions,
+                        Default::default(),
                         llm.clone(),
                         None, // status_tx: headless, drain to tracing
                     )

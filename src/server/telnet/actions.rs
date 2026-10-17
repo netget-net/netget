@@ -156,6 +156,10 @@ impl Protocol for TelnetProtocol {
                  Absent: character-at-a-time mode, TTYPE/NAWS, terminal emulation, TLS.",
             )
             .max_inbound_bytes(crate::server::telnet::MAX_LINE_BYTES)
+            .history(crate::protocol::metadata::HistoryMode::Last(
+                crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
+            ))
+            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
     fn description(&self) -> &'static str {

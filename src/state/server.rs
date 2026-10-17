@@ -302,6 +302,18 @@ pub struct ServerInstance {
     /// because `ServerInstance` is built as a struct literal in a few places;
     /// treat it as `add_connection`/`remove_connection` bookkeeping.
     pub connection_opened_at: HashMap<ConnectionId, Instant>,
+    /// How many earlier entries the model is shown per connection; 0 is off. Starts at the
+    /// protocol's declared [`crate::protocol::metadata::HistoryMode`], the instance may
+    /// override it, and it is hot-applied.
+    pub history_entries: u16,
+    /// Whether events arriving during a call are delivered together afterwards. Starts at the
+    /// protocol's declared [`crate::protocol::metadata::BatchingMode`]; only a protocol that
+    /// supports batching may have it on.
+    pub batching: bool,
+    /// Each live connection's [`ExchangeHistory`](crate::state::exchange_history::ExchangeHistory),
+    /// kept beside rather than inside `ConnectionState` for the reason `connection_opened_at`
+    /// is, and dropped by `remove_connection` like it.
+    pub exchange_history: HashMap<ConnectionId, crate::state::exchange_history::ExchangeHistory>,
 }
 
 /// Longest accepted `append_to_log` output name.
@@ -368,6 +380,9 @@ impl ServerInstance {
             last_feedback_processed: None,
             recent_connections: VecDeque::new(),
             connection_opened_at: HashMap::new(),
+            history_entries: 0,
+            batching: false,
+            exchange_history: HashMap::new(),
         }
     }
 
@@ -473,6 +488,7 @@ impl ServerInstance {
     /// [`Self::recent_connections`].
     pub fn remove_connection(&mut self, id: ConnectionId) -> Option<ConnectionState> {
         let removed = self.connections.remove(&id);
+        self.exchange_history.remove(&id);
         if let Some(state) = &removed {
             self.record_closed_connection(state);
         }

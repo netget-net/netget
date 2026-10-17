@@ -3214,6 +3214,37 @@ impl AppState {
         };
 
         let mut inner = self.inner.write().await;
+
+        // The same exchange, into the connection's history — every event the access log sees
+        // is one the model may need to know happened, whoever answered it. Only for a
+        // connection the server still holds: an id it has removed (or never registered) would
+        // otherwise leave an entry nothing ever clears.
+        match owner {
+            AccessLogOwner::Server(sid) => {
+                if let (Some(conn), Some(server)) =
+                    (connection_id, inner.servers.get_mut(&ServerId::new(sid)))
+                {
+                    let conn = crate::server::connection::ConnectionId::new(conn);
+                    let limit = server.history_entries;
+                    if limit > 0 && server.connections.contains_key(&conn) {
+                        server
+                            .exchange_history
+                            .entry(conn)
+                            .or_default()
+                            .record(event_type, &request, &response, limit);
+                    }
+                }
+            }
+            AccessLogOwner::Client(cid) => {
+                if let Some(client) = inner.clients.get_mut(&ClientId::new(cid)) {
+                    let limit = client.history_entries;
+                    client
+                        .exchange_history
+                        .record(event_type, &request, &response, limit);
+                }
+            }
+        }
+
         let id = inner.next_access_log_id;
         inner.next_access_log_id += 1;
         inner.access_logs.push_back(AccessLogEntry {
@@ -3231,6 +3262,89 @@ impl AppState {
             inner.access_logs.pop_front();
         }
         id
+    }
+
+    /// The history block to show the model ahead of an event on this server connection, or
+    /// `None` when history is off or nothing has happened yet. See
+    /// [`crate::state::exchange_history`].
+    pub async fn render_server_history(
+        &self,
+        server_id: ServerId,
+        connection_id: Option<crate::server::connection::ConnectionId>,
+    ) -> Option<String> {
+        let conn = connection_id?;
+        let inner = self.inner.read().await;
+        let server = inner.servers.get(&server_id)?;
+        server
+            .exchange_history
+            .get(&conn)?
+            .render(server.history_entries)
+    }
+
+    /// The history block for a client's next prompt — see [`Self::render_server_history`].
+    pub async fn render_client_history(&self, client_id: ClientId) -> Option<String> {
+        let inner = self.inner.read().await;
+        let client = inner.clients.get(&client_id)?;
+        client.exchange_history.render(client.history_entries)
+    }
+
+    /// An instance's history and batching settings as `(history entries, batching)`.
+    pub async fn server_conversation_settings(&self, server_id: ServerId) -> Option<(u16, bool)> {
+        let inner = self.inner.read().await;
+        inner
+            .servers
+            .get(&server_id)
+            .map(|s| (s.history_entries, s.batching))
+    }
+
+    /// See [`Self::server_conversation_settings`].
+    pub async fn client_conversation_settings(&self, client_id: ClientId) -> Option<(u16, bool)> {
+        let inner = self.inner.read().await;
+        inner
+            .clients
+            .get(&client_id)
+            .map(|c| (c.history_entries, c.batching))
+    }
+
+    /// Change a server's history and batching settings in place (no restart). Lowering the
+    /// history limit trims what every connection keeps; `0` drops it.
+    pub async fn set_server_conversation_settings(
+        &self,
+        server_id: ServerId,
+        history_entries: u16,
+        batching: bool,
+    ) {
+        let mut inner = self.inner.write().await;
+        if let Some(server) = inner.servers.get_mut(&server_id) {
+            server.history_entries = history_entries;
+            server.batching = batching;
+            if history_entries == 0 {
+                server.exchange_history.clear();
+            } else {
+                for history in server.exchange_history.values_mut() {
+                    history.trim(history_entries);
+                }
+            }
+        }
+    }
+
+    /// See [`Self::set_server_conversation_settings`].
+    pub async fn set_client_conversation_settings(
+        &self,
+        client_id: ClientId,
+        history_entries: u16,
+        batching: bool,
+    ) {
+        let mut inner = self.inner.write().await;
+        if let Some(client) = inner.clients.get_mut(&client_id) {
+            client.history_entries = history_entries;
+            client.batching = batching;
+            if history_entries == 0 {
+                client.exchange_history = Default::default();
+            } else {
+                client.exchange_history.trim(history_entries);
+            }
+        }
     }
 
     /// How many access-log entries have ever been recorded — one per network event a server

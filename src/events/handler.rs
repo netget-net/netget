@@ -958,6 +958,7 @@ impl EventHandler {
                     event_handlers,
                     scheduled_tasks,
                     feedback_instructions,
+                    Default::default(),
                     status_tx.clone(),
                 )
                 .await
@@ -1423,6 +1424,14 @@ impl EventHandler {
                 }
                 client.startup_params = startup_params.clone();
                 client.feedback_instructions = feedback_instructions;
+                if let Some(protocol_impl) = crate::protocol::CLIENT_REGISTRY.get(&protocol) {
+                    let (history_entries, batching) =
+                        crate::protocol::metadata::ConversationOverrides::default()
+                            .resolve(&protocol_impl.metadata(), &protocol)
+                            .unwrap_or((0, false));
+                    client.history_entries = history_entries;
+                    client.batching = batching;
+                }
 
                 // Add client to state (this allocates the real client ID)
                 let client_id = self.state.add_client(client).await;
@@ -2549,6 +2558,7 @@ impl EventHandler {
                             event_handlers,
                             scheduled_tasks,
                             feedback_instructions,
+                            Default::default(),
                             status_tx,
                         )
                         .await
@@ -2599,6 +2609,7 @@ impl EventHandler {
                             event_handlers,
                             scheduled_tasks,
                             feedback_instructions,
+                            Default::default(),
                             self.llm.clone(),
                             None, // status_tx: /load path, drain to tracing
                         )

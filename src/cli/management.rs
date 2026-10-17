@@ -209,6 +209,7 @@ impl ServerForm {
             self.event_handlers,
             self.scheduled_tasks,
             self.feedback_instructions,
+            Default::default(),
             status_tx,
         )
         .await
@@ -245,6 +246,7 @@ impl ClientForm {
             self.event_handlers,
             self.scheduled_tasks,
             self.feedback_instructions,
+            Default::default(),
             llm_client,
             Some(status_tx),
         )
@@ -423,6 +425,7 @@ pub async fn update_server(
             event_handlers,
             form.scheduled_tasks,
             feedback_instructions,
+            Default::default(),
             status_tx.clone(),
         )
         .await?;
@@ -615,6 +618,7 @@ pub async fn update_client(
             event_handlers,
             form.scheduled_tasks,
             feedback_instructions,
+            Default::default(),
             llm_client,
             Some(status_tx.clone()),
         )
