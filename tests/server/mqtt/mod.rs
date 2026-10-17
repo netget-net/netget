@@ -10,3 +10,4 @@ pub mod real_client_test;
 mod v5_property_limits_test;
 pub mod v5_real_client_test;
 pub mod v5_wire_test;
+mod batching_test;

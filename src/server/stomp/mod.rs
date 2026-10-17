@@ -357,19 +357,70 @@ async fn run_stomp_session<R, W>(
                 }
                 Ok(ParseOutcome::Frame { frame, consumed }) => {
                     pending.drain(..consumed);
-                    let flow = handle_frame(
-                        frame,
-                        &mut connected,
-                        write_half,
-                        peer_addr,
-                        llm_client,
-                        app_state,
-                        status_tx,
-                        server_id,
-                        protocol,
-                        connection_id,
-                    )
-                    .await;
+                    // With batching on, the frames that are already here behind this one -
+                    // typically what the client sent while the model answered the last - are
+                    // answered in the same call.
+                    let first = if connected {
+                        batchable_event(&frame)
+                    } else {
+                        None
+                    };
+                    let batching = match &first {
+                        Some(_) => app_state
+                            .server_conversation_settings(server_id)
+                            .await
+                            .is_some_and(|(_, batching)| batching),
+                        None => false,
+                    };
+                    let more = if batching {
+                        frames_already_here(
+                            &mut pending,
+                            &mut reader,
+                            &mut read_buf,
+                            app_state,
+                            server_id,
+                            connection_id,
+                        )
+                        .await
+                    } else {
+                        Vec::new()
+                    };
+                    let flow = match first {
+                        Some(event) if !more.is_empty() => {
+                            let receipt = frame.header("receipt").map(str::to_string);
+                            let mut frames = Vec::with_capacity(1 + more.len());
+                            frames.push((event, receipt));
+                            frames.extend(more);
+                            handle_batch(
+                                frames,
+                                &mut connected,
+                                write_half,
+                                peer_addr,
+                                llm_client,
+                                app_state,
+                                status_tx,
+                                server_id,
+                                protocol,
+                                connection_id,
+                            )
+                            .await
+                        }
+                        _ => {
+                            handle_frame(
+                                frame,
+                                &mut connected,
+                                write_half,
+                                peer_addr,
+                                llm_client,
+                                app_state,
+                                status_tx,
+                                server_id,
+                                protocol,
+                                connection_id,
+                            )
+                            .await
+                        }
+                    };
                     if matches!(flow, Flow::Close) {
                         return;
                     }
@@ -457,6 +508,65 @@ async fn run_stomp_session<R, W>(
     }
 }
 
+/// The batchable frames already here behind the one being handled, each with its `receipt`, up
+/// to [`crate::protocol::metadata::MAX_BATCH_EVENTS`] in all.
+///
+/// Takes complete frames out of `pending`, reading the socket only for what is readable
+/// without waiting. It stops at the first frame [`batchable_event`] does not build - the
+/// handshake, `DISCONNECT`, a transaction frame, a malformed frame - and leaves it in `pending`,
+/// so that frame is handled alone, after the batch, in the order it arrived.
+async fn frames_already_here<R>(
+    pending: &mut Vec<u8>,
+    reader: &mut R,
+    read_buf: &mut [u8],
+    app_state: &AppState,
+    server_id: crate::state::ServerId,
+    connection_id: ConnectionId,
+) -> Vec<(Event, Option<String>)>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut frames = Vec::new();
+    while frames.len() + 1 < crate::protocol::metadata::MAX_BATCH_EVENTS {
+        match frame::parse_frame(pending) {
+            Ok(ParseOutcome::Heartbeat { consumed }) => {
+                pending.drain(..consumed);
+            }
+            Ok(ParseOutcome::Frame { frame, consumed }) => {
+                let Some(event) = batchable_event(&frame) else {
+                    break;
+                };
+                pending.drain(..consumed);
+                frames.push((event, frame.header("receipt").map(str::to_string)));
+            }
+            Ok(ParseOutcome::Incomplete) => {
+                // A zero deadline polls the read once: whatever the kernel already holds,
+                // nothing that would mean waiting. `read` is cancel-safe, so a timeout loses
+                // no bytes.
+                match tokio::time::timeout(std::time::Duration::ZERO, reader.read(read_buf)).await {
+                    Ok(Ok(n)) if n > 0 => {
+                        app_state
+                            .update_connection_stats(
+                                server_id,
+                                connection_id,
+                                Some(n as u64),
+                                None,
+                                Some(1),
+                                None,
+                            )
+                            .await;
+                        pending.extend_from_slice(&read_buf[..n]);
+                    }
+                    _ => break,
+                }
+            }
+            // Left for the session loop, which reports it.
+            Err(_) => break,
+        }
+    }
+    frames
+}
+
 /// Refuse a frame the peer got wrong, and end the session.
 ///
 /// `message` and `body` describe the *peer's* mistake — a missing header, an unknown command —
@@ -525,46 +635,51 @@ where
 
     // Build the event, or refuse the frame outright. Every refusal here is a spec violation by
     // the peer, decided deterministically - the model is never asked to police framing.
-    let event = match command.as_str() {
-        "CONNECT" | "STOMP" => {
-            let accept_version = frame.header("accept-version").unwrap_or("");
-            if !accept_version.split(',').any(|v| v.trim() == STOMP_VERSION) {
-                log.warn(format!(
-                    "STOMP CONNECT from {peer_addr} wants accept-version={accept_version:?}: \
+    let event = if let Some(event) = batchable_event(&frame) {
+        event
+    } else {
+        match command.as_str() {
+            "CONNECT" | "STOMP" => {
+                let accept_version = frame.header("accept-version").unwrap_or("");
+                if !accept_version.split(',').any(|v| v.trim() == STOMP_VERSION) {
+                    log.warn(format!(
+                        "STOMP CONNECT from {peer_addr} wants accept-version={accept_version:?}: \
                      decision=version_refused"
-                ));
-                // The spec asks the ERROR to name the versions the server does support.
-                let body = format!(
-                    "This server implements STOMP {STOMP_VERSION} only. Send \
+                    ));
+                    // The spec asks the ERROR to name the versions the server does support.
+                    let body = format!(
+                        "This server implements STOMP {STOMP_VERSION} only. Send \
                      accept-version:{STOMP_VERSION}."
-                );
-                let refusal = StompFrame::new(
-                    "ERROR",
-                    vec![
-                        ("version".to_string(), STOMP_VERSION.to_string()),
-                        ("message".to_string(), "unsupported version".to_string()),
-                        ("content-type".to_string(), "text/plain".to_string()),
-                    ],
-                    body.into_bytes(),
+                    );
+                    let refusal = StompFrame::new(
+                        "ERROR",
+                        vec![
+                            ("version".to_string(), STOMP_VERSION.to_string()),
+                            ("message".to_string(), "unsupported version".to_string()),
+                            ("content-type".to_string(), "text/plain".to_string()),
+                        ],
+                        body.into_bytes(),
+                    )
+                    .encode();
+                    let _ =
+                        write_counted(write_half, &refusal, app_state, server_id, connection_id)
+                            .await;
+                    return Flow::Close;
+                }
+                Event::new(
+                    &STOMP_CONNECT_EVENT,
+                    serde_json::json!({
+                        "accept_version": accept_version,
+                        "host": frame.header("host").unwrap_or(""),
+                        "login": frame.header("login").unwrap_or(""),
+                        "passcode": frame.header("passcode").unwrap_or(""),
+                        "heart_beat": frame.header("heart-beat").unwrap_or("0,0"),
+                    }),
                 )
-                .encode();
-                let _ =
-                    write_counted(write_half, &refusal, app_state, server_id, connection_id).await;
-                return Flow::Close;
             }
-            Event::new(
-                &STOMP_CONNECT_EVENT,
-                serde_json::json!({
-                    "accept_version": accept_version,
-                    "host": frame.header("host").unwrap_or(""),
-                    "login": frame.header("login").unwrap_or(""),
-                    "passcode": frame.header("passcode").unwrap_or(""),
-                    "heart_beat": frame.header("heart-beat").unwrap_or("0,0"),
-                }),
-            )
-        }
-        "SEND" => {
-            let Some(destination) = frame.header("destination") else {
+            // The five commands `batchable_event` builds reach here only when a header they need
+            // is missing.
+            "SEND" => {
                 return refuse_frame(
                     write_half,
                     app_state,
@@ -574,21 +689,8 @@ where
                     "A SEND frame must carry a destination header.",
                 )
                 .await;
-            };
-            let (body, body_encoding) = body_for_event(&frame.body);
-            Event::new(
-                &STOMP_SEND_EVENT,
-                serde_json::json!({
-                    "destination": destination,
-                    "body": body,
-                    "body_encoding": body_encoding,
-                    "headers": frame.headers_except(&["destination", "content-length"]),
-                }),
-            )
-        }
-        "SUBSCRIBE" => {
-            let (Some(destination), Some(id)) = (frame.header("destination"), frame.header("id"))
-            else {
+            }
+            "SUBSCRIBE" => {
                 return refuse_frame(
                     write_half,
                     app_state,
@@ -598,18 +700,8 @@ where
                     "A SUBSCRIBE frame must carry both destination and id headers.",
                 )
                 .await;
-            };
-            Event::new(
-                &STOMP_SUBSCRIBE_EVENT,
-                serde_json::json!({
-                    "destination": destination,
-                    "id": id,
-                    "ack_mode": frame.header("ack").unwrap_or("auto"),
-                }),
-            )
-        }
-        "UNSUBSCRIBE" => {
-            let Some(id) = frame.header("id") else {
+            }
+            "UNSUBSCRIBE" => {
                 return refuse_frame(
                     write_half,
                     app_state,
@@ -619,11 +711,8 @@ where
                     "An UNSUBSCRIBE frame must carry an id header.",
                 )
                 .await;
-            };
-            Event::new(&STOMP_UNSUBSCRIBE_EVENT, serde_json::json!({ "id": id }))
-        }
-        "ACK" | "NACK" => {
-            let Some(id) = frame.header("id") else {
+            }
+            "ACK" | "NACK" => {
                 return refuse_frame(
                     write_half,
                     app_state,
@@ -633,62 +722,56 @@ where
                     &format!("A {command} frame must carry an id header."),
                 )
                 .await;
-            };
-            let event_type = if command == "ACK" {
-                &*STOMP_ACK_EVENT
-            } else {
-                &*STOMP_NACK_EVENT
-            };
-            Event::new(event_type, serde_json::json!({ "id": id }))
-        }
-        "DISCONNECT" => Event::new(
-            &STOMP_DISCONNECT_EVENT,
-            serde_json::json!({ "receipt": receipt_id.clone().unwrap_or_default() }),
-        ),
-        // Transactions are acknowledged and otherwise ignored. Holding a SEND until COMMIT
-        // would mean queueing messages inside the protocol, which is storage - see the
-        // "protocols must not implement storage" rule. The transaction header still reaches
-        // the model on the SEND event, so a handler can implement whatever it likes.
-        "BEGIN" | "COMMIT" | "ABORT" => {
-            log.info(format!(
+            }
+            "DISCONNECT" => Event::new(
+                &STOMP_DISCONNECT_EVENT,
+                serde_json::json!({ "receipt": receipt_id.clone().unwrap_or_default() }),
+            ),
+            // Transactions are acknowledged and otherwise ignored. Holding a SEND until COMMIT
+            // would mean queueing messages inside the protocol, which is storage - see the
+            // "protocols must not implement storage" rule. The transaction header still reaches
+            // the model on the SEND event, so a handler can implement whatever it likes.
+            "BEGIN" | "COMMIT" | "ABORT" => {
+                log.info(format!(
                 "STOMP {command} from {peer_addr} acknowledged; transactions are not implemented"
             ));
-            if let Some(id) = &receipt_id {
-                if write_counted(
+                if let Some(id) = &receipt_id {
+                    if write_counted(
+                        write_half,
+                        &receipt_frame(id),
+                        app_state,
+                        server_id,
+                        connection_id,
+                    )
+                    .await
+                    .is_err()
+                    {
+                        return Flow::Close;
+                    }
+                }
+                return Flow::Continue;
+            }
+            other => {
+                log.warn(format!(
+                    "STOMP unknown command {other:?} from {peer_addr}: decision=protocol_error"
+                ));
+                return refuse_frame(
                     write_half,
-                    &receipt_frame(id),
                     app_state,
                     server_id,
                     connection_id,
+                    "unknown command",
+                    &format!("{other} is not a STOMP 1.2 client command."),
                 )
-                .await
-                .is_err()
-                {
-                    return Flow::Close;
-                }
+                .await;
             }
-            return Flow::Continue;
-        }
-        other => {
-            log.warn(format!(
-                "STOMP unknown command {other:?} from {peer_addr}: decision=protocol_error"
-            ));
-            return refuse_frame(
-                write_half,
-                app_state,
-                server_id,
-                connection_id,
-                "unknown command",
-                &format!("{other} is not a STOMP 1.2 client command."),
-            )
-            .await;
         }
     };
 
     let is_connect = matches!(command.as_str(), "CONNECT" | "STOMP");
     let is_disconnect = command == "DISCONNECT";
 
-    let execution = match call_llm(
+    let execution = call_llm(
         llm_client,
         app_state,
         server_id,
@@ -696,8 +779,154 @@ where
         &event,
         protocol.as_ref(),
     )
+    .await;
+    deliver_answer(
+        execution,
+        &command,
+        &[receipt_id],
+        is_connect,
+        is_disconnect,
+        connected,
+        write_half,
+        peer_addr,
+        app_state,
+        status_tx,
+        server_id,
+        connection_id,
+    )
     .await
-    {
+}
+
+/// The event for a frame that the model answers and that can share a batch: `SEND`,
+/// `SUBSCRIBE`, `UNSUBSCRIBE`, `ACK` and `NACK` carrying the headers the spec requires.
+///
+/// `None` for everything else - the handshake, `DISCONNECT`, the transaction frames Rust
+/// acknowledges itself, and a frame missing a required header, which [`handle_frame`] refuses.
+/// A batch stops at the first such frame, so it is handled alone and in order.
+fn batchable_event(frame: &StompFrame) -> Option<Event> {
+    match frame.command.as_str() {
+        "SEND" => {
+            let destination = frame.header("destination")?;
+            let (body, body_encoding) = body_for_event(&frame.body);
+            Some(Event::new(
+                &STOMP_SEND_EVENT,
+                serde_json::json!({
+                    "destination": destination,
+                    "body": body,
+                    "body_encoding": body_encoding,
+                    "headers": frame.headers_except(&["destination", "content-length"]),
+                }),
+            ))
+        }
+        "SUBSCRIBE" => {
+            let destination = frame.header("destination")?;
+            let id = frame.header("id")?;
+            Some(Event::new(
+                &STOMP_SUBSCRIBE_EVENT,
+                serde_json::json!({
+                    "destination": destination,
+                    "id": id,
+                    "ack_mode": frame.header("ack").unwrap_or("auto"),
+                }),
+            ))
+        }
+        "UNSUBSCRIBE" => {
+            let id = frame.header("id")?;
+            Some(Event::new(
+                &STOMP_UNSUBSCRIBE_EVENT,
+                serde_json::json!({ "id": id }),
+            ))
+        }
+        "ACK" | "NACK" => {
+            let id = frame.header("id")?;
+            let event_type = if frame.command == "ACK" {
+                &*STOMP_ACK_EVENT
+            } else {
+                &*STOMP_NACK_EVENT
+            };
+            Some(Event::new(event_type, serde_json::json!({ "id": id })))
+        }
+        _ => None,
+    }
+}
+
+/// Answer several frames that were already waiting in one model call.
+///
+/// Every frame here came from [`batchable_event`], so none is a handshake or a `DISCONNECT`,
+/// and each one's `receipt` is still owed by Rust: any the model's own output did not carry is
+/// written after that output, in arrival order - the rule a single frame follows.
+#[allow(clippy::too_many_arguments)]
+async fn handle_batch<W>(
+    frames: Vec<(Event, Option<String>)>,
+    connected: &mut bool,
+    write_half: &Arc<Mutex<W>>,
+    peer_addr: SocketAddr,
+    llm_client: &OllamaClient,
+    app_state: &Arc<AppState>,
+    status_tx: &mpsc::UnboundedSender<String>,
+    server_id: crate::state::ServerId,
+    protocol: &Arc<StompProtocol>,
+    connection_id: ConnectionId,
+) -> Flow
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let (events, receipts): (Vec<Event>, Vec<Option<String>>) = frames.into_iter().unzip();
+    Log::new(Some(status_tx)).debug(format!(
+        "STOMP answering {} frames from {peer_addr} together",
+        events.len()
+    ));
+    let execution = crate::llm::action_helper::call_llm_batch(
+        llm_client,
+        app_state,
+        server_id,
+        Some(connection_id),
+        &events,
+        protocol.as_ref(),
+    )
+    .await;
+    let command = format!("batch of {}", events.len());
+    deliver_answer(
+        execution,
+        &command,
+        &receipts,
+        false,
+        false,
+        connected,
+        write_half,
+        peer_addr,
+        app_state,
+        status_tx,
+        server_id,
+        connection_id,
+    )
+    .await
+}
+
+/// Put a handler's answer on the wire, then every receipt it did not carry itself.
+///
+/// `receipts` holds one entry per frame answered, in arrival order: one for a single frame,
+/// several for a batch.
+#[allow(clippy::too_many_arguments)]
+async fn deliver_answer<W>(
+    execution: Result<crate::llm::ExecutionResult>,
+    command: &str,
+    receipts: &[Option<String>],
+    is_connect: bool,
+    is_disconnect: bool,
+    connected: &mut bool,
+    write_half: &Arc<Mutex<W>>,
+    peer_addr: SocketAddr,
+    app_state: &Arc<AppState>,
+    status_tx: &mpsc::UnboundedSender<String>,
+    server_id: crate::state::ServerId,
+    connection_id: ConnectionId,
+) -> Flow
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let log = Log::new(Some(status_tx));
+    let execution = match execution {
         Ok(result) => result,
         Err(e) => {
             // The peer gets a category; the log gets the error. Never the other way round.
@@ -728,7 +957,7 @@ where
     }
 
     let mut wrote_output = false;
-    let mut wrote_receipt = false;
+    let mut wrote_receipt = vec![false; receipts.len()];
     let mut wrote_error = false;
     let mut model_closed = false;
 
@@ -750,9 +979,11 @@ where
                 // the connection. The declared examples for stomp_unsubscribe, stomp_ack and
                 // stomp_nack used to be exactly that mistake, so this was reachable by
                 // following the documentation.
-                wrote_receipt |= receipt_id
-                    .as_deref()
-                    .is_some_and(|id| is_receipt_for(&bytes, id));
+                for (wrote, receipt_id) in wrote_receipt.iter_mut().zip(receipts) {
+                    *wrote |= receipt_id
+                        .as_deref()
+                        .is_some_and(|id| is_receipt_for(&bytes, id));
+                }
                 wrote_error |= bytes.starts_with(b"ERROR\n");
                 log.debug(format!("STOMP sent {} bytes to {}", bytes.len(), peer_addr));
                 log.trace(format!(
@@ -807,19 +1038,21 @@ where
     // The receipt is sent after the frame has been processed, which is what the spec says and
     // is also the only order that lets a handler answer before the acknowledgement. CONNECT is
     // exempt: CONNECTED is its acknowledgement and a receipt on it is not defined.
-    let owes_receipt = receipt_id.is_some() && !is_connect && !wrote_receipt;
-    if let (true, Some(id)) = (owes_receipt, &receipt_id) {
-        if write_counted(
-            write_half,
-            &receipt_frame(id),
-            app_state,
-            server_id,
-            connection_id,
-        )
-        .await
-        .is_err()
-        {
-            return Flow::Close;
+    for (receipt_id, wrote) in receipts.iter().zip(&wrote_receipt) {
+        let owes_receipt = receipt_id.is_some() && !is_connect && !wrote;
+        if let (true, Some(id)) = (owes_receipt, receipt_id) {
+            if write_counted(
+                write_half,
+                &receipt_frame(id),
+                app_state,
+                server_id,
+                connection_id,
+            )
+            .await
+            .is_err()
+            {
+                return Flow::Close;
+            }
         }
     }
 

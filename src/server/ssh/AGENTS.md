@@ -222,6 +222,25 @@ truncate.
 Event data is structured. The old `params` field flattened everything into a string
 (`"path='/x', id=3"`) that a script handler had to re-parse.
 
+## Batching (on by default, interactive shell only)
+
+russh calls `Handler::data` one packet at a time and not again until it returns, so a model
+call made inside `data` means nothing else arrives until it is over and there is never a batch
+to collect. With batching on, `data` still echoes and line-buffers as before, but queues each
+complete line for the channel's `ShellWorker` (`mod.rs`) and returns; the worker - at most one
+per channel, spawned with `spawn_server_task` and racing the owner token like every other model
+call - takes everything queued (up to `MAX_BATCH_EVENTS`) into one `call_llm_batch` and writes
+through the session `Handle`: every output in the order the model gave it, then one `$ `
+prompt. A terminal is a stream, so there is no per-line reply to correlate. Failure and
+`close_connection` end the channel as the inline path does (notice, exit status 69/75, EOF,
+CLOSE once, disconnect), though as separate writes, so libssh2 may report the channel's EOF
+before the disconnect - `llm_failure_test.rs` checks the session is gone either way. With
+batching off, or with no server id, the shell answers inline in `data` as it always did.
+Login, exec and SFTP never batch. `tests/server/ssh/batching_test.rs` drives it with libssh2
+against a batching-off control. Do not `flush()` a shell channel in a test: ssh2's
+`Write::flush` discards unread incoming data and refunds it as a window adjustment, which
+overflowed russh 0.45's window counter (a debug-build panic that drops the session).
+
 ## Connection bounds
 
 Before September 2026 this server accepted without limit, and its only read bound was russh's

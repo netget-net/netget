@@ -920,7 +920,11 @@ impl Protocol for MqttProtocol {
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // QoS 0 PUBLISHes already waiting behind the one being answered share one call
+            // (`publish_batch` in mod.rs): they owe the client nothing on the wire. QoS 1/2
+            // PUBLISH, SUBSCRIBE and UNSUBSCRIBE each owe an ack with its own packet id, in
+            // order (§4.6), so they are never batched; nor is CONNECT.
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
 
