@@ -268,6 +268,7 @@ pub mod rcon;
 #[cfg(unix)]
 pub mod rdp;
 pub mod restconf;
+pub mod lorawan;
 pub mod rsh;
 pub mod rsync;
 pub mod rtp;
