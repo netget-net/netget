@@ -295,6 +295,8 @@ impl Protocol for SocketIoProtocol {
             .answers_on_failure()
             .max_inbound_bytes(packet::MAX_PAYLOAD)
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            // Each event may carry an ack id owed exactly one reply, and `socketio_ack` names
+            // no id; in a batch the model could not say which event an ack answers.
             .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
