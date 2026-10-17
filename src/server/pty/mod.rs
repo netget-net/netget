@@ -20,7 +20,7 @@ use tokio::io::unix::AsyncFd;
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
-use crate::llm::action_helper::call_llm;
+use crate::llm::action_helper::call_llm_batch;
 use crate::llm::ollama_client::OllamaClient;
 use crate::llm::ActionResult;
 use crate::logging::emit::Log;
@@ -110,6 +110,13 @@ fn set_nonblocking(fd: RawFd) -> Result<()> {
     Ok(())
 }
 
+/// How many reads from the PTY master may wait while the model answers an earlier one.
+///
+/// Each is at most one 8 KiB read, so the queue holds at most 256 KiB; past it the reader stops
+/// reading and the terminal's input queue holds the writer back. It equals the batch cap, so
+/// one batching call can take everything that is waiting.
+const READ_QUEUE_CHUNKS: usize = crate::protocol::metadata::MAX_BATCH_EVENTS;
+
 /// Pseudo-terminal server.
 pub struct PtyServer;
 
@@ -172,6 +179,60 @@ impl PtyServer {
 
         let protocol = Arc::new(PtyProtocol::new());
         let task_registrar = app_state.clone();
+        // Shared by the reader (reads) and the dispatcher (writes the model's output).
+        let async_master = Arc::new(async_master);
+
+        // The reader runs on its own so that input typed while the model is answering is read
+        // as it arrives — each read keeping its own boundary — rather than piling up in the
+        // PTY's buffer until the call returns. The bounded channel is the backpressure: once
+        // it holds `READ_QUEUE_CHUNKS` chunks the reader stops reading and the terminal's own
+        // input queue holds the rest, which is what a busy program does to a typist.
+        let (chunk_tx, mut chunk_rx) = mpsc::channel::<Vec<u8>>(READ_QUEUE_CHUNKS);
+        let reader_master = Arc::clone(&async_master);
+        let reader = app_state
+            .spawn_server_task(server_id, async move {
+                let mut buffer = vec![0u8; 8192];
+                loop {
+                    let mut guard = match reader_master.readable().await {
+                        Ok(g) => g,
+                        Err(e) => {
+                            error!("PTY master readable() error: {}", e);
+                            break;
+                        }
+                    };
+
+                    let read_result = guard.try_io(|inner| inner.get_ref().read(&mut buffer));
+
+                    let n = match read_result {
+                        Ok(Ok(0)) => {
+                            // With the slave fd held open this should not occur.
+                            // `clear_ready()` is what makes `continue` safe: `try_io` only drops
+                            // the cached readiness when the closure reports WouldBlock, so
+                            // continuing on any *other* outcome leaves readiness set,
+                            // `readable()` returns instantly and the loop pins a core. Clearing
+                            // it means the next pass really waits on the fd.
+                            guard.clear_ready();
+                            continue;
+                        }
+                        Ok(Ok(n)) => n,
+                        Ok(Err(e)) => {
+                            // EIO here means no slave is currently attached; treat other errors
+                            // as fatal.
+                            if e.raw_os_error() == Some(libc::EIO) {
+                                guard.clear_ready();
+                                continue;
+                            }
+                            error!("PTY master read error: {}", e);
+                            break;
+                        }
+                        Err(_would_block) => continue,
+                    };
+                    if chunk_tx.send(buffer[..n].to_vec()).await.is_err() {
+                        break;
+                    }
+                }
+            })
+            .await;
 
         let handle = tokio::spawn(async move {
             // Keep the slave fd open for the whole session: it prevents the master from returning
@@ -187,7 +248,7 @@ impl PtyServer {
                     serde_json::json!({ "slave_path": slave_path.to_string_lossy() }),
                 );
                 Self::dispatch(
-                    &event,
+                    std::slice::from_ref(&event),
                     &async_master,
                     &llm_client,
                     &app_state,
@@ -198,61 +259,45 @@ impl PtyServer {
                 .await;
             }
 
-            let mut buffer = vec![0u8; 8192];
-            loop {
-                let mut guard = match async_master.readable().await {
-                    Ok(g) => g,
-                    Err(e) => {
-                        error!("PTY master readable() error: {}", e);
-                        break;
+            while let Some(first) = chunk_rx.recv().await {
+                // With batching on, every read that arrived while the model was answering the
+                // previous one is answered in one call; with it off, one read per call.
+                let batching = app_state
+                    .server_conversation_settings(server_id)
+                    .await
+                    .is_some_and(|(_, batching)| batching);
+                let mut chunks = vec![first];
+                while batching && chunks.len() < crate::protocol::metadata::MAX_BATCH_EVENTS {
+                    match chunk_rx.try_recv() {
+                        Ok(chunk) => chunks.push(chunk),
+                        Err(_) => break,
                     }
-                };
+                }
 
-                let read_result = guard.try_io(|inner| inner.get_ref().read(&mut buffer));
+                let mut events = Vec::with_capacity(chunks.len());
+                for data in &chunks {
+                    let (data_str, encoding) = if data
+                        .iter()
+                        .all(|&b| b.is_ascii_graphic() || b.is_ascii_whitespace())
+                    {
+                        (String::from_utf8_lossy(data).to_string(), "utf8")
+                    } else {
+                        (hex::encode(data), "hex")
+                    };
 
-                let n = match read_result {
-                    Ok(Ok(0)) => {
-                        // With the slave fd held open this should not occur. `clear_ready()` is
-                        // what makes `continue` safe: `try_io` only drops the cached readiness
-                        // when the closure reports WouldBlock, so continuing on any *other*
-                        // outcome leaves readiness set, `readable()` returns instantly and the
-                        // loop pins a core. Clearing it means the next pass really waits on the
-                        // fd.
-                        guard.clear_ready();
-                        continue;
-                    }
-                    Ok(Ok(n)) => n,
-                    Ok(Err(e)) => {
-                        // EIO here means no slave is currently attached; treat other errors as fatal.
-                        if e.raw_os_error() == Some(libc::EIO) {
-                            guard.clear_ready();
-                            continue;
-                        }
-                        error!("PTY master read error: {}", e);
-                        break;
-                    }
-                    Err(_would_block) => continue,
-                };
+                    Log::new(Some(&status_tx)).debug(format!(
+                        "PTY received {} bytes of input ({})",
+                        data.len(),
+                        encoding
+                    ));
 
-                let data = &buffer[..n];
-                let (data_str, encoding) = if data
-                    .iter()
-                    .all(|&b| b.is_ascii_graphic() || b.is_ascii_whitespace())
-                {
-                    (String::from_utf8_lossy(data).to_string(), "utf8")
-                } else {
-                    (hex::encode(data), "hex")
-                };
-
-                Log::new(Some(&status_tx))
-                    .debug(format!("PTY received {} bytes of input ({})", n, encoding));
-
-                let event = Event::new(
-                    &PTY_INPUT_RECEIVED_EVENT,
-                    serde_json::json!({ "data": data_str, "encoding": encoding }),
-                );
+                    events.push(Event::new(
+                        &PTY_INPUT_RECEIVED_EVENT,
+                        serde_json::json!({ "data": data_str, "encoding": encoding }),
+                    ));
+                }
                 Self::dispatch(
-                    &event,
+                    &events,
                     &async_master,
                     &llm_client,
                     &app_state,
@@ -262,16 +307,18 @@ impl PtyServer {
                 )
                 .await;
             }
+            reader.abort();
         });
 
         task_registrar.register_server_task(server_id, handle).await;
         Ok(())
     }
 
-    /// Run one LLM round-trip for `event` and write any produced output onto the PTY master.
+    /// Run one LLM round-trip for `events` (one, or a batch that arrived during the previous
+    /// call) and write any produced output onto the PTY master.
     #[allow(clippy::too_many_arguments)]
     async fn dispatch(
-        event: &Event,
+        events: &[Event],
         async_master: &AsyncFd<File>,
         llm_client: &OllamaClient,
         app_state: &Arc<AppState>,
@@ -279,7 +326,11 @@ impl PtyServer {
         protocol: &PtyProtocol,
         status_tx: &mpsc::UnboundedSender<String>,
     ) {
-        match call_llm(llm_client, app_state, server_id, None, event, protocol).await {
+        // The newest event names the batch in the log; it is the trigger the model answers.
+        let Some(event) = events.last() else {
+            return;
+        };
+        match call_llm_batch(llm_client, app_state, server_id, None, events, protocol).await {
             Ok(result) => {
                 for msg in result.messages {
                     let _ = status_tx.send(msg);
