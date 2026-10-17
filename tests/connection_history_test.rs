@@ -311,7 +311,7 @@ async fn history_and_batching_overrides_apply_and_refuse_cleanly() {
     let state = AppState::new_with_options(false, mock.base_url());
     let (tx, _rx) = mpsc::unbounded_channel();
 
-    // Declared default: telnet shows 40 earlier entries and cannot batch.
+    // Declared default: telnet shows 40 earlier entries and batches.
     let declared = ServerForm {
         protocol: "telnet".to_string(),
         port: Some(0),
@@ -323,7 +323,7 @@ async fn history_and_batching_overrides_apply_and_refuse_cleanly() {
     .expect("create with defaults");
     assert_eq!(
         state.server_conversation_settings(declared).await,
-        Some((netget::protocol::metadata::SESSION_HISTORY_ENTRIES, false))
+        Some((netget::protocol::metadata::SESSION_HISTORY_ENTRIES, true))
     );
 
     // Overridden at start.
@@ -332,19 +332,21 @@ async fn history_and_batching_overrides_apply_and_refuse_cleanly() {
         port: Some(0),
         instruction: Some("x".to_string()),
         history: Some(5),
+        batching: Some(false),
         ..Default::default()
     }
     .create(&state, tx.clone())
     .await
-    .expect("create with history 5");
+    .expect("create with history 5, batching off");
     assert_eq!(
         state.server_conversation_settings(overridden).await,
         Some((5, false))
     );
 
-    // Batching on a protocol that cannot batch is refused at start, naming the reason.
+    // Batching on a protocol that cannot batch is refused at start, naming the reason. HTTP
+    // owes each request its own response, so it declares batching unsupported.
     let refused = ServerForm {
-        protocol: "telnet".to_string(),
+        protocol: "http".to_string(),
         port: Some(0),
         instruction: Some("x".to_string()),
         batching: Some(true),
@@ -352,7 +354,7 @@ async fn history_and_batching_overrides_apply_and_refuse_cleanly() {
     }
     .create(&state, tx.clone())
     .await
-    .expect_err("batching on telnet must be refused while telnet cannot batch");
+    .expect_err("batching on http must be refused");
     assert!(
         refused.to_string().contains("cannot batch"),
         "the refusal must say why: {refused}"
@@ -364,25 +366,39 @@ async fn history_and_batching_overrides_apply_and_refuse_cleanly() {
         overridden,
         ServerForm {
             history: Some(0),
+            batching: Some(true),
             ..Default::default()
         },
         tx.clone(),
     )
     .await
-    .expect("update history");
+    .expect("update history and batching");
     assert!(
         !outcome.restarted,
-        "a history change must not restart the server"
+        "a history or batching change must not restart the server"
     );
     assert_eq!(
         state.server_conversation_settings(overridden).await,
-        Some((0, false))
+        Some((0, true))
     );
 
     // A refused update leaves the instance exactly as it was.
+    let http = ServerForm {
+        protocol: "http".to_string(),
+        port: Some(0),
+        instruction: Some("x".to_string()),
+        ..Default::default()
+    }
+    .create(&state, tx.clone())
+    .await
+    .expect("create http");
+    assert_eq!(
+        state.server_conversation_settings(http).await,
+        Some((0, false))
+    );
     netget::cli::management::update_server(
         &state,
-        overridden,
+        http,
         ServerForm {
             history: Some(7),
             batching: Some(true),
@@ -391,12 +407,13 @@ async fn history_and_batching_overrides_apply_and_refuse_cleanly() {
         tx.clone(),
     )
     .await
-    .expect_err("batching on telnet must be refused on update too");
+    .expect_err("batching on http must be refused on update too");
     assert_eq!(
-        state.server_conversation_settings(overridden).await,
+        state.server_conversation_settings(http).await,
         Some((0, false)),
         "a refused update changed the instance"
     );
+    let _ = state.remove_server(http).await;
 
     // The model's own open_client / update_server actions accept the fields.
     let action: netget::llm::actions::common::CommonAction = serde_json::from_value(
@@ -415,4 +432,219 @@ async fn history_and_batching_overrides_apply_and_refuse_cleanly() {
 
     let _ = state.remove_server(declared).await;
     let _ = state.remove_server(overridden).await;
+}
+
+/// Send `first`, then — while the model is still answering it — `second` and `third`, and
+/// return the prompts of every `telnet_message_received` call the model received.
+async fn prompts_for_three_lines(batching: bool) -> Vec<(String, serde_json::Value)> {
+    let mock = MockOllamaServer::start(
+        MockLlmBuilder::new()
+            // The first line is answered slowly, so the next two arrive during the call.
+            .on_event("telnet_message_received")
+            .and_event_data_contains("message", "first")
+            .respond_with_actions(serde_json::json!([
+                { "type": "send_telnet_line", "line": "got first" }
+            ]))
+            .after_delay(Duration::from_millis(1500))
+            .expect_calls(1)
+            .and()
+            .on_event("telnet_message_received")
+            .respond_with_actions_from_event(|event| {
+                let message = event["message"].as_str().unwrap_or_default().to_string();
+                serde_json::json!([{ "type": "send_telnet_line", "line": format!("got {message}") }])
+            })
+            .expect_at_least(1)
+            .and()
+            .on_any()
+            .respond_with_actions(serde_json::json!([]))
+            .expect_at_least(0)
+            .build(),
+    )
+    .await
+    .expect("mock ollama");
+
+    let state = AppState::new_with_options(false, mock.base_url());
+    state
+        .set_llm_client(netget::llm::OllamaClient::new(mock.base_url()))
+        .await;
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let id = ServerForm {
+        protocol: "telnet".to_string(),
+        port: Some(0),
+        instruction: Some("Acknowledge every line.".to_string()),
+        batching: Some(batching),
+        ..Default::default()
+    }
+    .create(&state, tx)
+    .await
+    .expect("create telnet server");
+    let port = wait_for_port(&state, id).await;
+
+    let stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("connect");
+    let (read_half, mut write_half) = stream.into_split();
+    let mut reader = BufReader::new(read_half);
+
+    write_half.write_all(b"first\r\n").await.expect("write");
+    // Let the server read `first` and start its (slow) model call before the rest arrives.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while mock.call_count().await == 0 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the first line never reached the model"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    write_half
+        .write_all(b"second\r\nthird\r\n")
+        .await
+        .expect("write");
+    read_until(&mut reader, "got third").await;
+
+    let prompts = mock
+        .recorded_calls()
+        .await
+        .into_iter()
+        .filter(|c| c.context.event_type.as_deref() == Some("telnet_message_received"))
+        .map(|c| (c.context.prompt.clone(), c.context.event_data.clone()))
+        .collect();
+    let _ = state.remove_server(id).await;
+    prompts
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn lines_typed_during_a_call_are_answered_together() {
+    // === Control: batching off. Every line is its own call. ===
+    let separate = prompts_for_three_lines(false).await;
+    assert_eq!(
+        separate.len(),
+        3,
+        "CONTROL FAILED: with batching off each line must be its own model call, or the \
+         two-call result below proves nothing. Got {} calls: {:#?}",
+        separate.len(),
+        separate.iter().map(|(_, d)| d).collect::<Vec<_>>()
+    );
+
+    // === The claim: the two lines that arrived during the slow call come back as one. ===
+    let batched = prompts_for_three_lines(true).await;
+    assert_eq!(
+        batched.len(),
+        2,
+        "the two lines typed during the first call must be answered in one follow-up call; \
+         got {} calls: {:#?}",
+        batched.len(),
+        batched.iter().map(|(_, d)| d).collect::<Vec<_>>()
+    );
+    let (prompt, current) = &batched[1];
+    assert_eq!(
+        current["message"], "third",
+        "the newest line is the batch's trigger"
+    );
+    let trigger_at = prompt
+        .rfind("Event ID: telnet_message_received")
+        .expect("trigger");
+    let before = &prompt[..trigger_at];
+    assert!(
+        before.contains(r#"(1) telnet_message_received {"message":"second"}"#),
+        "the earlier line must be listed as arrived and not yet answered:\n{prompt}"
+    );
+    assert!(
+        before.contains("answers all 2 together"),
+        "the model must be told it answers both:\n{prompt}"
+    );
+}
+
+/// TCP: `first`, then two separate writes while the model answers it. Returns the `data` of
+/// every `tcp_data_received` the model was asked about.
+async fn tcp_payloads_for_three_writes(batching: bool) -> Vec<String> {
+    let mock = MockOllamaServer::start(
+        MockLlmBuilder::new()
+            .on_event("tcp_data_received")
+            .and_event_data_contains("data", "first")
+            .respond_with_actions(serde_json::json!([
+                { "type": "send_tcp_data", "data": "ok first\n", "encoding": "utf8" }
+            ]))
+            .after_delay(Duration::from_millis(1500))
+            .expect_calls(1)
+            .and()
+            .on_event("tcp_data_received")
+            .respond_with_actions_from_event(|event| {
+                let data = event["data"].as_str().unwrap_or_default().to_string();
+                serde_json::json!([{ "type": "send_tcp_data", "data": format!("ok {data}\n"), "encoding": "utf8" }])
+            })
+            .expect_at_least(1)
+            .build(),
+    )
+    .await
+    .expect("mock ollama");
+
+    let state = AppState::new_with_options(false, mock.base_url());
+    state
+        .set_llm_client(netget::llm::OllamaClient::new(mock.base_url()))
+        .await;
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let id = ServerForm {
+        protocol: "tcp".to_string(),
+        port: Some(0),
+        instruction: Some("Acknowledge everything.".to_string()),
+        batching: Some(batching),
+        ..Default::default()
+    }
+    .create(&state, tx)
+    .await
+    .expect("create tcp server");
+    let port = wait_for_port(&state, id).await;
+
+    let stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("connect");
+    let (read_half, mut write_half) = stream.into_split();
+    let mut reader = BufReader::new(read_half);
+
+    write_half.write_all(b"first").await.expect("write");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while mock.call_count().await == 0 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "first never reached the model"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    // Two reads the server sees separately, both during the slow first call.
+    write_half.write_all(b"second").await.expect("write");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    write_half.write_all(b"third").await.expect("write");
+    read_until(&mut reader, "third").await;
+
+    let payloads = mock
+        .recorded_calls()
+        .await
+        .into_iter()
+        .filter(|c| c.context.event_type.as_deref() == Some("tcp_data_received"))
+        .map(|c| {
+            c.context.event_data["data"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string()
+        })
+        .collect();
+    let _ = state.remove_server(id).await;
+    payloads
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tcp_batching_joins_or_separates_what_arrived_during_a_call() {
+    let separate = tcp_payloads_for_three_writes(false).await;
+    assert_eq!(
+        separate,
+        vec!["first", "second", "third"],
+        "with batching off each read that arrived during the call is answered on its own"
+    );
+    let batched = tcp_payloads_for_three_writes(true).await;
+    assert_eq!(
+        batched,
+        vec!["first", "secondthird"],
+        "with batching on everything that arrived during the call is the next call's payload"
+    );
 }

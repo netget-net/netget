@@ -137,6 +137,17 @@ impl ExecutionResult {
         self.messages.push(message);
     }
 
+    /// Append another result after this one, as if both had come from one call — what a
+    /// batch that fell back to answering its events one by one hands its protocol.
+    pub fn extend(&mut self, other: ExecutionResult) {
+        self.messages.extend(other.messages);
+        self.protocol_results.extend(other.protocol_results);
+        self.protocol_result_actions
+            .extend(other.protocol_result_actions);
+        self.raw_actions.extend(other.raw_actions);
+        self.failures.extend(other.failures);
+    }
+
     pub fn add_protocol_result(&mut self, result: ActionResult) {
         self.add_named_protocol_result(String::new(), result);
     }

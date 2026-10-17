@@ -342,6 +342,10 @@ impl HistoryMode {
     }
 }
 
+/// The most events one batch delivers. More than this waiting on a connection are answered in
+/// further batches, oldest first, so a peer that floods cannot grow one prompt without bound.
+pub const MAX_BATCH_EVENTS: usize = 32;
+
 /// The history length a session protocol declares unless it has a reason to differ.
 pub const SESSION_HISTORY_ENTRIES: u16 = 40;
 

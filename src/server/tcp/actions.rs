@@ -107,7 +107,9 @@ impl Protocol for TcpProtocol {
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // Bytes arriving during a call are the next call's payload, whole (batching on) or
+            // one read at a time (off) — `ConnectionData::take_next`.
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
     fn description(&self) -> &'static str {

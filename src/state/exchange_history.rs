@@ -30,6 +30,10 @@ pub const HISTORY_PROMPT_BUDGET_CHARS: usize = 4096;
 /// The most characters one recorded entry keeps; longer exchanges are cut with a marker.
 pub const HISTORY_ENTRY_MAX_CHARS: usize = 600;
 
+/// The access-log response recorded for an event a batch answered together with a later one
+/// (see `call_llm_batch`), so history says so instead of "answered with: nothing".
+pub const ANSWERED_WITH_NEXT: &str = "answered_together_with_next";
+
 /// Event type recorded for an action an operator sent down the connection by hand
 /// (`send_to_peer`, `send_to_client`, the dashboard's `[ send ]`).
 pub const INJECTED_ACTION_EVENT: &str = "injected_action";
@@ -141,6 +145,14 @@ fn render_entry(event_type: &str, request: &Value, response: &[Value]) -> String
     let text = if event_type == INJECTED_ACTION_EVENT {
         // The request is the action the operator sent; the response is its outcome.
         format!("operator sent {}", render_action(request))
+    } else if response.len() == 1
+        && response[0].get("type").and_then(Value::as_str) == Some(ANSWERED_WITH_NEXT)
+    {
+        format!(
+            "{} {}\n   answered together with the next",
+            event_type,
+            compact(&crate::utils::redact::redact_sensitive(request))
+        )
     } else {
         let answers: Vec<String> = response.iter().map(render_action).collect();
         let answered = if answers.is_empty() {

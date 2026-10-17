@@ -159,7 +159,9 @@ impl Protocol for TelnetProtocol {
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // Lines typed while the model is answering are read together afterwards
+            // (`TelnetLineReader::lines_already_here`).
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
     fn description(&self) -> &'static str {

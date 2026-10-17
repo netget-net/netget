@@ -814,7 +814,37 @@ out what you need, drop the guard in an inner scope, then await.
 **Per-connection state machine** (Idle → Processing → Accumulating) prevents concurrent LLM
 calls on one connection and queues data arriving mid-call. Note: `state/machine.rs` defines a
 generic `StateMachine<S>` that **nothing uses** — every protocol hand-rolls its own copy.
-Copy the TCP implementation (`src/server/tcp/mod.rs`) as the reference.
+Copy the TCP implementation (`src/server/tcp/mod.rs`) as the reference. **Most servers do not
+have one**: about 110 read, call the model and write in one task, so what arrives mid-call
+waits in the socket — that is the shape batching (below) has to work with.
+
+**History and batching (CRITICAL — every protocol declares both).** The model used to see each
+event alone; a telnet peer asking "what did I just say?" was answered from a prompt holding only
+that question. Two per-instance settings now exist, each with a default the protocol declares
+in `metadata()` and `tests/history_batching_declaration_test.rs` requires:
+
+- `.history(HistoryMode::Last(SESSION_HISTORY_ENTRIES))` (40) wherever a peer's next message is
+  read in the light of its last — streams, command sessions, databases, peering, every client —
+  and `.history(HistoryMode::Off)` where each request stands alone (HTTP family, DNS, lookups,
+  datagrams, telemetry). The record is kept in shared code: `AppState::record_access_log` writes
+  each event and what answered it (model, script, static rule, person, operator send) into the
+  connection's `ExchangeHistory` (`src/state/exchange_history.rs`), and `call_llm` /
+  `call_llm_for_client` render it ahead of the event, bounded at 4 KB, credentials dropped. **A
+  protocol only has to pass the real `connection_id` to `call_llm`** — `None` gets no history.
+- `.batching(BatchingMode::On | Off | Unsupported)`: whether events that arrive while the model
+  is answering are delivered together in one follow-up call
+  (`action_helper::call_llm_batch`). This needs the protocol's cooperation, so declare
+  `Unsupported` unless you implemented it; asking for batching on an `Unsupported` protocol is
+  refused at start. Two reference implementations: `telnet` (a sequential reader collects every
+  line already waiting after the first — `TelnetLineReader::lines_already_here` — and hands the
+  `Vec<Event>` to `call_llm_batch`) and `tcp` (its mid-call byte queue is answered whole when
+  batching, one read at a time when not). Never batch where each request owes its own
+  correlated reply (HTTP, DNS, RPC).
+
+Both are overridable per instance everywhere an instance is started or updated (`history` /
+`batching` on `ServerForm`/`ClientForm`, `open_*`/`update_*`, MCP, `--history`/`--batching`,
+the dashboard form) and hot-applied. Memory is separate: it is what the model chooses to keep
+and outlives the connection; history is what happened and ends with it.
 
 **Actions**: protocols implement `ProtocolActions` (`src/llm/actions/protocol_trait.rs`) with
 async actions (user-triggered) and sync actions (network-event-triggered), in
@@ -970,8 +1000,8 @@ some configurations need is expressed with `startup_dependencies(startup_params)
    the accept-loop `JoinHandle` via `AppState::register_server_task()` (required for
    `stop_server` to actually release the socket)
 2. `src/server/<protocol>/actions.rs` — implement `ProtocolActions`: `metadata()` (state +
-   privilege + `well_known_port`), `get_startup_parameters()`, async/sync actions,
-   `get_event_types()`, `execute_action()`
+   privilege + `well_known_port` + `history` + `batching`, see "History and batching"),
+   `get_startup_parameters()`, async/sync actions, `get_event_types()`, `execute_action()`
 3. `src/server/<protocol>/CLAUDE.md` — implementation notes, library choice, limitations
 4. `src/server/mod.rs` — `pub mod`, with a platform gate only if it cannot build everywhere
 5. `src/protocol/server_registry.rs` — `register()` (same gate) and its `ALL_KNOWN_PROTOCOLS` row

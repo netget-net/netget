@@ -401,6 +401,102 @@ pub async fn call_llm(
     event: &Event,
     protocol: &dyn Server,
 ) -> Result<ExecutionResult> {
+    call_llm_with_earlier(
+        llm_client,
+        state,
+        server_id,
+        connection_id,
+        event,
+        &[],
+        protocol,
+    )
+    .await
+}
+
+/// Answer several events from one connection — the ones that arrived while the model was
+/// still answering an earlier one — in a single model call, when the instance batches.
+///
+/// The newest event is the trigger, exactly as for [`call_llm`]; the earlier ones are listed
+/// above it as arrived and not yet answered, and the model may answer each, some or none. One
+/// [`ExecutionResult`] covers the lot, its actions in the order the model gave them.
+///
+/// Falls back to answering the events one by one, in arrival order, and returns their results
+/// concatenated, when the instance has batching off or when any of them is routed somewhere
+/// other than the model: a script, static or manual rule decides its event on its own, and
+/// folding such an event into a model call would hand the model a decision that was not its.
+pub async fn call_llm_batch(
+    llm_client: &OllamaClient,
+    state: &AppState,
+    server_id: ServerId,
+    connection_id: Option<crate::server::connection::ConnectionId>,
+    events: &[Event],
+    protocol: &dyn Server,
+) -> Result<ExecutionResult> {
+    let Some((last, earlier)) = events.split_last() else {
+        return Ok(ExecutionResult::new());
+    };
+    if earlier.is_empty() || !batch_goes_to_the_model(state, server_id, events).await {
+        let mut combined = ExecutionResult::new();
+        for event in events {
+            combined.extend(
+                call_llm(llm_client, state, server_id, connection_id, event, protocol).await?,
+            );
+        }
+        return Ok(combined);
+    }
+    call_llm_with_earlier(
+        llm_client,
+        state,
+        server_id,
+        connection_id,
+        last,
+        earlier,
+        protocol,
+    )
+    .await
+}
+
+/// Whether a batch may be answered by one model call: the instance batches, it is not driven
+/// by an easy-protocol layer, and no event in it matches a rule other than an `llm` one with
+/// the same instruction as the rest.
+async fn batch_goes_to_the_model(state: &AppState, server_id: ServerId, events: &[Event]) -> bool {
+    let batching = state
+        .server_conversation_settings(server_id)
+        .await
+        .is_some_and(|(_, batching)| batching);
+    if !batching || state.get_easy_for_server(server_id).await.is_some() {
+        return false;
+    }
+    let Some(config) = state.get_event_handler_config(server_id).await else {
+        return true;
+    };
+    let mut instruction: Option<Option<String>> = None;
+    for event in events {
+        let this = match config.find_handler(event.id()) {
+            None => None,
+            Some(crate::scripting::EventHandlerType::Llm { instruction }) => {
+                Some(instruction.clone())
+            }
+            Some(_) => return false,
+        };
+        match &instruction {
+            None => instruction = Some(this),
+            Some(first) if *first != this => return false,
+            Some(_) => {}
+        }
+    }
+    true
+}
+
+async fn call_llm_with_earlier(
+    llm_client: &OllamaClient,
+    state: &AppState,
+    server_id: ServerId,
+    connection_id: Option<crate::server::connection::ConnectionId>,
+    event: &Event,
+    earlier: &[Event],
+    protocol: &dyn Server,
+) -> Result<ExecutionResult> {
     anyhow::ensure!(
         crate::utils::json_budget::within_budget(
             &event.data,
@@ -410,13 +506,28 @@ pub async fn call_llm(
         ),
         "event exceeds the shared JSON budget"
     );
-    let private = crate::utils::redact::contains_credentials(&event.data);
+    for earlier_event in earlier {
+        anyhow::ensure!(
+            crate::utils::json_budget::within_budget(
+                &earlier_event.data,
+                crate::scripting::event_handler::MAX_INTERPOLATION_BYTES,
+                crate::scripting::event_handler::MAX_INTERPOLATION_NODES,
+                crate::scripting::event_handler::MAX_INTERPOLATION_DEPTH
+            ),
+            "event exceeds the shared JSON budget"
+        );
+    }
+    let private = crate::utils::redact::contains_credentials(&event.data)
+        || earlier
+            .iter()
+            .any(|e| crate::utils::redact::contains_credentials(&e.data));
     let run = call_llm_inner(
         llm_client,
         state,
         server_id,
         connection_id,
         event,
+        earlier,
         protocol,
         private,
     );
@@ -432,6 +543,17 @@ pub async fn call_llm(
     };
 
     if let Err(e) = &outcome {
+        for earlier_event in earlier {
+            record_failed_event_access_log(
+                state,
+                server_id,
+                connection_id,
+                protocol,
+                earlier_event,
+                e,
+            )
+            .await;
+        }
         record_failed_event_access_log(state, server_id, connection_id, protocol, event, e).await;
     }
     outcome
@@ -444,6 +566,7 @@ async fn call_llm_inner(
     server_id: ServerId,
     connection_id: Option<crate::server::connection::ConnectionId>,
     event: &Event,
+    earlier: &[Event],
     protocol: &dyn Server,
     private_payloads: bool,
 ) -> Result<ExecutionResult> {
@@ -614,6 +737,14 @@ async fn call_llm_inner(
     } else {
         all_actions.extend(event.event_type.actions.clone());
     }
+    // A batch may hold events of other types; each one's own answers are on offer too.
+    for earlier_event in earlier {
+        for action in &earlier_event.event_type.actions {
+            if !all_actions.iter().any(|a| a.name == action.name) {
+                all_actions.push(action.clone());
+            }
+        }
+    }
 
     debug!(
         "LLM call for event '{}' (server #{}, {} actions available)",
@@ -683,6 +814,11 @@ async fn call_llm_inner(
     // What has already happened on this connection, ahead of the event being answered. The
     // block carries no `Event ID:` / `Context data:` labels, so the trigger stays the last —
     // and only — event in the prompt. Credentials were dropped when the history was recorded.
+    let event_trigger = if earlier.is_empty() {
+        event_trigger
+    } else {
+        format!("{}\n{}", render_unanswered(earlier, event), event_trigger)
+    };
     let event_trigger = match state.render_server_history(server_id, connection_id).await {
         Some(history) => format!("{}\n{}", history, event_trigger),
         None => event_trigger,
@@ -721,9 +857,53 @@ async fn call_llm_inner(
     if !private_payloads {
         log_ctx.log_complete(event_status_tx, &result.protocol_results);
     }
+    // A batch is recorded event by event, so the access log and the connection's history
+    // show each one arriving; the answer sits with the last, the others say they were
+    // answered together with it.
+    for earlier_event in earlier {
+        state
+            .record_access_log(
+                crate::state::AccessLogOwner::Server(server_id.as_u32()),
+                protocol.protocol_name(),
+                connection_id.map(|c| c.as_u32()),
+                earlier_event.id(),
+                earlier_event.data.clone(),
+                vec![serde_json::json!({
+                    "type": crate::state::exchange_history::ANSWERED_WITH_NEXT
+                })],
+            )
+            .await;
+    }
     record_event_access_log(state, server_id, connection_id, protocol, event, &result).await;
 
     Ok(result)
+}
+
+/// The block listing a batch's earlier events above its trigger. It carries none of the
+/// trigger's labels (`Event ID:`, `Event:`, `Context data:`), so the newest event stays the
+/// one the prompt — and the test mock — reads as current.
+fn render_unanswered(earlier: &[Event], last: &Event) -> String {
+    let mut out = format!(
+        "{} more arrived on this connection while you were answering, before the event below \
+         and not yet answered. Your reply answers all {} together: answer each, some or none, \
+         in the order the actions should happen.\n",
+        earlier.len(),
+        earlier.len() + 1
+    );
+    for (i, event) in earlier.iter().enumerate() {
+        out.push_str(&format!(
+            "({}) {} {}\n",
+            i + 1,
+            event.id(),
+            serde_json::to_string(&event.data).unwrap_or_default()
+        ));
+    }
+    out.push_str(&format!(
+        "({}) is the event below ({}).\n",
+        earlier.len() + 1,
+        last.id()
+    ));
+    out
 }
 
 /// Call LLM for client protocol events (simplified version for MVP)
