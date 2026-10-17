@@ -1294,6 +1294,10 @@ pub fn imap_batch_role(line: &str) -> Option<bool> {
     }
 }
 
+/// One pipelined command's share of a batch answer: its untagged replies, then its tagged
+/// completion.
+pub type CommandAnswer = (Vec<Vec<u8>>, Vec<u8>);
+
 /// A batch's answer split into each command's untagged replies and its tagged completion, or
 /// `None` when it does not read as one completion per tag, in order.
 ///
@@ -1304,10 +1308,7 @@ pub fn imap_batch_role(line: &str) -> Option<bool> {
 /// or for a tag outside the batch, `wait_for_more`, or a command left without a completion all
 /// make the answer unusable.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn split_batch_answer(
-    results: &[ActionResult],
-    tags: &[&str],
-) -> Option<Vec<(Vec<Vec<u8>>, Vec<u8>)>> {
+pub fn split_batch_answer(results: &[ActionResult], tags: &[&str]) -> Option<Vec<CommandAnswer>> {
     fn flatten(results: &[ActionResult], out: &mut Vec<Option<Vec<u8>>>) {
         for result in results {
             match result {
