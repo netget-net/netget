@@ -72,6 +72,15 @@ pub async fn wait_event(state: &AppState, id: ClientId, event_type: &str, nth: u
     .unwrap_or_else(|_| panic!("no {event_type} #{nth}"))
 }
 
+/// The connection the client opens, within 20 s: a client that never acts on the model's
+/// answer must fail the test, not hang it.
+async fn accept_within(listener: &TcpListener) -> (TcpStream, std::net::SocketAddr) {
+    tokio::time::timeout(Duration::from_secs(20), listener.accept())
+        .await
+        .expect("the client never connected: was the model's action dropped?")
+        .unwrap()
+}
+
 /// Read NUL-terminated fields off a raw connection.
 async fn read_fields(s: &mut TcpStream, count: usize) -> Vec<Vec<u8>> {
     let mut fields = Vec::new();
@@ -163,7 +172,7 @@ async fn rsh_client_ignores_a_stderr_connection_from_another_address() {
     )
     .await
     .unwrap();
-    let (mut main, from) = rshd.accept().await.unwrap();
+    let (mut main, from) = accept_within(&rshd).await;
     let fields = read_fields(&mut main, 4).await;
     let port: u16 = String::from_utf8(fields[0].clone())
         .unwrap()
@@ -201,7 +210,7 @@ async fn rsh_client_reports_a_refusal_and_without_stderr_sends_an_empty_port() {
     )
     .await
     .unwrap();
-    let (mut main, _) = rshd.accept().await.unwrap();
+    let (mut main, _) = accept_within(&rshd).await;
     let fields = read_fields(&mut main, 4).await;
     assert_eq!(fields[0], b"", "no stderr connection: an empty port field");
     main.write_all(b"\x01Permission denied.\n").await.unwrap();
@@ -249,7 +258,7 @@ async fn rexec_client_sends_the_configured_password_and_the_model_never_sees_it(
     )
     .await
     .unwrap();
-    let (mut main, _) = rexecd.accept().await.unwrap();
+    let (mut main, _) = accept_within(&rexecd).await;
     let fields = read_fields(&mut main, 4).await;
     assert_eq!(
         fields,
@@ -385,7 +394,7 @@ async fn rlogin_client_answers_the_window_request_and_types_the_models_lines() {
     );
     let (accepted, created) = tokio::join!(
         async {
-            let (mut s, _) = rlogind.accept().await.unwrap();
+            let (mut s, _) = accept_within(&rlogind).await;
             let fields = read_fields(&mut s, 4).await;
             assert_eq!(
                 fields,
@@ -451,7 +460,7 @@ async fn rlogin_client_refused_at_the_handshake_does_not_connect() {
     let rlogind = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = rlogind.local_addr().unwrap();
     let serve = tokio::spawn(async move {
-        let (mut s, _) = rlogind.accept().await.unwrap();
+        let (mut s, _) = accept_within(&rlogind).await;
         read_fields(&mut s, 4).await;
         s.write_all(b"\x01rlogind: Permission denied.\r\n")
             .await
