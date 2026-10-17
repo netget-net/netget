@@ -127,7 +127,11 @@ impl Protocol for StompProtocol {
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // Frames already waiting behind the one being answered (SEND, SUBSCRIBE,
+            // UNSUBSCRIBE, ACK, NACK) share one call; Rust still writes each frame's RECEIPT
+            // the model did not, in arrival order. The handshake, DISCONNECT and the
+            // transaction frames are never batched (`mod.rs`, `frames_already_here`).
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
 
