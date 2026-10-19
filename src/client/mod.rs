@@ -219,6 +219,8 @@ pub mod mqtt;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod mqtt_sn;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod iscsi;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod nbd;
 #[cfg(not(target_arch = "wasm32"))]
 pub use mqtt::actions::MqttClientProtocol;
