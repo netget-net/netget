@@ -11,3 +11,10 @@ QoS 0 and -1, `timeout` when the gateway never answered). Deliveries are acknowl
 (PUBACK, PUBREC/PUBCOMP; REGISTER from the gateway gets REGACK) and reported as
 `mqttsn_message_received`. While awake it pings at three quarters of its keep-alive.
 Not implemented: gateway discovery, forwarder encapsulation.
+
+Batching (`BatchingMode::On`): the session reports through a queue the dispatcher answers one
+model call at a time. With the client's batching on, a call takes every event already waiting —
+deliveries the gateway sent while the model was answering, results of earlier operations — one
+event each, through `call_llm_for_client_batch`; off, one event per call. Deliveries are acked
+before they are queued, so none waits on the model. `tests/client/mqtt_sn/batching_test.rs`
+holds it against a stand-in gateway, off and on in one test.
