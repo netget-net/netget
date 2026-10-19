@@ -56,9 +56,17 @@ So the client runs two tasks per connection, both registered with `spawn_client_
 1. **`poll_transport`** owns the `EventLoop` and never waits on the model. It sets
    `ClientStatus` (Connected / Disconnected / Error), so status stays true while a turn is
    parked, and puts the first CONNACK and every incoming PUBLISH onto the turn queue.
-2. **`run_model_turns`** takes events off that queue one at a time, in arrival order, asks the
-   model, and applies its actions through the `AsyncClient` handle (rumqttc's request channel,
-   drained by the transport task).
+2. **`run_model_turns`** takes events off that queue in arrival order, asks the model, and
+   applies its actions through the `AsyncClient` handle (rumqttc's request channel, drained by
+   the transport task).
+
+**Batching (`BatchingMode::On`).** With the client's batching on, a PUBLISH taken off the queue
+brings every PUBLISH already waiting behind it — what the broker delivered while the model was
+answering — into one `call_llm_for_client_batch` call, one event per message (at most
+`MAX_BATCH_EVENTS`); a `Connected` met while draining ends the batch and is answered next. Off,
+it is one message per call. QoS acks are rumqttc's, so no delivery waits on the model.
+`tests/client/mqtt/batching_test.rs` holds it against a hand-written broker, off and on in one
+test.
 
 One consumer is what keeps two turns from overlapping on a connection — the per-connection
 state machine rule — without a hand-rolled Idle/Processing/Accumulating enum: events that arrive

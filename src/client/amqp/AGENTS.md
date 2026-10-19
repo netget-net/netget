@@ -66,6 +66,17 @@ Two earlier defects on the same path, for the record:
   connection closing either. A supervisor task polls `conn.status().connected()` and the
   client's presence in `AppState`, and runs the disconnect path when either goes.
 
+## Batching (`BatchingMode::On`)
+
+Each `consume` runs a task that takes deliveries from lapin's consumer stream, acks them and
+raises `amqp_message_received`. Deliveries that arrive while the model is answering wait, whole,
+in lapin's consumer buffer. With the client's batching on, the task takes every delivery already
+there (`now_or_never`, at most `MAX_BATCH_EVENTS`) into one `call_llm_for_client_batch` call,
+one event each; off, one delivery per call. Acks are the task's, not the model's, so batching
+cannot leave a delivery unacknowledged; the follow-up chain is bounded by `MAX_FOLLOWUP_DEPTH`
+as before. `tests/client/amqp/batching_test.rs` holds it against a stand-in broker written on
+NetGet's own AMQP codec, off and on in one test.
+
 ## Command channel — the dashboard's `[ send ]`
 
 Adopted, archetype **(a)**: the connection lives in an `Arc<AmqpSession>` that both the

@@ -377,7 +377,9 @@ impl Protocol for MqttClientProtocol {
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // PUBLISHes that arrive while the model answers wait on the turn queue and are
+            // answered in one call, one event per message (`run_model_turns` in mod.rs).
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
     fn description(&self) -> &'static str {

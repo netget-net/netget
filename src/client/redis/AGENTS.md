@@ -136,6 +136,18 @@ connection to the same server (10 s end to end), publishes, reads the receiver c
 and closes — the model is not shown that count. On RESP3, or when not subscribed, it publishes
 on the connection itself and the `:N` is an ordinary `redis_response_received`.
 
+### Reader task and batching (`BatchingMode::On`)
+
+A reader task (registered with `spawn_client_task`) reads one whole reply at a time and puts it
+on a bounded queue (`MAX_BATCH_EVENTS` deep); the answering loop takes replies off it, so what
+the server pushes while the model is answering — pub/sub deliveries above all — waits there
+whole rather than unread in the socket. With the client's batching on, a call takes every reply
+already waiting, one event each, through `call_llm_for_client_batch`; off, one reply per call.
+Replies are classified in arrival order, because a confirmation changes what the next array
+means. `read_reply` is never raced in a `select!`; the reader is only aborted when the session
+ends. `tests/client/redis/batching_test.rs` holds it with RESP3 pushes from a hand-written
+server, off and on in one test. Cluster mode is request/response and does not use this path.
+
 ### Cluster mode (`cluster.rs`, `cluster_driver.rs`)
 
 With `cluster: true`, `remote_addr` is a seed. `Router::connect` reads `CLUSTER SLOTS` before the

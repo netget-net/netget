@@ -11,14 +11,15 @@
 //! hand back a transport otherwise), and it is the difference between a client that reports a
 //! session and a client that has one.
 //!
-//! # No per-connection state machine, deliberately
+//! # A reader task and one answering loop
 //!
-//! `src/server/tcp/mod.rs` carries Idle/Processing/Accumulating because raw TCP has no frame
-//! boundaries, so a second read arriving mid-LLM-call has to be queued somewhere. STOMP *has*
-//! frame boundaries: this loop reads, parses out whole frames, and handles them one at a time
-//! in the same task. Bytes arriving during a model call sit in the socket buffer — TCP's own
-//! backpressure — and are parsed on the next pass. There is no window in which two model calls
-//! could overlap on this connection, so there is nothing to track.
+//! A reader task (`read_frames`, registered with `spawn_client_task`) frames the stream and
+//! puts each whole frame on a bounded queue; the answering loop takes them off and is the only
+//! place the model is called, so two model calls can never overlap on this connection. Frames
+//! the broker sends during a call wait on that queue with their boundaries intact: with
+//! batching off the loop takes one per call, with it on everything waiting goes into one call
+//! (`call_llm_for_client_batch`, one event per frame). When the queue is full the reader stops
+//! and TCP's own backpressure holds the broker.
 //!
 //! # Why there is no boxed follow-up recursion here
 //!
@@ -52,7 +53,7 @@ use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info, trace, warn};
 
-use crate::client::llm_budget::call_llm_for_client;
+use crate::client::llm_budget::call_llm_for_client_batch;
 use crate::client::stomp::actions::{
     DISCONNECT_RECEIPT_ID, STOMP_ACCEPT_VERSION, STOMP_CLIENT_CONNECTED_EVENT,
     STOMP_CLIENT_ERROR_RECEIVED_EVENT, STOMP_CLIENT_MESSAGE_RECEIVED_EVENT,
@@ -250,8 +251,8 @@ impl StompClient {
                 "server": server,
             }),
         );
-        match report_event(
-            connected_event,
+        match report_events(
+            std::slice::from_ref(&connected_event),
             &protocol,
             &write_half,
             &llm_client,
@@ -312,38 +313,43 @@ impl StompClient {
     }
 }
 
-/// The read loop: parse frames, report each to the model, write whatever it answers with.
-#[allow(clippy::too_many_arguments)]
-async fn run_session(
+/// What the reader task hands the answering loop.
+enum Inbound {
+    /// One whole frame from the broker.
+    Frame(StompFrame),
+    /// The broker closed the connection.
+    Closed,
+    /// The socket failed.
+    Failed(String),
+    /// The broker's bytes stopped being STOMP; the stream cannot be resynchronised.
+    Framing(String),
+}
+
+/// How many frames may wait while the model answers an earlier one; past it the reader stops
+/// and TCP holds the broker back.
+const FRAME_QUEUE: usize = crate::protocol::metadata::MAX_BATCH_EVENTS;
+
+/// Own the read half: frame the stream and hand every frame to the answering loop.
+///
+/// It never waits on the model, so frames that arrive during a model call keep their
+/// boundaries in a bounded queue instead of piling up unread in the socket — which is what
+/// lets the answering loop take them one per call (batching off) or all together (on).
+async fn read_frames(
     mut read_half: tokio::io::ReadHalf<TcpStream>,
-    write_half: Arc<Mutex<tokio::io::WriteHalf<TcpStream>>>,
     mut pending: Vec<u8>,
-    command_rx: &mut mpsc::Receiver<crate::state::client_handles::ClientCommand>,
-    mut disconnect_deadline: Option<tokio::time::Instant>,
-    protocol: StompClientProtocol,
-    llm_client: OllamaClient,
-    app_state: Arc<AppState>,
-    status_tx: mpsc::UnboundedSender<String>,
+    inbound_tx: mpsc::Sender<Inbound>,
     client_id: ClientId,
-    memory: Arc<Mutex<String>>,
 ) {
     let mut read_buf = vec![0u8; 8192];
-
-    'session: loop {
-        // Drain every complete frame already buffered before asking the socket for more: a
-        // single read routinely carries several, and a broker that pipelines must not have its
-        // later frames wait for its next write.
+    loop {
+        // Every complete frame already buffered goes out before the socket is asked for more:
+        // a single read routinely carries several.
         loop {
             let outcome = match frame::parse_frame(&pending) {
                 Ok(outcome) => outcome,
                 Err(e) => {
-                    // STOMP cannot resynchronise a stream once framing is lost, so this is
-                    // fatal for the connection rather than something to skip past.
-                    error!("STOMP client {client_id} could not parse the broker's frame: {e}");
-                    let _ = status_tx.send(format!(
-                        "[CLIENT] ✖ STOMP client {client_id} framing error: {e}"
-                    ));
-                    break 'session;
+                    let _ = inbound_tx.send(Inbound::Framing(e.to_string())).await;
+                    return;
                 }
             };
             match outcome {
@@ -354,8 +360,91 @@ async fn run_session(
                 }
                 ParseOutcome::Frame { frame, consumed } => {
                     pending.drain(..consumed);
-                    match handle_frame(
-                        frame,
+                    if inbound_tx.send(Inbound::Frame(frame)).await.is_err() {
+                        return;
+                    }
+                }
+            }
+        }
+        let message = match read_half.read(&mut read_buf).await {
+            Ok(0) => Inbound::Closed,
+            Ok(n) => {
+                trace!("STOMP client {client_id} read {n} byte(s)");
+                pending.extend_from_slice(&read_buf[..n]);
+                continue;
+            }
+            Err(e) => Inbound::Failed(e.to_string()),
+        };
+        let _ = inbound_tx.send(message).await;
+        return;
+    }
+}
+
+/// The session: take frames from the reader, report them to the model, write whatever it
+/// answers with, and serve injected commands.
+#[allow(clippy::too_many_arguments)]
+async fn run_session(
+    read_half: tokio::io::ReadHalf<TcpStream>,
+    write_half: Arc<Mutex<tokio::io::WriteHalf<TcpStream>>>,
+    pending: Vec<u8>,
+    command_rx: &mut mpsc::Receiver<crate::state::client_handles::ClientCommand>,
+    mut disconnect_deadline: Option<tokio::time::Instant>,
+    protocol: StompClientProtocol,
+    llm_client: OllamaClient,
+    app_state: Arc<AppState>,
+    status_tx: mpsc::UnboundedSender<String>,
+    client_id: ClientId,
+    memory: Arc<Mutex<String>>,
+) {
+    // Registered, so stop_client aborts it; aborted below on every exit of this loop.
+    let (inbound_tx, mut inbound_rx) = mpsc::channel::<Inbound>(FRAME_QUEUE);
+    let reader = app_state
+        .spawn_client_task(
+            client_id,
+            read_frames(read_half, pending, inbound_tx, client_id),
+        )
+        .await;
+
+    'session: loop {
+        let grace = async {
+            match disconnect_deadline {
+                Some(deadline) => tokio::time::sleep_until(deadline).await,
+                None => std::future::pending::<()>().await,
+            }
+        };
+
+        tokio::select! {
+            inbound = inbound_rx.recv() => {
+                // This frame, plus — with batching on — every frame already waiting: what the
+                // broker sent while the model was answering. Batching is hot-changeable, so it
+                // is read per turn. What ends the stream is handled after the batch.
+                let mut frames = Vec::new();
+                let mut ended = None;
+                match inbound.unwrap_or(Inbound::Closed) {
+                    Inbound::Frame(frame) => frames.push(frame),
+                    other => ended = Some(other),
+                }
+                if ended.is_none()
+                    && app_state
+                        .client_conversation_settings(client_id)
+                        .await
+                        .is_some_and(|(_, batching)| batching)
+                {
+                    while frames.len() < crate::protocol::metadata::MAX_BATCH_EVENTS {
+                        match inbound_rx.try_recv() {
+                            Ok(Inbound::Frame(frame)) => frames.push(frame),
+                            Ok(other) => {
+                                ended = Some(other);
+                                break;
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                }
+
+                if !frames.is_empty() {
+                    match handle_frames(
+                        frames,
                         &protocol,
                         &write_half,
                         &llm_client,
@@ -374,35 +463,32 @@ async fn run_session(
                         Flow::Close => break 'session,
                     }
                 }
-            }
-        }
 
-        let grace = async {
-            match disconnect_deadline {
-                Some(deadline) => tokio::time::sleep_until(deadline).await,
-                None => std::future::pending::<()>().await,
-            }
-        };
-
-        tokio::select! {
-            // `AsyncReadExt::read` is cancellation-safe, so losing this branch to another arm
-            // does not drop bytes.
-            read = read_half.read(&mut read_buf) => match read {
-                Ok(0) => {
-                    info!("STOMP client {client_id} — broker closed the connection");
-                    break 'session;
-                }
-                Ok(n) => {
-                    trace!("STOMP client {client_id} read {n} byte(s)");
-                    pending.extend_from_slice(&read_buf[..n]);
-                }
-                Err(e) => {
-                    error!("STOMP client {client_id} read error: {e}");
-                    app_state
-                        .update_client_status(client_id, ClientStatus::Error(e.to_string()))
-                        .await;
-                    let _ = status_tx.send("__UPDATE_UI__".to_string());
-                    return;
+                match ended {
+                    None => {}
+                    Some(Inbound::Closed) => {
+                        info!("STOMP client {client_id} — broker closed the connection");
+                        break 'session;
+                    }
+                    Some(Inbound::Framing(e)) => {
+                        // STOMP cannot resynchronise a stream once framing is lost, so this is
+                        // fatal for the connection rather than something to skip past.
+                        error!("STOMP client {client_id} could not parse the broker's frame: {e}");
+                        let _ = status_tx.send(format!(
+                            "[CLIENT] ✖ STOMP client {client_id} framing error: {e}"
+                        ));
+                        break 'session;
+                    }
+                    Some(Inbound::Failed(e)) => {
+                        error!("STOMP client {client_id} read error: {e}");
+                        reader.abort();
+                        app_state
+                            .update_client_status(client_id, ClientStatus::Error(e))
+                            .await;
+                        let _ = status_tx.send("__UPDATE_UI__".to_string());
+                        return;
+                    }
+                    Some(Inbound::Frame(_)) => unreachable!("frames are batched above"),
                 }
             },
 
@@ -446,6 +532,7 @@ async fn run_session(
         }
     }
 
+    reader.abort();
     let _ = write_half.lock().await.shutdown().await;
     app_state
         .update_client_status(client_id, ClientStatus::Disconnected)
@@ -453,22 +540,33 @@ async fn run_session(
     let _ = status_tx.send(format!("[CLIENT] STOMP client {client_id} disconnected"));
 }
 
-/// Turn one inbound frame into an event, ask the model, and run its answer.
-#[allow(clippy::too_many_arguments)]
-async fn handle_frame(
+/// What one inbound frame means for the session.
+enum FrameMeaning {
+    /// Report it to the model.
+    Report(Event),
+    /// Report it, then close regardless of the answer (`ERROR`).
+    ReportThenClose(Event),
+    /// Close now without asking (the `RECEIPT` for our own `DISCONNECT`).
+    Close,
+    /// Nothing to ask about.
+    Ignore,
+}
+
+/// Turn one inbound frame into what the session does with it.
+fn classify_frame(
     frame: StompFrame,
-    protocol: &StompClientProtocol,
-    write_half: &Arc<Mutex<tokio::io::WriteHalf<TcpStream>>>,
-    llm_client: &OllamaClient,
-    app_state: &Arc<AppState>,
     status_tx: &mpsc::UnboundedSender<String>,
     client_id: ClientId,
-    memory: &Arc<Mutex<String>>,
-) -> Flow {
+) -> FrameMeaning {
     match frame.command.as_str() {
         "MESSAGE" => {
             let (body, body_encoding) = body_for_event(&frame.body);
-            let event = Event::new(
+            debug!(
+                "STOMP client {client_id} received MESSAGE on {} (subscription {})",
+                frame.header("destination").unwrap_or("-"),
+                frame.header("subscription").unwrap_or("-")
+            );
+            FrameMeaning::Report(Event::new(
                 &STOMP_CLIENT_MESSAGE_RECEIVED_EVENT,
                 serde_json::json!({
                     "destination": frame.header("destination").unwrap_or_default(),
@@ -478,16 +576,7 @@ async fn handle_frame(
                     "body": body,
                     "body_encoding": body_encoding,
                 }),
-            );
-            debug!(
-                "STOMP client {client_id} received MESSAGE on {} (subscription {})",
-                frame.header("destination").unwrap_or("-"),
-                frame.header("subscription").unwrap_or("-")
-            );
-            report_event(
-                event, protocol, write_half, llm_client, app_state, status_tx, client_id, memory,
-            )
-            .await
+            ))
         }
 
         "RECEIPT" => {
@@ -501,18 +590,14 @@ async fn handle_frame(
                     "STOMP client {client_id} — broker acknowledged DISCONNECT, closing \
                      gracefully"
                 );
-                return Flow::Close;
+                return FrameMeaning::Close;
             }
 
             debug!("STOMP client {client_id} received RECEIPT {receipt_id}");
-            let event = Event::new(
+            FrameMeaning::Report(Event::new(
                 &STOMP_CLIENT_RECEIPT_RECEIVED_EVENT,
                 serde_json::json!({ "receipt_id": receipt_id }),
-            );
-            report_event(
-                event, protocol, write_half, llm_client, app_state, status_tx, client_id, memory,
-            )
-            .await
+            ))
         }
 
         "ERROR" => {
@@ -522,29 +607,24 @@ async fn handle_frame(
             let _ = status_tx.send(format!(
                 "[CLIENT] ⚠ STOMP client {client_id} got an ERROR frame: {message}"
             ));
-            let event = Event::new(
+            // Reported so the model learns what happened and can record it, then closed
+            // regardless of what it answers: the specification has the broker close the
+            // connection immediately after an ERROR, so nothing written here would arrive.
+            FrameMeaning::ReportThenClose(Event::new(
                 &STOMP_CLIENT_ERROR_RECEIVED_EVENT,
                 serde_json::json!({
                     "message": message,
                     "body": body,
                     "body_encoding": body_encoding,
                 }),
-            );
-            // Reported so the model learns what happened and can record it, then closed
-            // regardless of what it answers: the specification has the broker close the
-            // connection immediately after an ERROR, so nothing written here would arrive.
-            let _ = report_event(
-                event, protocol, write_half, llm_client, app_state, status_tx, client_id, memory,
-            )
-            .await;
-            Flow::Close
+            ))
         }
 
         "CONNECTED" => {
             // A second CONNECTED mid-session is not defined. Ignoring it is safer than
             // re-running the handshake, and it is not fatal the way a framing error is.
             warn!("STOMP client {client_id} ignoring an unexpected second CONNECTED frame");
-            Flow::Continue
+            FrameMeaning::Ignore
         }
 
         other => {
@@ -552,15 +632,22 @@ async fn handle_frame(
                 "STOMP client {client_id} ignoring a frame with unexpected command {other:?} — \
                  a broker sends only MESSAGE, RECEIPT, ERROR and CONNECTED"
             );
-            Flow::Continue
+            FrameMeaning::Ignore
         }
     }
 }
 
-/// Ask the model about `event` and execute whatever it answers with.
+/// Report one frame — or, with batching on, every frame that was waiting — to the model in one
+/// call, and run its answer.
+///
+/// A frame that ends the session stops the gathering: the events before an `ERROR` are
+/// reported with it and the session then closes; the events before the `RECEIPT` for our own
+/// `DISCONNECT` are reported and the session closes without asking about the receipt. Each
+/// `MESSAGE` keeps its own `ack` header in its event, so a batch can be acknowledged one
+/// delivery at a time.
 #[allow(clippy::too_many_arguments)]
-async fn report_event(
-    event: Event,
+async fn handle_frames(
+    frames: Vec<StompFrame>,
     protocol: &StompClientProtocol,
     write_half: &Arc<Mutex<tokio::io::WriteHalf<TcpStream>>>,
     llm_client: &OllamaClient,
@@ -569,11 +656,53 @@ async fn report_event(
     client_id: ClientId,
     memory: &Arc<Mutex<String>>,
 ) -> Flow {
+    let mut events = Vec::new();
+    let mut close_after = false;
+    for frame in frames {
+        match classify_frame(frame, status_tx, client_id) {
+            FrameMeaning::Report(event) => events.push(event),
+            FrameMeaning::ReportThenClose(event) => {
+                events.push(event);
+                close_after = true;
+                break;
+            }
+            FrameMeaning::Close => {
+                close_after = true;
+                break;
+            }
+            FrameMeaning::Ignore => {}
+        }
+    }
+    let flow = if events.is_empty() {
+        Flow::Continue
+    } else {
+        report_events(
+            &events, protocol, write_half, llm_client, app_state, status_tx, client_id, memory,
+        )
+        .await
+    };
+    if close_after {
+        Flow::Close
+    } else {
+        flow
+    }
+}
+
+/// Ask the model about `events` in one call and execute whatever it answers with.
+#[allow(clippy::too_many_arguments)]
+async fn report_events(
+    events: &[Event],
+    protocol: &StompClientProtocol,
+    write_half: &Arc<Mutex<tokio::io::WriteHalf<TcpStream>>>,
+    llm_client: &OllamaClient,
+    app_state: &Arc<AppState>,
+    status_tx: &mpsc::UnboundedSender<String>,
+    client_id: ClientId,
+    memory: &Arc<Mutex<String>>,
+) -> Flow {
+    let ids = events.iter().map(|e| e.id()).collect::<Vec<_>>().join(", ");
     let Some(instruction) = app_state.get_instruction_for_client(client_id).await else {
-        debug!(
-            "STOMP client {client_id} has no instruction; {} is not reported to the model",
-            event.event_type.id
-        );
+        debug!("STOMP client {client_id} has no instruction; {ids} is not reported to the model");
         return Flow::Continue;
     };
 
@@ -581,13 +710,13 @@ async fn report_event(
     // performs I/O or an LLM call.
     let memory_snapshot = memory.lock().await.clone();
 
-    match call_llm_for_client(
+    match call_llm_for_client_batch(
         llm_client,
         app_state,
         client_id.to_string(),
         &instruction,
         &memory_snapshot,
-        Some(&event),
+        events,
         protocol,
         status_tx,
     )
@@ -613,10 +742,9 @@ async fn report_event(
             // wire traffic because our own backend failed would tell the broker something
             // untrue. The session stays open — the next delivery gets another chance — and the
             // failure is recorded in both logs.
-            error!("STOMP client {client_id} LLM error on {}: {e}", event.id());
+            error!("STOMP client {client_id} LLM error on {ids}: {e}");
             let _ = status_tx.send(format!(
-                "[CLIENT] ✖ STOMP client {client_id} could not answer {}: {e}",
-                event.id()
+                "[CLIENT] ✖ STOMP client {client_id} could not answer {ids}: {e}"
             ));
             Flow::Continue
         }
