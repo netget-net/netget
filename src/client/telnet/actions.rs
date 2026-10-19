@@ -220,7 +220,9 @@ impl Protocol for TelnetClientProtocol {
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // Reads that arrive while the model answers wait in a queue and are answered in
+            // one call, one event per read (`client/telnet/mod.rs`).
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
     fn description(&self) -> &'static str {
