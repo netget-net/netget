@@ -246,3 +246,9 @@ and all three were — from the action rather than from the startup parameters.
 Pinned by `tests/client/smtp/startup_params_test.rs`, whose peer offers no STARTTLS and
 refuses `MAIL FROM` until a correct `AUTH PLAIN`, so a delivery that succeeds is proof on the
 wire that both parameters arrived.
+
+## Batching
+
+Declared `BatchingMode::Unsupported`: nothing can arrive while the model is answering.
+`lettre` opens a connection per message and the only event after connect is the delivery
+result of the client's own `send_email`.
