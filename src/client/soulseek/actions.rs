@@ -170,7 +170,9 @@ impl Protocol for SoulseekClientProtocol {
     }
     fn metadata(&self) -> crate::protocol::ProtocolMetadataV2 {
         crate::protocol::ProtocolMetadataV2::builder().state(crate::protocol::metadata::DevelopmentState::Experimental).implementation("Native bounded Soulseek selected codec; TCP and optional implicit TLS").llm_control("Login decisions, public room lists, room membership/chat, user status/address and search announcements").e2e_testing("Independent peer exchanges, malformed input, owner shutdown and standalone feature builds").notes("Experimental local central-server simulator using legacy Soulseek framing. Selected messages only; no public service account database, distributed topology, obfuscation or automatic peer dialing. Peer browsing is the separate soulseek_peer feature. 256 connections, 30 s first frame, 600 s idle, 10 s handshake/exchange. No persistent protocol data; handlers supply content and decisions.").max_inbound_bytes(crate::server::soulseek::codec::MAX_COMMAND).well_known_port(2242).history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
-        .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+        // Replies queue on the shared p2p_support::connect runner; what arrives while the
+        // model answers is answered together (call_llm_for_client_batch).
+        .batching(crate::protocol::metadata::BatchingMode::On)
         .build()
     }
 }
