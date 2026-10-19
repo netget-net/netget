@@ -643,6 +643,9 @@ impl Protocol for KafkaClientProtocol {
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
+            // Pull-based: records are fetched only between model calls, and the next Fetch returns
+            // everything produced meanwhile as one event's record list; every other event is the
+            // reply to the client's own request. Nothing arrives during a call to batch.
             .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
