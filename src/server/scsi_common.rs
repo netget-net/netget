@@ -479,7 +479,9 @@ pub fn parse_report_luns(d: &[u8]) -> Vec<Result<u16, String>> {
     let len = u32::from_be_bytes([len[0], len[1], len[2], len[3]]) as usize;
     d.get(8..)
         .unwrap_or_default()
-        .chunks_exact(8)
+        .as_chunks::<8>()
+        .0
+        .iter()
         .take(len / 8)
         .map(|f| lun_from_field(f).ok_or_else(|| hex::encode(f)))
         .collect()

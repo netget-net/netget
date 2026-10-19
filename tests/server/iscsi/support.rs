@@ -252,7 +252,7 @@ impl Raw {
         }
         if !data.is_empty() {
             let mut d = data.to_vec();
-            while d.len() % 4 != 0 {
+            while !d.len().is_multiple_of(4) {
                 d.push(0);
             }
             out.extend(&d);

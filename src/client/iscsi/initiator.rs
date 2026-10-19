@@ -294,11 +294,11 @@ impl Session {
                         }
                         auth_done = true;
                     }
-                    _ if csg != stage::SECURITY || text::get(&keys, "AuthMethod").is_none() => {
-                        if !matches!(v.as_str(), "NotUnderstood" | "Irrelevant" | "Reject") {
-                            text::apply_as_initiator(&mut params, k, v)
-                                .map_err(|e| anyhow::anyhow!("the target answered {e}"))?;
-                        }
+                    _ if (csg != stage::SECURITY || text::get(&keys, "AuthMethod").is_none())
+                        && !matches!(v.as_str(), "NotUnderstood" | "Irrelevant" | "Reject") =>
+                    {
+                        text::apply_as_initiator(&mut params, k, v)
+                            .map_err(|e| anyhow::anyhow!("the target answered {e}"))?;
                     }
                     _ => {}
                 }

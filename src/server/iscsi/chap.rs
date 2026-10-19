@@ -29,17 +29,20 @@ pub fn encode_binary(b: &[u8]) -> String {
 /// A binary value in either encoding RFC 7143 §6.1 allows: `0x`/`0X` hex or `0b`/`0B` base64.
 pub fn decode_binary(v: &str) -> Option<Vec<u8>> {
     use base64::Engine;
-    let out = if let Some(h) = v.strip_prefix("0x").or_else(|| v.strip_prefix("0X")) {
-        let h = if h.len() % 2 == 1 {
-            format!("0{h}")
-        } else {
-            h.to_string()
-        };
-        hex::decode(h).ok()?
-    } else if let Some(b) = v.strip_prefix("0b").or_else(|| v.strip_prefix("0B")) {
-        base64::engine::general_purpose::STANDARD.decode(b).ok()?
-    } else {
-        return None;
+    let (prefix, body) = (v.get(..2)?, &v[2..]);
+    let out = match prefix {
+        "0x" | "0X" => {
+            let h = if body.len() % 2 == 1 {
+                format!("0{body}")
+            } else {
+                body.to_string()
+            };
+            hex::decode(h).ok()?
+        }
+        "0b" | "0B" => base64::engine::general_purpose::STANDARD
+            .decode(body)
+            .ok()?,
+        _ => return None,
     };
     (!out.is_empty() && out.len() <= MAX_BINARY).then_some(out)
 }
