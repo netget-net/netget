@@ -20,7 +20,7 @@ use tracing::{debug, error, info, trace, warn};
 
 use crate::protocol::StartupParams;
 
-use crate::client::llm_budget::call_llm_for_client;
+use crate::client::llm_budget::{call_llm_for_client, call_llm_for_client_batch};
 use crate::client::mqtt::actions::{MQTT_CLIENT_CONNECTED_EVENT, MQTT_MESSAGE_RECEIVED_EVENT};
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::llm::ollama_client::OllamaClient;
@@ -715,7 +715,14 @@ fn enqueue_turn(turn_tx: &mpsc::Sender<TurnEvent>, event: TurnEvent, client_id: 
     }
 }
 
-/// Answer queued events with the model, one at a time and in arrival order.
+/// Answer queued events with the model, in arrival order.
+///
+/// With batching off each event is its own model call. With it on, a PUBLISH taken off the
+/// queue brings every PUBLISH already waiting behind it — what arrived while the model was
+/// answering the previous turn — into the same call (`call_llm_for_client_batch`, one event
+/// per message). A `Connected` met while draining ends the batch and is answered next. QoS
+/// acknowledgements are rumqttc's, written by the transport task, so no delivery waits on the
+/// model to be acknowledged and folding several into one call cannot lose an ack.
 #[allow(clippy::too_many_arguments)]
 async fn run_model_turns(
     mut turn_rx: mpsc::Receiver<TurnEvent>,
@@ -727,7 +734,15 @@ async fn run_model_turns(
     mqtt_client_id: String,
     disconnecting: Arc<AtomicBool>,
 ) {
-    while let Some(turn) = turn_rx.recv().await {
+    let mut held: Option<TurnEvent> = None;
+    loop {
+        let turn = match held.take() {
+            Some(turn) => turn,
+            None => match turn_rx.recv().await {
+                Some(turn) => turn,
+                None => break,
+            },
+        };
         match turn {
             TurnEvent::Connected(info) => {
                 handle_connected(
@@ -743,8 +758,26 @@ async fn run_model_turns(
                 .await;
             }
             TurnEvent::Message(publish) => {
-                handle_incoming_message(
-                    &publish,
+                let mut messages = vec![publish];
+                // Read per turn: batching is hot-changeable.
+                if app_state
+                    .client_conversation_settings(client_id)
+                    .await
+                    .is_some_and(|(_, batching)| batching)
+                {
+                    while messages.len() < crate::protocol::metadata::MAX_BATCH_EVENTS {
+                        match turn_rx.try_recv() {
+                            Ok(TurnEvent::Message(next)) => messages.push(next),
+                            Ok(other) => {
+                                held = Some(other);
+                                break;
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                }
+                handle_incoming_messages(
+                    &messages,
                     &mqtt_client,
                     &llm_client,
                     &app_state,
@@ -821,10 +854,25 @@ async fn handle_connected(
     }
 }
 
-/// Handle incoming MQTT message
+/// The event one received PUBLISH raises.
+fn message_event(publish: &Message) -> ProtocolEvent {
+    let mut data = serde_json::json!({
+        "topic": publish.topic,
+        "payload": String::from_utf8_lossy(&publish.payload).to_string(),
+        "qos": publish.qos,
+        "retain": publish.retain,
+    });
+    if let Some(properties) = &publish.properties {
+        data["properties"] = properties.clone();
+    }
+    ProtocolEvent::new(&MQTT_MESSAGE_RECEIVED_EVENT, data)
+}
+
+/// Ask the model about received messages — more than one only when batching gathered them —
+/// and apply its answer.
 #[allow(clippy::too_many_arguments)]
-async fn handle_incoming_message(
-    publish: &Message,
+async fn handle_incoming_messages(
+    messages: &[Message],
     mqtt_client: &Broker,
     llm_client: &OllamaClient,
     app_state: &Arc<AppState>,
@@ -832,56 +880,42 @@ async fn handle_incoming_message(
     client_id: ClientId,
     disconnecting: &Arc<AtomicBool>,
 ) {
-    let topic = publish.topic.clone();
-    let payload = String::from_utf8_lossy(&publish.payload).to_string();
-    let qos = publish.qos;
-    let retain = publish.retain;
+    let Some(instruction) = app_state.get_instruction_for_client(client_id).await else {
+        return;
+    };
+    let protocol = Arc::new(MqttClientProtocol::new());
+    let events: Vec<ProtocolEvent> = messages.iter().map(message_event).collect();
 
-    // Call LLM with message received event
-    if let Some(instruction) = app_state.get_instruction_for_client(client_id).await {
-        let protocol = Arc::new(MqttClientProtocol::new());
-        let mut data = serde_json::json!({
-            "topic": topic,
-            "payload": payload,
-            "qos": qos,
-            "retain": retain,
-        });
-        if let Some(properties) = &publish.properties {
-            data["properties"] = properties.clone();
-        }
-        let event = ProtocolEvent::new(&MQTT_MESSAGE_RECEIVED_EVENT, data);
-
-        let memory = app_state
-            .get_memory_for_client(client_id)
-            .await
-            .unwrap_or_default();
-
-        match call_llm_for_client(
-            llm_client,
-            app_state,
-            client_id.to_string(),
-            &instruction,
-            &memory,
-            Some(&event),
-            protocol.as_ref(),
-            status_tx,
-        )
+    let memory = app_state
+        .get_memory_for_client(client_id)
         .await
-        {
-            Ok(result) => {
-                handle_llm_actions(
-                    result,
-                    mqtt_client,
-                    app_state,
-                    client_id,
-                    &protocol,
-                    disconnecting,
-                )
-                .await;
-            }
-            Err(e) => {
-                error!("LLM error for MQTT client {}: {}", client_id, e);
-            }
+        .unwrap_or_default();
+
+    match call_llm_for_client_batch(
+        llm_client,
+        app_state,
+        client_id.to_string(),
+        &instruction,
+        &memory,
+        &events,
+        protocol.as_ref(),
+        status_tx,
+    )
+    .await
+    {
+        Ok(result) => {
+            handle_llm_actions(
+                result,
+                mqtt_client,
+                app_state,
+                client_id,
+                &protocol,
+                disconnecting,
+            )
+            .await;
+        }
+        Err(e) => {
+            error!("LLM error for MQTT client {}: {}", client_id, e);
         }
     }
 }
