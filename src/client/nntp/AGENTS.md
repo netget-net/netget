@@ -241,9 +241,11 @@ Browser regression: after `./web/build.sh`, run `node web/test/nntp.mjs`. It dri
 
 ## Batching
 
-Declared `BatchingMode::Unsupported`. Results of later commands in one answer do queue while
-the model answers an earlier one, but the queue and the model call live in the shared
-`server::p2p_support::connect` runner, which answers one event per call and is shared with the
-adc, adc_peer, dc_peer, gnutella, soulseek and soulseek_peer clients. Batching NNTP means
-draining that runner's event channel into `call_llm_for_client_batch` — a change to the shared
-runner, not to this client.
+Declared `BatchingMode::On`. Replies to the later commands of one answer queue while the model
+answers an earlier one; the shared `server::p2p_support::connect` runner (also behind the adc,
+adc_peer, dc_peer, gnutella, soulseek and soulseek_peer clients) drains everything waiting into
+one `call_llm_for_client_batch` call. With batching off it answers one reply per call.
+`tests/client_batching_test.rs::p2p_runner_answers_replies_that_arrived_during_a_call_together`
+covers both, with off as the control. The runner logs each reply's arrival with
+`record_access_log_only`, so the reply appears once in the session's history — written by the
+model call with what answered it — rather than twice.

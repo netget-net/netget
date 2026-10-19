@@ -3204,6 +3204,53 @@ impl AppState {
         request: serde_json::Value,
         response: Vec<serde_json::Value>,
     ) -> u64 {
+        self.record_access_log_inner(
+            owner,
+            protocol,
+            connection_id,
+            event_type,
+            request,
+            response,
+            true,
+        )
+        .await
+    }
+
+    /// [`Self::record_access_log`] without the connection's history: for a caller that logs an
+    /// event's *arrival* while the event goes on to a model call that records it with its answer
+    /// — recording both would show the model the same event twice.
+    pub async fn record_access_log_only(
+        &self,
+        owner: AccessLogOwner,
+        protocol: &str,
+        connection_id: Option<u32>,
+        event_type: &str,
+        request: serde_json::Value,
+        response: Vec<serde_json::Value>,
+    ) -> u64 {
+        self.record_access_log_inner(
+            owner,
+            protocol,
+            connection_id,
+            event_type,
+            request,
+            response,
+            false,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn record_access_log_inner(
+        &self,
+        owner: AccessLogOwner,
+        protocol: &str,
+        connection_id: Option<u32>,
+        event_type: &str,
+        request: serde_json::Value,
+        response: Vec<serde_json::Value>,
+        history: bool,
+    ) -> u64 {
         let unix_ms = crate::utils::clock::SystemTime::now()
             .duration_since(crate::utils::clock::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
@@ -3215,32 +3262,34 @@ impl AppState {
 
         let mut inner = self.inner.write().await;
 
-        // The same exchange, into the connection's history — every event the access log sees
-        // is one the model may need to know happened, whoever answered it. Only for a
-        // connection the server still holds: an id it has removed (or never registered) would
-        // otherwise leave an entry nothing ever clears.
-        match owner {
-            AccessLogOwner::Server(sid) => {
-                if let (Some(conn), Some(server)) =
-                    (connection_id, inner.servers.get_mut(&ServerId::new(sid)))
-                {
-                    let conn = crate::server::connection::ConnectionId::new(conn);
-                    let limit = server.history_entries;
-                    if limit > 0 && server.connections.contains_key(&conn) {
-                        server
-                            .exchange_history
-                            .entry(conn)
-                            .or_default()
-                            .record(event_type, &request, &response, limit);
+        if history {
+            // The same exchange, into the connection's history — every event the access log sees
+            // is one the model may need to know happened, whoever answered it. Only for a
+            // connection the server still holds: an id it has removed (or never registered) would
+            // otherwise leave an entry nothing ever clears.
+            match owner {
+                AccessLogOwner::Server(sid) => {
+                    if let (Some(conn), Some(server)) =
+                        (connection_id, inner.servers.get_mut(&ServerId::new(sid)))
+                    {
+                        let conn = crate::server::connection::ConnectionId::new(conn);
+                        let limit = server.history_entries;
+                        if limit > 0 && server.connections.contains_key(&conn) {
+                            server
+                                .exchange_history
+                                .entry(conn)
+                                .or_default()
+                                .record(event_type, &request, &response, limit);
+                        }
                     }
                 }
-            }
-            AccessLogOwner::Client(cid) => {
-                if let Some(client) = inner.clients.get_mut(&ClientId::new(cid)) {
-                    let limit = client.history_entries;
-                    client
-                        .exchange_history
-                        .record(event_type, &request, &response, limit);
+                AccessLogOwner::Client(cid) => {
+                    if let Some(client) = inner.clients.get_mut(&ClientId::new(cid)) {
+                        let limit = client.history_entries;
+                        client
+                            .exchange_history
+                            .record(event_type, &request, &response, limit);
+                    }
                 }
             }
         }
