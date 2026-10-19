@@ -39,6 +39,16 @@ Normal disconnect gives the driver up to one second to flush its SSH disconnect 
 Every operation closes its channel on success, framing failure or timeout; a blocked close
 has a 250 ms grace period before the whole socket is shut down.
 
+**Batching.** Operations run side by side and each result is asked about in its own handler,
+so with batching off concurrent results mean concurrent model calls. With batching on (the
+declared default) an `ssh_output_received` that finishes while any handler is asking the model
+is held, and when a handler finishes everything held is answered in one call through
+`call_llm_for_client_batch`, the newest the trigger, at the deepest follow-up depth among them.
+SFTP results and operation failures are never held. A held output keeps its operation's slot in
+the 16-operation bound until it is answered. `tests/client/ssh/batching_test.rs` drives both
+against the unprivileged `sshd` the real-server test starts: three commands finishing at
+different times, the first answered slowly, batching off as the control.
+
 ## Actions and events
 
 | Action | Semantic result |
