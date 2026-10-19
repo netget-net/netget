@@ -231,7 +231,9 @@ impl Protocol for TlsClientProtocol {
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // A reader task queues each read while the model answers; with batching on the
+            // answering loop joins everything waiting into one payload, as the tcp client does.
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
 

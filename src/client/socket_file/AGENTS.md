@@ -52,10 +52,8 @@ The implementation follows the same pattern as TCP client:
 ### Data Flow
 
 ```
-Socket File → UnixStream → Read Loop → LLM Call → Actions → Write to Socket
-                                ↓
-                          State Machine
-                        (Idle/Processing/Accumulating)
+Socket File → UnixStream → Reader task → bounded queue → Answering loop → LLM Call
+                                                                  → Actions → Write to Socket
 ```
 
 ## LLM Integration
@@ -72,7 +70,7 @@ The LLM receives two primary event types:
     - Triggered when data arrives from socket
     - Contains `data` (text when every byte is printable ASCII, hex otherwise), `encoding`
       (`"utf8"` / `"hex"`) saying which, and `data_length`
-    - Prevents concurrent calls via state machine
+    - One answering loop, so model calls never overlap
 
 Both are the `LazyLock` statics the read loop emits. `get_event_types()` used to build two
 *separate* `EventType`s with `{"type": "placeholder"}` example actions, no parameters and no
@@ -109,29 +107,19 @@ Actions return `ClientActionResult` enum:
 - `Disconnect` - Close connection
 - `WaitForMore` - Continue accumulating data
 
-## State Management
+## Reading and batching
 
-### Connection States
+A registered reader task reads the socket and puts each read on a bounded queue
+(`READ_QUEUE_CHUNKS` = `MAX_BATCH_EVENTS` reads of at most 8 KiB; past it the reader stops and
+the socket buffer holds the peer back). The answering loop takes one read per model call with
+batching off; with batching on (the declared default) it joins every read already waiting
+into one payload, as the tcp client does. `tests/client/socket_file/batching_test.rs` drives
+both against a `UnixListener` that sends during a slow call, batching off as the control.
 
-**Idle:**
-
-- No LLM call in progress
-- Ready to process incoming data immediately
-
-**Processing:**
-
-- LLM call in progress for current data
-- New data is queued to prevent concurrent calls
-
-**Accumulating:**
-
-- Still processing, more data has arrived
-- The queue becomes the next payload once the in-flight round-trip finishes, and the loop runs
-  again until the queue is empty
-
-This last part was a lie until September 2026: the queue was filled and then `clear()`ed without
-ever being shown to the model, so every byte that arrived during an LLM call was silently
-dropped.
+The Idle/Processing/Accumulating machine that used to be described here could never run: the
+read loop awaited every model call inline, so nothing arrived mid-call. Before that it filled a
+queue and `clear()`ed it unread. The data path also kept its own memory copy while the
+connected event wrote `AppState`'s; both now use `AppState`'s.
 
 ### Dual Logging
 

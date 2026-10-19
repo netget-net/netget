@@ -29,31 +29,27 @@ The TLS client implementation provides LLM-controlled outbound TLS/SSL connectio
          │   - ServerName (SNI)
          │   - TlsConnector::connect()
          │
-         ├─► Read Loop
-         │   - Read decrypted data from TLS stream
-         │   - Call LLM with tls_client_data_received event
-         │   - Execute actions (send_data, disconnect)
-         │   - State machine (Idle/Processing/Accumulating)
+         ├─► Reader task → bounded queue → answering loop
+         │   - Reader: read decrypted data, one queue entry per read
+         │   - Answering loop: call LLM with tls_client_data_received
+         │   - Execute actions (send_data, wait_for_more, disconnect)
          │
          └─► Write Half (Arc<Mutex<WriteHalf<TlsStream>>>)
              - Shared for sending encrypted data
              - Used by action execution
 ```
 
-### Connection State Machine
+### Reading, `wait_for_more` and batching
 
-**States:**
-
-1. **Idle** - No LLM processing happening
-2. **Processing** - LLM is being called, new data queued
-3. **Accumulating** - LLM requested wait_for_more, accumulating more data
-
-**Transitions:**
-
-- Idle → Processing: Data received, call LLM
-- Processing → Accumulating: More data arrives during LLM call
-- Accumulating → Accumulating: More data while LLM processing
-- Processing/Accumulating → Idle: LLM returns, process queue
+A registered reader task reads the TLS stream and puts each read on a bounded queue
+(`READ_QUEUE_CHUNKS` = `MAX_BATCH_EVENTS` reads of at most 8 KiB; past it the reader stops and
+TCP holds the server back). The answering loop takes one read per model call with batching off;
+with batching on (the declared default) it joins every read already waiting into one payload,
+as the tcp client does, because TLS carries a byte stream whose read boundaries mean nothing.
+`wait_for_more` keeps the bytes the model saw as the front of the next payload.
+`tests/client/tls/batching_test.rs` drives both against a TLS listener that sends during a slow
+call, batching off as the control. There used to be an Idle/Processing/Accumulating machine
+here; the read loop awaited every model call inline, so nothing could arrive mid-call.
 
 ### LLM Control
 
