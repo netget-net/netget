@@ -975,7 +975,9 @@ impl Protocol for NatsClientProtocol {
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // Frames the broker sends while the model answers wait on the reader→dispatcher
+            // queue and are answered in one call, one event per message (`run_dispatcher`).
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
 

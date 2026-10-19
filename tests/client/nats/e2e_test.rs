@@ -438,6 +438,9 @@ mod nats_client_e2e_test {
                         "protocol": "NATS",
                         "remote_addr": broker_addr,
                         "instruction": "Report anything the broker refuses.",
+                        // The two -ERRs below arrive back to back and this test asserts each
+                        // is its own event; batching them is `batching_test.rs`'s subject.
+                        "batching": false,
                         "event_handlers": [{
                             "event_pattern": "nats_connected",
                             "handler": {

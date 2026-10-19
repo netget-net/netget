@@ -36,6 +36,14 @@ a `NATS/1.0\r\n…\r\n\r\n` block in front of the payload.
 - **Dispatcher** — owns the model. One LLM call at a time, in arrival order, plus the
   injected-command channel behind the dashboard's `[ send ]`.
 
+**Batching (`BatchingMode::On`).** Frames the broker sends while the model is answering wait on
+the reader→dispatcher channel. With the client's batching on, the dispatcher takes every frame
+already waiting into one `call_llm_for_client_batch` call, one event per message (at most
+`MAX_BATCH_EVENTS`); off, one per call. Each event keeps its own `reply_to` and, for JetStream,
+its `ack_subject`, so the model can still answer or acknowledge each delivery separately.
+`tests/client/nats/batching_test.rs` holds it against a hand-written broker, off and on in one
+test.
+
 **The split exists so the keepalive cannot be blocked by a decision.** Answering `PING` in
 Rust is not an optimisation: a broker that gets no `PONG` within two ping intervals declares
 the connection stale and drops it, and a dashboard-created instance defaults to a `*` → manual
