@@ -122,7 +122,12 @@ pub fn client_actions() -> Vec<ActionDefinition> {
             vec![
                 lun_param(),
                 p("lba", "number", "The first logical block to write", true),
-                p("data", "string", "The bytes to write: the text itself for utf8, pairs of hex digits for hex", true),
+                p(
+                    "data",
+                    "string",
+                    "The bytes to write: the text itself for utf8, pairs of hex digits for hex",
+                    true,
+                ),
                 p(
                     "encoding",
                     "string",
@@ -215,7 +220,12 @@ pub static LOGIN_RESULT_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         json!({"type": REPORT_LUNS}),
     )
     .with_parameters(vec![
-        p("target_name", "string", "The target's iSCSI name (iqn.…)", true),
+        p(
+            "target_name",
+            "string",
+            "The target's iSCSI name (iqn.…)",
+            true,
+        ),
         p("logged_in", "boolean", "Whether the session is open", true),
         p(
             "status",
@@ -257,7 +267,12 @@ pub static COMMAND_RESULT_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             "report_luns, inquiry, read_capacity, read, write or test_unit_ready",
             true,
         ),
-        p("lun", "number", "The logical unit number the command went to", false),
+        p(
+            "lun",
+            "number",
+            "The logical unit number the command went to",
+            false,
+        ),
         p(
             "status",
             "string",
@@ -315,8 +330,18 @@ pub static LOGGED_OUT_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         json!({"type": LOGIN, "target_name": "iqn.2026-10.net.netget:disk0"}),
     )
     .with_parameters(vec![
-        p("target_name", "string", "The target's iSCSI name (iqn.…)", true),
-        p("reason", "string", "Why the session ended: logged out, or the error that ended it", true),
+        p(
+            "target_name",
+            "string",
+            "The target's iSCSI name (iqn.…)",
+            true,
+        ),
+        p(
+            "reason",
+            "string",
+            "Why the session ended: logged out, or the error that ended it",
+            true,
+        ),
     ])
     .with_actions(client_actions())
 });
