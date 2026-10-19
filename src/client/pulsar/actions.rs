@@ -266,7 +266,9 @@ impl Protocol for PulsarClientProtocol {
             .e2e_testing("tests/client/pulsar: Apache Pulsar 4.0.6 standalone; the official Python client reads what NetGet publishes and publishes what NetGet receives")
             .notes("A lookup that redirects to another broker is reported, not followed. No partitioned topics, schemas, compression, encryption, transactions or TLS; acknowledgement is automatic. A handler chain stops after 8 follow-ups.")
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // Messages delivered while the model answers wait in the dispatcher queue and are
+            // answered in one call, one event each, then acknowledged (`client/pulsar/mod.rs`).
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

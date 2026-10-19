@@ -403,7 +403,9 @@ impl Protocol for MatrixClientProtocol {
             .e2e_testing("tests/client/matrix: Synapse (the reference homeserver), with a matrix-nio user as the other participant reading what NetGet said")
             .notes("No end-to-end encryption (encrypted rooms' messages arrive as m.room.encrypted and cannot be read), no media, no registration. Events from before login are not replayed. Answers are capped at 4 MiB. A handler chain stops after 8 follow-ups.")
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // What /sync raises while the model answers waits in the dispatcher queue and is
+            // answered in one call, one event each (`client/matrix/mod.rs`).
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

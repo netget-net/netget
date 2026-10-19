@@ -23,3 +23,12 @@ initial_position?}`, `pulsar_unsubscribe {topic, subscription}`, `disconnect`.
 
 Consumers get `PERMITS` (1000), topped up by half when half are used. `MAX_PENDING` (256)
 requests and sends may await the broker; a chain stops after `MAX_FOLLOWUP_DEPTH` (8).
+
+## Batching
+
+`BatchingMode::On`. Messages delivered while the model answers wait in the dispatcher queue;
+with batching on the dispatcher drains everything waiting (up to `MAX_BATCH_EVENTS`) into one
+`call_llm_for_client_batch` call, with it off one event per call. Every message in a batch is
+acknowledged once the handler has run on the batch, so acknowledgement still follows the
+handler. `tests/client/pulsar/batching_test.rs` is the off/on pair, and asserts all three
+messages are acknowledged either way.
