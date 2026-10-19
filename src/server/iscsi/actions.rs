@@ -85,12 +85,7 @@ pub fn reject_login_action() -> ActionDefinition {
         REJECT_LOGIN,
         "Refuse the login. not_found: there is no such target (status 0x0203); unauthorized: \
          this initiator may not use it (0x0202).",
-        vec![p(
-            "reason",
-            "string",
-            "not_found or unauthorized",
-            true,
-        )],
+        vec![p("reason", "string", "not_found or unauthorized", true)],
         json!({"type": REJECT_LOGIN, "reason": "unauthorized"}),
     )
 }
@@ -189,10 +184,7 @@ pub fn targets_of(v: &Value) -> Result<Vec<(String, Vec<String>)>> {
     let Some(list) = v["targets"].as_array() else {
         bail!("targets is an array");
     };
-    ensure!(
-        list.len() <= MAX_TARGETS,
-        "at most {MAX_TARGETS} targets"
-    );
+    ensure!(list.len() <= MAX_TARGETS, "at most {MAX_TARGETS} targets");
     let mut out = Vec::new();
     for t in list {
         let name = t["name"].as_str().unwrap_or_default();

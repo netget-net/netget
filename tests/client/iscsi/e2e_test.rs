@@ -26,18 +26,28 @@ async fn the_initiator_runs_the_models_session_against_netgets_target() {
     let r = results(&state, id, 6).await;
     assert_eq!(r[0]["luns"], json!([0, 1]), "{}", r[0]);
     assert_eq!(r[1]["inquiry"]["product"], "BOOT-DISK", "{}", r[1]);
-    assert_eq!(r[2]["capacity"], json!({"blocks": 2048, "block_size": 512, "size_bytes": 1048576}));
+    assert_eq!(
+        r[2]["capacity"],
+        json!({"blocks": 2048, "block_size": 512, "size_bytes": 1048576})
+    );
     assert_eq!(r[3]["data"], "hello from netget", "{}", r[3]);
     assert_eq!(r[3]["encoding"], "utf8");
     assert_eq!(r[3]["trailing_zero_bytes"], 512 - 17);
     assert_eq!(r[4]["status"], "GOOD", "{}", r[4]);
-    assert_eq!(r[5]["data"], WRITE_TEXT, "the target's session overlay read back: {}", r[5]);
+    assert_eq!(
+        r[5]["data"], WRITE_TEXT,
+        "the target's session overlay read back: {}",
+        r[5]
+    );
     let out = wait_event(&state, id, "iscsi_logged_out", 0).await;
     assert_eq!(out["reason"], "logged out");
     // The target saw exactly the login the model asked for.
     let logins = target::events(&srv.state, srv.id, "iscsi_login").await;
     assert_eq!(logins.len(), 1);
-    assert_eq!(logins[0]["initiator_name"], "iqn.2026-10.net.netget:test-initiator");
+    assert_eq!(
+        logins[0]["initiator_name"],
+        "iqn.2026-10.net.netget:test-initiator"
+    );
 }
 
 const READ_HEX_AND_ERRORS: &str = r#"import json,sys
@@ -68,9 +78,16 @@ async fn hex_reads_and_sense_reach_the_model() {
     let r = results(&state, id, 3).await;
     assert_eq!(r[0]["encoding"], "hex");
     let hex = r[0]["data"].as_str().unwrap();
-    assert!(hex.starts_with("deadbeef") && hex.len() == 8192, "4096 bytes as hex");
+    assert!(
+        hex.starts_with("deadbeef") && hex.len() == 8192,
+        "4096 bytes as hex"
+    );
     assert_eq!(r[1]["status"], "CHECK CONDITION");
-    assert_eq!(r[1]["sense"], "MEDIUM ERROR: UNRECOVERED READ ERROR", "{}", r[1]);
+    assert_eq!(
+        r[1]["sense"], "MEDIUM ERROR: UNRECOVERED READ ERROR",
+        "{}",
+        r[1]
+    );
     assert_eq!(
         r[2]["sense"], "ILLEGAL REQUEST: LOGICAL BLOCK ADDRESS OUT OF RANGE",
         "{}",
@@ -102,10 +119,7 @@ print(json.dumps({'actions':[{'type':'iscsi_login'}] if i['event_type_id']=='isc
     .unwrap();
     let login = wait_event(&state, id, "iscsi_login_result", 0).await;
     assert_eq!(login["logged_in"], true, "{login}");
-    let all = format!(
-        "{:?}",
-        state.list_access_logs_for(None, None).await
-    );
+    let all = format!("{:?}", state.list_access_logs_for(None, None).await);
     assert!(!all.contains("wonderland12") && !all.contains("targetsecret1"));
 
     // The target proving the wrong secret fails mutual CHAP on the initiator's side.
@@ -119,7 +133,10 @@ print(json.dumps({'actions':[{'type':'iscsi_login'}] if i['event_type_id']=='isc
     .unwrap();
     let login = wait_event(&state, id, "iscsi_login_result", 0).await;
     assert_eq!(login["logged_in"], false);
-    assert!(login["error"].as_str().unwrap().contains("mutual CHAP"), "{login}");
+    assert!(
+        login["error"].as_str().unwrap().contains("mutual CHAP"),
+        "{login}"
+    );
 
     // A wrong secret: the target refuses with authentication failure.
     let (state, id) = client(
@@ -130,7 +147,11 @@ print(json.dumps({'actions':[{'type':'iscsi_login'}] if i['event_type_id']=='isc
     .await
     .unwrap();
     let login = wait_event(&state, id, "iscsi_login_result", 0).await;
-    assert_eq!((login["logged_in"].clone(), login["status"].clone()), (json!(false), json!("0x0201")), "{login}");
+    assert_eq!(
+        (login["logged_in"].clone(), login["status"].clone()),
+        (json!(false), json!("0x0201")),
+        "{login}"
+    );
 }
 
 #[tokio::test]
@@ -179,7 +200,10 @@ print(json.dumps({'actions':a}))"#;
     }
 }
 
-async fn netget_count(state: &netget::state::app_state::AppState, id: netget::state::ClientId) -> usize {
+async fn netget_count(
+    state: &netget::state::app_state::AppState,
+    id: netget::state::ClientId,
+) -> usize {
     client_events(state, id, "iscsi_command_result").await.len()
 }
 
@@ -187,10 +211,18 @@ async fn netget_count(state: &netget::state::app_state::AppState, id: netget::st
 async fn a_model_that_cannot_answer_sends_nothing() {
     let srv = target::start(policy(POLICY), None).await;
     // No handlers: the connected event goes to the unreachable model, and nothing follows.
-    let (state, id) = client(format!("127.0.0.1:{}", srv.port), json!({"target_name": DISK0}), None)
-        .await
-        .unwrap();
+    let (state, id) = client(
+        format!("127.0.0.1:{}", srv.port),
+        json!({"target_name": DISK0}),
+        None,
+    )
+    .await
+    .unwrap();
     tokio::time::sleep(Duration::from_millis(1500)).await;
-    assert!(client_events(&state, id, "iscsi_login_result").await.is_empty());
-    assert!(target::events(&srv.state, srv.id, "iscsi_login").await.is_empty());
+    assert!(client_events(&state, id, "iscsi_login_result")
+        .await
+        .is_empty());
+    assert!(target::events(&srv.state, srv.id, "iscsi_login")
+        .await
+        .is_empty());
 }

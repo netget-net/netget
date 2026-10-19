@@ -79,9 +79,9 @@ pub const STATE_ZERO: u32 = 2;
 /// One request or option payload at most; a read or block status at most.
 pub const MAX_OPTION: usize = 64 * 1024;
 pub const MAX_REQUEST: u32 = 32 * 1024 * 1024;
+use crate::server::described_disk as disk;
 /// Bytes of explicit content one export may carry, and extents.
 pub use crate::server::described_disk::{Content, Extent, MAX_CONTENT, MAX_EXTENTS};
-use crate::server::described_disk as disk;
 use disk::u64_of;
 
 pub fn errno(name: &str) -> Option<u32> {

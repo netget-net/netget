@@ -82,10 +82,7 @@ impl TargetDescription {
                 None | Some(Json::Null) => i as u64,
                 Some(n) => n.as_u64().context("lun is a number")?,
             };
-            ensure!(
-                number <= MAX_LUN_NUMBER,
-                "lun is at most {MAX_LUN_NUMBER}"
-            );
+            ensure!(number <= MAX_LUN_NUMBER, "lun is at most {MAX_LUN_NUMBER}");
             let number = number as u16;
             ensure!(
                 out.iter().all(|o| o.number != number),
@@ -132,8 +129,8 @@ impl TargetDescription {
             let vendor = text_field(l, "vendor", 8)?.unwrap_or_else(|| "NETGET".into());
             let product = text_field(l, "product", 16)?.unwrap_or_else(|| "VIRTUAL-DISK".into());
             let revision = text_field(l, "revision", 4)?.unwrap_or_else(|| "0001".into());
-            let serial = text_field(l, "serial", 64)?
-                .unwrap_or_else(|| default_serial(target_name, number));
+            let serial =
+                text_field(l, "serial", 64)?.unwrap_or_else(|| default_serial(target_name, number));
             ensure!(
                 serial.bytes().all(|b| (0x21..0x7F).contains(&b)),
                 "serial is printable ASCII without spaces"
@@ -179,7 +176,8 @@ impl Lun {
 
     /// Whether `blocks` blocks from `lba` lie inside the LUN.
     pub fn in_range(&self, lba: u64, blocks: u64) -> bool {
-        lba.checked_add(blocks).is_some_and(|end| end <= self.blocks)
+        lba.checked_add(blocks)
+            .is_some_and(|end| end <= self.blocks)
     }
 
     /// The condition a failing region raises for a range, if it touches one.

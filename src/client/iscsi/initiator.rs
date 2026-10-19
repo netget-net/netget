@@ -325,7 +325,10 @@ impl Session {
             if resp.flags() & 0x80 != 0 {
                 let nsg = resp.flags() & 0x03;
                 if nsg == stage::FULL_FEATURE {
-                    ensure!(auth_done, "the target ended the login before authenticating");
+                    ensure!(
+                        auth_done,
+                        "the target ended the login before authenticating"
+                    );
                     // RFC 7143 has the final response carry the new session's TSIH; gotgt
                     // 0.2.2 sends 0. Nothing here depends on it (one connection, no
                     // reinstatement), so a missing TSIH is reported rather than refused.
@@ -519,8 +522,15 @@ impl Session {
         p.data = write[..immediate].to_vec();
         self.send(&p).await?;
         if unsolicited_end > immediate {
-            self.send_data(itt, lun_field, RESERVED_TAG, write, immediate, unsolicited_end)
-                .await?;
+            self.send_data(
+                itt,
+                lun_field,
+                RESERVED_TAG,
+                write,
+                immediate,
+                unsolicited_end,
+            )
+            .await?;
         }
         let mut out = CommandOutcome::default();
         let mut data_sn = 0u32;
@@ -649,7 +659,10 @@ impl Session {
             let r = loop {
                 let r = self.next().await?;
                 if r.opcode() == op::REJECT {
-                    bail!("the target rejected SendTargets (reason 0x{:02x})", r.bhs[2]);
+                    bail!(
+                        "the target rejected SendTargets (reason 0x{:02x})",
+                        r.bhs[2]
+                    );
                 }
                 if r.opcode() == op::TEXT_RESPONSE && r.itt() == itt {
                     break r;

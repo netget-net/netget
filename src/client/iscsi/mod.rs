@@ -192,9 +192,8 @@ async fn spawn_dispatcher(
                             }
                         }
                     }
-                    Err(e) => Log::new(Some(&ctx.status_tx)).warn(format!(
-                        "iSCSI client handler failed (nothing sent): {e}"
-                    )),
+                    Err(e) => Log::new(Some(&ctx.status_tx))
+                        .warn(format!("iSCSI client handler failed (nothing sent): {e}")),
                 }
             }
         }
@@ -401,7 +400,8 @@ impl Initiator<'_> {
     }
 
     async fn discover(&mut self) -> Result<Vec<(String, Vec<String>)>> {
-        let (outcome, session) = Session::login(self.addr, Kind::Discovery, "", &self.config).await?;
+        let (outcome, session) =
+            Session::login(self.addr, Kind::Discovery, "", &self.config).await?;
         let Some(mut s) = session else {
             bail!(
                 "the portal refused the discovery login: {} ({})",
@@ -482,7 +482,10 @@ impl Initiator<'_> {
         read_len: usize,
         write: Option<&[u8]>,
     ) -> Result<CommandOutcome> {
-        let s = self.session.as_mut().context("not logged in: run iscsi_login first")?;
+        let s = self
+            .session
+            .as_mut()
+            .context("not logged in: run iscsi_login first")?;
         match s.command(lun, cdb, read_len, write).await {
             Ok(o) => Ok(o),
             Err(e) => {
@@ -502,7 +505,9 @@ impl Initiator<'_> {
         if o.status != status::GOOD {
             bail!(
                 "READ CAPACITY failed: {}",
-                o.sense.map(|s| s.describe()).unwrap_or_else(|| scsi::status_name(o.status).into())
+                o.sense
+                    .map(|s| s.describe())
+                    .unwrap_or_else(|| scsi::status_name(o.status).into())
             );
         }
         Ok(bs)
@@ -514,14 +519,18 @@ impl Initiator<'_> {
         if o.status != status::GOOD {
             return Ok((0, 0, o));
         }
-        let (mut last, mut bs) = scsi::parse_read_capacity(&o.data).context("short READ CAPACITY data")?;
+        let (mut last, mut bs) =
+            scsi::parse_read_capacity(&o.data).context("short READ CAPACITY data")?;
         let mut o = o;
         if last == u32::MAX as u64 {
-            o = self.cmd(lun, scsi::read_capacity_16_cdb(), 32, None).await?;
+            o = self
+                .cmd(lun, scsi::read_capacity_16_cdb(), 32, None)
+                .await?;
             if o.status != status::GOOD {
                 return Ok((0, 0, o));
             }
-            (last, bs) = scsi::parse_read_capacity(&o.data).context("short READ CAPACITY(16) data")?;
+            (last, bs) =
+                scsi::parse_read_capacity(&o.data).context("short READ CAPACITY(16) data")?;
         }
         anyhow::ensure!(
             bs.is_power_of_two() && (512..=65536).contains(&bs),
@@ -532,10 +541,15 @@ impl Initiator<'_> {
     }
 
     async fn scsi(&mut self, kind: &str, lun: u16, action: &Value, data: &mut Value) -> Result<()> {
-        anyhow::ensure!(self.session.is_some(), "not logged in: run iscsi_login first");
+        anyhow::ensure!(
+            self.session.is_some(),
+            "not logged in: run iscsi_login first"
+        );
         match kind {
             actions::REPORT_LUNS => {
-                let o = self.cmd(0, scsi::report_luns_cdb(16 * 1024), 16 * 1024, None).await?;
+                let o = self
+                    .cmd(0, scsi::report_luns_cdb(16 * 1024), 16 * 1024, None)
+                    .await?;
                 status_fields(&o, data);
                 if o.status == status::GOOD {
                     data["luns"] = json!(scsi::parse_report_luns(&o.data)
@@ -555,7 +569,9 @@ impl Initiator<'_> {
                     "device_identification" => Some(0x83),
                     _ => None,
                 };
-                let o = self.cmd(lun, scsi::inquiry_cdb(code, 255), 255, None).await?;
+                let o = self
+                    .cmd(lun, scsi::inquiry_cdb(code, 255), 255, None)
+                    .await?;
                 status_fields(&o, data);
                 if o.status == status::GOOD {
                     data["inquiry"] = match code {
@@ -573,8 +589,12 @@ impl Initiator<'_> {
                         Some(c) => {
                             let (_, body) = scsi::parse_vpd(&o.data).context("short VPD page")?;
                             match c {
-                                0x00 => json!({"pages": body.iter().map(|p| format!("0x{p:02x}")).collect::<Vec<_>>()}),
-                                0x80 => json!({"serial": crate::utils::sanitize::line_field(&String::from_utf8_lossy(body)).trim().to_string()}),
+                                0x00 => {
+                                    json!({"pages": body.iter().map(|p| format!("0x{p:02x}")).collect::<Vec<_>>()})
+                                }
+                                0x80 => {
+                                    json!({"serial": crate::utils::sanitize::line_field(&String::from_utf8_lossy(body)).trim().to_string()})
+                                }
                                 _ => json!({"designators": scsi::parse_designators(body)}),
                             }
                         }
@@ -604,11 +624,12 @@ impl Initiator<'_> {
                 );
                 data["lba"] = json!(lba);
                 data["blocks"] = json!(blocks);
-                let o = self.cmd(lun, scsi::read_cdb(lba, blocks as u32), len, None).await?;
+                let o = self
+                    .cmd(lun, scsi::read_cdb(lba, blocks as u32), len, None)
+                    .await?;
                 status_fields(&o, data);
                 if o.status == status::GOOD {
-                    let (text, encoding, zeros) =
-                        render_data(&o.data, action["encoding"] == "hex");
+                    let (text, encoding, zeros) = render_data(&o.data, action["encoding"] == "hex");
                     data["data"] = json!(text);
                     data["encoding"] = json!(encoding);
                     data["bytes"] = json!(o.data.len());
@@ -630,7 +651,9 @@ impl Initiator<'_> {
                 let blocks = (bytes.len() / bs) as u32;
                 data["lba"] = json!(lba);
                 data["blocks"] = json!(blocks);
-                let o = self.cmd(lun, scsi::write_cdb(lba, blocks), 0, Some(&bytes)).await?;
+                let o = self
+                    .cmd(lun, scsi::write_cdb(lba, blocks), 0, Some(&bytes))
+                    .await?;
                 status_fields(&o, data);
                 if o.status == status::GOOD {
                     data["bytes"] = json!(bytes.len());

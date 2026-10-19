@@ -339,9 +339,7 @@ impl ServerRegistry {
         #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::nbd::actions::NbdProtocol::new()));
         #[cfg(not(target_arch = "wasm32"))]
-        self.register(Arc::new(
-            crate::server::iscsi::actions::IscsiProtocol::new(),
-        ));
+        self.register(Arc::new(crate::server::iscsi::actions::IscsiProtocol::new()));
         #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::managesieve::actions::ManageSieveProtocol::new(),

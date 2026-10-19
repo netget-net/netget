@@ -189,10 +189,7 @@ pub fn keys(data: &[u8]) -> Vec<(String, String)> {
 }
 
 pub fn key<'a>(pairs: &'a [(String, String)], k: &str) -> Option<&'a str> {
-    pairs
-        .iter()
-        .find(|(n, _)| n == k)
-        .map(|(_, v)| v.as_str())
+    pairs.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str())
 }
 
 pub fn text(pairs: &[(&str, &str)]) -> Vec<u8> {
@@ -366,7 +363,12 @@ impl Raw {
         b
     }
 
-    pub async fn login_step(&mut self, csg: u8, transit: Option<u8>, pairs: &[(&str, &str)]) -> Got {
+    pub async fn login_step(
+        &mut self,
+        csg: u8,
+        transit: Option<u8>,
+        pairs: &[(&str, &str)],
+    ) -> Got {
         let b = self.login_bhs(csg, transit, false);
         let data = text(pairs);
         // Login PDUs never carry digests.
@@ -384,7 +386,8 @@ impl Raw {
     /// A complete login without authentication: security (AuthMethod=None) then operational
     /// with `ops`, to full feature phase. Returns the final response.
     pub async fn login(&mut self, kind: &str, target: Option<&str>, ops: &[(&str, &str)]) -> Got {
-        let mut first: Vec<(&str, &str)> = vec![("InitiatorName", INITIATOR), ("SessionType", kind)];
+        let mut first: Vec<(&str, &str)> =
+            vec![("InitiatorName", INITIATOR), ("SessionType", kind)];
         if let Some(t) = target {
             first.push(("TargetName", t));
         }

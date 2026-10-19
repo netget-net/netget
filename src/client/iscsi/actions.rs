@@ -106,7 +106,12 @@ pub fn client_actions() -> Vec<ActionDefinition> {
                 lun_param(),
                 p("lba", "number", "The first logical block to read", true),
                 p("blocks", "number", "How many blocks (default 1)", false),
-                p("encoding", "string", "utf8 (default: text when it is text) or hex", false),
+                p(
+                    "encoding",
+                    "string",
+                    "utf8 (default: text when it is text) or hex",
+                    false,
+                ),
             ],
             json!({"type": READ, "lun": 0, "lba": 0, "blocks": 1}),
         ),
@@ -158,14 +163,24 @@ pub static CONNECTED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     )
     .with_parameters(vec![
         p("remote_addr", "string", "The target portal's address", true),
-        p("initiator_name", "string", "This initiator's iSCSI name", true),
+        p(
+            "initiator_name",
+            "string",
+            "This initiator's iSCSI name",
+            true,
+        ),
         p(
             "target_name",
             "string",
             "The configured target name, if any",
             false,
         ),
-        p("chap", "boolean", "Whether CHAP credentials are configured", true),
+        p(
+            "chap",
+            "boolean",
+            "Whether CHAP credentials are configured",
+            true,
+        ),
     ])
     .with_actions(client_actions())
 });
@@ -210,7 +225,12 @@ pub static LOGIN_RESULT_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             false,
         ),
         p("status_meaning", "string", "What the status means", false),
-        p("alias", "string", "The target's alias, if it gave one", false),
+        p(
+            "alias",
+            "string",
+            "The target's alias, if it gave one",
+            false,
+        ),
         p(
             "negotiated",
             "object",
@@ -238,7 +258,12 @@ pub static COMMAND_RESULT_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             true,
         ),
         p("lun", "number", "The LUN", false),
-        p("status", "string", "The SCSI status (GOOD, CHECK CONDITION, …)", false),
+        p(
+            "status",
+            "string",
+            "The SCSI status (GOOD, CHECK CONDITION, …)",
+            false,
+        ),
         p(
             "sense",
             "string",
@@ -259,7 +284,12 @@ pub static COMMAND_RESULT_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             "read_capacity: blocks, block_size, size_bytes",
             false,
         ),
-        p("data", "string", "read: the data, in the named encoding", false),
+        p(
+            "data",
+            "string",
+            "read: the data, in the named encoding",
+            false,
+        ),
         p(
             "encoding",
             "string",
@@ -332,7 +362,9 @@ pub fn check(v: &Value) -> Result<()> {
             ensure!(
                 matches!(
                     v["page"].as_str(),
-                    None | Some("standard" | "supported_pages" | "serial" | "device_identification")
+                    None | Some(
+                        "standard" | "supported_pages" | "serial" | "device_identification"
+                    )
                 ),
                 "page is standard, supported_pages, serial or device_identification"
             );
@@ -346,7 +378,8 @@ pub fn check(v: &Value) -> Result<()> {
             match &v["blocks"] {
                 Value::Null => {}
                 b => ensure!(
-                    b.as_u64().is_some_and(|b| (1..=MAX_TRANSFER as u64 / 512).contains(&b)),
+                    b.as_u64()
+                        .is_some_and(|b| (1..=MAX_TRANSFER as u64 / 512).contains(&b)),
                     "blocks is 1 to {}",
                     MAX_TRANSFER / 512
                 ),

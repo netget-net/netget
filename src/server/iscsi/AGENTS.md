@@ -90,7 +90,9 @@ NotUnderstood. TargetPortalGroupTag in the first response, TargetAlias in the fi
 - **Text:** SendTargets only — All (the model's list in a discovery session, this session's
   target in a normal one), a target name, or empty; anything else is Reject (as LIO does).
   Answers longer than the initiator's MaxRecvDataSegmentLength continue with C bit and TTT.
-- NOP-Out pings are echoed; Logout answers and closes (reason 2, recovery, is refused);
+- NOP-Out pings are echoed; Logout answers, then waits up to 5 s for the initiator to close
+  before closing itself (closing first made libiscsi log in again; reason 2, recovery, is
+  refused);
   SNACK is Reject at ERL 0; a data segment over MaxRecvDataSegmentLength or a bad header digest
   closes the connection; a bad data digest is Reject (data digest error) and the session goes
   on; a discovery session's SCSI command is Reject (command not supported).

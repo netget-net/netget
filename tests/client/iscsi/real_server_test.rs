@@ -14,7 +14,7 @@ use serde_json::json;
 use std::path::PathBuf;
 use std::time::Duration;
 
-fn find(name: &str, env: &str, install: &str) -> PathBuf {
+fn find_binary(name: &str, env: &str, install: &str) -> PathBuf {
     if let Some(p) = std::env::var_os(env) {
         let p = PathBuf::from(p);
         assert!(p.is_file(), "{env}={} is not a file", p.display());
@@ -88,7 +88,7 @@ const GOTGT_TARGET: &str = "iqn.2026-10.org.gostor:netget-disk";
 
 #[tokio::test]
 async fn gotgt_serves_the_models_session_from_its_backing_file() {
-    let gotgt = find(
+    let gotgt = find_binary(
         "gotgt",
         "NETGET_GOTGT",
         "go install github.com/gostor/gotgt@v0.2.2 (then NETGET_GOTGT=$(go env GOPATH)/bin/gotgt)",
@@ -138,13 +138,20 @@ async fn gotgt_serves_the_models_session_from_its_backing_file() {
     assert_eq!(login["logged_in"], true, "{login}\n{}", log());
     let r = results(&state, id, 6).await;
     assert_eq!(r[0]["luns"], json!([0]), "{}", r[0]);
-    assert_eq!(r[1]["inquiry"]["device_type"], "direct-access block device", "{}", r[1]);
+    assert_eq!(
+        r[1]["inquiry"]["device_type"], "direct-access block device",
+        "{}",
+        r[1]
+    );
     assert_eq!(r[2]["capacity"]["size_bytes"], 4 * 1024 * 1024, "{}", r[2]);
     assert_eq!(r[3]["data"], "hello from gotgt", "{}", r[3]);
     assert_eq!(r[4]["status"], "GOOD", "{}", r[4]);
     assert_eq!(r[5]["data"], WRITE_TEXT, "{}", r[5]);
     let d = wait_for_write(&disk).await;
-    assert!(d[51200 + WRITE_TEXT.len()..51712].iter().all(|b| *b == 0), "zero-padded to the block");
+    assert!(
+        d[51200 + WRITE_TEXT.len()..51712].iter().all(|b| *b == 0),
+        "zero-padded to the block"
+    );
     wait_event(&state, id, "iscsi_logged_out", 0).await;
 }
 
@@ -162,7 +169,7 @@ mod tgtd {
     const TARGET: &str = "iqn.2026-10.org.tgt:netget-disk";
 
     async fn tgtadm(control: u16, args: &[&str]) {
-        let tgtadm = find("tgtadm", "NETGET_TGTADM", "apt-get install tgt");
+        let tgtadm = find_binary("tgtadm", "NETGET_TGTADM", "apt-get install tgt");
         let out = tokio::process::Command::new(tgtadm)
             .arg("-C")
             .arg(control.to_string())
@@ -170,13 +177,17 @@ mod tgtd {
             .output()
             .await
             .unwrap();
-        assert!(out.status.success(), "tgtadm {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "tgtadm {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 
     #[tokio::test]
     async fn tgtd_serves_the_models_session_with_chap_and_mutual_chap() {
         require_root();
-        let tgtd = find("tgtd", "NETGET_TGTD", "apt-get install tgt");
+        let tgtd = find_binary("tgtd", "NETGET_TGTD", "apt-get install tgt");
         let dir = tempfile::tempdir().unwrap();
         let disk = backing_file(dir.path(), "hello from tgt");
         let port = free_port();
@@ -195,13 +206,95 @@ mod tgtd {
             .spawn()
             .unwrap();
         wait_for_port(port).await;
-        tgtadm(control, &["--lld", "iscsi", "--op", "new", "--mode", "target", "--tid", "1", "-T", TARGET]).await;
-        tgtadm(control, &["--lld", "iscsi", "--op", "new", "--mode", "logicalunit", "--tid", "1", "--lun", "1", "-b", disk.to_str().unwrap()]).await;
-        tgtadm(control, &["--lld", "iscsi", "--op", "bind", "--mode", "target", "--tid", "1", "-I", "ALL"]).await;
-        tgtadm(control, &["--lld", "iscsi", "--op", "new", "--mode", "account", "--user", "alice", "--password", "wonderland12"]).await;
-        tgtadm(control, &["--lld", "iscsi", "--op", "bind", "--mode", "account", "--tid", "1", "--user", "alice"]).await;
-        tgtadm(control, &["--lld", "iscsi", "--op", "new", "--mode", "account", "--user", "tgt-target", "--password", "targetsecret1"]).await;
-        tgtadm(control, &["--lld", "iscsi", "--op", "bind", "--mode", "account", "--tid", "1", "--user", "tgt-target", "--outgoing"]).await;
+        tgtadm(
+            control,
+            &[
+                "--lld", "iscsi", "--op", "new", "--mode", "target", "--tid", "1", "-T", TARGET,
+            ],
+        )
+        .await;
+        tgtadm(
+            control,
+            &[
+                "--lld",
+                "iscsi",
+                "--op",
+                "new",
+                "--mode",
+                "logicalunit",
+                "--tid",
+                "1",
+                "--lun",
+                "1",
+                "-b",
+                disk.to_str().unwrap(),
+            ],
+        )
+        .await;
+        tgtadm(
+            control,
+            &[
+                "--lld", "iscsi", "--op", "bind", "--mode", "target", "--tid", "1", "-I", "ALL",
+            ],
+        )
+        .await;
+        tgtadm(
+            control,
+            &[
+                "--lld",
+                "iscsi",
+                "--op",
+                "new",
+                "--mode",
+                "account",
+                "--user",
+                "alice",
+                "--password",
+                "wonderland12",
+            ],
+        )
+        .await;
+        tgtadm(
+            control,
+            &[
+                "--lld", "iscsi", "--op", "bind", "--mode", "account", "--tid", "1", "--user",
+                "alice",
+            ],
+        )
+        .await;
+        tgtadm(
+            control,
+            &[
+                "--lld",
+                "iscsi",
+                "--op",
+                "new",
+                "--mode",
+                "account",
+                "--user",
+                "tgt-target",
+                "--password",
+                "targetsecret1",
+            ],
+        )
+        .await;
+        tgtadm(
+            control,
+            &[
+                "--lld",
+                "iscsi",
+                "--op",
+                "bind",
+                "--mode",
+                "account",
+                "--tid",
+                "1",
+                "--user",
+                "tgt-target",
+                "--outgoing",
+            ],
+        )
+        .await;
 
         // tgt's LUN 0 is its controller; the disk is LUN 1. CRC32C both ways.
         let (state, id) = client(

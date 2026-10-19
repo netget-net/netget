@@ -241,7 +241,10 @@ pub enum ReadError {
     Stalled,
     /// The data segment declared is longer than this side accepts; nothing past the header
     /// was read.
-    Oversize { declared: usize, limit: usize },
+    Oversize {
+        declared: usize,
+        limit: usize,
+    },
     /// The header digest did not match: the stream can no longer be trusted.
     HeaderDigest,
     /// The data digest did not match. The PDU was read whole, so the stream is still in step.

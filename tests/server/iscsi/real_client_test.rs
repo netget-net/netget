@@ -16,8 +16,9 @@ use std::process::Output;
 
 /// A peer binary on PATH (or Homebrew's libiscsi prefix), or a failure that says how to
 /// install it.
-pub fn require(name: &str, install: &str) -> PathBuf {
-    let mut dirs: Vec<PathBuf> = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect();
+pub fn require_tool(name: &str, install: &str) -> PathBuf {
+    let mut dirs: Vec<PathBuf> =
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect();
     dirs.push("/opt/homebrew/opt/libiscsi/bin".into());
     dirs.push("/usr/local/opt/libiscsi/bin".into());
     dirs.push("/usr/sbin".into());
@@ -35,7 +36,8 @@ pub fn require(name: &str, install: &str) -> PathBuf {
     );
 }
 
-pub const LIBISCSI: &str = "brew install libiscsi (macOS) or apt-get install libiscsi-bin (Debian/Ubuntu)";
+pub const LIBISCSI: &str =
+    "brew install libiscsi (macOS) or apt-get install libiscsi-bin (Debian/Ubuntu)";
 pub const TESTCU: &str = "iqn.2026-10.net.netget:testcu";
 
 /// The model for the libiscsi tests: disk0 as in `POLICY`, and a plain 64 MiB writable LUN for
@@ -74,12 +76,22 @@ pub fn text(b: &[u8]) -> String {
     String::from_utf8_lossy(b).into_owned()
 }
 
+/// iscsi-md5sum's digest of a read, which must succeed.
+async fn md5_of(md5sum: &PathBuf, args: &[&str]) -> String {
+    let mut a = vec!["-i", INITIATOR];
+    a.extend(args);
+    let out = run(md5sum, &a).await;
+    let o = text(&out.stdout);
+    assert!(out.status.success(), "{o}\n{}", text(&out.stderr));
+    o.trim().to_string()
+}
+
 #[tokio::test]
 async fn libiscsi_discovers_logs_in_and_reads_the_described_luns() {
-    let ls = require("iscsi-ls", LIBISCSI);
-    let inq = require("iscsi-inq", LIBISCSI);
-    let rc16 = require("iscsi-readcapacity16", LIBISCSI);
-    let md5sum = require("iscsi-md5sum", LIBISCSI);
+    let ls = require_tool("iscsi-ls", LIBISCSI);
+    let inq = require_tool("iscsi-inq", LIBISCSI);
+    let rc16 = require_tool("iscsi-readcapacity16", LIBISCSI);
+    let md5sum = require_tool("iscsi-md5sum", LIBISCSI);
     let srv = start(policy(REAL_POLICY), None).await;
     let portal = format!("iscsi://127.0.0.1:{}", srv.port);
     let init = ["-i", INITIATOR];
@@ -88,7 +100,10 @@ async fn libiscsi_discovers_logs_in_and_reads_the_described_luns() {
     let out = run(&ls, &[init[0], init[1], "-s", &portal]).await;
     let o = text(&out.stdout);
     assert!(out.status.success(), "{o}\n{}", text(&out.stderr));
-    assert!(o.contains(&format!("Target:{DISK0} Portal:127.0.0.1:{},1", srv.port)), "{o}");
+    assert!(
+        o.contains(&format!("Target:{DISK0} Portal:127.0.0.1:{},1", srv.port)),
+        "{o}"
+    );
     assert!(o.contains(&format!("Target:{TESTCU}")), "{o}");
     assert!(o.contains("Lun:0") && o.contains("Lun:1"), "{o}");
 
@@ -103,53 +118,103 @@ async fn libiscsi_discovers_logs_in_and_reads_the_described_luns() {
     assert!(out.status.success(), "{o}\n{}", text(&out.stderr));
     assert!(o.contains("SER0001"), "{o}");
     let out = run(&inq, &[init[0], init[1], "-e", "1", "-c", "0x83", &lun0]).await;
-    assert!(out.status.success(), "{}{}", text(&out.stdout), text(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}{}",
+        text(&out.stdout),
+        text(&out.stderr)
+    );
 
     // READ CAPACITY(16) of the 4096-byte-block LUN.
     let lun1 = format!("{portal}/{DISK0}/1");
     let out = run(&rc16, &[init[0], init[1], &lun1]).await;
     let o = text(&out.stdout);
     assert!(out.status.success(), "{o}\n{}", text(&out.stderr));
-    assert!(o.contains("Block size:4096") || o.contains("Block Length:4096") || o.contains("4096"), "{o}");
+    assert!(
+        o.contains("Block size:4096") || o.contains("Block Length:4096") || o.contains("4096"),
+        "{o}"
+    );
     assert!(o.contains("511"), "last LBA 511: {o}");
 
-    // Reads: the digest of the first 64 KiB of LUN 0 and of all of LUN 1, computed here from
-    // what the model described.
+    // Reads: the digest of the first 64 KiB of LUN 0 and of all of LUN 1, against the md5 of
+    // the bytes the model described.
     let mut first = vec![0u8; 65536];
     first[..17].copy_from_slice(b"hello from netget");
     first[4096..4608].fill(0xAB);
-    let want = hex::encode(md5::Md5::digest(&first));
-    let out = run(&md5sum, &[init[0], init[1], "-o", "0", "-l", "65536", &lun0]).await;
-    let o = text(&out.stdout);
-    assert!(out.status.success(), "{o}\n{}", text(&out.stderr));
-    assert!(o.contains(&want), "md5 {want} of the described bytes: {o}");
     let mut whole = vec![0u8; 2 * 1024 * 1024];
     whole[..4].copy_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
-    let want = hex::encode(md5::Md5::digest(&whole));
-    let out = run(&md5sum, &[init[0], init[1], &lun1]).await;
-    let o = text(&out.stdout);
-    assert!(out.status.success(), "{o}\n{}", text(&out.stderr));
-    assert!(o.contains(&want), "md5 {want} of LUN 1: {o}");
+    let head = md5_of(&md5sum, &["-o", "0", "-l", "65536", &lun0]).await;
+    let lun1_digest = md5_of(&md5sum, &[&lun1]).await;
+    if cfg!(target_os = "macos") {
+        // Homebrew's libiscsi 1.20.3 bottle prints digests that are not MD5 — 75733c3b… for
+        // 512 zero bytes, where MD5 is bf619eac… — while a capture of the same session shows
+        // the target's bytes exactly as described (measured 19 October 2026). So on macOS
+        // its digest is compared with its own digest of other reads: the same range twice
+        // agrees, two ranges of zeroes agree, and ranges whose described bytes differ do
+        // not. The exact MD5 comparison runs on Linux, against the source build.
+        assert_eq!(
+            head,
+            md5_of(&md5sum, &["-o", "0", "-l", "65536", &lun0]).await
+        );
+        let zeros_a = md5_of(&md5sum, &["-o", "8192", "-l", "512", &lun0]).await;
+        let zeros_b = md5_of(&md5sum, &["-o", "16384", "-l", "512", &lun0]).await;
+        let text_block = md5_of(&md5sum, &["-o", "0", "-l", "512", &lun0]).await;
+        let fill_block = md5_of(&md5sum, &["-o", "4096", "-l", "512", &lun0]).await;
+        assert_eq!(zeros_a, zeros_b, "two zero blocks read the same");
+        assert_ne!(zeros_a, text_block, "the text block is not zeroes");
+        assert_ne!(zeros_a, fill_block, "the fill block is not zeroes");
+        assert_ne!(text_block, fill_block);
+        assert_ne!(head, lun1_digest);
+    } else {
+        let want = hex::encode(md5::Md5::digest(&first));
+        assert_eq!(head, want, "md5 of the described bytes");
+        let want = hex::encode(md5::Md5::digest(&whole));
+        assert_eq!(lun1_digest, want, "md5 of LUN 1");
+    }
 
     // The medium error region fails the read, as described.
-    let out = run(&md5sum, &[init[0], init[1], "-o", "520192", "-l", "8192", &lun0]).await;
-    assert!(!out.status.success(), "a read across the error region fails: {}", text(&out.stdout));
+    let out = run(
+        &md5sum,
+        &[init[0], init[1], "-o", "520192", "-l", "8192", &lun0],
+    )
+    .await;
+    assert!(
+        !out.status.success(),
+        "a read across the error region fails: {}",
+        text(&out.stdout)
+    );
 }
 
 #[tokio::test]
 async fn libiscsi_logs_in_with_chap() {
-    let inq = require("iscsi-inq", LIBISCSI);
-    let params = serde_json::json!({"chap_accounts": [{"name": "alice", "secret": "wonderland12"}]});
+    let inq = require_tool("iscsi-inq", LIBISCSI);
+    let params =
+        serde_json::json!({"chap_accounts": [{"name": "alice", "secret": "wonderland12"}]});
     let srv = start(policy(REAL_POLICY), Some(params)).await;
-    let good = format!("iscsi://alice%wonderland12@127.0.0.1:{}/{DISK0}/0", srv.port);
+    let good = format!(
+        "iscsi://alice%wonderland12@127.0.0.1:{}/{DISK0}/0",
+        srv.port
+    );
     let out = run(&inq, &["-i", INITIATOR, &good]).await;
-    assert!(out.status.success(), "{}{}", text(&out.stdout), text(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}{}",
+        text(&out.stdout),
+        text(&out.stderr)
+    );
     assert!(text(&out.stdout).contains("BOOT-DISK"));
-    let bad = format!("iscsi://alice%wrong-secret-1@127.0.0.1:{}/{DISK0}/0", srv.port);
+    let bad = format!(
+        "iscsi://alice%wrong-secret-1@127.0.0.1:{}/{DISK0}/0",
+        srv.port
+    );
     let out = run(&inq, &["-i", INITIATOR, &bad]).await;
     assert!(!out.status.success(), "a wrong secret is refused");
     let login = events(&srv.state, srv.id, "iscsi_login").await;
-    assert_eq!(login.len(), 1, "only the authenticated login reached the model");
+    assert_eq!(
+        login.len(),
+        1,
+        "only the authenticated login reached the model"
+    );
     assert_eq!(login[0]["authenticated_user"], "alice");
 }
 
@@ -200,7 +265,7 @@ async fn test_cu(bin: &PathBuf, url: &str, test: &str) -> (u32, u32, String) {
 
 #[tokio::test]
 async fn iscsi_test_cu_passes_the_implemented_subset() {
-    let bin = require("iscsi-test-cu", LIBISCSI);
+    let bin = require_tool("iscsi-test-cu", LIBISCSI);
     let srv = start(policy(REAL_POLICY), None).await;
     let url = format!("iscsi://127.0.0.1:{}/{TESTCU}/0", srv.port);
     let mut failures = Vec::new();
@@ -231,7 +296,10 @@ mod open_iscsi {
 
     /// The block device the kernel made for a session to `target`, from sysfs.
     fn block_device_for(target: &str) -> Option<PathBuf> {
-        for host in std::fs::read_dir("/sys/class/iscsi_session").ok()?.flatten() {
+        for host in std::fs::read_dir("/sys/class/iscsi_session")
+            .ok()?
+            .flatten()
+        {
             let name = std::fs::read_to_string(host.path().join("targetname")).unwrap_or_default();
             if name.trim() != target {
                 continue;
@@ -258,15 +326,31 @@ mod open_iscsi {
     #[tokio::test]
     async fn the_linux_kernel_initiator_reads_the_described_disk() {
         require_root();
-        let iscsiadm = require("iscsiadm", "apt-get install open-iscsi (and modprobe iscsi_tcp)");
+        let iscsiadm = require_tool(
+            "iscsiadm",
+            "apt-get install open-iscsi (and modprobe iscsi_tcp)",
+        );
         let srv = start_on("127.0.0.1", 0, policy(REAL_POLICY), None).await;
         let portal = format!("127.0.0.1:{}", srv.port);
-        let out = run(&iscsiadm, &["-m", "discovery", "-t", "sendtargets", "-p", &portal]).await;
+        let out = run(
+            &iscsiadm,
+            &["-m", "discovery", "-t", "sendtargets", "-p", &portal],
+        )
+        .await;
         let o = text(&out.stdout);
         assert!(out.status.success(), "{o}\n{}", text(&out.stderr));
         assert!(o.contains(DISK0), "{o}");
-        let out = run(&iscsiadm, &["-m", "node", "-T", DISK0, "-p", &portal, "--login"]).await;
-        assert!(out.status.success(), "{}{}", text(&out.stdout), text(&out.stderr));
+        let out = run(
+            &iscsiadm,
+            &["-m", "node", "-T", DISK0, "-p", &portal, "--login"],
+        )
+        .await;
+        assert!(
+            out.status.success(),
+            "{}{}",
+            text(&out.stdout),
+            text(&out.stderr)
+        );
         let dev = tokio::time::timeout(std::time::Duration::from_secs(30), async {
             loop {
                 if let Some(d) = block_device_for(DISK0) {
@@ -279,14 +363,28 @@ mod open_iscsi {
         })
         .await
         .expect("the kernel made a block device for the session");
-        let dd = require("dd", "coreutils");
+        let dd = require_tool("dd", "coreutils");
         let out = run(
             &dd,
-            &[&format!("if={}", dev.display()), "bs=4096", "count=2", "iflag=direct", "status=none"],
+            &[
+                &format!("if={}", dev.display()),
+                "bs=4096",
+                "count=2",
+                "iflag=direct",
+                "status=none",
+            ],
         )
         .await;
-        let _ = run(&iscsiadm, &["-m", "node", "-T", DISK0, "-p", &portal, "--logout"]).await;
-        let _ = run(&iscsiadm, &["-m", "node", "-T", DISK0, "-p", &portal, "-o", "delete"]).await;
+        let _ = run(
+            &iscsiadm,
+            &["-m", "node", "-T", DISK0, "-p", &portal, "--logout"],
+        )
+        .await;
+        let _ = run(
+            &iscsiadm,
+            &["-m", "node", "-T", DISK0, "-p", &portal, "-o", "delete"],
+        )
+        .await;
         assert!(out.status.success(), "{}", text(&out.stderr));
         let d = out.stdout;
         assert_eq!(&d[..17], b"hello from netget");

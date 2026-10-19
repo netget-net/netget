@@ -29,13 +29,15 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use text::{DigestPreference, Params};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 /// The whole login, from the first byte to full feature phase.
 pub const LOGIN_DEADLINE: Duration = Duration::from_secs(60);
 /// The rest of any PDU once its first byte has arrived.
 pub const PDU_DEADLINE: Duration = Duration::from_secs(60);
+/// How long a logged-out connection waits for the initiator to close it.
+pub const LOGOUT_LINGER: Duration = Duration::from_secs(5);
 /// Commands an initiator may have outstanding: MaxCmdSN - ExpCmdSN + 1.
 pub const COMMAND_WINDOW: u32 = 32;
 /// Bytes one command may move in either direction.
@@ -130,9 +132,8 @@ pub fn parse_config(ctx: &SpawnContext) -> Result<Config> {
         config.initial_r2t = v;
     }
     if let Some(d) = params.get_optional_string("digests")? {
-        config.digests = Some(
-            DigestPreference::parse(&d).context("digests is either, crc32c or none")?,
-        );
+        config.digests =
+            Some(DigestPreference::parse(&d).context("digests is either, crc32c or none")?);
     }
     Ok(config)
 }
@@ -206,7 +207,8 @@ pub async fn spawn(ctx: SpawnContext) -> Result<SocketAddr> {
 
 /// Log how a decision went, in the `decision=` vocabulary every server shares.
 fn outcome(ctx: &SpawnContext, id: ConnectionId, operation: &str, decision: &str, detail: &str) {
-    let summary = format!("iSCSI connection {id} operation={operation} decision={decision} {detail}");
+    let summary =
+        format!("iSCSI connection {id} operation={operation} decision={decision} {detail}");
     let log = Log::new(Some(&ctx.status_tx));
     if decision.starts_with("fail_closed_") || decision == "model_silent" {
         log.error(summary);
@@ -230,7 +232,10 @@ enum Auth {
     /// AuthMethod=CHAP was agreed; the initiator's CHAP_A comes next.
     ChapChosen,
     /// We sent CHAP_I and CHAP_C.
-    Challenged { id: u8, challenge: Vec<u8> },
+    Challenged {
+        id: u8,
+        challenge: Vec<u8>,
+    },
     /// Authenticated (as this CHAP name, or with no authentication at all).
     Done(Option<String>),
 }
@@ -297,6 +302,8 @@ struct Conn<'a> {
     discovered: Option<Vec<(String, Vec<String>)>>,
     /// CmdSNs an ABORT TASK named before the command arrived; dropped when they do.
     aborted_before_arrival: Vec<u32>,
+    /// A Logout Response has been sent: the initiator closes next.
+    logged_out: bool,
 }
 
 impl<'a> Conn<'a> {
@@ -333,6 +340,7 @@ impl<'a> Conn<'a> {
             text_out: None,
             discovered: None,
             aborted_before_arrival: Vec::new(),
+            logged_out: false,
         }
     }
 
@@ -584,15 +592,8 @@ impl<'a> Conn<'a> {
                     let done = next == Some(stage::FULL_FEATURE);
                     match next {
                         Some(n) => {
-                            self.login_response(
-                                &req,
-                                true,
-                                csg,
-                                n,
-                                &reply,
-                                login_status::SUCCESS,
-                            )
-                            .await?;
+                            self.login_response(&req, true, csg, n, &reply, login_status::SUCCESS)
+                                .await?;
                             csg = n;
                         }
                         None => {
@@ -653,7 +654,8 @@ impl<'a> Conn<'a> {
             ),
         );
         // A refused login answers once and closes (RFC 7143 §11.13.5).
-        self.login_response(req, false, csg, 0, &[], f.status).await?;
+        self.login_response(req, false, csg, 0, &[], f.status)
+            .await?;
         let _ = self.stream.shutdown().await;
         Ok(())
     }
@@ -759,8 +761,8 @@ impl<'a> Conn<'a> {
         }
         for (k, v) in pairs {
             match k.as_str() {
-                "InitiatorName" | "SessionType" | "TargetName" | "InitiatorAlias" | "AuthMethod"
-                | "CHAP_A" | "CHAP_N" | "CHAP_R" | "CHAP_I" | "CHAP_C" => {}
+                "InitiatorName" | "SessionType" | "TargetName" | "InitiatorAlias"
+                | "AuthMethod" | "CHAP_A" | "CHAP_N" | "CHAP_R" | "CHAP_I" | "CHAP_C" => {}
                 _ => match text::negotiate_as_target(
                     &mut self.params,
                     k,
@@ -844,7 +846,9 @@ impl<'a> Conn<'a> {
                 reply.push(("AuthMethod".into(), "None".into()));
                 *auth = Auth::Done(None);
             } else {
-                return auth_fail("no CHAP accounts are configured and the initiator requires authentication");
+                return auth_fail(
+                    "no CHAP accounts are configured and the initiator requires authentication",
+                );
             }
         }
         if let Some(algorithms) = text::get(pairs, "CHAP_A") {
@@ -1065,6 +1069,16 @@ impl<'a> Conn<'a> {
             };
             self.received(&req).await;
             if !self.dispatch(req).await? {
+                if self.logged_out {
+                    // The initiator closes after reading the Logout Response (RFC 7143
+                    // §11.15); closing first races it, and libiscsi reads the hang-up as a
+                    // dropped connection and logs in again. Wait for its close, bounded.
+                    let mut sink = [0u8; 512];
+                    let _ = tokio::time::timeout(LOGOUT_LINGER, async {
+                        while matches!(self.stream.read(&mut sink).await, Ok(n) if n > 0) {}
+                    })
+                    .await;
+                }
                 let _ = self.stream.shutdown().await;
                 return Ok(());
             }
@@ -1080,7 +1094,11 @@ impl<'a> Conn<'a> {
         }
         if cmd_sn == self.exp_cmd_sn {
             self.exp_cmd_sn = self.exp_cmd_sn.wrapping_add(1);
-            if let Some(i) = self.aborted_before_arrival.iter().position(|c| *c == cmd_sn) {
+            if let Some(i) = self
+                .aborted_before_arrival
+                .iter()
+                .position(|c| *c == cmd_sn)
+            {
                 self.aborted_before_arrival.swap_remove(i);
                 outcome(
                     self.ctx,
@@ -1166,7 +1184,14 @@ impl<'a> Conn<'a> {
                 r.set_u16(40, self.params.default_time2wait as u16);
                 r.set_u16(42, self.params.default_time2retain as u16);
                 self.send(&r).await?;
-                outcome(self.ctx, self.id, "logout", "logged_out", &format!("reason {reason}"));
+                outcome(
+                    self.ctx,
+                    self.id,
+                    "logout",
+                    "logged_out",
+                    &format!("reason {reason}"),
+                );
+                self.logged_out = reason != 2;
                 Ok(reason == 2)
             }
             op::SNACK_REQUEST => {
@@ -1413,11 +1438,7 @@ impl<'a> Conn<'a> {
                     let d = lun.read(rw.lba, rw.blocks as u64, &self.overlay);
                     self.data_in(itt, lun_field, &d, edtl).await?;
                 }
-                None => {
-                    return self
-                        .check_condition(itt, Sense::INVALID_OPCODE, edtl)
-                        .await
-                }
+                None => return self.check_condition(itt, Sense::INVALID_OPCODE, edtl).await,
             },
         }
         Ok(true)
@@ -1491,7 +1512,9 @@ impl<'a> Conn<'a> {
                 .await;
         }
         if !lun.writable {
-            return self.check_condition(itt, Sense::WRITE_PROTECTED, edtl).await;
+            return self
+                .check_condition(itt, Sense::WRITE_PROTECTED, edtl)
+                .await;
         }
         if expected == 0 {
             let residual = if edtl > 0 { (0x02, edtl) } else { (0, 0) };
@@ -1662,9 +1685,7 @@ impl<'a> Conn<'a> {
             return Ok(true);
         };
         let Some(lun) = target.lun(w.lun) else {
-            return self
-                .check_condition(itt, Sense::LUN_NOT_SUPPORTED, 0)
-                .await;
+            return self.check_condition(itt, Sense::LUN_NOT_SUPPORTED, 0).await;
         };
         let blocks = (w.expected / lun.block_size as usize) as u64;
         if let Some(s) = lun.failure(w.lba, blocks, true) {
@@ -1800,7 +1821,13 @@ impl<'a> Conn<'a> {
         let pairs = match text::parse(&acc) {
             Ok(p) => p,
             Err(e) => {
-                outcome(self.ctx, self.id, "text", "protocol_refusal", &e.to_string());
+                outcome(
+                    self.ctx,
+                    self.id,
+                    "text",
+                    "protocol_refusal",
+                    &e.to_string(),
+                );
                 self.reject(&req, reject::PROTOCOL_ERROR).await?;
                 return Ok(true);
             }
@@ -1959,7 +1986,13 @@ impl<'a> Conn<'a> {
                 vec![]
             }
             Err(f) => {
-                outcome(self.ctx, self.id, "discovery", f.decision, "no targets listed");
+                outcome(
+                    self.ctx,
+                    self.id,
+                    "discovery",
+                    f.decision,
+                    "no targets listed",
+                );
                 vec![]
             }
         };

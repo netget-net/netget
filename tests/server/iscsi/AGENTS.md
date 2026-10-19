@@ -27,10 +27,23 @@ iSCSI is reached through its `iscsi.target_ports` preference, not a decode-as en
 
 **libiscsi 1.20.3** (Homebrew `libiscsi`, Ubuntu `libiscsi-bin`), unprivileged: `iscsi-ls -s`
 (discovery, login to every target, LUN listing), `iscsi-inq` (standard and VPD 0x80/0x83),
-`iscsi-readcapacity16`, `iscsi-md5sum` (digests of the first 64 KiB of LUN 0 and all of LUN 1
-compared with the md5 of the bytes the policy described; a read across the error region must
-fail), CHAP through the URL's `user%secret` with a wrong secret refused, and **iscsi-test-cu**
-`--dataloss` over `TEST_CU_SUBSET`.
+`iscsi-readcapacity16`, `iscsi-md5sum` (a read across the error region must fail), CHAP
+through the URL's `user%secret` with a wrong secret refused and exactly one login reaching the
+model, and **iscsi-test-cu** `--dataloss` over `TEST_CU_SUBSET`.
+
+**iscsi-md5sum's digest is compared with MD5 only on Linux.** Homebrew's libiscsi 1.20.3 bottle
+(arm64) prints digests that are not MD5 at all — `75733c3b…` for 512 zero bytes, where MD5 is
+`bf619eac…` — while a loopback capture of the same session shows the target sending exactly the
+described bytes (measured 19 October 2026). On macOS the test compares libiscsi's digests with
+each other instead (the same range twice agrees, two zero ranges agree, ranges whose described
+bytes differ do not); on Linux, against the source build of `scripts/test-peers/build-libiscsi.sh`,
+the digests of LUN 0's first 64 KiB and all of LUN 1 must equal the MD5 of the description.
+
+**The CHAP test found a real defect.** The target closed its end straight after the Logout
+Response; libiscsi saw the hang-up before it had finished with the response, took it for a
+dropped connection, and logged in again — so the model was asked twice. The target now waits
+(up to `LOGOUT_LINGER`, 5 s) for the initiator to close, as RFC 7143 §11.15 has the initiator
+do.
 
 iscsi-test-cu census (every SCSI and iSCSI suite, measured 19 October 2026 on macOS): 224
 tests, all pass but one. About 145 of the passes are the suite skipping itself because the

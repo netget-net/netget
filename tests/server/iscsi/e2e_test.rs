@@ -21,7 +21,11 @@ async fn discovery_lists_the_models_targets_and_tshark_reads_the_session() {
     raw.login(
         "Discovery",
         None,
-        &[("HeaderDigest", "None"), ("DataDigest", "None"), ("MaxRecvDataSegmentLength", "8192")],
+        &[
+            ("HeaderDigest", "None"),
+            ("DataDigest", "None"),
+            ("MaxRecvDataSegmentLength", "8192"),
+        ],
     )
     .await;
     let answer = raw.text_request(&[("SendTargets", "All")]).await;
@@ -48,7 +52,11 @@ async fn discovery_lists_the_models_targets_and_tshark_reads_the_session() {
     let (b, _) = raw.scsi_bhs(0x80, 0, 0, &[0u8; 6]);
     raw.send(b, &[]).await;
     let g = raw.recv().await;
-    assert_eq!((g.opcode(), g.bhs[2]), (0x3f, 0x05), "Reject: command not supported");
+    assert_eq!(
+        (g.opcode(), g.bhs[2]),
+        (0x3f, 0x05),
+        "Reject: command not supported"
+    );
     let g = raw.logout().await;
     assert_eq!(g.bhs[2], 0, "logout succeeded");
     assert!(raw.closed().await, "the target closes after logout");
@@ -95,7 +103,11 @@ async fn a_normal_session_serves_the_described_luns() {
     let t = r.text();
     assert_eq!(key(&t, "InitialR2T"), Some("No"));
     assert_eq!(key(&t, "ImmediateData"), Some("Yes"));
-    assert_eq!(key(&t, "MaxRecvDataSegmentLength"), Some("262144"), "the target declares its own");
+    assert_eq!(
+        key(&t, "MaxRecvDataSegmentLength"),
+        Some("262144"),
+        "the target declares its own"
+    );
     assert_eq!(key(&t, "TargetAlias"), Some("netget disk"));
     assert_ne!(u16::from_be_bytes([r.bhs[14], r.bhs[15]]), 0, "a TSIH");
     let login = events(&srv.state, srv.id, "iscsi_login").await;
@@ -155,7 +167,11 @@ async fn a_normal_session_serves_the_described_luns() {
     // READ: the text, the fill, zeroes; a 4 KiB read comes back in 1 KiB Data-In PDUs.
     let (d, st) = raw.read_cmd(0, 512, &read10(0, 1)).await;
     assert_eq!(st.status(), 0);
-    assert_eq!(st.flags() & 0x81, 0x81, "status collapsed into the last Data-In");
+    assert_eq!(
+        st.flags() & 0x81,
+        0x81,
+        "status collapsed into the last Data-In"
+    );
     assert_eq!(&d[..17], b"hello from netget");
     assert!(d[17..].iter().all(|b| *b == 0));
     let (d, _) = raw.read_cmd(0, 512, &read10(8, 1)).await;
@@ -166,7 +182,10 @@ async fn a_normal_session_serves_the_described_luns() {
     loop {
         let g = raw.recv().await;
         assert_eq!(g.itt(), itt);
-        assert!(g.data.len() <= 1024, "within the initiator's MaxRecvDataSegmentLength");
+        assert!(
+            g.data.len() <= 1024,
+            "within the initiator's MaxRecvDataSegmentLength"
+        );
         let last = g.flags() & 0x01 != 0;
         pdus.push(g);
         if last {
@@ -180,7 +199,11 @@ async fn a_normal_session_serves_the_described_luns() {
     // A medium error names its first failing block; past the end is out of range.
     let (_, st) = raw.read_cmd(0, 8192, &read10(1020, 16)).await;
     assert_eq!(st.sense(), Some((3, 0x11, 0)));
-    assert_eq!(be32(&st.data[2..], 3), 1024, "INFORMATION: the first bad LBA");
+    assert_eq!(
+        be32(&st.data[2..], 3),
+        1024,
+        "INFORMATION: the first bad LBA"
+    );
     let (_, st) = raw.read_cmd(0, 1024, &read10(2047, 2)).await;
     assert_eq!(st.sense(), Some((5, 0x21, 0)));
 
@@ -196,7 +219,11 @@ async fn a_normal_session_serves_the_described_luns() {
     let (b, _) = raw.scsi_bhs(0xA0, 1, 4096, &write10(0, 1));
     raw.send(b, &vec![1u8; 4096]).await;
     let g = raw.recv().await;
-    assert_eq!(g.sense(), Some((7, 0x27, 0)), "DATA PROTECT / WRITE PROTECTED");
+    assert_eq!(
+        g.sense(),
+        Some((7, 0x27, 0)),
+        "DATA PROTECT / WRITE PROTECTED"
+    );
 
     // Unsolicited Data-Out after the immediate data (InitialR2T=No): 2 KiB in two PDUs.
     let data: Vec<u8> = (0..2048u32).map(|i| (i % 251) as u8).collect();
@@ -231,7 +258,10 @@ async fn a_normal_session_serves_the_described_luns() {
     nop[24..28].copy_from_slice(&raw.cmd_sn.to_be_bytes());
     raw.send(nop, b"ping").await;
     let g = raw.recv().await;
-    assert_eq!((g.opcode(), g.itt(), g.data.as_slice()), (0x20, itt, &b"ping"[..]));
+    assert_eq!(
+        (g.opcode(), g.itt(), g.data.as_slice()),
+        (0x20, itt, &b"ping"[..])
+    );
 
     raw.logout().await;
     assert_eq!(
@@ -309,7 +339,11 @@ async fn r2t_solicits_write_data_in_bursts() {
     d[40..44].copy_from_slice(&256u32.to_be_bytes());
     raw.send(d, &[0u8; 256]).await;
     let g = raw.recv().await;
-    assert_eq!((g.opcode(), g.bhs[2]), (0x3f, 0x04), "Reject: protocol error");
+    assert_eq!(
+        (g.opcode(), g.bhs[2]),
+        (0x3f, 0x04),
+        "Reject: protocol error"
+    );
     assert!(raw.closed().await);
     oracle(&raw).assert_clean();
 }
@@ -386,14 +420,18 @@ async fn chap_is_checked_in_rust_before_the_model_is_asked() {
         Some(format!("0x{}", hex::encode(h.finalize())).as_str()),
         "mutual CHAP: the target proves its secret"
     );
-    raw.finish_operational(&[("MaxRecvDataSegmentLength", "8192")]).await;
+    raw.finish_operational(&[("MaxRecvDataSegmentLength", "8192")])
+        .await;
     let g = raw.tur(0).await;
     assert_eq!(g.status(), 0);
     let login = events(&srv.state, srv.id, "iscsi_login").await;
     assert_eq!(login.len(), 1);
     assert_eq!(login[0]["authenticated_user"], "alice", "{}", login[0]);
     let all = serde_json::to_string(&login).unwrap();
-    assert!(!all.contains("wonderland12") && !all.contains("targetsecret1"), "no secret reaches the model");
+    assert!(
+        !all.contains("wonderland12") && !all.contains("targetsecret1"),
+        "no secret reaches the model"
+    );
 
     // No CHAP offered while it is required: refused.
     let mut raw = Raw::connect(srv.port).await;
@@ -401,7 +439,11 @@ async fn chap_is_checked_in_rust_before_the_model_is_asked() {
         .login_step(
             0,
             Some(1),
-            &[("InitiatorName", INITIATOR), ("TargetName", DISK0), ("AuthMethod", "None")],
+            &[
+                ("InitiatorName", INITIATOR),
+                ("TargetName", DISK0),
+                ("AuthMethod", "None"),
+            ],
         )
         .await;
     assert_eq!(r.login_status(), 0x0201);
@@ -411,17 +453,27 @@ async fn chap_is_checked_in_rust_before_the_model_is_asked() {
 #[tokio::test]
 async fn logins_fail_closed_and_expose_nothing_the_model_did_not_describe() {
     // Only discovery has a handler: a login falls through to the unreachable model.
-    let handlers = Some(vec![json!({"event_pattern":"iscsi_discovery","handler":{"type":"script","language":"python","code":POLICY}})]);
+    let handlers = Some(vec![
+        json!({"event_pattern":"iscsi_discovery","handler":{"type":"script","language":"python","code":POLICY}}),
+    ]);
     let srv = start(handlers, None).await;
     let mut raw = Raw::connect(srv.port).await;
     let r = raw
         .login_step(
             0,
             Some(1),
-            &[("InitiatorName", INITIATOR), ("TargetName", DISK0), ("AuthMethod", "None")],
+            &[
+                ("InitiatorName", INITIATOR),
+                ("TargetName", DISK0),
+                ("AuthMethod", "None"),
+            ],
         )
         .await;
-    assert_eq!(r.login_status(), 0x0300, "target error when the backend fails");
+    assert_eq!(
+        r.login_status(),
+        0x0300,
+        "target error when the backend fails"
+    );
     assert!(raw.closed().await, "no session, so no LUN");
 
     let srv = start(policy(POLICY), None).await;
@@ -436,7 +488,11 @@ async fn logins_fail_closed_and_expose_nothing_the_model_did_not_describe() {
             .login_step(
                 0,
                 Some(1),
-                &[("InitiatorName", initiator), ("TargetName", target), ("AuthMethod", "None")],
+                &[
+                    ("InitiatorName", initiator),
+                    ("TargetName", target),
+                    ("AuthMethod", "None"),
+                ],
             )
             .await;
         assert_eq!(r.login_status(), status, "{target} {initiator}");
@@ -455,7 +511,9 @@ async fn bounds_refuse_before_anything_is_buffered_or_asked() {
     assert!(raw.closed().await);
     // 129 keys in one login.
     let mut raw = Raw::connect(srv.port).await;
-    let many: Vec<(String, String)> = (0..129).map(|i| (format!("X-k{i}"), "v".to_string())).collect();
+    let many: Vec<(String, String)> = (0..129)
+        .map(|i| (format!("X-k{i}"), "v".to_string()))
+        .collect();
     let mut pairs: Vec<(&str, &str)> = vec![("InitiatorName", INITIATOR), ("TargetName", DISK0)];
     pairs.extend(many.iter().map(|(k, v)| (k.as_str(), v.as_str())));
     let r = raw.login_step(0, Some(1), &pairs).await;
@@ -463,7 +521,11 @@ async fn bounds_refuse_before_anything_is_buffered_or_asked() {
     // A key sent twice.
     let mut raw = Raw::connect(srv.port).await;
     let r = raw
-        .login_step(0, Some(1), &[("InitiatorName", INITIATOR), ("InitiatorName", INITIATOR)])
+        .login_step(
+            0,
+            Some(1),
+            &[("InitiatorName", INITIATOR), ("InitiatorName", INITIATOR)],
+        )
         .await;
     assert_eq!(r.login_status(), 0x0200);
     // A version this target does not speak.
@@ -477,15 +539,28 @@ async fn bounds_refuse_before_anything_is_buffered_or_asked() {
 
     // Full feature phase: a data segment over the target's MaxRecvDataSegmentLength (256 KiB).
     let mut raw = Raw::connect(srv.port).await;
-    raw.login("Normal", Some(DISK0), &[("MaxRecvDataSegmentLength", "8192")]).await;
+    raw.login(
+        "Normal",
+        Some(DISK0),
+        &[("MaxRecvDataSegmentLength", "8192")],
+    )
+    .await;
     let (mut b, _) = raw.scsi_bhs(0xA0, 0, 512, &write10(0, 1));
     b[5..8].copy_from_slice(&[0x04, 0x00, 0x01]);
     raw.write(&b).await;
-    assert!(raw.closed().await, "an oversize data segment ends the connection unread");
+    assert!(
+        raw.closed().await,
+        "an oversize data segment ends the connection unread"
+    );
 
     // Immediate data beyond FirstBurstLength.
     let mut raw = Raw::connect(srv.port).await;
-    raw.login("Normal", Some(DISK0), &[("FirstBurstLength", "512"), ("MaxBurstLength", "1024")]).await;
+    raw.login(
+        "Normal",
+        Some(DISK0),
+        &[("FirstBurstLength", "512"), ("MaxBurstLength", "1024")],
+    )
+    .await;
     let (b, _) = raw.scsi_bhs(0xA0, 0, 1024, &write10(0, 2));
     raw.send(b, &[0u8; 1024]).await;
     let g = raw.recv().await;
@@ -510,7 +585,11 @@ async fn commands_out_of_cmdsn_order_are_dropped() {
     raw.cmd_sn = exp;
     let g = raw.tur(0).await;
     assert_eq!((g.opcode(), g.status()), (0x21, 0));
-    assert_eq!(g.u32(28), exp + 1, "ExpCmdSN advanced past the in-order command only");
+    assert_eq!(
+        g.u32(28),
+        exp + 1,
+        "ExpCmdSN advanced past the in-order command only"
+    );
     // A replay of the command just executed is dropped too.
     raw.cmd_sn = exp;
     let (b, _) = raw.scsi_bhs(0x80, 0, 0, &[0u8; 6]);
@@ -526,7 +605,10 @@ async fn crc32c_digests_are_negotiated_and_checked() {
         .login(
             "Normal",
             Some(DISK0),
-            &[("HeaderDigest", "CRC32C,None"), ("DataDigest", "CRC32C,None")],
+            &[
+                ("HeaderDigest", "CRC32C,None"),
+                ("DataDigest", "CRC32C,None"),
+            ],
         )
         .await;
     assert_eq!(key(&r.text(), "HeaderDigest"), Some("CRC32C"));
@@ -559,10 +641,16 @@ async fn crc32c_digests_are_negotiated_and_checked() {
     raw.login_step(
         0,
         Some(1),
-        &[("InitiatorName", INITIATOR), ("TargetName", DISK0), ("AuthMethod", "None")],
+        &[
+            ("InitiatorName", INITIATOR),
+            ("TargetName", DISK0),
+            ("AuthMethod", "None"),
+        ],
     )
     .await;
-    let r = raw.login_step(1, Some(3), &[("HeaderDigest", "None")]).await;
+    let r = raw
+        .login_step(1, Some(3), &[("HeaderDigest", "None")])
+        .await;
     assert_eq!(key(&r.text(), "HeaderDigest"), Some("Reject"));
 }
 
@@ -570,7 +658,12 @@ async fn crc32c_digests_are_negotiated_and_checked() {
 async fn abort_task_ends_a_write_waiting_for_its_data() {
     let srv = start(policy(POLICY), None).await;
     let mut raw = Raw::connect(srv.port).await;
-    raw.login("Normal", Some(DISK0), &[("InitialR2T", "Yes"), ("ImmediateData", "No")]).await;
+    raw.login(
+        "Normal",
+        Some(DISK0),
+        &[("InitialR2T", "Yes"), ("ImmediateData", "No")],
+    )
+    .await;
     let (b, itt) = raw.scsi_bhs(0xA0, 0, 512, &write10(500, 1));
     raw.send(b, &[]).await;
     let r2t = raw.recv().await;
@@ -586,7 +679,11 @@ async fn abort_task_ends_a_write_waiting_for_its_data() {
     tmf[32..36].copy_from_slice(&ref_cmd_sn.to_be_bytes());
     raw.send(tmf, &[]).await;
     let g = raw.recv().await;
-    assert_eq!((g.opcode(), g.itt(), g.bhs[2]), (0x22, tmf_itt, 0), "function complete");
+    assert_eq!(
+        (g.opcode(), g.itt(), g.bhs[2]),
+        (0x22, tmf_itt, 0),
+        "function complete"
+    );
     // The aborted task's data is ignored; the session goes on.
     let mut d = [0u8; 48];
     d[0] = 0x05;
@@ -596,7 +693,10 @@ async fn abort_task_ends_a_write_waiting_for_its_data() {
     raw.send(d, &[9u8; 512]).await;
     assert_eq!(raw.tur(0).await.status(), 0);
     let (back, _) = raw.read_cmd(0, 512, &read10(500, 1)).await;
-    assert!(back.iter().all(|b| *b == 0), "the aborted write was not applied");
+    assert!(
+        back.iter().all(|b| *b == 0),
+        "the aborted write was not applied"
+    );
     // ABORT TASK for a task that never existed.
     let mut tmf = [0u8; 48];
     tmf[0] = 0x42;

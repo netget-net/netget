@@ -313,7 +313,9 @@ pub fn apply_as_initiator(p: &mut Params, key: &str, value: &str) -> Result<(), 
                 p.data_digest = on;
             }
         }
-        "MaxRecvDataSegmentLength" => p.peer_max_recv_data_segment = num(512, (1 << 24) - 1)? as u32,
+        "MaxRecvDataSegmentLength" => {
+            p.peer_max_recv_data_segment = num(512, (1 << 24) - 1)? as u32
+        }
         "MaxBurstLength" => p.max_burst = num(512, (1 << 24) - 1)? as u32,
         "FirstBurstLength" => p.first_burst = num(512, (1 << 24) - 1)? as u32,
         "InitialR2T" => p.initial_r2t = yes_no(value).ok_or("InitialR2T is Yes or No")?,

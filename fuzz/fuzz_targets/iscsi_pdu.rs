@@ -60,7 +60,10 @@ fuzz_target!(|data: &[u8]| {
 fn peer_payload(p: &pdu::Pdu) {
     if matches!(
         p.opcode(),
-        pdu::op::LOGIN_REQUEST | pdu::op::LOGIN_RESPONSE | pdu::op::TEXT_REQUEST | pdu::op::TEXT_RESPONSE
+        pdu::op::LOGIN_REQUEST
+            | pdu::op::LOGIN_RESPONSE
+            | pdu::op::TEXT_REQUEST
+            | pdu::op::TEXT_RESPONSE
     ) {
         if let Ok(pairs) = text::parse(&p.data) {
             assert!(pairs.len() <= text::MAX_KEYS);
