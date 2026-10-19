@@ -135,21 +135,24 @@ The client parses SIP responses (RFC 3261 Section 7):
 
 ```rust
 struct ClientData {
-    state: ConnectionState,        // Idle/Processing/Accumulating
-    queued_data: Vec<u8>,          // Queued responses during LLM processing
     memory: String,                // LLM conversation memory
     call_id: Option<String>,       // Dialog Call-ID (generated once)
     from_tag: Option<String>,      // From tag (generated once)
     to_tag: Option<String>,        // To tag (from server response)
     cseq: u32,                     // Command sequence number
+    local_addr: SocketAddr,        // Via and Contact
 }
 ```
 
-**State Machine**:
-
-- **Idle**: Ready to process incoming response
-- **Processing**: LLM is processing current response
-- **Accumulating**: Not used for UDP (no partial responses)
+**No state machine, and no batching (declared `Unsupported`).** The client used to carry the
+server's `Idle`/`Processing`/`Accumulating` machine and a `queued_data` buffer cleared after
+one parse. The read loop is sequential and calls the model inline, so the queue could never
+fill — and had it filled, every queued datagram but the first would have been lost. It is
+gone: a response that arrives during a model call waits in the socket, one datagram each, and
+is read in turn. Batching is unsupported because every event is a final response to a request
+this client sent (server-initiated requests are not parsed), so nothing is pushed to pile up.
+`tests/client/sip/queued_response_test.rs` pins that responses arriving during a call each
+reach the model, in order.
 
 **Dialog Lifecycle**:
 
@@ -158,7 +161,10 @@ struct ClientData {
 3. Receive 200 OK → Extract To tag, LLM decides next action
 4. LLM decides to INVITE → Send INVITE with CSeq=2, To tag from REGISTER
 5. Receive 180 Ringing → Skipped by client (provisional response), wait for final
-6. Receive 200 OK → Client automatically sends ACK (RFC 3261 compliance). **If no local
+6. Receive 200 OK → Client automatically sends ACK (RFC 3261 compliance), **before** the
+   model is asked, carrying the INVITE's sequence number from the response's CSeq. It used to
+   go after the model's actions, numbered from the dialog counter, so an answer of BYE went out
+   first and the ACK took the BYE's CSeq (`queued_response_test.rs` covers it). **If no local
    dialog exists** — an unsolicited `200`/`CSeq: n INVITE` from a peer this client never
    INVITEd — there is nothing to acknowledge, so it is logged and nothing is sent. Both fields
    used to be read with `.unwrap()`, so that datagram panicked the read loop; the panic was
@@ -234,7 +240,7 @@ The LLM controls the SIP client via actions:
     - 403 Forbidden → Authentication or policy issue
 - Automatic Behavior:
     - Client sends ACK immediately after 200 OK to INVITE (RFC 3261 requirement)
-    - Queued responses processed after LLM finishes processing current response
+    - Responses that arrive during a model call wait in the socket and are read in turn
 
 ## SDP (Session Description Protocol)
 
@@ -327,7 +333,7 @@ arrives at a peer socket and that its length matches the reported `bytes_sent`).
     - Basic Call-ID, tags, CSeq tracking
     - No route set (Record-Route) handling
     - No early dialog vs. confirmed dialog distinction
-    - Queued responses processed sequentially
+    - Responses are processed one at a time, in arrival order
 
 **Header parsing is hostile-input-safe as of this pass.** `extract_uri` searched the whole
 header value for `<` and, independently, for `>`, then sliced between them — so a display name
@@ -341,7 +347,7 @@ Reached from the automatic-ACK path, i.e. from any peer that can send a `200`/`I
 
 - ACK request handling (automatic after 200 OK to INVITE) ✓
 - Provisional response handling (1xx responses skipped) ✓
-- Queued response processing (handles concurrent responses) ✓
+- Responses arriving during a model call read in turn from the socket ✓
 - Basic dialog state tracking (Call-ID, tags, CSeq) ✓
 
 **RFC 3261 Features Not Implemented**:
@@ -487,7 +493,7 @@ implemented).
 
 - ✓ ACK request handling (automatic after 200 OK to INVITE)
 - ✓ Provisional response handling (1xx responses skipped)
-- ✓ Queued response processing (handles concurrent responses)
+- ✓ Responses arriving during a model call read in turn from the socket
 - ✓ Dialog state tracking (Call-ID, tags, CSeq)
 - ✓ SIP methods: REGISTER, INVITE, ACK, BYE, OPTIONS, CANCEL
 

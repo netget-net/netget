@@ -19,20 +19,17 @@ use crate::state::app_state::AppState;
 use crate::state::client_handles::{ClientCommand, ClientSendOutcome};
 use crate::state::{AccessLogOwner, ClientId, ClientStatus};
 
-/// Connection state for LLM processing
-#[derive(Debug, Clone, PartialEq)]
-enum ConnectionState {
-    Idle,
-    Processing,
-    /// Reserved for future TCP support where partial messages may need buffering
-    #[allow(dead_code)]
-    Accumulating,
-}
-
-/// Per-client data for LLM handling
+/// Per-client data for LLM handling.
+///
+/// There used to be an `Idle`/`Processing`/`Accumulating` machine and a `queued_data` buffer
+/// here, copied from the server side. Nothing could reach the queue: the read loop is one
+/// sequential task that calls the model inline, so the state was always `Idle` when a datagram
+/// was examined and the `Processing` arm that appended to `queued_data` never ran. Had it run,
+/// the drain would have glued every queued datagram into one buffer and parsed it as a single
+/// response, delivering the first and dropping the rest. What arrives during a model call
+/// waits in the socket's receive buffer instead, one datagram per response, and the loop reads
+/// each in turn when the call returns; `tests/client/sip/queued_response_test.rs` pins that.
 struct ClientData {
-    state: ConnectionState,
-    queued_data: Vec<u8>,
     memory: String,
     call_id: Option<String>,
     from_tag: Option<String>,
@@ -88,8 +85,6 @@ impl SipClient {
 
         // Initialize client data
         let client_data = Arc::new(Mutex::new(ClientData {
-            state: ConnectionState::Idle,
-            queued_data: Vec::new(),
             memory: String::new(),
             call_id: None,
             from_tag: None,
@@ -194,293 +189,18 @@ impl SipClient {
             loop {
                 match socket_clone.recv(&mut buffer).await {
                     Ok(n) => {
-                        let data = buffer[..n].to_vec();
                         trace!("SIP client {} received {} bytes", client_id, n);
-
-                        // Parse SIP response
-                        let response = match Self::parse_sip_response(&data) {
-                            Ok(resp) => resp,
-                            Err(e) => {
-                                warn!("SIP client {} failed to parse response: {}", client_id, e);
-                                continue;
-                            }
-                        };
-
-                        info!(
-                            "SIP client {} received {} response (status: {})",
-                            client_id, response.method, response.status_code
-                        );
-
-                        // Handle provisional responses (1xx) without calling LLM
-                        if response.status_code >= 100 && response.status_code < 200 {
-                            info!(
-                                "SIP client {} received provisional response {} {}, skipping LLM",
-                                client_id, response.status_code, response.reason_phrase
-                            );
-                            let _ = status_clone.send(format!(
-                                "[CLIENT] SIP {} response: {} {}",
-                                client_id, response.status_code, response.reason_phrase
-                            ));
-                            continue;
-                        }
-
-                        // Handle response with LLM
-                        let mut client_data_lock = client_data_clone.lock().await;
-
-                        match client_data_lock.state {
-                            ConnectionState::Idle => {
-                                // Process immediately
-                                client_data_lock.state = ConnectionState::Processing;
-
-                                // Extract To tag if present
-                                if let Some(to_tag) = &response.to_tag {
-                                    client_data_lock.to_tag = Some(to_tag.clone());
-                                }
-
-                                drop(client_data_lock);
-
-                                // Call LLM
-                                if let Some(instruction) =
-                                    state_clone.get_instruction_for_client(client_id).await
-                                {
-                                    let event = Event::new(
-                                        &SIP_CLIENT_RESPONSE_RECEIVED_EVENT,
-                                        serde_json::json!({
-                                            "status_code": response.status_code,
-                                            "reason_phrase": response.reason_phrase,
-                                            "method": response.method,
-                                            "call_id": response.call_id,
-                                            "from": response.from,
-                                            "to": response.to,
-                                            "body": response.body,
-                                        }),
-                                    );
-
-                                    // Copied out so the mutex is not held across the LLM
-                                    // round-trip (see the connect path).
-                                    let memory = client_data_clone.lock().await.memory.clone();
-                                    match call_llm_for_client(
-                                        &llm_clone,
-                                        &state_clone,
-                                        client_id.to_string(),
-                                        &instruction,
-                                        &memory,
-                                        Some(&event),
-                                        protocol_clone.as_ref(),
-                                        &status_clone,
-                                    )
-                                    .await
-                                    {
-                                        Ok(ClientLlmResult {
-                                            actions,
-                                            memory_updates,
-                                        }) => {
-                                            // Update memory
-                                            if let Some(mem) = memory_updates {
-                                                client_data_clone.lock().await.memory = mem;
-                                            }
-
-                                            // Execute actions
-                                            for action in actions {
-                                                if let Err(e) = Self::execute_sip_action(
-                                                    action,
-                                                    &socket_clone,
-                                                    &protocol_clone,
-                                                    &client_data_clone,
-                                                    client_id,
-                                                    &status_clone,
-                                                )
-                                                .await
-                                                {
-                                                    error!(
-                                                        "SIP client {} send error: {}",
-                                                        client_id, e
-                                                    );
-                                                }
-                                            }
-                                        }
-                                        Err(e) => {
-                                            error!("LLM error for SIP client {}: {}", client_id, e);
-                                        }
-                                    }
-                                }
-
-                                // Send automatic ACK for 200 OK response to INVITE (RFC 3261)
-                                if response.method == "INVITE" && response.status_code == 200 {
-                                    info!(
-                                        "SIP client {} sending automatic ACK for INVITE 200 OK",
-                                        client_id
-                                    );
-
-                                    // Both of these were `.unwrap()`, and both are `None` until
-                                    // this client has itself sent a request. A datagram whose
-                                    // CSeq says `INVITE` and whose status line says 200 — which
-                                    // any peer can send unprompted — therefore panicked the read
-                                    // loop, inside a `tokio::spawn` that swallows the panic: the
-                                    // client stayed "Connected" and went permanently deaf.
-                                    // There is no dialog to acknowledge in that case, so the
-                                    // honest answer is to log it and send nothing.
-                                    let ack = {
-                                        let d = client_data_clone.lock().await;
-                                        match (d.call_id.as_ref(), d.from_tag.as_ref()) {
-                                            (Some(call_id), Some(from_tag)) => {
-                                                Some(Self::build_ack_request(
-                                                    &response,
-                                                    call_id,
-                                                    from_tag,
-                                                    // Same CSeq as the INVITE. Saturating
-                                                    // because `cseq` is unsigned and nothing
-                                                    // guarantees a request preceded this.
-                                                    d.cseq.saturating_sub(1),
-                                                    d.local_addr,
-                                                ))
-                                            }
-                                            _ => None,
-                                        }
-                                    };
-                                    match ack {
-                                        None => warn!(
-                                            "SIP client {} got an INVITE 200 OK with no local \
-                                             dialog (no Call-ID or From tag yet); this client \
-                                             sent no INVITE, so no ACK is owed",
-                                            client_id
-                                        ),
-                                        Some(ack_request) => {
-                                            match socket_clone.send(&ack_request).await {
-                                                Ok(sent) => {
-                                                    info!(
-                                                        "SIP client {} sent ACK ({} bytes)",
-                                                        client_id, sent
-                                                    );
-                                                    let _ = status_clone.send(format!(
-                                                        "[CLIENT] SIP client {} sent ACK",
-                                                        client_id
-                                                    ));
-                                                }
-                                                Err(e) => {
-                                                    error!(
-                                                        "SIP client {} ACK send error: {}",
-                                                        client_id, e
-                                                    );
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // Reset state
-                                let mut lock = client_data_clone.lock().await;
-                                lock.state = ConnectionState::Idle;
-
-                                // Process queued data if any
-                                if !lock.queued_data.is_empty() {
-                                    let queued = lock.queued_data.clone();
-                                    lock.queued_data.clear();
-                                    drop(lock);
-
-                                    info!(
-                                        "SIP client {} processing {} bytes of queued data",
-                                        client_id,
-                                        queued.len()
-                                    );
-
-                                    // Parse and process queued response
-                                    if let Ok(queued_response) = Self::parse_sip_response(&queued) {
-                                        // Skip provisional responses in queue
-                                        if queued_response.status_code >= 200 {
-                                            // Set state to Processing for queued response
-                                            client_data_clone.lock().await.state =
-                                                ConnectionState::Processing;
-
-                                            // Extract To tag if present
-                                            if let Some(to_tag) = &queued_response.to_tag {
-                                                client_data_clone.lock().await.to_tag =
-                                                    Some(to_tag.clone());
-                                            }
-
-                                            // Call LLM for queued response
-                                            if let Some(instruction) = state_clone
-                                                .get_instruction_for_client(client_id)
-                                                .await
-                                            {
-                                                let event = Event::new(
-                                                    &SIP_CLIENT_RESPONSE_RECEIVED_EVENT,
-                                                    serde_json::json!({
-                                                        "status_code": queued_response.status_code,
-                                                        "reason_phrase": queued_response.reason_phrase,
-                                                        "method": queued_response.method,
-                                                        "call_id": queued_response.call_id,
-                                                        "from": queued_response.from,
-                                                        "to": queued_response.to,
-                                                        "body": queued_response.body,
-                                                    }),
-                                                );
-
-                                                // Copied out so the mutex is not held across
-                                                // the LLM round-trip (see the connect path).
-                                                let memory =
-                                                    client_data_clone.lock().await.memory.clone();
-                                                match call_llm_for_client(
-                                                    &llm_clone,
-                                                    &state_clone,
-                                                    client_id.to_string(),
-                                                    &instruction,
-                                                    &memory,
-                                                    Some(&event),
-                                                    protocol_clone.as_ref(),
-                                                    &status_clone,
-                                                )
-                                                .await
-                                                {
-                                                    Ok(ClientLlmResult {
-                                                        actions,
-                                                        memory_updates,
-                                                    }) => {
-                                                        if let Some(mem) = memory_updates {
-                                                            client_data_clone.lock().await.memory =
-                                                                mem;
-                                                        }
-
-                                                        for action in actions {
-                                                            if let Err(e) =
-                                                                Self::execute_sip_action(
-                                                                    action,
-                                                                    &socket_clone,
-                                                                    &protocol_clone,
-                                                                    &client_data_clone,
-                                                                    client_id,
-                                                                    &status_clone,
-                                                                )
-                                                                .await
-                                                            {
-                                                                error!(
-                                                                    "SIP client {} send error: {}",
-                                                                    client_id, e
-                                                                );
-                                                            }
-                                                        }
-                                                    }
-                                                    Err(e) => {
-                                                        error!("LLM error for queued SIP response {}: {}", client_id, e);
-                                                    }
-                                                }
-                                            }
-
-                                            // Reset state after processing queued response
-                                            client_data_clone.lock().await.state =
-                                                ConnectionState::Idle;
-                                        }
-                                    }
-                                }
-                            }
-                            ConnectionState::Processing => {
-                                // Queue data
-                                client_data_lock.queued_data.extend_from_slice(&data);
-                            }
-                            ConnectionState::Accumulating => {
-                                // Accumulate data (not used for UDP)
-                            }
-                        }
+                        Self::handle_datagram(
+                            &buffer[..n],
+                            &llm_clone,
+                            &state_clone,
+                            &socket_clone,
+                            &protocol_clone,
+                            &client_data_clone,
+                            client_id,
+                            &status_clone,
+                        )
+                        .await;
                     }
                     Err(e) => {
                         error!("SIP client {} recv error: {}", client_id, e);
@@ -505,6 +225,167 @@ impl SipClient {
             .await;
 
         Ok(local_addr)
+    }
+
+    /// Handle one datagram from the server: a final response is acknowledged (when it is an
+    /// INVITE's 200) and then put to the model; anything else is logged and dropped.
+    ///
+    /// The ACK goes out *before* the model is asked. RFC 3261 owes it to the 200 regardless of
+    /// what the model decides, and sending it afterwards built it from the dialog's CSeq after
+    /// the model's own requests had advanced it, so an answer such as BYE gave the ACK the BYE's
+    /// sequence number. It now carries the number from the response's own CSeq.
+    #[allow(clippy::too_many_arguments)]
+    async fn handle_datagram(
+        data: &[u8],
+        llm_client: &OllamaClient,
+        app_state: &Arc<AppState>,
+        socket: &Arc<UdpSocket>,
+        protocol: &Arc<SipClientProtocol>,
+        client_data: &Arc<Mutex<ClientData>>,
+        client_id: ClientId,
+        status_tx: &mpsc::UnboundedSender<String>,
+    ) {
+        let response = match Self::parse_sip_response(data) {
+            Ok(resp) => resp,
+            Err(e) => {
+                warn!("SIP client {} failed to parse response: {}", client_id, e);
+                return;
+            }
+        };
+
+        info!(
+            "SIP client {} received {} response (status: {})",
+            client_id, response.method, response.status_code
+        );
+
+        // Provisional responses (1xx) are reported without a model call.
+        if response.status_code >= 100 && response.status_code < 200 {
+            info!(
+                "SIP client {} received provisional response {} {}, skipping LLM",
+                client_id, response.status_code, response.reason_phrase
+            );
+            let _ = status_tx.send(format!(
+                "[CLIENT] SIP {} response: {} {}",
+                client_id, response.status_code, response.reason_phrase
+            ));
+            return;
+        }
+
+        if let Some(to_tag) = &response.to_tag {
+            client_data.lock().await.to_tag = Some(to_tag.clone());
+        }
+
+        // Send automatic ACK for 200 OK response to INVITE (RFC 3261)
+        if response.method == "INVITE" && response.status_code == 200 {
+            info!(
+                "SIP client {} sending automatic ACK for INVITE 200 OK",
+                client_id
+            );
+
+            // Both of these were `.unwrap()`, and both are `None` until this client has itself
+            // sent a request. A datagram whose CSeq says `INVITE` and whose status line says
+            // 200 — which any peer can send unprompted — therefore panicked the read loop,
+            // inside a `tokio::spawn` that swallows the panic: the client stayed "Connected"
+            // and went permanently deaf. There is no dialog to acknowledge in that case, so the
+            // honest answer is to log it and send nothing.
+            let ack = {
+                let d = client_data.lock().await;
+                match (d.call_id.as_ref(), d.from_tag.as_ref()) {
+                    (Some(call_id), Some(from_tag)) => {
+                        // The INVITE's own sequence number, from the response. The saturating
+                        // fallback is for a CSeq without one; `cseq` is unsigned and nothing
+                        // guarantees a request preceded this.
+                        let cseq = response
+                            .cseq
+                            .split_whitespace()
+                            .next()
+                            .and_then(|n| n.parse::<u32>().ok())
+                            .unwrap_or_else(|| d.cseq.saturating_sub(1));
+                        Some(Self::build_ack_request(
+                            &response,
+                            call_id,
+                            from_tag,
+                            cseq,
+                            d.local_addr,
+                        ))
+                    }
+                    _ => None,
+                }
+            };
+            match ack {
+                None => warn!(
+                    "SIP client {} got an INVITE 200 OK with no local dialog (no Call-ID or From                      tag yet); this client sent no INVITE, so no ACK is owed",
+                    client_id
+                ),
+                Some(ack_request) => match socket.send(&ack_request).await {
+                    Ok(sent) => {
+                        info!("SIP client {} sent ACK ({} bytes)", client_id, sent);
+                        let _ =
+                            status_tx.send(format!("[CLIENT] SIP client {} sent ACK", client_id));
+                    }
+                    Err(e) => {
+                        error!("SIP client {} ACK send error: {}", client_id, e);
+                    }
+                },
+            }
+        }
+
+        let Some(instruction) = app_state.get_instruction_for_client(client_id).await else {
+            return;
+        };
+        let event = Event::new(
+            &SIP_CLIENT_RESPONSE_RECEIVED_EVENT,
+            serde_json::json!({
+                "status_code": response.status_code,
+                "reason_phrase": response.reason_phrase,
+                "method": response.method,
+                "call_id": response.call_id,
+                "from": response.from,
+                "to": response.to,
+                "body": response.body,
+            }),
+        );
+
+        // Copied out so the mutex is not held across the LLM round-trip (see the connect path).
+        let memory = client_data.lock().await.memory.clone();
+        match call_llm_for_client(
+            llm_client,
+            app_state,
+            client_id.to_string(),
+            &instruction,
+            &memory,
+            Some(&event),
+            protocol.as_ref(),
+            status_tx,
+        )
+        .await
+        {
+            Ok(ClientLlmResult {
+                actions,
+                memory_updates,
+            }) => {
+                if let Some(mem) = memory_updates {
+                    client_data.lock().await.memory = mem;
+                }
+                for action in actions {
+                    if let Err(e) = Self::execute_sip_action(
+                        action,
+                        socket,
+                        protocol,
+                        client_data,
+                        client_id,
+                        status_tx,
+                    )
+                    .await
+                    {
+                        error!("SIP client {} send error: {}", client_id, e);
+                    }
+                }
+            }
+            Err(e) => {
+                error!("LLM error for SIP client {}: {}", client_id, e);
+            }
+        }
     }
 
     /// Drain injected commands until the channel closes (client removed, or the read loop
@@ -973,8 +854,7 @@ struct SipResponse {
     from: String,
     to: String,
     to_tag: Option<String>,
-    /// Full CSeq header value (kept for debugging and future use)
-    #[allow(dead_code)]
+    /// Full CSeq header value; its number is the one the automatic ACK repeats.
     cseq: String,
     body: Option<String>,
 }
