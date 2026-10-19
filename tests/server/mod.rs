@@ -310,6 +310,7 @@ pub mod bmp;
 
 pub mod mqtt_sn;
 
+pub mod iscsi;
 pub mod nbd;
 
 pub mod managesieve;

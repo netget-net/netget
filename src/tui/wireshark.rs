@@ -483,6 +483,11 @@ pub fn wire_for(protocol: &str) -> Wire {
         "mqtt" => tcp("mqtt"),
         "mqtt_sn" => udp("mqttsn"),
         "nbd" => tcp("nbd"),
+        // iSCSI is not in the tcp.port decode-as table (4.6.8: `tshark -G decodes` has no iscsi
+        // row); the dissector claims the ports in its own `iscsi.target_ports` preference (3260
+        // by default), so a capture on another port needs that preference set, not `-d`. The
+        // SCSI commands inside are dissected as `scsi` / `scsi_sbc`.
+        "iscsi" => with_note(with_display(PLAIN_TCP, "iscsi"), "Wireshark's iSCSI dissector claims the ports in its iscsi.target_ports preference (3260 by default), not a decode-as entry: for another port pass -o iscsi.target_ports:<port>. It learns whether digests are in use from the login it saw, so capture from the start of the session."),
         // RESTCONF is HTTP carrying YANG JSON.
         "restconf" => tcp("http"),
         // JMAP is JSON over HTTPS (or HTTP with tls: false); TLS hides it without session keys.
