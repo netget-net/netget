@@ -29,7 +29,7 @@ use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::RTCPeerConnection;
 
-use crate::client::llm_budget::call_llm_for_client;
+use crate::client::llm_budget::{call_llm_for_client, call_llm_for_client_batch};
 use crate::client::webrtc::actions::{
     WEBRTC_CLIENT_CHANNEL_OPENED_EVENT, WEBRTC_CLIENT_MESSAGE_RECEIVED_EVENT,
     WEBRTC_CLIENT_SIGNALING_CONNECTED_EVENT,
@@ -49,22 +49,13 @@ pub enum SignalingMode {
     WebSocket { url: String, peer_id: String },
 }
 
-/// Connection state for LLM processing
-///
-/// Two states, not the usual three. `Accumulating` was the third and is gone: it
-/// was only ever *entered*, never left, because nothing drained the queue that
-/// justified it — see the comment where the state is reset after an LLM call.
-#[derive(Debug, Clone, PartialEq)]
-enum ConnectionState {
-    Idle,
-    Processing,
-}
+/// How many messages one channel may hold while the model answers an earlier one. Past it the
+/// channel's message handler waits, which stops webrtc-rs reading the channel, so SCTP flow
+/// control holds the peer back rather than anything being dropped.
+const CHANNEL_QUEUE_MESSAGES: usize = crate::protocol::metadata::MAX_BATCH_EVENTS;
 
-/// Per-channel LLM state
+/// Per-channel data
 struct ChannelData {
-    state: ConnectionState,
-    /// Bounded FIFO drained by the active processor before returning to Idle.
-    queued_messages: std::collections::VecDeque<(String, bool)>, // (message, is_binary)
     /// The live channel, used to send on it from outside the on_message closure
     /// (injected commands go through this).
     channel: Arc<RTCDataChannel>,
@@ -243,8 +234,6 @@ impl WebRtcClient {
         client_data.lock().await.channels.insert(
             "netget".to_string(),
             ChannelData {
-                state: ConnectionState::Idle,
-                queued_messages: std::collections::VecDeque::new(),
                 channel: Arc::clone(&data_channel),
             },
         );
@@ -796,33 +785,33 @@ impl WebRtcClient {
             })
         }));
 
-        // On message handler
+        // Messages. webrtc-rs awaits this handler before it reads the channel again, so a
+        // handler that called the model itself (as this one did) left everything the peer sent
+        // during the call unread in SCTP, and its "queue while processing" arm could never run.
+        // The handler only queues now; the channel's answering task below takes one message per
+        // call (batching off) or everything waiting (on).
+        let (message_tx, mut message_rx) = mpsc::channel::<(String, bool)>(CHANNEL_QUEUE_MESSAGES);
         let client_data_on_msg = Arc::downgrade(&client_data);
-        let app_state_on_msg = Arc::clone(&app_state);
-        let status_tx_on_msg = status_tx.clone();
-        let llm_on_msg = llm_client.clone();
         let label_on_msg = channel_label.clone();
         let dc_on_msg = Arc::downgrade(&data_channel);
 
         data_channel.on_message(Box::new(move |msg: DataChannelMessage| {
-            let app_state = Arc::clone(&app_state_on_msg);
-            let status_tx = status_tx_on_msg.clone();
             let client_data = client_data_on_msg.upgrade();
-            let llm_client = llm_on_msg.clone();
             let dc = dc_on_msg.upgrade();
             let label = label_on_msg.clone();
+            let message_tx = message_tx.clone();
 
             Box::pin(async move {
-                let (Some(client_data), Some(dc)) = (client_data, dc) else { return; };
+                let (Some(client_data), Some(dc)) = (client_data, dc) else {
+                    return;
+                };
                 if msg.data.len() > 1024 * 1024 {
                     warn!("WebRTC data message exceeds 1 MiB; closing channel");
                     let _ = dc.close().await;
                     return;
                 }
-                // Detect if message is binary
-                let mut is_binary = !msg.is_string;
-
-                let mut message_text = if is_binary {
+                let is_binary = !msg.is_string;
+                let message_text = if is_binary {
                     // Hex encode binary data
                     hex::encode(&msg.data)
                 } else {
@@ -837,125 +826,118 @@ impl WebRtcClient {
                     is_binary
                 );
 
-                // Handle data with LLM using per-channel state machine
-                let mut client_data_lock = client_data.lock().await;
-
-                // Get or create channel data
-                if !client_data_lock.channels.contains_key(&label) {
-                    warn!("WebRTC client {} received message on unknown channel '{}'", client_id, label);
+                if !client_data.lock().await.channels.contains_key(&label) {
+                    warn!(
+                        "WebRTC client {} received message on unknown channel '{}'",
+                        client_id, label
+                    );
                     return;
                 }
+                drop(client_data);
+                // Waits while the queue is full: webrtc-rs stops reading, and the peer is held
+                // back by flow control.
+                let _ = message_tx.send((message_text, is_binary)).await;
+            })
+        }));
 
-                let channel_state = client_data_lock
-                    .channels
-                    .get(&label)
-                    .map(|cd| cd.state.clone())
-                    .unwrap_or(ConnectionState::Idle);
-
-                match channel_state {
-                    ConnectionState::Idle => {
-                        // Process immediately
-                        if let Some(channel_data) = client_data_lock.channels.get_mut(&label) {
-                            channel_data.state = ConnectionState::Processing;
+        // The channel's answering task. It holds the channel and the client data weakly, like
+        // the handlers, so it ends when the channel is dropped (its handler, and with it the
+        // queue's sender, goes too) or when the client shuts down.
+        let client_data_weak = Arc::downgrade(&client_data);
+        let dc_weak = Arc::downgrade(&data_channel);
+        let label = channel_label;
+        let state = Arc::clone(&app_state);
+        let shutdown = client_data.lock().await.shutdown.clone();
+        app_state
+            .spawn_client_task(client_id, async move {
+                let protocol = crate::client::webrtc::actions::WebRtcClientProtocol::new();
+                loop {
+                    let first = tokio::select! {
+                        _ = shutdown.cancelled() => return,
+                        message = message_rx.recv() => match message {
+                            Some(message) => message,
+                            None => return,
+                        },
+                    };
+                    let mut messages = vec![first];
+                    if state
+                        .client_conversation_settings(client_id)
+                        .await
+                        .is_some_and(|(_, batching)| batching)
+                    {
+                        while messages.len() < crate::protocol::metadata::MAX_BATCH_EVENTS {
+                            match message_rx.try_recv() {
+                                Ok(message) => messages.push(message),
+                                Err(_) => break,
+                            }
                         }
-                        drop(client_data_lock);
-
-                        loop {
-                        // Drain all queued messages in order through the same event path.
-                        if let Some(instruction) = app_state.get_instruction_for_client(client_id).await {
-                            let protocol = Arc::new(crate::client::webrtc::actions::WebRtcClientProtocol::new());
-                            let event = Event::new(
+                    }
+                    let (Some(client_data), Some(dc)) =
+                        (client_data_weak.upgrade(), dc_weak.upgrade())
+                    else {
+                        return;
+                    };
+                    let Some(instruction) = state.get_instruction_for_client(client_id).await
+                    else {
+                        continue;
+                    };
+                    let events: Vec<Event> = messages
+                        .into_iter()
+                        .map(|(message, is_binary)| {
+                            Event::new(
                                 &WEBRTC_CLIENT_MESSAGE_RECEIVED_EVENT,
                                 serde_json::json!({
                                     "channel_label": label,
-                                    "message": message_text,
+                                    "message": message,
                                     "is_binary": is_binary,
                                 }),
-                            );
-
-                            let memory = client_data.lock().await.memory.clone();
-
-                            let shutdown = client_data.lock().await.shutdown.clone();
-                            let call = call_llm_for_client(
-                                &llm_client,
-                                &app_state,
-                                client_id.to_string(),
-                                &instruction,
-                                &memory,
-                                Some(&event),
-                                protocol.as_ref(),
-                                &status_tx,
-                            );
-                            let result = tokio::select! { _ = shutdown.cancelled() => return, result = call => result };
-                            match result {
-                                Ok(ClientLlmResult { actions, memory_updates }) => {
-                                    // Update memory
-                                    if let Some(mem) = memory_updates {
-                                        client_data.lock().await.memory = mem;
-                                    }
-
-                                    // Execute actions
-                                    for action in actions {
-                                        use crate::llm::actions::client_trait::Client;
-                                        match protocol.as_ref().execute_action(action) {
-                                            Ok(crate::llm::actions::client_trait::ClientActionResult::SendData(bytes)) => {
-                                                // Send data (text or binary)
-                                                match dc.send(&bytes.into()).await {
-                                                    Ok(_) => {
-                                                        trace!("WebRTC client {} sent message on '{}'", client_id, label);
-                                                    }
-                                                    Err(e) => {
-                                                        error!("WebRTC client {} failed to send on '{}': {}", client_id, label, e);
-                                                    }
-                                                }
-                                            }
-                                            Ok(crate::llm::actions::client_trait::ClientActionResult::Disconnect) => {
-                                                info!("WebRTC client {} closing channel '{}'", client_id, label);
-                                                let _ = dc.close().await;
-                                            }
-                                            Ok(crate::llm::actions::client_trait::ClientActionResult::WaitForMore) => {
-                                                trace!("WebRTC client {} waiting for more data on '{}'", client_id, label);
-                                            }
-                                            _ => {}
+                            )
+                        })
+                        .collect();
+                    let memory = client_data.lock().await.memory.clone();
+                    let call = call_llm_for_client_batch(
+                        &llm_client,
+                        &state,
+                        client_id.to_string(),
+                        &instruction,
+                        &memory,
+                        &events,
+                        &protocol,
+                        &status_tx,
+                    );
+                    let result = tokio::select! { _ = shutdown.cancelled() => return, result = call => result };
+                    match result {
+                        Ok(ClientLlmResult { actions, memory_updates }) => {
+                            if let Some(mem) = memory_updates {
+                                client_data.lock().await.memory = mem;
+                            }
+                            for action in actions {
+                                use crate::llm::actions::client_trait::{Client, ClientActionResult};
+                                match protocol.execute_action(action) {
+                                    Ok(ClientActionResult::SendData(bytes)) => {
+                                        match dc.send(&bytes.into()).await {
+                                            Ok(_) => trace!("WebRTC client {} sent message on '{}'", client_id, label),
+                                            Err(e) => error!("WebRTC client {} failed to send on '{}': {}", client_id, label, e),
                                         }
                                     }
+                                    Ok(ClientActionResult::Disconnect) => {
+                                        info!("WebRTC client {} closing channel '{}'", client_id, label);
+                                        let _ = dc.close().await;
+                                    }
+                                    Ok(ClientActionResult::WaitForMore) => {
+                                        trace!("WebRTC client {} waiting for more data on '{}'", client_id, label);
+                                    }
+                                    _ => {}
                                 }
-                                Err(e) => {
-                                    error!("LLM error for WebRTC client {} on '{}': {}", client_id, label, e);
-                                }
                             }
                         }
-
-                        let mut client_data_lock = client_data.lock().await;
-                        if let Some(channel_data) = client_data_lock.channels.get_mut(&label) {
-                            if let Some((next, binary)) = channel_data.queued_messages.pop_front() {
-                                message_text = next;
-                                is_binary = binary;
-                                drop(client_data_lock);
-                                continue;
-                            }
-                            channel_data.state = ConnectionState::Idle;
-                        }
-                        break;
-                        }
-                    }
-                    ConnectionState::Processing => {
-                        // Queue the message
-                        if let Some(channel_data) = client_data_lock.channels.get_mut(&label) {
-                            let queued_bytes: usize = channel_data.queued_messages.iter().map(|(message, _)| message.len()).sum();
-                            if channel_data.queued_messages.len() >= 128 || queued_bytes.saturating_add(message_text.len()) > 8 * 1024 * 1024 {
-                                drop(client_data_lock);
-                                warn!("WebRTC pending message queue full; closing channel");
-                                let _ = dc.close().await;
-                                return;
-                            }
-                            channel_data.queued_messages.push_back((message_text, is_binary));
-                            trace!("WebRTC client {} queued message on '{}' (already processing)", client_id, label);
+                        Err(e) => {
+                            error!("LLM error for WebRTC client {} on '{}': {}", client_id, label, e);
                         }
                     }
                 }
             })
-        }));
+            .await;
     }
 
     // Three `pub async fn`s used to live here — `apply_answer`, `create_channel` and
@@ -1059,14 +1041,11 @@ impl WebRtcClient {
                                     llm_client.clone(),
                                 )
                                 .await;
-                                client_data.lock().await.channels.insert(
-                                    new_label.clone(),
-                                    ChannelData {
-                                        state: ConnectionState::Idle,
-                                        queued_messages: std::collections::VecDeque::new(),
-                                        channel,
-                                    },
-                                );
+                                client_data
+                                    .lock()
+                                    .await
+                                    .channels
+                                    .insert(new_label.clone(), ChannelData { channel });
                                 Ok(ClientSendOutcome::Executed {
                                     detail: format!(
                                         "data channel '{new_label}' created; it carries data \

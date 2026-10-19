@@ -10,7 +10,7 @@
 pub mod actions;
 pub mod display;
 
-use crate::client::llm_budget::call_llm_for_client;
+use crate::client::llm_budget::call_llm_for_client_batch;
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::logging::emit::Log;
 use crate::protocol::{ConnectContext, Event, EventType};
@@ -838,17 +838,45 @@ impl Session {
     }
 }
 
+/// Answers what the readers and the session raised. The server pushes notifications and
+/// surface changes whenever it likes, so they can pile up in `events` while the model is
+/// answering; with batching on, everything waiting is answered in one call (one event each,
+/// the newest the trigger), with it off one event per call.
 async fn run_turns(
     ctx: ConnectContext,
     mut events: mpsc::Receiver<(Event, u32)>,
     internal: mpsc::Sender<(Value, u32)>,
 ) {
     let protocol = SpiceClientProtocol;
-    while let Some((event, depth)) = events.recv().await {
+    let too_deep = |event: &Event, depth: u32| {
         if depth >= MAX_FOLLOWUP_DEPTH {
             tracing::warn!("SPICE client {} not asking the model about {}: {depth} turns deep decision=followup_depth", ctx.client_id, event.id());
+            true
+        } else {
+            false
+        }
+    };
+    while let Some((event, depth)) = events.recv().await {
+        if too_deep(&event, depth) {
             continue;
         }
+        let mut batch = vec![(event, depth)];
+        if ctx
+            .state
+            .client_conversation_settings(ctx.client_id)
+            .await
+            .is_some_and(|(_, batching)| batching)
+        {
+            while batch.len() < crate::protocol::metadata::MAX_BATCH_EVENTS {
+                match events.try_recv() {
+                    Ok((event, depth)) if !too_deep(&event, depth) => batch.push((event, depth)),
+                    Ok(_) => {}
+                    Err(_) => break,
+                }
+            }
+        }
+        let depth = batch.iter().map(|(_, d)| *d).max().unwrap_or(0);
+        let batch: Vec<Event> = batch.into_iter().map(|(e, _)| e).collect();
         let instruction = ctx
             .state
             .get_instruction_for_client(ctx.client_id)
@@ -859,13 +887,13 @@ async fn run_turns(
             .get_memory_for_client(ctx.client_id)
             .await
             .unwrap_or_default();
-        match call_llm_for_client(
+        match call_llm_for_client_batch(
             &ctx.llm_client,
             &ctx.state,
             ctx.client_id.to_string(),
             &instruction,
             &memory,
-            Some(&event),
+            &batch,
             &protocol,
             &ctx.status_tx,
         )

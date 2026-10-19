@@ -328,7 +328,9 @@ impl Protocol for WebRtcClientProtocol {
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // The peer sends data-channel messages whenever it likes; each channel's handler
+            // queues them and its answering task drains what waited during a model call.
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
 

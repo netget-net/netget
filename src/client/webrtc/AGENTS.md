@@ -53,7 +53,7 @@ This implementation is well-suited for LLM control, enabling peer-to-peer messag
 
 **Benefits**:
 - Separate streams for different data types (control, file transfer, chat, etc.)
-- Per-channel state machines prevent crosstalk
+- Per-channel message queues and answering tasks prevent crosstalk
 - Isolated message queuing per channel
 
 **Usage**:
@@ -105,7 +105,7 @@ This implementation is well-suited for LLM control, enabling peer-to-peer messag
 2. **Data Channels**: Multiple `RTCDataChannel` instances for parallel streams
 3. **ICE/STUN**: Uses Google STUN server for NAT traversal
 4. **Signaling**: Manual SDP exchange OR WebSocket-based automatic signaling
-5. **Per-Channel State**: Independent state machines per channel (Idle/Processing/Accumulating)
+5. **Per-Channel Queue**: each channel queues its messages for its own answering task
 
 ### Protocol Stack
 
@@ -272,25 +272,19 @@ two cannot drift again. Use `webrtc_channel_opened`.
 
 ## State Management
 
-### Per-Channel Connection States
+### Per-channel queue and batching (on by default)
 
-- **Idle**: No LLM processing in progress
-- **Processing**: LLM call active for current message
-There is deliberately **no third `Accumulating` state**. There was one, and it was only ever
-entered, never left: `queued_messages` was pushed to in two places and popped in none, and no
-arm processed the queue — so the first message to arrive during an LLM call latched the
-channel into `Accumulating` and every later message went onto a `Vec` nobody read, silently,
-for the life of the connection. This section claimed "No message loss during LLM processing";
-it was total message loss after the first overlap.
-
-**What happens now**: a bounded FIFO is drained in order by the active callback before the
-channel returns to Idle. Each inbound message is limited to 1 MiB; a queue over 128 messages or
-8 MiB closes the channel with a warning instead of silently losing data. Binary/text events use
-the data channel's message type flag rather than guessing from ASCII contents.
-
-**Benefits**:
-- Independent state per channel
-- Prevents concurrent LLM calls per channel
+webrtc-rs awaits a channel's `on_message` handler before it reads the channel again. The
+handler used to call the model itself, so what the peer sent during a call stayed unread in
+SCTP and its Idle/Processing "queue while processing" arm could never run. The handler now
+only queues: each message (at most 1 MiB; a larger one closes the channel) goes into a bounded
+per-channel queue of `MAX_BATCH_EVENTS`, and when it is full the handler waits, so webrtc-rs
+stops reading and SCTP flow control holds the peer back. Each channel has an answering task
+(`spawn_client_task`, holding the channel and client data weakly so it ends with the channel
+or the client's shutdown token). With batching on it takes everything waiting and answers it in
+one `call_llm_for_client_batch` call, one event per message; with it off, one per call.
+`tests/client/webrtc/batching_test.rs` drives it with a webrtc-rs peer answering the client's
+manual offer. Binary/text events use the data channel's message type flag.
 
 ### Stored Data (protocol_data)
 
@@ -315,8 +309,6 @@ declaration is gone; the field on the client record still reflects the derived m
 
 - `memory`: LLM memory (shared across all channels)
 - `channels`: HashMap of channel_label → ChannelData
-  - `state`: ConnectionState (Idle/Processing/Accumulating)
-  - `queued_messages`: VecDeque<(message, is_binary)>
   - `channel`: Arc<RTCDataChannel>
 
 ## Signaling Strategy

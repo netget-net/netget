@@ -262,6 +262,8 @@ impl Protocol for MinecraftClientProtocol {
             .notes("Offline probing only: no Mojang authentication or encryption, so an online-mode server is reported as encryption_required, and an accepted login is reported and closed before play. Status responses are bounded to 32767 characters and decompressed packets to the same size; each read has a 30 s deadline.")
             .max_inbound_bytes(wire::MAX_CLIENTBOUND_PACKET)
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            // Every event is the result of the model's own ping or login probe, run one at a
+            // time on a fresh connection; the server never pushes anything to batch.
             .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }

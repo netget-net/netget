@@ -265,7 +265,9 @@ impl Protocol for GuacamoleClientProtocol {
             .e2e_testing("tests/client/guacamole: guacd 1.3 (Apache's own daemon) driving TigerVNC's Xvnc, read back with xclip and an xterm writing what it is typed to a file")
             .notes("Images are counted, not decoded: the handler cannot see the screen. No audio, file transfer or multi-touch. Instructions are bounded as guacd bounds them (8192 bytes, 128 elements).")
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // guacd pushes clipboard changes and errors on its own; the reader queues them as
+            // whole instructions and the dispatcher drains what waited during a model call.
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

@@ -2,7 +2,7 @@
 //! then a reader task answers sync and acks blobs in Rust and raises the first frame, the
 //! remote clipboard and errors; the session task sends the handler's input.
 pub mod actions;
-use crate::client::llm_budget::call_llm_for_client;
+use crate::client::llm_budget::call_llm_for_client_batch;
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::logging::emit::Log;
 use crate::protocol::{ConnectContext, Event};
@@ -207,20 +207,41 @@ pub async fn connect(ctx: ConnectContext) -> Result<std::net::SocketAddr> {
     });
     ctx.state.register_client_task(ctx.client_id, read).await;
 
+    // The dispatcher answers what the reader raised. guacd pushes the clipboard and errors
+    // whenever it likes, so they can pile up in `event_rx` while the model is answering; with
+    // batching on, everything waiting is answered in one call, with it off one event per call.
     let events_ctx = ctx.clone();
     let dispatcher = tokio::spawn(async move {
-        while let Some((event, depth)) = event_rx.recv().await {
-            events_ctx
+        while let Some(first) = event_rx.recv().await {
+            let mut batch = vec![first];
+            if events_ctx
                 .state
-                .record_access_log(
-                    AccessLogOwner::Client(events_ctx.client_id.as_u32()),
-                    "Guacamole",
-                    None,
-                    event.id(),
-                    event.data.clone(),
-                    vec![],
-                )
-                .await;
+                .client_conversation_settings(events_ctx.client_id)
+                .await
+                .is_some_and(|(_, batching)| batching)
+            {
+                while batch.len() < crate::protocol::metadata::MAX_BATCH_EVENTS {
+                    match event_rx.try_recv() {
+                        Ok(next) => batch.push(next),
+                        Err(_) => break,
+                    }
+                }
+            }
+            let depth = batch.iter().map(|(_, d)| *d).max().unwrap_or(0);
+            let events: Vec<Event> = batch.into_iter().map(|(e, _)| e).collect();
+            for event in &events {
+                events_ctx
+                    .state
+                    .record_access_log(
+                        AccessLogOwner::Client(events_ctx.client_id.as_u32()),
+                        "Guacamole",
+                        None,
+                        event.id(),
+                        event.data.clone(),
+                        vec![],
+                    )
+                    .await;
+            }
             let instruction = events_ctx
                 .state
                 .get_instruction_for_client(events_ctx.client_id)
@@ -231,13 +252,13 @@ pub async fn connect(ctx: ConnectContext) -> Result<std::net::SocketAddr> {
                 .get_memory_for_client(events_ctx.client_id)
                 .await
                 .unwrap_or_default();
-            match call_llm_for_client(
+            match call_llm_for_client_batch(
                 &events_ctx.llm_client,
                 &events_ctx.state,
                 events_ctx.client_id.to_string(),
                 &instruction,
                 &memory,
-                Some(&event),
+                &events,
                 &GuacamoleClientProtocol,
                 &events_ctx.status_tx,
             )
