@@ -2,7 +2,8 @@
 
 `initiator.rs` runs sessions (no model); `mod.rs` turns the model's actions into sessions and
 commands and raises each result as an event; `actions.rs` holds the vocabulary. The PDU, text
-and CHAP code is the target's (`src/server/iscsi/{pdu,text,chap}.rs`) and the SCSI code is
+and CHAP code is the target's (`src/server/iscsi/pdu.rs`, `src/server/iscsi/text.rs`,
+`src/server/iscsi/chap.rs`) and the SCSI code is
 `src/server/scsi_common.rs`.
 
 **Lifecycle.** `connect()` opens nothing: it resolves the portal, registers the command channel
