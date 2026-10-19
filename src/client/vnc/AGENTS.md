@@ -80,13 +80,17 @@ control mouse movement, keyboard input, request screen updates, and interact wit
 - **Bell (2):** Server bell notification
 - **ServerCutText (3):** Server clipboard update
 
-### Connection State Machine
+### Reader task and batching (on by default)
 
-**States:**
-
-1. **Idle** - No LLM processing happening
-2. **Processing** - LLM is being called, skip new events
-3. **Accumulating** - Reserved for future use
+A reader task (`spawn_client_task`) frames whole server messages into a bounded queue
+(`MAX_BATCH_EVENTS` messages; past it the reader stops and TCP holds the server back); the
+answering loop asks the model. Framebuffer updates and clipboard text are pushed by the server,
+so they pile up while the model answers. With batching on the loop takes everything waiting and
+answers it in one `call_llm_for_client_batch` call, one event per message; with it off, one
+message per call. The model used to be called inline in the read loop, behind an
+`Idle`/`Processing` state whose "skip while processing" arm could never run.
+`tests/client/vnc/batching_test.rs` drives an RFB server written in the test, off and on.
+A model `disconnect` half-closes the socket, and the session ends at the server's EOF.
 
 **Lifecycle:**
 

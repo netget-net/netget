@@ -81,6 +81,10 @@ Server frames go through `ActiveStage::process`; response frames are written bac
 - **Terminate** ends the session with the server's reason.
 - **Turn bounds:** model turns chain up to `MAX_FOLLOWUP_DEPTH` (8); the turn queue holds 64.
 
+**Batching: unsupported.** Nothing the server sends becomes an event by itself: a screen
+reading answers the model's own `rdp_read_screen`, an error its own input action, and the only
+server-caused event, `rdp_disconnected`, ends the session.
+
 ## Not implemented
 
 - Virtual channels: clipboard, audio, drives, RemoteApp, display control.

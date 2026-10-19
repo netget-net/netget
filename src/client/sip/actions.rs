@@ -72,6 +72,8 @@ impl Protocol for SipClientProtocol {
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
+            // Every event is a final response to a request this client sent (server-initiated
+            // requests are not parsed), each answered as it is read; nothing is pushed to batch.
             .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }

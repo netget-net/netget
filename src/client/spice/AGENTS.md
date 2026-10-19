@@ -33,6 +33,12 @@ messages go to `display::DisplayModel`. Any channel ending ends the session with
 The session task owns input and screen reads; `run_turns` asks the model, follow-ups bounded
 by `MAX_FOLLOWUP_DEPTH` (8), turn queue 64.
 
+**Batching (on by default).** Notifications and surface changes are pushed by the server and
+can queue while the model answers. With batching on `run_turns` takes everything waiting
+(up to `MAX_BATCH_EVENTS`, skipping events past the depth bound) and answers it in one
+`call_llm_for_client_batch` call, one event per message; with it off, one per call.
+`tests/client/spice/batching_test.rs` drives a main-channel server written in the test.
+
 ## What the model does
 
 | Action | Wire |
