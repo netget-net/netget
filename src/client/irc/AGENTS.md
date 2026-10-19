@@ -27,8 +27,8 @@ pure weight. Both this file and the client's `metadata().implementation` claimed
 
 1. **TCP Connect** - Connect to IRC server (typically port 6667 or 6697 for TLS)
 2. **Registration** - Automatically send `NICK` and `USER` commands
-3. **PING/PONG** - Automatically respond to PING to maintain connection
-4. **Message Loop** - Read lines, parse IRC messages, call LLM for decisions
+3. **PING/PONG** - The reader task answers PING itself, at once, even during a model call
+4. **Message Loop** - The answering loop takes queued lines, parses them, calls the LLM
 
 ### IRC Message Format
 
@@ -44,16 +44,18 @@ PING :server.example.com
 :server 001 nick :Welcome to the IRC Network
 ```
 
-### No state machine
+### Reader task, queue and batching
 
-There is no Idle/Processing/Accumulating machine and no message queue. One used to exist here
-and was worse than nothing twice over: the read loop awaits each LLM call inline before reading
-the next line, so `Processing` was unreachable and the queue was dead code - and the one path
-that touched the queue **cleared it without ever handing it to the model**, so had it been
-reachable it would have silently discarded every message that arrived during a call.
-
-Concurrency is prevented by the loop's own shape, and backpressure comes from TCP. This is the
-same choice `src/server/irc/AGENTS.md` documents for the server side.
+A registered reader task reads lines (bounded by `MAX_IRC_READ_LINE`), answers `PING` itself and
+puts every other line on a bounded queue (`READ_QUEUE_LINES` = `MAX_BATCH_EVENTS`; past it the
+reader stops and TCP holds the server back). The answering loop takes one line per model call
+with batching off; with batching on (the declared default) it hands every line already waiting
+to `call_llm_for_client_batch`, one `irc_message_received` per line, the newest the trigger.
+`tests/client/irc/batching_test.rs` drives both against a raw listener that sends during a slow
+call, batching off as the control, and checks a PING sent mid-call is answered before the call
+ends. Before this, the read loop awaited each call inline: PING waited behind the model, and the
+Idle/Processing/Accumulating queue that preceded that could never fill (and cleared itself
+unread).
 
 ## LLM Integration
 

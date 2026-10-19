@@ -301,7 +301,9 @@ impl Protocol for XmppClientProtocol {
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // The event loop queues every message and presence stanza for an answering task;
+            // with batching on it answers everything waiting in one model call.
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
     fn description(&self) -> &'static str {

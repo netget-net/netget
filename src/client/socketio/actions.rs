@@ -268,7 +268,9 @@ impl Protocol for SocketIoClientProtocol {
             .notes("No transport upgrade from polling to WebSocket, no binary attachments, no automatic reconnection. 1 MB payloads.")
             .max_inbound_bytes(packet::MAX_PAYLOAD)
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // The dispatcher task drains its event queue: with batching on, every event pushed
+            // while the model answered goes to call_llm_for_client_batch together.
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

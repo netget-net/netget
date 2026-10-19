@@ -263,7 +263,10 @@ impl Protocol for SshClientProtocol {
             .e2e_testing("Independent OpenSSH sshd command and SFTP sessions, host-key pin negatives and direct NetGet pairing; tests under tests/client/ssh. No tests skip missing peers")
             .notes("SFTP requires an explicit SHA256 host-key pin. Command-only legacy sessions without a pin accept the peer key and are vulnerable to active attackers. SFTP packets 64 KiB, paths 4 KiB, read windows 1 MiB, directories 1024 entries and 16 empty batches, whole response budget 2 MiB; 16 total active operations/handlers. SSH stdout/stderr 1 MiB combined; channel payload 3 MiB and 4096 messages, at most 16 channels until peer CLOSE. A transport bound closes SSH; callback checks may include one extra upstream packet capped at 256 KiB. No SFTP writes, binary file action, protocol extensions, known_hosts, SSH agent, keyboard-interactive, certificate auth, PTY or forwarding. Experimental: no second independent SFTP server, pcap oracle or fuzz target")
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // Commands run concurrently; output that finishes while a handler is asking the
+            // model is held and, with batching on, answered together when that call ends.
+            // SFTP results and failures are never batched.
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
     fn get_startup_examples(&self) -> StartupExamples {

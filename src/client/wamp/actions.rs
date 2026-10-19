@@ -356,7 +356,10 @@ impl Protocol for WampClientProtocol {
             .notes("JSON serializer only; anonymous authentication; ws:// only; no progressive results or cancellation.")
             .max_inbound_bytes(crate::server::wamp::MAX_MESSAGE)
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // The dispatcher task drains its event queue: with batching on, every event pushed
+            // while the model answered goes to call_llm_for_client_batch together, and each
+            // invocation in it the model left unanswered is still answered for it.
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

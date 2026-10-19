@@ -1,7 +1,7 @@
 //! SSH commands and bounded SFTP v3 operations on one authenticated owned session.
 pub mod actions;
 pub mod sftp;
-use crate::client::{command_support, llm_budget::call_llm_for_client};
+use crate::client::{command_support, llm_budget::call_llm_for_client_batch};
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::logging::emit::Log;
 use crate::protocol::{ConnectContext, Event};
@@ -394,14 +394,31 @@ impl SshClient {
         let mut operations: FuturesUnordered<OperationFuture> = FuturesUnordered::new();
         let mut handlers: FuturesUnordered<HandlerFuture> = FuturesUnordered::new();
         handlers.push(handle_event(ctx.clone(), event, CONNECT_DEPTH));
+        // Command output that arrived while a handler was asking the model, held so that -
+        // with batching on - the outputs that finished during one model call are answered
+        // together in the next. Only `ssh_output_received`: SFTP results and failures are
+        // answered one by one. Each keeps its operation's handler slot until it is answered.
+        let mut held: Vec<(u8, Event)> = Vec::new();
         let mut check_closed = tokio::time::interval(Duration::from_millis(100));
         loop {
             tokio::select! {
                 command = commands.recv() => {
                     let Some(command) = command else { break; };
-                    if enqueue(&ctx,&session,socket.0.clone(),deadline,pinned,&mut operations,handlers.len(),command.action.clone(),Some(command),0).await { break; }
+                    if enqueue(&ctx,&session,socket.0.clone(),deadline,pinned,&mut operations,handlers.len() + held.len(),command.action.clone(),Some(command),0).await { break; }
                 }
-                Some((depth,event)) = operations.next(), if !operations.is_empty() => { handlers.push(handle_event(ctx.clone(),event,depth)); }
+                Some((depth,event)) = operations.next(), if !operations.is_empty() => {
+                    let hold = event.event_type.id == SSH_CLIENT_OUTPUT_RECEIVED_EVENT.id
+                        && !handlers.is_empty()
+                        && ctx.state.client_conversation_settings(ctx.client_id).await.is_some_and(|(_, batching)| batching);
+                    if hold {
+                        held.push((depth, event));
+                        if held.len() >= crate::protocol::metadata::MAX_BATCH_EVENTS {
+                            handlers.push(handle_events(ctx.clone(), std::mem::take(&mut held)));
+                        }
+                    } else {
+                        handlers.push(handle_event(ctx.clone(),event,depth));
+                    }
+                }
                 Some((depth,result)) = handlers.next(), if !handlers.is_empty() => {
                     match result {
                         Ok(actions) if actions.len() <= MAX_OPERATIONS => {
@@ -412,12 +429,17 @@ impl SshClient {
                                     continue;
                                 }
                                 let next_depth = if depth == CONNECT_DEPTH {0} else {depth+1};
-                                if enqueue(&ctx,&session,socket.0.clone(),deadline,pinned,&mut operations,handlers.len(),action,None,next_depth).await { disconnect = true; break; }
+                                if enqueue(&ctx,&session,socket.0.clone(),deadline,pinned,&mut operations,handlers.len() + held.len(),action,None,next_depth).await { disconnect = true; break; }
                             }
                             if disconnect { break; }
                         }
                         Ok(_) => Log::new(Some(&ctx.status_tx)).warn("SSH handler returned too many actions"),
                         Err(e) => Log::new(Some(&ctx.status_tx)).warn(format!("SSH event handler failed: {e}")),
+                    }
+                    // A model call has ended: what finished during it is answered now, in one
+                    // call when there is more than one.
+                    if !held.is_empty() {
+                        handlers.push(handle_events(ctx.clone(), std::mem::take(&mut held)));
                     }
                 }
                 _ = check_closed.tick() => { if session.is_closed() { break; } }
@@ -450,7 +472,14 @@ impl SshClient {
     }
 }
 fn handle_event(ctx: ConnectContext, event: Event, depth: u8) -> HandlerFuture {
+    handle_events(ctx, vec![(depth, event)])
+}
+/// Ask about one event, or several held outputs in one model call, the newest the trigger.
+/// The follow-up depth is the deepest of them, so a batch never extends a chain's bound.
+fn handle_events(ctx: ConnectContext, held: Vec<(u8, Event)>) -> HandlerFuture {
     async move {
+        let depth = held.iter().map(|(depth, _)| *depth).max().unwrap_or(0);
+        let events: Vec<Event> = held.into_iter().map(|(_, event)| event).collect();
         let result = async {
             let instruction = ctx
                 .state
@@ -462,13 +491,13 @@ fn handle_event(ctx: ConnectContext, event: Event, depth: u8) -> HandlerFuture {
                 .get_memory_for_client(ctx.client_id)
                 .await
                 .unwrap_or_default();
-            let result = call_llm_for_client(
+            let result = call_llm_for_client_batch(
                 &ctx.llm_client,
                 &ctx.state,
                 ctx.client_id.to_string(),
                 &instruction,
                 &memory,
-                Some(&event),
+                &events,
                 &SshClientProtocol,
                 &ctx.status_tx,
             )

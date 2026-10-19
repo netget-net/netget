@@ -1,6 +1,8 @@
 //! Socket File client tests module
 
 #[cfg(unix)]
+mod batching_test;
+#[cfg(unix)]
 mod command_channel_test;
 #[cfg(unix)]
 mod e2e_test;
