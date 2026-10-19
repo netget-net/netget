@@ -179,7 +179,9 @@ impl Protocol for WebSocketClientProtocol {
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // The read loop already queues every message for the turn task; with batching on
+            // the turn task answers all that are waiting in one call, one event per message.
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
 

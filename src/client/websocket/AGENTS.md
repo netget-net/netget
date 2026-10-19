@@ -66,9 +66,16 @@ and the connection runs on two tasks, both registered with `spawn_client_task`:
    `websocket_client_connected` first (queued before either task starts), then each message,
    then the close.
 
-One consumer is what keeps two turns from overlapping on a connection. The Idle → Processing →
-Accumulating machine is still there for `wait_for_websocket_data` (hold this message, join the
-next of the same kind onto it); messages that arrive during a turn wait in the queue.
+One consumer is what keeps two turns from overlapping on a connection. Messages that arrive
+during a turn wait in the queue. With batching off each is its own turn; with batching on (the
+declared default) the turn task takes every message already waiting (up to `MAX_BATCH_EVENTS`)
+and answers them in one call through `call_llm_for_client_batch`, one event per message, the
+newest the trigger; a close found while sweeping is answered after them.
+`wait_for_websocket_data` holds the newest message of the turn and joins the next of the same
+kind onto it. `tests/client/websocket/batching_test.rs` drives both against a tokio-tungstenite
+server that sends during a slow call, batching off as the control. (An Idle → Processing →
+Accumulating machine used to sit here too; with one consumer it never left `Idle` except for
+the `wait_for_websocket_data` hold, which is all that remains of it.)
 
 **The queue is bounded two ways and never blocks the read loop**, because a read loop that
 waits for room stops answering Pings again: 256 messages (`TURN_QUEUE_CAPACITY`) and 16 MiB of

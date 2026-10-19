@@ -17,7 +17,6 @@ pub use actions::WebSocketClientProtocol;
 use anyhow::{Context, Result};
 use futures::stream::StreamExt;
 use futures::SinkExt;
-use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
@@ -29,7 +28,7 @@ use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, error, info, trace, warn};
 
-use crate::client::llm_budget::call_llm_for_client;
+use crate::client::llm_budget::{call_llm_for_client, call_llm_for_client_batch};
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::llm::ollama_client::OllamaClient;
 use crate::llm::ClientLlmResult;
@@ -41,13 +40,6 @@ use actions::{
     WEBSOCKET_CLIENT_BINARY_MESSAGE_EVENT, WEBSOCKET_CLIENT_CLOSED_EVENT,
     WEBSOCKET_CLIENT_CONNECTED_EVENT, WEBSOCKET_CLIENT_TEXT_MESSAGE_EVENT,
 };
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum HandlerState {
-    Idle,
-    Processing,
-    Accumulating,
-}
 
 #[derive(Debug, Clone)]
 enum Inbound {
@@ -157,8 +149,8 @@ fn enqueue_inbound(
 }
 
 struct ClientData {
-    state: HandlerState,
-    queued: VecDeque<Inbound>,
+    /// The message the model answered `wait_for_websocket_data` to: the next message of the
+    /// same kind is joined onto it and the whole is offered again.
     pending: Option<Inbound>,
     memory: String,
 }
@@ -369,8 +361,6 @@ impl WebSocketClient {
         });
 
         let data = Arc::new(Mutex::new(ClientData {
-            state: HandlerState::Idle,
-            queued: VecDeque::new(),
             pending: None,
             memory: String::new(),
         }));
@@ -553,8 +543,35 @@ impl WebSocketClient {
                 }
                 WsTurn::Message(frame) => {
                     queued_bytes.fetch_sub(frame.len(), std::sync::atomic::Ordering::SeqCst);
+                    // This message, plus - with batching on - every message already waiting:
+                    // what the server sent while the model answered the previous turn. A close
+                    // found while sweeping is answered after them, as it arrived.
+                    let mut frames = vec![frame];
+                    let mut closed: Option<(u16, String)> = None;
+                    if app_state
+                        .client_conversation_settings(client_id)
+                        .await
+                        .is_some_and(|(_, batching)| batching)
+                    {
+                        while frames.len() < crate::protocol::metadata::MAX_BATCH_EVENTS {
+                            match turn_rx.try_recv() {
+                                Ok(WsTurn::Message(more)) => {
+                                    queued_bytes
+                                        .fetch_sub(more.len(), std::sync::atomic::Ordering::SeqCst);
+                                    frames.push(more);
+                                }
+                                Ok(WsTurn::Closed { code, reason }) => {
+                                    closed = Some((code, reason));
+                                    break;
+                                }
+                                // Queued once, before either task starts: never behind a message.
+                                Ok(WsTurn::Connected { .. }) => {}
+                                Err(_) => break,
+                            }
+                        }
+                    }
                     Self::handle_inbound(
-                        frame,
+                        frames,
                         client_id,
                         &llm_client,
                         &app_state,
@@ -563,6 +580,20 @@ impl WebSocketClient {
                         &data,
                     )
                     .await;
+                    if let Some((code, reason)) = closed {
+                        Self::emit_closed(
+                            client_id,
+                            code,
+                            reason,
+                            &llm_client,
+                            &app_state,
+                            &status_tx,
+                            &out_tx,
+                            &data,
+                        )
+                        .await;
+                        break;
+                    }
                 }
                 WsTurn::Closed { code, reason } => {
                     Self::emit_closed(
@@ -767,9 +798,12 @@ impl WebSocketClient {
         }
     }
 
+    /// Answer one or more messages - several when they arrived during the previous turn and
+    /// the client batches - in one model call through `call_llm_for_client_batch`, one event
+    /// per message, the newest the trigger.
     #[allow(clippy::too_many_arguments)]
     async fn handle_inbound(
-        frame: Inbound,
+        mut frames: Vec<Inbound>,
         client_id: ClientId,
         llm_client: &OllamaClient,
         app_state: &Arc<AppState>,
@@ -777,44 +811,26 @@ impl WebSocketClient {
         out_tx: &mpsc::UnboundedSender<WsOut>,
         data: &Arc<Mutex<ClientData>>,
     ) {
-        {
-            let mut d = data.lock().await;
-            if d.state == HandlerState::Processing {
-                d.queued.push_back(frame);
-                return;
-            }
-            d.state = HandlerState::Processing;
-            match d.pending.take() {
-                Some(pending) => match pending.merge(frame) {
-                    Ok(merged) => d.queued.push_front(merged),
-                    Err((held, new)) => {
-                        d.queued.push_front(new);
-                        d.queued.push_front(held);
-                    }
-                },
-                None => d.queued.push_front(frame),
+        // A message held by `wait_for_websocket_data` is the front of the first one: joined
+        // when they are of the same kind, offered just before it otherwise.
+        if let Some(pending) = data.lock().await.pending.take() {
+            let first = frames.remove(0);
+            match pending.merge(first) {
+                Ok(merged) => frames.insert(0, merged),
+                Err((held, new)) => {
+                    frames.insert(0, new);
+                    frames.insert(0, held);
+                }
             }
         }
 
-        loop {
-            let next = {
-                let mut d = data.lock().await;
-                match d.queued.pop_front() {
-                    Some(f) => f,
-                    None => {
-                        d.state = HandlerState::Idle;
-                        return;
-                    }
-                }
-            };
+        let Some(instruction) = app_state.get_instruction_for_client(client_id).await else {
+            return;
+        };
 
-            let Some(instruction) = app_state.get_instruction_for_client(client_id).await else {
-                let mut d = data.lock().await;
-                d.state = HandlerState::Idle;
-                return;
-            };
-
-            let event = match &next {
+        let events: Vec<Event> = frames
+            .iter()
+            .map(|frame| match frame {
                 Inbound::Text(text) => Event::new(
                     &WEBSOCKET_CLIENT_TEXT_MESSAGE_EVENT,
                     serde_json::json!({ "text": text, "message_bytes": text.len() }),
@@ -830,65 +846,54 @@ impl WebSocketClient {
                         }),
                     )
                 }
-            };
+            })
+            .collect();
 
-            let protocol = WebSocketClientProtocol::for_connection(out_tx.clone());
-            let memory = { data.lock().await.memory.clone() };
+        let protocol = WebSocketClientProtocol::for_connection(out_tx.clone());
+        let memory = { data.lock().await.memory.clone() };
 
-            match call_llm_for_client(
-                llm_client,
-                app_state,
-                client_id.to_string(),
-                &instruction,
-                &memory,
-                Some(&event),
-                &protocol,
-                status_tx,
-            )
-            .await
-            {
-                Ok(ClientLlmResult {
-                    actions,
-                    memory_updates,
-                }) => {
-                    if let Some(mem) = memory_updates {
-                        data.lock().await.memory = mem;
-                    }
-                    let mut should_wait = false;
-                    let mut should_stop = false;
-                    for action in actions {
-                        match protocol.execute_action(action) {
-                            Ok(ClientActionResult::WaitForMore) => should_wait = true,
-                            Ok(ClientActionResult::Disconnect) => should_stop = true,
-                            Ok(_) => {}
-                            Err(e) => {
-                                error!("WebSocket client action failed: {}", e);
-                                let _ = status_tx
-                                    .send(format!("[CLIENT] WebSocket action failed: {e}"));
-                            }
+        match call_llm_for_client_batch(
+            llm_client,
+            app_state,
+            client_id.to_string(),
+            &instruction,
+            &memory,
+            &events,
+            &protocol,
+            status_tx,
+        )
+        .await
+        {
+            Ok(ClientLlmResult {
+                actions,
+                memory_updates,
+            }) => {
+                if let Some(mem) = memory_updates {
+                    data.lock().await.memory = mem;
+                }
+                let mut should_wait = false;
+                let mut should_stop = false;
+                for action in actions {
+                    match protocol.execute_action(action) {
+                        Ok(ClientActionResult::WaitForMore) => should_wait = true,
+                        Ok(ClientActionResult::Disconnect) => should_stop = true,
+                        Ok(_) => {}
+                        Err(e) => {
+                            error!("WebSocket client action failed: {}", e);
+                            let _ =
+                                status_tx.send(format!("[CLIENT] WebSocket action failed: {e}"));
                         }
                     }
-                    if should_wait {
-                        let mut d = data.lock().await;
-                        d.pending = Some(next);
-                        d.state = HandlerState::Accumulating;
-                        return;
-                    }
-                    if should_stop {
-                        let mut d = data.lock().await;
-                        d.state = HandlerState::Idle;
-                        d.queued.clear();
-                        return;
-                    }
                 }
-                Err(e) => {
-                    error!("LLM error for WebSocket client {}: {}", client_id, e);
-                    let _ = status_tx.send(format!("[CLIENT] WebSocket LLM error: {e}"));
-                    let mut d = data.lock().await;
-                    d.state = HandlerState::Idle;
-                    d.queued.clear();
-                    return;
+                // In a batch the wait is for the newest message; the earlier ones were whole
+                // messages the model has answered.
+                if should_wait && !should_stop {
+                    data.lock().await.pending = frames.pop();
                 }
+            }
+            Err(e) => {
+                error!("LLM error for WebSocket client {}: {}", client_id, e);
+                let _ = status_tx.send(format!("[CLIENT] WebSocket LLM error: {e}"));
             }
         }
     }

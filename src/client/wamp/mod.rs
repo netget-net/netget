@@ -1,6 +1,6 @@
 //! WAMP v2 client, JSON over WebSocket, in all four roles.
 pub mod actions;
-use crate::client::llm_budget::call_llm_for_client;
+use crate::client::llm_budget::call_llm_for_client_batch;
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::logging::emit::Log;
 use crate::protocol::{ConnectContext, Event};
@@ -181,6 +181,22 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
     let dispatcher = tokio::spawn(async move {
         let protocol = WampClientProtocol;
         while let Some(event) = event_rx.recv().await {
+            // This event, plus - with batching on - every event already waiting: what the
+            // router delivered while the model answered the previous one.
+            let mut events = vec![event];
+            if events_ctx
+                .state
+                .client_conversation_settings(events_ctx.client_id)
+                .await
+                .is_some_and(|(_, batching)| batching)
+            {
+                while events.len() < crate::protocol::metadata::MAX_BATCH_EVENTS {
+                    match event_rx.try_recv() {
+                        Ok(more) => events.push(more),
+                        Err(_) => break,
+                    }
+                }
+            }
             let instruction = events_ctx
                 .state
                 .get_instruction_for_client(events_ctx.client_id)
@@ -191,13 +207,13 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
                 .get_memory_for_client(events_ctx.client_id)
                 .await
                 .unwrap_or_default();
-            let mut produced = match call_llm_for_client(
+            let mut produced = match call_llm_for_client_batch(
                 &events_ctx.llm_client,
                 &events_ctx.state,
                 events_ctx.client_id.to_string(),
                 &instruction,
                 &memory,
-                Some(&event),
+                &events,
                 &protocol,
                 &events_ctx.status_tx,
             )
@@ -217,16 +233,37 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
                     vec![]
                 }
             };
-            // An invocation the handler did not answer is answered for it: a caller must never hang.
-            if event.event_type.id == "wamp_invocation" {
+            // An invocation the handler did not answer is answered for it: a caller must never
+            // hang. In a batch an answer naming its invocation answers that one, and each
+            // answer naming none answers the oldest still unanswered, as `perform` does.
+            let answers =
+                |a: &&Value| matches!(a["type"].as_str(), Some("wamp_yield" | "wamp_error"));
+            let mut unnamed = produced
+                .iter()
+                .filter(answers)
+                .filter(|a| a["invocation"].is_null())
+                .count();
+            let mut unanswered = Vec::new();
+            for event in events
+                .iter()
+                .filter(|e| e.event_type.id == "wamp_invocation")
+            {
                 let inv = event.data["invocation"].clone();
-                let answered = produced.iter().any(|a| {
-                    matches!(a["type"].as_str(), Some("wamp_yield" | "wamp_error"))
-                        && (a["invocation"].is_null() || a["invocation"] == inv)
-                });
-                if !answered {
-                    produced.push(json!({"type": "wamp_error", "invocation": inv, "error": "wamp.error.unavailable", "args": ["the callee could not answer"]}));
+                if produced
+                    .iter()
+                    .filter(answers)
+                    .any(|a| a["invocation"] == inv)
+                {
+                    continue;
                 }
+                if unnamed > 0 {
+                    unnamed -= 1;
+                    continue;
+                }
+                unanswered.push(inv);
+            }
+            for inv in unanswered {
+                produced.push(json!({"type": "wamp_error", "invocation": inv, "error": "wamp.error.unavailable", "args": ["the callee could not answer"]}));
             }
             for action in produced {
                 if internal_tx.send(action).await.is_err() {
