@@ -323,6 +323,8 @@ impl Protocol for ImapClientProtocol {
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
+            // Nothing can arrive during a call: async_imap owns the socket and every event is the
+            // result of the client's own verb, reported before the next one runs (no IDLE).
             .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }

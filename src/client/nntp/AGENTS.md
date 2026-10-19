@@ -238,3 +238,14 @@ The client now uses sequential bounded command/reply transactions and reads mult
 Independent TLS/authentication/posting coverage uses nntpserver 0.0.3. Untrusted certificates must fail. See `tests/client/nntp/extensions_test.rs` and `tests/peers/README.md`.
 
 Browser regression: after `./web/build.sh`, run `node web/test/nntp.mjs`. It drives both roles through capabilities, dot-stuffed POST, sequential TAKETHIS and QUIT over the browser’s virtual loopback; this is runtime coverage, not independent-peer interoperability evidence. Browser CI runs it beside the general bundle smoke test.
+
+## Batching
+
+Declared `BatchingMode::On`. Replies to the later commands of one answer queue while the model
+answers an earlier one; the shared `server::p2p_support::connect` runner (also behind the adc,
+adc_peer, dc_peer, gnutella, soulseek and soulseek_peer clients) drains everything waiting into
+one `call_llm_for_client_batch` call. With batching off it answers one reply per call.
+`tests/client_batching_test.rs::p2p_runner_answers_replies_that_arrived_during_a_call_together`
+covers both, with off as the control. The runner logs each reply's arrival with
+`record_access_log_only`, so the reply appears once in the session's history — written by the
+model call with what answered it — rather than twice.

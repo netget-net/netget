@@ -1,6 +1,6 @@
 //! ManageSieve client over the server's line and literal parser.
 pub mod actions;
-use crate::client::llm_budget::call_llm_for_client;
+use crate::client::llm_budget::call_llm_for_client_batch;
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::logging::emit::Log;
 use crate::protocol::{ConnectContext, Event};
@@ -233,7 +233,24 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
     let events_ctx = ctx.clone();
     let dispatcher = tokio::spawn(async move {
         let protocol = ManageSieveClientProtocol;
-        while let Some(event) = event_rx.recv().await {
+        while let Some(first) = event_rx.recv().await {
+            // The session keeps running the model's earlier actions (and injected ones) while
+            // this call is out, so their results queue here. With batching on, everything
+            // already waiting is answered in one call; with it off, one result per call.
+            let mut events = vec![first];
+            if events_ctx
+                .state
+                .client_conversation_settings(events_ctx.client_id)
+                .await
+                .is_some_and(|(_, batching)| batching)
+            {
+                while events.len() < crate::protocol::metadata::MAX_BATCH_EVENTS {
+                    match event_rx.try_recv() {
+                        Ok(event) => events.push(event),
+                        Err(_) => break,
+                    }
+                }
+            }
             let instruction = events_ctx
                 .state
                 .get_instruction_for_client(events_ctx.client_id)
@@ -244,13 +261,13 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
                 .get_memory_for_client(events_ctx.client_id)
                 .await
                 .unwrap_or_default();
-            match call_llm_for_client(
+            match call_llm_for_client_batch(
                 &events_ctx.llm_client,
                 &events_ctx.state,
                 events_ctx.client_id.to_string(),
                 &instruction,
                 &memory,
-                Some(&event),
+                &events,
                 &protocol,
                 &events_ctx.status_tx,
             )

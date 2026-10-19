@@ -391,7 +391,9 @@ impl Protocol for StompClientProtocol {
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // Frames that arrive while the model answers wait on the reader task's queue and
+            // are answered in one call, one event per frame (`run_session` in mod.rs).
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
 

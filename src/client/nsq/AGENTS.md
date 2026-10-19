@@ -58,3 +58,10 @@ Maturity remains Experimental. Tests use independent nsqd 1.3.0, deterministic a
 mocked model decisions, the existing NetGet broker pair, framing/semantic negatives,
 followup bounds, heartbeats and cleanup. No NSQ Wireshark dissector or pcap oracle is
 claimed. Existing server peers are the upstream to_nsq/nsq_tail tools.
+
+Batching is On: deliveries (and responses/errors) raised while the model answers wait in the
+dispatcher queue (16); with batching on the dispatcher drains everything waiting into one
+`call_llm_for_client_batch` call, one event each, with it off one event per call. Every
+`nsq_message` carries its own `message_id`, so a batched answer still finishes, requeues or
+touches each delivery by id; there is still no automatic FIN. A batch's follow-ups are as deep
+as its deepest event. `tests/client/nsq/batching_test.rs` is the off/on pair.

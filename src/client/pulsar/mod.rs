@@ -1,7 +1,7 @@
 //! Apache Pulsar client: one connection to a broker, producers and consumers created on
 //! demand (each after a lookup), messages handed to the handler and acknowledged after it.
 pub mod actions;
-use crate::client::llm_budget::call_llm_for_client;
+use crate::client::llm_budget::call_llm_for_client_batch;
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::logging::emit::Log;
 use crate::protocol::{ConnectContext, Event};
@@ -98,18 +98,66 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
     ))?;
     let events_ctx = ctx.clone();
     let dispatcher = tokio::spawn(async move {
-        while let Some((event, depth, ack)) = event_rx.recv().await {
-            events_ctx
-                .state
-                .record_access_log(
-                    AccessLogOwner::Client(events_ctx.client_id.as_u32()),
-                    "Pulsar",
-                    None,
-                    event.id(),
-                    event.data.clone(),
-                    vec![],
+        // An event that would not have joined the previous batch starts the next one.
+        let mut carried = None;
+        while let Some(first) = match carried.take() {
+            Some(item) => Some(item),
+            None => event_rx.recv().await,
+        } {
+            // With batching on, everything raised while the model was answering is answered
+            // in this one call; with it off, one event per call. Only events the model itself
+            // will answer together are drained: one a script, static or manual rule answers
+            // stays in the bounded queue, as it would without batching.
+            let mut batch = vec![first];
+            while batch.len() < crate::protocol::metadata::MAX_BATCH_EVENTS {
+                let mut ids: Vec<&str> = batch.iter().map(|item| item.0.id()).collect();
+                if ids.len() == 1
+                    && !crate::llm::action_helper::client_batch_goes_to_the_model(
+                        &events_ctx.state,
+                        events_ctx.client_id,
+                        &ids,
+                    )
+                    .await
+                {
+                    break;
+                }
+                let Ok(next) = event_rx.try_recv() else {
+                    break;
+                };
+                ids.push(next.0.id());
+                if !crate::llm::action_helper::client_batch_goes_to_the_model(
+                    &events_ctx.state,
+                    events_ctx.client_id,
+                    &ids,
                 )
-                .await;
+                .await
+                {
+                    carried = Some(next);
+                    break;
+                }
+                drop(ids);
+                batch.push(next);
+            }
+            // A follow-up is as deep as the deepest event it answers; every message in the
+            // batch is acknowledged once the handler has run on all of them.
+            let depth = batch.iter().map(|(_, d, _)| *d).max().unwrap_or(0);
+            let mut events = Vec::with_capacity(batch.len());
+            let mut acks = Vec::new();
+            for (event, _, ack) in batch {
+                events_ctx
+                    .state
+                    .record_access_log(
+                        AccessLogOwner::Client(events_ctx.client_id.as_u32()),
+                        "Pulsar",
+                        None,
+                        event.id(),
+                        event.data.clone(),
+                        vec![],
+                    )
+                    .await;
+                events.push(event);
+                acks.extend(ack);
+            }
             let instruction = events_ctx
                 .state
                 .get_instruction_for_client(events_ctx.client_id)
@@ -120,13 +168,13 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
                 .get_memory_for_client(events_ctx.client_id)
                 .await
                 .unwrap_or_default();
-            match call_llm_for_client(
+            match call_llm_for_client_batch(
                 &events_ctx.llm_client,
                 &events_ctx.state,
                 events_ctx.client_id.to_string(),
                 &instruction,
                 &memory,
-                Some(&event),
+                &events,
                 &PulsarClientProtocol,
                 &events_ctx.status_tx,
             )
@@ -148,7 +196,7 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
                 Err(e) => Log::new(Some(&events_ctx.status_tx))
                     .warn(format!("Pulsar client handler: {e}")),
             }
-            if let Some(ack) = ack {
+            for ack in acks {
                 if ack_tx.send(ack).await.is_err() {
                     return;
                 }

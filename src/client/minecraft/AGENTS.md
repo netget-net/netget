@@ -19,6 +19,11 @@ list does; the client instance itself holds no socket.
   server; there is no Mojang authentication here) or `accepted` (with the assigned UUID and
   name). An accepted login is closed before the game.
 
+## Batching
+
+Unsupported. Every event is the result of the model's own ping or login probe, run one at a
+time on a fresh connection; the server never pushes anything that could pile up.
+
 ## Bounds
 
 A clientbound packet is refused past 3 × 32767 + 8 bytes before it is read, and a compressed

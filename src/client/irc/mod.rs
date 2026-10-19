@@ -12,7 +12,7 @@ use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::client::irc::actions::{IRC_CLIENT_CONNECTED_EVENT, IRC_CLIENT_MESSAGE_RECEIVED_EVENT};
-use crate::client::llm_budget::call_llm_for_client;
+use crate::client::llm_budget::call_llm_for_client_batch;
 use crate::server::irc::wire::{
     cap_line, read_irc_line, reject_line_breaks, reject_not_a_word, IrcLine, MAX_IRC_READ_LINE,
 };
@@ -23,18 +23,27 @@ use crate::protocol::Event;
 use crate::state::app_state::AppState;
 use crate::state::{ClientId, ClientStatus};
 
-/// Per-client data shared between the read loop and the injected-command loop.
+/// Per-client data shared between the answering loop and the injected-command loop.
 ///
 /// There is deliberately no Idle/Processing/Accumulating state machine here. One used to
-/// exist, with a `queued_messages` vector, and it was worse than nothing twice over: the read
-/// loop awaits each LLM call inline before reading the next line, so `Processing` was
-/// unreachable and the queue was dead code - and the one path that touched it *cleared* the
-/// queue without ever handing it to the model, so had it been reachable it would have silently
-/// discarded every message that arrived during a call. Backpressure comes from TCP instead,
-/// which is the same choice `src/server/irc/` documents.
+/// exist, with a `queued_messages` vector that was cleared without ever being handed to the
+/// model. Lines that arrive during a model call now wait in the reader task's bounded queue
+/// ([`READ_QUEUE_LINES`]) and are all answered, together when the client batches.
 struct ClientData {
     memory: String,
     nickname: String,
+}
+
+/// How many lines may wait while the model answers an earlier one (at most
+/// `MAX_IRC_READ_LINE` bytes each); past it the reader stops reading and TCP holds the server
+/// back.
+const READ_QUEUE_LINES: usize = crate::protocol::metadata::MAX_BATCH_EVENTS;
+
+/// What the reader task hands the answering loop.
+enum Inbound {
+    Line(String),
+    Closed,
+    Failed(String),
 }
 
 /// IRC client that connects to an IRC server
@@ -148,26 +157,79 @@ impl IrcClient {
         });
         app_state.register_client_task(client_id, cmd_task).await;
 
+        // The reader runs on its own task and answers PING itself, so a server's keepalive is
+        // answered at once rather than after whatever model call is running, and every other
+        // line waits in a bounded queue in arrival order: with batching on, the lines that
+        // arrived while the model answered are answered together, with it off one per call.
+        // Past `READ_QUEUE_LINES` the reader stops reading and TCP holds the server back.
+        // Registered, so stop_client aborts it with the answering loop.
+        let (inbound_tx, mut inbound_rx) = mpsc::channel::<Inbound>(READ_QUEUE_LINES);
+        let reader_write = write_half_arc.clone();
+        let reader = app_state
+            .spawn_client_task(client_id, async move {
+                let mut reader = BufReader::new(read_half);
+                loop {
+                    // Bounded. The peer here is a *server*, and an unbounded `read_line` lets
+                    // one that never sends a newline grow this buffer until the netget process
+                    // is out of memory - the same one-connection OOM the server side had.
+                    let message = match read_irc_line(&mut reader, MAX_IRC_READ_LINE).await {
+                        Ok((IrcLine::Line(line), _)) => {
+                            let line = line.trim_end().to_string();
+                            trace!("IRC client {} received: {}", client_id, line);
+                            // Handle PING immediately.
+                            //
+                            // `line.replace("PING", "PONG")` was wrong in a way that only shows
+                            // on real servers: `replace` rewrites *every* occurrence, so a token
+                            // containing the letters PING - which ircds do send, they are
+                            // opaque cookies - came back corrupted and the server dropped the
+                            // link for failing its own ping. Only the command word is a
+                            // command.
+                            if let Some(rest) = line.strip_prefix("PING ") {
+                                let pong = format!("PONG {rest}\r\n");
+                                if reader_write
+                                    .lock()
+                                    .await
+                                    .write_all(pong.as_bytes())
+                                    .await
+                                    .is_ok()
+                                {
+                                    trace!("IRC client {} sent PONG", client_id);
+                                }
+                                continue;
+                            }
+                            Inbound::Line(line)
+                        }
+                        Ok((IrcLine::Eof, _)) => Inbound::Closed,
+                        Ok((IrcLine::TooLong, n)) => Inbound::Failed(format!(
+                            "IRC server sent {n} bytes with no newline (limit \
+                             {MAX_IRC_READ_LINE})"
+                        )),
+                        Err(e) => Inbound::Failed(e.to_string()),
+                    };
+                    let last = !matches!(message, Inbound::Line(_));
+                    if inbound_tx.send(message).await.is_err() || last {
+                        break;
+                    }
+                }
+            })
+            .await;
+
         // Clone for spawned task
         let write_half_clone = write_half_arc.clone();
         let client_data_clone = client_data.clone();
         let nickname_clone = nickname.clone();
 
-        // Spawn read loop
+        // Spawn the answering loop.
         // Registered with AppState so stop_client can abort this task —
         // dropping a JoinHandle only detaches it in Tokio.
         let task_registrar = app_state.clone();
         let task_handle = tokio::spawn(async move {
-            let mut reader = BufReader::new(read_half);
             let mut registered = false;
 
             loop {
-                // Bounded. The peer here is a *server*, and an unbounded `read_line` lets one
-                // that never sends a newline grow this buffer until the netget process is out
-                // of memory - the same one-connection OOM the server side had.
-                let line = match read_irc_line(&mut reader, MAX_IRC_READ_LINE).await {
-                    Ok((IrcLine::Line(line), _)) => line,
-                    Ok((IrcLine::Eof, _)) => {
+                let line = match inbound_rx.recv().await.unwrap_or(Inbound::Closed) {
+                    Inbound::Line(line) => line,
+                    Inbound::Closed => {
                         info!("IRC client {} disconnected", client_id);
                         app_state
                             .update_client_status(client_id, ClientStatus::Disconnected)
@@ -177,107 +239,87 @@ impl IrcClient {
                         let _ = status_tx.send("__UPDATE_UI__".to_string());
                         break;
                     }
-                    Ok((IrcLine::TooLong, n)) => {
-                        let msg = format!(
-                            "IRC server sent {n} bytes with no newline (limit \
-                             {MAX_IRC_READ_LINE})"
-                        );
-                        error!("IRC client {}: {}", client_id, msg);
-                        app_state
-                            .update_client_status(client_id, ClientStatus::Error(msg))
-                            .await;
-                        let _ = status_tx.send("__UPDATE_UI__".to_string());
-                        break;
-                    }
-                    Err(e) => {
+                    Inbound::Failed(e) => {
                         error!("IRC client {} read error: {}", client_id, e);
                         app_state
-                            .update_client_status(client_id, ClientStatus::Error(e.to_string()))
+                            .update_client_status(client_id, ClientStatus::Error(e))
                             .await;
                         let _ = status_tx.send("__UPDATE_UI__".to_string());
                         break;
                     }
                 };
 
-                {
+                // Check for registration complete (001 welcome message)
+                if !registered && line.contains(" 001 ") {
+                    registered = true;
+                    info!("IRC client {} registration complete", client_id);
+
+                    // Call LLM with connected event
+                    if let Some(instruction) = app_state.get_instruction_for_client(client_id).await
                     {
-                        let line = line.trim_end().to_string();
-                        trace!("IRC client {} received: {}", client_id, line);
+                        let protocol = Arc::new(IrcClientProtocol::new());
+                        let event = Event::new(
+                            &IRC_CLIENT_CONNECTED_EVENT,
+                            serde_json::json!({
+                                "remote_addr": remote_sock_addr.to_string(),
+                                "nickname": nickname_clone,
+                            }),
+                        );
 
-                        // Handle PING immediately.
-                        //
-                        // `line.replace("PING", "PONG")` was wrong in a way that only shows on
-                        // real servers: `replace` rewrites *every* occurrence, so a token
-                        // containing the letters PING - which ircds do send, they are opaque
-                        // cookies - came back corrupted and the server dropped the link for
-                        // failing its own ping. Only the command word is a command.
-                        if let Some(rest) = line.strip_prefix("PING ") {
-                            let pong = format!("PONG {rest}\r\n");
-                            if write_half_clone
-                                .lock()
-                                .await
-                                .write_all(pong.as_bytes())
-                                .await
-                                .is_ok()
-                            {
-                                trace!("IRC client {} sent PONG", client_id);
-                            }
-                            continue;
-                        }
-
-                        // Check for registration complete (001 welcome message)
-                        if !registered && line.contains(" 001 ") {
-                            registered = true;
-                            info!("IRC client {} registration complete", client_id);
-
-                            // Call LLM with connected event
-                            if let Some(instruction) =
-                                app_state.get_instruction_for_client(client_id).await
-                            {
-                                let protocol = Arc::new(IrcClientProtocol::new());
-                                let event = Event::new(
-                                    &IRC_CLIENT_CONNECTED_EVENT,
-                                    serde_json::json!({
-                                        "remote_addr": remote_sock_addr.to_string(),
-                                        "nickname": nickname_clone,
-                                    }),
-                                );
-
-                                if let Err(e) = Self::handle_llm_call(
-                                    &llm_client,
-                                    &app_state,
-                                    client_id,
-                                    &instruction,
-                                    &client_data_clone,
-                                    Some(&event),
-                                    protocol,
-                                    &write_half_clone,
-                                    &status_tx,
-                                )
-                                .await
-                                {
-                                    error!("IRC client {} LLM error on connect: {}", client_id, e);
-                                }
-                            }
-                            continue;
-                        }
-
-                        // Skip if not yet registered
-                        if !registered {
-                            continue;
-                        }
-
-                        // Parse IRC message
-                        let parsed = Self::parse_irc_message(&line);
-
-                        // Handle message with LLM. Awaited inline, so the next line is not read
-                        // until this one has been answered - the backpressure the removed
-                        // state machine pretended to provide.
-                        if let Some(instruction) =
-                            app_state.get_instruction_for_client(client_id).await
+                        if let Err(e) = Self::handle_llm_call(
+                            &llm_client,
+                            &app_state,
+                            client_id,
+                            &instruction,
+                            &client_data_clone,
+                            &[event],
+                            protocol,
+                            &write_half_clone,
+                            &status_tx,
+                        )
+                        .await
                         {
-                            let protocol = Arc::new(IrcClientProtocol::new());
-                            let event = Event::new(
+                            error!("IRC client {} LLM error on connect: {}", client_id, e);
+                        }
+                    }
+                    continue;
+                }
+
+                // Skip if not yet registered
+                if !registered {
+                    continue;
+                }
+
+                // This line, plus - with batching on - every line already waiting: what the
+                // server sent while the model answered the previous one. An end of the
+                // connection found while sweeping is handled after this turn.
+                let mut lines = vec![line];
+                let mut ended: Option<Inbound> = None;
+                if app_state
+                    .client_conversation_settings(client_id)
+                    .await
+                    .is_some_and(|(_, batching)| batching)
+                {
+                    while lines.len() < crate::protocol::metadata::MAX_BATCH_EVENTS {
+                        match inbound_rx.try_recv() {
+                            Ok(Inbound::Line(more)) => lines.push(more),
+                            Ok(other) => {
+                                ended = Some(other);
+                                break;
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                }
+
+                // One event per line, answered in one model call when there are several.
+                if let Some(instruction) = app_state.get_instruction_for_client(client_id).await {
+                    let protocol = Arc::new(IrcClientProtocol::new());
+                    let events: Vec<Event> = lines
+                        .iter()
+                        .map(|line| {
+                            let parsed = Self::parse_irc_message(line);
+                            Event::new(
                                 &IRC_CLIENT_MESSAGE_RECEIVED_EVENT,
                                 serde_json::json!({
                                     "source": parsed.source,
@@ -286,28 +328,51 @@ impl IrcClient {
                                     "message": parsed.message,
                                     "raw_message": line,
                                 }),
-                            );
-
-                            if let Err(e) = Self::handle_llm_call(
-                                &llm_client,
-                                &app_state,
-                                client_id,
-                                &instruction,
-                                &client_data_clone,
-                                Some(&event),
-                                protocol,
-                                &write_half_clone,
-                                &status_tx,
                             )
-                            .await
-                            {
-                                error!("IRC client {} LLM error: {}", client_id, e);
-                            }
-                        }
+                        })
+                        .collect();
+
+                    if let Err(e) = Self::handle_llm_call(
+                        &llm_client,
+                        &app_state,
+                        client_id,
+                        &instruction,
+                        &client_data_clone,
+                        &events,
+                        protocol,
+                        &write_half_clone,
+                        &status_tx,
+                    )
+                    .await
+                    {
+                        error!("IRC client {} LLM error: {}", client_id, e);
                     }
+                }
+
+                match ended {
+                    Some(Inbound::Closed) => {
+                        info!("IRC client {} disconnected", client_id);
+                        app_state
+                            .update_client_status(client_id, ClientStatus::Disconnected)
+                            .await;
+                        let _ = status_tx
+                            .send(format!("[CLIENT] IRC client {} disconnected", client_id));
+                        let _ = status_tx.send("__UPDATE_UI__".to_string());
+                        break;
+                    }
+                    Some(Inbound::Failed(e)) => {
+                        error!("IRC client {} read error: {}", client_id, e);
+                        app_state
+                            .update_client_status(client_id, ClientStatus::Error(e))
+                            .await;
+                        let _ = status_tx.send("__UPDATE_UI__".to_string());
+                        break;
+                    }
+                    _ => {}
                 }
             }
 
+            reader.abort();
             // Every exit path (EOF - including the one an injected or LLM QUIT provokes - and
             // read error) lands here: drop the command handle so the dashboard stops offering
             // [ send ] on a dead connection (a late send then fails fast).
@@ -429,27 +494,30 @@ impl IrcClient {
         }
     }
 
-    /// Handle LLM call and execute actions
+    /// Ask the model about one or more events and execute its actions
     async fn handle_llm_call(
         llm_client: &OllamaClient,
         app_state: &Arc<AppState>,
         client_id: ClientId,
         instruction: &str,
         client_data: &Arc<Mutex<ClientData>>,
-        event: Option<&Event>,
+        events: &[Event],
         protocol: Arc<IrcClientProtocol>,
         write_half: &Arc<Mutex<tokio::io::WriteHalf<TcpStream>>>,
         status_tx: &mpsc::UnboundedSender<String>,
     ) -> Result<()> {
         let memory = client_data.lock().await.memory.clone();
 
-        match call_llm_for_client(
+        // Several events are the lines that arrived during the previous call: one model call
+        // answers them all, or they are answered one by one when the client does not batch
+        // or a rule decides one of them.
+        match call_llm_for_client_batch(
             llm_client,
             app_state,
             client_id.to_string(),
             instruction,
             &memory,
-            event,
+            events,
             protocol.as_ref(),
             status_tx,
         )

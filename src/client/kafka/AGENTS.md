@@ -193,3 +193,10 @@ call `remove_client_handle`, which is also what ends `command_loop`.
 
 Test: `tests/client/kafka/command_channel_test.rs` (zero LLM calls; a NetGet broker answers
 through one `*` static rule).
+
+### Batching: Unsupported
+
+The client is pull-based: the poll loop fetches only between model calls, and the next Fetch
+returns everything produced meanwhile as one `kafka_records_received` event's record list.
+Every other event is the reply to the client's own request. Nothing arrives while the model
+is answering, so there is nothing for batching to collect.

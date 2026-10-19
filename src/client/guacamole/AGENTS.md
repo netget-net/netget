@@ -26,6 +26,13 @@ It raises:
 - `guacamole_error`. For example, guacd answers 519 when the VNC server is unreachable,
   after `ready`.
 
+**Batching (on by default).** guacd pushes clipboard changes and errors whenever it likes, so
+they can queue in the event channel while the model answers an earlier one. With batching on
+the dispatcher takes everything waiting when a call returns (up to `MAX_BATCH_EVENTS`) and
+answers it in one `call_llm_for_client_batch` call, one event per instruction; with it off,
+one event per call. The follow-up depth of a batch is its deepest event's.
+`tests/client/guacamole/batching_test.rs` drives a guacd written in the test, off and on.
+
 ## Actions
 
 - `guacamole_type`: each character pressed and released; `\n` is Return.

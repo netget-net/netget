@@ -19,7 +19,7 @@ and interact with other XMPP clients.
 - ✅ Protocol structure and Client trait implementation
 - ✅ Event type definitions (connected, message_received, presence_received)
 - ✅ Action definitions (send_message, send_presence, disconnect)
-- ✅ State machine (Idle/Processing/Accumulating)
+- ✅ Answering task fed by a bounded queue, with batching
 - ✅ LLM integration with call_llm_for_client
 - ✅ Bidirectional stanza handling (send and receive)
 - ✅ Proper JID and Lang type handling for xmpp-parsers 0.22
@@ -67,8 +67,8 @@ and interact with other XMPP clients.
    the LLM with "xmpp_connected" in its own task
    No Online in time, or the stream ended first: return Err (the client is Error)
 
-7. State machine: Idle → Processing → Accumulating
-   (prevents concurrent LLM calls)
+7. Incoming message and presence stanzas go to an answering task over a bounded queue;
+   one consumer, so model calls never overlap (see "Batching" below)
 ```
 
 ### Target: `remote_addr` and nothing else
@@ -104,19 +104,26 @@ TLS failure or a SASL rejection is logged by the library (`Failed to connect: �
 which reaches `netget.log`) and retried with backoff. So every failure before `Online` surfaces
 as the session timeout, not as its specific cause.
 
-### State Management
+### Batching
 
-**Connection State:**
+The event loop turns each incoming message or presence stanza into an event and hands it to an
+answering task over a bounded queue (`EVENT_QUEUE` = `MAX_BATCH_EVENTS`; when full the loop
+stops taking stanzas from tokio-xmpp, which holds them). The answering task answers one event
+per model call with batching off; with batching on (the declared default) it takes everything
+waiting and answers it in one call through `call_llm_for_client_batch`, the newest the trigger.
+The event loop therefore keeps polling the stream and writing the model's stanzas while a call
+is in flight; it used to await each call inline, so its Idle/Processing/Accumulating queue never
+filled and nothing was written until the call ended. The memory used to be read through a guard
+held across the call, which deadlocked the memory write in the same `match`; it is copied out
+first now.
 
-- **Idle:** Ready to process events
-- **Processing:** LLM is currently processing an event
-- **Accumulating:** Queuing events while LLM is busy
+`tests/xmpp_client_batching_test.rs` drives both against a server written in the test that
+takes tokio-xmpp through STARTTLS (a self-signed `localhost` certificate trusted through
+`SSL_CERT_FILE`, which `rustls-native-certs` honours), SASL PLAIN and resource binding, then
+sends chat messages during a slow call, batching off as the control. It is its own test binary
+because the environment variable is process-wide.
 
-**Per-Client Data:**
-
-- `state`: Current connection state
-- `queued_events`: Events queued during Processing state
-- `memory`: LLM conversation memory
+**Per-Client Data:** `memory`, the LLM conversation memory.
 
 **Stored in AppState:**
 
@@ -487,6 +494,7 @@ internally and reports no byte count.
 
 **Gap.** `tests/client/xmpp/command_channel_test.rs` pins registration, execution, the access-log
 entry and disconnect against a loopback listener that never answers, but **not** a stanza
-reaching a peer: no XMPP server this suite can start
-completes tokio-xmpp's STARTTLS/SASL negotiation, so the wire path is still only exercised by the
-`#[ignore]`d e2e test against a real prosody/ejabberd.
+reaching a peer. `tests/xmpp_client_batching_test.rs` shows the way to an online session in a
+test (a hand-written server, `SSL_CERT_FILE`), but asserts only what reaches the model; a
+stanza written to a peer is still only exercised by the `#[ignore]`d e2e test against a real
+prosody/ejabberd.

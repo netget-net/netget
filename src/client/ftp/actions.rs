@@ -156,7 +156,10 @@ impl Protocol for FtpClientProtocol {
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // Control-channel lines that arrive while the model answers (the rest of a multi-line
+            // reply, a 226 after a 150, replies to several commands) wait in a queue; with
+            // batching on they are answered in one call, one event per line.
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
 

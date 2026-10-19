@@ -49,7 +49,7 @@ use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info, trace, warn};
 
-use crate::client::llm_budget::call_llm_for_client;
+use crate::client::llm_budget::call_llm_for_client_batch;
 use crate::client::nats::actions::{
     NatsClientProtocol as Proto, NATS_CLIENT_CONNECTED_EVENT, NATS_CLIENT_ERROR_RECEIVED_EVENT,
     NATS_CLIENT_MESSAGE_RECEIVED_EVENT, NATS_CLIENT_PERMISSION_ERROR_EVENT,
@@ -841,7 +841,7 @@ impl NatsClient {
         let mut flow = Self::ask_and_execute(
             &protocol,
             &write_half,
-            connected_event,
+            std::slice::from_ref(&connected_event),
             &mut memory,
             client_id,
             &llm_client,
@@ -854,11 +854,29 @@ impl NatsClient {
             tokio::select! {
                 frame = frame_rx.recv() => {
                     let Some(frame) = frame else { break };
-                    let Some(event) = Self::event_for(frame, client_id, &js_inbox) else { continue };
+                    // This frame, plus — with batching on — every frame already waiting: what
+                    // the broker sent while the model was answering. Frames are whole
+                    // messages, so each is one event; read per turn because batching is
+                    // hot-changeable.
+                    let mut events: Vec<Event> =
+                        Self::event_for(frame, client_id, &js_inbox).into_iter().collect();
+                    if app_state
+                        .client_conversation_settings(client_id)
+                        .await
+                        .is_some_and(|(_, batching)| batching)
+                    {
+                        while events.len() < crate::protocol::metadata::MAX_BATCH_EVENTS {
+                            let Ok(next) = frame_rx.try_recv() else { break };
+                            events.extend(Self::event_for(next, client_id, &js_inbox));
+                        }
+                    }
+                    if events.is_empty() {
+                        continue;
+                    }
                     flow = Self::ask_and_execute(
                         &protocol,
                         &write_half,
-                        event,
+                        &events,
                         &mut memory,
                         client_id,
                         &llm_client,
@@ -979,7 +997,8 @@ impl NatsClient {
         }
     }
 
-    /// Ask the model about one event and run every action it answers with.
+    /// Ask the model about one event — or, with batching on, every event that was waiting — in
+    /// one call, and run every action it answers with.
     ///
     /// The actions are the point. Discarding them — `let _ =`, an `Err`-only arm, a `..` that
     /// swallows the field, or a `debug!` of `.len()` — is the single most common client defect
@@ -989,7 +1008,7 @@ impl NatsClient {
     async fn ask_and_execute(
         protocol: &Proto,
         write_half: &Arc<Mutex<tokio::io::WriteHalf<TcpStream>>>,
-        event: Event,
+        events: &[Event],
         memory: &mut String,
         client_id: ClientId,
         llm_client: &OllamaClient,
@@ -1000,14 +1019,19 @@ impl NatsClient {
             .get_instruction_for_client(client_id)
             .await
             .unwrap_or_default();
+        let ids = events
+            .iter()
+            .map(|e| e.id())
+            .collect::<Vec<_>>()
+            .join("', '");
 
-        let outcome = call_llm_for_client(
+        let outcome = call_llm_for_client_batch(
             llm_client,
             app_state,
             client_id.to_string(),
             &instruction,
             memory,
-            Some(&event),
+            events,
             protocol,
             status_tx,
         )
@@ -1022,14 +1046,11 @@ impl NatsClient {
                 // somebody's message bus. The log carries the error; the wire carries nothing.
                 error!(
                     "NATS client {} could not answer '{}': {} (decision=fail_closed_llm_error)",
-                    client_id,
-                    event.id(),
-                    e
+                    client_id, ids, e
                 );
                 let _ = status_tx.send(format!(
                     "[CLIENT] ✖ NATS client {} could not answer '{}'",
-                    client_id,
-                    event.id()
+                    client_id, ids
                 ));
                 return Flow::Continue;
             }
@@ -1042,8 +1063,7 @@ impl NatsClient {
         if result.actions.is_empty() {
             debug!(
                 "NATS client {} answered '{}' with no actions (decision=model_no_actions)",
-                client_id,
-                event.id()
+                client_id, ids
             );
         }
 

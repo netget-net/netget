@@ -1,7 +1,7 @@
 //! MQTT-SN 1.2 sensor client over the gateway's codec: one outstanding operation at a time,
 //! retried, with deliveries from the gateway acknowledged and reported as they arrive.
 pub mod actions;
-use crate::client::llm_budget::call_llm_for_client;
+use crate::client::llm_budget::call_llm_for_client_batch;
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::logging::emit::Log;
 use crate::protocol::{ConnectContext, Event};
@@ -695,9 +695,28 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
         json!({"gateway": remote.to_string(), "client_id": client_id}),
     ))?;
     let events_ctx = ctx.clone();
+    // One model call at a time. What the session reports while a call runs (deliveries from
+    // the gateway, results of earlier operations) waits on `event_rx`; with batching on the
+    // next call takes everything waiting, one event each, and with it off one event per call.
+    // Deliveries are acknowledged by `Sensor::packet` before they are queued, so none waits on
+    // the model for its PUBACK/PUBREC.
     let dispatcher = tokio::spawn(async move {
         let protocol = MqttSnClientProtocol;
         while let Some(event) = event_rx.recv().await {
+            let mut events = vec![event];
+            if events_ctx
+                .state
+                .client_conversation_settings(events_ctx.client_id)
+                .await
+                .is_some_and(|(_, batching)| batching)
+            {
+                while events.len() < crate::protocol::metadata::MAX_BATCH_EVENTS {
+                    match event_rx.try_recv() {
+                        Ok(next) => events.push(next),
+                        Err(_) => break,
+                    }
+                }
+            }
             let instruction = events_ctx
                 .state
                 .get_instruction_for_client(events_ctx.client_id)
@@ -708,13 +727,13 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
                 .get_memory_for_client(events_ctx.client_id)
                 .await
                 .unwrap_or_default();
-            match call_llm_for_client(
+            match call_llm_for_client_batch(
                 &events_ctx.llm_client,
                 &events_ctx.state,
                 events_ctx.client_id.to_string(),
                 &instruction,
                 &memory,
-                Some(&event),
+                &events,
                 &protocol,
                 &events_ctx.status_tx,
             )

@@ -11,7 +11,7 @@ use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info, trace, warn};
 
-use crate::client::llm_budget::call_llm_for_client;
+use crate::client::llm_budget::{call_llm_for_client, call_llm_for_client_batch};
 use crate::client::vnc::actions::{
     VNC_CLIENT_CONNECTED_EVENT, VNC_CLIENT_FRAMEBUFFER_UPDATE_EVENT,
     VNC_CLIENT_SERVER_CUT_TEXT_EVENT,
@@ -118,21 +118,28 @@ pub fn resolve_keysym(value: &serde_json::Value) -> Option<u32> {
     })
 }
 
-/// Connection state for LLM processing
-#[derive(Debug, Clone, PartialEq)]
-enum ConnectionState {
-    Idle,
-    Processing,
-    #[allow(dead_code)]
-    Accumulating,
-}
-
-/// Per-client data for LLM handling
+/// Per-client data for LLM handling.
+///
+/// There used to be an `Idle`/`Processing` state here whose `Processing` arm skipped a
+/// framebuffer update. Nothing could reach it: the model was called inline in the read loop, so
+/// the state was always `Idle` when an update was examined. What the server sent during a call
+/// waited unread in the socket. The reader is now its own task (see `connect_with_llm_actions`).
 struct ClientData {
-    state: ConnectionState,
     memory: String,
     fb_width: u16,
     fb_height: u16,
+}
+
+/// How many server messages may wait while the model answers an earlier one; past it the
+/// reader stops and TCP holds the server back.
+const READ_QUEUE_MESSAGES: usize = crate::protocol::metadata::MAX_BATCH_EVENTS;
+
+/// What the reader task hands the answering loop.
+enum Inbound {
+    /// A whole server message the model is told about.
+    Event(Event),
+    /// The session is over: EOF, a read error or a message that cannot be framed.
+    Ended(String),
 }
 
 /// VNC client that connects to a VNC server
@@ -293,96 +300,134 @@ impl VncClient {
 
         // Initialize client data
         let client_data = Arc::new(Mutex::new(ClientData {
-            state: ConnectionState::Idle,
             memory: String::new(),
             fb_width,
             fb_height,
         }));
 
-        // Spawn read loop for server messages
-        // Registered with AppState so stop_client can abort this task —
-        // dropping a JoinHandle only detaches it in Tokio.
-        let task_registrar = app_state.clone();
-        let task_handle = tokio::spawn(async move {
-            loop {
-                read_half.end_frame();
-                // Read message type
-                let mut msg_type_buf = [0u8; 1];
-                match read_half.read_exact(&mut msg_type_buf).await {
-                    Ok(_) => {
-                        read_half.start_frame(crate::client::response_reader::RESPONSE_DEADLINE);
-                        let msg_type = msg_type_buf[0];
-                        trace!(
-                            "VNC client {} received message type: {}",
-                            client_id,
-                            msg_type
-                        );
-
-                        match msg_type {
-                            0 => {
-                                // FramebufferUpdate
-                                if let Err(e) = Self::handle_framebuffer_update(
-                                    &mut read_half,
-                                    &llm_client,
-                                    &app_state,
-                                    &status_tx,
-                                    client_id,
-                                    &client_data,
-                                    &protocol,
-                                    &write_half_arc,
-                                )
-                                .await
-                                {
-                                    error!("Failed to handle framebuffer update: {}", e);
-                                    break;
-                                }
-                            }
-                            1 => {
-                                // SetColourMapEntries
-                                if let Err(e) =
-                                    Self::handle_set_colour_map_entries(&mut read_half).await
-                                {
-                                    error!("Failed to handle SetColourMapEntries: {}", e);
-                                    break;
-                                }
-                            }
-                            2 => {
-                                // Bell
-                                debug!("VNC client {}: Bell received", client_id);
-                            }
-                            3 => {
-                                // ServerCutText
-                                if let Err(e) = Self::handle_server_cut_text(
-                                    &mut read_half,
-                                    &llm_client,
-                                    &app_state,
-                                    &status_tx,
-                                    client_id,
-                                    &client_data,
-                                    &protocol,
-                                    &write_half_arc,
-                                )
-                                .await
-                                {
-                                    error!("Failed to handle server cut text: {}", e);
-                                    break;
-                                }
-                            }
-                            _ => {
-                                warn!(
-                                    "VNC client {}: Unknown message type: {}",
-                                    client_id, msg_type
-                                );
-                                break;
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        info!("VNC client {} disconnected: {}", client_id, e);
+        // The reader runs on its own task and frames whole server messages into a bounded
+        // queue, so what the server sends while the model is answering keeps its message
+        // boundaries instead of waiting unread in the socket: with batching on, everything
+        // waiting is answered in one call (one event per message), with it off one message per
+        // call. Registered, so stop_client aborts it.
+        let (inbound_tx, mut inbound_rx) = mpsc::channel::<Inbound>(READ_QUEUE_MESSAGES);
+        let reader = app_state
+            .spawn_client_task(client_id, async move {
+                loop {
+                    let message = match Self::read_server_message(&mut read_half, client_id).await {
+                        Ok(Some(event)) => Inbound::Event(event),
+                        Ok(None) => continue,
+                        Err(e) => Inbound::Ended(e.to_string()),
+                    };
+                    let last = matches!(message, Inbound::Ended(_));
+                    if inbound_tx.send(message).await.is_err() || last {
                         break;
                     }
                 }
+            })
+            .await;
+
+        // The answering loop. Registered with AppState so stop_client can abort this task —
+        // dropping a JoinHandle only detaches it in Tokio.
+        let task_registrar = app_state.clone();
+        let task_handle = tokio::spawn(async move {
+            'session: loop {
+                let first = inbound_rx
+                    .recv()
+                    .await
+                    .unwrap_or_else(|| Inbound::Ended("reader stopped".to_string()));
+
+                // This message, plus — with batching on — every message already waiting.
+                let mut events = Vec::new();
+                let mut ended = None;
+                match first {
+                    Inbound::Event(event) => events.push(event),
+                    Inbound::Ended(reason) => ended = Some(reason),
+                }
+                if ended.is_none()
+                    && app_state
+                        .client_conversation_settings(client_id)
+                        .await
+                        .is_some_and(|(_, batching)| batching)
+                {
+                    while events.len() < crate::protocol::metadata::MAX_BATCH_EVENTS {
+                        match inbound_rx.try_recv() {
+                            Ok(Inbound::Event(event)) => events.push(event),
+                            Ok(Inbound::Ended(reason)) => {
+                                ended = Some(reason);
+                                break;
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                }
+
+                if !events.is_empty() {
+                    if let Some(instruction) = app_state.get_instruction_for_client(client_id).await
+                    {
+                        let memory = client_data.lock().await.memory.clone();
+                        match call_llm_for_client_batch(
+                            &llm_client,
+                            &app_state,
+                            client_id.to_string(),
+                            &instruction,
+                            &memory,
+                            &events,
+                            protocol.as_ref(),
+                            &status_tx,
+                        )
+                        .await
+                        {
+                            Ok(ClientLlmResult {
+                                actions,
+                                memory_updates,
+                            }) => {
+                                let (fb_width, fb_height) = {
+                                    let mut data = client_data.lock().await;
+                                    if let Some(mem) = memory_updates {
+                                        data.memory = mem;
+                                    }
+                                    (data.fb_width, data.fb_height)
+                                };
+                                for action in actions {
+                                    use crate::llm::actions::client_trait::Client;
+                                    if matches!(
+                                        protocol.as_ref().execute_action(action.clone()),
+                                        Ok(ClientActionResult::Disconnect)
+                                    ) {
+                                        // Half-close: the server answers with EOF, which the
+                                        // reader reports as the end of the session.
+                                        info!("VNC client {} disconnecting", client_id);
+                                        let _ = write_half_arc.lock().await.shutdown().await;
+                                        break;
+                                    }
+                                    let mut guard = write_half_arc.lock().await;
+                                    if let Err(e) = Self::execute_vnc_action_with_writer(
+                                        &mut *guard,
+                                        &protocol,
+                                        action,
+                                        fb_width,
+                                        fb_height,
+                                    )
+                                    .await
+                                    {
+                                        error!("Failed to execute VNC action: {}", e);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                error!("LLM error for VNC client {}: {}", client_id, e);
+                            }
+                        }
+                    }
+                }
+
+                if let Some(reason) = ended {
+                    info!("VNC client {} disconnected: {}", client_id, reason);
+                    break 'session;
+                }
             }
+            reader.abort();
             // A framing failure is terminal too: its unconsumed payload cannot be
             // interpreted as a new message, and its command handle must disappear.
             app_state
@@ -567,20 +612,49 @@ impl VncClient {
         Ok(())
     }
 
-    /// Handle FramebufferUpdate message
-    async fn handle_framebuffer_update<R, W>(
-        read_half: &mut R,
-        llm_client: &OllamaClient,
-        app_state: &Arc<AppState>,
-        status_tx: &mpsc::UnboundedSender<String>,
+    /// Read one whole server message. `Ok(Some(event))` is a message the model is told about,
+    /// `Ok(None)` one consumed silently (colour map, bell), `Err` the end of the session: EOF,
+    /// a read error, a frame past its deadline or a message that cannot be framed, whose
+    /// unconsumed payload cannot be read as a new message.
+    async fn read_server_message<R>(
+        read_half: &mut crate::client::response_reader::FrameReader<R>,
         client_id: ClientId,
-        client_data: &Arc<Mutex<ClientData>>,
-        protocol: &Arc<VncClientProtocol>,
-        write_half: &Arc<Mutex<W>>,
-    ) -> Result<()>
+    ) -> Result<Option<Event>>
+    where
+        R: tokio::io::AsyncRead + Unpin,
+    {
+        read_half.end_frame();
+        let mut msg_type_buf = [0u8; 1];
+        read_half.read_exact(&mut msg_type_buf).await?;
+        read_half.start_frame(crate::client::response_reader::RESPONSE_DEADLINE);
+        let msg_type = msg_type_buf[0];
+        trace!(
+            "VNC client {} received message type: {}",
+            client_id,
+            msg_type
+        );
+        match msg_type {
+            0 => Ok(Some(Self::read_framebuffer_update(read_half).await?)),
+            1 => {
+                Self::handle_set_colour_map_entries(read_half).await?;
+                Ok(None)
+            }
+            2 => {
+                debug!("VNC client {}: Bell received", client_id);
+                Ok(None)
+            }
+            3 => Ok(Some(Self::read_server_cut_text(read_half).await?)),
+            other => {
+                warn!("VNC client {}: Unknown message type: {}", client_id, other);
+                bail!("unknown VNC server message type {other}")
+            }
+        }
+    }
+
+    /// Read a FramebufferUpdate (after its type byte) and describe it.
+    async fn read_framebuffer_update<R>(read_half: &mut R) -> Result<Event>
     where
         R: AsyncReadExt + Unpin,
-        W: AsyncWriteExt + Unpin,
     {
         // Read padding + number of rectangles
         let mut header = [0u8; 3];
@@ -622,90 +696,19 @@ impl VncClient {
             discard_raw_rectangle(read_half, width, height).await?;
         }
 
-        let mut client_data_lock = client_data.lock().await;
-
-        if client_data_lock.state != ConnectionState::Idle {
-            // Already processing, skip
-            return Ok(());
-        }
-
-        client_data_lock.state = ConnectionState::Processing;
-        drop(client_data_lock);
-
-        // Call LLM with update event
-        if let Some(instruction) = app_state.get_instruction_for_client(client_id).await {
-            let event = Event::new(
-                &VNC_CLIENT_FRAMEBUFFER_UPDATE_EVENT,
-                serde_json::json!({
-                    "rectangles": num_rects,
-                    "update_summary": format!("{} rectangle(s) updated", num_rects),
-                }),
-            );
-
-            match call_llm_for_client(
-                llm_client,
-                app_state,
-                client_id.to_string(),
-                &instruction,
-                &client_data.lock().await.memory,
-                Some(&event),
-                protocol.as_ref(),
-                status_tx,
-            )
-            .await
-            {
-                Ok(ClientLlmResult {
-                    actions,
-                    memory_updates,
-                }) => {
-                    // Update memory
-                    if let Some(mem) = memory_updates {
-                        client_data.lock().await.memory = mem;
-                    }
-
-                    // Execute actions
-                    let fb_width = client_data.lock().await.fb_width;
-                    let fb_height = client_data.lock().await.fb_height;
-
-                    for action in actions {
-                        let mut write_lock = write_half.lock().await;
-                        if let Err(e) = Self::execute_vnc_action_with_writer(
-                            &mut *write_lock,
-                            protocol,
-                            action,
-                            fb_width,
-                            fb_height,
-                        )
-                        .await
-                        {
-                            error!("Failed to execute VNC action: {}", e);
-                        }
-                    }
-                }
-                Err(e) => {
-                    error!("LLM error for VNC client {}: {}", client_id, e);
-                }
-            }
-        }
-
-        client_data.lock().await.state = ConnectionState::Idle;
-        Ok(())
+        Ok(Event::new(
+            &VNC_CLIENT_FRAMEBUFFER_UPDATE_EVENT,
+            serde_json::json!({
+                "rectangles": num_rects,
+                "update_summary": format!("{} rectangle(s) updated", num_rects),
+            }),
+        ))
     }
 
-    /// Handle ServerCutText message
-    async fn handle_server_cut_text<R, W>(
-        read_half: &mut R,
-        llm_client: &OllamaClient,
-        app_state: &Arc<AppState>,
-        status_tx: &mpsc::UnboundedSender<String>,
-        client_id: ClientId,
-        client_data: &Arc<Mutex<ClientData>>,
-        protocol: &Arc<VncClientProtocol>,
-        write_half: &Arc<Mutex<W>>,
-    ) -> Result<()>
+    /// Read a ServerCutText (after its type byte) and describe it.
+    async fn read_server_cut_text<R>(read_half: &mut R) -> Result<Event>
     where
         R: AsyncReadExt + Unpin,
-        W: AsyncWriteExt + Unpin,
     {
         // Read padding + text length
         let mut header = [0u8; 7];
@@ -718,55 +721,12 @@ impl VncClient {
         let text = String::from_utf8_lossy(&text_bytes).to_string();
         debug!("VNC ServerCutText: {}", text);
 
-        // Call LLM with event
-        if let Some(instruction) = app_state.get_instruction_for_client(client_id).await {
-            let event = Event::new(
-                &VNC_CLIENT_SERVER_CUT_TEXT_EVENT,
-                serde_json::json!({
-                    "text": text,
-                }),
-            );
-
-            if let Ok(ClientLlmResult {
-                actions,
-                memory_updates,
-            }) = call_llm_for_client(
-                llm_client,
-                app_state,
-                client_id.to_string(),
-                &instruction,
-                &client_data.lock().await.memory,
-                Some(&event),
-                protocol.as_ref(),
-                status_tx,
-            )
-            .await
-            {
-                if let Some(mem) = memory_updates {
-                    client_data.lock().await.memory = mem;
-                }
-
-                let fb_width = client_data.lock().await.fb_width;
-                let fb_height = client_data.lock().await.fb_height;
-
-                for action in actions {
-                    let mut write_lock = write_half.lock().await;
-                    if let Err(e) = Self::execute_vnc_action_with_writer(
-                        &mut *write_lock,
-                        protocol,
-                        action,
-                        fb_width,
-                        fb_height,
-                    )
-                    .await
-                    {
-                        error!("Failed to execute VNC action: {}", e);
-                    }
-                }
-            }
-        }
-
-        Ok(())
+        Ok(Event::new(
+            &VNC_CLIENT_SERVER_CUT_TEXT_EVENT,
+            serde_json::json!({
+                "text": text,
+            }),
+        ))
     }
 
     /// Drain injected commands until the channel closes (client removed) or an injected

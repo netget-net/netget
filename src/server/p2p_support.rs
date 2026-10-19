@@ -276,6 +276,22 @@ pub async fn connect<S: ScannerSession>(
                 .state
                 .spawn_client_task(cid, async move {
                     while let Some(event) = events_rx.recv().await {
+                        // With batching on, every event already waiting — what the peer sent
+                        // while the model answered the previous one — is answered in the same
+                        // call; `call_llm_for_client_batch` falls back to one by one otherwise.
+                        let mut events = vec![event];
+                        let batching = event_ctx
+                            .state
+                            .client_conversation_settings(cid)
+                            .await
+                            .is_some_and(|(_, batching)| batching);
+                        while batching && events.len() < crate::protocol::metadata::MAX_BATCH_EVENTS
+                        {
+                            match events_rx.try_recv() {
+                                Ok(more) => events.push(more),
+                                Err(_) => break,
+                            }
+                        }
                         let instruction = event_ctx
                             .state
                             .get_instruction_for_client(cid)
@@ -286,13 +302,13 @@ pub async fn connect<S: ScannerSession>(
                             .get_memory_for_client(cid)
                             .await
                             .unwrap_or_default();
-                        match crate::client::llm_budget::call_llm_for_client(
+                        match crate::client::llm_budget::call_llm_for_client_batch(
                             &event_ctx.llm_client,
                             &event_ctx.state,
                             cid.to_string(),
                             &instruction,
                             &memory,
-                            Some(&event),
+                            &events,
                             p.as_ref(),
                             &event_ctx.status_tx,
                         )
@@ -322,7 +338,7 @@ pub async fn connect<S: ScannerSession>(
                 let (action, command) = tokio::select! {
                     Some(c) = commands.recv() => (c.action.clone(),Some(c)),
                     Some(a) = actions_rx.recv() => (a,None),
-                    incoming = session.idle(&mut stream) => {match incoming {Ok(Some(response))=>{ctx.state.record_access_log(AccessLogOwner::Client(cid.as_u32()),protocol.protocol_name(),None,&kinds[1].id,response.clone(),vec![]).await;if events_tx.try_send(Event::new(kinds[1],response)).is_err(){break;}},Ok(None)=>{},Err(_)=>break};continue;},
+                    incoming = session.idle(&mut stream) => {match incoming {Ok(Some(response))=>{ctx.state.record_access_log_only(AccessLogOwner::Client(cid.as_u32()),protocol.protocol_name(),None,&kinds[1].id,response.clone(),vec![]).await;if events_tx.try_send(Event::new(kinds[1],response)).is_err(){break;}},Ok(None)=>{},Err(_)=>break};continue;},
                     else => break,
                 };
                 if action["type"] == "disconnect" {
@@ -353,8 +369,11 @@ pub async fn connect<S: ScannerSession>(
                 let terminal = result.is_err();
                 match result {
                     Ok(response) => {
+                        // Arrival is logged here; history is written by the turn task's call,
+                        // which records the event with what answered it. Writing history here as
+                        // well made every response appear twice in what the model was shown.
                         ctx.state
-                            .record_access_log(
+                            .record_access_log_only(
                                 AccessLogOwner::Client(cid.as_u32()),
                                 protocol.protocol_name(),
                                 None,

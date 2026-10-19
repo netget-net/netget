@@ -16,7 +16,7 @@ use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info, trace};
 
-use crate::client::llm_budget::call_llm_for_client;
+use crate::client::llm_budget::{call_llm_for_client, call_llm_for_client_batch};
 use crate::client::redis::actions::{
     REDIS_CLIENT_CONNECTED_EVENT, REDIS_CLIENT_MESSAGE_EVENT, REDIS_CLIENT_RESPONSE_RECEIVED_EVENT,
     REDIS_CLIENT_SUBSCRIPTION_EVENT,
@@ -39,6 +39,17 @@ pub struct RedisClientOptions {
     pub cluster: bool,
     /// Send `HELLO 3` on connect.
     pub resp3: bool,
+}
+
+/// How many replies may wait while the model answers an earlier one; past it the reader stops
+/// and TCP holds the server back.
+const READ_QUEUE_REPLIES: usize = crate::protocol::metadata::MAX_BATCH_EVENTS;
+
+/// What the reader task hands the answering loop.
+enum Inbound {
+    Reply(resp::Reply),
+    Closed,
+    Failed(String),
 }
 
 /// How long the server has to answer the `HELLO 3` sent on connect.
@@ -335,15 +346,193 @@ impl RedisClient {
             }
         }
 
-        // Spawn read loop for Redis responses. Registered with AppState so
-        // stop_client can abort it and release the socket.
+        // The reader runs on its own task so that what the server sends while the model is
+        // answering — pub/sub deliveries above all — waits as whole replies on a bounded queue
+        // rather than unread in the socket. With batching on, the answering loop takes every
+        // reply already waiting into one call (one event each); with it off, one per call.
+        // `read_reply` is not cancellation-safe, which a task of its own also respects: it is
+        // never raced in a `select!`, only aborted when the session ends. Registered, so
+        // stop_client aborts it too.
+        let (inbound_tx, mut inbound_rx) = mpsc::channel::<Inbound>(READ_QUEUE_REPLIES);
+        let reader_task = app_state
+            .spawn_client_task(client_id, async move {
+                loop {
+                    // One complete RESP reply per event — a bulk string or an array is never
+                    // split across events. See `resp.rs` for the framing and its bounds.
+                    let message = match resp::read_reply(&mut reader).await {
+                        Ok(None) => Inbound::Closed,
+                        Ok(Some(reply)) => Inbound::Reply(reply),
+                        // A socket error, or a reply that is not RESP or breaks a bound in
+                        // `resp.rs`. Either way this connection's framing is gone.
+                        Err(e) => Inbound::Failed(e.to_string()),
+                    };
+                    let last = !matches!(message, Inbound::Reply(_));
+                    if inbound_tx.send(message).await.is_err() || last {
+                        break;
+                    }
+                }
+            })
+            .await;
+
+        // The answering loop. Registered with AppState so stop_client can abort it and
+        // release the socket.
         let task_registrar = app_state.clone();
         let handle = tokio::spawn(async move {
-            loop {
-                // One complete RESP reply per event — a bulk string or an array is never
-                // split across events. See `resp.rs` for the framing and its bounds.
-                match resp::read_reply(&mut reader).await {
-                    Ok(None) => {
+            while let Some(first) = inbound_rx.recv().await {
+                // This reply, plus — with batching on — every reply already waiting.
+                let mut replies = Vec::new();
+                let mut ended = None;
+                match first {
+                    Inbound::Reply(reply) => replies.push(reply),
+                    other => ended = Some(other),
+                }
+                if ended.is_none()
+                    && app_state
+                        .client_conversation_settings(client_id)
+                        .await
+                        .is_some_and(|(_, batching)| batching)
+                {
+                    while replies.len() < crate::protocol::metadata::MAX_BATCH_EVENTS {
+                        match inbound_rx.try_recv() {
+                            Ok(Inbound::Reply(reply)) => replies.push(reply),
+                            Ok(other) => {
+                                ended = Some(other);
+                                break;
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                }
+
+                for reply in &replies {
+                    trace!(
+                        "Redis client {} received {}: {}",
+                        client_id,
+                        reply.reply_type,
+                        crate::utils::truncate::truncate_for_log(&reply.response, 200)
+                    );
+                }
+
+                if !replies.is_empty() {
+                    if let Some(instruction) = app_state.get_instruction_for_client(client_id).await
+                    {
+                        // A delivered message and a subscription confirmation are their own
+                        // events; everything else is a reply. Classified in arrival order,
+                        // because classifying a confirmation updates the subscription set.
+                        let events: Vec<Event> =
+                            replies.iter().map(|r| event_for(r, &session)).collect();
+
+                        let memory = app_state
+                            .get_memory_for_client(client_id)
+                            .await
+                            .unwrap_or_default();
+
+                        match call_llm_for_client_batch(
+                            &llm_client,
+                            &app_state,
+                            client_id.to_string(),
+                            &instruction,
+                            &memory,
+                            &events,
+                            protocol.as_ref(),
+                            &status_tx,
+                        )
+                        .await
+                        {
+                            Ok(ClientLlmResult {
+                                actions,
+                                memory_updates,
+                            }) => {
+                                // Update memory
+                                if let Some(mem) = memory_updates {
+                                    app_state.set_memory_for_client(client_id, mem).await;
+                                }
+
+                                // Execute actions
+                                //
+                                // `disconnect_requested` rather than a bare `break`: the break
+                                // here left only the `for action in actions` loop, so the read
+                                // loop carried straight on and the socket stayed open. Nor did
+                                // it shut the write half, drop the command handle or set
+                                // `Disconnected` - all of which the connect-time path above
+                                // does. The model could ask this client to disconnect and
+                                // nothing at all happened.
+                                let mut disconnect_requested = false;
+                                for action in actions {
+                                    match protocol.execute_action(action) {
+                                        Ok(action_result) => {
+                                            match Self::apply_action(
+                                                action_result,
+                                                &write_half_arc,
+                                                client_id,
+                                                &session,
+                                            )
+                                            .await
+                                            {
+                                                Ok(Applied::Disconnect) => {
+                                                    info!(
+                                                        "Redis client {} disconnecting",
+                                                        client_id
+                                                    );
+                                                    disconnect_requested = true;
+                                                    break;
+                                                }
+                                                Ok(Applied::Sent(_)) => {}
+                                                Err(e) => {
+                                                    error!(
+                                                        "Redis client {} write failed: {}",
+                                                        client_id, e
+                                                    );
+                                                }
+                                            }
+                                        }
+                                        // Do not swallow. `_ => {}` here meant an action the
+                                        // client cannot execute — including one it never
+                                        // advertised — was indistinguishable from success:
+                                        // nothing went on the wire and nothing said so. Two
+                                        // tests passed at HEAD while sending `wait_for_more`,
+                                        // which this client does not implement.
+                                        Err(e) => {
+                                            error!(
+                                                "Redis client {} could not execute action: {}",
+                                                client_id, e
+                                            );
+                                            let _ = status_tx.send(format!(
+                                                "[ERROR] Redis client {} action failed: {}",
+                                                client_id, e
+                                            ));
+                                        }
+                                    }
+                                }
+
+                                if disconnect_requested {
+                                    // The same teardown the connect-time path runs: half-close
+                                    // so the server sees EOF, drop the command handle so the
+                                    // dashboard stops offering [ send ] on a client whose loop
+                                    // is gone, and record the status.
+                                    let _ = write_half_arc.lock().await.shutdown().await;
+                                    app_state.remove_client_handle(client_id).await;
+                                    app_state
+                                        .update_client_status(client_id, ClientStatus::Disconnected)
+                                        .await;
+                                    let _ = status_tx.send(format!(
+                                        "[CLIENT] Redis client {} disconnected",
+                                        client_id
+                                    ));
+                                    let _ = status_tx.send("__UPDATE_UI__".to_string());
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                error!("LLM error for Redis client {}: {}", client_id, e);
+                            }
+                        }
+                    }
+                }
+
+                match ended {
+                    None | Some(Inbound::Reply(_)) => {}
+                    Some(Inbound::Closed) => {
                         info!(
                             "Redis client {} {}",
                             client_id,
@@ -357,145 +546,17 @@ impl RedisClient {
                         let _ = status_tx.send("__UPDATE_UI__".to_string());
                         break;
                     }
-                    Ok(Some(reply)) => {
-                        trace!(
-                            "Redis client {} received {}: {}",
-                            client_id,
-                            reply.reply_type,
-                            crate::utils::truncate::truncate_for_log(&reply.response, 200)
-                        );
-
-                        // Call LLM with response
-                        if let Some(instruction) =
-                            app_state.get_instruction_for_client(client_id).await
-                        {
-                            // A delivered message and a subscription confirmation are
-                            // their own events; everything else is a reply.
-                            let event = event_for(&reply, &session);
-
-                            let memory = app_state
-                                .get_memory_for_client(client_id)
-                                .await
-                                .unwrap_or_default();
-
-                            match call_llm_for_client(
-                                &llm_client,
-                                &app_state,
-                                client_id.to_string(),
-                                &instruction,
-                                &memory,
-                                Some(&event),
-                                protocol.as_ref(),
-                                &status_tx,
-                            )
-                            .await
-                            {
-                                Ok(ClientLlmResult {
-                                    actions,
-                                    memory_updates,
-                                }) => {
-                                    // Update memory
-                                    if let Some(mem) = memory_updates {
-                                        app_state.set_memory_for_client(client_id, mem).await;
-                                    }
-
-                                    // Execute actions
-                                    //
-                                    // `disconnect_requested` rather than a bare `break`: the
-                                    // break here left only the `for action in actions` loop,
-                                    // so the read loop carried straight on and the socket
-                                    // stayed open. Nor did it shut the write half, drop the
-                                    // command handle or set `Disconnected` - all of which the
-                                    // connect-time path above does. The model could ask this
-                                    // client to disconnect and nothing at all happened.
-                                    let mut disconnect_requested = false;
-                                    for action in actions {
-                                        match protocol.execute_action(action) {
-                                            Ok(action_result) => {
-                                                match Self::apply_action(
-                                                    action_result,
-                                                    &write_half_arc,
-                                                    client_id,
-                                                    &session,
-                                                )
-                                                .await
-                                                {
-                                                    Ok(Applied::Disconnect) => {
-                                                        info!(
-                                                            "Redis client {} disconnecting",
-                                                            client_id
-                                                        );
-                                                        disconnect_requested = true;
-                                                        break;
-                                                    }
-                                                    Ok(Applied::Sent(_)) => {}
-                                                    Err(e) => {
-                                                        error!(
-                                                            "Redis client {} write failed: {}",
-                                                            client_id, e
-                                                        );
-                                                    }
-                                                }
-                                            }
-                                            // Do not swallow. `_ => {}` here meant an action
-                                            // the client cannot execute — including one it
-                                            // never advertised — was indistinguishable from
-                                            // success: nothing went on the wire and nothing
-                                            // said so. Two tests passed at HEAD while sending
-                                            // `wait_for_more`, which this client does not
-                                            // implement.
-                                            Err(e) => {
-                                                error!(
-                                                    "Redis client {} could not execute action: {}",
-                                                    client_id, e
-                                                );
-                                                let _ = status_tx.send(format!(
-                                                    "[ERROR] Redis client {} action failed: {}",
-                                                    client_id, e
-                                                ));
-                                            }
-                                        }
-                                    }
-
-                                    if disconnect_requested {
-                                        // The same teardown the connect-time path runs:
-                                        // half-close so the server sees EOF, drop the command
-                                        // handle so the dashboard stops offering [ send ] on
-                                        // a client whose loop is gone, and record the status.
-                                        let _ = write_half_arc.lock().await.shutdown().await;
-                                        app_state.remove_client_handle(client_id).await;
-                                        app_state
-                                            .update_client_status(
-                                                client_id,
-                                                ClientStatus::Disconnected,
-                                            )
-                                            .await;
-                                        let _ = status_tx.send(format!(
-                                            "[CLIENT] Redis client {} disconnected",
-                                            client_id
-                                        ));
-                                        let _ = status_tx.send("__UPDATE_UI__".to_string());
-                                        break;
-                                    }
-                                }
-                                Err(e) => {
-                                    error!("LLM error for Redis client {}: {}", client_id, e);
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        // A socket error, or a reply that is not RESP or breaks a bound in
-                        // `resp.rs`. Either way this connection's framing is gone.
+                    Some(Inbound::Failed(e)) => {
                         error!("Redis client {} read error: {}", client_id, e);
                         app_state
-                            .update_client_status(client_id, ClientStatus::Error(e.to_string()))
+                            .update_client_status(client_id, ClientStatus::Error(e))
                             .await;
                         let _ = status_tx.send("__UPDATE_UI__".to_string());
                         break;
                     }
                 }
             }
+            reader_task.abort();
             // Every exit path lands here: drop the command handle so the dashboard stops
             // offering [ send ] on a dead connection (a late send then fails fast). This
             // also closes the command channel, which ends `command_loop`.

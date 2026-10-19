@@ -1,3 +1,4 @@
+mod batching_test;
 mod command_channel_test;
 mod keepalive_test;
 mod real_server_test;

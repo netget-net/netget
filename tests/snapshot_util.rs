@@ -2,8 +2,50 @@
 //!
 //! Provides consistent snapshot testing across all test suites.
 //! Uses .snap.md files for expected output and .actual.snap.md for mismatches.
+//!
+//! A missing snapshot is a **failure**, not a pass. This utility used to write a missing
+//! snapshot and return, so a new test was green on its first run whatever it captured, and a
+//! deleted snapshot quietly re-created itself from whatever the code produced that day.
+//! Snapshots are written only when asked for:
+//!
+//! ```text
+//! UPDATE_SNAPSHOTS=1 ./cargo-isolated.sh test --test <target>
+//! ```
+//!
+//! which writes every compared snapshot from the current output and passes. Review the
+//! resulting diff before committing it; a regenerated snapshot proves nothing by itself.
+
+// Each test crate includes this file with `#[path]` and uses a different subset of it.
+#![allow(dead_code)]
 
 use std::fs;
+
+/// True when `UPDATE_SNAPSHOTS=1`: compared snapshots are (re)written instead of checked.
+pub fn update_requested() -> bool {
+    std::env::var("UPDATE_SNAPSHOTS").is_ok_and(|v| v == "1")
+}
+
+/// Compare `actual` with `{snapshot_dir}/{test_name}.snap.md` without writing anything.
+///
+/// `Err` carries a readable description: the missing file, or the first differing region.
+pub fn check_snapshot(test_name: &str, snapshot_dir: &str, actual: &str) -> Result<(), String> {
+    let snapshot_path = format!("{}/{}.snap.md", snapshot_dir, test_name);
+    let expected = fs::read_to_string(&snapshot_path).map_err(|e| {
+        format!(
+            "snapshot {snapshot_path} cannot be read ({e}). A missing snapshot is a failure; \
+             create it deliberately with UPDATE_SNAPSHOTS=1 and review what it captured."
+        )
+    })?;
+    if actual == expected {
+        return Ok(());
+    }
+    let diff = first_diff_region(&expected, actual);
+    Err(format!(
+        "snapshot {snapshot_path} does not match.\nFirst differing region (line {}):\n{}",
+        diff.first_diff_line,
+        diff.rendered.join("\n"),
+    ))
+}
 
 /// Assert that a value matches a snapshot file
 ///
@@ -16,10 +58,11 @@ use std::fs;
 /// assert_snapshot("my_test", "snapshots", "test output");
 /// ```
 ///
-/// If the snapshot doesn't match:
+/// With `UPDATE_SNAPSHOTS=1` the snapshot is written from `actual` and the call passes.
+/// Otherwise, if the snapshot is missing or does not match:
 /// 1. Creates `{test_name}.actual.snap.md` with actual output
-/// 2. Prints diff instructions
-/// 3. Panics with helpful message
+/// 2. Prints the first differing region and how to accept it
+/// 3. Panics with the same message
 pub fn assert_snapshot(test_name: &str, snapshot_dir: &str, actual: &str) {
     let snapshot_path = format!("{}/{}.snap.md", snapshot_dir, test_name);
     let actual_path = format!("{}/{}.actual.snap.md", snapshot_dir, test_name);
@@ -27,67 +70,41 @@ pub fn assert_snapshot(test_name: &str, snapshot_dir: &str, actual: &str) {
     // Ensure snapshot directory exists
     fs::create_dir_all(snapshot_dir).ok();
 
-    // Read expected snapshot
-    let expected = match fs::read_to_string(&snapshot_path) {
-        Ok(content) => content,
-        Err(_) => {
-            // Snapshot doesn't exist, create it
-            fs::write(&snapshot_path, actual).expect("Failed to write initial snapshot");
-            println!("✓ Created initial snapshot: {}", snapshot_path);
-            return;
+    if update_requested() {
+        if fs::read_to_string(&snapshot_path).ok().as_deref() != Some(actual) {
+            fs::write(&snapshot_path, actual).expect("Failed to write snapshot");
+            println!("UPDATE_SNAPSHOTS=1: wrote {}", snapshot_path);
         }
-    };
-
-    // Compare actual vs expected
-    if actual != expected {
-        // Write actual output for comparison
-        fs::write(&actual_path, actual).expect("Failed to write actual snapshot");
-
-        let diff = first_diff_region(&expected, actual);
-
-        // Print diff instructions
-        eprintln!("\n╔══════════════════════════════════════════════════════════════╗");
-        eprintln!(
-            "║ Snapshot Mismatch: {}                                ",
-            test_name
-        );
-        eprintln!("╠══════════════════════════════════════════════════════════════╣");
-        eprintln!(
-            "║ Expected: {}                                          ",
-            snapshot_path
-        );
-        eprintln!(
-            "║ Actual:   {}                                      ",
-            actual_path
-        );
-        eprintln!("╠══════════════════════════════════════════════════════════════╣");
-        eprintln!(
-            "║ First differing region (line {}):                            ",
-            diff.first_diff_line
-        );
-        eprintln!("╠══════════════════════════════════════════════════════════════╣");
-        for line in &diff.rendered {
-            eprintln!("{}", line);
-        }
-        eprintln!("╠══════════════════════════════════════════════════════════════╣");
-        eprintln!("║ To review the full difference:                               ║");
-        eprintln!("║   diff {} {}  ║", snapshot_path, actual_path);
-        eprintln!("║                                                              ║");
-        eprintln!("║ To accept the new snapshot:                                  ║");
-        eprintln!("║   cp {} {}      ║", actual_path, snapshot_path);
-        eprintln!("╚══════════════════════════════════════════════════════════════╝\n");
-
-        panic!(
-            "Snapshot mismatch for '{}'\nExpected: {}\nActual: {}\n\nFirst differing region (line {}):\n{}",
-            test_name,
-            snapshot_path,
-            actual_path,
-            diff.first_diff_line,
-            diff.rendered.join("\n"),
-        );
-    } else {
-        // Clean up any stale .actual.snap file
         let _ = fs::remove_file(&actual_path);
+        return;
+    }
+
+    match check_snapshot(test_name, snapshot_dir, actual) {
+        Ok(()) => {
+            // Clean up any stale .actual.snap file
+            let _ = fs::remove_file(&actual_path);
+        }
+        Err(message) => {
+            // Write actual output for comparison
+            fs::write(&actual_path, actual).expect("Failed to write actual snapshot");
+
+            eprintln!("\n╔══════════════════════════════════════════════════════════════╗");
+            eprintln!("║ Snapshot Mismatch: {}", test_name);
+            eprintln!("╠══════════════════════════════════════════════════════════════╣");
+            eprintln!("{}", message);
+            eprintln!("╠══════════════════════════════════════════════════════════════╣");
+            eprintln!("║ To review the full difference:");
+            eprintln!("║   diff {} {}", snapshot_path, actual_path);
+            eprintln!("║ To accept it, review that diff, then either:");
+            eprintln!("║   UPDATE_SNAPSHOTS=1 ./cargo-isolated.sh test --test <target>");
+            eprintln!("║   cp {} {}", actual_path, snapshot_path);
+            eprintln!("╚══════════════════════════════════════════════════════════════╝\n");
+
+            panic!(
+                "Snapshot mismatch for '{}'\nActual written to: {}\n{}",
+                test_name, actual_path, message
+            );
+        }
     }
 }
 

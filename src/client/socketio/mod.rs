@@ -1,7 +1,7 @@
 //! Socket.IO v5 client over Engine.IO v4 (direct WebSocket or HTTP long-polling).
 pub mod actions;
 use crate::client::http_fetch::FetchClient;
-use crate::client::llm_budget::call_llm_for_client;
+use crate::client::llm_budget::call_llm_for_client_batch;
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::logging::emit::Log;
 use crate::protocol::{ConnectContext, Event};
@@ -234,6 +234,23 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
     let dispatcher = tokio::spawn(async move {
         let protocol = SocketIoClientProtocol;
         while let Some(event) = event_rx.recv().await {
+            // This event, plus - with batching on - every event already waiting: what the
+            // server pushed while the model answered the previous one. Each keeps its own
+            // `ack_id`, so the model can still acknowledge every one of them.
+            let mut events = vec![event];
+            if events_ctx
+                .state
+                .client_conversation_settings(events_ctx.client_id)
+                .await
+                .is_some_and(|(_, batching)| batching)
+            {
+                while events.len() < crate::protocol::metadata::MAX_BATCH_EVENTS {
+                    match event_rx.try_recv() {
+                        Ok(more) => events.push(more),
+                        Err(_) => break,
+                    }
+                }
+            }
             let instruction = events_ctx
                 .state
                 .get_instruction_for_client(events_ctx.client_id)
@@ -244,13 +261,13 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
                 .get_memory_for_client(events_ctx.client_id)
                 .await
                 .unwrap_or_default();
-            match call_llm_for_client(
+            match call_llm_for_client_batch(
                 &events_ctx.llm_client,
                 &events_ctx.state,
                 events_ctx.client_id.to_string(),
                 &instruction,
                 &memory,
-                Some(&event),
+                &events,
                 &protocol,
                 &events_ctx.status_tx,
             )

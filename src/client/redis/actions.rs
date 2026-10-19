@@ -442,7 +442,10 @@ impl Protocol for RedisClientProtocol {
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // Replies that arrive while the model answers — pub/sub deliveries above all — wait
+            // on the reader task's queue and are answered in one call, one event per reply
+            // (mod.rs). Cluster mode is request/response and has nothing to batch.
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
     fn description(&self) -> &'static str {

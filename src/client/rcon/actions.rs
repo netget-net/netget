@@ -152,7 +152,9 @@ impl Protocol for RconClientProtocol {
             .notes("The password is a startup parameter and is never part of an event. Incoming packets are capped at 4096 bytes and one command's output at 1 MiB; connect, login and reply deadlines are 30 s.")
             .max_inbound_bytes(wire::MAX_PACKET)
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // Results of the model's later actions (and injected ones) queue while it answers an
+            // earlier one; with batching on the dispatcher answers everything waiting together.
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

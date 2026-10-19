@@ -2,9 +2,19 @@
 //!
 //! These tests snapshot the generated prompts to detect changes.
 //! When prompts change, review the diff to ensure it's intentional.
+//!
+//! Regenerate every snapshot from the current code (then READ the diff — a regenerated
+//! snapshot proves nothing by itself):
+//!
+//! ```text
+//! UPDATE_SNAPSHOTS=1 ./cargo-isolated.sh test --test prompt --test prompt_snapshots
+//! ```
+//!
+//! or `tests/prompt/update_snapshots.sh`, which runs exactly that.
 
 use netget::llm::actions::Protocol;
-#[allow(unused_imports)] // only used by tests gated behind the tcp+http+proxy+ssh+sqlite combo
+#[allow(unused_imports)]
+// the Unix+sqlite tests use it; see `prompt_snapshots_need_unix_and_sqlite`
 use netget::llm::PromptBuilder;
 use netget::state::app_state::AppState;
 use netget::state::server::{ServerInstance, ServerStatus};
@@ -18,36 +28,59 @@ mod snapshot_util;
 
 const SNAPSHOT_DIR: &str = "tests/prompt/snapshots";
 
+/// Every snapshot this suite compares, which is every `*.snap.md` in [`SNAPSHOT_DIR`].
+/// `snapshot_comparison_is_live` holds the directory, this list and the calls in this file
+/// to each other, so a snapshot cannot sit on disk with nothing comparing it.
+const SNAPSHOTS: &[&str] = &[
+    "feedback_prompt_client",
+    "feedback_prompt_server",
+    "json_parse_retry_prompt",
+    "network_event_prompt_proxy",
+    "protocol_http_documentation",
+    "protocol_ssh_documentation",
+    "retry_mechanism_prompt",
+    "unknown_action_retry_prompt",
+    "user_input_prompt",
+    "user_input_prompt_after_docs",
+    "user_input_prompt_proxy_server",
+    "user_input_prompt_without_scripting",
+    "user_input_prompt_without_web_search",
+];
+
 // ============================================================================
-// DETERMINISM HELPERS
+// DETERMINISM
 //
-// Two independent sources of non-determinism affected this suite:
+// A snapshot must say the same thing on every build and every machine, and must still
+// compare everything the test exists for: the prompts' structure, instructions, action
+// definitions and wording. Three kinds of content are not that, and each is replaced by a
+// fixed placeholder before comparison:
 //
-// 1. Feature-set dependence: the "Available Protocols" / "Available Base
-//    Stacks" sections and the sqlite-gated create_database/execute_sql/
-//    list_databases/delete_database actions enumerate whatever protocols
-//    happen to be compiled in. That's real, meaningful prompt content (not
-//    noise), so instead of textually normalizing it away, the snapshot-
-//    comparing tests below carry
-//    `#[cfg(all(feature = "tcp", feature = "http", feature = "proxy", feature = "ssh", feature = "sqlite"))]`
-//    to only compile under the exact feature combination the checked-in
-//    snapshots were generated with (see `tests/prompt/update_snapshots.sh`).
-//    Under any other feature set they don't exist as tests, so `cargo test`
-//    reports fewer tests rather than failures - a clean skip instead of a
-//    wall of diff noise. (E.g. the CI feature set in
-//    .github/workflows/ci.yml lacks proxy/ssh/sqlite, so these tests are
-//    absent - not failing - there; `test_json_parse_retry_prompt`,
-//    `test_unknown_action_retry_prompt`, and `test_protocol_documentation_prompt`
-//    have no such feature-sensitive content and remain ungated.)
+// 1. The compiled protocol registry. Every build compiles every protocol (there are no
+//    protocol features), and protocols are added continuously, so the lists enumerating
+//    the registry change with every new protocol. Snapshotting them would make every
+//    protocol addition a prompt-snapshot diff, which teaches people to regenerate without
+//    reading. See `normalize_registry_lists` for exactly which five spots are replaced and
+//    the check each one gets instead, so the normalisation cannot hide an empty or broken
+//    list.
 //
-// 2. Environment dependence: `SystemCapabilities` (src/privilege.rs) probes
-//    the *host* at runtime (root / CAP_NET_RAW / whether privileged ports
-//    are bindable), independent of feature flags. `AppState` has no setter
-//    to inject a fixed value (only `set_scripting_env` exists, no
-//    `set_system_capabilities`), so there is no seam to construct a fixed
-//    state through from this test crate. We normalize the two System
-//    Capabilities lines that embed this host-dependent text before
-//    comparing against the snapshot. See `normalize_capabilities` below.
+//    What is deliberately KEPT: per-protocol action definitions that a test asks for by
+//    name (the proxy's sync actions in `network_event_prompt_proxy`) and the HTTP / SSH
+//    metadata in `protocol_*_documentation`. Those change only when that protocol changes,
+//    and when they do the diff is something a reviewer should see.
+//
+// 2. The host. `SystemCapabilities` (src/privilege.rs) probes the machine at runtime
+//    (root / CAP_NET_RAW / privileged ports), and `AppState` has no seam to inject a fixed
+//    value. See `normalize_capabilities`.
+//
+// 3. The build's platform and optional capabilities. The proxy is Unix-only and the SQLite
+//    actions exist only with the `sqlite` feature (on by default). Tests that render those
+//    are gated on `all(unix, feature = "sqlite")`, and a build without either FAILS
+//    `prompt_snapshots_need_unix_and_sqlite` rather than quietly running fewer tests.
+//
+// This suite used to skip instead: it compared nothing unless the prompt carried the
+// protocol list of one long-gone feature combination, which no build has produced since
+// protocols stopped being features, so every test printed SKIP and passed.
+// `snapshot_comparison_is_live` exists so that cannot happen again.
 // ============================================================================
 
 /// Replace the host-dependent "System Capabilities" lines with a fixed
@@ -79,42 +112,276 @@ fn normalize_capabilities(prompt: &str) -> String {
     prompt.into_owned()
 }
 
-/// Snapshot assertion for rendered prompts: normalizes host-dependent
-/// content (see `normalize_capabilities`) before delegating to the shared
-/// snapshot utility.
-/// The server protocols these snapshots were generated against.
+/// Panic unless a comma-separated registry list names every protocol in `must_name`.
 ///
-/// The prompt embeds an "Available Protocols" line built from the compiled registry, so the
-/// snapshots are **feature-set specific** — they match at
-/// `--no-default-features --features tcp,http,proxy,ssh,sqlite` and cannot match at
-/// `--all-features`, which compiles 135 protocols into that line.
-const SNAPSHOT_PROTOCOLS: &str = "HTTP, Proxy, SSH, TCP";
+/// This is what stands in for the snapshot where a list is normalised: the list must still
+/// be a real list of the registry, not empty, not an error, not a stray sentence.
+fn check_registry_list(what: &str, list: &str, separator: &str, must_name: &[&str]) {
+    let entries: Vec<&str> = list.split(separator).map(str::trim).collect();
+    assert!(
+        entries.len() >= 50,
+        "{what}: expected the compiled registry (hundreds of protocols), got {} entr(ies): {list:?}",
+        entries.len()
+    );
+    for name in must_name {
+        assert!(
+            entries.contains(name),
+            "{what}: the registry list does not name {name}: {list:?}"
+        );
+    }
+}
+
+/// Replace the parts of a prompt that enumerate the compiled protocol registry with fixed
+/// placeholders, checking each list is a plausible registry list before discarding it.
+///
+/// The five spots, and nothing else:
+/// - `read_documentation`'s `**Server protocols**:` and `**Client protocols**:` lines;
+/// - `read_documentation`'s example `"protocols":[…]` array (every compiled protocol);
+/// - `open_server`'s `protocol` parameter, whose description ends `Available: <list>`;
+/// - the body of the `## Available Base Stacks` section (group headings and one
+///   `Name (keywords)` line per protocol), up to the next `#` or `##` heading.
+///
+/// The heading and the text around each list stay in the snapshot, so moving, rewording
+/// or dropping any of these sections is still a diff.
+fn normalize_registry_lists(prompt: &str) -> String {
+    static SERVER_LIST_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?m)^(\*\*Server protocols\*\*: )(.*)$").unwrap());
+    static CLIENT_LIST_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?m)^(\*\*Client protocols\*\*: )(.*)$").unwrap());
+    static READ_DOCS_EXAMPLE_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r#"(\{"type":"read_documentation","protocols":)\[([^\]]*)\]"#).unwrap()
+    });
+    static OPEN_SERVER_PROTOCOL_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?m)^(- `protocol` \(string, required\): .*? Available: )(.*)$").unwrap()
+    });
+
+    let prompt = SERVER_LIST_RE.replace_all(prompt, |c: &regex::Captures| {
+        check_registry_list(
+            "read_documentation server list",
+            &c[2],
+            ",",
+            &["HTTP", "Proxy", "SSH", "TCP"],
+        );
+        format!("{}<normalized: compiled server registry>", &c[1])
+    });
+    let prompt = CLIENT_LIST_RE.replace_all(&prompt, |c: &regex::Captures| {
+        check_registry_list(
+            "read_documentation client list",
+            &c[2],
+            ",",
+            &["HTTP", "SSH", "TCP"],
+        );
+        format!("{}<normalized: compiled client registry>", &c[1])
+    });
+    let prompt = READ_DOCS_EXAMPLE_RE.replace_all(&prompt, |c: &regex::Captures| {
+        check_registry_list(
+            "read_documentation example",
+            &c[2],
+            ",",
+            &["\"HTTP\"", "\"Proxy\"", "\"SSH\"", "\"TCP\""],
+        );
+        format!("{}[\"<normalized: every compiled protocol>\"]", &c[1])
+    });
+    let prompt = OPEN_SERVER_PROTOCOL_RE.replace_all(&prompt, |c: &regex::Captures| {
+        check_registry_list(
+            "open_server protocol parameter",
+            &c[2],
+            ",",
+            &["HTTP", "Proxy", "SSH", "TCP"],
+        );
+        format!("{}<normalized: compiled server registry>", &c[1])
+    });
+
+    normalize_base_stacks(&prompt)
+}
+
+/// Replace the body of `## Available Base Stacks` (see `normalize_registry_lists`).
+fn normalize_base_stacks(prompt: &str) -> String {
+    const HEADING: &str = "## Available Base Stacks\n";
+    let Some(start) = prompt.find(HEADING) else {
+        return prompt.to_string();
+    };
+    let body_start = start + HEADING.len();
+    let rest = &prompt[body_start..];
+    // The section ends at the next `# ` or `## ` heading or `---` rule; `### ` group
+    // headings are its body.
+    let mut body_len = rest.len();
+    let mut offset = 0;
+    for line in rest.split_inclusive('\n') {
+        if line.starts_with("# ") || line.starts_with("## ") || line.trim_end() == "---" {
+            body_len = offset;
+            break;
+        }
+        offset += line.len();
+    }
+    let body = &rest[..body_len];
+
+    let groups = body.lines().filter(|l| l.starts_with("### ")).count();
+    let stacks: Vec<&str> = body
+        .lines()
+        .filter(|l| !l.is_empty() && !l.starts_with("### "))
+        .collect();
+    assert!(
+        groups >= 5 && stacks.len() >= 50,
+        "Available Base Stacks: expected the compiled registry grouped under ### headings, \
+         got {groups} group(s) and {} stack line(s):\n{body}",
+        stacks.len()
+    );
+    for name in ["HTTP", "Proxy", "SSH", "TCP"] {
+        assert!(
+            stacks
+                .iter()
+                .any(|l| *l == name || l.starts_with(&format!("{name} ("))),
+            "Available Base Stacks does not list {name}:\n{body}"
+        );
+    }
+
+    format!(
+        "{}\n<normalized: compiled base stacks, grouped>\n\n{}",
+        &prompt[..body_start],
+        &rest[body_len..]
+    )
+}
+
+/// Everything build- or host-dependent, replaced; everything else, untouched.
+fn normalize_prompt(prompt: &str) -> String {
+    normalize_registry_lists(&normalize_capabilities(prompt))
+}
 
 fn assert_prompt_snapshot(test_name: &str, prompt: &str) {
-    let normalized = normalize_capabilities(prompt);
+    assert!(
+        SNAPSHOTS.contains(&test_name),
+        "snapshot '{test_name}' is not in SNAPSHOTS; add it there"
+    );
+    snapshot_util::assert_snapshot(test_name, SNAPSHOT_DIR, &normalize_prompt(prompt));
+}
 
-    // Skip rather than fail outside the canonical feature set.
-    //
-    // A full-suite `--all-features` run otherwise reports ten confident snapshot mismatches
-    // that are nothing but a longer protocol list, which is exactly the kind of noise that
-    // teaches people to ignore this suite. Failing here would say the prompts regressed; they
-    // did not.
-    if !normalized.contains(SNAPSHOT_PROTOCOLS) {
-        eprintln!(
-            "SKIP {test_name}: prompt snapshots are feature-set specific. They were generated \
-             against server protocols [{SNAPSHOT_PROTOCOLS}]; this build compiled a different \
-             set, so the embedded 'Available Protocols' line cannot match. Run:\n  \
-             ./cargo-isolated.sh test --no-default-features --features tcp,http,proxy,ssh,sqlite \
-             --test prompt"
+/// A build that cannot render the Unix+sqlite prompts fails here instead of running fewer
+/// snapshot tests and passing.
+#[test]
+// A runtime failure, not a `const` assert: a compile error would take down the
+// ungated tests in this target as well.
+#[allow(clippy::assertions_on_constants)]
+fn prompt_snapshots_need_unix_and_sqlite() {
+    assert!(
+        cfg!(all(unix, feature = "sqlite")),
+        "the prompt snapshots render the Unix-only proxy and the sqlite actions; this build \
+         lacks unix or the `sqlite` feature, so most of tests/prompt would not compare \
+         anything. Build with the default features on a Unix host."
+    );
+}
+
+/// The prompt `test_user_input_prompt` snapshots: no servers, every scripting runtime.
+async fn build_user_input_prompt() -> String {
+    let state = Arc::new(AppState::new());
+    let scripting_env = netget::scripting::ScriptingEnvironment {
+        python: Some("Python 3.11.0".to_string()),
+        javascript: Some("v20.0.0".to_string()),
+        go: Some("go version go1.21.0".to_string()),
+        perl: Some("perl 5.38.0".to_string()),
+    };
+    state.set_scripting_env(scripting_env).await;
+
+    let system_prompt = PromptBuilder::build_user_input_system_prompt(&state, vec![], None).await;
+    format!(
+        "{}\n\nTrigger: User input: \"{}\"",
+        system_prompt, "start a DNS server on port 53"
+    )
+}
+
+/// The guard against this suite going quiet again.
+///
+/// It proves, from inside the suite, that a snapshot comparison really happens on this
+/// build, through the same `assert_prompt_snapshot` every test uses: the real user-input
+/// prompt passes it, and the same prompt with one phrase of its instructions changed makes
+/// it panic with a diff naming the change. A skip anywhere on that path (normalisation,
+/// `assert_prompt_snapshot`, `snapshot_util`) turns the second half into a pass and fails
+/// this test; the old skip fired on every build for months. It also holds the snapshot
+/// directory, `SNAPSHOTS` and the `assert_prompt_snapshot` calls in this file to the same
+/// set, so no snapshot sits on disk with nothing comparing it.
+#[tokio::test]
+async fn snapshot_comparison_is_live() {
+    let prompt = build_user_input_prompt().await;
+    let normalized = normalize_prompt(&prompt);
+
+    // The placeholders must actually have been applied, or the comparison is against a
+    // registry dump and will churn with every new protocol.
+    for placeholder in [
+        "**Server protocols**: <normalized: compiled server registry>",
+        "**Client protocols**: <normalized: compiled client registry>",
+        "\"protocols\":[\"<normalized: every compiled protocol>\"]",
+    ] {
+        assert!(
+            normalized.contains(placeholder),
+            "normalisation did not apply: {placeholder:?} is missing from the prompt"
         );
+    }
+
+    // The directory, the list and the calls must agree.
+    let mut on_disk: Vec<String> = std::fs::read_dir(SNAPSHOT_DIR)
+        .expect("snapshot directory")
+        .filter_map(|e| {
+            let name = e.ok()?.file_name().into_string().ok()?;
+            let stem = name.strip_suffix(".snap.md")?;
+            (!stem.ends_with(".actual")).then(|| stem.to_string())
+        })
+        .collect();
+    on_disk.sort();
+    let mut listed: Vec<String> = SNAPSHOTS.iter().map(|s| s.to_string()).collect();
+    listed.sort();
+    assert_eq!(
+        on_disk, listed,
+        "{SNAPSHOT_DIR} and SNAPSHOTS disagree: every snapshot on disk must be compared"
+    );
+    let source = include_str!("mod.rs");
+    for name in SNAPSHOTS {
+        assert!(
+            source.contains(&format!("assert_prompt_snapshot(\"{name}\"")),
+            "no test calls assert_prompt_snapshot(\"{name}\", …)"
+        );
+    }
+
+    // Regenerating writes whatever it is given, so the comparison half cannot run then.
+    if snapshot_util::update_requested() {
         return;
     }
 
-    snapshot_util::assert_snapshot(test_name, SNAPSHOT_DIR, &normalized);
+    assert_prompt_snapshot("user_input_prompt", &prompt);
+
+    const PHRASE: &str = "interprets user commands";
+    const CHANGED: &str = "ignores user commands";
+    assert!(
+        prompt.contains(PHRASE),
+        "the user-input prompt no longer contains {PHRASE:?}; pick another phrase for this guard"
+    );
+    let mutated = prompt.replacen(PHRASE, CHANGED, 1);
+    eprintln!("snapshot_comparison_is_live: the mismatch report below is expected");
+    let outcome =
+        std::panic::catch_unwind(|| assert_prompt_snapshot("user_input_prompt", &mutated));
+
+    // assert_prompt_snapshot leaves the mutant as the .actual file; remove it, and only it.
+    let actual_path = format!("{SNAPSHOT_DIR}/user_input_prompt.actual.snap.md");
+    if std::fs::read_to_string(&actual_path).ok() == Some(normalize_prompt(&mutated)) {
+        let _ = std::fs::remove_file(&actual_path);
+    }
+
+    let panic = outcome.expect_err(
+        "a one-phrase change to the prompt passed assert_prompt_snapshot: the snapshot \
+         comparison is not happening",
+    );
+    let message = panic
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_default();
+    assert!(
+        message.contains(CHANGED),
+        "the mismatch report should show the changed line, got:\n{message}"
+    );
 }
 
 /// Helper to create test app state with a proxy server (no scripting)
-#[allow(dead_code)] // only used by tests gated behind the tcp+http+proxy+ssh+sqlite combo
+#[allow(dead_code)] // only used by the Unix+sqlite tests
 async fn create_test_state_with_proxy() -> Arc<AppState> {
     let state = Arc::new(AppState::new());
 
@@ -244,25 +511,8 @@ async fn test_user_input_prompt_proxy_server() {
 #[cfg(all(unix, feature = "sqlite"))]
 #[tokio::test]
 async fn test_user_input_prompt() {
-    // Create state WITHOUT any servers to trigger base_stack documentation
-    let state = Arc::new(AppState::new());
-
-    // Set up mock scripting environment (the common case - Python/Node.js/Go available)
-    let scripting_env = netget::scripting::ScriptingEnvironment {
-        python: Some("Python 3.11.0".to_string()),
-        javascript: Some("v20.0.0".to_string()),
-        go: Some("go version go1.21.0".to_string()),
-        perl: Some("perl 5.38.0".to_string()),
-    };
-    state.set_scripting_env(scripting_env).await;
-
-    let user_input = "start a DNS server on port 53";
-
-    let system_prompt = PromptBuilder::build_user_input_system_prompt(&state, vec![], None).await;
-    let prompt = format!(
-        "{}\n\nTrigger: User input: \"{}\"",
-        system_prompt, user_input
-    );
+    // No servers, every scripting runtime (the common case).
+    let prompt = build_user_input_prompt().await;
 
     // Assert snapshot
     assert_prompt_snapshot("user_input_prompt", &prompt);

@@ -12,3 +12,13 @@ unless the action supplies them, extra headers validated as single lines, the bo
 CRLF line endings and dot-stuffed. An injected send is answered once all its bytes are on the
 wire. Replies are bounded to 1000-byte lines and 64 lines, and every connect, write and reply
 has a 30 s deadline. Plain TCP only.
+
+## Batching (what arrives while the model is answering)
+
+The session task runs the model's actions one after another while the dispatcher task is still
+asking the model about the first result, so with several `lmtp_send`s in one answer (or an injected
+one) the later results queue in the dispatcher's event channel during that call. With batching
+on the dispatcher drains everything waiting (up to `MAX_BATCH_EVENTS`) into one
+`call_llm_for_client_batch` call, one `lmtp_result` event each; with it off, one call per result.
+Each result names its own sender and recipients, so answering them together loses nothing. Declared
+`BatchingMode::On`. Test: `tests/client/lmtp/batching_test.rs`.

@@ -1,3 +1,4 @@
+mod batching_test;
 mod cluster_real_server_test;
 mod cluster_redirect_bound_test;
 mod command_channel_test;

@@ -37,3 +37,12 @@ Transaction ids are `ng<random>.<n>`, unique per session.
 A handler chain stops after `MAX_FOLLOWUP_DEPTH` (8). Answers are capped at 4 MiB.
 
 Not implemented: end-to-end encryption, media, registration, SSO.
+
+## Batching
+
+`BatchingMode::On`. What `/sync` raises (messages, invites, membership) and the answers to the
+handler's own requests reach the model through the dispatcher's queue; with batching on the
+dispatcher drains everything that arrived during the previous call (up to `MAX_BATCH_EVENTS`)
+into one `call_llm_for_client_batch` call, with it off one event per call. A batch's
+follow-ups are as deep as its deepest event. `tests/client/matrix/batching_test.rs` is the
+off/on pair.

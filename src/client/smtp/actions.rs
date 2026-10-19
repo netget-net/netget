@@ -245,6 +245,8 @@ impl Protocol for SmtpClientProtocol {
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
+            // Nothing can arrive during a call: lettre opens a connection per message and the only
+            // event after connect is the delivery result of the client's own send_email.
             .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }

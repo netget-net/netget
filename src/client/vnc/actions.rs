@@ -365,7 +365,9 @@ impl Protocol for VncClientProtocol {
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // Framebuffer updates and clipboard text are pushed by the server; a reader task
+            // queues them as whole messages and the answering loop drains what waited.
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
     fn description(&self) -> &'static str {

@@ -27,18 +27,21 @@ use crate::protocol::Event;
 use crate::state::app_state::AppState;
 use crate::state::{ClientId, ClientStatus};
 
-/// Connection state for LLM processing
-#[derive(Debug, Clone, PartialEq)]
-enum ConnectionState {
-    Idle,
-    Processing,
-    Accumulating,
-}
+/// How many reads may wait while the model answers an earlier one. Each is at most one
+/// 8 KiB read, so at most 256 KiB waits; past it the reader stops reading and TCP holds the
+/// server back.
+///
+/// There used to be an `Idle`/`Processing`/`Accumulating` machine with a `queued_data` buffer
+/// here. The read loop awaited every model call inline, so nothing could arrive mid-call and
+/// the buffer was only ever filled by `wait_for_more`; that one real use is the `held` prefix
+/// in the answering loop now.
+const READ_QUEUE_CHUNKS: usize = crate::protocol::metadata::MAX_BATCH_EVENTS;
 
-/// Per-client data for LLM handling
-struct ClientData {
-    state: ConnectionState,
-    queued_data: Vec<u8>,
+/// What the reader task hands the answering loop.
+enum Inbound {
+    Data(Vec<u8>),
+    Closed,
+    Failed(String),
 }
 
 /// TLS client that connects to a remote TLS server
@@ -194,12 +197,6 @@ impl TlsClient {
         let write_half_arc = Arc::new(Mutex::new(write_half));
         let write_half_for_connected = write_half_arc.clone();
 
-        // Initialize client data
-        let client_data = Arc::new(Mutex::new(ClientData {
-            state: ConnectionState::Idle,
-            queued_data: Vec::new(),
-        }));
-
         // Call LLM with tls_client_connected event
         if let Some(instruction) = app_state.get_instruction_for_client(client_id).await {
             let event = Event::new(
@@ -288,22 +285,47 @@ impl TlsClient {
             }
         }
 
-        // Spawn read loop
-        // Registered with AppState so stop_client can abort this task —
-        // dropping a JoinHandle only detaches it in Tokio.
-        let task_registrar = app_state.clone();
         // Command channel: lets the dashboard inject actions into this loop
         // via AppState::send_to_client (see client/command_support.rs).
         let mut command_rx =
             crate::client::command_support::register_command_channel(&app_state, client_id).await;
 
+        // The reader runs on its own task so that what the server sends while the model is
+        // answering keeps its read boundaries in a bounded queue instead of merging in the
+        // kernel buffer (or waiting undecrypted inside rustls): with batching on everything
+        // waiting is answered together, with it off one read per call. Registered, so
+        // stop_client aborts it with the loop.
+        let (inbound_tx, mut inbound_rx) = mpsc::channel::<Inbound>(READ_QUEUE_CHUNKS);
+        let reader = app_state
+            .spawn_client_task(client_id, async move {
+                let mut buffer = vec![0u8; 8192];
+                loop {
+                    let message = match read_half.read(&mut buffer).await {
+                        Ok(0) => Inbound::Closed,
+                        Ok(n) => Inbound::Data(buffer[..n].to_vec()),
+                        Err(e) => Inbound::Failed(e.to_string()),
+                    };
+                    let last = !matches!(message, Inbound::Data(_));
+                    if inbound_tx.send(message).await.is_err() || last {
+                        break;
+                    }
+                }
+            })
+            .await;
+
+        // Spawn the answering loop.
+        // Registered with AppState so stop_client can abort this task —
+        // dropping a JoinHandle only detaches it in Tokio.
+        let task_registrar = app_state.clone();
         let task_handle = tokio::spawn(async move {
             info!("TLS client {} read loop started", client_id);
-            let mut buffer = vec![0u8; 8192];
+            // Bytes the model has seen and answered `wait_for_more` to: the front of the next
+            // turn, re-offered with whatever arrives after them.
+            let mut held: Vec<u8> = Vec::new();
 
-            loop {
-                let read_result = tokio::select! {
-                    read = read_half.read(&mut buffer) => read,
+            'session: loop {
+                let inbound = tokio::select! {
+                    inbound = inbound_rx.recv() => inbound.unwrap_or(Inbound::Closed),
                     Some(cmd) = command_rx.recv() => {
                         let disconnect = crate::client::command_support::handle_stream_client_command(
                             &crate::client::tls::actions::TlsClientProtocol,
@@ -328,8 +350,155 @@ impl TlsClient {
                         continue;
                     }
                 };
-                match read_result {
-                    Ok(0) => {
+
+                let mut ended: Option<Inbound> = None;
+                let mut payload = std::mem::take(&mut held);
+                match inbound {
+                    Inbound::Data(data) => payload.extend_from_slice(&data),
+                    other => ended = Some(other),
+                }
+
+                // With batching on, everything else already waiting — what the server sent
+                // while the model answered the previous read — joins this payload, as the tcp
+                // client does: TLS carries a byte stream, whose read boundaries mean nothing.
+                // An end of stream found while sweeping is handled after this turn.
+                if ended.is_none()
+                    && app_state
+                        .client_conversation_settings(client_id)
+                        .await
+                        .is_some_and(|(_, batching)| batching)
+                {
+                    while let Ok(more) = inbound_rx.try_recv() {
+                        match more {
+                            Inbound::Data(more) => payload.extend_from_slice(&more),
+                            other => {
+                                ended = Some(other);
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if !payload.is_empty() {
+                    info!(
+                        "TLS client {} received {} {}",
+                        client_id,
+                        payload.len(),
+                        patterns::TLS_CLIENT_RECEIVED
+                    );
+                    if let Some(instruction) = app_state.get_instruction_for_client(client_id).await
+                    {
+                        let protocol = crate::client::tls::actions::TlsClientProtocol::new();
+                        // Try to decode as UTF-8, fallback to hex
+                        let data_str = match String::from_utf8(payload.clone()) {
+                            Ok(utf8) => utf8,
+                            Err(_) => format!("HEX:{}", hex::encode(&payload)),
+                        };
+                        let event = Event::new(
+                            &TLS_CLIENT_DATA_RECEIVED_EVENT,
+                            serde_json::json!({
+                                "data": data_str,
+                                "data_length": payload.len(),
+                            }),
+                        );
+
+                        // From AppState, for the reasons in the connect path above: that is
+                        // where the client's memory actually lives.
+                        let memory_snapshot = app_state
+                            .get_memory_for_client(client_id)
+                            .await
+                            .unwrap_or_default();
+
+                        match call_llm_for_client(
+                            &llm_client,
+                            &app_state,
+                            client_id.to_string(),
+                            &instruction,
+                            &memory_snapshot,
+                            Some(&event),
+                            &protocol,
+                            &status_tx,
+                        )
+                        .await
+                        {
+                            Ok(ClientLlmResult {
+                                actions,
+                                memory_updates,
+                            }) => {
+                                if let Some(mem) = memory_updates {
+                                    app_state.set_memory_for_client(client_id, mem).await;
+                                }
+
+                                let mut wait_for_more = false;
+                                for action in actions {
+                                    use crate::llm::actions::client_trait::Client;
+                                    use crate::llm::actions::client_trait::ClientActionResult;
+                                    match protocol.execute_action(action) {
+                                        Ok(ClientActionResult::SendData(bytes)) => {
+                                            let mut write_guard = write_half_arc.lock().await;
+                                            if let Err(e) = write_guard.write_all(&bytes).await {
+                                                error!(
+                                                    "TLS client {} send failed: {}",
+                                                    client_id, e
+                                                );
+                                            } else if let Err(e) = write_guard.flush().await {
+                                                error!(
+                                                    "TLS client {} flush failed: {}",
+                                                    client_id, e
+                                                );
+                                            } else {
+                                                trace!(
+                                                    "TLS client {} sent {} bytes",
+                                                    client_id,
+                                                    bytes.len()
+                                                );
+                                            }
+                                        }
+                                        Ok(ClientActionResult::Disconnect) => {
+                                            info!("TLS client {} disconnecting", client_id);
+                                            let mut write_guard = write_half_arc.lock().await;
+                                            let _ = write_guard.shutdown().await;
+                                            drop(write_guard);
+                                            app_state
+                                                .update_client_status(
+                                                    client_id,
+                                                    ClientStatus::Disconnected,
+                                                )
+                                                .await;
+                                            let _ = status_tx.send(format!(
+                                                "[CLIENT] TLS client {} disconnected (model requested)",
+                                                client_id
+                                            ));
+                                            let _ = status_tx.send("__UPDATE_UI__".to_string());
+                                            break 'session;
+                                        }
+                                        Ok(ClientActionResult::WaitForMore) => {
+                                            wait_for_more = true;
+                                        }
+                                        Ok(_) => {}
+                                        Err(e) => {
+                                            error!(
+                                                "TLS client {} could not execute action: {}",
+                                                client_id, e
+                                            );
+                                        }
+                                    }
+                                }
+                                if wait_for_more {
+                                    // Keep the bytes the model has already seen: the next
+                                    // read is appended to them and the whole is re-offered.
+                                    held = payload;
+                                }
+                            }
+                            Err(e) => {
+                                error!("LLM error for TLS client {}: {}", client_id, e);
+                            }
+                        }
+                    }
+                }
+
+                match ended {
+                    Some(Inbound::Closed) => {
                         info!(
                             "TLS client {} {}",
                             client_id,
@@ -343,203 +512,19 @@ impl TlsClient {
                         let _ = status_tx.send("__UPDATE_UI__".to_string());
                         break;
                     }
-                    Ok(n) => {
-                        let data = buffer[..n].to_vec();
-                        info!(
-                            "TLS client {} received {} {}",
-                            client_id,
-                            n,
-                            patterns::TLS_CLIENT_RECEIVED
-                        );
-                        trace!("TLS client {} received {} bytes", client_id, n);
-
-                        // Decide under the lock what this chunk belongs to, then drop the
-                        // guard before doing anything that awaits.
-                        //
-                        // `Accumulating` is not a terminal state: it means the model answered
-                        // `wait_for_more`, so the bytes it has already seen are the front of
-                        // this turn and the new chunk completes it. Treating it as "keep
-                        // queueing" left the client permanently deaf after a single
-                        // `wait_for_more` - nothing ever moved it back to Idle, so no further
-                        // read reached the model.
-                        let payload = {
-                            let mut client_data_lock = client_data.lock().await;
-                            match client_data_lock.state {
-                                ConnectionState::Processing => {
-                                    client_data_lock.queued_data.extend_from_slice(&data);
-                                    None
-                                }
-                                ConnectionState::Idle | ConnectionState::Accumulating => {
-                                    let mut merged =
-                                        std::mem::take(&mut client_data_lock.queued_data);
-                                    merged.extend_from_slice(&data);
-                                    client_data_lock.state = ConnectionState::Processing;
-                                    Some(merged)
-                                }
-                            }
-                        };
-
-                        let Some(mut payload) = payload else {
-                            continue;
-                        };
-
-                        let Some(instruction) =
-                            app_state.get_instruction_for_client(client_id).await
-                        else {
-                            // No instruction: nothing can be asked, so do not hold the
-                            // connection in Processing forever.
-                            let mut client_data_lock = client_data.lock().await;
-                            client_data_lock.state = ConnectionState::Idle;
-                            continue;
-                        };
-
-                        let protocol =
-                            Arc::new(crate::client::tls::actions::TlsClientProtocol::new());
-                        let mut disconnect_requested = false;
-
-                        loop {
-                            // Try to decode as UTF-8, fallback to hex
-                            let data_str = match String::from_utf8(payload.clone()) {
-                                Ok(utf8) => utf8,
-                                Err(_) => format!("HEX:{}", hex::encode(&payload)),
-                            };
-
-                            let event = Event::new(
-                                &TLS_CLIENT_DATA_RECEIVED_EVENT,
-                                serde_json::json!({
-                                    "data": data_str,
-                                    "data_length": payload.len(),
-                                }),
-                            );
-
-                            // From AppState, for the reasons in the connect path above:
-                            // that is where the client's memory actually lives, and taking a
-                            // guard inline here would deadlock the write below.
-                            let memory_snapshot = app_state
-                                .get_memory_for_client(client_id)
-                                .await
-                                .unwrap_or_default();
-
-                            let mut wait_for_more = false;
-                            match call_llm_for_client(
-                                &llm_client,
-                                &app_state,
-                                client_id.to_string(),
-                                &instruction,
-                                &memory_snapshot,
-                                Some(&event),
-                                protocol.as_ref(),
-                                &status_tx,
-                            )
-                            .await
-                            {
-                                Ok(ClientLlmResult {
-                                    actions,
-                                    memory_updates,
-                                }) => {
-                                    if let Some(mem) = memory_updates {
-                                        app_state.set_memory_for_client(client_id, mem).await;
-                                    }
-
-                                    for action in actions {
-                                        use crate::llm::actions::client_trait::Client;
-                                        use crate::llm::actions::client_trait::ClientActionResult;
-                                        match protocol.as_ref().execute_action(action) {
-                                            Ok(ClientActionResult::SendData(bytes)) => {
-                                                let mut write_guard = write_half_arc.lock().await;
-                                                if let Err(e) = write_guard.write_all(&bytes).await
-                                                {
-                                                    error!(
-                                                        "TLS client {} send failed: {}",
-                                                        client_id, e
-                                                    );
-                                                } else if let Err(e) = write_guard.flush().await {
-                                                    error!(
-                                                        "TLS client {} flush failed: {}",
-                                                        client_id, e
-                                                    );
-                                                } else {
-                                                    trace!(
-                                                        "TLS client {} sent {} bytes",
-                                                        client_id,
-                                                        bytes.len()
-                                                    );
-                                                }
-                                            }
-                                            Ok(ClientActionResult::Disconnect) => {
-                                                info!("TLS client {} disconnecting", client_id);
-                                                disconnect_requested = true;
-                                                break;
-                                            }
-                                            Ok(ClientActionResult::WaitForMore) => {
-                                                wait_for_more = true;
-                                            }
-                                            Ok(_) => {}
-                                            Err(e) => {
-                                                error!(
-                                                    "TLS client {} could not execute action: {}",
-                                                    client_id, e
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    error!("LLM error for TLS client {}: {}", client_id, e);
-                                }
-                            }
-
-                            if disconnect_requested {
-                                break;
-                            }
-
-                            let mut client_data_lock = client_data.lock().await;
-                            if wait_for_more {
-                                // Keep the bytes the model has already seen: the next chunk is
-                                // appended to them and the whole thing is re-offered.
-                                let mut pending = std::mem::take(&mut payload);
-                                pending.extend_from_slice(&client_data_lock.queued_data);
-                                client_data_lock.queued_data = pending;
-                                client_data_lock.state = ConnectionState::Accumulating;
-                                break;
-                            }
-
-                            if client_data_lock.queued_data.is_empty() {
-                                client_data_lock.state = ConnectionState::Idle;
-                                break;
-                            }
-
-                            // Data arrived while the model was thinking: it is the next turn,
-                            // not something to discard (it used to be cleared unread).
-                            payload = std::mem::take(&mut client_data_lock.queued_data);
-                        }
-
-                        if disconnect_requested {
-                            let mut write_guard = write_half_arc.lock().await;
-                            let _ = write_guard.shutdown().await;
-                            drop(write_guard);
-                            app_state
-                                .update_client_status(client_id, ClientStatus::Disconnected)
-                                .await;
-                            let _ = status_tx.send(format!(
-                                "[CLIENT] TLS client {} disconnected (model requested)",
-                                client_id
-                            ));
-                            let _ = status_tx.send("__UPDATE_UI__".to_string());
-                            break;
-                        }
-                    }
-                    Err(e) => {
+                    Some(Inbound::Failed(e)) => {
                         error!("TLS client {} read error: {}", client_id, e);
                         app_state
-                            .update_client_status(client_id, ClientStatus::Error(e.to_string()))
+                            .update_client_status(client_id, ClientStatus::Error(e))
                             .await;
                         let _ = status_tx.send("__UPDATE_UI__".to_string());
                         break;
                     }
+                    _ => {}
                 }
             }
 
+            reader.abort();
             // The loop owns the only receiver; dropping the registered handle
             // makes later send_to_client calls fail fast instead of timing out.
             app_state.remove_client_handle(client_id).await;

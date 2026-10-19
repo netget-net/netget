@@ -277,7 +277,9 @@ impl Protocol for MqttSnClientProtocol {
             .e2e_testing("tests/client/mqtt_sn: the Eclipse Paho MQTT-SN Gateway (independent, C++) in front of Mosquitto; messages cross to and from mosquitto_sub and mosquitto_pub")
             .notes("No gateway discovery (connect to a known address); no forwarder encapsulation on the client side.")
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // What the session reports while the model answers (gateway deliveries, results)
+            // waits on the dispatcher's queue and is answered in one call, one event each.
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

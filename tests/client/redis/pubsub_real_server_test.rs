@@ -214,6 +214,9 @@ async fn run(server: &RealServer, resp3: bool) -> E2EResult<()> {
         remote_addr: Some(server.addr()),
         instruction: Some("Answer every message on netget:in on netget:out.".to_string()),
         startup_params: resp3.then(|| json!({"resp3": true})),
+        // The subscription confirmations arrive together and the rules below count one call
+        // per confirmation; batching them is `batching_test.rs`'s subject.
+        batching: Some(false),
         ..Default::default()
     }
     .create(

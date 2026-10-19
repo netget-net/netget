@@ -106,7 +106,9 @@ impl Protocol for GnutellaClientProtocol {
     }
     fn metadata(&self) -> crate::protocol::ProtocolMetadataV2 {
         crate::protocol::ProtocolMetadataV2::builder().state(crate::protocol::metadata::DevelopmentState::Experimental).implementation("Native bounded Gnutella selected codec; TCP and optional implicit TLS").llm_control("Ping/pong discovery, query/query-hit search and push descriptors").e2e_testing("Independent peer exchanges, malformed input, owner shutdown and standalone feature builds").notes("Selected Gnutella 0.6 TCP peer simulator. No public network crawling, ultrapeer routing, QRP/GGEP, DHT, HTTP file downloads or push connection dialing. Handler-supplied endpoint and search results, TTL/hops limited to 16, 64 KiB descriptor payload, 32 query hits. 256 connections, 30 s first frame, 600 s idle, 10 s handshake/exchange. No persistent protocol data; handlers supply content and decisions.").max_inbound_bytes(crate::server::gnutella::codec::MAX_COMMAND).well_known_port(6346).history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
-        .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+        // Replies queue on the shared p2p_support::connect runner; what arrives while the
+        // model answers is answered together (call_llm_for_client_batch).
+        .batching(crate::protocol::metadata::BatchingMode::On)
         .build()
     }
 }

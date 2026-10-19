@@ -103,7 +103,9 @@ impl Protocol for DcPeerClientProtocol {
     }
     fn metadata(&self) -> crate::protocol::ProtocolMetadataV2 {
         crate::protocol::ProtocolMetadataV2::builder().state(crate::protocol::metadata::DevelopmentState::Experimental).implementation("Native bounded NMDC Peer selected codec; TCP and optional implicit TLS").llm_control("Handler-supplied file and file-list downloads, ranges and refusals").e2e_testing("Independent peer exchanges, malformed input, owner shutdown and standalone feature builds").notes("NMDC uploader/listener and downloader/connector. ADCGET/ADCSND file requests, XML/BZip2 file lists and optional full-payload Tiger tree hash verification. Configurable local nickname must match hub rendezvous identity. 1 MiB per transfer; no filesystem access, multi-source scheduler, peer discovery or push uploads. 256 connections, 30 s first frame, 600 s idle, 10 s handshake/exchange. No persistent protocol data; handlers supply content and decisions.").max_inbound_bytes(crate::server::dc_peer::codec::MAX_COMMAND).well_known_port(412).history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
-        .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+        // Replies queue on the shared p2p_support::connect runner; what arrives while the
+        // model answers is answered together (call_llm_for_client_batch).
+        .batching(crate::protocol::metadata::BatchingMode::On)
         .build()
     }
 }

@@ -177,11 +177,11 @@ and in the parameter's own description rather than being left for someone to dis
 
 Both omissions are deliberate and both are the *same* argument:
 
-- **No Idle/Processing/Accumulating.** `src/server/tcp/mod.rs` needs one because raw TCP has no
-  frame boundaries, so a read arriving mid-LLM-call has to be queued. STOMP has frame
-  boundaries: this loop parses whole frames and handles them one at a time in one task. Bytes
-  arriving during a model call sit in the socket buffer — TCP's own backpressure. There is no
-  window in which two model calls could overlap, so there is nothing to track.
+- **No Idle/Processing/Accumulating.** A reader task (`read_frames`) frames the stream and puts
+  each whole frame on a bounded queue (`MAX_BATCH_EVENTS` deep; when it is full the reader
+  stops and TCP's own backpressure holds the broker). One answering loop takes frames off it and
+  is the only place the model is called, so two model calls can never overlap and there is
+  nothing to track.
 - **No `MAX_FOLLOWUP_DEPTH`.** The root `AGENTS.md` requires a boxed, depth-capped recursive
   call for clients whose action → event → action cycle is self-referential *in process*. This
   client's is not: every action puts a frame on the wire, and the answer arrives as another
@@ -192,6 +192,17 @@ Both omissions are deliberate and both are the *same* argument:
 
 If a future action ever produces a follow-up event *without* a wire round trip, that reasoning
 stops holding and the boxing is required. Do not remove this paragraph instead of the code.
+
+## Batching (`BatchingMode::On`)
+
+Frames the broker sends while the model is answering wait on the reader's queue with their
+boundaries intact. With the client's batching on, the answering loop takes every frame already
+waiting into one `call_llm_for_client_batch` call, one event per frame; off, one frame per
+call. Each `MESSAGE` event keeps its own `ack` header, so a batch is still acknowledged one
+delivery at a time. A frame that ends the session ends the gathering: events before an `ERROR`
+are reported with it and the session closes; the `RECEIPT` for our own `DISCONNECT` closes it
+after the events before it are reported. `tests/client/stomp/batching_test.rs` holds it against
+a hand-written broker, off and on in one test.
 
 ## Failure behaviour
 
@@ -206,7 +217,7 @@ lost, so the loop closes rather than trying to skip past it.
 
 ## Command channel (injected actions)
 
-The read loop carries a `tokio::select!` arm on the bounded command channel, registered via
+The answering loop carries a `tokio::select!` arm on the bounded command channel, registered via
 `command_support::register_command_channel` **before** the `stomp_connected` event is handled —
 a `manual` routing rule can park that event at the dashboard for minutes, and until
 registration the UI reports "no command channel", which reads as a protocol limitation when it
@@ -214,9 +225,10 @@ is only a queue. `AppState::send_to_client` therefore runs any of the seven acti
 same executor the model's go through, with no LLM call, and the dashboard's `[ send ]` button
 works.
 
-Every task this client spawns — there is exactly one, the read loop — is registered with
-`AppState::register_client_task`, so `stop_client` can abort it. On every exit the handle is
-removed so a later `send_to_client` fails fast instead of timing out.
+Both tasks this client spawns — the answering loop and the reader — are registered with
+`AppState::register_client_task`, so `stop_client` can abort them, and the loop aborts the
+reader on every exit. On every exit the handle is removed so a later `send_to_client` fails
+fast instead of timing out.
 
 ## Why the rating is Experimental
 

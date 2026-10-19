@@ -131,7 +131,9 @@ impl Protocol for NsqClientProtocol {
         .e2e_testing("Independent nsqd 1.3.0 daemon lifecycle, RDY concurrency, publish/consume/requeue/touch; NetGet pair and negative/lifecycle tests")
         .notes("Plain TCP only. Authentication-required, TLS or compression negotiation is refused explicitly. No lookupd/discovery, reconnect, automatic FIN, binary outbound payloads or persistent queue. UTF-8 inbound body is null for binary messages, with exact byte count. MPUB at most 1024 messages. Response/partial-frame/write deadline 15s, event and action queues 16, handler followups 4; fresh deliveries reset followup depth. All three tasks tracked; command handle available before IDENTIFY and manual events.")
         .max_inbound_bytes(crate::server::nsq::wire::MAX_FRAME_DATA).history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
-        .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+        // Deliveries and responses raised while the model answers wait in the dispatcher
+        // queue and are answered in one call, one event each (`client/nsq/mod.rs`).
+        .batching(crate::protocol::metadata::BatchingMode::On)
         .build()
     }
     fn get_startup_parameters(&self) -> Vec<crate::llm::actions::ParameterDefinition> {
