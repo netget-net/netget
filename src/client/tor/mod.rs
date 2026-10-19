@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use arti_client::{TorClient as ArtiClient, TorClientConfig};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{error, info, trace, warn};
 
@@ -23,21 +23,6 @@ use crate::llm::ClientLlmResult;
 use crate::protocol::Event;
 use crate::state::app_state::AppState;
 use crate::state::{ClientId, ClientStatus};
-
-/// Connection state for LLM processing
-#[derive(Debug, Clone, PartialEq)]
-enum ConnectionState {
-    Idle,
-    Processing,
-    Accumulating,
-}
-
-/// Per-client data for LLM handling
-struct ClientData {
-    state: ConnectionState,
-    queued_data: Vec<u8>,
-    memory: String,
-}
 
 /// Relay filter criteria for directory queries
 #[cfg(unix)]
@@ -261,6 +246,20 @@ pub async fn apply_actions(
     app_state: &Arc<AppState>,
     status_tx: &mpsc::UnboundedSender<String>,
 ) -> bool {
+    apply_actions_to(actions, write_half, client_id, app_state, status_tx).await
+}
+
+/// [`apply_actions`] over any write half, so [`run_circuit`] can be driven over a plain socket.
+async fn apply_actions_to<W>(
+    actions: Vec<serde_json::Value>,
+    write_half: Option<&Arc<Mutex<W>>>,
+    client_id: ClientId,
+    app_state: &Arc<AppState>,
+    status_tx: &mpsc::UnboundedSender<String>,
+) -> bool
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
     use crate::llm::actions::client_trait::{Client, ClientActionResult};
     let protocol = crate::client::tor::actions::TorClientProtocol::new();
 
@@ -303,6 +302,225 @@ pub async fn apply_actions(
         }
     }
     false
+}
+
+/// Drive one open circuit: the `tor_connected` call, then every payload the destination
+/// sends, then the end of the stream — with the command channel served throughout.
+///
+/// The circuit is read on a registered task of its own (`client/inbound_queue.rs`), so what
+/// the destination sends while the model is answering keeps its read boundaries in a bounded
+/// queue instead of merging in arti's buffer: with batching on everything waiting is answered
+/// as one payload, with it off one read per call.
+///
+/// Generic over the stream halves and `pub` because a real circuit needs a full Tor bootstrap
+/// this repository has no cheap loopback for; `tests/client/tor/batching_test.rs` drives this
+/// over a plain socket instead. `connect_with_llm_actions` calls it with arti's halves.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_circuit<R, W>(
+    read_half: R,
+    write_half: Arc<Mutex<W>>,
+    mut command_rx: mpsc::Receiver<crate::state::client_handles::ClientCommand>,
+    remote_addr: String,
+    llm_client: OllamaClient,
+    app_state: Arc<AppState>,
+    status_tx: mpsc::UnboundedSender<String>,
+    client_id: ClientId,
+) where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    use crate::client::inbound_queue::{Inbound, InboundQueue};
+
+    let mut memory = String::new();
+
+    // `tor_connected`: ask the model what to do with the circuit, then do it. The
+    // answer used to be `Ok(_) => trace!("LLM called successfully")` — the round-trip
+    // was paid for and every action the model chose was dropped on the floor, so a
+    // client told "send an HTTP GET and analyse the response" sent nothing and then
+    // waited forever for a reply to a request it never made.
+    if let Some(instruction) = app_state.get_instruction_for_client(client_id).await {
+        let protocol = crate::client::tor::actions::TorClientProtocol::new();
+        let event = Event::new(
+            &TOR_CLIENT_CONNECTED_EVENT,
+            serde_json::json!({ "target": remote_addr }),
+        );
+        match call_llm_for_client(
+            &llm_client,
+            &app_state,
+            client_id.to_string(),
+            &instruction,
+            "",
+            Some(&event),
+            &protocol,
+            &status_tx,
+        )
+        .await
+        {
+            Ok(ClientLlmResult {
+                actions,
+                memory_updates,
+            }) => {
+                if let Some(mem) = memory_updates {
+                    memory = mem;
+                }
+                if apply_actions_to(
+                    actions,
+                    Some(&write_half),
+                    client_id,
+                    &app_state,
+                    &status_tx,
+                )
+                .await
+                {
+                    app_state
+                        .update_client_status(client_id, ClientStatus::Disconnected)
+                        .await;
+                    let _ = status_tx.send("__UPDATE_UI__".to_string());
+                    app_state.remove_client_handle(client_id).await;
+                    return;
+                }
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to call LLM for Tor client {} connection: {}",
+                    client_id, e
+                );
+            }
+        }
+    }
+
+    let mut inbound = InboundQueue::spawn(&app_state, client_id, read_half).await;
+
+    loop {
+        let first = tokio::select! {
+            first = inbound.recv() => first,
+            Some(cmd) = command_rx.recv() => {
+                let disconnect = crate::client::command_support::handle_stream_client_command(
+                    &crate::client::tor::actions::TorClientProtocol,
+                    &write_half,
+                    cmd,
+                    client_id,
+                    &app_state,
+                    &status_tx,
+                )
+                .await;
+                if disconnect {
+                    app_state
+                        .update_client_status(client_id, ClientStatus::Disconnected)
+                        .await;
+                    let _ = status_tx.send(format!(
+                        "[CLIENT] Tor client {} disconnected (injected action)",
+                        client_id
+                    ));
+                    let _ = status_tx.send("__UPDATE_UI__".to_string());
+                    break;
+                }
+                continue;
+            }
+        };
+        let (mut data, mut ended) = match first {
+            Inbound::Data(data) => (data, None),
+            other => (Vec::new(), Some(other)),
+        };
+
+        if !data.is_empty() {
+            // With batching on, everything else already waiting joins this payload; an end
+            // of stream found while sweeping is handled after it is answered.
+            let batching = app_state
+                .client_conversation_settings(client_id)
+                .await
+                .is_some_and(|(_, batching)| batching);
+            if batching {
+                ended = inbound.drain_into(&mut data);
+            }
+            trace!("Tor client {} received {} bytes", client_id, data.len());
+
+            // A `disconnect` used to `break` the `for action in actions` loop and nothing
+            // else, so the model could never actually close a Tor client: it stopped
+            // executing the rest of that one answer and went straight back to reading. The
+            // flag carries the decision out to this loop.
+            let mut disconnect_requested = false;
+            if let Some(instruction) = app_state.get_instruction_for_client(client_id).await {
+                let protocol = crate::client::tor::actions::TorClientProtocol::new();
+                let event = Event::new(
+                    &TOR_CLIENT_DATA_RECEIVED_EVENT,
+                    crate::client::tor::actions::inbound_event_fields(&data),
+                );
+                match call_llm_for_client(
+                    &llm_client,
+                    &app_state,
+                    client_id.to_string(),
+                    &instruction,
+                    &memory,
+                    Some(&event),
+                    &protocol,
+                    &status_tx,
+                )
+                .await
+                {
+                    Ok(ClientLlmResult {
+                        actions,
+                        memory_updates,
+                    }) => {
+                        if let Some(mem) = memory_updates {
+                            memory = mem;
+                        }
+                        // Shared with the connected-event and bootstrap-complete paths, so
+                        // the Tor action vocabulary is executed in exactly one place.
+                        disconnect_requested = apply_actions_to(
+                            actions,
+                            Some(&write_half),
+                            client_id,
+                            &app_state,
+                            &status_tx,
+                        )
+                        .await;
+                    }
+                    Err(e) => {
+                        error!("LLM error for Tor client {}: {}", client_id, e);
+                    }
+                }
+            }
+
+            if disconnect_requested {
+                app_state
+                    .update_client_status(client_id, ClientStatus::Disconnected)
+                    .await;
+                let _ = status_tx.send(format!(
+                    "[CLIENT] Tor client {} disconnected (model asked)",
+                    client_id
+                ));
+                let _ = status_tx.send("__UPDATE_UI__".to_string());
+                break;
+            }
+        }
+
+        match ended {
+            Some(Inbound::Closed) => {
+                info!("Tor client {} disconnected", client_id);
+                app_state
+                    .update_client_status(client_id, ClientStatus::Disconnected)
+                    .await;
+                let _ = status_tx.send(format!("[CLIENT] Tor client {} disconnected", client_id));
+                let _ = status_tx.send("__UPDATE_UI__".to_string());
+                break;
+            }
+            Some(Inbound::Failed(e)) => {
+                error!("Tor client {} read error: {}", client_id, e);
+                app_state
+                    .update_client_status(client_id, ClientStatus::Error(e))
+                    .await;
+                let _ = status_tx.send("__UPDATE_UI__".to_string());
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    drop(inbound);
+    // The loop owns the only receiver; dropping the registered handle
+    // makes later send_to_client calls fail fast instead of timing out.
+    app_state.remove_client_handle(client_id).await;
 }
 
 /// Tor client that connects through the Tor network
@@ -469,235 +687,27 @@ impl TorClient {
         // the dashboard's `[ send ]` has to reach the client for the whole park.
 
         // Split stream into read/write halves
-        let (mut read_half, write_half) = tokio::io::split(stream);
-        let write_half_arc = Arc::new(Mutex::new(write_half));
+        let (read_half, write_half) = tokio::io::split(stream);
+        let write_half_arc: TorWriteHalf = Arc::new(Mutex::new(write_half));
 
-        // Initialize client data
-        let client_data = Arc::new(Mutex::new(ClientData {
-            state: ConnectionState::Idle,
-            queued_data: Vec::new(),
-            memory: String::new(),
-        }));
+        // Command channel: lets the dashboard inject actions into this loop
+        // via AppState::send_to_client (see client/command_support.rs).
+        let command_rx =
+            crate::client::command_support::register_command_channel(&app_state, client_id).await;
 
-        // Spawn read loop
         // Registered with AppState so stop_client can abort this task —
         // dropping a JoinHandle only detaches it in Tokio.
         let task_registrar = app_state.clone();
-        // Command channel: lets the dashboard inject actions into this loop
-        // via AppState::send_to_client (see client/command_support.rs).
-        let mut command_rx =
-            crate::client::command_support::register_command_channel(&app_state, client_id).await;
-
-        let task_handle = tokio::spawn(async move {
-            // `tor_connected`: ask the model what to do with the circuit, then do it. The
-            // answer used to be `Ok(_) => trace!("LLM called successfully")` — the round-trip
-            // was paid for and every action the model chose was dropped on the floor, so a
-            // client told "send an HTTP GET and analyse the response" sent nothing and then
-            // waited forever for a reply to a request it never made.
-            if let Some(instruction) = app_state.get_instruction_for_client(client_id).await {
-                let protocol = crate::client::tor::actions::TorClientProtocol::new();
-                let event = Event::new(
-                    &TOR_CLIENT_CONNECTED_EVENT,
-                    serde_json::json!({ "target": remote_addr }),
-                );
-                match call_llm_for_client(
-                    &llm_client,
-                    &app_state,
-                    client_id.to_string(),
-                    &instruction,
-                    "",
-                    Some(&event),
-                    &protocol,
-                    &status_tx,
-                )
-                .await
-                {
-                    Ok(ClientLlmResult {
-                        actions,
-                        memory_updates,
-                    }) => {
-                        if let Some(mem) = memory_updates {
-                            client_data.lock().await.memory = mem;
-                        }
-                        if apply_actions(
-                            actions,
-                            Some(&write_half_arc),
-                            client_id,
-                            &app_state,
-                            &status_tx,
-                        )
-                        .await
-                        {
-                            app_state
-                                .update_client_status(client_id, ClientStatus::Disconnected)
-                                .await;
-                            let _ = status_tx.send("__UPDATE_UI__".to_string());
-                            app_state.remove_client_handle(client_id).await;
-                            return;
-                        }
-                    }
-                    Err(e) => {
-                        warn!(
-                            "Failed to call LLM for Tor client {} connection: {}",
-                            client_id, e
-                        );
-                    }
-                }
-            }
-
-            let mut buffer = vec![0u8; 8192];
-
-            loop {
-                let read_result = tokio::select! {
-                    read = read_half.read(&mut buffer) => read,
-                    Some(cmd) = command_rx.recv() => {
-                        let disconnect = crate::client::command_support::handle_stream_client_command(
-                            &crate::client::tor::actions::TorClientProtocol,
-                            &write_half_arc,
-                            cmd,
-                            client_id,
-                            &app_state,
-                            &status_tx,
-                        )
-                        .await;
-                        if disconnect {
-                            app_state
-                                .update_client_status(client_id, ClientStatus::Disconnected)
-                                .await;
-                            let _ = status_tx.send(format!(
-                                "[CLIENT] Tor client {} disconnected (injected action)",
-                                client_id
-                            ));
-                            let _ = status_tx.send("__UPDATE_UI__".to_string());
-                            break;
-                        }
-                        continue;
-                    }
-                };
-                match read_result {
-                    Ok(0) => {
-                        info!("Tor client {} disconnected", client_id);
-                        app_state
-                            .update_client_status(client_id, ClientStatus::Disconnected)
-                            .await;
-                        let _ = status_tx
-                            .send(format!("[CLIENT] Tor client {} disconnected", client_id));
-                        let _ = status_tx.send("__UPDATE_UI__".to_string());
-                        break;
-                    }
-                    Ok(n) => {
-                        let data = buffer[..n].to_vec();
-                        trace!("Tor client {} received {} bytes", client_id, n);
-
-                        // Handle data with LLM.
-                        //
-                        // A `disconnect` used to `break` the `for action in actions` loop and
-                        // nothing else, so the model could never actually close a Tor client:
-                        // it stopped executing the rest of that one answer and went straight
-                        // back to reading. The flag carries the decision out to the read loop.
-                        let mut disconnect_requested = false;
-                        let mut client_data_lock = client_data.lock().await;
-
-                        match client_data_lock.state {
-                            ConnectionState::Idle => {
-                                // Process immediately
-                                client_data_lock.state = ConnectionState::Processing;
-                                drop(client_data_lock);
-
-                                // Call LLM
-                                if let Some(instruction) =
-                                    app_state.get_instruction_for_client(client_id).await
-                                {
-                                    let protocol = Arc::new(
-                                        crate::client::tor::actions::TorClientProtocol::new(),
-                                    );
-                                    let event = Event::new(
-                                        &TOR_CLIENT_DATA_RECEIVED_EVENT,
-                                        crate::client::tor::actions::inbound_event_fields(&data),
-                                    );
-
-                                    match call_llm_for_client(
-                                        &llm_client,
-                                        &app_state,
-                                        client_id.to_string(),
-                                        &instruction,
-                                        &client_data.lock().await.memory,
-                                        Some(&event),
-                                        protocol.as_ref(),
-                                        &status_tx,
-                                    )
-                                    .await
-                                    {
-                                        Ok(ClientLlmResult {
-                                            actions,
-                                            memory_updates,
-                                        }) => {
-                                            if let Some(mem) = memory_updates {
-                                                client_data.lock().await.memory = mem;
-                                            }
-                                            // Shared with the connected-event and
-                                            // bootstrap-complete paths, so the Tor action
-                                            // vocabulary is executed in exactly one place.
-                                            disconnect_requested = apply_actions(
-                                                actions,
-                                                Some(&write_half_arc),
-                                                client_id,
-                                                &app_state,
-                                                &status_tx,
-                                            )
-                                            .await;
-                                        }
-                                        Err(e) => {
-                                            error!("LLM error for Tor client {}: {}", client_id, e);
-                                        }
-                                    }
-                                }
-
-                                // Process queued data if any
-                                let mut client_data_lock = client_data.lock().await;
-                                if !client_data_lock.queued_data.is_empty() {
-                                    client_data_lock.queued_data.clear();
-                                }
-                                client_data_lock.state = ConnectionState::Idle;
-                            }
-                            ConnectionState::Processing => {
-                                // Queue data
-                                client_data_lock.queued_data.extend_from_slice(&data);
-                                client_data_lock.state = ConnectionState::Accumulating;
-                            }
-                            ConnectionState::Accumulating => {
-                                // Continue queuing
-                                client_data_lock.queued_data.extend_from_slice(&data);
-                            }
-                        }
-
-                        if disconnect_requested {
-                            app_state
-                                .update_client_status(client_id, ClientStatus::Disconnected)
-                                .await;
-                            let _ = status_tx.send(format!(
-                                "[CLIENT] Tor client {} disconnected (model asked)",
-                                client_id
-                            ));
-                            let _ = status_tx.send("__UPDATE_UI__".to_string());
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        error!("Tor client {} read error: {}", client_id, e);
-                        app_state
-                            .update_client_status(client_id, ClientStatus::Error(e.to_string()))
-                            .await;
-                        let _ = status_tx.send("__UPDATE_UI__".to_string());
-                        break;
-                    }
-                }
-            }
-
-            // The loop owns the only receiver; dropping the registered handle
-            // makes later send_to_client calls fail fast instead of timing out.
-            app_state.remove_client_handle(client_id).await;
-        });
+        let task_handle = tokio::spawn(run_circuit(
+            read_half,
+            write_half_arc,
+            command_rx,
+            remote_addr,
+            llm_client,
+            app_state,
+            status_tx,
+            client_id,
+        ));
         task_registrar
             .register_client_task(client_id, task_handle)
             .await;

@@ -1,6 +1,6 @@
 pub mod actions;
 
-use crate::client::llm_budget::call_llm_for_client;
+use crate::client::llm_budget::call_llm_for_client_batch;
 use crate::client::pop3::actions::{
     POP3_CLIENT_CONNECTED_EVENT, POP3_CLIENT_RESPONSE_RECEIVED_EVENT,
 };
@@ -297,7 +297,7 @@ impl Pop3Client {
         remote_addr: String,
     ) -> Result<()>
     where
-        R: tokio::io::AsyncRead + Unpin,
+        R: tokio::io::AsyncRead + Unpin + Send + 'static,
         W: tokio::io::AsyncWrite + Unpin + Send + 'static,
     {
         // Read greeting from server
@@ -334,7 +334,7 @@ impl Pop3Client {
 
         // Initial LLM call with greeting
         if let Err(e) = Self::handle_llm_response(
-            &event,
+            std::slice::from_ref(&event),
             &llm_client,
             &app_state,
             &status_tx,
@@ -353,37 +353,87 @@ impl Pop3Client {
             return Err(e);
         }
 
-        // Main read loop
-        loop {
-            line.clear();
-            match crate::client::response_reader::read_response_line(&mut reader, &mut line).await {
-                Ok(0) => {
-                    debug!("POP3 client {} connection closed by server", client_id);
-                    break;
-                }
-                Ok(_) => {
-                    let response = line.trim().to_string();
-                    if response.is_empty() {
-                        continue;
-                    }
-
-                    debug!("POP3 client {} received response: {}", client_id, response);
-
-                    // Check if this is a multiline response
-                    let is_multiline = write_half
-                        .lock()
-                        .await
-                        .next_response_is_multiline(&response)?;
-
-                    let full_response = if is_multiline {
-                        crate::client::response_reader::read_dot_response(&mut reader, response)
+        // Responses are framed on a registered task of its own, so what the server answers
+        // while the model is still on an earlier response -- the replies to the rest of a
+        // multi-command answer (USER then PASS, LIST then RETR), or to an injected command --
+        // waits in a bounded queue as whole responses. With batching on everything waiting is
+        // answered in one model call, one event per response; with it off, one per call.
+        let (inbound_tx, mut inbound_rx) =
+            mpsc::channel::<Result<Option<String>>>(crate::protocol::metadata::MAX_BATCH_EVENTS);
+        let framing_writer = write_half.clone();
+        let framer = app_state
+            .spawn_client_task(client_id, async move {
+                let mut line = String::new();
+                loop {
+                    let next: Result<Option<String>> = async {
+                        loop {
+                            line.clear();
+                            if crate::client::response_reader::read_response_line(
+                                &mut reader,
+                                &mut line,
+                            )
                             .await?
-                    } else {
-                        response
-                    };
+                                == 0
+                            {
+                                return Ok(None);
+                            }
+                            let response = line.trim().to_string();
+                            if response.is_empty() {
+                                continue;
+                            }
+                            debug!("POP3 client {} received response: {}", client_id, response);
+                            // Check if this is a multiline response
+                            let is_multiline = framing_writer
+                                .lock()
+                                .await
+                                .next_response_is_multiline(&response)?;
+                            return Ok(Some(if is_multiline {
+                                crate::client::response_reader::read_dot_response(
+                                    &mut reader,
+                                    response,
+                                )
+                                .await?
+                            } else {
+                                response
+                            }));
+                        }
+                    }
+                    .await;
+                    let last = !matches!(next, Ok(Some(_)));
+                    if inbound_tx.send(next).await.is_err() || last {
+                        break;
+                    }
+                }
+            })
+            .await;
 
-                    let is_ok = full_response.starts_with("+OK");
+        let result = async {
+            loop {
+                let mut responses = Vec::new();
+                let mut ended = None;
+                match inbound_rx.recv().await.unwrap_or(Ok(None)) {
+                    Ok(Some(response)) => responses.push(response),
+                    other => ended = Some(other),
+                }
+                if !responses.is_empty()
+                    && app_state
+                        .client_conversation_settings(client_id)
+                        .await
+                        .is_some_and(|(_, batching)| batching)
+                {
+                    while responses.len() < crate::protocol::metadata::MAX_BATCH_EVENTS {
+                        match inbound_rx.try_recv() {
+                            Ok(Ok(Some(response))) => responses.push(response),
+                            Ok(other) => {
+                                ended = Some(other);
+                                break;
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                }
 
+                if !responses.is_empty() {
                     // Get updated instruction and memory
                     let (instruction, memory) = app_state
                         .with_client_mut(client_id, |client| {
@@ -392,16 +442,22 @@ impl Pop3Client {
                         .await
                         .unwrap_or_default();
 
-                    let event = Event::new(
-                        &POP3_CLIENT_RESPONSE_RECEIVED_EVENT,
-                        json!({
-                            "response": full_response,
-                            "is_ok": is_ok,
-                        }),
-                    );
+                    let events: Vec<Event> = responses
+                        .into_iter()
+                        .map(|full_response| {
+                            let is_ok = full_response.starts_with("+OK");
+                            Event::new(
+                                &POP3_CLIENT_RESPONSE_RECEIVED_EVENT,
+                                json!({
+                                    "response": full_response,
+                                    "is_ok": is_ok,
+                                }),
+                            )
+                        })
+                        .collect();
 
                     if let Err(e) = Self::handle_llm_response(
-                        &event,
+                        &events,
                         &llm_client,
                         &app_state,
                         &status_tx,
@@ -417,21 +473,32 @@ impl Pop3Client {
                             "POP3 client {} failed to process response: {}",
                             client_id, e
                         );
-                        break;
+                        return Ok(());
                     }
                 }
-                Err(e) => {
-                    return Err(e.into());
+
+                match ended {
+                    Some(Ok(None)) => {
+                        debug!("POP3 client {} connection closed by server", client_id);
+                        return Ok(());
+                    }
+                    Some(Err(e)) => return Err(e),
+                    _ => {}
                 }
             }
         }
+        .await;
+        framer.abort();
+        result?;
 
         info!("POP3 client {} disconnected", client_id);
         Ok(())
     }
 
+    /// Ask the model about one or more events -- several only when batching gathered them --
+    /// and put its answer on the wire.
     async fn handle_llm_response<W>(
-        event: &Event,
+        events: &[Event],
         llm_client: &OllamaClient,
         app_state: &Arc<AppState>,
         status_tx: &mpsc::UnboundedSender<String>,
@@ -445,13 +512,13 @@ impl Pop3Client {
         W: tokio::io::AsyncWrite + Unpin,
     {
         // Call LLM
-        let llm_result = call_llm_for_client(
+        let llm_result = call_llm_for_client_batch(
             llm_client,
             app_state,
             client_id.to_string(),
             instruction,
             memory,
-            Some(event),
+            events,
             protocol.as_ref(),
             status_tx,
         )

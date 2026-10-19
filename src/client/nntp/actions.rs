@@ -297,6 +297,8 @@ impl Protocol for NntpClientProtocol {
             .max_inbound_bytes(crate::server::nntp::extensions::MAX_ARTICLE)
             .notes("No STARTTLS, SASL, compression or persistent article spool. Credentials require TLS; certificate verification is mandatory. MODE STREAM/CHECK/TAKETHIS are sequential transactions.")
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            // The shared p2p_support::connect runner answers one event per model call; batching
+            // the results that queue there means changing that runner, which six other clients share.
             .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }

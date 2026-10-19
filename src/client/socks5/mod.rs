@@ -6,7 +6,7 @@ pub use actions::Socks5ClientProtocol;
 use anyhow::{Context, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, Mutex};
 use tokio_socks::tcp::Socks5Stream;
 use tracing::{error, info, trace, warn};
@@ -21,18 +21,8 @@ use crate::protocol::Event;
 use crate::state::app_state::AppState;
 use crate::state::{ClientId, ClientStatus};
 
-/// Connection state for LLM processing
-#[derive(Debug, Clone, PartialEq)]
-enum ConnectionState {
-    Idle,
-    Processing,
-    Accumulating,
-}
-
 /// Per-client data for LLM handling
 struct ClientData {
-    state: ConnectionState,
-    queued_data: Vec<u8>,
     memory: String,
 }
 
@@ -119,13 +109,11 @@ impl Socks5Client {
         let _ = status_tx.send("__UPDATE_UI__".to_string());
 
         // Split stream (tcp_stream was already extracted above)
-        let (mut read_half, write_half) = tokio::io::split(tcp_stream);
+        let (read_half, write_half) = tokio::io::split(tcp_stream);
         let write_half_arc = Arc::new(Mutex::new(write_half));
 
         // Initialize client data
         let client_data = Arc::new(Mutex::new(ClientData {
-            state: ConnectionState::Idle,
-            queued_data: Vec::new(),
             memory: String::new(),
         }));
 
@@ -215,21 +203,27 @@ impl Socks5Client {
             }
         }
 
-        // Spawn read loop
-        // Registered with AppState so stop_client can abort this task —
-        // dropping a JoinHandle only detaches it in Tokio.
-        let task_registrar = app_state.clone();
         // Command channel: lets the dashboard inject actions into this loop
         // via AppState::send_to_client (see client/command_support.rs).
         let mut command_rx =
             crate::client::command_support::register_command_channel(&app_state, client_id).await;
 
-        let task_handle = tokio::spawn(async move {
-            let mut buffer = vec![0u8; 8192];
+        // The tunnel is read on a registered task of its own, so what the target sends while
+        // the model is answering keeps its read boundaries in a bounded queue instead of
+        // merging in the kernel buffer: with batching on everything waiting is answered as
+        // one payload, with it off one read per call.
+        let mut inbound =
+            crate::client::inbound_queue::InboundQueue::spawn(&app_state, client_id, read_half)
+                .await;
 
+        // The answering loop. Registered with AppState so stop_client can abort it —
+        // dropping a JoinHandle only detaches it in Tokio.
+        let task_registrar = app_state.clone();
+        let task_handle = tokio::spawn(async move {
+            use crate::client::inbound_queue::Inbound;
             loop {
-                let read_result = tokio::select! {
-                    read = read_half.read(&mut buffer) => read,
+                let first = tokio::select! {
+                    first = inbound.recv() => first,
                     Some(cmd) = command_rx.recv() => {
                         let disconnect = crate::client::command_support::handle_stream_client_command(
                             &crate::client::socks5::actions::Socks5ClientProtocol,
@@ -254,8 +248,52 @@ impl Socks5Client {
                         continue;
                     }
                 };
-                match read_result {
-                    Ok(0) => {
+                let (mut data, mut ended) = match first {
+                    Inbound::Data(data) => (data, None),
+                    other => (Vec::new(), Some(other)),
+                };
+
+                if !data.is_empty() {
+                    // With batching on, everything else already waiting — what the target
+                    // sent while the model answered the previous read — joins this payload,
+                    // as the tcp client does. An end of stream found while sweeping is
+                    // handled after this payload is answered.
+                    let batching = app_state
+                        .client_conversation_settings(client_id)
+                        .await
+                        .is_some_and(|(_, batching)| batching);
+                    if batching {
+                        ended = inbound.drain_into(&mut data);
+                    }
+                    trace!(
+                        "SOCKS5 client {} received {} bytes from target",
+                        client_id,
+                        data.len()
+                    );
+                    if Self::answer(
+                        &llm_client,
+                        &app_state,
+                        &status_tx,
+                        client_id,
+                        &client_data,
+                        &write_half_arc,
+                        &data,
+                    )
+                    .await
+                    {
+                        info!("SOCKS5 client {} disconnecting", client_id);
+                        app_state
+                            .update_client_status(client_id, ClientStatus::Disconnected)
+                            .await;
+                        let _ = status_tx
+                            .send(format!("[CLIENT] SOCKS5 client {} disconnected", client_id));
+                        let _ = status_tx.send("__UPDATE_UI__".to_string());
+                        break;
+                    }
+                }
+
+                match ended {
+                    Some(Inbound::Closed) => {
                         info!("SOCKS5 client {} disconnected", client_id);
                         app_state
                             .update_client_status(client_id, ClientStatus::Disconnected)
@@ -265,115 +303,19 @@ impl Socks5Client {
                         let _ = status_tx.send("__UPDATE_UI__".to_string());
                         break;
                     }
-                    Ok(n) => {
-                        let data = buffer[..n].to_vec();
-                        trace!(
-                            "SOCKS5 client {} received {} bytes from target",
-                            client_id,
-                            n
-                        );
-
-                        // Handle data with LLM
-                        let mut client_data_lock = client_data.lock().await;
-
-                        match client_data_lock.state {
-                            ConnectionState::Idle => {
-                                // Process immediately
-                                client_data_lock.state = ConnectionState::Processing;
-                                drop(client_data_lock);
-
-                                // Call LLM
-                                if let Some(instruction) =
-                                    app_state.get_instruction_for_client(client_id).await
-                                {
-                                    let protocol = Arc::new(
-                                        crate::client::socks5::actions::Socks5ClientProtocol::new(),
-                                    );
-                                    let event = Event::new(
-                                        &SOCKS5_CLIENT_DATA_RECEIVED_EVENT,
-                                        crate::client::socks5::actions::inbound_event_fields(&data),
-                                    );
-
-                                    // Same reasoning as the connected-event call above: the
-                                    // guard must not survive into the match arms.
-                                    let memory = { client_data.lock().await.memory.clone() };
-                                    match call_llm_for_client(
-                                        &llm_client,
-                                        &app_state,
-                                        client_id.to_string(),
-                                        &instruction,
-                                        &memory,
-                                        Some(&event),
-                                        protocol.as_ref(),
-                                        &status_tx,
-                                    )
-                                    .await
-                                    {
-                                        Ok(ClientLlmResult {
-                                            actions,
-                                            memory_updates,
-                                        }) => {
-                                            // Update memory
-                                            if let Some(mem) = memory_updates {
-                                                client_data.lock().await.memory = mem;
-                                            }
-
-                                            // Execute actions
-                                            for action in actions {
-                                                use crate::llm::actions::client_trait::Client;
-                                                match protocol.as_ref().execute_action(action) {
-                                                    Ok(crate::llm::actions::client_trait::ClientActionResult::SendData(bytes)) => {
-                                                        match write_half_arc.lock().await.write_all(&bytes).await {
-                                                            Ok(()) => trace!("SOCKS5 client {} sent {} bytes", client_id, bytes.len()),
-                                                            Err(e) => error!("SOCKS5 client {} failed to write {} bytes to the tunnel: {}", client_id, bytes.len(), e),
-                                                        }
-                                                    }
-                                                    Ok(crate::llm::actions::client_trait::ClientActionResult::Disconnect) => {
-                                                        info!("SOCKS5 client {} disconnecting", client_id);
-                                                        break;
-                                                    }
-                                                    _ => {}
-                                                }
-                                            }
-                                        }
-                                        Err(e) => {
-                                            error!(
-                                                "LLM error for SOCKS5 client {}: {}",
-                                                client_id, e
-                                            );
-                                        }
-                                    }
-                                }
-
-                                // Process queued data if any
-                                let mut client_data_lock = client_data.lock().await;
-                                if !client_data_lock.queued_data.is_empty() {
-                                    client_data_lock.queued_data.clear();
-                                }
-                                client_data_lock.state = ConnectionState::Idle;
-                            }
-                            ConnectionState::Processing => {
-                                // Queue data
-                                client_data_lock.queued_data.extend_from_slice(&data);
-                                client_data_lock.state = ConnectionState::Accumulating;
-                            }
-                            ConnectionState::Accumulating => {
-                                // Continue queuing
-                                client_data_lock.queued_data.extend_from_slice(&data);
-                            }
-                        }
-                    }
-                    Err(e) => {
+                    Some(Inbound::Failed(e)) => {
                         error!("SOCKS5 client {} read error: {}", client_id, e);
                         app_state
-                            .update_client_status(client_id, ClientStatus::Error(e.to_string()))
+                            .update_client_status(client_id, ClientStatus::Error(e))
                             .await;
                         let _ = status_tx.send("__UPDATE_UI__".to_string());
                         break;
                     }
+                    _ => {}
                 }
             }
 
+            drop(inbound);
             // The loop owns the only receiver; dropping the registered handle
             // makes later send_to_client calls fail fast instead of timing out.
             app_state.remove_client_handle(client_id).await;
@@ -383,5 +325,77 @@ impl Socks5Client {
             .await;
 
         Ok(local_addr)
+    }
+
+    /// Ask the model about one payload from the target and carry out its answer. Returns
+    /// `true` when it asked to disconnect — which ends the session, not just the loop over
+    /// this answer's actions.
+    async fn answer<W>(
+        llm_client: &OllamaClient,
+        app_state: &Arc<AppState>,
+        status_tx: &mpsc::UnboundedSender<String>,
+        client_id: ClientId,
+        client_data: &Arc<Mutex<ClientData>>,
+        write_half: &Arc<Mutex<W>>,
+        data: &[u8],
+    ) -> bool
+    where
+        W: tokio::io::AsyncWrite + Unpin,
+    {
+        use crate::llm::actions::client_trait::{Client, ClientActionResult};
+        let Some(instruction) = app_state.get_instruction_for_client(client_id).await else {
+            return false;
+        };
+        let protocol = crate::client::socks5::actions::Socks5ClientProtocol::new();
+        let event = Event::new(
+            &SOCKS5_CLIENT_DATA_RECEIVED_EVENT,
+            crate::client::socks5::actions::inbound_event_fields(data),
+        );
+        // Copied out under its own guard: the `Ok` arm locks the same mutex again.
+        let memory = { client_data.lock().await.memory.clone() };
+        match call_llm_for_client(
+            llm_client,
+            app_state,
+            client_id.to_string(),
+            &instruction,
+            &memory,
+            Some(&event),
+            &protocol,
+            status_tx,
+        )
+        .await
+        {
+            Ok(ClientLlmResult {
+                actions,
+                memory_updates,
+            }) => {
+                if let Some(mem) = memory_updates {
+                    client_data.lock().await.memory = mem;
+                }
+                for action in actions {
+                    match protocol.execute_action(action) {
+                        Ok(ClientActionResult::SendData(bytes)) => {
+                            match write_half.lock().await.write_all(&bytes).await {
+                                Ok(()) => {
+                                    trace!("SOCKS5 client {} sent {} bytes", client_id, bytes.len())
+                                }
+                                Err(e) => error!(
+                                    "SOCKS5 client {} failed to write {} bytes to the tunnel: {}",
+                                    client_id,
+                                    bytes.len(),
+                                    e
+                                ),
+                            }
+                        }
+                        Ok(ClientActionResult::Disconnect) => return true,
+                        _ => {}
+                    }
+                }
+            }
+            Err(e) => {
+                error!("LLM error for SOCKS5 client {}: {}", client_id, e);
+            }
+        }
+        false
     }
 }

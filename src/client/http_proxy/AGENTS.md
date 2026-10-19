@@ -36,17 +36,17 @@ ETH > IP > TCP > HTTP
 4. **Tunnel Mode**: After successful CONNECT, stream becomes transparent tunnel
 5. **Data Forwarding**: All data sent/received through tunnel
 
-### State Machine
+### Batching (what arrives while the model is answering)
 
-```
-Idle -> Processing -> Accumulating
-```
-
-- **Idle**: No LLM processing in progress, can process new data immediately
-- **Processing**: LLM is analyzing data, queue new incoming data
-- **Accumulating**: Continue queuing data while LLM processes previous chunk
-
-This prevents concurrent LLM calls on the same client and ensures ordered processing.
+The tunnel, once the CONNECT reply has been read, is read on a registered task of its own (`client/inbound_queue.rs`, shared with
+the other proxied byte-stream clients), feeding a bounded queue of reads (32). The answering
+loop takes one read per model call with batching off, and with batching on joins everything
+already waiting into one payload, as the `tcp` client does. Declared `BatchingMode::On`.
+This replaced an Idle/Processing/Accumulating machine that could never leave Idle — the loop
+read, called the model and wrote in sequence — and "cleared" a queue nothing filled: nothing
+was lost, but what arrived during a call merged in the kernel buffer, so batching off and on
+could not be told apart. A `disconnect` the model returns now ends the session (it used to
+break only the loop over that answer's actions). Test: `tests/client/http_proxy/batching_test.rs`.
 
 ### HTTP CONNECT Protocol
 

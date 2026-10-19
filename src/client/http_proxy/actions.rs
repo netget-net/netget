@@ -323,7 +323,10 @@ impl Protocol for HttpProxyClientProtocol {
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // What the far end sends through the tunnel while the model answers waits in a
+            // queue: joined into one payload with batching on, one read per call with it off
+            // (`client/inbound_queue.rs`).
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
     fn description(&self) -> &'static str {

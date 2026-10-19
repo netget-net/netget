@@ -6,7 +6,7 @@ pub use actions::HttpProxyClientProtocol;
 use anyhow::{Context, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info, trace};
@@ -24,18 +24,8 @@ use crate::state::app_state::AppState;
 use crate::state::client_handles::{ClientCommand, ClientSendOutcome};
 use crate::state::{AccessLogOwner, ClientId, ClientStatus};
 
-/// Connection state for LLM processing
-#[derive(Debug, Clone, PartialEq)]
-enum ConnectionState {
-    Idle,
-    Processing,
-    Accumulating,
-}
-
 /// Per-client data for LLM handling
 struct ClientData {
-    state: ConnectionState,
-    queued_data: Vec<u8>,
     memory: String,
     tunnel_established: bool,
 }
@@ -239,8 +229,6 @@ impl HttpProxyClient {
 
         // Initialize client data
         let client_data = Arc::new(Mutex::new(ClientData {
-            state: ConnectionState::Idle,
-            queued_data: Vec::new(),
             memory: String::new(),
             tunnel_established: false,
         }));
@@ -511,13 +499,63 @@ impl HttpProxyClient {
                 }
             }
 
-            // Now read data through the tunnel
-            let mut buffer = vec![0u8; 8192];
-
+            // Now read data through the tunnel, on a registered task of its own: what the far
+            // end sends while the model is answering keeps its read boundaries in a bounded
+            // queue instead of merging in the kernel buffer, so batching on answers everything
+            // waiting as one payload and batching off one read per call. The reader takes the
+            // BufReader itself, so bytes it already buffered behind the CONNECT headers are
+            // delivered first.
             reader.get_mut().end_frame();
-            'tunnel: loop {
-                match reader.read(&mut buffer).await {
-                    Ok(0) => {
+            let mut inbound = crate::client::inbound_queue::InboundQueue::spawn(
+                &app_state_clone,
+                client_id,
+                reader,
+            )
+            .await;
+            use crate::client::inbound_queue::Inbound;
+            loop {
+                let (mut data, mut ended) = match inbound.recv().await {
+                    Inbound::Data(data) => (data, None),
+                    other => (Vec::new(), Some(other)),
+                };
+                if !data.is_empty() {
+                    let batching = app_state_clone
+                        .client_conversation_settings(client_id)
+                        .await
+                        .is_some_and(|(_, batching)| batching);
+                    if batching {
+                        ended = inbound.drain_into(&mut data);
+                    }
+                    trace!(
+                        "HTTP proxy client {} received {} bytes via tunnel",
+                        client_id,
+                        data.len()
+                    );
+                    if answer_tunnel_data(
+                        &llm_client,
+                        &app_state_clone,
+                        &status_tx_clone,
+                        client_id,
+                        &client_data_clone,
+                        &write_half_clone,
+                        &data,
+                    )
+                    .await
+                    {
+                        info!("HTTP proxy client {} disconnecting", client_id);
+                        app_state_clone
+                            .update_client_status(client_id, ClientStatus::Disconnected)
+                            .await;
+                        let _ = status_tx_clone.send(format!(
+                            "[CLIENT] HTTP proxy client {} disconnected",
+                            client_id
+                        ));
+                        let _ = status_tx_clone.send("__UPDATE_UI__".to_string());
+                        break;
+                    }
+                }
+                match ended {
+                    Some(Inbound::Closed) => {
                         info!("HTTP proxy client {} disconnected", client_id);
                         app_state_clone
                             .update_client_status(client_id, ClientStatus::Disconnected)
@@ -529,133 +567,15 @@ impl HttpProxyClient {
                         let _ = status_tx_clone.send("__UPDATE_UI__".to_string());
                         break;
                     }
-                    Ok(n) => {
-                        let data = buffer[..n].to_vec();
-                        trace!(
-                            "HTTP proxy client {} received {} bytes via tunnel",
-                            client_id,
-                            n
-                        );
-
-                        // Handle data with LLM
-                        let mut client_data_lock = client_data_clone.lock().await;
-
-                        match client_data_lock.state {
-                            ConnectionState::Idle => {
-                                // Process immediately
-                                client_data_lock.state = ConnectionState::Processing;
-                                drop(client_data_lock);
-
-                                // Call LLM
-                                if let Some(instruction) =
-                                    app_state_clone.get_instruction_for_client(client_id).await
-                                {
-                                    let protocol = Arc::new(crate::client::http_proxy::actions::HttpProxyClientProtocol::new());
-                                    let event = Event::new(
-                                        &HTTP_PROXY_RESPONSE_RECEIVED_EVENT,
-                                        serde_json::json!({
-                                            "data_hex": hex::encode(&data),
-                                            "data_length": data.len(),
-                                        }),
-                                    );
-
-                                    // Same reasoning as the tunnel-established call above:
-                                    // the guard must not survive into the match arms.
-                                    let memory =
-                                        { client_data_clone.lock().await.memory.clone() };
-                                    match call_llm_for_client(
-                                        &llm_client,
-                                        &app_state_clone,
-                                        client_id.to_string(),
-                                        &instruction,
-                                        &memory,
-                                        Some(&event),
-                                        protocol.as_ref(),
-                                        &status_tx_clone,
-                                    )
-                                    .await
-                                    {
-                                        Ok(ClientLlmResult {
-                                            actions,
-                                            memory_updates,
-                                        }) => {
-                                            // Update memory
-                                            if let Some(mem) = memory_updates {
-                                                client_data_clone.lock().await.memory = mem;
-                                            }
-
-                                            // Execute actions
-                                            for action in actions {
-                                                if let Ok(result) =
-                                                    protocol.as_ref().execute_action(action)
-                                                {
-                                                    match result {
-                                                        ClientActionResult::SendData(bytes) => {
-                                                            if write_half_clone
-                                                                .lock()
-                                                                .await
-                                                                .write_all(&bytes)
-                                                                .await
-                                                                .is_ok()
-                                                            {
-                                                                trace!("HTTP proxy client {} sent {} bytes", client_id, bytes.len());
-                                                            }
-                                                        }
-                                                        ClientActionResult::Disconnect => {
-                                                            // Labeled: a bare `break` here only
-                                                            // exits the actions for-loop and the
-                                                            // tunnel keeps running.
-                                                            info!("HTTP proxy client {} disconnecting", client_id);
-                                                            app_state_clone
-                                                                .update_client_status(client_id, ClientStatus::Disconnected)
-                                                                .await;
-                                                            let _ = status_tx_clone.send(format!(
-                                                                "[CLIENT] HTTP proxy client {} disconnected",
-                                                                client_id
-                                                            ));
-                                                            let _ = status_tx_clone.send("__UPDATE_UI__".to_string());
-                                                            break 'tunnel;
-                                                        }
-                                                        _ => {}
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        Err(e) => {
-                                            error!(
-                                                "LLM error for HTTP proxy client {}: {}",
-                                                client_id, e
-                                            );
-                                        }
-                                    }
-                                }
-
-                                // Process queued data if any
-                                let mut client_data_lock = client_data_clone.lock().await;
-                                if !client_data_lock.queued_data.is_empty() {
-                                    client_data_lock.queued_data.clear();
-                                }
-                                client_data_lock.state = ConnectionState::Idle;
-                            }
-                            ConnectionState::Processing => {
-                                // Queue data
-                                client_data_lock.queued_data.extend_from_slice(&data);
-                                client_data_lock.state = ConnectionState::Accumulating;
-                            }
-                            ConnectionState::Accumulating => {
-                                // Continue queuing
-                                client_data_lock.queued_data.extend_from_slice(&data);
-                            }
-                        }
-                    }
-                    Err(e) => {
+                    Some(Inbound::Failed(e)) => {
                         error!("HTTP proxy client {} read error: {}", client_id, e);
                         app_state_clone
-                            .update_client_status(client_id, ClientStatus::Error(e.to_string()))
+                            .update_client_status(client_id, ClientStatus::Error(e))
                             .await;
                         let _ = status_tx_clone.send("__UPDATE_UI__".to_string());
                         break;
                     }
+                    _ => {}
                 }
             }
             }
@@ -668,6 +588,71 @@ impl HttpProxyClient {
 
         Ok(local_addr)
     }
+}
+
+/// Ask the model about one payload from the tunnel and carry out its answer. Returns `true`
+/// when it asked to disconnect, which ends the tunnel rather than just this answer.
+async fn answer_tunnel_data<W>(
+    llm_client: &OllamaClient,
+    app_state: &Arc<AppState>,
+    status_tx: &mpsc::UnboundedSender<String>,
+    client_id: ClientId,
+    client_data: &Arc<Mutex<ClientData>>,
+    write_half: &Arc<Mutex<W>>,
+    data: &[u8],
+) -> bool
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let Some(instruction) = app_state.get_instruction_for_client(client_id).await else {
+        return false;
+    };
+    let protocol = HttpProxyClientProtocol::new();
+    let event = Event::new(
+        &HTTP_PROXY_RESPONSE_RECEIVED_EVENT,
+        serde_json::json!({
+            "data_hex": hex::encode(data),
+            "data_length": data.len(),
+        }),
+    );
+    // Copied out under its own guard: the `Ok` arm locks the same mutex again.
+    let memory = { client_data.lock().await.memory.clone() };
+    match call_llm_for_client(
+        llm_client,
+        app_state,
+        client_id.to_string(),
+        &instruction,
+        &memory,
+        Some(&event),
+        &protocol,
+        status_tx,
+    )
+    .await
+    {
+        Ok(ClientLlmResult {
+            actions,
+            memory_updates,
+        }) => {
+            if let Some(mem) = memory_updates {
+                client_data.lock().await.memory = mem;
+            }
+            for action in actions {
+                match protocol.execute_action(action) {
+                    Ok(ClientActionResult::SendData(bytes)) => {
+                        if write_half.lock().await.write_all(&bytes).await.is_ok() {
+                            trace!("HTTP proxy client {} sent {} bytes", client_id, bytes.len());
+                        }
+                    }
+                    Ok(ClientActionResult::Disconnect) => return true,
+                    _ => {}
+                }
+            }
+        }
+        Err(e) => {
+            error!("LLM error for HTTP proxy client {}: {}", client_id, e);
+        }
+    }
+    false
 }
 
 /// The CONNECT request the client puts on the wire — the one encoder for both the LLM's

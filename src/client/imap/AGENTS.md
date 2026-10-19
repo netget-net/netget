@@ -295,3 +295,9 @@ documents: the IMAP server's greeting is **not** deterministic — without an `i
 handler it writes `* BYE` and hangs up — and the `imap_auth` rule must interpolate
 `{{event.tag}}`, because `async_imap` picks its own tags and the server checks the tag rather
 than substring-matching.
+
+## Batching
+
+Declared `BatchingMode::Unsupported`: nothing can arrive while the model is answering.
+`async_imap` owns the socket, there is no IDLE, and every event is the result of the client's
+own verb, reported (and answered) before the next verb runs.
