@@ -9,3 +9,8 @@ attached). `amqp1_receive` attaches a receiving link, grants `count` credit, acc
 within `timeout_secs`, detaches and reports `amqp1_messages`. A null terminus in the server's
 attach counts as a refusal only if its detach follows within a second: rhea's broker answers an
 accepted attach without echoing the terminus.
+
+Batching is declared `Unsupported`: nothing arrives unsolicited. Every event is the result of
+an action the client itself took — an `amqp1_outcome` for its send, an `amqp1_messages` for its
+receive, which already gathers every transfer that arrived within the window into one event —
+so there is no traffic pushed during a model call for a batch to gather.

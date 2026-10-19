@@ -180,6 +180,9 @@ impl Protocol for Amqp1ClientProtocol {
             .notes("One session; links are attached per address on demand; no transactions or link recovery.")
             .max_inbound_bytes(crate::server::amqp1::frame::MAX_FRAME as usize)
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
+            // Nothing is pushed: every event is the result of the client's own send or receive
+            // (a receive already gathers its transfers into one event), so there is no
+            // unsolicited traffic arriving during a call to batch.
             .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
     }
