@@ -44,6 +44,7 @@ pub mod igmp;
 pub mod imap;
 pub mod ipp;
 pub mod irc;
+pub mod iscsi;
 #[cfg(all(unix, feature = "libpcap"))]
 pub mod isis;
 pub mod jsonrpc;

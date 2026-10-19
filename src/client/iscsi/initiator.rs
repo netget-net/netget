@@ -326,8 +326,10 @@ impl Session {
                 let nsg = resp.flags() & 0x03;
                 if nsg == stage::FULL_FEATURE {
                     ensure!(auth_done, "the target ended the login before authenticating");
+                    // RFC 7143 has the final response carry the new session's TSIH; gotgt
+                    // 0.2.2 sends 0. Nothing here depends on it (one connection, no
+                    // reinstatement), so a missing TSIH is reported rather than refused.
                     let tsih = resp.u16_at(14);
-                    ensure!(tsih != 0, "the target finished the login without a TSIH");
                     let digests = Digests {
                         header: params.header_digest,
                         data: params.data_digest,

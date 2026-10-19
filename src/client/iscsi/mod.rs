@@ -23,7 +23,7 @@ use std::net::SocketAddr;
 use tokio::sync::mpsc;
 
 /// A handler chain (result → event → command …) stops after this many follow-ups.
-pub const MAX_FOLLOWUP_DEPTH: usize = 8;
+pub const MAX_FOLLOWUP_DEPTH: usize = 16;
 pub const DEFAULT_INITIATOR_NAME: &str = "iqn.2026-10.net.netget:initiator";
 pub const DEFAULT_DIGESTS: &str = "either";
 
@@ -445,6 +445,7 @@ impl Initiator<'_> {
                 let data = json!({
                     "target_name": target,
                     "logged_in": true,
+                    "tsih": outcome.tsih,
                     "status": status_text(outcome.status),
                     "status_meaning": login_status::describe(outcome.status),
                     "alias": s.alias,
