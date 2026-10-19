@@ -4,7 +4,7 @@ pub mod actions;
 pub use actions::AmqpClientProtocol;
 
 use crate::client::amqp::actions::AMQP_CLIENT_CONNECTED_EVENT;
-use crate::client::llm_budget::call_llm_for_client;
+use crate::client::llm_budget::{call_llm_for_client, call_llm_for_client_batch};
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::llm::ollama_client::OllamaClient;
 use crate::llm::ClientLlmResult;
@@ -325,29 +325,59 @@ fn apply_action<'a>(
                         let consume_llm = llm_client.clone();
                         let consume_tx = status_tx.clone();
                         let consume_queue = queue.clone();
+                        // Deliveries that arrive while the model answers wait, whole, in lapin's
+                        // consumer buffer. With batching on, everything already there is taken
+                        // into the next call (one event per delivery); with it off, one per
+                        // call. Each is acked here as it is taken, so none waits on the model.
                         let handle = tokio::spawn(async move {
-                            use futures::StreamExt;
+                            use futures::{FutureExt, StreamExt};
                             let mut consumer = consumer;
+                            let message = |delivery: lapin::message::Delivery| {
+                                let body = String::from_utf8_lossy(&delivery.data).to_string();
+                                let event = Event::new(
+                                    &crate::client::amqp::actions::AMQP_CLIENT_MESSAGE_RECEIVED_EVENT,
+                                    serde_json::json!({
+                                        "queue_name": consume_queue,
+                                        "message_body": body,
+                                    }),
+                                );
+                                (delivery, event)
+                            };
                             while let Some(delivery) = consumer.next().await {
                                 let Ok(delivery) = delivery else { continue };
-                                let body = String::from_utf8_lossy(&delivery.data).to_string();
-                                let _ = delivery
-                                    .ack(lapin::options::BasicAckOptions::default())
-                                    .await;
-                                raise_amqp_event(
-                            &crate::client::amqp::actions::AMQP_CLIENT_MESSAGE_RECEIVED_EVENT,
-                            serde_json::json!({
-                                "queue_name": consume_queue,
-                                "message_body": body,
-                            }),
-                            &consume_session,
-                            0,
-                            client_id,
-                            &consume_state,
-                            &consume_llm,
-                            &consume_tx,
-                        )
-                        .await;
+                                let mut taken = vec![message(delivery)];
+                                // Read per delivery: batching is hot-changeable.
+                                if consume_state
+                                    .client_conversation_settings(client_id)
+                                    .await
+                                    .is_some_and(|(_, batching)| batching)
+                                {
+                                    while taken.len() < crate::protocol::metadata::MAX_BATCH_EVENTS
+                                    {
+                                        match consumer.next().now_or_never() {
+                                            Some(Some(Ok(next))) => taken.push(message(next)),
+                                            Some(Some(Err(_))) => continue,
+                                            _ => break,
+                                        }
+                                    }
+                                }
+                                let mut events = Vec::with_capacity(taken.len());
+                                for (delivery, event) in taken {
+                                    let _ = delivery
+                                        .ack(lapin::options::BasicAckOptions::default())
+                                        .await;
+                                    events.push(event);
+                                }
+                                raise_amqp_events(
+                                    &events,
+                                    &consume_session,
+                                    0,
+                                    client_id,
+                                    &consume_state,
+                                    &consume_llm,
+                                    &consume_tx,
+                                )
+                                .await;
                             }
                         });
                         state.register_client_task(client_id, handle).await;
@@ -546,6 +576,30 @@ async fn raise_amqp_event(
     llm_client: &OllamaClient,
     status_tx: &mpsc::UnboundedSender<String>,
 ) {
+    raise_amqp_events(
+        &[Event::new(event_type, data)],
+        session,
+        depth,
+        client_id,
+        state,
+        llm_client,
+        status_tx,
+    )
+    .await;
+}
+
+/// [`raise_amqp_event`] for several events answered in one model call — the deliveries a
+/// batching consumer found waiting. The chain that follows is bounded the same way.
+#[allow(clippy::too_many_arguments)]
+async fn raise_amqp_events(
+    events: &[Event],
+    session: &Arc<AmqpSession>,
+    depth: u8,
+    client_id: ClientId,
+    state: &Arc<AppState>,
+    llm_client: &OllamaClient,
+    status_tx: &mpsc::UnboundedSender<String>,
+) {
     let Some(instruction) = state.get_instruction_for_client(client_id).await else {
         return;
     };
@@ -553,14 +607,13 @@ async fn raise_amqp_event(
         .get_memory_for_client(client_id)
         .await
         .unwrap_or_default();
-    let event = Event::new(event_type, data);
-    match call_llm_for_client(
+    match call_llm_for_client_batch(
         llm_client,
         state,
         client_id.to_string(),
         &instruction,
         &memory,
-        Some(&event),
+        events,
         &AmqpClientProtocol::new(),
         status_tx,
     )

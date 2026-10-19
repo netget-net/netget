@@ -209,7 +209,9 @@ impl Protocol for AmqpClientProtocol {
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // Deliveries that arrive while the model answers wait in lapin's consumer buffer
+            // and are answered in one call, one event each (the `consume` task in mod.rs).
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
 
