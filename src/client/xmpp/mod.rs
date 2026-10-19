@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info, trace, warn};
 
-use crate::client::llm_budget::call_llm_for_client;
+use crate::client::llm_budget::{call_llm_for_client, call_llm_for_client_batch};
 use crate::client::xmpp::actions::{
     XMPP_CLIENT_CONNECTED_EVENT, XMPP_CLIENT_MESSAGE_RECEIVED_EVENT,
     XMPP_CLIENT_PRESENCE_RECEIVED_EVENT,
@@ -35,20 +35,20 @@ use xmpp_parsers::{
     presence::{Presence, Show as PresenceShow, Type as PresenceType},
 };
 
-/// Connection state for LLM processing
-#[derive(Debug, Clone, PartialEq)]
-enum ConnectionState {
-    Idle,
-    Processing,
-    Accumulating,
-}
-
-/// Per-client data for LLM handling
+/// Per-client data for LLM handling.
+///
+/// There used to be an `Idle`/`Processing`/`Accumulating` machine with a `queued_events`
+/// list here. The event loop awaited every model call inline, so the machine was always
+/// `Idle` when examined and nothing was ever queued; meanwhile the loop stopped polling the
+/// stream and stopped writing the model's own stanzas until the call ended. Stanzas now go to
+/// the answering task over a queue ([`EVENT_QUEUE`]).
 struct ClientData {
-    state: ConnectionState,
-    queued_events: Vec<XmppEvent>,
     memory: String,
 }
+
+/// How many incoming stanzas may wait while the model answers an earlier one; past it the
+/// event loop stops taking stanzas from tokio-xmpp, which holds them, and TCP the server.
+const EVENT_QUEUE: usize = crate::protocol::metadata::MAX_BATCH_EVENTS;
 
 /// How long `connect()` waits for the server to accept the session when the
 /// `session_timeout_secs` startup parameter is not given.
@@ -226,8 +226,6 @@ impl XmppClientConnection {
 
         // Initialize client data
         let client_data = Arc::new(Mutex::new(ClientData {
-            state: ConnectionState::Idle,
-            queued_events: Vec::new(),
             memory: String::new(),
         }));
 
@@ -264,24 +262,64 @@ impl XmppClientConnection {
         });
         app_state.register_client_task(client_id, cmd_task).await;
 
+        // The answering task: the event loop hands it every stanza the model is asked about,
+        // and it answers them in order - one per call, or with batching on everything waiting
+        // in one call. Running it apart from the event loop keeps the loop polling the stream
+        // and writing the model's stanzas while a call is in flight.
+        let (event_tx, mut event_rx) = mpsc::channel::<Event>(EVENT_QUEUE);
+        let answer_llm = llm_client.clone();
+        let answer_state = app_state.clone();
+        let answer_status_tx = status_tx.clone();
+        let answer_protocol = protocol.clone();
+        let answer_stanza_tx = stanza_tx.clone();
+        let answer_data = client_data.clone();
+        let answer_ended = ended.clone();
+        app_state
+            .spawn_client_task(client_id, async move {
+                while let Some(event) = event_rx.recv().await {
+                    let mut events = vec![event];
+                    if answer_state
+                        .client_conversation_settings(client_id)
+                        .await
+                        .is_some_and(|(_, batching)| batching)
+                    {
+                        while events.len() < crate::protocol::metadata::MAX_BATCH_EVENTS {
+                            match event_rx.try_recv() {
+                                Ok(more) => events.push(more),
+                                Err(_) => break,
+                            }
+                        }
+                    }
+                    // A session the model has ended asks it nothing more.
+                    if answer_ended.is_cancelled() {
+                        break;
+                    }
+                    Self::answer_events(
+                        &events,
+                        &answer_llm,
+                        &answer_state,
+                        client_id,
+                        &answer_data,
+                        answer_protocol.clone(),
+                        answer_stanza_tx.clone(),
+                        &answer_status_tx,
+                        &answer_ended,
+                    )
+                    .await;
+                }
+            })
+            .await;
+
         // Spawn event loop that handles both sending and receiving
         // Registered with AppState so stop_client can abort this task —
         // dropping a JoinHandle only detaches it in Tokio.
         let task_registrar = app_state.clone();
-        let loop_llm = llm_client.clone();
         let loop_state = app_state.clone();
         let loop_status_tx = status_tx.clone();
-        let loop_protocol = protocol.clone();
-        let loop_stanza_tx = stanza_tx.clone();
-        let loop_data = client_data.clone();
         let loop_ended = ended.clone();
         let task_handle = tokio::spawn(async move {
-            let llm_client = loop_llm;
             let app_state = loop_state;
             let status_tx = loop_status_tx;
-            let protocol = loop_protocol;
-            let stanza_tx = loop_stanza_tx;
-            let client_data = loop_data;
             let ended = loop_ended;
             // Aborting this task (`remove_client`) drops the guard, which ends the client and
             // so stops tokio-xmpp dialling, even though the code below never runs.
@@ -370,59 +408,19 @@ impl XmppClientConnection {
                     other => other,
                 };
 
-                // Handle event with LLM
-                let mut client_data_lock = client_data.lock().await;
-
-                match client_data_lock.state {
-                    ConnectionState::Idle => {
-                        // Process immediately
-                        client_data_lock.state = ConnectionState::Processing;
-                        drop(client_data_lock);
-
-                        Self::handle_xmpp_event(
-                            xmpp_event,
-                            &llm_client,
-                            &app_state,
-                            client_id,
-                            &client_data,
-                            protocol.clone(),
-                            stanza_tx.clone(),
-                            &status_tx,
-                            &ended,
-                        ).await;
-
-                        // Process queued events
-                        let mut client_data_lock = client_data.lock().await;
-                        let queued = std::mem::take(&mut client_data_lock.queued_events);
-                        client_data_lock.state = ConnectionState::Idle;
-                        drop(client_data_lock);
-
-                        for queued_event in queued {
-                            // A session the model has just ended asks it nothing more.
-                            if ended.is_cancelled() {
-                                break;
+                // To the answering task. Waiting for room holds the stream (tokio-xmpp keeps
+                // what it has not been asked for), but not the end of the session.
+                if let Some(event) = Self::event_of(xmpp_event, client_id) {
+                    tokio::select! {
+                        sent = event_tx.send(event) => {
+                            if sent.is_err() {
+                                break "the answering task ended";
                             }
-                            Self::handle_xmpp_event(
-                                queued_event,
-                                &llm_client,
-                                &app_state,
-                                client_id,
-                                &client_data,
-                                protocol.clone(),
-                                stanza_tx.clone(),
-                                &status_tx,
-                                &ended,
-                            ).await;
                         }
-                    }
-                    ConnectionState::Processing => {
-                        // Queue event
-                        client_data_lock.queued_events.push(xmpp_event);
-                        client_data_lock.state = ConnectionState::Accumulating;
-                    }
-                    ConnectionState::Accumulating => {
-                        // Continue queuing
-                        client_data_lock.queued_events.push(xmpp_event);
+                        _ = ended.cancelled() => {
+                            info!("XMPP client {} closing the stream on request", client_id);
+                            break "the client was closed";
+                        }
                     }
                 }
                     }
@@ -628,19 +626,9 @@ impl XmppClientConnection {
         Ok((jid, password))
     }
 
-    /// Handle an XMPP event with LLM
-    async fn handle_xmpp_event(
-        xmpp_event: XmppEvent,
-        llm_client: &OllamaClient,
-        app_state: &Arc<AppState>,
-        client_id: ClientId,
-        client_data: &Arc<Mutex<ClientData>>,
-        protocol: Arc<XmppClientProtocol>,
-        stanza_tx: Arc<mpsc::UnboundedSender<StanzaRequest>>,
-        status_tx: &mpsc::UnboundedSender<String>,
-        ended: &CancellationToken,
-    ) {
-        let event_opt = match xmpp_event {
+    /// What the model is asked about for one incoming stream event, if anything.
+    fn event_of(xmpp_event: XmppEvent, client_id: ClientId) -> Option<Event> {
+        match xmpp_event {
             // Acted on by the event loop before an event gets here.
             XmppEvent::Online { .. } => None,
             XmppEvent::Disconnected(e) => {
@@ -718,51 +706,68 @@ impl XmppClientConnection {
                     }
                 }
             }
+        }
+    }
+
+    /// Ask the model about one or more stanzas - several when they arrived during the previous
+    /// call and the client batches - and run its actions.
+    #[allow(clippy::too_many_arguments)]
+    async fn answer_events(
+        events: &[Event],
+        llm_client: &OllamaClient,
+        app_state: &Arc<AppState>,
+        client_id: ClientId,
+        client_data: &Arc<Mutex<ClientData>>,
+        protocol: Arc<XmppClientProtocol>,
+        stanza_tx: Arc<mpsc::UnboundedSender<StanzaRequest>>,
+        status_tx: &mpsc::UnboundedSender<String>,
+        ended: &CancellationToken,
+    ) {
+        let Some(instruction) = app_state.get_instruction_for_client(client_id).await else {
+            return;
         };
-
-        if let Some(event) = event_opt {
-            if let Some(instruction) = app_state.get_instruction_for_client(client_id).await {
-                match call_llm_for_client(
-                    llm_client,
-                    app_state,
-                    client_id.to_string(),
-                    &instruction,
-                    &client_data.lock().await.memory,
-                    Some(&event),
-                    protocol.as_ref(),
-                    status_tx,
-                )
-                .await
-                {
-                    Ok(ClientLlmResult {
-                        actions,
-                        memory_updates,
-                    }) => {
-                        if let Some(mem) = memory_updates {
-                            client_data.lock().await.memory = mem;
-                        }
-
-                        // Execute actions; nothing after a `disconnect` runs.
-                        for action in actions {
-                            if ended.is_cancelled() {
-                                break;
-                            }
-                            Self::execute_action_result(
-                                action,
-                                protocol.clone(),
-                                stanza_tx.clone(),
-                                client_id,
-                                app_state,
-                                status_tx,
-                                ended,
-                            )
-                            .await;
-                        }
-                    }
-                    Err(e) => {
-                        error!("LLM error for XMPP client {}: {}", client_id, e);
-                    }
+        // Copied out first: a guard taken inline in the call's arguments would live to the end
+        // of the `match` and deadlock the memory write in its arm.
+        let memory = client_data.lock().await.memory.clone();
+        match call_llm_for_client_batch(
+            llm_client,
+            app_state,
+            client_id.to_string(),
+            &instruction,
+            &memory,
+            events,
+            protocol.as_ref(),
+            status_tx,
+        )
+        .await
+        {
+            Ok(ClientLlmResult {
+                actions,
+                memory_updates,
+            }) => {
+                if let Some(mem) = memory_updates {
+                    client_data.lock().await.memory = mem;
                 }
+
+                // Execute actions; nothing after a `disconnect` runs.
+                for action in actions {
+                    if ended.is_cancelled() {
+                        break;
+                    }
+                    Self::execute_action_result(
+                        action,
+                        protocol.clone(),
+                        stanza_tx.clone(),
+                        client_id,
+                        app_state,
+                        status_tx,
+                        ended,
+                    )
+                    .await;
+                }
+            }
+            Err(e) => {
+                error!("LLM error for XMPP client {}: {}", client_id, e);
             }
         }
     }
