@@ -33,7 +33,7 @@ Client state tracked in `ClientInstance`:
 
 - `pop3_server`: Server hostname
 - `remote_addr`: Full server address with port
-- Connection state machine: Idle → Processing → Idle
+- Responses framed on a registered task into a bounded queue (see "Batching")
 
 ### TLS Support — there is none, and `use_tls: true` is refused
 
@@ -173,7 +173,7 @@ a `select!` arm. `send_pop3_command` yields `ClientActionResult::Custom`, which 
 
 ### Read Loop
 
-- State machine: Idle → Processing → Idle
+- Responses framed on a registered task into a bounded queue (see "Batching")
 - Reads line-by-line from server
 - Detects multiline responses (LIST, RETR, TOP, UIDL)
 - Calls LLM with each response
@@ -245,3 +245,13 @@ CR/LF injection is rejected. A cancelled/failed write poisons the writer so futu
 cannot reuse ambiguous framing. Outstanding expectations are capped at 1024. Whole writes,
 greetings and multiline bodies have 30-second deadlines; an idle established session may wait
 for the first byte, after which each partial response line has a 30-second completion deadline.
+
+## Batching (what arrives while the model is answering)
+
+A POP3 server only answers, but a model often sends several commands in one answer (`USER`
+then `PASS`, `LIST` then `RETR`), and the replies to the later ones arrive while it is still
+on the first. Responses are framed (status line, dot-terminated body where the command calls
+for one, decided by the shared `CommandWriter`) on a registered task into a bounded queue
+(32). With batching off each response is its own model call; with it on everything waiting is
+one call through `call_llm_for_client_batch`, one `pop3_response_received` event per
+response. Declared `BatchingMode::On`. Test: `tests/client/pop3/batching_test.rs`.

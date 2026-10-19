@@ -68,22 +68,18 @@ generic `handle_stream_client_command` arm executes it; `disconnect` half-closes
 and the read loop's EOF path runs. The handle is removed on every loop exit. No `Custom`-result
 gap. Proven with zero LLM calls in `tests/client/ftp/command_channel_test.rs`.
 
-## State Machine
+## Batching (what arrives while the model is answering)
 
-```
-                ┌─────────────────────────────────────────┐
-                │                                         │
-                ▼                                         │
-            ┌───────┐  Response received   ┌────────────┐ │
-            │ Idle  │───────────────────>│ Processing │──┘
-            └───────┘                      └────────────┘
-                ▲                                │
-                │  LLM response complete         │ More data
-                │                                ▼
-                │                          ┌──────────────┐
-                └──────────────────────────│ Accumulating │
-                                           └──────────────┘
-```
+The control channel is read on a registered task, one bounded-queue item per line (32). An
+FTP server sends lines the client did not just ask for — the rest of a multi-line reply, a 226
+after a 150, the replies to several commands sent in one answer — and those now wait in the
+queue with their boundaries kept. With batching off each line is its own model call; with it
+on everything waiting is one call through `call_llm_for_client_batch`, one `ftp_response`
+event per line. Declared `BatchingMode::On`. This replaced an Idle/Processing/Accumulating
+machine that could never leave Idle and cleared a queue nothing filled. A `disconnect` the
+model returns now ends the session (it used to break only the loop over that answer's
+actions), and the memory is copied out before the call instead of being borrowed under a
+lock the success arm locks again. Test: `tests/client/ftp/batching_test.rs`.
 
 ## Limitations
 

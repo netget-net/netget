@@ -174,7 +174,10 @@ impl Protocol for Pop3ClientProtocol {
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // Whole responses that arrive while the model answers an earlier one (the rest of a
+            // multi-command answer, an injected command's reply) wait in a queue; with batching
+            // on they are answered in one call, one event per response.
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
 
