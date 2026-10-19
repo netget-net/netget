@@ -69,7 +69,11 @@ mod irc_client_tests {
                         "type": "open_server",
                         "port": 0,
                         "base_stack": "IRC",
-                        "instruction": "Accept IRC clients and log messages"
+                        "instruction": "Accept IRC clients and log messages",
+                        // The server batches by default and would answer the client's NICK and
+                        // USER in one call; these tests mock one call per line, and what they
+                        // test is the client. Server batching: tests/server/irc/batching_test.rs.
+                        "batching": false
                     }
                 ]))
                 .expect_calls(1)
@@ -164,7 +168,9 @@ mod irc_client_tests {
                         "type": "open_server",
                         "port": 0,
                         "base_stack": "IRC",
-                        "instruction": "Accept channel joins and log PRIVMSG"
+                        "instruction": "Accept channel joins and log PRIVMSG",
+                        // Server batching off: see the first test.
+                        "batching": false
                     }
                 ]))
                 .expect_calls(1)
@@ -269,7 +275,9 @@ mod irc_client_tests {
                         "type": "open_server",
                         "port": 0,
                         "base_stack": "IRC",
-                        "instruction": "Send welcome PRIVMSG when client joins #bot"
+                        "instruction": "Send welcome PRIVMSG when client joins #bot",
+                        // Server batching off: see the first test.
+                        "batching": false
                     }
                 ]))
                 .expect_calls(1)
