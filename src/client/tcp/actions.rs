@@ -180,7 +180,9 @@ impl Protocol for TcpClientProtocol {
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // What the server sends while the model answers waits in a queue: joined into one
+            // payload with batching on, one read per call with it off (`client/tcp/mod.rs`).
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
     fn description(&self) -> &'static str {

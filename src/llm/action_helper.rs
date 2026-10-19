@@ -477,7 +477,41 @@ pub async fn batch_goes_to_the_model(
     if !batching || state.get_easy_for_server(server_id).await.is_some() {
         return false;
     }
-    let Some(config) = state.get_event_handler_config(server_id).await else {
+    routes_to_one_model_call(
+        state.get_event_handler_config(server_id).await.as_ref(),
+        event_ids,
+    )
+}
+
+/// The client twin of [`batch_goes_to_the_model`]: the client batches and no event in the
+/// batch is answered by a script, static or manual rule, or by an `llm` rule with a different
+/// instruction from the rest.
+pub async fn client_batch_goes_to_the_model(
+    state: &AppState,
+    client_id: crate::state::ClientId,
+    event_ids: &[&str],
+) -> bool {
+    let batching = state
+        .client_conversation_settings(client_id)
+        .await
+        .is_some_and(|(_, batching)| batching);
+    batching
+        && routes_to_one_model_call(
+            state
+                .get_client_event_handler_config(client_id)
+                .await
+                .as_ref(),
+            event_ids,
+        )
+}
+
+/// Whether every event id is routed to the model by the same rule (or by none). Shared by the
+/// server and client batch checks, so the two cannot disagree about what a rule means.
+fn routes_to_one_model_call(
+    config: Option<&crate::scripting::EventHandlerConfig>,
+    event_ids: &[&str],
+) -> bool {
+    let Some(config) = config else {
         return true;
     };
     let mut instruction: Option<Option<String>> = None;
@@ -939,6 +973,48 @@ pub async fn call_llm_for_client(
     protocol: &dyn crate::llm::actions::client_trait::Client,
     status_tx: &tokio::sync::mpsc::UnboundedSender<String>,
 ) -> Result<ClientLlmResult> {
+    call_llm_for_client_with_earlier(
+        llm_client,
+        state,
+        client_id,
+        instruction,
+        memory,
+        event,
+        &[],
+        protocol,
+        status_tx,
+    )
+    .await
+}
+
+/// [`call_llm_for_client`] answering `event` together with `earlier` — events that arrived on
+/// the client's session while the model was answering, oldest first. They are listed above
+/// the trigger exactly as a server batch lists them (see [`call_llm_batch`]); the model may
+/// answer each, some or none. Reached through `crate::client::llm_budget::call_llm_for_client_batch`,
+/// which decides whether a batch may go to the model at all.
+#[allow(clippy::too_many_arguments)]
+pub async fn call_llm_for_client_with_earlier(
+    llm_client: &OllamaClient,
+    state: &AppState,
+    client_id: String,
+    instruction: &str,
+    memory: &str,
+    event: Option<&Event>,
+    earlier: &[Event],
+    protocol: &dyn crate::llm::actions::client_trait::Client,
+    status_tx: &tokio::sync::mpsc::UnboundedSender<String>,
+) -> Result<ClientLlmResult> {
+    for earlier_event in earlier {
+        anyhow::ensure!(
+            crate::utils::json_budget::within_budget(
+                &earlier_event.data,
+                crate::scripting::event_handler::MAX_INTERPOLATION_BYTES,
+                crate::scripting::event_handler::MAX_INTERPOLATION_NODES,
+                crate::scripting::event_handler::MAX_INTERPOLATION_DEPTH,
+            ),
+            "event exceeds the shared JSON budget"
+        );
+    }
     if let Some(event) = event {
         anyhow::ensure!(
             crate::utils::json_budget::within_budget(
@@ -952,6 +1028,9 @@ pub async fn call_llm_for_client(
     }
     let private_payloads = event
         .is_some_and(|event| crate::utils::redact::contains_credentials(&event.data))
+        || earlier
+            .iter()
+            .any(|e| crate::utils::redact::contains_credentials(&e.data))
         || crate::utils::redact::actions_have_credentials(
             &crate::llm::actions::client_trait::client_llm_action_set(protocol, state, event),
         );
@@ -962,6 +1041,7 @@ pub async fn call_llm_for_client(
         instruction,
         memory,
         event,
+        earlier,
         protocol,
         status_tx,
         private_payloads,
@@ -984,6 +1064,7 @@ async fn call_llm_for_client_inner(
     instruction: &str,
     memory: &str,
     event: Option<&Event>,
+    earlier: &[Event],
     protocol: &dyn crate::llm::actions::client_trait::Client,
     status_tx: &tokio::sync::mpsc::UnboundedSender<String>,
     private_payloads: bool,
@@ -1000,6 +1081,18 @@ async fn call_llm_for_client_inner(
     // See that function for why the client path unions where the server path narrows.
     let mut all_actions =
         crate::llm::actions::client_trait::client_llm_action_set(protocol, state, event);
+    // A batch may hold events of other types; each one's own answers are on offer too.
+    for earlier_event in earlier {
+        for action in crate::llm::actions::client_trait::client_llm_action_set(
+            protocol,
+            state,
+            Some(earlier_event),
+        ) {
+            if !all_actions.iter().any(|a| a.name == action.name) {
+                all_actions.push(action);
+            }
+        }
+    }
 
     // A client has a memory — `ClientInstance::memory`, prefixed to every message below — but
     // no way to write it, so anything it learned across events was lost. Both actions are in
@@ -1045,6 +1138,12 @@ async fn call_llm_for_client_inner(
         )
     } else {
         "Waiting for instructions".to_string()
+    };
+    let user_message = match event {
+        Some(ev) if !earlier.is_empty() => {
+            format!("{}\n{}", render_unanswered(earlier, ev), user_message)
+        }
+        _ => user_message,
     };
 
     // What has already happened on this client's session, ahead of what it is answering now.
