@@ -302,7 +302,9 @@ impl Protocol for LmtpClientProtocol {
             .notes("Plain TCP only (no STARTTLS or AUTH). Replies are bounded to 1000-byte lines and 64 lines; every connect, write and reply has a 30 s deadline; bodies up to 1 MiB.")
             .max_inbound_bytes(wire::MAX_LINE_BYTES)
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // Results of the model's later actions (and injected ones) queue while it answers an
+            // earlier one; with batching on the dispatcher answers everything waiting together.
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
     fn example_prompt(&self) -> &'static str {
