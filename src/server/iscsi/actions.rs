@@ -329,6 +329,17 @@ impl Protocol for IscsiProtocol {
                 json!("targetsecret1"),
             ),
             ParameterDefinition {
+                name: "initial_r2t".into(),
+                type_hint: "boolean".into(),
+                description: "InitialR2T as this target declares it: true (the RFC default) makes \
+                              every non-immediate write wait for an R2T; false lets an initiator \
+                              that also says No send its first burst unsolicited"
+                    .into(),
+                required: false,
+                example: json!(false),
+                default: Some(json!(super::DEFAULT_INITIAL_R2T)),
+            },
+            ParameterDefinition {
                 name: "digests".into(),
                 type_hint: "string".into(),
                 description: "Header and data digests this target accepts: either (CRC32C or \

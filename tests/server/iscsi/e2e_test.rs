@@ -88,7 +88,8 @@ const OPS: &[(&str, &str)] = &[
 
 #[tokio::test]
 async fn a_normal_session_serves_the_described_luns() {
-    let srv = start(policy(POLICY), None).await;
+    // InitialR2T=No on this target, so the initiator's unsolicited burst is allowed.
+    let srv = start(policy(POLICY), Some(json!({"initial_r2t": false}))).await;
     let mut raw = Raw::connect(srv.port).await;
     let r = raw.login("Normal", Some(DISK0), OPS).await;
     let t = r.text();

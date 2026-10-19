@@ -83,6 +83,7 @@ impl Sense {
     pub const INVALID_OPCODE: Sense = Sense::new(sense_key::ILLEGAL_REQUEST, 0x20, 0x00);
     pub const LBA_OUT_OF_RANGE: Sense = Sense::new(sense_key::ILLEGAL_REQUEST, 0x21, 0x00);
     pub const INVALID_FIELD_IN_CDB: Sense = Sense::new(sense_key::ILLEGAL_REQUEST, 0x24, 0x00);
+    pub const INVALID_FIELD_IN_IU: Sense = Sense::new(sense_key::ILLEGAL_REQUEST, 0x0E, 0x03);
     pub const LUN_NOT_SUPPORTED: Sense = Sense::new(sense_key::ILLEGAL_REQUEST, 0x25, 0x00);
     pub const SAVING_NOT_SUPPORTED: Sense = Sense::new(sense_key::ILLEGAL_REQUEST, 0x39, 0x00);
     pub const WRITE_PROTECTED: Sense = Sense::new(sense_key::DATA_PROTECT, 0x27, 0x00);
@@ -205,6 +206,7 @@ pub fn asc_meaning(asc: u8, ascq: u8) -> String {
         (0x04, 0x00) => "LOGICAL UNIT NOT READY",
         (0x08, 0x00) => "LOGICAL UNIT COMMUNICATION FAILURE",
         (0x0C, 0x00) => "WRITE ERROR",
+        (0x0E, 0x03) => "INVALID FIELD IN INFORMATION UNIT",
         (0x11, 0x00) => "UNRECOVERED READ ERROR",
         (0x1A, 0x00) => "PARAMETER LIST LENGTH ERROR",
         (0x20, 0x00) => "INVALID COMMAND OPERATION CODE",
@@ -267,16 +269,29 @@ fn ascii_field(s: &str, n: usize) -> Vec<u8> {
     out
 }
 
-/// Standard INQUIRY data, 36 bytes, for a direct-access block device (peripheral type 0).
-/// `version` is the claimed SPC version (0x05 SPC-3, 0x06 SPC-4); `cmdque` advertises
-/// tagged command queuing (byte 7 bit 1).
-pub fn standard_inquiry(id: &Identity, removable: bool, version: u8, cmdque: bool) -> Vec<u8> {
+/// Version descriptors (SPC-4 table 49) for the standard INQUIRY data.
+pub const VERSION_SAM5: u16 = 0x00A0;
+pub const VERSION_ISCSI: u16 = 0x0960;
+pub const VERSION_SPC4: u16 = 0x0460;
+pub const VERSION_SBC3: u16 = 0x04C0;
+
+/// Standard INQUIRY data for a direct-access block device (peripheral type 0): 36 bytes, or
+/// 96 when it carries version descriptors (at most eight). `version` is the claimed SPC
+/// version (0x05 SPC-3, 0x06 SPC-4); `cmdque` advertises tagged command queuing.
+pub fn standard_inquiry(
+    id: &Identity,
+    removable: bool,
+    version: u8,
+    cmdque: bool,
+    descriptors: &[u16],
+) -> Vec<u8> {
+    let len: u8 = if descriptors.is_empty() { 36 } else { 96 };
     let mut d = vec![
         0x00,
         if removable { 0x80 } else { 0x00 },
         version,
-        0x02, // response data format 2
-        0x1F, // additional length: 36 - 5
+        0x02,    // response data format 2
+        len - 5, // additional length
         0x00,
         0x00,
         if cmdque { 0x02 } else { 0x00 },
@@ -284,6 +299,13 @@ pub fn standard_inquiry(id: &Identity, removable: bool, version: u8, cmdque: boo
     d.extend(ascii_field(&id.vendor, 8));
     d.extend(ascii_field(&id.product, 16));
     d.extend(ascii_field(&id.revision, 4));
+    if !descriptors.is_empty() {
+        d.resize(58, 0);
+        for v in descriptors.iter().take(8) {
+            d.extend(v.to_be_bytes());
+        }
+        d.resize(96, 0);
+    }
     d
 }
 

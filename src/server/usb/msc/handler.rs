@@ -267,6 +267,7 @@ impl UsbMscHandler {
             true, // removable media
             0x05, // SPC-3
             false,
+            &[],
         );
 
         self.pending_data = response[..alloc_len.min(response.len())].to_vec();

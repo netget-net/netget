@@ -210,6 +210,7 @@ pub fn negotiate_as_target(
     key: &str,
     value: &str,
     digests: DigestPreference,
+    target_initial_r2t: bool,
 ) -> Option<String> {
     let reject = || Some("Reject".to_string());
     let clamp = |v: &str, lo: u64, hi: u64| number(v).filter(|n| (lo..=hi).contains(n));
@@ -234,9 +235,9 @@ pub fn negotiate_as_target(
             Some("1".into())
         }),
         "InitialR2T" => yes_no(value).map_or_else(reject, |v| {
-            // OR: we accept unsolicited data, so the initiator decides.
-            p.initial_r2t = v;
-            Some(yn(v))
+            // OR: unsolicited data flows only when neither side requires an R2T first.
+            p.initial_r2t = v || target_initial_r2t;
+            Some(yn(p.initial_r2t))
         }),
         "ImmediateData" => yes_no(value).map_or_else(reject, |v| {
             // AND: we accept immediate data, so the initiator decides.

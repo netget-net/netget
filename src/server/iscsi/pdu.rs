@@ -323,6 +323,68 @@ pub async fn read_pdu<R: AsyncRead + Unpin>(
         .map_err(|_| ReadError::Stalled)?
 }
 
+/// One PDU from the front of a buffer, with the same checks [`read_pdu`] makes: the data
+/// segment bounded before anything else is believed, then the digests. `Ok(None)` means the
+/// buffer holds less than a whole PDU; otherwise the PDU and the bytes it took. For the fuzz
+/// target and for anything holding bytes already read.
+pub fn decode(
+    buf: &[u8],
+    digests: Digests,
+    max_data: usize,
+) -> Result<Option<(Pdu, usize)>, ReadError> {
+    let Some(head) = buf.get(..BHS_LEN) else {
+        return Ok(None);
+    };
+    let bhs: [u8; BHS_LEN] = head.try_into().expect("48 bytes");
+    let (ahs_len, dsl) = Pdu::declared_lengths(&bhs);
+    if dsl > max_data {
+        return Err(ReadError::Oversize {
+            declared: dsl,
+            limit: max_data,
+        });
+    }
+    let mut at = BHS_LEN + ahs_len;
+    let Some(ahs) = buf.get(BHS_LEN..at) else {
+        return Ok(None);
+    };
+    if digests.header {
+        let Some(d) = buf.get(at..at + 4) else {
+            return Ok(None);
+        };
+        if crc32c(&buf[..at]) != u32::from_le_bytes(d.try_into().expect("4 bytes")) {
+            return Err(ReadError::HeaderDigest);
+        }
+        at += 4;
+    }
+    let mut data_ok = true;
+    let mut data = Vec::new();
+    if dsl > 0 {
+        let end = at + padded(dsl);
+        let Some(seg) = buf.get(at..end) else {
+            return Ok(None);
+        };
+        data = seg[..dsl].to_vec();
+        at = end;
+        if digests.data {
+            let Some(d) = buf.get(at..at + 4) else {
+                return Ok(None);
+            };
+            data_ok = crc32c(seg) == u32::from_le_bytes(d.try_into().expect("4 bytes"));
+            at += 4;
+        }
+    }
+    let pdu = Pdu {
+        bhs,
+        ahs: ahs.to_vec(),
+        data,
+    };
+    if data_ok {
+        Ok(Some((pdu, at)))
+    } else {
+        Err(ReadError::DataDigest(Box::new(pdu)))
+    }
+}
+
 /// Serial number comparison (RFC 1982, 32-bit), which CmdSN, StatSN and DataSN use: whether
 /// `a` is before `b`.
 pub fn sn_lt(a: u32, b: u32) -> bool {

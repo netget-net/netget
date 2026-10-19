@@ -42,6 +42,9 @@ pub const COMMAND_WINDOW: u32 = 32;
 pub const MAX_COMMAND_BYTES: u64 = 32 * 1024 * 1024;
 /// Login PDUs one login may take.
 pub const MAX_LOGIN_PDUS: usize = 64;
+/// This target's InitialR2T unless the `initial_r2t` startup parameter says otherwise: Yes, the
+/// RFC 7143 default and what LIO and tgt declare.
+pub const DEFAULT_INITIAL_R2T: bool = true;
 /// The default for the `digests` startup parameter.
 pub const DEFAULT_DIGESTS: &str = "either";
 /// A CHAP secret's length bounds (RFC 7143 §12.1.3 requires at least 12 bytes for CHAP over
@@ -52,11 +55,24 @@ pub const MAX_SECRET: usize = 255;
 pub const PORTAL_GROUP_TAG: u16 = 1;
 
 /// What the operator configured.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Config {
     pub accounts: Vec<Credential>,
     pub target_credential: Option<Credential>,
     pub digests: Option<DigestPreference>,
+    /// This target's InitialR2T: whether non-immediate write data waits for an R2T.
+    pub initial_r2t: bool,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            accounts: Vec::new(),
+            target_credential: None,
+            digests: None,
+            initial_r2t: DEFAULT_INITIAL_R2T,
+        }
+    }
 }
 
 impl Config {
@@ -109,6 +125,9 @@ pub fn parse_config(ctx: &SpawnContext) -> Result<Config> {
         }
         (None, None) => {}
         _ => bail!("target_chap_name and target_chap_secret go together"),
+    }
+    if let Some(v) = params.get_optional_bool("initial_r2t")? {
+        config.initial_r2t = v;
     }
     if let Some(d) = params.get_optional_string("digests")? {
         config.digests = Some(
@@ -276,6 +295,8 @@ struct Conn<'a> {
     text_in: Option<(u32, Vec<u8>)>,
     text_out: Option<TextContinuation>,
     discovered: Option<Vec<(String, Vec<String>)>>,
+    /// CmdSNs an ABORT TASK named before the command arrived; dropped when they do.
+    aborted_before_arrival: Vec<u32>,
 }
 
 impl<'a> Conn<'a> {
@@ -311,6 +332,7 @@ impl<'a> Conn<'a> {
             text_in: None,
             text_out: None,
             discovered: None,
+            aborted_before_arrival: Vec::new(),
         }
     }
 
@@ -492,13 +514,11 @@ impl<'a> Conn<'a> {
                     return Ok(false);
                 }
                 if req.u16_at(14) != 0 {
-                    let f = fail(
-                        login_status::SESSION_DOES_NOT_EXIST,
-                        "protocol_refusal",
-                        "a TSIH for a session this target does not have",
-                    );
-                    self.refuse_login(&req, req_csg, f).await?;
-                    return Ok(false);
+                    // A login naming a session's TSIH reinstates it. At error recovery level 0
+                    // nothing of the old connection survives (its writes went with it), so it
+                    // starts afresh under the TSIH the initiator asked for, as an initiator
+                    // that reconnects after a dropped connection expects.
+                    self.tsih = req.u16_at(14);
                 }
                 csg = req_csg;
                 if csg == stage::FULL_FEATURE {
@@ -741,7 +761,13 @@ impl<'a> Conn<'a> {
             match k.as_str() {
                 "InitiatorName" | "SessionType" | "TargetName" | "InitiatorAlias" | "AuthMethod"
                 | "CHAP_A" | "CHAP_N" | "CHAP_R" | "CHAP_I" | "CHAP_C" => {}
-                _ => match text::negotiate_as_target(&mut self.params, k, v, digests) {
+                _ => match text::negotiate_as_target(
+                    &mut self.params,
+                    k,
+                    v,
+                    digests,
+                    self.config.initial_r2t,
+                ) {
                     Some(answer) => {
                         if k == "MaxRecvDataSegmentLength" {
                             *declared_mrdsl = true;
@@ -1054,6 +1080,17 @@ impl<'a> Conn<'a> {
         }
         if cmd_sn == self.exp_cmd_sn {
             self.exp_cmd_sn = self.exp_cmd_sn.wrapping_add(1);
+            if let Some(i) = self.aborted_before_arrival.iter().position(|c| *c == cmd_sn) {
+                self.aborted_before_arrival.swap_remove(i);
+                outcome(
+                    self.ctx,
+                    self.id,
+                    "sequence",
+                    "aborted",
+                    &format!("CmdSN {cmd_sn} was aborted before it arrived: dropped"),
+                );
+                return false;
+            }
             return true;
         }
         outcome(
@@ -1394,7 +1431,18 @@ impl<'a> Conn<'a> {
             if page != 0 {
                 return Err(Sense::INVALID_FIELD_IN_CDB);
             }
-            scsi::standard_inquiry(&lun.identity, false, 0x05, true)
+            scsi::standard_inquiry(
+                &lun.identity,
+                false,
+                0x06, // SPC-4
+                true,
+                &[
+                    scsi::VERSION_SAM5,
+                    scsi::VERSION_ISCSI,
+                    scsi::VERSION_SPC4,
+                    scsi::VERSION_SBC3,
+                ],
+            )
         } else {
             match page {
                 0x00 => scsi::vpd_supported_pages(&[0x00, 0x80, 0x83, 0xB0, 0xB1]),
@@ -1452,10 +1500,23 @@ impl<'a> Conn<'a> {
         }
         if edtl as u64 != expected {
             // The command and its iSCSI transfer length disagree about how much data comes;
-            // refuse rather than write a guess (LIO does the same).
-            return self
-                .check_condition(itt, Sense::INVALID_FIELD_IN_CDB, edtl)
-                .await;
+            // refuse rather than write a guess, as LIO does (INVALID FIELD IN INFORMATION
+            // UNIT), naming the difference as the residual. Any data the initiator still sends
+            // for the task is discarded as belonging to no task.
+            let residual = if (edtl as u64) < expected {
+                (0x04, (expected - edtl as u64) as u32)
+            } else {
+                (0x02, (edtl as u64 - expected) as u32)
+            };
+            self.respond(
+                itt,
+                status::CHECK_CONDITION,
+                Some(Sense::INVALID_FIELD_IN_IU),
+                residual,
+                0,
+            )
+            .await?;
+            return Ok(true);
         }
         let expected = expected as usize;
         let first_burst = (self.params.first_burst as usize).min(expected);
@@ -1643,12 +1704,16 @@ impl<'a> Conn<'a> {
             1 => {
                 if self.pending.remove(&referenced).is_some() {
                     0
-                } else if pdu::sn_lt(ref_cmd_sn, cmd_sn)
-                    && pdu::sn_le(self.exp_cmd_sn.wrapping_sub(COMMAND_WINDOW), ref_cmd_sn)
+                } else if pdu::sn_lt(ref_cmd_sn, cmd_sn) && pdu::sn_le(self.exp_cmd_sn, ref_cmd_sn)
                 {
-                    // Already completed: RFC 7143 §11.5.1 has the target report it done.
+                    // Not received yet but inside the window: RFC 7143 §11.5.1 has the target
+                    // take it as received and aborted, so it is dropped if it turns up.
+                    if self.aborted_before_arrival.len() < COMMAND_WINDOW as usize {
+                        self.aborted_before_arrival.push(ref_cmd_sn);
+                    }
                     0
                 } else {
+                    // Received and already answered, or never in the window.
                     1
                 }
             }
@@ -1740,23 +1805,28 @@ impl<'a> Conn<'a> {
                 return Ok(true);
             }
         };
+        // Full feature phase text is SendTargets and nothing else here: its value is All, empty
+        // (this session's target) or a target name. Anything else is refused with Reject, as
+        // LIO does, rather than answered with an empty list the initiator would read as "no
+        // targets" (keys are case-sensitive, so sENDtARGETS is not SendTargets either).
+        let valid = !pairs.is_empty()
+            && pairs.iter().all(|(k, v)| {
+                k == "SendTargets" && (v == "All" || v.is_empty() || actions::valid_name(v))
+            });
+        if !valid {
+            outcome(
+                self.ctx,
+                self.id,
+                "text",
+                "protocol_refusal",
+                "a text request that is not SendTargets=All, a target name or empty",
+            );
+            self.reject(&req, reject::PROTOCOL_ERROR).await?;
+            return Ok(true);
+        }
         let mut answer: Vec<(String, String)> = Vec::new();
-        for (k, v) in &pairs {
-            if k == "SendTargets" {
-                answer.extend(self.send_targets(v).await);
-            } else if text::negotiate_as_target(
-                &mut Params::default(),
-                k,
-                v,
-                DigestPreference::Either,
-            )
-            .is_some()
-            {
-                // Leading-only operational keys cannot change in full feature phase.
-                answer.push((k.clone(), "Reject".into()));
-            } else {
-                answer.push((k.clone(), "NotUnderstood".into()));
-            }
+        for (_, v) in &pairs {
+            answer.extend(self.send_targets(v).await);
         }
         self.send_text(itt, text::encode(&answer)).await?;
         Ok(true)
@@ -1812,7 +1882,9 @@ impl<'a> Conn<'a> {
         );
         let targets: Vec<(String, Vec<String>)> = match (self.session_type, value) {
             (SessionType::Discovery, "All") => self.discover().await,
-            (SessionType::Normal, "") => vec![(self.target_name.clone(), vec![])],
+            // In a normal session the initiator already has its target: All and the empty
+            // value both name it alone.
+            (SessionType::Normal, "" | "All") => vec![(self.target_name.clone(), vec![])],
             (SessionType::Normal, name) if name == self.target_name => {
                 vec![(self.target_name.clone(), vec![])]
             }
@@ -1947,7 +2019,9 @@ fn mode_sense(lun: &Lun, cdb: &[u8; 16]) -> Result<Vec<u8>, Sense> {
         block.push(0);
         block.extend(&lun.block_size.to_be_bytes()[1..]);
     }
-    let wp = if lun.writable { 0x00 } else { 0x80 };
+    // WP for a read-only LUN; DPOFUA, since DPO and FUA are honoured trivially (nothing is
+    // cached, so every write is already where a later read finds it).
+    let wp = if lun.writable { 0x10 } else { 0x90 };
     let mut d = Vec::new();
     if ten {
         let len = (6 + block.len() + pages.len()) as u16;
