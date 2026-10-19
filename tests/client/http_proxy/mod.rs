@@ -4,4 +4,6 @@ mod command_channel_test;
 mod e2e_test;
 
 #[cfg(unix)]
+mod batching_test;
+#[cfg(unix)]
 mod target_port_range_test;

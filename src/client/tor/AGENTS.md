@@ -103,18 +103,22 @@ rejected verb reaching the operator. Treat the wire behaviour as unverified.
 
 - `TorClient` (from arti): Main client instance, manages circuits and connections
 - `DataStream` (from arti): Individual anonymized connection (like TcpStream)
-- `ConnectionState`: State machine (Idle → Processing → Accumulating) prevents concurrent LLM calls
-- `ClientData`: Per-client memory for LLM context
+- `run_circuit`: the session loop over one open circuit, generic over the stream halves
 
-### State Machine
+### Batching (what arrives while the model is answering)
 
-```
-Idle ────data────> Processing ─────LLM done────> Idle
-                        │                          ↑
-                        └──more data──> Accumulating
-                                             │
-                                             └──(queue data)
-```
+The circuit is read on a registered task of its own (`client/inbound_queue.rs`, shared with
+the other proxied byte-stream clients), feeding a bounded queue of reads (32). The answering
+loop takes one read per model call with batching off, and with batching on joins everything
+already waiting into one payload, as the `tcp` client does. Declared `BatchingMode::On`.
+This replaced an Idle/Processing/Accumulating machine that could never leave Idle — the loop
+read, called the model and wrote in sequence — and "cleared" a queue nothing filled: nothing
+was lost, but what arrived during a call merged in the kernel buffer, so batching off and on
+could not be told apart. A `disconnect` the model returns now ends the session (it used to
+break only the loop over that answer's actions). Test: `tests/client/tor/batching_test.rs`.
+
+`run_circuit` is `pub` and generic over the stream halves for that test: a real circuit needs a
+full Tor bootstrap, so the test drives the same loop over a plain local socket.
 
 ## LLM Integration
 

@@ -48,21 +48,25 @@ User → NetGet SOCKS5 Client → SOCKS5 Proxy → Target Server
 3. **Data Flow**:
     - Once tunnel is established, data flows transparently
     - LLM sees data from/to target server (not SOCKS5 protocol internals)
-    - Uses same state machine as TCP client (Idle → Processing → Accumulating)
+    - Read on a registered reader task; see "Batching" below
 
 ### State Management
 
-**Connection States:**
-
-- `Idle` - Ready to process new data from target
-- `Processing` - LLM is analyzing data and generating actions
-- `Accumulating` - Data arriving while LLM is busy (queued)
-
 **Client Data:**
 
-- `state`: Current connection state
-- `queued_data`: Buffer for data received during Processing
 - `memory`: LLM's persistent memory across calls
+
+## Batching (what arrives while the model is answering)
+
+The tunnel is read on a registered task of its own (`client/inbound_queue.rs`, shared with
+the other proxied byte-stream clients), feeding a bounded queue of reads (32). The answering
+loop takes one read per model call with batching off, and with batching on joins everything
+already waiting into one payload, as the `tcp` client does. Declared `BatchingMode::On`.
+This replaced an Idle/Processing/Accumulating machine that could never leave Idle — the loop
+read, called the model and wrote in sequence — and "cleared" a queue nothing filled: nothing
+was lost, but what arrived during a call merged in the kernel buffer, so batching off and on
+could not be told apart. A `disconnect` the model returns now ends the session (it used to
+break only the loop over that answer's actions). Test: `tests/client/socks5/batching_test.rs`.
 
 ## LLM Integration
 

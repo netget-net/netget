@@ -14,3 +14,6 @@ mod apply_actions_test;
 
 #[cfg(unix)]
 mod action_test;
+
+#[cfg(unix)]
+mod batching_test;

@@ -12,6 +12,8 @@ pub mod command_support;
 /// The HTTP round trip the HTTP-family clients share: reqwest natively, hyper's HTTP/1.1
 /// client over the virtual loopback in the browser build.
 pub mod http_fetch;
+/// The reader task and bounded queue the proxied byte-stream clients batch through.
+pub mod inbound_queue;
 pub mod llm_budget;
 /// The directory a media client may read local files from (`srt`, `rtmp`).
 pub mod media_root;

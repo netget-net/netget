@@ -1,5 +1,8 @@
 //! Client protocol e2e tests
 
+/// The shared shape of the per-client batching tests.
+pub mod batching_support;
+
 pub mod amqp;
 #[cfg(all(unix, feature = "libpcap"))]
 pub mod arp;
