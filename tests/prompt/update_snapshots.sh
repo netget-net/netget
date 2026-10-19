@@ -1,78 +1,19 @@
 #!/bin/bash
-
-# Script to update prompt test snapshots
-# This script will:
-# 1. Run the prompt tests to generate .actual.snap.md files
-# 2. Update all snapshots with the new versions
+# Regenerate every prompt snapshot from the current code.
 #
-# IMPORTANT: The snapshot-comparing tests in tests/prompt/mod.rs are
-# feature-gated to `tcp,http,proxy,ssh,sqlite` (the exact combination the
-# checked-in snapshots were generated with - see the DETERMINISM HELPERS
-# comment at the top of tests/prompt/mod.rs). Regenerating with a different
-# feature set (e.g. plain `cargo test`, which defaults to `all-protocols`)
-# would bake a different, much larger protocol list into the snapshots and
-# break every other feature-set-limited run. Always regenerate with exactly
-# this feature set.
+# Writes tests/prompt/snapshots/*.snap.md and tests/prompt_snapshots/snapshots/*.snap.md
+# through snapshot_util's UPDATE_SNAPSHOTS=1 mode, which overwrites each compared snapshot
+# and passes. There are no feature flags to choose: every build compiles every protocol,
+# and the parts of a prompt that depend on the compiled set are normalised in
+# tests/prompt/mod.rs before comparison.
+#
+# A regenerated snapshot proves nothing by itself. Read the diff before committing it.
+set -euo pipefail
 
-SNAPSHOTS_DIR="$(dirname "$0")/snapshots"
-SCRIPT_DIR="$(dirname "$0")"
-PROMPT_FEATURES="tcp,http,proxy,ssh,sqlite"
+cd "$(dirname "$0")/../.."
 
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  Prompt Snapshot Update Script"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
+UPDATE_SNAPSHOTS=1 ./cargo-isolated.sh test --test prompt --test prompt_snapshots
 
-# Step 1: Run tests to generate .actual.snap.md files
-echo "Step 1: Running prompt tests to generate snapshots (--features $PROMPT_FEATURES)..."
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
-
-# Run from repo root (2 levels up from tests/prompt/)
-cd "$SCRIPT_DIR/../.."
-
-# Run tests and capture exit code
-set +e  # Don't exit on error
-./cargo-isolated.sh test --no-default-features --features "$PROMPT_FEATURES" \
-    --test prompt -- --test-threads=100
-test_exit_code=$?
-set -e  # Re-enable exit on error
-
-if [ $test_exit_code -eq 0 ]; then
-    echo ""
-    echo "✓ All tests already passing - no snapshots to update"
-    exit 0
-fi
-
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-# Step 2: Count and update snapshots
-echo "Step 2: Updating snapshots..."
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-count=$(find "$SNAPSHOTS_DIR" -name "*.actual.snap.md" 2>/dev/null | wc -l | tr -d ' ')
-
-if [ "$count" -eq 0 ]; then
-    echo "⚠ No .actual.snap.md files found - tests may have all passed"
-    exit 0
-fi
-
-echo "Found $count snapshot(s) to update:"
-echo ""
-
-# Move each .actual.snap.md file to replace the .snap.md file
-for actual_file in "$SNAPSHOTS_DIR"/*.actual.snap.md; do
-    if [ -f "$actual_file" ]; then
-        snap_file="${actual_file%.actual.snap.md}.snap.md"
-        filename=$(basename "$snap_file")
-
-        echo "  → Updating $filename"
-        mv "$actual_file" "$snap_file"
-    fi
-done
-
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "✓ Snapshots updated successfully!"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo
+echo "Snapshots regenerated. Review them before committing:"
+git status --short -- tests/prompt/snapshots tests/prompt_snapshots/snapshots
