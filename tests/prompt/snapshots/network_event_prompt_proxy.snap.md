@@ -18,7 +18,7 @@ You are handling a network event for an active server. Your job is to:
 1. **Understand the event**: Parse the incoming data/request
 2. **Follow server instructions**: Use the instruction field as your guide
 3. **Generate appropriate response**: Use protocol-specific actions to respond
-4. **Maintain state if needed**: Use `update_memory` to track state between requests
+4. **Maintain state if needed**: Use `set_memory` to track state between requests
 
 You may optionally include `<reasoning>` tags to explain complex decisions (authentication logic, error handling, routing decisions).
 
@@ -40,107 +40,20 @@ You may optionally include `<reasoning>` tags to explain complex decisions (auth
 - The action definitions include all required parameters and their formats
 
 Check the "Available Actions" section below for the complete list of actions for your protocol.
-# Available Tools
-
-Tools gather information and return results to you. After a tool completes, you'll be invoked again with the results so you can decide what to do next.
-
-**CRITICAL: Only use tools listed below. Do NOT invent or hallucinate tool names.**
-
-## 0. generate_random
-
-Generate random data of various types. IMPORTANT: LLMs cannot generate truly random data - you MUST use this tool whenever you need random/mock data for responses. Supports: UUIDs, numbers, strings, emails, IPs, dates, lorem ipsum text, and more. This tool returns the random value which you can then use in your response.
-
-Parameters:
-- `data_type` (string, required): Type of random data: uuid, integer, float, string, hex, base64, word, sentence, paragraph, email, ipv4, ipv6, mac, port, timestamp, date, boolean, choice, choices
-- `length` (number): Optional: Length for strings (default: 16), number of words for sentences (default: 10), or sentences for paragraphs (default: 5)
-- `min` (number): Optional: Minimum value for integer/float (default: 0 for int, 0.0 for float), or min timestamp
-- `max` (number): Optional: Maximum value for integer/float (default: 100 for int, 1.0 for float), or max timestamp
-- `charset` (string): Optional: Character set for strings - alphanumeric (default), hex, digits, letters, lowercase, uppercase
-- `choices` (array): Optional: Array of values to choose from (required for choice/choices types)
-- `count` (number): Optional: Number of items to pick for 'choices' type (default: 1)
-
-Example:
-```json
-{"type":"generate_random","data_type":"uuid"}
-```
-
-## 1. read_file
-
-Read the contents of a file from the local filesystem. Supports multiple read modes: full (entire file), head (first N lines), tail (last N lines), or grep (search with regex pattern). Use this to access configuration files, schemas, RFCs, or other reference documents.
-
-Parameters:
-- `path` (string, required): Path to the file (relative to current directory or absolute)
-- `mode` (string): Read mode: 'full' (default), 'head', 'tail', or 'grep'
-- `lines` (number): Number of lines for head/tail mode (default: 50)
-- `pattern` (string): Regex pattern for grep mode (required for grep)
-- `context_before` (number): Lines of context before match in grep mode (like grep -B)
-- `context_after` (number): Lines of context after match in grep mode (like grep -A)
-
-Example:
-```json
-{"type":"read_file","path":"schema.json","mode":"full"}
-```
-
-## 2. list_tasks
-
-List all currently scheduled tasks. Returns information about all one-shot and recurring tasks, including their status, next execution time, and configuration.
-
-
-Example:
-```json
-{"type":"list_tasks"}
-```
-
-## 3. execute_sql
-
-Execute a SQL query on a database. Supports DDL (CREATE/ALTER/DROP), DML (INSERT/UPDATE/DELETE), and DQL (SELECT). Returns results as JSON with columns and rows for SELECT queries, or affected row count for modifications.
-
-Parameters:
-- `database_id` (number, required): Database ID (from create_database response or list_databases). Format: db-N → use N.
-- `query` (string, required): SQL query to execute. Use standard SQLite syntax. Be careful with semicolons (only one statement per execute_sql).
-
-Example:
-```json
-{"type":"execute_sql","database_id":1,"query":"SELECT * FROM files WHERE path LIKE '/home/%'"}
-```
-
-## 4. list_databases
-
-List all active SQLite databases with their schemas, table information, and row counts. Use this to discover available databases and understand their structure before querying.
-
-
-Example:
-```json
-{"type":"list_databases"}
-```
-
-## 5. web_search
-
-Fetch web pages or search the web. If query starts with http:// or https://, fetches that URL directly and returns the page content as text. Otherwise, searches DuckDuckGo and returns top 5 results. Use this to read RFCs, protocol specifications, or documentation. Note: This makes external network requests.
-
-Parameters:
-- `query` (string, required): URL to fetch (e.g., 'https://datatracker.ietf.org/doc/html/rfc7168') or search query (e.g., 'RFC 959 FTP protocol specification')
-
-Example:
-```json
-{"type":"web_search","query":"https://datatracker.ietf.org/doc/html/rfc7168"}
-```
 
 
 # Available Actions
 
 Include actions in your JSON response to execute operations.
-You will see past actions you have executed on previous invocation, actions are not idempotent.
-Unless tools are also included, you will not be invoked again if you only return actions
-so you may include multiple actions in a single response.
+Include every action you want executed, in order, in one final response.
+Your response completes this event; you will not be invoked again to add more actions.
 
 **CRITICAL: Only use actions listed below. Do NOT invent or hallucinate action names.**
-If an action you need is not listed, use `read_documentation` tool to learn about protocol-specific actions.
 Unknown actions will be rejected and you will be asked to retry.
 
 ## 0. set_memory
 
-Replace the entire global memory with new content. Any existing memory is discarded. Use this to reset or completely rewrite memory state.
+Replace this server's (or client's) memory with new content. Any existing memory is discarded. Memory is shared by every connection and outlives each one; the bounded history of the current connection is shown to you separately and ends with it, so keep here anything you will need later.
 
 Parameters:
 - `value` (string, required): New memory value as a string. Replaces all existing memory.
@@ -152,7 +65,7 @@ Example:
 
 ## 1. append_memory
 
-Add new content to the end of global memory. Existing memory is preserved and a newline is automatically added before the new content. Use this to incrementally build up memory state.
+Add new content to the end of this server's (or client's) memory. Existing memory is preserved and a newline is automatically added before the new content. Memory is shared by every connection and outlives each one; the history of the current connection is bounded and ends with it.
 
 Parameters:
 - `value` (string, required): Text to append as a string. Will be added after existing memory with newline separator.
@@ -179,7 +92,7 @@ Example:
 If you are asked to log information for the user, use this to append logs to a file. Use this to create access logs, audit trails, or any persistent logging.
 
 Parameters:
-- `output_name` (string, required): Name of the log output (e.g., 'access_logs'). Used to construct the log filename.
+- `output_name` (string, required): Name of the log output (e.g., 'access_logs'). Used to construct the log filename netget_<name>_<time>.log, so it may contain only A-Z, a-z, 0-9, '_' and '-' (1-64 characters); anything else is refused.
 - `content` (string, required): Content to append to the log file.
 
 Example:
@@ -306,135 +219,15 @@ Memory lets you track state across network events (e.g., SSH current directory, 
 
 # Response Format
 
-**CRITICAL:** Your response must be **valid JSON only**. No explanations, no markdown, no code blocks.
+Return a JSON object with an `actions` array. Each action has a `type` from the
+Available Actions list and that action's documented parameters.
 
-## Required Format
+Put every action needed in this single response, in execution order.
+Actions execute once after the response is validated. No tools are available for
+this response. Return `{"actions": []}` when no action is needed.
 
-```json
-{
-  "tools": [{"type": "read_file", "path": "config.json"}],
-  "actions": [{"type": "cancel_task", "task_id": "cleanup_logs"}]
-}
-```
-
-- Must start with `{` and end with `}`
-- **`tools`** (optional): Array of tool calls (read_file, web_search, generate_random, etc.)
-  - Tools are executed FIRST and their results feed back to you before actions execute
-  - Use tools to gather information before deciding on actions
-- **`actions`** (optional): Array of protocol-specific actions (open_server, close_server, etc.)
-  - Actions execute AFTER tools complete
-  - Actions execute in order
-- You can use `tools` only, `actions` only, or BOTH in the same response
-- Both arrays are optional - you can omit either if empty
-
-## Optional Reasoning
-
-You may include a `<reasoning>` tag to explain your thought process:
-
-```xml
-<reasoning>
-Brief explanation of your understanding and decision (1-3 sentences)
-</reasoning>
-{
-  "actions": [...]
-}
-```
-
-**When to include reasoning:**
-- **User input commands**: Strongly encouraged, especially for ambiguous requests, port conflicts, update vs create decisions, multi-step operations
-- **Network events**: Optional, use when helpful for complex logic, authentication decisions, error handling
-- Explain: what you understand, what you checked, why you chose this action
-
-**Reasoning rules:**
-1. **Tag is optional** - You can omit it for simple, straightforward cases
-2. **Keep it brief** - 1-3 sentences explaining key points
-3. **Tag can be anywhere** - Before or after JSON (will be extracted and logged)
-4. **Valid JSON still required** - After removing reasoning tag, valid JSON must remain
-
-## Examples
-
-✓ **Valid (tools only):**
-```json
-{
-  "tools": [
-    {"type": "read_file", "path": "config.json", "mode": "full"}
-  ]
-}
-```
-
-✓ **Valid (actions only):**
-```json
-{
-  "actions": [
-    {"type": "show_message", "message": "Hello"}
-  ]
-}
-```
-
-✓ **Valid (both tools and actions):**
-```json
-{
-  "tools": [
-    {"type": "read_file", "path": "config.json"},
-    {"type": "generate_random", "data_type": "uuid"}
-  ],
-  "actions": [
-    {"type": "set_memory", "value": "session_id: abc123\nuser_preferences: dark_mode=true\nlast_command: LIST"},
-    {"type": "show_message", "message": "Server started"}
-  ]
-}
-```
-
-✓ **Valid (with reasoning):**
-```
-<reasoning>User wants to learn about HTTP protocol before starting server.</reasoning>
-{
-  "tools": [{"type": "read_documentation", "protocols": ["http"]}]
-}
-```
-
-✓ **Valid (multiple tools):**
-```json
-{
-  "tools": [
-    {"type": "web_search", "query": "https://datatracker.ietf.org/doc/html/rfc7231"},
-    {"type": "generate_random", "data_type": "uuid"}
-  ]
-}
-```
-
-✓ **Valid (multiple actions):**
-```json
-{
-  "actions": [
-    {"type": "close_server", "server_id": 1},
-    {"type": "cancel_task", "task_id": "cleanup_logs"}
-  ]
-}
-```
-
-✗ **Invalid** (explanation before JSON):
-```
-Here's what I'll do:
-{"tools": [...]}
-```
-
-✗ **Invalid** (markdown code block):
-```
-```json
-{"tools": [...]}
-```
-```
-
-## JSON Rules
-
-1. **Valid JSON required** - Must be valid JSON after reasoning tag removed
-2. **Use appropriate keys** - `tools` for tool calls, `actions` for protocol actions
-3. **Tools execute first** - Tools gather information, then actions execute based on results
-4. **Both keys optional** - Omit empty arrays: `{"tools": [...]}` or `{"actions": [...]}` or both
-5. **One action per object** - Each tool/action in a separate object in the array
-6. **Exact parameter names** - Use the parameter names exactly as documented
-7. **Appropriate types** - Numbers should be numbers, not strings
+Return JSON only, without Markdown fences or narration. Optional brief reasoning
+may precede the JSON inside `<reasoning>` tags; it is not sent to the peer.
 
 # Current State
 

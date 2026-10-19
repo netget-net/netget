@@ -98,16 +98,16 @@ Get detailed protocol documentation. After you fetch documentation, you will be 
 
 ## Available Protocols
 
-**Server protocols**: HTTP, Proxy, SSH, TCP
+**Server protocols**: <normalized: compiled server registry>
 
-**Client protocols**: HTTP, SSH, TCP
+**Client protocols**: <normalized: compiled client registry>
 
 Parameters:
 - `protocols` (array, required): Array of protocol names to get documentation for. Maximum 5 protocols per call. Returns both server and client docs if available for each protocol.
 
 Example:
 ```json
-{"type":"read_documentation","protocols":["HTTP","Proxy","SSH","TCP"]}
+{"type":"read_documentation","protocols":["<normalized: every compiled protocol>"]}
 ```
 
 ## 3. list_tasks
@@ -199,7 +199,7 @@ Parameters:
 - `interface` (string): Optional: Network interface to bind (for raw protocols like ICMP, ARP, DataLink). Common interface names: "lo" or "lo0" (loopback), "eth0" or "en0" (Ethernet), "wlan0" (WiFi). NOTE: Only specify if the protocol specifically requires it (e.g., DataLink). Most port-based protocols (TCP, HTTP, DNS) don't use this. If you need to discover available interfaces, you can try common names like "lo" for loopback or use the system's default interface by omitting this parameter.
 - `host` (string): Optional: Host address to bind (IPv4, IPv6, or hostname). Examples: "127.0.0.1" (loopback), "0.0.0.0" (all interfaces), "::". Protocols will use sensible defaults if omitted.
 - `port` (number): Optional: Port number to listen on. Use 0 to automatically find an available port. Required for port-based protocols (TCP, HTTP, DNS). Raw protocols (ICMP, ARP) don't use this.
-- `protocol` (string, required): Protocol to use. ALWAYS prefer high-level protocols when user keywords match: if user says 'dns' or 'dns server' → use 'dns' (NOT 'udp'), if user says 'http' or 'web server' → use 'http' (NOT 'tcp'), if user says 'smtp' or 'mail server' → use 'smtp' (NOT 'tcp'). Only use low-level protocols (tcp, udp) for custom protocols without a specific high-level match. Available: HTTP, Proxy, SSH, TCP
+- `protocol` (string, required): Protocol to use. ALWAYS prefer high-level protocols when user keywords match: if user says 'dns' or 'dns server' → use 'dns' (NOT 'udp'), if user says 'http' or 'web server' → use 'http' (NOT 'tcp'), if user says 'smtp' or 'mail server' → use 'smtp' (NOT 'tcp'). Only use low-level protocols (tcp, udp) for custom protocols without a specific high-level match. Available: <normalized: compiled server registry>
 - `send_first` (boolean): True if server sends data first (FTP, SMTP), false if it waits for client (HTTP)
 - `initial_memory` (string): Optional initial memory as a string. Use for storing persistent context across connections. Example: "user_count: 0"
 - `instruction` (string, required): Detailed instructions for handling network events. Use this field for custom requirements that don't have dedicated parameters (e.g., 'with 30 second timeout', 'log all requests to file', 'rate limit to 10 requests per second', etc.)
@@ -207,6 +207,8 @@ Parameters:
 - `scheduled_tasks` (array): Optional: Array of TIME-BASED tasks that execute periodically or after a delay. USE WHEN: User says 'every X seconds/minutes', 'heartbeat', 'periodic', 'scheduled', or describes time-based automation. EXAMPLES: - 'send heartbeat every 10 seconds' → scheduled_tasks with interval_secs: 10 - 'check status every minute' → scheduled_tasks with interval_secs: 60 - 'cleanup after 30 seconds' → scheduled_tasks with delay_secs: 30 DO NOT use event_handlers for periodic tasks - event_handlers respond to network events, NOT time-based triggers! Each task has: task_id (string), recurring (boolean), interval_secs (for periodic) OR delay_secs (for one-shot), max_executions (optional), instruction (what to do), context (optional).
 - `event_handlers` (array): Optional: Array of event handlers to configure how events are processed. You can configure different handlers for different events. Each handler specifies an event_pattern (specific event ID or "*" for all events) and a handler type (script, static, or llm). Handlers are matched in order - first match wins.\n\nEach handler has:\n- event_pattern: Event ID to match (e.g., \"tcp_data_received\") or \"*\" for all events\n- handler: Object with:\n- type: \"script\" (inline code), \"static\" (predefined actions), or \"llm\" (dynamic processing)\n\nREQUIRED FIELDS BY TYPE:\n- For script: language (Python (Python 3.11.0), Node.js (v20.0.0), Go (go version go1.21.0), Perl (perl 5.38.0)), code (inline script)\n- For static: actions (array of action objects)\n- For llm: instruction (string, REQUIRED) - describes how the LLM should handle this event\n\nCRITICAL: LLM handlers MUST include 'instruction' field. Example: {\"type\": \"llm\", \"instruction\": \"Handle HTTP requests...\"}\n\nSCRIPT EVENT DATA STRUCTURE:\nScripts receive JSON via stdin with this structure:\n{\n\"event_type_id\": \"http_request\",  // Event type identifier\n\"server\": {\"id\": 1, \"port\": 8080, \"stack\": \"HTTP\", \"memory\": \"\", \"instruction\": \"...\"},\n\"connection\": {\"id\": \"1\", \"remote_addr\": \"127.0.0.1:12345\"},  // Optional\n\"event\": {\n// Protocol-specific event data (fields vary by event type)\n// For HTTP: method, path, query_string, query, headers, body\n// For TCP: data (hex-encoded bytes)\n// For DNS: query_id, domain, query_type\n}\n}\n\nIMPORTANT: Event data is directly under data['event'], NOT data['event']['data']!\nAccess pattern: data['event']['field_name'] (e.g., data['event']['method'])\n\nCRITICAL - COMMON MISTAKES TO AVOID:\n❌ WRONG: data['event']['request']['query_string']      # NO 'request' wrapper!\n❌ WRONG: data['event']['http_request']['query_string'] # NO 'http_request' wrapper!\n❌ WRONG: data['event']['data']['method']               # NO 'data' wrapper!\n✅ RIGHT: data['event']['query_string']                 # Direct access\n✅ RIGHT: data['event']['method']                       # Direct access\n\nThe event_type_id tells you WHAT event occurred, but data fields are DIRECTLY under data['event'].\n\nExample HTTP script (sum query parameters x and y):\n{\"event_pattern\": \"http_request\", \"handler\": {\"type\": \"script\", \"language\": \"python\", \"code\": \"<http_sum_script>\"}}\n\n<http_sum_script>\nimport json\nimport sys\n\ndata = json.load(sys.stdin)\n# Access event data: data['event']['field_name']\nquery_params = data['event']['query']  # Pre-parsed query parameters object\nx = float(query_params['x'])\ny = float(query_params['y'])\nresult = x + y\n\nprint(json.dumps({\n'actions': [{\n'type': 'send_http_response',\n'status': 200,\n'body': str(result)\n}]\n}))\n</http_sum_script>\n\nExample TCP script (echo received data):\n{\"event_pattern\": \"tcp_data_received\", \"handler\": {\"type\": \"script\", \"language\": \"python\", \"code\": \"<tcp_echo_script>\"}}\n\n<tcp_echo_script>\nimport json\nimport sys\n\ndata = json.load(sys.stdin)\n# TCP data is hex-encoded in data['event']['data']\nreceived_hex = data['event']['data']\n\nprint(json.dumps({\n'actions': [{\n'type': 'send_tcp_data',\n'data': received_hex  # Echo back the same hex data\n}]\n}))\n</tcp_echo_script>\n\nExample static handler:\n{\"event_pattern\": \"*\", \"handler\": {\"type\": \"static\", \"actions\": [{\"type\": \"send_data\", \"data\": \"Welcome\"}]}}\n\nExample LLM handler:\n{\"event_pattern\": \"http_request\", \"handler\": {\"type\": \"llm\", \"instruction\": \"You are a recipe website\"}}
 - `feedback_instructions` (string): Optional: Instructions for automatic server adjustment based on network request feedback. When set, network requests can provide feedback via the 'provide_feedback' action. Feedback is accumulated and debounced (leading edge), then the LLM is invoked with these instructions to decide how to adjust the server behavior (e.g., update instructions, modify handlers, change configuration). Example: "Adjust response time if clients are timing out" or "Learn from failed requests and improve error handling".
+- `history` (number): Optional: how many earlier exchanges on the same connection you are shown with each new event (each event and what answered it). 0 turns it off. Omit to keep the protocol's default — conversational protocols (telnet, IRC, SMTP, databases) show 40, independent requests (DNS, HTTP) none; get_protocol_docs names the default. Memory is separate: use it for anything that must outlive the connection.
+- `batching` (boolean): Optional: when events arrive on a connection while you are still answering an earlier one, hold them and give them to you together in one follow-up call. Omit to keep the protocol's default. Refused on a protocol that answers each event as it arrives.
 
 Example:
 ```json
@@ -248,6 +250,8 @@ Parameters:
 - `scheduled_tasks` (array): Optional: Array of scheduled tasks to create with this client. Each task will be attached to the client and execute at specified intervals or delays. Tasks are automatically cleaned up when the client disconnects.
 - `event_handlers` (array): Optional: Array of event handlers to configure how client events are processed. You can configure different handlers for different client events. Each handler specifies an event_pattern (specific event ID or "*" for all events) and a handler type (script, static, or llm). Handlers are matched in order - first match wins.\n\nEach handler has:\n- event_pattern: Event ID to match (e.g., \"http_response_received\") or \"*\" for all events\n- handler: Object with:\n- type: \"script\" (inline code), \"static\" (predefined actions), or \"llm\" (dynamic processing)\n- For script: language (Python (Python 3.11.0), Node.js (v20.0.0), Go (go version go1.21.0), Perl (perl 5.38.0)), code (inline script)\n- For static: actions (array of action objects)\n- For llm: instruction (REQUIRED - describes how the LLM should handle this event)\n\nNote: Client scripts use the same event data structure as server scripts (see open_server documentation for details).\nAccess pattern: data['event']['field_name'] (e.g., data['event']['status_code'] for HTTP responses)\n\nExample script handler: {\"event_pattern\": \"redis_response_received\", \"handler\": {\"type\": \"script\", \"language\": \"python\", \"code\": \"import json,sys;data=json.load(sys.stdin);print(json.dumps({'actions':[{'type':'execute_redis_command','command':'PING'}]}))\"}}\n\nExample static handler: {\"event_pattern\": \"*\", \"handler\": {\"type\": \"static\", \"actions\": [{\"type\": \"send_http_request\", \"method\": \"GET\", \"path\": \"/\"}]}}\n\nExample LLM handler: {\"event_pattern\": \"http_response_received\", \"handler\": {\"type\": \"llm\", \"instruction\": \"You are a recipe website\"}}
 - `feedback_instructions` (string): Optional: Instructions for automatic client adjustment based on server response feedback. When set, server responses can provide feedback via the 'provide_feedback' action. Feedback is accumulated and debounced (leading edge), then the LLM is invoked with these instructions to decide how to adjust the client behavior (e.g., update request strategy, modify retry logic, change authentication method). Example: "Adjust request rate if server is throttling" or "Learn from error responses and modify request format".
+- `history` (number): Optional: how many earlier exchanges on this client's session you are shown with each new event (each event and what answered it). 0 turns it off. Omit to keep the protocol's default — conversational protocols (telnet, IRC, SMTP, databases) show 40, independent requests (DNS, HTTP) none; get_protocol_docs names the default. Memory is separate: use it for anything that must outlive the connection.
+- `batching` (boolean): Optional: when events arrive on a connection while you are still answering an earlier one, hold them and give them to you together in one follow-up call. Omit to keep the protocol's default. Refused on a protocol that answers each event as it arrives.
 
 Example:
 ```json
@@ -315,13 +319,15 @@ Example:
 
 ## 9. update_client
 
-Update a RUNNING client in place, by its id, instead of opening a second one. Supply only the fields you want to change. Changing the instruction, memory, event_handlers, feedback_instructions or scheduled_tasks is applied in place. Changing the remote_addr or startup_params reconnects (new id).
+Update a RUNNING client in place, by its id, instead of opening a second one. Supply only the fields you want to change. Changing the instruction, memory, event_handlers, feedback_instructions, scheduled_tasks, history or batching is applied in place. Changing the remote_addr or startup_params reconnects (new id).
 
 Parameters:
 - `client_id` (number, required): Id of the client to update.
 - `instruction` (string): New LLM instruction (hot-applied).
 - `event_handlers` (array): Replacement deterministic event handlers (hot-applied).
 - `remote_addr` (string): New remote address 'host:port'. Triggers a reconnect.
+- `history` (number): Earlier exchanges per connection shown with each event; 0 turns it off (hot-applied).
+- `batching` (boolean): Batch events arriving during a call (hot-applied; refused where the protocol cannot batch).
 
 Example:
 ```json
@@ -330,7 +336,7 @@ Example:
 
 ## 10. update_server
 
-Update a RUNNING server in place, by its id, instead of opening a second one. Supply only the fields you want to change. Changing the instruction, memory, event_handlers, feedback_instructions or scheduled_tasks is applied WITHOUT dropping connections. Changing the port, host, interface, mac_address or startup_params requires a clean stop+start (connections are dropped and the server gets a new id). Prefer this over open_server when a server for the protocol already exists.
+Update a RUNNING server in place, by its id, instead of opening a second one. Supply only the fields you want to change. Changing the instruction, memory, event_handlers, feedback_instructions, scheduled_tasks, history or batching is applied WITHOUT dropping connections. Changing the port, host, interface, mac_address or startup_params requires a clean stop+start (connections are dropped and the server gets a new id). Prefer this over open_server when a server for the protocol already exists.
 
 Parameters:
 - `server_id` (number, required): Id of the server to update (from the running servers list).
@@ -338,6 +344,8 @@ Parameters:
 - `event_handlers` (array): Replacement deterministic event handlers (hot-applied). Same shape as open_server's.
 - `startup_params` (object): Startup parameters to merge in. Validated against the protocol schema; triggers a restart.
 - `port` (number): New port to bind. Triggers a restart.
+- `history` (number): Earlier exchanges per connection shown with each event; 0 turns it off (hot-applied).
+- `batching` (boolean): Batch events arriving during a call (hot-applied; refused where the protocol cannot batch).
 
 Example:
 ```json
@@ -358,7 +366,7 @@ Example:
 
 ## 12. set_memory
 
-Replace the entire global memory with new content. Any existing memory is discarded. Use this to reset or completely rewrite memory state.
+Replace this server's (or client's) memory with new content. Any existing memory is discarded. Memory is shared by every connection and outlives each one; the bounded history of the current connection is shown to you separately and ends with it, so keep here anything you will need later.
 
 Parameters:
 - `value` (string, required): New memory value as a string. Replaces all existing memory.
@@ -370,7 +378,7 @@ Example:
 
 ## 13. append_memory
 
-Add new content to the end of global memory. Existing memory is preserved and a newline is automatically added before the new content. Use this to incrementally build up memory state.
+Add new content to the end of this server's (or client's) memory. Existing memory is preserved and a newline is automatically added before the new content. Memory is shared by every connection and outlives each one; the history of the current connection is bounded and ends with it.
 
 Parameters:
 - `value` (string, required): Text to append as a string. Will be added after existing memory with newline separator.
@@ -433,7 +441,7 @@ Example:
 If you are asked to log information for the user, use this to append logs to a file. Use this to create access logs, audit trails, or any persistent logging.
 
 Parameters:
-- `output_name` (string, required): Name of the log output (e.g., 'access_logs'). Used to construct the log filename.
+- `output_name` (string, required): Name of the log output (e.g., 'access_logs'). Used to construct the log filename netget_<name>_<time>.log, so it may contain only A-Z, a-z, 0-9, '_' and '-' (1-64 characters); anything else is refused.
 - `content` (string, required): Content to append to the log file.
 
 Example:
@@ -471,15 +479,7 @@ Example:
 
 ## Available Base Stacks
 
-### Core
-HTTP (http, http server, http stack, via http, hyper)
-SSH (ssh)
-TCP (tcp, raw, custom)
-
-### Proxy & Network
-Proxy (proxy, mitm)
-
-
+<normalized: compiled base stacks, grouped>
 
 ---
 

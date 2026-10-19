@@ -109,16 +109,16 @@ Get detailed protocol documentation. After you fetch documentation, you will be 
 
 ## Available Protocols
 
-**Server protocols**: HTTP, Proxy, SSH, TCP
+**Server protocols**: <normalized: compiled server registry>
 
-**Client protocols**: HTTP, SSH, TCP
+**Client protocols**: <normalized: compiled client registry>
 
 Parameters:
 - `protocols` (array, required): Array of protocol names to get documentation for. Maximum 5 protocols per call. Returns both server and client docs if available for each protocol.
 
 Example:
 ```json
-{"type":"read_documentation","protocols":["HTTP","Proxy","SSH","TCP"]}
+{"type":"read_documentation","protocols":["<normalized: every compiled protocol>"]}
 ```
 
 ## 3. list_tasks
@@ -261,13 +261,15 @@ Example:
 
 ## 7. update_client
 
-Update a RUNNING client in place, by its id, instead of opening a second one. Supply only the fields you want to change. Changing the instruction, memory, event_handlers, feedback_instructions or scheduled_tasks is applied in place. Changing the remote_addr or startup_params reconnects (new id).
+Update a RUNNING client in place, by its id, instead of opening a second one. Supply only the fields you want to change. Changing the instruction, memory, event_handlers, feedback_instructions, scheduled_tasks, history or batching is applied in place. Changing the remote_addr or startup_params reconnects (new id).
 
 Parameters:
 - `client_id` (number, required): Id of the client to update.
 - `instruction` (string): New LLM instruction (hot-applied).
 - `event_handlers` (array): Replacement deterministic event handlers (hot-applied).
 - `remote_addr` (string): New remote address 'host:port'. Triggers a reconnect.
+- `history` (number): Earlier exchanges per connection shown with each event; 0 turns it off (hot-applied).
+- `batching` (boolean): Batch events arriving during a call (hot-applied; refused where the protocol cannot batch).
 
 Example:
 ```json
@@ -276,7 +278,7 @@ Example:
 
 ## 8. update_server
 
-Update a RUNNING server in place, by its id, instead of opening a second one. Supply only the fields you want to change. Changing the instruction, memory, event_handlers, feedback_instructions or scheduled_tasks is applied WITHOUT dropping connections. Changing the port, host, interface, mac_address or startup_params requires a clean stop+start (connections are dropped and the server gets a new id). Prefer this over open_server when a server for the protocol already exists.
+Update a RUNNING server in place, by its id, instead of opening a second one. Supply only the fields you want to change. Changing the instruction, memory, event_handlers, feedback_instructions, scheduled_tasks, history or batching is applied WITHOUT dropping connections. Changing the port, host, interface, mac_address or startup_params requires a clean stop+start (connections are dropped and the server gets a new id). Prefer this over open_server when a server for the protocol already exists.
 
 Parameters:
 - `server_id` (number, required): Id of the server to update (from the running servers list).
@@ -284,6 +286,8 @@ Parameters:
 - `event_handlers` (array): Replacement deterministic event handlers (hot-applied). Same shape as open_server's.
 - `startup_params` (object): Startup parameters to merge in. Validated against the protocol schema; triggers a restart.
 - `port` (number): New port to bind. Triggers a restart.
+- `history` (number): Earlier exchanges per connection shown with each event; 0 turns it off (hot-applied).
+- `batching` (boolean): Batch events arriving during a call (hot-applied; refused where the protocol cannot batch).
 
 Example:
 ```json
@@ -304,7 +308,7 @@ Example:
 
 ## 10. set_memory
 
-Replace the entire global memory with new content. Any existing memory is discarded. Use this to reset or completely rewrite memory state.
+Replace this server's (or client's) memory with new content. Any existing memory is discarded. Memory is shared by every connection and outlives each one; the bounded history of the current connection is shown to you separately and ends with it, so keep here anything you will need later.
 
 Parameters:
 - `value` (string, required): New memory value as a string. Replaces all existing memory.
@@ -316,7 +320,7 @@ Example:
 
 ## 11. append_memory
 
-Add new content to the end of global memory. Existing memory is preserved and a newline is automatically added before the new content. Use this to incrementally build up memory state.
+Add new content to the end of this server's (or client's) memory. Existing memory is preserved and a newline is automatically added before the new content. Memory is shared by every connection and outlives each one; the history of the current connection is bounded and ends with it.
 
 Parameters:
 - `value` (string, required): Text to append as a string. Will be added after existing memory with newline separator.
@@ -376,7 +380,7 @@ Example:
 If you are asked to log information for the user, use this to append logs to a file. Use this to create access logs, audit trails, or any persistent logging.
 
 Parameters:
-- `output_name` (string, required): Name of the log output (e.g., 'access_logs'). Used to construct the log filename.
+- `output_name` (string, required): Name of the log output (e.g., 'access_logs'). Used to construct the log filename netget_<name>_<time>.log, so it may contain only A-Z, a-z, 0-9, '_' and '-' (1-64 characters); anything else is refused.
 - `content` (string, required): Content to append to the log file.
 
 Example:
