@@ -197,7 +197,9 @@ impl Protocol for ZeromqClientProtocol {
             .notes("NULL security only. One connection, no reconnection: if the server goes away the client ends. A REQ socket refuses a second send before its reply arrives. Frames and messages are capped at 1 MiB, 64 frames per message.")
             .max_inbound_bytes(wire::MAX_MESSAGE_BYTES)
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // Messages received while the model answers wait in the dispatcher queue and are
+            // answered in one call, one event each (`client/zeromq/mod.rs`).
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

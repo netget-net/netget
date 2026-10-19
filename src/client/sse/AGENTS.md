@@ -27,3 +27,12 @@ framing (an overlong line, a bad size, a missing CRLF, a line deadline) ends the
 (a reset) is treated as a close and reconnects like one.
 
 Not implemented: https, redirects, custom request headers or credentials.
+
+## Batching
+
+`BatchingMode::On`. The body goes on being read while the model answers: each piece is parsed
+into a queue of unanswered `sse_event_received` events (past `MAX_BATCH_EVENTS` waiting the
+body is not read and TCP holds the server back). With batching on, everything waiting is
+answered in one `call_llm_for_client_batch` call, one event each; with it off, one event per
+call. An end, reset or broken framing found while reading during a call is acted on once the
+events read before it are answered. `tests/client/sse/batching_test.rs` is the off/on pair.

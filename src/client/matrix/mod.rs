@@ -2,7 +2,7 @@
 //! `/sync` and raises what other people did (messages, invites, membership), while the
 //! session task performs the handler's actions, one HTTP/1.1 connection per request.
 pub mod actions;
-use crate::client::llm_budget::call_llm_for_client;
+use crate::client::llm_budget::call_llm_for_client_batch;
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::logging::emit::Log;
 use crate::protocol::{ConnectContext, Event};
@@ -282,18 +282,62 @@ pub async fn connect(ctx: ConnectContext) -> Result<std::net::SocketAddr> {
 
     let events_ctx = ctx.clone();
     let dispatcher = tokio::spawn(async move {
-        while let Some((event, depth)) = event_rx.recv().await {
-            events_ctx
-                .state
-                .record_access_log(
-                    AccessLogOwner::Client(events_ctx.client_id.as_u32()),
-                    "Matrix",
-                    None,
-                    event.id(),
-                    event.data.clone(),
-                    vec![],
+        // An event that would not have joined the previous batch starts the next one.
+        let mut carried = None;
+        while let Some(first) = match carried.take() {
+            Some(item) => Some(item),
+            None => event_rx.recv().await,
+        } {
+            // With batching on, everything raised while the model was answering is answered
+            // in this one call; with it off, one event per call. Only events the model itself
+            // will answer together are drained: one a script, static or manual rule answers
+            // stays in the bounded queue, as it would without batching.
+            let mut batch = vec![first];
+            while batch.len() < crate::protocol::metadata::MAX_BATCH_EVENTS {
+                let mut ids: Vec<&str> = batch.iter().map(|item| item.0.id()).collect();
+                if ids.len() == 1
+                    && !crate::llm::action_helper::client_batch_goes_to_the_model(
+                        &events_ctx.state,
+                        events_ctx.client_id,
+                        &ids,
+                    )
+                    .await
+                {
+                    break;
+                }
+                let Ok(next) = event_rx.try_recv() else {
+                    break;
+                };
+                ids.push(next.0.id());
+                if !crate::llm::action_helper::client_batch_goes_to_the_model(
+                    &events_ctx.state,
+                    events_ctx.client_id,
+                    &ids,
                 )
-                .await;
+                .await
+                {
+                    carried = Some(next);
+                    break;
+                }
+                drop(ids);
+                batch.push(next);
+            }
+            // A follow-up is as deep as the deepest event it answers.
+            let depth = batch.iter().map(|(_, d)| *d).max().unwrap_or(0);
+            let events: Vec<Event> = batch.into_iter().map(|(e, _)| e).collect();
+            for event in &events {
+                events_ctx
+                    .state
+                    .record_access_log(
+                        AccessLogOwner::Client(events_ctx.client_id.as_u32()),
+                        "Matrix",
+                        None,
+                        event.id(),
+                        event.data.clone(),
+                        vec![],
+                    )
+                    .await;
+            }
             let instruction = events_ctx
                 .state
                 .get_instruction_for_client(events_ctx.client_id)
@@ -304,13 +348,13 @@ pub async fn connect(ctx: ConnectContext) -> Result<std::net::SocketAddr> {
                 .get_memory_for_client(events_ctx.client_id)
                 .await
                 .unwrap_or_default();
-            match call_llm_for_client(
+            match call_llm_for_client_batch(
                 &events_ctx.llm_client,
                 &events_ctx.state,
                 events_ctx.client_id.to_string(),
                 &instruction,
                 &memory,
-                Some(&event),
+                &events,
                 &MatrixClientProtocol,
                 &events_ctx.status_tx,
             )
