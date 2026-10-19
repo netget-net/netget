@@ -9398,3 +9398,102 @@ jobs:
             --test parameter_type_agreement_test \
             --test history_batching_declaration_test \
             -- --test-threads=32
+  iscsi:
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'iscsi')
+    name: iSCSI target against libiscsi and the Linux kernel initiator, initiator against gotgt and tgtd
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: protocol-pairs-${{ github.job }}
+      # gotgt is installed with `go install` (no release binary).
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: false
+      - name: Install open-iscsi, tgt and tshark; build libiscsi 1.20.3; install gotgt; no daemon may hold port 3260
+        run: |
+          set -euo pipefail
+          echo 'wireshark-common wireshark-common/install-setuid boolean false' | sudo debconf-set-selections
+          sudo apt-get update
+          # The packages' own services would hold port 3260; the tests start their own.
+          echo exit 101 | sudo tee /usr/sbin/policy-rc.d >/dev/null
+          sudo chmod +x /usr/sbin/policy-rc.d
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            open-iscsi tgt tshark build-essential autoconf automake libtool libcunit1-dev \
+            "linux-modules-extra-$(uname -r)"
+          sudo rm -f /usr/sbin/policy-rc.d
+          for s in tgt iscsid open-iscsi; do sudo systemctl stop "$s" 2>/dev/null || true; done
+          # The kernel initiator: its transport module and iscsid, which iscsiadm talks to.
+          sudo modprobe iscsi_tcp
+          sudo systemctl start iscsid
+          # libiscsi builds into a directory this (non-root) user owns.
+          sh scripts/test-peers/build-libiscsi.sh "$RUNNER_TEMP/libiscsi" | tail -1 >> "$GITHUB_PATH"
+          GOBIN="$RUNNER_TEMP/gotgt" go install github.com/gostor/gotgt@v0.2.2
+          echo "NETGET_GOTGT=$RUNNER_TEMP/gotgt/gotgt" >> "$GITHUB_ENV"
+          dpkg-query -W open-iscsi tgt tshark
+          # tgtd, iscsiadm and the block device the kernel makes need root.
+          sudo -n true
+      - name: Both roles with mandatory independent peers, bounds and fail-closed paths
+        run: |
+          set -euo pipefail
+          command -v iscsi-ls iscsi-inq iscsi-readcapacity16 iscsi-md5sum iscsi-test-cu tshark
+          command -v iscsiadm tgtd tgtadm
+          test -x "$NETGET_GOTGT"
+          # cargo builds as the runner user and runs each test binary as root, with the PATH
+          # that finds the peers.
+          export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER="sudo -E env PATH=$PATH"
+          for filter in \
+            iscsi:: \
+            client/iscsi::; do
+            case "$filter" in
+              client/*) target=client; filter=${filter#client/} ;;
+              *) target=server ;;
+            esac
+            pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
+            cargo test --locked --no-default-features \
+              --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
+            grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
+          done
+      - name: Shared declarations, native startup, privacy and ownership
+        run: |
+          cargo test --locked --no-default-features \
+            --test event_action_declarations_test \
+            --test advertised_actions_test \
+            --test action_descriptions_test \
+            --test startup_examples_validation_test \
+            --test examples \
+            --test startup_param_defaults_test \
+            --test startup_param_drift_test \
+            --test protocol_startup_examples_test \
+            --test startup_params_result_test \
+            --test startup_constructed_input_test \
+            --test management_test \
+            --test management_form_test \
+            --test dual_protocol_test \
+            --test dashboard_wireshark_test \
+            --test client_event_wiring_test \
+            --test event_emit_sites_test \
+            --test task_registration_cancellation_test \
+            --test server_task_registry_test \
+            --test client_stop_releases_socket_test \
+            --test peer_handle_coverage_ratchet_test \
+            --test client_credential_logging_test \
+            --test client_llm_budget_test \
+            --test secret_redaction_test \
+            --test wire_failure_test \
+            --test site_protocol_list_test \
+            --test well_known_port_declaration_test \
+            --test failure_mode_declaration_test \
+            --test decision_tag_ratchet_test \
+            --test max_inbound_bytes_declaration_test \
+            --test max_inbound_bytes_bound_plus_one_test \
+            --test test_suite_hygiene_test \
+            --test real_client_evidence_is_run_test \
+            --test startup_privilege_transport_test \
+            --test parameter_type_agreement_test \
+            --test history_batching_declaration_test \
+            -- --test-threads=32
