@@ -841,6 +841,15 @@ in `metadata()` and `tests/history_batching_declaration_test.rs` requires:
   batching, one read at a time when not). Never batch where each request owes its own
   correlated reply (HTTP, DNS, RPC).
 
+  **Clients batch the same way**, through `llm_budget::call_llm_for_client_batch` (one budget
+  unit per batch; falls back to one-by-one when the client has batching off or a rule answers
+  any event). A client that calls the model inline in its read loop cannot batch as it is: what
+  the server sends during the call merges in the kernel buffer into one read, so off and on are
+  indistinguishable. The reference shape is the `tcp` and `telnet` clients — a registered reader
+  task (`spawn_client_task`) feeding a bounded queue, and an answering loop that takes one read
+  per call (off) or drains everything waiting (on). `tests/client_batching_test.rs` is the test
+  shape: a local listener sends during a deliberately slow call, batching off as the control.
+
 Both are overridable per instance everywhere an instance is started or updated (`history` /
 `batching` on `ServerForm`/`ClientForm`, `open_*`/`update_*`, MCP, `--history`/`--batching`,
 the dashboard form) and hot-applied. Memory is separate: it is what the model chooses to keep

@@ -52,6 +52,17 @@ struct ClientData {
 /// Telnet client that connects to a remote Telnet server
 pub struct TelnetClient;
 
+/// How many reads may wait while the model answers an earlier one (at most 8 KiB each);
+/// past it the reader stops and TCP holds the server back.
+const READ_QUEUE_CHUNKS: usize = crate::protocol::metadata::MAX_BATCH_EVENTS;
+
+/// What the reader task hands the answering loop.
+enum Inbound {
+    Data(Vec<u8>),
+    Closed,
+    Failed(String),
+}
+
 impl TelnetClient {
     /// Connect to a Telnet server with integrated LLM actions
     pub async fn connect_with_llm_actions(
@@ -193,16 +204,36 @@ impl TelnetClient {
         let write_half_for_negotiation = write_half_arc.clone();
         let status_tx_for_negotiation = status_tx.clone();
 
-        // Spawn read loop
+        // The reader runs on its own task so that what the server sends while the model is
+        // answering keeps its read boundaries in a bounded queue rather than merging in the
+        // kernel buffer: with batching on, everything waiting is answered in one call (one
+        // event per read), with it off one read per call. Registered, so stop_client aborts it.
+        let (inbound_tx, mut inbound_rx) = mpsc::channel::<Inbound>(READ_QUEUE_CHUNKS);
+        let reader = app_state
+            .spawn_client_task(client_id, async move {
+                let mut buffer = vec![0u8; 8192];
+                loop {
+                    let message = match read_half.read(&mut buffer).await {
+                        Ok(0) => Inbound::Closed,
+                        Ok(n) => Inbound::Data(buffer[..n].to_vec()),
+                        Err(e) => Inbound::Failed(e.to_string()),
+                    };
+                    let last = !matches!(message, Inbound::Data(_));
+                    if inbound_tx.send(message).await.is_err() || last {
+                        break;
+                    }
+                }
+            })
+            .await;
+
+        // Spawn the answering loop.
         // Registered with AppState so stop_client can abort this task —
         // dropping a JoinHandle only detaches it in Tokio.
         let task_registrar = app_state.clone();
         let task_handle = tokio::spawn(async move {
-            let mut buffer = vec![0u8; 8192];
-
-            loop {
-                let read_result = tokio::select! {
-                    read = read_half.read(&mut buffer) => read,
+            'session: loop {
+                let first = tokio::select! {
+                    inbound = inbound_rx.recv() => inbound.unwrap_or(Inbound::Closed),
                     Some(cmd) = command_rx.recv() => {
                         let disconnect = crate::client::command_support::handle_stream_client_command(
                             &crate::client::telnet::actions::TelnetClientProtocol,
@@ -227,8 +258,170 @@ impl TelnetClient {
                         continue;
                     }
                 };
-                match read_result {
-                    Ok(0) => {
+
+                // This read, plus — with batching on — every read already waiting.
+                let mut reads: Vec<Vec<u8>> = Vec::new();
+                let mut ended: Option<Inbound> = None;
+                match first {
+                    Inbound::Data(data) => reads.push(data),
+                    other => ended = Some(other),
+                }
+                if ended.is_none()
+                    && app_state
+                        .client_conversation_settings(client_id)
+                        .await
+                        .is_some_and(|(_, batching)| batching)
+                {
+                    while reads.len() < crate::protocol::metadata::MAX_BATCH_EVENTS {
+                        match inbound_rx.try_recv() {
+                            Ok(Inbound::Data(data)) => reads.push(data),
+                            Ok(other) => {
+                                ended = Some(other);
+                                break;
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                }
+
+                // Negotiation is answered per read, here, before any model call; what is left
+                // of each read becomes one event.
+                let mut events = Vec::with_capacity(reads.len());
+                for raw_data in &reads {
+                    trace!(
+                        "Telnet client {} received {} bytes",
+                        client_id,
+                        raw_data.len()
+                    );
+                    let (data, telnet_commands) = Self::parse_telnet_data(raw_data);
+                    for cmd in &telnet_commands {
+                        if let Some(response) =
+                            Self::handle_telnet_command(cmd, client_id, &status_tx_for_negotiation)
+                        {
+                            match write_half_for_negotiation
+                                .lock()
+                                .await
+                                .write_all(&response)
+                                .await
+                            {
+                                Ok(()) => trace!(
+                                    "Telnet client {} sent negotiation response: {:?}",
+                                    client_id,
+                                    response
+                                ),
+                                Err(e) => error!(
+                                    "Telnet client {} could not answer negotiation: {}",
+                                    client_id, e
+                                ),
+                            }
+                        }
+                    }
+                    // Only meaningful content reaches the model.
+                    if data.is_empty() && telnet_commands.is_empty() {
+                        continue;
+                    }
+                    // Lossy: after IAC stripping what is left is the server's text, and a
+                    // stray byte must not cost the model the whole line.
+                    //
+                    // `data` only. This event used to carry `raw_hex` as well - the whole
+                    // read hex-encoded, up to 16 KB of hex per turn - which the repo's
+                    // action/event rules forbid outright ("never put raw bytes or base64 in
+                    // action parameters or event data"): models cannot reliably parse it, the
+                    // negotiation it exposed is handled here rather than by the model, and it
+                    // doubled the prompt for nothing.
+                    events.push(Event::new(
+                        &TELNET_CLIENT_DATA_RECEIVED_EVENT,
+                        serde_json::json!({ "data": String::from_utf8_lossy(&data).to_string() }),
+                    ));
+                }
+
+                if !events.is_empty() {
+                    if let Some(instruction) = app_state.get_instruction_for_client(client_id).await
+                    {
+                        let protocol =
+                            Arc::new(crate::client::telnet::actions::TelnetClientProtocol::new());
+                        let memory = client_data.lock().await.memory.clone();
+                        match crate::client::llm_budget::call_llm_for_client_batch(
+                            &llm_client,
+                            &app_state,
+                            client_id.to_string(),
+                            &instruction,
+                            &memory,
+                            &events,
+                            protocol.as_ref(),
+                            &status_tx,
+                        )
+                        .await
+                        {
+                            Ok(ClientLlmResult {
+                                actions,
+                                memory_updates,
+                            }) => {
+                                if let Some(mem) = memory_updates {
+                                    client_data.lock().await.memory = mem;
+                                }
+
+                                for action in actions {
+                                    use crate::llm::actions::client_trait::Client;
+                                    use crate::llm::actions::client_trait::ClientActionResult;
+                                    match protocol.as_ref().execute_action(action) {
+                                        Ok(ClientActionResult::SendData(bytes)) => {
+                                            // A failed write was silently swallowed here, so
+                                            // the model's command vanished and the client went
+                                            // on waiting for a reply to something that never
+                                            // left the host.
+                                            let mut write_guard = write_half_arc.lock().await;
+                                            if let Err(e) = write_guard.write_all(&bytes).await {
+                                                error!(
+                                                    "Telnet client {} failed to send {} bytes: {}",
+                                                    client_id,
+                                                    bytes.len(),
+                                                    e
+                                                );
+                                            } else if let Err(e) = write_guard.flush().await {
+                                                error!(
+                                                    "Telnet client {} failed to flush: {}",
+                                                    client_id, e
+                                                );
+                                            } else {
+                                                trace!(
+                                                    "Telnet client {} sent {} bytes",
+                                                    client_id,
+                                                    bytes.len()
+                                                );
+                                            }
+                                        }
+                                        Ok(ClientActionResult::Disconnect) => {
+                                            // This used to `break` out of the loop over actions
+                                            // only, so the model's disconnect was ignored and
+                                            // the session went on.
+                                            info!("Telnet client {} disconnecting", client_id);
+                                            app_state
+                                                .update_client_status(
+                                                    client_id,
+                                                    ClientStatus::Disconnected,
+                                                )
+                                                .await;
+                                            let _ = status_tx.send(format!(
+                                                "[CLIENT] Telnet client {} disconnected",
+                                                client_id
+                                            ));
+                                            let _ = status_tx.send("__UPDATE_UI__".to_string());
+                                            break 'session;
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                error!("LLM error for Telnet client {}: {}", client_id, e);
+                            }
+                        }
+                    }
+                }
+
+                match ended {
+                    Some(Inbound::Closed) => {
                         info!(
                             "Telnet client {} {}",
                             client_id,
@@ -242,147 +435,18 @@ impl TelnetClient {
                         let _ = status_tx.send("__UPDATE_UI__".to_string());
                         break;
                     }
-                    Ok(n) => {
-                        let raw_data = buffer[..n].to_vec();
-                        trace!("Telnet client {} received {} bytes", client_id, n);
-
-                        // Parse Telnet protocol and extract data
-                        let (data, telnet_commands) = Self::parse_telnet_data(&raw_data);
-
-                        // Handle Telnet option negotiations
-                        for cmd in &telnet_commands {
-                            if let Some(response) = Self::handle_telnet_command(
-                                cmd,
-                                client_id,
-                                &status_tx_for_negotiation,
-                            ) {
-                                match write_half_for_negotiation
-                                    .lock()
-                                    .await
-                                    .write_all(&response)
-                                    .await
-                                {
-                                    Ok(()) => trace!(
-                                        "Telnet client {} sent negotiation response: {:?}",
-                                        client_id,
-                                        response
-                                    ),
-                                    Err(e) => error!(
-                                        "Telnet client {} could not answer negotiation: {}",
-                                        client_id, e
-                                    ),
-                                }
-                            }
-                        }
-
-                        // Only process data if there's meaningful content
-                        if data.is_empty() && telnet_commands.is_empty() {
-                            continue;
-                        }
-
-                        // Handle the data. Strictly sequential: the LLM call happens inline,
-                        // so nothing else reads this socket meanwhile and there is no state
-                        // to keep between turns beyond the model's memory.
-                        if let Some(instruction) =
-                            app_state.get_instruction_for_client(client_id).await
-                        {
-                            let protocol = Arc::new(
-                                crate::client::telnet::actions::TelnetClientProtocol::new(),
-                            );
-
-                            // Lossy: after IAC stripping what is left is the server's text,
-                            // and a stray byte must not cost the model the whole line.
-                            let data_str = String::from_utf8_lossy(&data).to_string();
-
-                            // `data` only. This event used to carry `raw_hex` as well - the
-                            // whole read hex-encoded, up to 16 KB of hex per turn - which the
-                            // repo's action/event rules forbid outright ("never put raw bytes
-                            // or base64 in action parameters or event data"): models cannot
-                            // reliably parse it, the negotiation it exposed is handled here
-                            // rather than by the model, and it doubled the prompt for
-                            // nothing.
-                            let event = Event::new(
-                                &TELNET_CLIENT_DATA_RECEIVED_EVENT,
-                                serde_json::json!({ "data": data_str }),
-                            );
-
-                            let memory = client_data.lock().await.memory.clone();
-                            match call_llm_for_client(
-                                &llm_client,
-                                &app_state,
-                                client_id.to_string(),
-                                &instruction,
-                                &memory,
-                                Some(&event),
-                                protocol.as_ref(),
-                                &status_tx,
-                            )
-                            .await
-                            {
-                                Ok(ClientLlmResult {
-                                    actions,
-                                    memory_updates,
-                                }) => {
-                                    if let Some(mem) = memory_updates {
-                                        client_data.lock().await.memory = mem;
-                                    }
-
-                                    for action in actions {
-                                        use crate::llm::actions::client_trait::Client;
-                                        use crate::llm::actions::client_trait::ClientActionResult;
-                                        match protocol.as_ref().execute_action(action) {
-                                            Ok(ClientActionResult::SendData(bytes)) => {
-                                                // A failed write was silently swallowed here,
-                                                // so the model's command vanished and the
-                                                // client went on waiting for a reply to
-                                                // something that never left the host.
-                                                let mut write_guard = write_half_arc.lock().await;
-                                                if let Err(e) = write_guard.write_all(&bytes).await
-                                                {
-                                                    error!(
-                                                        "Telnet client {} failed to send {} \
-                                                         bytes: {}",
-                                                        client_id,
-                                                        bytes.len(),
-                                                        e
-                                                    );
-                                                } else if let Err(e) = write_guard.flush().await {
-                                                    error!(
-                                                        "Telnet client {} failed to flush: {}",
-                                                        client_id, e
-                                                    );
-                                                } else {
-                                                    trace!(
-                                                        "Telnet client {} sent {} bytes",
-                                                        client_id,
-                                                        bytes.len()
-                                                    );
-                                                }
-                                            }
-                                            Ok(ClientActionResult::Disconnect) => {
-                                                info!("Telnet client {} disconnecting", client_id);
-                                                break;
-                                            }
-                                            _ => {}
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    error!("LLM error for Telnet client {}: {}", client_id, e);
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
+                    Some(Inbound::Failed(e)) => {
                         error!("Telnet client {} read error: {}", client_id, e);
                         app_state
-                            .update_client_status(client_id, ClientStatus::Error(e.to_string()))
+                            .update_client_status(client_id, ClientStatus::Error(e))
                             .await;
                         let _ = status_tx.send("__UPDATE_UI__".to_string());
                         break;
                     }
+                    _ => {}
                 }
             }
+            reader.abort();
             // The loop owns the only receiver; dropping the registered handle
             // makes later send_to_client calls fail fast instead of timing out.
             app_state.remove_client_handle(client_id).await;

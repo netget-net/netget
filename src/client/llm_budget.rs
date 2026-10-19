@@ -94,6 +94,118 @@ pub async fn call_llm_for_client(
         instruction,
         memory,
         event,
+        &[],
+        protocol,
+        status_tx,
+        offered_actions,
+        private_payloads,
+    );
+    if private_payloads {
+        use tracing::instrument::WithSubscriber;
+        run.with_subscriber(tracing::subscriber::NoSubscriber::default())
+            .await
+            .map_err(crate::utils::redact::hide_error_details)
+    } else {
+        run.await
+    }
+}
+
+/// Answer several events from one client session — the ones that arrived while the model was
+/// still answering an earlier one — in a single model call, when the client batches.
+///
+/// The client-side twin of `crate::llm::action_helper::call_llm_batch`: the newest event is
+/// the trigger, the earlier ones are listed above it as arrived and not yet answered, and one
+/// [`ClientLlmResult`] carries the model's actions for all of them, in its order. One budget
+/// unit is spent, and every event is recorded in the access log and the session's history.
+///
+/// Falls back to answering the events one by one, in arrival order, with their actions
+/// concatenated, when the client has batching off or any event is routed to a script, static
+/// or manual rule — a rule decides its own event, and folding it into a model call would hand
+/// the model a decision that was not its.
+#[allow(clippy::too_many_arguments)]
+pub async fn call_llm_for_client_batch(
+    llm_client: &OllamaClient,
+    state: &AppState,
+    client_id: String,
+    instruction: &str,
+    memory: &str,
+    events: &[Event],
+    protocol: &dyn Client,
+    status_tx: &mpsc::UnboundedSender<String>,
+) -> Result<ClientLlmResult> {
+    let Some((last, earlier)) = events.split_last() else {
+        return Ok(ClientLlmResult {
+            actions: Vec::new(),
+            memory_updates: None,
+        });
+    };
+    let ids: Vec<&str> = events.iter().map(|e| e.id()).collect();
+    let one_call = !earlier.is_empty()
+        && match ClientId::from_string(&client_id) {
+            Some(cid) => {
+                crate::llm::action_helper::client_batch_goes_to_the_model(state, cid, &ids).await
+            }
+            None => false,
+        };
+    if !one_call {
+        let mut combined = ClientLlmResult {
+            actions: Vec::new(),
+            memory_updates: None,
+        };
+        for event in events {
+            let result = call_llm_for_client(
+                llm_client,
+                state,
+                client_id.clone(),
+                instruction,
+                memory,
+                Some(event),
+                protocol,
+                status_tx,
+            )
+            .await?;
+            combined.actions.extend(result.actions);
+            if result.memory_updates.is_some() {
+                combined.memory_updates = result.memory_updates;
+            }
+        }
+        return Ok(combined);
+    }
+
+    for event in earlier {
+        anyhow::ensure!(
+            crate::utils::json_budget::within_budget(
+                &event.data,
+                crate::scripting::event_handler::MAX_INTERPOLATION_BYTES,
+                crate::scripting::event_handler::MAX_INTERPOLATION_NODES,
+                crate::scripting::event_handler::MAX_INTERPOLATION_DEPTH,
+            ),
+            "event exceeds the shared JSON budget"
+        );
+    }
+    let mut offered_actions =
+        crate::llm::actions::client_trait::client_llm_action_set(protocol, state, Some(last));
+    for event in earlier {
+        for action in
+            crate::llm::actions::client_trait::client_llm_action_set(protocol, state, Some(event))
+        {
+            if !offered_actions.iter().any(|a| a.name == action.name) {
+                offered_actions.push(action);
+            }
+        }
+    }
+    let private_payloads = crate::utils::redact::actions_have_credentials(&offered_actions)
+        || events
+            .iter()
+            .any(|event| crate::utils::redact::contains_credentials(&event.data));
+    let run = call_llm_for_client_inner(
+        llm_client,
+        state,
+        client_id,
+        instruction,
+        memory,
+        Some(last),
+        earlier,
         protocol,
         status_tx,
         offered_actions,
@@ -117,6 +229,7 @@ async fn call_llm_for_client_inner(
     instruction: &str,
     memory: &str,
     event: Option<&Event>,
+    earlier: &[Event],
     protocol: &dyn Client,
     status_tx: &mpsc::UnboundedSender<String>,
     offered_actions: Vec<crate::llm::actions::ActionDefinition>,
@@ -240,13 +353,14 @@ async fn call_llm_for_client_inner(
         }
     }
 
-    let result = crate::llm::action_helper::call_llm_for_client(
+    let result = crate::llm::action_helper::call_llm_for_client_with_earlier(
         llm_client,
         state,
         client_id.clone(),
         instruction,
         memory,
         event,
+        earlier,
         protocol,
         status_tx,
     )
@@ -257,6 +371,22 @@ async fn call_llm_for_client_inner(
     // execution happens later in the client's own loop, which does not report
     // back here.
     if let (Some(cid), Some(ev)) = (ClientId::from_string(&client_id), event) {
+        // A batch is recorded event by event; the answer sits with the last, the others say
+        // they were answered together with it — as on the server side.
+        for earlier_event in earlier {
+            state
+                .record_access_log(
+                    crate::state::AccessLogOwner::Client(cid.as_u32()),
+                    protocol.protocol_name(),
+                    None,
+                    earlier_event.id(),
+                    earlier_event.data.clone(),
+                    vec![serde_json::json!({
+                        "type": crate::state::exchange_history::ANSWERED_WITH_NEXT
+                    })],
+                )
+                .await;
+        }
         state
             .record_access_log(
                 crate::state::AccessLogOwner::Client(cid.as_u32()),
