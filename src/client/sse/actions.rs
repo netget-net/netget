@@ -214,7 +214,9 @@ impl Protocol for SseClientProtocol {
             .notes("http:// only (no TLS), no redirects, no request headers beyond Accept, Cache-Control and Last-Event-ID. Lines are capped at 64 KiB and an event's data at 1 MiB. A handler chain stops after 8 follow-ups.")
             .max_inbound_bytes(crate::server::sse::wire::MAX_EVENT_BYTES)
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // Stream events that arrive while the model answers are read and parsed during the
+            // call and answered together in the next one (`client/sse/mod.rs`).
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
     fn example_prompt(&self) -> &'static str {

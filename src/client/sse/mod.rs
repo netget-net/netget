@@ -2,9 +2,10 @@
 //! and EventSource's reconnects — the server's retry hint, Last-Event-ID, no reconnect after a
 //! refusal. Each event goes to the handler, which may reconnect or stop.
 pub mod actions;
-use crate::client::llm_budget::call_llm_for_client;
+use crate::client::llm_budget::call_llm_for_client_batch;
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::logging::emit::Log;
+use crate::protocol::metadata::MAX_BATCH_EVENTS;
 use crate::protocol::{ConnectContext, Event};
 use crate::server::sse::wire::Parser;
 use crate::state::client_handles::{ClientCommand, ClientSendOutcome};
@@ -12,6 +13,7 @@ use crate::state::{AccessLogOwner, ClientStatus};
 pub use actions::SseClientProtocol;
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use serde_json::{json, Value};
+use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, ReadHalf};
@@ -137,6 +139,11 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
 }
 
 async fn ask(ctx: &ConnectContext, event: &Event) -> Vec<Value> {
+    ask_all(ctx, std::slice::from_ref(event)).await
+}
+
+/// Ask the handler about several events at once — one model call when the client batches.
+async fn ask_all(ctx: &ConnectContext, events: &[Event]) -> Vec<Value> {
     let state = &ctx.state;
     let instruction = state
         .get_instruction_for_client(ctx.client_id)
@@ -146,13 +153,13 @@ async fn ask(ctx: &ConnectContext, event: &Event) -> Vec<Value> {
         .get_memory_for_client(ctx.client_id)
         .await
         .unwrap_or_default();
-    match call_llm_for_client(
+    match call_llm_for_client_batch(
         &ctx.llm_client,
         state,
         ctx.client_id.to_string(),
         &instruction,
         &memory,
-        Some(event),
+        events,
         &SseClientProtocol,
         &ctx.status_tx,
     )
@@ -573,36 +580,55 @@ async fn session(
         );
         let mut next = apply(ctx, ask(ctx, &connected).await);
         let mut broken = None;
+        // Events parsed and not yet answered. The body goes on being read while the model
+        // answers, so what the server sends during a call is parsed into this queue rather
+        // than left in the socket: with batching on everything waiting is answered in the next
+        // call, with it off one event per call. Past `MAX_BATCH_EVENTS` waiting the body is not
+        // read and TCP holds the server back.
+        let mut waiting: VecDeque<Event> = VecDeque::new();
+        let mut ended = false;
         // Read the stream until it ends or the handler or a command says otherwise.
         while matches!(next, Next::Continue) {
-            tokio::select! {
-                c = external.recv() => match c {
-                    Some(c) => next = command(ctx, c).await,
-                    None => next = Next::Stop,
-                },
-                piece = body_chunk(&mut reader, &mut body, &mut buf) => {
-                    let n = match piece {
-                        Ok(Some(n)) => n,
-                        Ok(None) => break,
-                        Err(e) if is_transport_error(&e) => break,
-                        Err(e) => {
-                            broken = Some(format!("{e:#}"));
-                            break;
-                        }
-                    };
-                    for ev in parser.feed(&buf[..n])? {
-                        chained = 0;
-                        let event = Event::new(
-                            &actions::MESSAGE_EVENT,
-                            json!({"event": ev.event, "data": ev.data, "id": ev.last_event_id}),
-                        );
-                        next = apply(ctx, ask(ctx, &event).await);
-                        if !matches!(next, Next::Continue) {
-                            break;
-                        }
+            if waiting.is_empty() {
+                if ended {
+                    break;
+                }
+                tokio::select! {
+                    c = external.recv() => match c {
+                        Some(c) => next = command(ctx, c).await,
+                        None => next = Next::Stop,
+                    },
+                    piece = body_chunk(&mut reader, &mut body, &mut buf) => {
+                        take_piece(piece, &buf, &mut parser, &mut waiting, &mut ended, &mut broken)?;
                     }
                 }
+                continue;
             }
+            let batching = ctx
+                .state
+                .client_conversation_settings(ctx.client_id)
+                .await
+                .is_some_and(|(_, batching)| batching);
+            let take = if batching {
+                waiting.len().min(MAX_BATCH_EVENTS)
+            } else {
+                1
+            };
+            let batch: Vec<Event> = waiting.drain(..take).collect();
+            chained = 0;
+            let call = ask_all(ctx, &batch);
+            tokio::pin!(call);
+            let answer = loop {
+                tokio::select! {
+                    answer = &mut call => break answer,
+                    piece = body_chunk(&mut reader, &mut body, &mut buf),
+                        if !ended && waiting.len() < MAX_BATCH_EVENTS =>
+                    {
+                        take_piece(piece, &buf, &mut parser, &mut waiting, &mut ended, &mut broken)?;
+                    }
+                }
+            };
+            next = apply(ctx, answer);
         }
         drop(writer);
         match next {
@@ -672,6 +698,42 @@ async fn session(
         }
         attempt += 1;
     }
+}
+
+/// One piece of the body: its events join `waiting`; its end, a transport failure or broken
+/// framing ends the stream (`ended`), the last also saying why (`broken`). A malformed event
+/// stream is an error for the session, as before.
+fn take_piece(
+    piece: Result<Option<usize>>,
+    buf: &[u8],
+    parser: &mut Parser,
+    waiting: &mut VecDeque<Event>,
+    ended: &mut bool,
+    broken: &mut Option<String>,
+) -> Result<()> {
+    let n = match piece {
+        Ok(Some(n)) => n,
+        Ok(None) => {
+            *ended = true;
+            return Ok(());
+        }
+        Err(e) if is_transport_error(&e) => {
+            *ended = true;
+            return Ok(());
+        }
+        Err(e) => {
+            *broken = Some(format!("{e:#}"));
+            *ended = true;
+            return Ok(());
+        }
+    };
+    for ev in parser.feed(&buf[..n])? {
+        waiting.push_back(Event::new(
+            &actions::MESSAGE_EVENT,
+            json!({"event": ev.event, "data": ev.data, "id": ev.last_event_id}),
+        ));
+    }
+    Ok(())
 }
 
 /// A stream that will not be reopened by itself: tell the handler, then wait for it or a
