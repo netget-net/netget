@@ -1062,31 +1062,9 @@ impl CommandStatusWrapper {
     }
 }
 
-/// SCSI command opcodes (subset)
+/// SCSI command opcodes and sense keys: the shared SCSI module's, which the iSCSI target
+/// answers from too.
 #[cfg(all(unix, feature = "libusb"))]
-pub mod scsi_opcode {
-    pub const TEST_UNIT_READY: u8 = 0x00;
-    pub const REQUEST_SENSE: u8 = 0x03;
-    pub const INQUIRY: u8 = 0x12;
-    pub const MODE_SENSE_6: u8 = 0x1A;
-    pub const START_STOP_UNIT: u8 = 0x1B;
-    pub const PREVENT_ALLOW_MEDIUM_REMOVAL: u8 = 0x1E;
-    pub const READ_FORMAT_CAPACITIES: u8 = 0x23;
-    pub const READ_CAPACITY_10: u8 = 0x25;
-    pub const READ_10: u8 = 0x28;
-    pub const WRITE_10: u8 = 0x2A;
-}
-
-/// SCSI sense key codes
+pub use crate::server::scsi_common::opcode as scsi_opcode;
 #[cfg(all(unix, feature = "libusb"))]
-pub mod scsi_sense_key {
-    pub const NO_SENSE: u8 = 0x00;
-    pub const RECOVERED_ERROR: u8 = 0x01;
-    pub const NOT_READY: u8 = 0x02;
-    pub const MEDIUM_ERROR: u8 = 0x03;
-    pub const HARDWARE_ERROR: u8 = 0x04;
-    pub const ILLEGAL_REQUEST: u8 = 0x05;
-    pub const UNIT_ATTENTION: u8 = 0x06;
-    pub const DATA_PROTECT: u8 = 0x07;
-    pub const ABORTED_COMMAND: u8 = 0x0B;
-}
+pub use crate::server::scsi_common::sense_key as scsi_sense_key;

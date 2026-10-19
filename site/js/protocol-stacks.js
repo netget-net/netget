@@ -128,6 +128,7 @@ export const protocolStacks = [
     ["ipp", "ETH>IP>TCP>HTTP>IPP"],
     ["ipsec", "ETH>IP>UDP>IPSEC"],
     ["irc", "ETH>IP>TCP>IRC"],
+    ["iscsi", "ETH>IP>TCP>iSCSI"],
     ["isis", "ETH>LLC/SNAP>IS-IS"],
     ["isis", "ETH>LLC>ISIS"],
     ["jmap", "ETH>IP>TCP>HTTP>JMAP"],
