@@ -297,7 +297,9 @@ impl Protocol for IrcClientProtocol {
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
-            .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // A reader task answers PING and queues every other line while the model answers;
+            // with batching on the lines waiting go to `call_llm_for_client_batch` together.
+            .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
     fn description(&self) -> &'static str {
