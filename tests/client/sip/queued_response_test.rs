@@ -213,6 +213,6 @@ async fn the_ack_precedes_the_models_answer_and_repeats_the_invites_cseq() {
         second.starts_with("BYE "),
         "the model's BYE must follow:\n{second}"
     );
-    mock.verify_mocks().await.unwrap();
+    mock.verify_calls().await.unwrap();
     let _ = state.remove_client(id).await;
 }
