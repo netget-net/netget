@@ -1718,7 +1718,7 @@ impl<'a> Conn<'a> {
         let numd = (((sqe.cdw(11) & 0xFFFF) as u64) << 16 | (sqe.cdw(10) >> 16) as u64) + 1;
         let len = numd * 4;
         let lpo = sqe.cdw(12) as u64 | (sqe.cdw(13) as u64) << 32;
-        if len > MAX_TRANSFER as u64 || lpo % 4 != 0 {
+        if len > MAX_TRANSFER as u64 || !lpo.is_multiple_of(4) {
             return err(Status::INVALID_FIELD);
         }
         let len = len as usize;

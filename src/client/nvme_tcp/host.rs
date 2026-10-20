@@ -388,7 +388,10 @@ impl QueueConn {
         offset: u64,
         len: usize,
     ) -> Result<Completion> {
-        ensure!(len >= 4 && len % 4 == 0, "a log page read of {len} bytes");
+        ensure!(
+            len >= 4 && len.is_multiple_of(4),
+            "a log page read of {len} bytes"
+        );
         let numd = (len / 4 - 1) as u32;
         let mut sqe = Sqe::new(admin::GET_LOG_PAGE, 0);
         sqe.set_nsid(nsid);
