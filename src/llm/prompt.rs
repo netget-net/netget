@@ -196,33 +196,28 @@ If tools are available, use them first; actions in an intermediate tool round ar
 
 ## What Went Wrong
 
-Your response could not be parsed as valid JSON. This usually happens when:
+Your response was not one JSON object of the required shape. This usually happens when:
 - You included explanatory text before or after the JSON
 - You wrapped the JSON in markdown code blocks
 - The JSON syntax is incorrect (missing quotes, commas, brackets, etc.)
+- You returned valid JSON of another shape, or several objects instead of one
 
 ## Required Format
 
-Your response must be **pure JSON** only:
+One JSON object, optionally preceded by a `<reasoning>…</reasoning>` block, and nothing else:
 
 ```
-{{"actions": [{{"type": "action_name", "param": "value"}}]}}
+{{"actions": [{{"type": "<an action from the Available Actions list>", "param": "value"}}]}}
 ```
 
-- Start with `{{` and end with `}}`
-- No text before or after the JSON
+- Put every action you want performed, in order, into that one `actions` array
+- `{{"actions": []}}` means "do nothing now"
+- Use a `tools` key only if the prompt above lists tools
 - No markdown formatting
-
-## Example
-
-✓ **Correct:**
-```json
-{{"actions": [{{"type": "show_message", "message": "Server started successfully"}}]}}
-```
 
 ---
 
-**Please retry:** Respond to the original request using the correct JSON format."#,
+**Please retry:** Respond to the original request using the correct JSON format. Nothing from the rejected response was executed."#,
             error
         )
     }
@@ -245,17 +240,22 @@ Your response must be **pure JSON** only:
             .collect::<Vec<_>>()
             .join("\n");
 
-        let available_summary = if available_action_names.len() > 20 {
-            format!(
-                "{} actions available (see 'Available Actions' section above)",
-                available_action_names.len()
-            )
+        // Always the names themselves: "see the section above" sent a model scrolling a long
+        // prompt for the one thing this message exists to give it.
+        let available_summary = available_action_names
+            .iter()
+            .map(|a| format!("`{}`", a))
+            .collect::<Vec<_>>()
+            .join(", ");
+        // Only where the tool is actually offered. Network events and clients have no tools, and
+        // a model that followed this advice there spent its last retry on another unknown action.
+        let documentation_rule = if available_action_names
+            .iter()
+            .any(|a| a == "read_documentation")
+        {
+            "3. If you need a protocol-specific action, call the `read_documentation` tool first to learn that protocol's actions"
         } else {
-            available_action_names
-                .iter()
-                .map(|a| format!("`{}`", a))
-                .collect::<Vec<_>>()
-                .join(", ")
+            "3. Pick the closest match from the Valid Actions below; if none fits, return `{\"actions\": []}`"
         };
 
         format!(
@@ -271,7 +271,7 @@ You used action name(s) that are not in the Available Actions list. This is NOT 
 **CRITICAL RULES:**
 1. You can ONLY use actions explicitly listed in the "Available Actions" section
 2. Do NOT invent, guess, or hallucinate action names
-3. If you need a protocol-specific action, use `read_documentation` tool first to learn the available actions for that protocol
+{}
 
 ## Valid Actions
 
@@ -280,7 +280,7 @@ You used action name(s) that are not in the Available Actions list. This is NOT 
 ---
 
 **Please retry:** Use ONLY names from the Available Actions list. Return the complete corrected response; no action from the rejected response has been executed."#,
-            unknown_list, available_summary
+            unknown_list, documentation_rule, available_summary
         )
     }
 
@@ -318,11 +318,7 @@ You used action name(s) that are not in the Available Actions list. This is NOT 
 
 Your action JSON is missing required parameters or has invalid values. Each action type has specific required parameters that must be provided.
 
-**Common issues:**
-- `open_server` requires `base_stack` (e.g., "http", "tcp", "dns")
-- `open_client` requires both `protocol` and `remote_addr`
-- `close_server` requires `server_id`
-- Numeric values should be numbers, not strings
+Look up the failing action's Parameters in "Available Actions": every parameter marked required must be present, with the documented type (numbers as numbers, not strings).
 
 ## How to Fix
 
@@ -744,155 +740,75 @@ Understand what the user wants and respond with the appropriate actions to make 
     /// * `current_instruction` - Current instruction of the instance
     /// * `memory` - Current memory of the instance
     /// * `feedback_entries` - Accumulated feedback entries
-    /// * `available_actions` - Actions available for adjusting the instance
+    /// * `available_actions` - The adjustments on offer: `feedback::get_feedback_actions`,
+    ///   the same list the answer is validated against and executed by
+    #[allow(clippy::too_many_arguments)]
     pub async fn build_feedback_system_prompt(
         state: &AppState,
         server_id: Option<ServerId>,
-        _client_id: Option<crate::state::ClientId>,
+        client_id: Option<crate::state::ClientId>,
         feedback_instructions: &str,
         current_instruction: &str,
         memory: &str,
         feedback_entries: &[serde_json::Value],
         available_actions: Vec<ActionDefinition>,
     ) -> String {
-        // Get selected scripting mode
-        let selected_mode = state.get_selected_scripting_mode().await;
-        let has_scripting = selected_mode != crate::state::app_state::ScriptingMode::Off;
+        use crate::llm::feedback::{feedback_instance_view, FeedbackTarget};
 
-        // Filter actions based on scripting mode
-        let filtered_actions =
-            Self::filter_actions_by_scripting_mode(available_actions, has_scripting);
-
-        // Get servers for context
-        let servers = state.get_all_servers().await;
-        let include_disabled = state.get_include_disabled_protocols().await;
-
-        // Split actions into tools and regular actions
+        // The list is advertised as given: it is the same list the response is validated
+        // against (`feedback::get_feedback_actions`), so filtering it here would make the
+        // two disagree.
+        let action_json = |a: &ActionDefinition| {
+            let mut params_map = serde_json::Map::new();
+            for param in &a.parameters {
+                params_map.insert(
+                    param.name.clone(),
+                    serde_json::json!({
+                        "type": param.type_hint,
+                        "description": param.description,
+                        "required": param.required
+                    }),
+                );
+            }
+            serde_json::json!({
+                "name": a.name,
+                "description": a.description,
+                "is_tool": a.is_tool(),
+                "parameters": params_map,
+                "example": a.example.to_string()
+            })
+        };
         let (tool_actions_raw, regular_actions_raw): (Vec<_>, Vec<_>) =
-            filtered_actions.iter().partition(|a| a.is_tool());
+            available_actions.iter().partition(|a| a.is_tool());
+        let tool_actions: Vec<serde_json::Value> =
+            tool_actions_raw.into_iter().map(action_json).collect();
+        let regular_actions: Vec<serde_json::Value> =
+            regular_actions_raw.into_iter().map(action_json).collect();
+        let action_names: Vec<&str> = available_actions.iter().map(|a| a.name.as_str()).collect();
 
-        // Convert actions to JSON for templates
-        let tool_actions: Vec<serde_json::Value> = tool_actions_raw
-            .iter()
-            .map(|a| {
-                let mut params_map = serde_json::Map::new();
-                for param in &a.parameters {
-                    params_map.insert(
-                        param.name.clone(),
-                        serde_json::json!({
-                            "type": param.type_hint,
-                            "description": param.description,
-                            "required": param.required
-                        }),
-                    );
-                }
+        let target = FeedbackTarget::from_ids(server_id, client_id);
+        let instance = feedback_instance_view(state, target, current_instruction, memory).await;
 
-                serde_json::json!({
-                    "name": a.name,
-                    "description": a.description,
-                    "is_tool": a.is_tool(),
-                    "parameters": params_map,
-                    "example": a.example.to_string()
-                })
-            })
-            .collect();
-
-        let regular_actions: Vec<serde_json::Value> = regular_actions_raw
-            .iter()
-            .map(|a| {
-                let mut params_map = serde_json::Map::new();
-                for param in &a.parameters {
-                    params_map.insert(
-                        param.name.clone(),
-                        serde_json::json!({
-                            "type": param.type_hint,
-                            "description": param.description,
-                            "required": param.required
-                        }),
-                    );
-                }
-
-                serde_json::json!({
-                    "name": a.name,
-                    "description": a.description,
-                    "is_tool": a.is_tool(),
-                    "parameters": params_map,
-                    "example": a.example.to_string()
-                })
-            })
-            .collect();
-
-        // Get system capabilities
-        let system_caps = state.get_system_capabilities().await;
-
-        // Convert servers to simple objects for templates
-        let servers_data: Vec<serde_json::Value> = servers
-            .iter()
-            .map(|s| {
-                serde_json::json!({
-                    "id": s.id.as_u32(),
-                    "protocol_name": s.protocol_name,
-                    "port": s.port,
-                    "status": s.status.to_string(),
-                    "memory": s.memory
-                })
-            })
-            .collect();
-
-        let active_server_data = server_id.and_then(|id| {
-            servers.iter().find(|s| s.id == id).map(|s| {
-                serde_json::json!({
-                    "id": s.id.as_u32(),
-                    "protocol_name": s.protocol_name,
-                    "port": s.port,
-                    "status": s.status.to_string(),
-                    "memory": s.memory,
-                    "instruction": s.instruction
-                })
-            })
-        });
-
-        // Convert feedback entries to pretty JSON strings for template
         let feedback_strings: Vec<String> = feedback_entries
             .iter()
             .map(|entry| serde_json::to_string_pretty(entry).unwrap_or_else(|_| entry.to_string()))
             .collect();
 
-        // Determine instance type (server or client)
-        let instance_type = if server_id.is_some() {
-            "server"
-        } else {
-            "client"
-        };
-
-        // Build template data
-        let web_search_mode = state.get_web_search_mode().await;
-        let web_search_enabled = web_search_mode != crate::state::app_state::WebSearchMode::Off;
-
         let data = TemplateDataBuilder::new()
-            .field("instance_type", instance_type)
+            .field(
+                "instance_type",
+                target.map(|t| t.kind()).unwrap_or("instance"),
+            )
+            .field("instance_id", target.map(|t| t.id()))
+            .field("instance", &instance)
             .field("feedback_instructions", feedback_instructions)
-            .field("current_instruction", current_instruction)
-            .field("memory", memory)
             .field("feedback_count", feedback_entries.len())
             .field("feedback_entries", &feedback_strings)
             .field("tool_actions", &tool_actions)
             .field("regular_actions", &regular_actions)
-            .field("include_disabled_protocols", include_disabled)
-            .field("scripting_enabled", has_scripting)
-            .field("selected_scripting_mode", selected_mode.as_str())
-            .field("mode", state.get_mode().await.as_str())
-            .field("servers", &servers_data)
-            .optional_field("active_server", active_server_data)
-            .field("web_search_enabled", web_search_enabled)
-            .field(
-                "can_bind_privileged_ports",
-                system_caps.can_bind_privileged_ports,
-            )
-            .field("has_raw_socket_access", system_caps.has_raw_socket_access)
+            .field("action_names", action_names.join(", "))
             .build();
 
-        // Render template
         TEMPLATE_ENGINE
             .render_json("feedback/main", &data)
             .unwrap_or_else(|e| {
@@ -1060,11 +976,17 @@ Understand what the user wants and respond with the appropriate actions to make 
         event_description: &str,
         context_json: serde_json::Value,
     ) -> String {
+        // A heading of its own: the trigger used to run straight on from the System
+        // Capabilities list at the end of the system prompt. `Event ID:` and `Context data:`
+        // stay as the labels; the test mock finds the current event by them.
         if context_json.is_null() || context_json == serde_json::json!({}) {
-            format!("Event ID: {}\nEvent: {}", event_id, event_description)
+            format!(
+                "# Event to answer\nEvent ID: {}\nEvent: {}",
+                event_id, event_description
+            )
         } else {
             format!(
-                "Event ID: {}\nEvent: {}\n\nContext data:\n{}",
+                "# Event to answer\nEvent ID: {}\nEvent: {}\nContext data:\n{}",
                 event_id,
                 event_description,
                 serde_json::to_string_pretty(&context_json)
@@ -1073,259 +995,536 @@ Understand what the user wants and respond with the appropriate actions to make 
         }
     }
 
-    /// Build prompt for scheduled task execution
+    /// The actions a scheduled task may use, and how each one is executed.
     ///
-    /// # Arguments
-    /// * `state` - Application state
-    /// * `task` - The scheduled task to execute
-    /// * `protocol_actions` - Protocol-specific actions (if server-scoped)
-    pub async fn build_task_execution_prompt(
-        state: &crate::state::AppState,
+    /// Computed once per firing and used for both halves of the run: the prompt advertises
+    /// exactly `actions`, the conversation validates against exactly `actions`, and
+    /// `src/cli/tasks.rs` routes each returned action by the names recorded here. A scope
+    /// is offered only what its executor can actually carry out:
+    ///
+    /// - **Global**: the operator's management vocabulary (open/close/update servers and
+    ///   clients, schedule/cancel tasks, databases, `show_message`) plus every tool. Not
+    ///   `set_memory`, `append_memory`, `append_to_log` or `update_instruction`: with no
+    ///   instance in scope those fall through to "the first server", an arbitrary target.
+    /// - **Server #N**: memory, `show_message`, `append_to_log`, and — when at least one live
+    ///   connection registered a peer handle — the protocol's actions, each with a required
+    ///   `connection_id` naming which connection runs it.
+    /// - **Connection conn-M on server #N**: the same, aimed at that connection.
+    /// - **Client #N**: memory, `show_message`, and the client's protocol actions when its
+    ///   loop accepts injected commands. Not `append_to_log`, which writes to a server log.
+    ///
+    /// Protocol actions are executed *inside* the instance (`AppState::send_to_peer` /
+    /// `send_to_client`), because a protocol action executed anywhere else produces bytes
+    /// nobody writes.
+    pub async fn task_action_set(
+        state: &AppState,
         task: &crate::state::ScheduledTask,
-        protocol_actions: Vec<crate::llm::actions::ActionDefinition>,
-    ) -> String {
-        use crate::llm::actions::{
-            get_all_tool_actions, get_network_event_common_actions, get_user_input_common_actions,
-        };
+    ) -> TaskActionSet {
+        use crate::llm::actions::get_network_event_common_actions;
         use crate::state::task::TaskScope;
 
         let selected_mode = state.get_selected_scripting_mode().await;
-        let scripting_env = state.get_scripting_env().await;
+        let web_search_mode = state.get_web_search_mode().await;
 
-        let (server_id, actions, trigger, instructions) = match &task.scope {
+        let mut set = TaskActionSet::default();
+        let mut actions: Vec<ActionDefinition>;
+
+        match &task.scope {
             TaskScope::Global => {
-                // Global task: use user input actions
-                // Enable open_server and open_client for global tasks
-                let is_open_server_enabled = true;
-                let is_open_client_enabled = true;
-                let mut actions = get_user_input_common_actions(
-                    selected_mode,
-                    &scripting_env,
-                    is_open_server_enabled,
-                    is_open_client_enabled,
-                );
-
-                // Add tool actions
-                let web_search_mode = state.get_web_search_mode().await;
+                let scripting_env = state.get_scripting_env().await;
+                actions = get_user_input_common_actions(selected_mode, &scripting_env, true, true);
+                actions.retain(|a| !GLOBAL_TASK_UNTARGETED_ACTIONS.contains(&a.name.as_str()));
                 actions.extend(get_all_tool_actions(web_search_mode));
-
-                let trigger = format!(
-                    "Scheduled task '{}' triggered (created {} ago)",
-                    task.name,
-                    crate::state::task::format_duration(task.created_at.elapsed())
-                );
-
-                let instructions = &task.instruction;
-
-                (None, actions, trigger, instructions.clone())
             }
             TaskScope::Server(sid) => {
-                // Server-scoped task: use server instruction + protocol actions
-                let server = state.get_server(*sid).await;
-                if server.is_none() {
-                    // Server no longer exists - return error prompt
-                    return format!(
-                        r#"ERROR: Server #{} no longer exists. Task '{}' cannot execute.
-
-Return: [{{"type": "show_message", "message": "Task '{}' cancelled - server no longer exists"}}]"#,
-                        sid.as_u32(),
-                        task.name,
-                        task.name
-                    );
+                actions = get_network_event_common_actions();
+                let peers = Self::task_peer_connections(state, *sid, None).await;
+                match Self::task_peer_vocabulary(state, *sid).await {
+                    Err(reason) => set.protocol_unavailable = Some(reason),
+                    Ok(_) if peers.is_empty() => {
+                        set.protocol_unavailable = Some(
+                            "no live connection of this server accepts injected actions right now"
+                                .to_string(),
+                        )
+                    }
+                    Ok(vocabulary) => {
+                        for mut action in vocabulary {
+                            if !action.parameters.iter().any(|p| p.name == "connection_id") {
+                                set.routing_only_connection_id.insert(action.name.clone());
+                            }
+                            action.parameters.retain(|p| p.name != "connection_id");
+                            action.parameters.insert(
+                                0,
+                                crate::llm::actions::Parameter {
+                                    name: "connection_id".to_string(),
+                                    type_hint: "number".to_string(),
+                                    description: format!(
+                                        "Which connection runs this action: one of {}",
+                                        peers
+                                            .iter()
+                                            .map(|c| c.to_string())
+                                            .collect::<Vec<_>>()
+                                            .join(", ")
+                                    ),
+                                    required: true,
+                                },
+                            );
+                            if let Some(obj) = action.example.as_object_mut() {
+                                obj.insert(
+                                    "connection_id".to_string(),
+                                    serde_json::json!(peers[0]),
+                                );
+                            }
+                            set.protocol_actions.insert(action.name.clone());
+                            actions.push(action);
+                        }
+                        set.peer_connections = peers;
+                    }
                 }
-
-                let mut actions = get_network_event_common_actions();
-                actions.extend(protocol_actions);
-
-                // Scoped scheduled tasks retain tools for gathering information.
-                let web_search_mode = state.get_web_search_mode().await;
                 actions.extend(get_network_event_tool_actions(web_search_mode));
-
-                let trigger = format!(
-                    "Scheduled task '{}' triggered on server #{} (created {} ago)",
-                    task.name,
-                    sid.as_u32(),
-                    crate::state::task::format_duration(task.created_at.elapsed())
-                );
-
-                // Combine server instruction with task instruction
-                let server_instruction = state.get_instruction(*sid).await.unwrap_or_default();
-                let combined = if server_instruction.is_empty() {
-                    task.instruction.clone()
-                } else {
-                    format!(
-                        "{}\n\nScheduled task: {}",
-                        server_instruction, task.instruction
-                    )
-                };
-
-                (Some(*sid), actions, trigger, combined)
             }
             TaskScope::Connection(sid, cid) => {
-                // Connection-scoped task: use server instruction + protocol actions + connection context
-                let server = state.get_server(*sid).await;
-                if server.is_none() {
-                    // Server no longer exists - return error prompt
-                    return format!(
-                        r#"ERROR: Server #{} no longer exists. Task '{}' cannot execute.
-
-Return: [{{"type": "show_message", "message": "Task '{}' cancelled - server no longer exists"}}]"#,
-                        sid.as_u32(),
-                        task.name,
-                        task.name
-                    );
-                }
-
-                // Check if connection still exists and get connection info atomically
-                let server_instance = server.unwrap();
-                let conn_info = match server_instance.connections.get(cid) {
-                    Some(info) => info.clone(),
-                    None => {
-                        // Connection closed - task should have been cleaned up, but just in case
-                        return format!(
-                            r#"ERROR: Connection {} on server #{} no longer exists. Task '{}' cannot execute.
-
-Return: [{{"type": "show_message", "message": "Task '{}' cancelled - connection closed"}}]"#,
-                            cid,
-                            sid.as_u32(),
-                            task.name,
-                            task.name
-                        );
+                actions = get_network_event_common_actions();
+                let peers = Self::task_peer_connections(state, *sid, Some(cid.as_u32())).await;
+                match Self::task_peer_vocabulary(state, *sid).await {
+                    Err(reason) => set.protocol_unavailable = Some(reason),
+                    Ok(_) if peers.is_empty() => {
+                        set.protocol_unavailable = Some(format!(
+                            "connection {} does not accept injected actions (it is closed, or \
+                             its protocol registers no peer handle)",
+                            cid
+                        ))
                     }
-                };
-
-                let mut actions = get_network_event_common_actions();
-                actions.extend(protocol_actions);
-
-                // Scoped scheduled tasks retain tools for gathering information.
-                let web_search_mode = state.get_web_search_mode().await;
+                    Ok(vocabulary) => {
+                        for action in vocabulary {
+                            set.protocol_actions.insert(action.name.clone());
+                            actions.push(action);
+                        }
+                        set.peer_connections = peers;
+                    }
+                }
                 actions.extend(get_network_event_tool_actions(web_search_mode));
-
-                // Use connection info obtained above
-                let conn_info = &conn_info;
-                let idle_duration = conn_info.last_activity.elapsed();
-
-                let trigger = format!(
-                    "Scheduled task '{}' triggered for connection {} on server #{} (created {} ago)\n\
-                     Connection: {} → {}\n\
-                     Bytes sent/received: {}/{}\n\
-                     Packets sent/received: {}/{}\n\
-                     Last activity: {:?} ago\n\
-                     Status: {:?}",
-                    task.name,
-                    cid,
-                    sid.as_u32(),
-                    crate::state::task::format_duration(task.created_at.elapsed()),
-                    conn_info.remote_addr,
-                    conn_info.local_addr,
-                    conn_info.bytes_sent,
-                    conn_info.bytes_received,
-                    conn_info.packets_sent,
-                    conn_info.packets_received,
-                    idle_duration,
-                    conn_info.status
-                );
-
-                // Combine server instruction with task instruction
-                let server_instruction = state.get_instruction(*sid).await.unwrap_or_default();
-                let combined = if server_instruction.is_empty() {
-                    task.instruction.clone()
-                } else {
-                    format!(
-                        "{}\n\nScheduled task: {}",
-                        server_instruction, task.instruction
-                    )
-                };
-
-                (Some(*sid), actions, trigger, combined)
             }
             TaskScope::Client(cid) => {
-                // Client-scoped task: use client instruction + protocol actions
-                let client_instance = match state.get_client(*cid).await {
-                    Some(client) => client,
+                actions = get_network_event_common_actions();
+                actions.retain(|a| a.name != "append_to_log");
+                let protocol = match state.get_protocol_name_for_client(*cid).await {
+                    Some(name) => crate::protocol::client_registry::CLIENT_REGISTRY.get(&name),
+                    None => None,
+                };
+                match protocol {
                     None => {
-                        // Client no longer exists - return error prompt
-                        return format!(
-                            r#"ERROR: Client #{} no longer exists. Task '{}' cannot execute.
-
-Return: [{{"type": "show_message", "message": "Task '{}' cancelled - client no longer exists"}}]"#,
-                            cid.as_u32(),
-                            task.name,
-                            task.name
-                        );
+                        set.protocol_unavailable =
+                            Some("the client or its protocol no longer exists".to_string())
                     }
-                };
-
-                let mut actions = get_network_event_common_actions();
-                actions.extend(protocol_actions);
-
-                // Scoped scheduled tasks retain tools for gathering information.
-                let web_search_mode = state.get_web_search_mode().await;
+                    Some(_) if !state.has_client_handle(*cid).await => {
+                        set.protocol_unavailable = Some(
+                            "the client is not connected, or its protocol does not accept \
+                             injected actions"
+                                .to_string(),
+                        )
+                    }
+                    Some(protocol) => {
+                        // Clients union; servers narrow — `client_llm_action_set` is the one
+                        // place that rule lives, and `send_to_client` executes any of it.
+                        for action in crate::llm::actions::client_trait::client_llm_action_set(
+                            protocol.as_ref(),
+                            state,
+                            None,
+                        ) {
+                            set.protocol_actions.insert(action.name.clone());
+                            actions.push(action);
+                        }
+                    }
+                }
                 actions.extend(get_network_event_tool_actions(web_search_mode));
-
-                let trigger = format!(
-                    "Scheduled task '{}' triggered for client #{} (created {} ago)\n\
-                     Client: {} ({})\n\
-                     Status: {:?}",
-                    task.name,
-                    cid.as_u32(),
-                    crate::state::task::format_duration(task.created_at.elapsed()),
-                    client_instance.remote_addr,
-                    client_instance.protocol_name,
-                    client_instance.status
-                );
-
-                // Combine client instruction with task instruction
-                let combined = if client_instance.instruction.is_empty() {
-                    task.instruction.clone()
-                } else {
-                    format!(
-                        "{}\n\nScheduled task: {}",
-                        client_instance.instruction, task.instruction
-                    )
-                };
-
-                (None, actions, trigger, combined)
             }
+        }
+
+        // A protocol action that shares a common action's name would be ambiguous to route;
+        // the first definition wins, as it does for the model's tool schema.
+        let mut seen = std::collections::BTreeSet::new();
+        actions.retain(|a| seen.insert(a.name.clone()));
+
+        let has_scripting = selected_mode != crate::state::app_state::ScriptingMode::Off;
+        set.actions = Self::filter_actions_by_scripting_mode(actions, has_scripting);
+        set
+    }
+
+    /// The server protocol's peer vocabulary (sync ∪ async), or why it has none.
+    async fn task_peer_vocabulary(
+        state: &AppState,
+        server_id: ServerId,
+    ) -> Result<Vec<ActionDefinition>, String> {
+        let protocol_name = state
+            .get_protocol_name(server_id)
+            .await
+            .ok_or_else(|| "the server no longer exists".to_string())?;
+        let registry = crate::protocol::server_registry::registry();
+        if let Some(reason) = registry.request_only_reason(&protocol_name) {
+            return Err(format!(
+                "{} speaks only in answer to a request: {}",
+                protocol_name, reason
+            ));
+        }
+        let protocol = registry
+            .resolve(&protocol_name)
+            .map_err(|e| e.to_string())?;
+        let mut actions = protocol.get_sync_actions();
+        for action in protocol.get_async_actions(state) {
+            if !actions.iter().any(|a| a.name == action.name) {
+                actions.push(action);
+            }
+        }
+        Ok(actions)
+    }
+
+    /// Live connections of a server that accept injected actions, ascending; restricted to
+    /// `only` when given.
+    async fn task_peer_connections(
+        state: &AppState,
+        server_id: ServerId,
+        only: Option<u32>,
+    ) -> Vec<u32> {
+        let Some(server) = state.get_server(server_id).await else {
+            return Vec::new();
+        };
+        let mut ids: Vec<u32> = server
+            .connections
+            .iter()
+            .filter(|(_, c)| c.status == crate::state::server::ConnectionStatus::Active)
+            .map(|(id, _)| id.as_u32())
+            .filter(|id| only.is_none_or(|o| o == *id))
+            .collect();
+        ids.sort_unstable();
+        let mut live = Vec::with_capacity(ids.len());
+        for id in ids {
+            if state.has_peer_handle(server_id, id).await {
+                live.push(id);
+            }
+        }
+        live
+    }
+
+    /// Build prompt for scheduled task execution.
+    ///
+    /// Renders `scheduled_task/main`, whose preamble says what actually happened — a timer
+    /// fired; there is no network event to answer and no user to talk to — and states the
+    /// task's scope and that instance's state. `set` is [`Self::task_action_set`] for this
+    /// task, computed once by the caller: the prompt advertises exactly `set.actions`, which
+    /// is also what the conversation validates against.
+    ///
+    /// The prompt ends with `\n\nTrigger: Scheduled task '<name>' …`, which the test mock
+    /// (`tests/helpers/mock_ollama.rs`) uses to recognise a task call.
+    pub async fn build_task_execution_prompt(
+        state: &crate::state::AppState,
+        task: &crate::state::ScheduledTask,
+        set: &TaskActionSet,
+    ) -> String {
+        use crate::state::task::{TaskScope, TaskType};
+
+        let actions = &set.actions;
+        let offered: std::collections::BTreeSet<&str> =
+            actions.iter().map(|a| a.name.as_str()).collect();
+
+        let created_ago = crate::state::task::format_duration(task.created_at.elapsed());
+        let schedule = match &task.task_type {
+            TaskType::OneShot { delay_secs } => format!("one-shot, {}s after creation", delay_secs),
+            TaskType::Recurring {
+                interval_secs,
+                max_executions,
+                executions_count,
+            } => match max_executions {
+                Some(max) => format!(
+                    "recurring every {}s, run {} of at most {}",
+                    interval_secs,
+                    executions_count.saturating_add(1),
+                    max
+                ),
+                None => format!(
+                    "recurring every {}s, run {}",
+                    interval_secs,
+                    executions_count.saturating_add(1)
+                ),
+            },
         };
 
-        // Add context data to trigger if present
-        let full_trigger = if let Some(ctx) = &task.context {
-            format!(
-                "{}\n\nTask context:\n{}",
-                trigger,
-                serde_json::to_string_pretty(ctx).unwrap_or_else(|_| ctx.to_string())
-            )
+        let scope_label: String;
+        let mut scope_lines: Vec<String> = Vec::new();
+        let mut instance_instruction = String::new();
+        let mut memory = String::new();
+        let mut history: Option<String> = None;
+        let mut trigger_target = String::new();
+
+        match &task.scope {
+            TaskScope::Global => {
+                scope_label = "global — not tied to any server, connection or client".to_string();
+                let servers = state.get_all_servers().await;
+                if servers.is_empty() {
+                    scope_lines.push("No servers are running.".to_string());
+                } else {
+                    scope_lines.push("Servers:".to_string());
+                    for s in &servers {
+                        scope_lines.push(format!(
+                            "- Server #{}: {} on port {} ({})",
+                            s.id.as_u32(),
+                            s.protocol_name,
+                            s.port,
+                            s.status
+                        ));
+                    }
+                }
+                let clients = state.get_all_clients().await;
+                if clients.is_empty() {
+                    scope_lines.push("No clients are running.".to_string());
+                } else {
+                    scope_lines.push("Clients:".to_string());
+                    for c in &clients {
+                        scope_lines.push(format!(
+                            "- Client #{}: {} to {} ({})",
+                            c.id.as_u32(),
+                            c.protocol_name,
+                            c.remote_addr,
+                            c.status
+                        ));
+                    }
+                }
+            }
+            TaskScope::Server(sid) | TaskScope::Connection(sid, _) => {
+                let server = state.get_server(*sid).await;
+                match &task.scope {
+                    TaskScope::Connection(_, cid) => {
+                        scope_label = format!("connection {} on server #{}", cid, sid.as_u32());
+                        trigger_target =
+                            format!(" for connection {} on server #{}", cid, sid.as_u32());
+                    }
+                    _ => {
+                        scope_label = format!("server #{}", sid.as_u32());
+                        trigger_target = format!(" on server #{}", sid.as_u32());
+                    }
+                }
+                match &server {
+                    None => scope_lines.push(format!("Server #{} no longer exists.", sid.as_u32())),
+                    Some(server) => {
+                        scope_lines.push(format!(
+                            "- Server #{}: {} on port {} ({})",
+                            server.id.as_u32(),
+                            server.protocol_name,
+                            server.port,
+                            server.status
+                        ));
+                        instance_instruction = server.instruction.clone();
+                        memory = server.memory.clone();
+                        if let TaskScope::Connection(_, cid) = &task.scope {
+                            match server.connections.get(cid) {
+                                None => scope_lines
+                                    .push(format!("- Connection {}: no longer exists", cid)),
+                                Some(conn) => scope_lines.push(format!(
+                                    "- Connection {}: {} → {}, {:?}, {} bytes sent / {} received, \
+                                     last activity {} ago",
+                                    cid,
+                                    conn.remote_addr,
+                                    conn.local_addr,
+                                    conn.status,
+                                    conn.bytes_sent,
+                                    conn.bytes_received,
+                                    crate::state::task::format_duration(
+                                        conn.last_activity.elapsed()
+                                    )
+                                )),
+                            }
+                            history = state.render_server_history(*sid, Some(*cid)).await;
+                        } else {
+                            let live = server
+                                .connections
+                                .values()
+                                .filter(|c| {
+                                    c.status == crate::state::server::ConnectionStatus::Active
+                                })
+                                .count();
+                            scope_lines.push(format!("- Live connections: {}", live));
+                        }
+                    }
+                }
+            }
+            TaskScope::Client(cid) => {
+                scope_label = format!("client #{}", cid.as_u32());
+                trigger_target = format!(" for client #{}", cid.as_u32());
+                match state.get_client(*cid).await {
+                    None => scope_lines.push(format!("Client #{} no longer exists.", cid.as_u32())),
+                    Some(client) => {
+                        scope_lines.push(format!(
+                            "- Client #{}: {} to {} ({})",
+                            client.id.as_u32(),
+                            client.protocol_name,
+                            client.remote_addr,
+                            client.status
+                        ));
+                        instance_instruction = client.instruction.clone();
+                        memory = client.memory.clone();
+                        history = state.render_client_history(*cid).await;
+                    }
+                }
+            }
+        }
+
+        // How the protocol actions reach the wire — or why there are none.
+        let protocol_note = if !matches!(task.scope, TaskScope::Global) {
+            if let Some(reason) = &set.protocol_unavailable {
+                Some(format!(
+                    "No protocol actions are offered: {}. Only the actions listed below can be used.",
+                    reason
+                ))
+            } else {
+                match &task.scope {
+                    TaskScope::Server(_) => Some(format!(
+                        "Protocol actions run inside one live connection; name it in \
+                         `connection_id` (connections accepting actions: {}).",
+                        set.peer_connections
+                            .iter()
+                            .map(|c| c.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )),
+                    TaskScope::Connection(_, cid) => Some(format!(
+                        "Protocol actions run inside connection {} and go to its peer.",
+                        cid
+                    )),
+                    TaskScope::Client(_) => Some(
+                        "Protocol actions run inside the client's connection and go to the \
+                         server it is connected to."
+                            .to_string(),
+                    ),
+                    TaskScope::Global => None,
+                }
+            }
         } else {
-            trigger
+            None
         };
 
-        // Add previous error if this is a retry
-        let instructions_with_error = if let Some(error) = &task.last_error {
-            format!(
-                "{}\n\nPREVIOUS EXECUTION ERROR:\nThe last execution failed with: {}\nAttempt to handle or resolve this issue.",
-                instructions,
-                error
+        let (tool_actions, regular_actions): (Vec<_>, Vec<_>) =
+            actions.iter().partition(|a| a.is_tool());
+        let tool_actions: Vec<serde_json::Value> = tool_actions
+            .iter()
+            .map(|a| Self::task_action_json(a))
+            .collect();
+        let regular_actions: Vec<serde_json::Value> = regular_actions
+            .iter()
+            .map(|a| Self::task_action_json(a))
+            .collect();
+
+        // The Required Format example must be an action this task is actually offered:
+        // a protocol action if there is one, else show_message, else the first offered.
+        let example_action = actions
+            .iter()
+            .filter(|a| !a.is_tool())
+            .find(|a| set.protocol_actions.contains(&a.name))
+            .or_else(|| actions.iter().find(|a| a.name == "show_message"))
+            .or_else(|| actions.iter().find(|a| !a.is_tool()))
+            .map(|a| a.example.to_string())
+            .unwrap_or_else(|| "{\"type\": \"show_message\", \"message\": \"done\"}".to_string());
+        let example_tool = actions
+            .iter()
+            .find(|a| a.is_tool())
+            .map(|a| a.example.to_string());
+
+        let system_caps = state.get_system_capabilities().await;
+        let data = TemplateDataBuilder::new()
+            .field("task_name", &task.name)
+            .field("schedule", &schedule)
+            .field("created_ago", &created_ago)
+            .field("scope_label", &scope_label)
+            .field("scope_lines", scope_lines.join("\n"))
+            .field("instruction", &task.instruction)
+            .field("previous_error", &task.last_error)
+            .field(
+                "task_context",
+                task.context
+                    .as_ref()
+                    .map(|c| serde_json::to_string_pretty(c).unwrap_or_else(|_| c.to_string())),
             )
-        } else {
-            instructions
-        };
+            .field("instance_instruction", &instance_instruction)
+            .field("memory", &memory)
+            .field("memory_actions", offered.contains("set_memory"))
+            .field("history", &history)
+            .field("protocol_note", &protocol_note)
+            .field("tool_actions", &tool_actions)
+            .field("regular_actions", &regular_actions)
+            .field("example_action", &example_action)
+            .field("example_tool", &example_tool)
+            .field("is_global", matches!(task.scope, TaskScope::Global))
+            .field(
+                "can_bind_privileged_ports",
+                system_caps.can_bind_privileged_ports,
+            )
+            .field("has_raw_socket_access", system_caps.has_raw_socket_access)
+            .build();
 
-        let system_prompt = Self::build_action_prompt(
-            state,
-            server_id,
-            &instructions_with_error,
-            actions,
-            false, // Don't include base stack docs for tasks
-            None,  // Tasks don't use conversation history
+        let system_prompt = TEMPLATE_ENGINE
+            .render_json("scheduled_task/main", &data)
+            .unwrap_or_else(|e| {
+                tracing::error!("Failed to render template scheduled_task/main: {}", e);
+                format!("# Error\n\nFailed to render prompt template: {}", e)
+            });
+
+        format!(
+            "{}\n\nTrigger: Scheduled task '{}' fired{} (created {} ago)",
+            system_prompt.trim_end(),
+            task.name,
+            trigger_target,
+            created_ago
         )
-        .await;
+    }
 
-        // Return system prompt + trigger as user message
-        // TODO: This should be refactored to return (system_prompt, user_message) tuple
-        // For now, we keep the trigger in the prompt for backwards compatibility
-        format!("{}\n\nTrigger: {}", system_prompt, full_trigger)
+    /// One action as the `shared/partials/actions` partial renders it.
+    fn task_action_json(a: &ActionDefinition) -> serde_json::Value {
+        let mut params_map = serde_json::Map::new();
+        for param in &a.parameters {
+            params_map.insert(
+                param.name.clone(),
+                serde_json::json!({
+                    "type": param.type_hint,
+                    "description": param.description,
+                    "required": param.required
+                }),
+            );
+        }
+        serde_json::json!({
+            "name": a.name,
+            "description": a.description,
+            "is_tool": a.is_tool(),
+            "parameters": params_map,
+            "example": a.example.to_string()
+        })
     }
 
     // ========================================================================
+}
+
+/// Operator actions a global task is not offered: with no instance in scope each of them
+/// falls through to "the first server", which is an arbitrary target rather than a choice.
+const GLOBAL_TASK_UNTARGETED_ACTIONS: &[&str] = &[
+    "set_memory",
+    "append_memory",
+    "append_to_log",
+    "update_instruction",
+];
+
+/// What a scheduled task may do this firing — see [`PromptBuilder::task_action_set`].
+#[derive(Debug, Default, Clone)]
+pub struct TaskActionSet {
+    /// Every action offered (common, protocol and tools), scripting-filtered. The prompt
+    /// advertises exactly these and the conversation validates against exactly these.
+    pub actions: Vec<ActionDefinition>,
+    /// Offered actions that belong to the instance's protocol. They execute inside the
+    /// instance: `AppState::send_to_peer` for a server or connection, `send_to_client` for a
+    /// client.
+    pub protocol_actions: std::collections::BTreeSet<String>,
+    /// Server or connection scope: the live connections that accept injected actions.
+    pub peer_connections: Vec<u32>,
+    /// Server scope: protocol actions whose `connection_id` exists only to route them, and is
+    /// removed before the action is handed to the connection.
+    pub routing_only_connection_id: std::collections::BTreeSet<String>,
+    /// Why the instance's protocol actions are not offered, when they are not.
+    pub protocol_unavailable: Option<String>,
 }

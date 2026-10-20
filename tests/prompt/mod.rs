@@ -37,7 +37,9 @@ const SNAPSHOTS: &[&str] = &[
     "json_parse_retry_prompt",
     "network_event_prompt_proxy",
     "protocol_http_documentation",
+    "protocol_http_mcp_documentation",
     "protocol_ssh_documentation",
+    "protocol_ssh_mcp_documentation",
     "retry_mechanism_prompt",
     "unknown_action_retry_prompt",
     "user_input_prompt",
@@ -65,7 +67,8 @@ const SNAPSHOTS: &[&str] = &[
 //
 //    What is deliberately KEPT: per-protocol action definitions that a test asks for by
 //    name (the proxy's sync actions in `network_event_prompt_proxy`) and the HTTP / SSH
-//    metadata in `protocol_*_documentation`. Those change only when that protocol changes,
+//    documentation in `protocol_*_documentation` — what `read_documentation` and MCP's
+//    `get_protocol_docs` return. Those change only when that protocol changes,
 //    and when they do the diff is something a reviewer should see.
 //
 // 2. The host. `SystemCapabilities` (src/privilege.rs) probes the machine at runtime
@@ -264,10 +267,11 @@ fn assert_prompt_snapshot(test_name: &str, prompt: &str) {
 #[allow(clippy::assertions_on_constants)]
 fn prompt_snapshots_need_unix_and_sqlite() {
     assert!(
-        cfg!(all(unix, feature = "sqlite")),
-        "the prompt snapshots render the Unix-only proxy and the sqlite actions; this build \
-         lacks unix or the `sqlite` feature, so most of tests/prompt would not compare \
-         anything. Build with the default features on a Unix host."
+        cfg!(all(unix, feature = "sqlite", feature = "mcp-stdio")),
+        "the prompt snapshots render the Unix-only proxy, the sqlite actions and MCP's \
+         protocol documentation; this build lacks unix, the `sqlite` feature or the \
+         `mcp-stdio` feature, so part of tests/prompt would not compare anything. Build \
+         with the default features on a Unix host."
     );
 }
 
@@ -860,14 +864,21 @@ async fn test_retry_mechanism_prompt() {
     };
     state.set_scripting_env(scripting_env).await;
 
-    let prompt =
-        netget::llm::PromptBuilder::build_task_execution_prompt(&state, &task, vec![]).await;
+    let set = netget::llm::PromptBuilder::task_action_set(&state, &task).await;
+    let prompt = netget::llm::PromptBuilder::build_task_execution_prompt(&state, &task, &set).await;
 
     // Assert snapshot
     assert_prompt_snapshot("retry_mechanism_prompt", &prompt);
 
+    // A task is not a network event and not an operator command: its preamble says what
+    // actually happened.
+    assert!(prompt.contains("A scheduled task has fired"));
+    assert!(!prompt.contains("in response to a network event"));
+    assert!(!prompt.contains("You are handling a network event"));
+    assert!(!prompt.contains("interprets user commands"));
+
     // Sanity checks
-    assert!(prompt.contains("PREVIOUS EXECUTION ERROR"));
+    assert!(prompt.contains("## Previous Execution Error"));
     assert!(prompt.contains("Failed to write file: Permission denied"));
     assert!(prompt.contains("periodic_backup"));
     assert!(prompt.contains("Create a backup of server memory"));
@@ -918,73 +929,124 @@ async fn test_unknown_action_retry_prompt() {
     assert!(prompt.contains("ONLY")); // Should emphasize only using listed actions
 }
 
+/// What the model reads when it calls `read_documentation` for one protocol: the real tool
+/// output, not a summary of the protocol's metadata assembled here.
+async fn read_documentation_output(protocol: &str) -> String {
+    use netget::llm::actions::tools::{execute_tool, ToolAction};
+    use netget::state::app_state::WebSearchMode;
+
+    let action = ToolAction::ReadDocumentation {
+        protocols: vec![protocol.to_string()],
+        protocol: None,
+    };
+    let result = execute_tool(&action, None, WebSearchMode::Off, None).await;
+    assert!(
+        result.success,
+        "read_documentation({protocol}) failed: {}",
+        result.result
+    );
+    result.result
+}
+
+/// Replace the `start_server` `port` line of MCP's documentation, which resolves the default
+/// port against this process's privilege and what is bound right now.
+#[cfg(any(feature = "mcp-stdio", feature = "mcp-http"))]
+fn normalize_mcp_port_line(doc: &str) -> String {
+    static PORT_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?m)^- `port` \(number\) — listen port\..*$").unwrap());
+    assert!(
+        PORT_RE.is_match(doc),
+        "MCP documentation no longer has the `port` argument line this normalises"
+    );
+    PORT_RE
+        .replace_all(
+            doc,
+            "- `port` (number) — listen port. <normalized: resolved against this host's privilege and bound ports>",
+        )
+        .into_owned()
+}
+
 #[tokio::test]
 async fn test_protocol_documentation_prompt() {
-    // Test protocol-specific metadata documentation
-    let _state = Arc::new(AppState::new());
+    let http = read_documentation_output("http").await;
 
-    // Create an HTTP server to get protocol-specific documentation
-    {
-        use netget::server::HttpProtocol;
+    // What a script handler needs and what the model used to be denied: the event's field
+    // names, the response action's parameters, startup parameter defaults, and an
+    // open_server example that leaves the port to the protocol.
+    assert!(
+        http.contains("- `path` (string"),
+        "http_request's `path` field"
+    );
+    assert!(
+        http.contains("- `query_string` ("),
+        "http_request's `query_string` field"
+    );
+    assert!(
+        http.contains("### `send_http_response`"),
+        "the response action, with its parameters"
+    );
+    assert!(
+        http.contains("well-known port 80"),
+        "the port an omitted `port` means"
+    );
+    assert!(
+        http.contains("\"protocol\": \"http\""),
+        "open_server names the protocol"
+    );
+    assert!(
+        !http.contains("base_stack"),
+        "open_server's parameter is `protocol`"
+    );
+    assert!(
+        !http.contains("\"port\": 8080"),
+        "no example pins an invented developer port"
+    );
+    assert!(
+        http.contains("\"remote_addr\": \"127.0.0.1:80\""),
+        "the client example reaches localhost on the well-known port"
+    );
 
-        let protocol = HttpProtocol::new();
-        let metadata = protocol.metadata();
+    let ssh = read_documentation_output("ssh").await;
+    assert!(ssh.contains("well-known port 22"));
+    assert!(
+        ssh.contains(", default: `"),
+        "SSH declares startup parameter defaults"
+    );
 
-        // Build a simple documentation string showing protocol metadata
-        let doc = format!(
-            "Protocol: {}\nState: {}\nImplementation: {}\nLLM Control: {}\nE2E Testing: {}{}",
-            protocol.protocol_name(),
-            metadata.state.as_str(),
-            metadata.implementation,
-            metadata.llm_control,
-            metadata.e2e_testing,
-            metadata
-                .notes
-                .map(|n| format!("\nNotes: {}", n))
-                .unwrap_or_default()
-        );
+    assert_prompt_snapshot("protocol_http_documentation", &http);
+    assert_prompt_snapshot("protocol_ssh_documentation", &ssh);
+}
 
-        // Assert snapshot
-        assert_prompt_snapshot("protocol_http_documentation", &doc);
+/// What an MCP caller reads from `get_protocol_docs`, through the same renderers.
+#[cfg(any(feature = "mcp-stdio", feature = "mcp-http"))]
+#[tokio::test]
+async fn test_protocol_mcp_documentation() {
+    let state = AppState::new();
+    let mcp_doc = |protocol: &'static str| {
+        let state = &state;
+        async move {
+            let doc = netget::mcp_stdio::docs::render_protocol_docs(protocol, state)
+                .await
+                .unwrap_or_else(|| panic!("{protocol} is compiled in"));
+            normalize_mcp_port_line(&doc)
+        }
+    };
+    // The two surfaces describe the event the same way, because one renderer writes both.
+    let in_app = read_documentation_output("http").await;
+    let mcp = netget::mcp_stdio::docs::render_protocol_docs("http", &state)
+        .await
+        .unwrap();
+    let field_line = in_app
+        .lines()
+        .find(|l| l.starts_with("- `path` ("))
+        .expect("in-app docs list the `path` field");
+    assert!(
+        mcp.contains(field_line),
+        "MCP renders the same field line: {field_line}"
+    );
 
-        // Sanity checks
-        assert!(doc.contains("HTTP"));
-        assert!(doc.contains("State:"));
-        assert!(doc.contains("Implementation:"));
-        assert!(doc.contains("LLM Control:"));
-        assert!(doc.contains("E2E Testing:"));
-    }
-
-    {
-        use netget::server::SshProtocol;
-
-        let protocol = SshProtocol::new();
-        let metadata = protocol.metadata();
-
-        // Build a simple documentation string showing protocol metadata
-        let doc = format!(
-            "Protocol: {}\nState: {}\nImplementation: {}\nLLM Control: {}\nE2E Testing: {}{}",
-            protocol.protocol_name(),
-            metadata.state.as_str(),
-            metadata.implementation,
-            metadata.llm_control,
-            metadata.e2e_testing,
-            metadata
-                .notes
-                .map(|n| format!("\nNotes: {}", n))
-                .unwrap_or_default()
-        );
-
-        // Assert snapshot
-        assert_prompt_snapshot("protocol_ssh_documentation", &doc);
-
-        // Sanity checks
-        assert!(doc.contains("SSH"));
-        assert!(doc.contains("State:"));
-        assert!(doc.contains("Implementation:"));
-        assert!(doc.contains("LLM Control:"));
-        assert!(doc.contains("E2E Testing:"));
-    }
+    assert_prompt_snapshot("protocol_http_mcp_documentation", &mcp_doc("http").await);
+    assert_prompt_snapshot("protocol_ssh_mcp_documentation", &mcp_doc("ssh").await);
 }
 
 /// Test that read_documentation with multiple protocols includes examples for ALL protocols
@@ -1020,15 +1082,15 @@ async fn test_multi_protocol_documentation_examples() {
     // Check that examples for each protocol are present
     // The execute_read_documentation generates open_server examples per protocol
     assert!(
-        result.contains("Example for HTTP") || result.contains("\"base_stack\": \"http\""),
+        result.contains("Example for http server") && result.contains("\"protocol\": \"http\""),
         "Documentation should include example for HTTP"
     );
     assert!(
-        result.contains("Example for SSH") || result.contains("\"base_stack\": \"ssh\""),
+        result.contains("Example for ssh server") && result.contains("\"protocol\": \"ssh\""),
         "Documentation should include example for SSH"
     );
     assert!(
-        result.contains("Example for DNS") || result.contains("\"base_stack\": \"dns\""),
+        result.contains("Example for dns server") && result.contains("\"protocol\": \"dns\""),
         "Documentation should include example for DNS"
     );
 
@@ -1101,16 +1163,9 @@ async fn test_feedback_prompt_server() {
         .await
         .unwrap_or_else(|| ("".to_string(), "".to_string()));
 
-    // Get available actions for feedback processing
-    use netget::llm::actions::get_user_input_common_actions;
-    let selected_mode = state.get_selected_scripting_mode().await;
-    let scripting_env = state.get_scripting_env().await;
-    let available_actions = get_user_input_common_actions(
-        selected_mode,
-        &scripting_env,
-        true, // is_open_server_enabled
-        true, // is_open_client_enabled
-    );
+    // The feedback vocabulary: this server only
+    use netget::llm::feedback::{get_feedback_actions, FeedbackTarget};
+    let available_actions = get_feedback_actions(FeedbackTarget::Server(server_id));
 
     // Build feedback prompt
     let system_prompt = PromptBuilder::build_feedback_system_prompt(
@@ -1135,8 +1190,30 @@ async fn test_feedback_prompt_server() {
 
     // Sanity checks
     assert!(prompt.contains("server"));
-    assert!(prompt.contains("Server ID**: #1") || prompt.contains("Server #1"));
-    assert!(prompt.contains("HTTP"));
+    assert!(prompt.contains("**server #1**: HTTP"), "{prompt}");
+    assert!(
+        prompt.contains("`update_server` with `server_id` 1"),
+        "{prompt}"
+    );
+    // The instruction and memory appear once each, fenced
+    assert_eq!(prompt.matches("Respond to GET/POST requests").count(), 1);
+    assert_eq!(prompt.matches("error_count: 3").count(), 1);
+    // Nothing that opens, closes or restarts anything is on offer
+    for absent in [
+        "open_server",
+        "close_server",
+        "close_all_servers",
+        "open_client",
+        "close_connection_by_id",
+        "update_server_instruction",
+        "update_client_instruction",
+        "create_database",
+        "No servers currently running",
+        "## Running Servers",
+    ] {
+        assert!(!prompt.contains(absent), "{absent} in:\n{prompt}");
+    }
+    assert!(!prompt.contains("sent to the peer"), "{prompt}");
     assert!(prompt.contains("Feedback Instructions"));
     assert!(prompt.contains("Monitor error rates"));
     assert!(prompt.contains("client_timeout"));
@@ -1198,12 +1275,9 @@ async fn test_feedback_prompt_client() {
         .await
         .unwrap_or_else(|| ("".to_string(), "".to_string()));
 
-    // Get available actions
-    use netget::llm::actions::get_user_input_common_actions;
-    let selected_mode = state.get_selected_scripting_mode().await;
-    let scripting_env = state.get_scripting_env().await;
-    let available_actions =
-        get_user_input_common_actions(selected_mode, &scripting_env, true, true);
+    // The feedback vocabulary: this client only
+    use netget::llm::feedback::{get_feedback_actions, FeedbackTarget};
+    let available_actions = get_feedback_actions(FeedbackTarget::Client(client_id));
 
     // Build feedback prompt for client
     let system_prompt = PromptBuilder::build_feedback_system_prompt(
@@ -1233,4 +1307,25 @@ async fn test_feedback_prompt_client() {
     assert!(prompt.contains("timeout"));
     assert!(prompt.contains("rate_limited"));
     assert!(prompt.contains("2 entries"));
+    // The client itself is shown, not an empty server list
+    assert!(
+        prompt.contains("**client #1**: HTTP, connected to api.example.com:443"),
+        "{prompt}"
+    );
+    assert!(prompt.contains("Fetch data from /api/endpoint every 5 seconds"));
+    assert!(prompt.contains("timeout_count: 5"));
+    assert!(
+        prompt.contains("`update_client` with `client_id` 1"),
+        "{prompt}"
+    );
+    assert!(prompt.contains("## 1. update_client"), "{prompt}");
+    for absent in [
+        "No servers currently running",
+        "update_server",
+        "append_to_log",
+        "open_client",
+        "reconnect_client",
+    ] {
+        assert!(!prompt.contains(absent), "{absent} in:\n{prompt}");
+    }
 }

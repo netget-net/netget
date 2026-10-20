@@ -406,14 +406,17 @@ pub async fn execute_actions(
 async fn execute_common_action(
     action: CommonAction,
     state: &AppState,
-    _result: &mut ExecutionResult,
+    result: &mut ExecutionResult,
     server_id: Option<crate::state::ServerId>,
     client_id: Option<crate::state::ClientId>,
 ) -> Result<()> {
     match action {
-        CommonAction::ShowMessage { .. } => {
-            // ShowMessage is handled by the caller (event handler) to avoid duplicate output
-            // This match arm exists to satisfy exhaustiveness checking
+        CommonAction::ShowMessage { message } => {
+            // The operator, feedback and non-interactive paths answer show_message themselves
+            // and never reach here; a network event does. This arm used to do nothing, and
+            // nothing filled `messages`, so a server's model could call show_message and the
+            // operator saw nothing. Each server logs `result.messages` to the status stream.
+            result.add_message(message);
         }
 
         CommonAction::OpenServer { .. } => {

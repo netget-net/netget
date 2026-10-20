@@ -20,7 +20,7 @@
 //! One in-process mock model serves both halves. The rules are ordered so that the three
 //! client events and the server's `gopher_request` match first; the client's
 //! initial-instruction call (`event: None`) is caught last by the literal user message
-//! `call_llm_for_client` writes for it, "Waiting for instructions". Two rules that cannot be
+//! `call_llm_for_client` writes for it, "No network event yet: the client has just started". Two rules that cannot be
 //! told apart is the most common mocking mistake in this repo, so the server's single rule
 //! branches on the selector inside one `respond_with_actions_from_event` rather than being
 //! split into three rules on the same event id.
@@ -47,7 +47,7 @@ use tokio::sync::mpsc;
 
 /// The user message `call_llm_for_client` writes when there is no event — the client's
 /// opening turn. Matching on it is how the initial fetch is distinguished from every event.
-const OPENING_TURN: &str = "Waiting for instructions";
+const OPENING_TURN: &str = "No network event yet: the client has just started";
 
 type Captured = Arc<Mutex<Vec<Value>>>;
 
