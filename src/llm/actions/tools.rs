@@ -1828,27 +1828,42 @@ pub async fn execute_tool(
                 execute_web_search(query).await
             }
         }
-        ToolAction::ReadBaseStackDocs { protocol } => execute_read_base_stack_docs(protocol).await,
+        ToolAction::ReadBaseStackDocs { protocol } => render_documentation(
+            "read_base_stack_docs",
+            std::slice::from_ref(protocol),
+            DocModes::Both,
+            _state,
+        ),
         ToolAction::ReadServerDocumentation {
             protocols,
             protocol,
         } => {
             let all_protocols = ToolAction::merge_protocols(protocols, protocol);
-            execute_read_server_documentation(&all_protocols).await
+            render_documentation(
+                "read_server_documentation",
+                &all_protocols,
+                DocModes::ServerOnly,
+                _state,
+            )
         }
         ToolAction::ReadClientDocumentation {
             protocols,
             protocol,
         } => {
             let all_protocols = ToolAction::merge_protocols(protocols, protocol);
-            execute_read_client_documentation(&all_protocols).await
+            render_documentation(
+                "read_client_documentation",
+                &all_protocols,
+                DocModes::ClientOnly,
+                _state,
+            )
         }
         ToolAction::ReadDocumentation {
             protocols,
             protocol,
         } => {
             let all_protocols = ToolAction::merge_protocols(protocols, protocol);
-            execute_read_documentation(&all_protocols).await
+            render_documentation("read_documentation", &all_protocols, DocModes::Both, _state)
         }
         ToolAction::ListModels => execute_list_models().await,
         ToolAction::GenerateRandom {
@@ -1909,737 +1924,384 @@ pub async fn execute_tool(
     }
 }
 
-/// Execute read_base_stack_docs tool
-async fn execute_read_base_stack_docs(protocol: &str) -> ToolResult {
-    use tracing::info;
-
-    info!("🔧 Tool: read_base_stack_docs - protocol=\"{}\"", protocol);
-    debug!("Getting documentation for protocol: {}", protocol);
-
-    // Get structured documentation data
-    let doc_data = match super::common::generate_single_protocol_doc_data(protocol) {
-        Ok(data) => data,
-        Err(e) => {
-            warn!(
-                "Failed to get documentation for protocol '{}': {}",
-                protocol, e
-            );
-            info!("  ✗ Protocol '{}' not found: {}", protocol, e);
-            return ToolResult::error(
-                "read_base_stack_docs",
-                protocol.to_string(),
-                format!("Protocol not found or unavailable: {}", e),
-            );
-        }
-    };
-
-    // Render documentation using the template
-    let template_engine = &crate::llm::template_engine::TEMPLATE_ENGINE;
-    let rendered = match template_engine.render(
-        "shared/partials/base_stack_docs",
-        &serde_json::json!({ "base_stack_docs": doc_data }),
-    ) {
-        Ok(docs) => docs,
-        Err(e) => {
-            error!("Failed to render base stack docs template: {}", e);
-            return ToolResult::error(
-                "read_base_stack_docs",
-                protocol.to_string(),
-                format!("Failed to render documentation: {}", e),
-            );
-        }
-    };
-
-    debug!(
-        "Successfully retrieved documentation for protocol '{}' ({} bytes)",
-        protocol,
-        rendered.len()
-    );
-    info!(
-        "  ✓ Retrieved docs for '{}' ({} bytes)",
-        protocol,
-        rendered.len()
-    );
-
-    // Append open_server action description to inform LLM it's now enabled
-    let mut result = rendered;
-    result.push_str("\n\n---\n\n");
-    result.push_str("## open_server Action\n\n");
-    result.push_str("**Action:** `open_server`\n\n");
-    result
-        .push_str("**Description:** Start a new server with the protocol you just read about.\n\n");
-    result.push_str("**Required Parameters:**\n");
-    result.push_str("- `port` (number): Port number to listen on\n");
-    result.push_str(
-        "- `base_stack` (string): Protocol stack to use (e.g., the protocol you just read about)\n",
-    );
-    result.push_str(
-        "- `instruction` (string): Detailed instructions for handling network events\n\n",
-    );
-    result.push_str("**Optional Parameters:**\n");
-    result.push_str("- `send_first` (boolean): True if server sends data first (FTP, SMTP), false if it waits for client (HTTP)\n");
-    result.push_str("- `initial_memory` (string): Initial memory as a string for persistent context across connections\n");
-    result.push_str("- `startup_params` (object): Protocol-specific startup parameters (see protocol documentation above)\n");
-    result.push_str("- `scheduled_tasks` (array): Scheduled tasks to create with this server\n");
-    result.push_str("- Script-related parameters (if scripting is enabled)\n\n");
-    result.push_str("**Example:**\n");
-    result.push_str("```json\n");
-    result.push_str("{\n");
-    result.push_str("  \"type\": \"open_server\",\n");
-    result.push_str("  \"port\": 8080,\n");
-    result.push_str(&format!(
-        "  \"base_stack\": \"{}\",\n",
-        protocol.to_lowercase()
-    ));
-    result.push_str("  \"instruction\": \"Handle requests according to protocol specification\"\n");
-    result.push_str("}\n");
-    result.push_str("```\n");
-
-    ToolResult::success("read_base_stack_docs", protocol.to_string(), result)
+/// Which halves of a protocol a documentation tool describes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DocModes {
+    /// Server and client, whichever exist — `read_documentation` and `read_base_stack_docs`.
+    Both,
+    /// `read_server_documentation`.
+    ServerOnly,
+    /// `read_client_documentation`.
+    ClientOnly,
 }
 
-/// Execute read_server_documentation tool
-async fn execute_read_server_documentation(protocols: &[String]) -> ToolResult {
-    use tracing::info;
+/// Most protocols one documentation call may ask for.
+const MAX_DOC_PROTOCOLS: usize = 5;
 
-    if protocols.is_empty() {
-        return ToolResult::error(
-            "read_server_documentation",
-            "no protocols".to_string(),
-            "No protocols specified. Provide at least one protocol name in the 'protocols' array."
-                .to_string(),
-        );
-    }
-
-    info!(
-        "🔧 Tool: read_server_documentation - protocols={:?}",
-        protocols
-    );
-    debug!(
-        "Getting server documentation for protocols: {:?}",
-        protocols
-    );
-
-    let registry = crate::protocol::server_registry::registry();
-    let mut result = String::new();
-    let mut found_protocols = Vec::new();
-    let mut not_found_protocols = Vec::new();
-
-    for protocol in protocols {
-        // Get server protocol from registry
-        let server_protocol = match registry.get(protocol) {
-            Some(p) => p,
-            None => {
-                warn!("Server protocol '{}' not found", protocol);
-                not_found_protocols.push(protocol.clone());
-                continue;
-            }
-        };
-
-        found_protocols.push(protocol.clone());
-
-        // Build documentation from protocol
-        let metadata = server_protocol.metadata();
-        let startup_params = server_protocol.get_startup_parameters();
-
-        result.push_str(&format!("# Server Protocol: {}\n\n", protocol));
-        result.push_str(&format!("**Stack:** {}\n", server_protocol.stack_name()));
-        result.push_str(&format!("**Group:** {}\n", server_protocol.group_name()));
-        result.push_str(&format!("**State:** {:?}\n\n", metadata.state));
-        result.push_str(&format!(
-            "**History:** {}\n**Batching:** {}\n\n",
-            metadata.history.describe(),
-            metadata.batching.describe()
-        ));
-
-        result.push_str("## Description\n\n");
-        result.push_str(&format!("{}\n\n", server_protocol.description()));
-
-        if !startup_params.is_empty() {
-            result.push_str("## Startup Parameters\n\n");
-            for param in &startup_params {
-                result.push_str(&format!(
-                    "- **{}** ({}): {}\n",
-                    param.name, param.type_hint, param.description
-                ));
-                if param.required {
-                    result.push_str("  - Required: Yes\n");
-                }
-            }
-            result.push_str("\n");
-        }
-
-        result.push_str("## Example Prompt\n\n");
-        result.push_str(&format!("{}\n\n", server_protocol.example_prompt()));
-
-        if !server_protocol.keywords().is_empty() {
-            result.push_str("## Keywords\n\n");
-            result.push_str(&format!("{}\n\n", server_protocol.keywords().join(", ")));
-        }
-
-        if let Some(notes) = metadata.notes {
-            result.push_str("## Notes\n\n");
-            result.push_str(&format!("{}\n\n", notes));
-        }
-
-        // Concrete, ready-to-run `open_server` examples for THIS protocol, in each
-        // handler mode. These come from the protocol's own `get_startup_examples()`
-        // (the existing `StartupExamples` machinery) so they use real base_stack names,
-        // real event patterns and — for script/static mode — real protocol action types.
-        // Shown only for the protocol the model actually asked about, so they cost
-        // nothing on the always-on system prompt.
-        result.push_str(&server_protocol.get_startup_examples().to_prompt_text());
-
-        // Add protocol-specific event examples if available
-        let event_types = server_protocol.get_event_types();
-        if !event_types.is_empty() {
-            result.push_str("## Protocol-Specific Response Examples\n\n");
-            result.push_str("**IMPORTANT**: Use these protocol-specific action types when responding to events.\n\n");
-
-            for event_type in event_types {
-                result.push_str(&format!("### Event: {}\n\n", event_type.id));
-
-                // Response example is always present (required field)
-                result.push_str("**Response Example:**\n```json\n");
-                result.push_str(
-                    &serde_json::to_string_pretty(&event_type.effective_response_example())
-                        .unwrap_or_default(),
-                );
-                result.push_str("\n```\n\n");
-
-                if !event_type.alternative_examples.is_empty() {
-                    result.push_str("**Alternative Responses:**\n");
-                    for example in &event_type.alternative_examples {
-                        result.push_str("```json\n");
-                        result.push_str(&serde_json::to_string_pretty(example).unwrap_or_default());
-                        result.push_str("\n```\n");
-                    }
-                    result.push_str("\n");
-                }
-            }
-        }
-
-        result.push_str("\n---\n\n");
-    }
-
-    if found_protocols.is_empty() {
-        return ToolResult::error(
-            "read_server_documentation",
-            protocols.join(", "),
-            format!(
-                "No valid server protocols found. Protocols not found: {:?}. Use read_server_documentation to see available server protocols.",
-                not_found_protocols
-            ),
-        );
-    }
-
-    // Add open_server action description once at the end. The concrete, ready-to-run
-    // `open_server` examples are emitted per protocol above (via each protocol's own
-    // `get_startup_examples()`), so there is no need for a generic stub here.
-    result.push_str("## open_server Action (Now Enabled)\n\n");
-    result.push_str(
-        "The `open_server` action is now enabled for the protocols documented above. \
-         Use the LLM-mode / Script-mode / Static-mode examples shown under each protocol \
-         as your starting point.\n\n",
-    );
-
-    if !not_found_protocols.is_empty() {
-        result.push_str(&format!(
-            "\n**Note:** The following protocols were not found: {:?}\n",
-            not_found_protocols
-        ));
-    }
-
-    debug!(
-        "Successfully retrieved server documentation for {} protocols ({} bytes)",
-        found_protocols.len(),
-        result.len()
-    );
-    info!(
-        "  ✓ Retrieved server docs for {:?} ({} bytes)",
-        found_protocols,
-        result.len()
-    );
-
-    ToolResult::success(
-        "read_server_documentation",
-        found_protocols.join(", "),
-        result,
-    )
-}
-
-/// Execute read_client_documentation tool
-async fn execute_read_client_documentation(protocols: &[String]) -> ToolResult {
-    use tracing::info;
-
-    if protocols.is_empty() {
-        return ToolResult::error(
-            "read_client_documentation",
-            "no protocols".to_string(),
-            "No protocols specified. Provide at least one protocol name in the 'protocols' array."
-                .to_string(),
-        );
-    }
-
-    info!(
-        "🔧 Tool: read_client_documentation - protocols={:?}",
-        protocols
-    );
-    debug!(
-        "Getting client documentation for protocols: {:?}",
-        protocols
-    );
-
-    let client_registry = &crate::protocol::client_registry::CLIENT_REGISTRY;
-    let mut result = String::new();
-    let mut found_protocols = Vec::new();
-    let mut not_found_protocols = Vec::new();
-
-    for protocol in protocols {
-        // Get client protocol from registry
-        let client_protocol = match client_registry.get(protocol) {
-            Some(p) => p,
-            None => {
-                warn!("Client protocol '{}' not found", protocol);
-                not_found_protocols.push(protocol.clone());
-                continue;
-            }
-        };
-
-        found_protocols.push(protocol.clone());
-
-        // Build documentation from protocol
-        let metadata = client_protocol.metadata();
-        let startup_params = client_protocol.get_startup_parameters();
-
-        result.push_str(&format!("# Client Protocol: {}\n\n", protocol));
-        result.push_str(&format!("**Stack:** {}\n", client_protocol.stack_name()));
-        result.push_str(&format!("**Group:** {}\n", client_protocol.group_name()));
-        result.push_str(&format!("**State:** {:?}\n\n", metadata.state));
-        result.push_str(&format!(
-            "**History:** {}\n**Batching:** {}\n\n",
-            metadata.history.describe(),
-            metadata.batching.describe()
-        ));
-
-        result.push_str("## Description\n\n");
-        result.push_str(&format!("{}\n\n", client_protocol.description()));
-
-        if !startup_params.is_empty() {
-            result.push_str("## Startup Parameters\n\n");
-            for param in &startup_params {
-                result.push_str(&format!(
-                    "- **{}** ({}): {}\n",
-                    param.name, param.type_hint, param.description
-                ));
-                if param.required {
-                    result.push_str("  - Required: Yes\n");
-                }
-            }
-            result.push_str("\n");
-        }
-
-        result.push_str("## Example Prompt\n\n");
-        result.push_str(&format!("{}\n\n", client_protocol.example_prompt()));
-
-        if !client_protocol.keywords().is_empty() {
-            result.push_str("## Keywords\n\n");
-            result.push_str(&format!("{}\n\n", client_protocol.keywords().join(", ")));
-        }
-
-        if let Some(notes) = metadata.notes {
-            result.push_str("## Notes\n\n");
-            result.push_str(&format!("{}\n\n", notes));
-        }
-
-        // Add protocol-specific event examples if available
-        let event_types = client_protocol.get_event_types();
-        if !event_types.is_empty() {
-            result.push_str("## Protocol-Specific Action Examples\n\n");
-            result.push_str("**IMPORTANT**: Use these protocol-specific action types when sending requests.\n\n");
-
-            for event_type in event_types {
-                result.push_str(&format!("### Event: {}\n\n", event_type.id));
-
-                // Response example is always present (required field)
-                result.push_str("**Action Example:**\n```json\n");
-                result.push_str(
-                    &serde_json::to_string_pretty(&event_type.effective_response_example())
-                        .unwrap_or_default(),
-                );
-                result.push_str("\n```\n\n");
-
-                if !event_type.alternative_examples.is_empty() {
-                    result.push_str("**Alternative Actions:**\n");
-                    for example in &event_type.alternative_examples {
-                        result.push_str("```json\n");
-                        result.push_str(&serde_json::to_string_pretty(example).unwrap_or_default());
-                        result.push_str("\n```\n");
-                    }
-                    result.push_str("\n");
-                }
-            }
-        }
-
-        result.push_str("\n---\n\n");
-    }
-
-    if found_protocols.is_empty() {
-        return ToolResult::error(
-            "read_client_documentation",
-            protocols.join(", "),
-            format!(
-                "No valid client protocols found. Protocols not found: {:?}. Use read_client_documentation to see available client protocols.",
-                not_found_protocols
-            ),
-        );
-    }
-
-    // Add open_client action description once at the end
-    result.push_str("## open_client Action (Now Enabled)\n\n");
-    result.push_str(
-        "The `open_client` action is now enabled for the protocols documented above.\n\n",
-    );
-
-    // Add examples for each documented protocol
-    for protocol in &found_protocols {
-        result.push_str(&format!("**Example for {}:**\n```json\n{{\n", protocol));
-        result.push_str("  \"type\": \"open_client\",\n");
-        result.push_str(&format!("  \"protocol\": \"{}\",\n", protocol));
-        result.push_str("  \"remote_addr\": \"example.com:80\",\n");
-        result.push_str("  \"instruction\": \"Connect and interact with the remote server\"\n");
-        result.push_str("}\n```\n\n");
-    }
-
-    if !not_found_protocols.is_empty() {
-        result.push_str(&format!(
-            "\n**Note:** The following protocols were not found: {:?}\n",
-            not_found_protocols
-        ));
-    }
-
-    debug!(
-        "Successfully retrieved client documentation for {} protocols ({} bytes)",
-        found_protocols.len(),
-        result.len()
-    );
-    info!(
-        "  ✓ Retrieved client docs for {:?} ({} bytes)",
-        found_protocols,
-        result.len()
-    );
-
-    ToolResult::success(
-        "read_client_documentation",
-        found_protocols.join(", "),
-        result,
-    )
-}
-
-/// Execute unified read_documentation tool
+/// Render the documentation tools' output: every requested protocol in the requested modes,
+/// then the `open_server` / `open_client` examples for what was found.
 ///
-/// This function looks up protocols in both server and client registries,
-/// returning comprehensive documentation for all found modes.
-async fn execute_read_documentation(protocols: &[String]) -> ToolResult {
+/// All four documentation tools land here, so the model reads one format whichever it calls.
+/// What each mode says about the protocol itself — events with their fields, actions with
+/// their parameters, startup parameters with their defaults — is rendered by
+/// `crate::protocol::docs`, the renderers MCP's `get_protocol_docs` uses too.
+fn render_documentation(
+    tool_name: &str,
+    protocols: &[String],
+    modes: DocModes,
+    state: Option<&crate::state::AppState>,
+) -> ToolResult {
     use tracing::info;
 
     if protocols.is_empty() {
         return ToolResult::error(
-            "read_documentation",
+            tool_name,
             "no protocols".to_string(),
             "No protocols specified. Provide at least one protocol name in the 'protocols' array."
                 .to_string(),
         );
     }
 
-    if protocols.len() > 5 {
+    if protocols.len() > MAX_DOC_PROTOCOLS {
         return ToolResult::error(
-            "read_documentation",
+            tool_name,
             format!("{} protocols requested", protocols.len()),
             format!(
-                "Too many protocols requested ({}). Maximum is 5 per call. Please retry with 5 or fewer protocols. Requested: {:?}",
+                "Too many protocols requested ({}). Maximum is {} per call. Please retry with {} or fewer protocols. Requested: {:?}",
                 protocols.len(),
+                MAX_DOC_PROTOCOLS,
+                MAX_DOC_PROTOCOLS,
                 protocols
             ),
         );
     }
 
-    info!("🔧 Tool: read_documentation - protocols={:?}", protocols);
-    debug!("Getting documentation for protocols: {:?}", protocols);
+    info!("🔧 Tool: {} - protocols={:?}", tool_name, protocols);
 
+    let state: &crate::state::AppState = match state {
+        Some(state) => state,
+        None => crate::protocol::docs::fresh_state(),
+    };
     let server_registry = crate::protocol::server_registry::registry();
     let client_registry = &crate::protocol::client_registry::CLIENT_REGISTRY;
 
-    let mut result = String::new();
-    let mut found_server_protocols = Vec::new();
-    let mut found_client_protocols = Vec::new();
-    let mut not_found_protocols = Vec::new();
-
-    // Add guidance header with explicit keyword matching
-    result.push_str("# Protocol Documentation\n\n");
-    result.push_str("## CRITICAL: When to Use Server vs Client Mode\n\n");
-    result.push_str(
-        "**Server Mode (open_server)** - Use when the user wants to HOST/SERVE content:\n",
-    );
-    result.push_str("- Keywords: \"serve\", \"host\", \"listen\", \"start a server\", \"create a server\", \"run a server\", \"open server\", \"provide\", \"respond to\"\n");
-    result.push_str("- You LISTEN on a port and RESPOND to incoming requests\n");
-    result.push_str("- User wants to PROVIDE a service that others connect to\n");
-    result.push_str("- Examples: \"host a website\", \"start HTTP server\", \"create DNS server\", \"run FTP server\"\n\n");
-    result.push_str("**Client Mode (open_client)** - Use when the user wants to CONNECT to an existing remote server:\n");
-    result.push_str("- Keywords: \"connect to\", \"fetch from\", \"query\", \"access\", \"call\", \"request from\", \"get from\", \"send to\", \"send a\"\n");
-    result.push_str("- You CONNECT to a remote server and SEND requests to it\n");
-    result.push_str("- User wants to ACCESS a service that someone else is running\n");
-    result.push_str("- Examples: \"connect to Redis at localhost:6379\", \"fetch from API\", \"query database\"\n\n");
-    result.push_str("**⚠️ IMPORTANT**: If the user says \"serve\", \"host\", or \"provide\" content, use `open_server` even if they mistakenly say \"client\".\n");
-    result.push_str("The ACTION (serving content) matters more than the word choice.\n\n");
-    result.push_str("---\n\n");
+    let mut body = String::new();
+    // (name as the model should write it, well-known port to reach it on)
+    let mut found_servers: Vec<String> = Vec::new();
+    let mut found_clients: Vec<(String, Option<u16>)> = Vec::new();
+    let mut not_found = Vec::new();
 
     for protocol in protocols {
-        // Normalize protocol name (try both cases)
-        let protocol_upper = protocol.to_uppercase();
-        let protocol_lower = protocol.to_lowercase();
-
-        // Exact registry key first (e.g. "HTTP", "S3"), then fall back to keyword
-        // resolution so mixed-case keys ("DynamoDB") and keyword/base_stack forms
-        // ("dynamo", "dynamodb", "s3 bucket") still reach the docs — uppercasing
-        // alone never matches "DynamoDB".
-        let server_protocol = server_registry.get(&protocol_upper).or_else(|| {
+        // Exact registry key first (e.g. "HTTP", "S3"), then keyword resolution, so
+        // mixed-case keys ("DynamoDB") and keyword forms ("dynamo", "s3 bucket") resolve.
+        let server = server_registry.get(&protocol.to_uppercase()).or_else(|| {
             server_registry
                 .parse_from_str(protocol)
                 .and_then(|name| server_registry.get(&name))
         });
-        let client_protocol = client_registry.get(&protocol_lower);
+        let client = client_registry.get(&protocol.to_lowercase()).or_else(|| {
+            client_registry
+                .parse_from_str(protocol)
+                .and_then(|name| client_registry.get(&name))
+        });
 
-        let found_any = server_protocol.is_some() || client_protocol.is_some();
-
-        if !found_any {
-            warn!(
-                "Protocol '{}' not found in server or client registry",
-                protocol
-            );
-            not_found_protocols.push(protocol.clone());
+        let server = server.filter(|_| modes != DocModes::ClientOnly);
+        let client = client.filter(|_| modes != DocModes::ServerOnly);
+        if server.is_none() && client.is_none() {
+            warn!("Protocol '{}' not found for {}", protocol, tool_name);
+            not_found.push(protocol.clone());
             continue;
         }
 
-        // Document server mode if available
-        if let Some(server) = server_protocol {
-            // Canonical registry name (e.g. "DynamoDB"), not the uppercased input.
-            let server_name = server.protocol_name();
-            found_server_protocols.push(server_name.to_string());
-
-            let metadata = server.metadata();
-            let startup_params = server.get_startup_parameters();
-
-            result.push_str(&format!("# {} (Server Mode)\n\n", server_name));
-            result.push_str("**Mode:** Server - listens for incoming connections\n");
-            result.push_str(&format!("**Stack:** {}\n", server.stack_name()));
-            result.push_str(&format!("**Group:** {}\n", server.group_name()));
-            result.push_str(&format!("**State:** {:?}\n\n", metadata.state));
-            result.push_str(&format!(
-                "**History:** {}\n**Batching:** {}\n\n",
-                metadata.history.describe(),
-                metadata.batching.describe()
-            ));
-
-            result.push_str("## Description\n\n");
-            result.push_str(&format!("{}\n\n", server.description()));
-
-            if !startup_params.is_empty() {
-                result.push_str("## Startup Parameters\n\n");
-                for param in &startup_params {
-                    result.push_str(&format!(
-                        "- **{}** ({}): {}\n",
-                        param.name, param.type_hint, param.description
-                    ));
-                    if param.required {
-                        result.push_str("  - Required: Yes\n");
-                    }
-                }
-                result.push_str("\n");
-            }
-
-            result.push_str("## Example Prompt\n\n");
-            result.push_str(&format!("{}\n\n", server.example_prompt()));
-
-            if !server.keywords().is_empty() {
-                result.push_str("## Keywords\n\n");
-                result.push_str(&format!("{}\n\n", server.keywords().join(", ")));
-            }
-
-            if let Some(notes) = metadata.notes {
-                result.push_str("## Notes\n\n");
-                result.push_str(&format!("{}\n\n", notes));
-            }
-
-            // Concrete `open_server` examples for THIS protocol in each handler
-            // mode, from its own `get_startup_examples()`. Shown only for the
-            // protocol the model asked about, so it costs nothing on the
-            // always-on system prompt.
-            result.push_str(&server.get_startup_examples().to_prompt_text());
-
-            // Add protocol-specific event examples
-            let event_types = server.get_event_types();
-            if !event_types.is_empty() {
-                result.push_str("## Protocol-Specific Response Examples\n\n");
-                for event_type in event_types {
-                    result.push_str(&format!("### Event: {}\n\n", event_type.id));
-                    result.push_str("**Response Example:**\n```json\n");
-                    result.push_str(
-                        &serde_json::to_string_pretty(&event_type.effective_response_example())
-                            .unwrap_or_default(),
-                    );
-                    result.push_str("\n```\n\n");
-                }
-            }
-
-            result.push_str("\n---\n\n");
+        if let Some(server) = &server {
+            let name = server.protocol_name().to_lowercase();
+            render_server_mode(&mut body, server.as_ref(), state);
+            found_servers.push(name);
         }
 
-        // Document client mode if available
-        if let Some(client) = client_protocol {
-            found_client_protocols.push(protocol_lower.clone());
-
-            let metadata = client.metadata();
-            let startup_params = client.get_startup_parameters();
-
-            result.push_str(&format!("# {} (Client Mode)\n\n", protocol_lower));
-            result.push_str("**Mode:** Client - connects to remote servers\n");
-            result.push_str(&format!("**Stack:** {}\n", client.stack_name()));
-            result.push_str(&format!("**Group:** {}\n", client.group_name()));
-            result.push_str(&format!("**State:** {:?}\n\n", metadata.state));
-            result.push_str(&format!(
-                "**History:** {}\n**Batching:** {}\n\n",
-                metadata.history.describe(),
-                metadata.batching.describe()
-            ));
-
-            result.push_str("## Description\n\n");
-            result.push_str(&format!("{}\n\n", client.description()));
-
-            if !startup_params.is_empty() {
-                result.push_str("## Startup Parameters\n\n");
-                for param in &startup_params {
-                    result.push_str(&format!(
-                        "- **{}** ({}): {}\n",
-                        param.name, param.type_hint, param.description
-                    ));
-                    if param.required {
-                        result.push_str("  - Required: Yes\n");
-                    }
-                }
-                result.push_str("\n");
-            }
-
-            result.push_str("## Example Prompt\n\n");
-            result.push_str(&format!("{}\n\n", client.example_prompt()));
-
-            if !client.keywords().is_empty() {
-                result.push_str("## Keywords\n\n");
-                result.push_str(&format!("{}\n\n", client.keywords().join(", ")));
-            }
-
-            if let Some(notes) = metadata.notes {
-                result.push_str("## Notes\n\n");
-                result.push_str(&format!("{}\n\n", notes));
-            }
-
-            // Add protocol-specific event examples
-            let event_types = client.get_event_types();
-            if !event_types.is_empty() {
-                result.push_str("## Protocol-Specific Action Examples\n\n");
-                for event_type in event_types {
-                    result.push_str(&format!("### Event: {}\n\n", event_type.id));
-                    result.push_str("**Action Example:**\n```json\n");
-                    result.push_str(
-                        &serde_json::to_string_pretty(&event_type.effective_response_example())
-                            .unwrap_or_default(),
-                    );
-                    result.push_str("\n```\n\n");
-                }
-            }
-
-            result.push_str("\n---\n\n");
+        if let Some(client) = &client {
+            let name = client.protocol_name().to_lowercase();
+            render_client_mode(&mut body, &name, client.as_ref(), state);
+            // A client reaches a server of its protocol, so the server's declared port is
+            // where one listens; a client-only protocol may declare its own.
+            let port = server_registry
+                .parse_from_str(&name)
+                .and_then(|n| server_registry.get(&n))
+                .and_then(|s| s.metadata().well_known_port)
+                .or(client.metadata().well_known_port);
+            found_clients.push((name, port));
         }
     }
 
-    if found_server_protocols.is_empty() && found_client_protocols.is_empty() {
+    if found_servers.is_empty() && found_clients.is_empty() {
+        let kind = match modes {
+            DocModes::Both => "protocols",
+            DocModes::ServerOnly => "server protocols",
+            DocModes::ClientOnly => "client protocols",
+        };
         return ToolResult::error(
-            "read_documentation",
+            tool_name,
             protocols.join(", "),
             format!(
-                "No valid protocols found. Protocols not found: {:?}",
-                not_found_protocols
+                "No {kind} found for {:?}. The read_documentation action's description lists \
+                 every server and client protocol in this build; use a name from there.",
+                not_found
             ),
         );
     }
 
-    // Add enabled actions summary at the end
+    let mut result = String::new();
+    result.push_str("# Protocol Documentation\n\n");
+    if modes == DocModes::Both {
+        result.push_str("## CRITICAL: When to Use Server vs Client Mode\n\n");
+        result.push_str(
+            "**Server Mode (open_server)** - Use when the user wants to HOST/SERVE content:\n",
+        );
+        result.push_str("- Keywords: \"serve\", \"host\", \"listen\", \"start a server\", \"create a server\", \"run a server\", \"open server\", \"provide\", \"respond to\"\n");
+        result.push_str("- You LISTEN on a port and RESPOND to incoming requests\n");
+        result.push_str("- User wants to PROVIDE a service that others connect to\n");
+        result.push_str("- Examples: \"host a website\", \"start HTTP server\", \"create DNS server\", \"run FTP server\"\n\n");
+        result.push_str("**Client Mode (open_client)** - Use when the user wants to CONNECT to an existing remote server:\n");
+        result.push_str("- Keywords: \"connect to\", \"fetch from\", \"query\", \"access\", \"call\", \"request from\", \"get from\", \"send to\", \"send a\"\n");
+        result.push_str("- You CONNECT to a remote server and SEND requests to it\n");
+        result.push_str("- User wants to ACCESS a service that someone else is running\n");
+        result.push_str("- Examples: \"connect to Redis at localhost:6379\", \"fetch from API\", \"query database\"\n\n");
+        result.push_str("**⚠️ IMPORTANT**: If the user says \"serve\", \"host\", or \"provide\" content, use `open_server` even if they mistakenly say \"client\".\n");
+        result.push_str("The ACTION (serving content) matters more than the word choice.\n\n");
+        result.push_str("---\n\n");
+    }
+    result.push_str(&body);
+
     result.push_str("## Enabled Actions\n\n");
+    if !found_servers.is_empty() && !found_clients.is_empty() {
+        result.push_str(
+            "**⚠️ BEFORE CHOOSING**: Re-read the user's request. What do they want to DO?\n",
+        );
+        result.push_str("- If they want to SERVE/HOST/PROVIDE content → use `open_server`\n");
+        result.push_str(
+            "- If they want to CONNECT TO/FETCH FROM a remote server → use `open_client`\n",
+        );
+        result.push_str("- The ACTION matters, not the words. \"serve recipes\" = server, even if user says \"client\"\n\n");
+    }
 
-    // Add decision reminder before showing actions
-    result
-        .push_str("**⚠️ BEFORE CHOOSING**: Re-read the user's request. What do they want to DO?\n");
-    result.push_str("- If they want to SERVE/HOST/PROVIDE content → use `open_server`\n");
-    result
-        .push_str("- If they want to CONNECT TO/FETCH FROM a remote server → use `open_client`\n");
-    result.push_str("- The ACTION matters, not the words. \"serve recipes\" = server, even if user says \"client\"\n\n");
-
-    if !found_server_protocols.is_empty() {
+    if !found_servers.is_empty() {
         result.push_str("### open_server (For SERVING content)\n\n");
-        result.push_str("Use when: User wants to HOST content, SERVE data, LISTEN for connections, or PROVIDE a service.\n\n");
-        for protocol in &found_server_protocols {
-            result.push_str(&format!("**Example for {} server:**\n```json\n", protocol));
-            result.push_str("{\n");
-            result.push_str("  \"type\": \"open_server\",\n");
-            result.push_str("  \"port\": 8080,\n");
+        result.push_str("Use when: User wants to HOST content, SERVE data, LISTEN for connections, or PROVIDE a service. `open_server` is now enabled for the protocols above. Leave `port` out to listen on the protocol's well-known port (its **Port** line above); give one only when the user names it.\n\n");
+        for protocol in &found_servers {
+            let example = json!({
+                "type": "open_server",
+                "protocol": protocol,
+                "instruction": "Handle incoming requests",
+            });
             result.push_str(&format!(
-                "  \"base_stack\": \"{}\",\n",
-                protocol.to_lowercase()
+                "**Example for {} server:**\n```json\n{}\n```\n\n",
+                protocol,
+                serde_json::to_string_pretty(&example).unwrap_or_default()
             ));
-            result.push_str("  \"instruction\": \"Handle incoming requests\"\n");
-            result.push_str("}\n```\n\n");
         }
     }
 
-    if !found_client_protocols.is_empty() {
+    if !found_clients.is_empty() {
         result.push_str("### open_client (For CONNECTING to remote servers)\n\n");
-        result.push_str("Use when: User wants to CONNECT TO an existing server, FETCH data, QUERY a database, or ACCESS a remote service.\n\n");
-        for protocol in &found_client_protocols {
-            result.push_str(&format!("**Example for {} client:**\n```json\n", protocol));
-            result.push_str("{\n");
-            result.push_str("  \"type\": \"open_client\",\n");
-            result.push_str(&format!("  \"protocol\": \"{}\",\n", protocol));
-            result.push_str("  \"remote_addr\": \"example.com:80\",\n");
-            result.push_str("  \"instruction\": \"Connect and interact\"\n");
-            result.push_str("}\n```\n\n");
+        result.push_str("Use when: User wants to CONNECT TO an existing server, FETCH data, QUERY a database, or ACCESS a remote service. `open_client` is now enabled for the protocols above. `remote_addr` is the `host:port` the user names; the examples use the protocol's well-known port on this machine.\n\n");
+        for (protocol, port) in &found_clients {
+            let remote_addr = match port {
+                Some(port) => format!("127.0.0.1:{port}"),
+                None => "127.0.0.1:9000".to_string(),
+            };
+            let example = json!({
+                "type": "open_client",
+                "protocol": protocol,
+                "remote_addr": remote_addr,
+                "instruction": "Connect and interact",
+            });
+            result.push_str(&format!(
+                "**Example for {} client:**\n```json\n{}\n```\n\n",
+                protocol,
+                serde_json::to_string_pretty(&example).unwrap_or_default()
+            ));
+            if port.is_none() {
+                result.push_str("This protocol has no well-known port: use the port the server you are connecting to listens on.\n\n");
+            }
         }
     }
 
-    if !not_found_protocols.is_empty() {
+    if !not_found.is_empty() {
         result.push_str(&format!(
             "\n**Note:** The following protocols were not found: {:?}\n",
-            not_found_protocols
+            not_found
         ));
     }
 
-    let all_found: Vec<String> = found_server_protocols
+    let all_found: Vec<String> = found_servers
         .iter()
-        .chain(found_client_protocols.iter())
         .cloned()
+        .chain(found_clients.iter().map(|(n, _)| n.clone()))
         .collect();
-
-    debug!(
-        "Successfully retrieved documentation for {} protocols ({} bytes)",
-        all_found.len(),
-        result.len()
-    );
     info!(
         "  ✓ Retrieved docs for {:?} ({} bytes)",
         all_found,
         result.len()
     );
 
-    ToolResult::success("read_documentation", all_found.join(", "), result)
+    ToolResult::success(tool_name, all_found.join(", "), result)
+}
+
+/// The facts and description shared by both modes' headers.
+fn render_mode_header<P: crate::llm::actions::protocol_trait::Protocol + ?Sized>(
+    out: &mut String,
+    p: &P,
+) {
+    let metadata = p.metadata();
+    out.push_str(&format!("**Stack:** {}\n", p.stack_name()));
+    out.push_str(&format!("**Group:** {}\n", p.group_name()));
+    out.push_str(&format!("**Maturity:** {}\n", metadata.state.as_str()));
+    out.push_str(&format!(
+        "**Privilege required:** {}\n",
+        metadata.privilege_requirement.description()
+    ));
+}
+
+/// The parts of a mode's documentation after its facts: description, startup parameters,
+/// example prompt, keywords and notes.
+fn render_mode_description<P: crate::llm::actions::protocol_trait::Protocol + ?Sized>(
+    out: &mut String,
+    p: &P,
+) {
+    let metadata = p.metadata();
+    out.push_str(&format!(
+        "**History:** {}\n**Batching:** {}\n\n",
+        metadata.history.describe(),
+        metadata.batching.describe()
+    ));
+
+    out.push_str("## Description\n\n");
+    out.push_str(&format!("{}\n\n", p.description()));
+
+    let startup_params = p.get_startup_parameters();
+    if !startup_params.is_empty() {
+        out.push_str("## Startup Parameters\n\nPassed as `startup_params`; a key not listed here is an error.\n\n");
+        for param in &startup_params {
+            crate::protocol::docs::render_startup_param(out, param);
+        }
+        out.push('\n');
+    }
+
+    out.push_str("## Example Prompt\n\n");
+    out.push_str(&format!("{}\n\n", p.example_prompt()));
+
+    if !p.keywords().is_empty() {
+        out.push_str("## Keywords\n\n");
+        out.push_str(&format!("{}\n\n", p.keywords().join(", ")));
+    }
+
+    if let Some(notes) = metadata.notes {
+        out.push_str("## Notes\n\n");
+        out.push_str(&format!("{}\n\n", notes));
+    }
+}
+
+/// Events with their fields, then the response actions and the instance's own actions with
+/// their parameters. `events_intro` / `own_intro` are the mode's framing.
+fn render_mode_reference<P: crate::llm::actions::protocol_trait::Protocol + ?Sized>(
+    out: &mut String,
+    p: &P,
+    state: &crate::state::AppState,
+    own_heading: &str,
+    own_intro: &str,
+) {
+    use crate::protocol::docs::{instance_only_actions, render_action, render_event};
+
+    let events = p.get_event_types();
+    if !events.is_empty() {
+        let ids: Vec<String> = events.iter().map(|e| format!("`{}`", e.id)).collect();
+        out.push_str(&format!(
+            "## Events ({}) — valid `event_pattern` values for event handlers\n\n",
+            ids.join(", ")
+        ));
+        for event in &events {
+            render_event(out, event, "###");
+        }
+    }
+
+    let sync_actions = p.get_sync_actions();
+    if !sync_actions.is_empty() {
+        out.push_str("## Response Actions\n\nThe action objects that answer an event — what you, a script (inside `{\"actions\":[…]}`) or a static handler (`handler.actions`) return.\n\n");
+        for action in &sync_actions {
+            render_action(out, action, "###");
+        }
+    }
+
+    let own = instance_only_actions(p, &sync_actions, state);
+    if !own.is_empty() {
+        out.push_str(&format!("## {own_heading}\n\n{own_intro}\n\n"));
+        for action in &own {
+            render_action(out, action, "###");
+        }
+    }
+}
+
+fn render_server_mode(
+    out: &mut String,
+    server: &dyn crate::llm::actions::protocol_trait::Server,
+    state: &crate::state::AppState,
+) {
+    let metadata = server.metadata();
+    out.push_str(&format!("# {} (Server Mode)\n\n", server.protocol_name()));
+    out.push_str("**Mode:** Server - listens for incoming connections\n");
+    render_mode_header(out, server);
+    let interface_bound = server
+        .default_binding()
+        .is_some_and(|b| b.interface.is_some());
+    if interface_bound {
+        out.push_str("**Binding:** interface-bound — it captures on a network interface (`interface`), not a port\n");
+    } else {
+        out.push_str(&format!(
+            "**Port:** {}\n",
+            crate::protocol::docs::well_known_port_text(&metadata)
+        ));
+    }
+    out.push_str(&format!(
+        "**When the model cannot answer:** {}\n",
+        crate::protocol::docs::failure_mode_text(metadata.failure_mode)
+    ));
+    render_mode_description(out, server);
+
+    // Concrete `open_server` examples for THIS protocol in each handler mode, from its own
+    // `get_startup_examples()`. Shown only for the protocol the model asked about, so it
+    // costs nothing on the always-on system prompt.
+    out.push_str(&crate::protocol::docs::server_startup_examples_text(
+        server.get_startup_examples(),
+    ));
+
+    render_mode_reference(
+        out,
+        server,
+        state,
+        "Server-level Actions",
+        "Not tied to one event: what you can do on a running server of this protocol on your own initiative.",
+    );
+    out.push_str("\n---\n\n");
+}
+
+fn render_client_mode(
+    out: &mut String,
+    name: &str,
+    client: &dyn crate::llm::actions::client_trait::Client,
+    state: &crate::state::AppState,
+) {
+    out.push_str(&format!("# {} (Client Mode)\n\n", name));
+    out.push_str("**Mode:** Client - connects to remote servers\n");
+    render_mode_header(out, client);
+    render_mode_description(out, client);
+    render_mode_reference(
+        out,
+        client,
+        state,
+        "Client Actions",
+        "What the client can do on its own initiative, such as sending a request.",
+    );
+    out.push_str("\n---\n\n");
 }
 
 /// Execute list_tasks tool
