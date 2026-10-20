@@ -851,7 +851,15 @@ async fn test_json_parse_retry_prompt() {
     // Sanity checks - verify key elements are present
     assert!(prompt.contains("Invalid Response Format"));
     assert!(prompt.contains(error)); // The actual error should be in the prompt
-    assert!(prompt.contains("pure JSON"));
+    assert!(prompt.contains("One JSON object"));
+    assert!(
+        prompt.contains(r#"{"actions": []}"#),
+        "the retry must say how to answer with nothing"
+    );
+    assert!(
+        prompt.contains("Nothing from the rejected response was executed"),
+        "the retry must say the rejected reply did not run"
+    );
     assert!(prompt.contains("Please retry"));
     assert!(prompt.contains("original request")); // Should reference original request
 }

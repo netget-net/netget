@@ -1042,7 +1042,15 @@ Check the action definition in "Available Actions" for required parameters and p
         match &task.scope {
             TaskScope::Global => {
                 let scripting_env = state.get_scripting_env().await;
-                actions = get_user_input_common_actions(selected_mode, &scripting_env, true, true);
+                // The operator set: it already leaves out update_instruction, set_memory and
+                // append_memory, which with no instance in scope would land on whichever server
+                // happens to be "first".
+                actions = crate::llm::actions::common::get_operator_common_actions(
+                    selected_mode,
+                    &scripting_env,
+                    true,
+                    true,
+                );
                 actions.retain(|a| !GLOBAL_TASK_UNTARGETED_ACTIONS.contains(&a.name.as_str()));
                 actions.extend(get_all_tool_actions(web_search_mode));
             }
