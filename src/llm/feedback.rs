@@ -35,10 +35,11 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error};
 
 use crate::llm::actions::{ActionDefinition, Parameter};
 use crate::llm::OllamaClient;
+use crate::logging::emit::Log;
 use crate::state::app_state::DueFeedback;
 use crate::state::{AppState, ClientId, ServerId};
 
@@ -498,13 +499,8 @@ async fn process_feedback_batch(
         return;
     };
     let who = target.label();
-    info!(
+    Log::new(Some(&status_tx)).info(format!(
         "Processing {} feedback entries for {}",
-        batch.entries.len(),
-        who
-    );
-    let _ = status_tx.send(format!(
-        "[INFO] Processing {} feedback entries for {}",
         batch.entries.len(),
         who
     ));
@@ -529,14 +525,8 @@ async fn process_feedback_batch(
             // model cannot answer retry forever, so it is dropped — loudly. Feedback is a
             // best-effort signal channel, not a durable queue, and nothing on the wire is
             // waiting on this call.
-            error!(
+            Log::new(Some(&status_tx)).error(format!(
                 "Feedback processing failed for {} ({} entries dropped): {}",
-                who,
-                batch.entries.len(),
-                e
-            );
-            let _ = status_tx.send(format!(
-                "[ERROR] Feedback processing failed for {} ({} entries dropped): {}",
                 who,
                 batch.entries.len(),
                 e
@@ -799,7 +789,7 @@ fn task_belongs_to(scope: &crate::state::task::TaskScope, target: FeedbackTarget
 /// Apply the adjustment actions the model returned, in order, to `target` only.
 ///
 /// Every action that is refused or fails is recorded in the outcome and reported as a
-/// `[WARN] Feedback adjustment for … failed` line, so nothing the model asked for disappears
+/// WARN line `Feedback adjustment for … failed`, so nothing the model asked for disappears
 /// silently.
 pub async fn apply_feedback_actions(
     state: &AppState,
@@ -832,9 +822,8 @@ pub async fn apply_feedback_actions(
                             .await
                     }
                 }
-                info!("Feedback updated the instruction for {}", who);
-                let _ = status_tx.send(format!(
-                    "[INFO] Feedback updated the instruction for {}: {}",
+                Log::new(Some(status_tx)).info(format!(
+                    "Feedback updated the instruction for {}: {}",
                     who,
                     crate::utils::truncate_for_log(&instruction, 120)
                 ));
@@ -848,7 +837,7 @@ pub async fn apply_feedback_actions(
                     .await
                 {
                     Ok(update) => {
-                        let _ = status_tx.send(format!("[INFO] Feedback: {}", update.summary));
+                        Log::new(Some(status_tx)).info(format!("Feedback: {}", update.summary));
                         outcome.applied.push(format!("{name}: {}", update.summary));
                     }
                     Err(e) => outcome.failures.push(format!("{name}: {e}")),
@@ -866,7 +855,7 @@ pub async fn apply_feedback_actions(
                 .await
                 {
                     Ok(update) => {
-                        let _ = status_tx.send(format!("[INFO] Feedback: {}", update.summary));
+                        Log::new(Some(status_tx)).info(format!("Feedback: {}", update.summary));
                         outcome.applied.push(format!("{name}: {}", update.summary));
                     }
                     Err(e) => outcome.failures.push(format!("{name}: {e}")),
@@ -902,8 +891,7 @@ pub async fn apply_feedback_actions(
                     .push(format!("{name}: no task named '{task_id}'")),
             },
             Route::Message(message) => {
-                info!("Feedback for {}: {}", who, message);
-                let _ = status_tx.send(format!("[INFO] Feedback for {}: {}", who, message));
+                Log::new(Some(status_tx)).info(format!("Feedback for {}: {}", who, message));
                 outcome.applied.push(format!("{name}: shown"));
             }
             Route::Executor(value) => {
@@ -939,9 +927,8 @@ pub async fn apply_feedback_actions(
             "partly failed"
         };
         let summary = outcome.failures.join("; ");
-        warn!("Feedback adjustment for {} {}: {}", who, how, summary);
-        let _ = status_tx.send(format!(
-            "[WARN] Feedback adjustment for {} {}: {}",
+        Log::new(Some(status_tx)).warn(format!(
+            "Feedback adjustment for {} {}: {}",
             who, how, summary
         ));
     }
