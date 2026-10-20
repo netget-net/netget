@@ -294,33 +294,39 @@ mod open_iscsi {
         );
     }
 
-    /// The block device the kernel made for a session to `target`, from sysfs.
-    fn block_device_for(target: &str) -> Option<PathBuf> {
-        for host in std::fs::read_dir("/sys/class/iscsi_session")
-            .ok()?
-            .flatten()
-        {
-            let name = std::fs::read_to_string(host.path().join("targetname")).unwrap_or_default();
-            if name.trim() != target {
-                continue;
+    /// What the kernel and open-iscsi say about the session, for a failure message.
+    async fn diagnostics(iscsiadm: &PathBuf) -> String {
+        let session = run(iscsiadm, &["-m", "session", "-P", "3"]).await;
+        let by_path = std::fs::read_dir("/dev/disk/by-path")
+            .map(|d| {
+                d.flatten()
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default();
+        let dmesg = match std::process::Command::new("dmesg").output() {
+            Ok(o) => {
+                let all = text(&o.stdout);
+                let lines: Vec<&str> = all.lines().collect();
+                lines[lines.len().saturating_sub(60)..].join("\n")
             }
-            let device = host.path().join("device");
-            for t in std::fs::read_dir(&device).ok()?.flatten() {
-                let tname = t.file_name().to_string_lossy().to_string();
-                if !tname.starts_with("target") {
-                    continue;
-                }
-                for lun in std::fs::read_dir(t.path()).ok()?.flatten() {
-                    let block = lun.path().join("block");
-                    if let Ok(mut it) = std::fs::read_dir(&block) {
-                        if let Some(Ok(dev)) = it.next() {
-                            return Some(PathBuf::from("/dev").join(dev.file_name()));
-                        }
-                    }
-                }
-            }
-        }
-        None
+            Err(e) => format!("dmesg: {e}"),
+        };
+        format!(
+            "iscsiadm -m session -P 3:\n{}{}\n/dev/disk/by-path:\n{by_path}\ndmesg:\n{dmesg}",
+            text(&session.stdout),
+            text(&session.stderr)
+        )
+    }
+
+    /// Read `len` bytes from the start of the block device, once it opens and reads.
+    fn read_start(path: &std::path::Path, len: usize) -> std::io::Result<Vec<u8>> {
+        use std::io::Read;
+        let mut f = std::fs::File::open(path)?;
+        let mut buf = vec![0u8; len];
+        f.read_exact(&mut buf)?;
+        Ok(buf)
     }
 
     #[tokio::test]
@@ -351,30 +357,34 @@ mod open_iscsi {
             text(&out.stdout),
             text(&out.stderr)
         );
-        let dev = tokio::time::timeout(std::time::Duration::from_secs(30), async {
-            loop {
-                if let Some(d) = block_device_for(DISK0) {
-                    if d.exists() {
-                        return d;
-                    }
+        // The kernel names the disk; udev links it by portal, target and LUN. Never guess the
+        // sdX name: the runner has disks of its own, and LUN 1 is a disk of this session too.
+        let link = PathBuf::from(format!("/dev/disk/by-path/ip-{portal}-iscsi-{DISK0}-lun-0"));
+        if let Some(udevadm) = ["/usr/bin/udevadm", "/bin/udevadm", "/sbin/udevadm"]
+            .iter()
+            .find(|p| std::path::Path::new(p).exists())
+        {
+            let _ = run(&PathBuf::from(udevadm), &["settle", "--timeout=30"]).await;
+        }
+        // The node can exist before the kernel has finished probing the disk (opening it then
+        // fails with ENXIO), so wait for a read to succeed, not for the name to appear.
+        let mut last = String::new();
+        let mut data = None;
+        for _ in 0..150 {
+            match read_start(&link, 8192) {
+                Ok(d) => {
+                    data = Some(d);
+                    break;
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                Err(e) => last = format!("{}: {e}", link.display()),
             }
-        })
-        .await
-        .expect("the kernel made a block device for the session");
-        let dd = require_tool("dd", "coreutils");
-        let out = run(
-            &dd,
-            &[
-                &format!("if={}", dev.display()),
-                "bs=4096",
-                "count=2",
-                "iflag=direct",
-                "status=none",
-            ],
-        )
-        .await;
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+        let report = if data.is_none() {
+            diagnostics(&iscsiadm).await
+        } else {
+            String::new()
+        };
         let _ = run(
             &iscsiadm,
             &["-m", "node", "-T", DISK0, "-p", &portal, "--logout"],
@@ -385,8 +395,8 @@ mod open_iscsi {
             &["-m", "node", "-T", DISK0, "-p", &portal, "-o", "delete"],
         )
         .await;
-        assert!(out.status.success(), "{}", text(&out.stderr));
-        let d = out.stdout;
+        let d = data
+            .unwrap_or_else(|| panic!("the kernel's disk for LUN 0 never read: {last}\n{report}"));
         assert_eq!(&d[..17], b"hello from netget");
         assert!(d[4096..4608].iter().all(|b| *b == 0xAB));
         assert!(d[4608..8192].iter().all(|b| *b == 0));

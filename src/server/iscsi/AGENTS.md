@@ -64,7 +64,13 @@ NotUnderstood. TargetPortalGroupTag in the first response, TargetAlias in the fi
   GOOD collapsed into the last PDU, overflow/underflow residuals.
 - **Writes.** Immediate data (≤ FirstBurstLength), unsolicited Data-Out (InitialR2T=No, ≤
   FirstBurstLength), then R2Ts of ≤ MaxBurstLength one at a time. DataSN, buffer offset and TTT
-  are checked; a violation is Reject (protocol error) and the connection ends (ERL 0). An EDTL
+  are checked. A violation ends its task with CHECK CONDITION (ABORTED COMMAND: DATA PHASE
+  ERROR, or UNEXPECTED UNSOLICITED DATA), nothing written, and the connection goes on, because
+  the PDU was read whole and the stream is in step. Both louder answers hung libiscsi's
+  iSCSIDataSnInvalid on Linux: closing the connection (which error recovery level 0 allows)
+  made it reconnect with its next WRITE queued ahead of its Login and wait forever, and a
+  Reject for the Data-Out made it reset the connection itself, with the same result. A connection whose first PDU is not a Login Request is closed
+  unanswered, as LIO does. An EDTL
   that disagrees with the CDB is CHECK CONDITION / INVALID FIELD IN INFORMATION UNIT with the
   residual named (what LIO does; libiscsi's residual tests accept it). Data-Out for a task that
   no longer exists is discarded.

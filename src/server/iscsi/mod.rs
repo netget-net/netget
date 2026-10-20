@@ -494,6 +494,14 @@ impl<'a> Conn<'a> {
                     "protocol_refusal",
                     &format!("{} during login", op::name(req.opcode())),
                 );
+                if first {
+                    // No login has begun, so there is nothing to answer: close, as LIO does.
+                    // A Login Response here could only carry the stray PDU's ITT, which names
+                    // no login (libiscsi, reconnecting, sends a queued command ahead of its
+                    // Login, and that command is what arrives first).
+                    let _ = self.stream.shutdown().await;
+                    return Ok(false);
+                }
                 let f = fail(
                     login_status::INVALID_DURING_LOGIN,
                     "protocol_refusal",
@@ -1628,13 +1636,21 @@ impl<'a> Conn<'a> {
             // Data for a task already answered (refused before its data) or aborted.
             return Ok(true);
         };
+        let unexpected = Sense::UNEXPECTED_UNSOLICITED_DATA;
+        let phase = Sense::DATA_PHASE_ERROR;
         let violation = if ttt == RESERVED_TAG {
             if !w.unsolicited_open {
-                Some("unsolicited data after the unsolicited burst ended")
+                Some((
+                    "unsolicited data after the unsolicited burst ended",
+                    unexpected,
+                ))
             } else if data_sn != w.unsolicited_data_sn {
-                Some("DataSN out of order")
+                Some(("DataSN out of order", phase))
             } else if offset != w.buf.len() || offset + req.data.len() > w.unsolicited_limit {
-                Some("unsolicited data beyond FirstBurstLength or out of order")
+                Some((
+                    "unsolicited data beyond FirstBurstLength or out of order",
+                    unexpected,
+                ))
             } else {
                 None
             }
@@ -1642,17 +1658,17 @@ impl<'a> Conn<'a> {
             match w.r2t {
                 Some((t, end, sn)) if t == ttt => {
                     if data_sn != sn {
-                        Some("DataSN out of order")
+                        Some(("DataSN out of order", phase))
                     } else if offset != w.buf.len() || offset + req.data.len() > end {
-                        Some("data outside the R2T it answers")
+                        Some(("data outside the R2T it answers", phase))
                     } else {
                         None
                     }
                 }
-                _ => Some("a Target Transfer Tag this target did not issue"),
+                _ => Some(("a Target Transfer Tag this target did not issue", phase)),
             }
         };
-        if let Some(why) = violation {
+        if let Some((why, sense)) = violation {
             outcome(
                 self.ctx,
                 self.id,
@@ -1660,9 +1676,20 @@ impl<'a> Conn<'a> {
                 "protocol_refusal",
                 &format!("{why} (ITT 0x{itt:08x}, DataSN {data_sn}, offset {offset})"),
             );
-            self.reject(&req, reject::PROTOCOL_ERROR).await?;
-            // Error recovery level 0: the connection cannot resynchronise.
-            return Ok(false);
+            // The PDU itself was read whole, so the connection is still in step: end only its
+            // task, with CHECK CONDITION and nothing written, and keep the session. Any later
+            // Data-Out for the task is discarded as belonging to no task.
+            //
+            // Both louder answers broke libiscsi's iSCSIDataSnInvalid on Linux. Closing the
+            // connection (which error recovery level 0 allows) made it reconnect with its next
+            // WRITE queued ahead of its Login, then send a WRITE on a fresh connection with no
+            // Login at all and wait forever. A Reject for the Data-Out made it reset the
+            // connection itself, with the same result. The task's own SCSI Response is what
+            // it handles: the WRITE fails and the session goes on.
+            self.pending.remove(&itt);
+            self.respond(itt, status::CHECK_CONDITION, Some(sense), (0, 0), 0)
+                .await?;
+            return Ok(true);
         }
         w.buf.extend(&req.data);
         if ttt == RESERVED_TAG {

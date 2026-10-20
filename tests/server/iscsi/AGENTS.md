@@ -15,7 +15,7 @@ iSCSI is reached through its `iscsi.target_ports` preference, not a decode-as en
 |---|---|
 | `discovery_lists_the_models_targets_and_tshark_reads_the_session` | SendTargets=All answered from the model, default portal, Reject for SCSI in discovery, logout; tshark reads SendTargets and both TargetNames |
 | `a_normal_session_serves_the_described_luns` | REPORT LUNS, INQUIRY + VPD 0x00/0x80/0x83, absent LUN, READ CAPACITY 10/16, reads of text/fill/hex, Data-In split under MaxRecvDataSegmentLength, medium error with INFORMATION, LBA out of range, write + read back, write-protected LUN, unsolicited Data-Out, MODE SENSE WP, NOP echo, one model call for the whole session; tshark reads the INQUIRY product id |
-| `r2t_solicits_write_data_in_bursts` | R2Ts within MaxBurstLength, R2TSN and DataSN order, a skipped offset → Reject and close |
+| `r2t_solicits_write_data_in_bursts` | R2Ts within MaxBurstLength, R2TSN and DataSN order; a skipped offset and a wrong DataSN → CHECK CONDITION (DATA PHASE ERROR) for that task, nothing written, the session goes on |
 | `chap_is_checked_in_rust_before_the_model_is_asked` | wrong secret and wrong name → 0x0201 with no model call; mutual CHAP response verified; no secret in any event; CHAP required but not offered → 0x0201 |
 | `logins_fail_closed_and_expose_nothing_the_model_did_not_describe` | backend down, silent, invalid → 0x0300; not_found → 0x0203; unauthorized → 0x0202; every refusal closes |
 | `bounds_refuse_before_anything_is_buffered_or_asked` | login segment over 8 KiB closed unread; 129 keys, duplicate key, bad version refused; FFP segment over 256 KiB closed; immediate data over FirstBurstLength → Reject |
@@ -60,7 +60,23 @@ PDU carrying all 4096 bytes as immediate data and nothing else queued on the wir
 suite is left out of the subset rather than chased.
 
 **open-iscsi** (Linux, as root, the `iscsi` pair job): `iscsiadm` discovery and login, then
-`dd` with `iflag=direct` from the block device the kernel made, compared with the described
-bytes.
+the first 8 KiB of LUN 0 read through `/dev/disk/by-path/ip-127.0.0.1:<port>-iscsi-<iqn>-lun-0`
+after `udevadm settle`, retried until a read succeeds (the node can exist while the kernel is
+still probing the disk, and opening it then fails with ENXIO) for up to 30 s, and compared
+with the described bytes. The test never names an sdX device: the first CI run assumed
+`/dev/sdb` and failed with ENXIO. On failure it prints `iscsiadm -m session -P 3`, the by-path
+links and the tail of `dmesg`.
+
+**tshark versions.** The discovery test reads SendTargets and the TargetNames through
+`iscsi.login.*` fields where tshark has them (4.6) and through `iscsi.keyvalue` ("Key=Value"
+strings) where it does not (4.2, Ubuntu 24.04's, which refuses the 4.6 names).
+
+**iSCSIDataSnInvalid on Linux** hung for 300 s in the first CI run and was reproduced in an
+ubuntu:24.04 amd64 container against a Linux build of the target, through a relay logging
+every PDU: after the target closed the connection on the bad DataSN, libiscsi reconnected with
+the test's next WRITE queued ahead of its Login, then sent a WRITE on a new connection with no
+Login at all and waited forever. Replacing the close with a Reject of the Data-Out was tried
+and hung the same way: libiscsi reset the connection itself on the Reject. The target now
+answers the task alone with CHECK CONDITION and keeps the connection.
 
 Every peer test fails, never skips, when its initiator is missing.
