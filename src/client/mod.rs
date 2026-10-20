@@ -225,6 +225,8 @@ pub mod mqtt_sn;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod nbd;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod nvme_tcp;
+#[cfg(not(target_arch = "wasm32"))]
 pub use mqtt::actions::MqttClientProtocol;
 
 // amqp client

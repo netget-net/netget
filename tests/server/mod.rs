@@ -312,6 +312,7 @@ pub mod mqtt_sn;
 
 pub mod iscsi;
 pub mod nbd;
+pub mod nvme_tcp;
 
 pub mod managesieve;
 

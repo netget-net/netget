@@ -483,6 +483,10 @@ pub fn wire_for(protocol: &str) -> Wire {
         "mqtt" => tcp("mqtt"),
         "mqtt_sn" => udp("mqttsn"),
         "nbd" => tcp("nbd"),
+        // NVMe/TCP is in the tcp.port decode-as table (4420 and 8009 by default); the
+        // commands inside are dissected as `nvme`, which matches each completion to its command
+        // only when it saw the command, so capture from the start of the connection.
+        "nvme_tcp" => tcp("nvme-tcp"),
         // iSCSI is not in the tcp.port decode-as table (4.6.8: `tshark -G decodes` has no iscsi
         // row); the dissector claims the ports in its own `iscsi.target_ports` preference (3260
         // by default), so a capture on another port needs that preference set, not `-d`. The

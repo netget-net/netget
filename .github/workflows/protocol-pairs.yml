@@ -9502,3 +9502,106 @@ jobs:
             --test parameter_type_agreement_test \
             --test history_batching_declaration_test \
             -- --test-threads=32
+  nvme-tcp:
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'nvme-tcp')
+    name: NVMe/TCP target against the Linux kernel host and SPDK, host against the Linux kernel target and SPDK nvmf_tgt
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: protocol-pairs-${{ github.job }}
+      - name: Cache the SPDK v26.09 build
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/spdk-peer/spdk
+          key: spdk-v26.09-0bbb7fe-${{ runner.os }}-${{ runner.arch }}-x86-64-v2
+      - name: Install nvme-cli and tshark; load nvme-tcp, nvmet and nvmet-tcp
+        run: |
+          set -euo pipefail
+          echo 'wireshark-common wireshark-common/install-setuid boolean false' | sudo debconf-set-selections
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nvme-cli tshark
+          # The kernel host (nvme-tcp) and target (nvmet, nvmet-tcp). Only reach for
+          # linux-modules-extra when the base modules lack them: a freshly booted runner kernel
+          # can be ahead of the archive, and then that package does not exist.
+          if ! sudo modprobe -a nvme-tcp nvmet nvmet-tcp; then
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+              "linux-modules-extra-$(uname -r)" || true
+            if ! sudo modprobe -a nvme-tcp nvmet nvmet-tcp; then
+              echo "::error::kernel $(uname -r) cannot load nvme-tcp, nvmet and nvmet-tcp, and linux-modules-extra-$(uname -r) did not provide them; the kernel peers this job exists for cannot run"
+              exit 1
+            fi
+          fi
+          mountpoint -q /sys/kernel/config || sudo mount -t configfs none /sys/kernel/config
+          test -e /dev/nvme-fabrics
+          test -d /sys/kernel/config/nvmet
+          dpkg-query -W nvme-cli tshark
+          nvme version
+          # SPDK: a second, userspace host (spdk_nvme_identify, spdk_dd, spdk_nvme_perf) and
+          # target (nvmf_tgt), run without hugepages.
+          spdk=$(sh scripts/test-peers/build-spdk.sh "$RUNNER_TEMP/spdk-peer" | tail -1)
+          echo "NETGET_SPDK_DIR=$spdk" >> "$GITHUB_ENV"
+          # nvme connect and configfs need root.
+          sudo -n true
+      - name: Both roles with mandatory independent peers, bounds and fail-closed paths
+        run: |
+          set -euo pipefail
+          command -v nvme tshark
+          test -x "$NETGET_SPDK_DIR/build/bin/nvmf_tgt"
+          # cargo builds as the runner user and runs each test binary as root, with the PATH
+          # that finds the peers.
+          export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER="sudo -E env PATH=$PATH"
+          for filter in \
+            nvme_tcp:: \
+            client/nvme_tcp::; do
+            case "$filter" in
+              client/*) target=client; filter=${filter#client/} ;;
+              *) target=server ;;
+            esac
+            pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
+            cargo test --locked --no-default-features \
+              --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
+            grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
+          done
+      - name: Shared declarations, native startup, privacy and ownership
+        run: |
+          cargo test --locked --no-default-features \
+            --test event_action_declarations_test \
+            --test advertised_actions_test \
+            --test action_descriptions_test \
+            --test startup_examples_validation_test \
+            --test examples \
+            --test startup_param_defaults_test \
+            --test startup_param_drift_test \
+            --test protocol_startup_examples_test \
+            --test startup_params_result_test \
+            --test startup_constructed_input_test \
+            --test management_test \
+            --test management_form_test \
+            --test dual_protocol_test \
+            --test dashboard_wireshark_test \
+            --test client_event_wiring_test \
+            --test event_emit_sites_test \
+            --test task_registration_cancellation_test \
+            --test server_task_registry_test \
+            --test client_stop_releases_socket_test \
+            --test peer_handle_coverage_ratchet_test \
+            --test client_credential_logging_test \
+            --test client_llm_budget_test \
+            --test secret_redaction_test \
+            --test wire_failure_test \
+            --test site_protocol_list_test \
+            --test well_known_port_declaration_test \
+            --test failure_mode_declaration_test \
+            --test decision_tag_ratchet_test \
+            --test max_inbound_bytes_declaration_test \
+            --test max_inbound_bytes_bound_plus_one_test \
+            --test test_suite_hygiene_test \
+            --test real_client_evidence_is_run_test \
+            --test startup_privilege_transport_test \
+            --test parameter_type_agreement_test \
+            --test history_batching_declaration_test \
+            -- --test-threads=32
