@@ -64,6 +64,7 @@ pub mod cns {
     pub const CONTROLLER: u8 = 0x01;
     pub const ACTIVE_NAMESPACES: u8 = 0x02;
     pub const NAMESPACE_DESCRIPTORS: u8 = 0x03;
+    pub const IO_COMMAND_SET_CONTROLLER: u8 = 0x06;
 }
 
 /// Log page identifiers.

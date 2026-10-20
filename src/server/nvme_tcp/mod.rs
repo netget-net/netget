@@ -1680,6 +1680,11 @@ impl<'a> Conn<'a> {
                 Some(n) => Done::Data(n.descriptors(), 0),
                 None => err(Status::INVALID_NAMESPACE),
             },
+            // The NVM command set's own Identify Controller (CSI 0): every limit it reports is
+            // 0, "not reported". The Linux host asks for it of any controller past NVMe 1.2.
+            cns::IO_COMMAND_SET_CONTROLLER if sqe.cdw(11) >> 24 == 0 => {
+                Done::Data(vec![0u8; nvme::IDENTIFY_LEN], 0)
+            }
             _ => err(Status::INVALID_FIELD),
         }
     }

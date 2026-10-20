@@ -74,7 +74,8 @@ pub async fn results(state: &AppState, id: ClientId, n: usize) -> Vec<Value> {
     client_events(state, id, "nvme_tcp_command_result").await
 }
 
-/// The model for a whole session: read the discovery log, connect to its first subsystem (or
+/// The model for a whole session: read the discovery log, connect to its first NVM subsystem
+/// (a log may list itself as the current discovery subsystem first) (or
 /// straight to the configured one when the log is skipped), identify namespace NSID, read block
 /// 0, write `WRITE_TEXT` to block 100, read it back, read the health log, flush, disconnect.
 pub const SESSION_POLICY: &str = r#"import json,sys
@@ -84,8 +85,9 @@ a=[]
 if t=='nvme_tcp_connected':
   a=[{'type':'nvme_tcp_discover'}]
 elif t=='nvme_tcp_discovery_log':
-  if e['entries']:
-    a=[{'type':'nvme_tcp_connect','subsystem_nqn':e['entries'][0]['subsystem_nqn']}]
+  nvm=[x for x in e['entries'] if x['subsystem_type']=='nvme subsystem']
+  if nvm:
+    a=[{'type':'nvme_tcp_connect','subsystem_nqn':nvm[0]['subsystem_nqn']}]
 elif t=='nvme_tcp_connect_result' and e['connected']:
   a=[{'type':'nvme_tcp_identify_namespace','nsid':NS}]
 elif t=='nvme_tcp_command_result':

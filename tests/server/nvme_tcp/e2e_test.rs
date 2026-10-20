@@ -214,6 +214,11 @@ async fn an_association_serves_the_described_namespaces() {
     assert_eq!(c.sc(), INVALID_NAMESPACE);
     let (_, c) = admin.identify(0x20, 0).await;
     assert_eq!(c.sc(), INVALID_FIELD, "an unknown CNS");
+    let (nvm, c) = admin.identify(0x06, 0).await;
+    assert!(
+        c.ok() && nvm.iter().all(|b| *b == 0),
+        "the NVM command set's Identify Controller reports no limits"
+    );
 
     // Two I/O queues granted of the eight asked for? This target grants up to 8.
     let (_, c) = admin
