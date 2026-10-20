@@ -84,7 +84,7 @@ mod relay_abuse_tests {
                     .and()
                     .on_event("webrtc_signaling_peer_connected")
                     .respond_with_actions(serde_json::json!([{
-                        "type": "append_to_log",
+                        "type": "show_message",
                         "message": "peer connected"
                     }]))
                     .expect_calls(expect_connections)

@@ -177,3 +177,57 @@ fn failed_actions_are_marked_in_the_access_log() {
     assert!(summary.contains("send_tcp_data"));
     assert!(summary.contains("Missing 'data' parameter"));
 }
+
+fn script_handler(language: &str) -> Vec<serde_json::Value> {
+    vec![json!({
+        "event_pattern": "tcp_data_received",
+        "handler": {"type": "script", "language": language, "code": "print('{}')"}
+    })]
+}
+
+/// A script naming a language NetGet cannot run is refused when the handler is configured.
+/// It used to be accepted and then fall back to the model at every event, silently.
+#[test]
+fn unknown_script_language_is_rejected_at_parse_time() {
+    let err = EventHandler::parse_event_handlers(script_handler("cobol"))
+        .expect_err("an unknown script language must not be accepted");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("cobol") && msg.contains("python") && msg.contains("javascript"),
+        "the error should name the language and the accepted ones: {msg}"
+    );
+}
+
+/// The prompt lists runtimes as "`javascript` (Node.js v20.0.0)"; the names a model
+/// copies from that are accepted.
+#[test]
+fn script_language_aliases_are_accepted() {
+    for language in [
+        "python",
+        "Python",
+        "python3",
+        "py",
+        "javascript",
+        "js",
+        "node",
+        "nodejs",
+        "Node.js",
+        "go",
+        "golang",
+        "perl",
+    ] {
+        EventHandler::parse_event_handlers(script_handler(language))
+            .unwrap_or_else(|e| panic!("script language {language:?} should be accepted: {e}"));
+    }
+}
+
+/// An LLM handler without its instruction is refused; the prompt's examples carry one.
+#[test]
+fn llm_handler_requires_an_instruction() {
+    let err = EventHandler::parse_event_handlers(vec![json!({
+        "event_pattern": "*",
+        "handler": {"type": "llm"}
+    })])
+    .expect_err("an llm handler with no instruction must not be accepted");
+    assert!(err.to_string().contains("instruction"), "{err}");
+}

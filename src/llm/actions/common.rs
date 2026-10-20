@@ -30,6 +30,35 @@ mod flexible_deserializers {
         }
     }
 
+    /// Deserialize a connection id from `3`, `"3"` or `"conn-3"`.
+    ///
+    /// Everything else in NetGet names a connection `conn-N` (events, scripts, the Current
+    /// State section of the prompt, `schedule_task`'s `connection_id`), so the model will
+    /// copy that form; refusing it here made `close_connection_by_id` fail on exactly the id
+    /// it had just been shown.
+    pub fn deserialize_connection_id_flexible<'de, D>(deserializer: D) -> Result<u32, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum U32OrString {
+            Number(u32),
+            String(String),
+        }
+
+        match U32OrString::deserialize(deserializer)? {
+            U32OrString::Number(n) => Ok(n),
+            U32OrString::String(s) => crate::server::connection::ConnectionId::from_string(&s)
+                .map(|id| id.as_u32())
+                .ok_or_else(|| {
+                    serde::de::Error::custom(format!(
+                        "invalid connection id '{s}': expected 'conn-N' or N"
+                    ))
+                }),
+        }
+    }
+
     /// Deserialize Option<u32> from either a number or a string
     pub fn deserialize_option_u32_flexible<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
     where
@@ -257,9 +286,9 @@ pub enum CommonAction {
     /// Close all clients
     CloseAllClients,
 
-    /// Close a specific connection by its unified ID
+    /// Close one live connection on a running server, by its id (`conn-N` or `N`)
     CloseConnectionById {
-        #[serde(deserialize_with = "flexible_deserializers::deserialize_u32_flexible")]
+        #[serde(deserialize_with = "flexible_deserializers::deserialize_connection_id_flexible")]
         connection_id: u32,
     },
 
@@ -341,7 +370,10 @@ pub enum CommonAction {
         batching: Option<bool>,
     },
 
-    /// Update the server instruction (combines with existing)
+    /// Replace the whole instruction of the instance in context (the old one is discarded).
+    ///
+    /// Not offered to the operator prompt, where no instance is in context and the handler
+    /// can only fall back to the first server; `update_server` / `update_client` name theirs.
     UpdateInstruction { instruction: String },
 
     /// Change the LLM model
@@ -393,7 +425,8 @@ pub enum CommonAction {
         instruction: String,
         #[serde(default)]
         context: Option<serde_json::Value>,
-        // Script configuration fields
+        // Accepted only so that a reply carrying them can be refused by name: a scheduled
+        // task always calls the model with its instruction and runs no script.
         #[serde(default)]
         script_runtime: Option<String>,
         #[serde(default)]
@@ -529,35 +562,232 @@ pub fn show_message_action() -> ActionDefinition {
     }
 }
 
+/// Whether a definition is being built for a server or a client: the two share the
+/// `event_handlers` shape but not the script input or the examples.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandlerSide {
+    Server,
+    Client,
+}
+
+/// The `event_handlers` parameter description of `open_server` / `open_client`.
+///
+/// `script_languages` is the rendered list of languages a script handler may name, or
+/// `None` when scripting is off — in which case nothing about scripts is said at all, so the
+/// model is not offered a handler type the operator has switched off.
+pub fn event_handlers_description(side: HandlerSide, script_languages: Option<&str>) -> String {
+    let mut d = String::from(
+        "Optional: rules deciding who answers each event, so that predictable events need no \
+         model call. Each rule is {\"event_pattern\": \"<event id>\" or \"*\", \"handler\": {...}}. \
+         Event ids come from read_documentation. Rules are checked in order and the first match \
+         answers; an event no rule matches is answered by the model using 'instruction'.\n\
+         \n\
+         Handler types:\n\
+         - {\"type\": \"static\", \"actions\": [...]}: fixed actions, no model call. A string may \
+         contain {{event.<field>}}, replaced by that field of the triggering event; a string that \
+         is only the reference keeps the field's JSON type (\"query_id\": \"{{event.query_id}}\" \
+         stays a number).\n",
+    );
+    if let Some(languages) = script_languages {
+        d.push_str(&format!(
+            "- {{\"type\": \"script\", \"language\": \"<language>\", \"code\": \"...\"}}: runs code \
+             for each event, no model call. language is one of: {languages}.\n"
+        ));
+    }
+    d.push_str(
+        "- {\"type\": \"llm\", \"instruction\": \"<how to handle this event>\"}: the model \
+         answers, with this instruction added to the instance's own. 'instruction' is \
+         required.\n\
+         - {\"type\": \"manual\", \"timeout_secs\": 300}: the event waits for a person to answer \
+         it at the NetGet dashboard; unanswered after timeout_secs (default 300) it fails closed.\n",
+    );
+
+    match side {
+        HandlerSide::Server => {
+            if script_languages.is_some() {
+                d.push_str(
+                    r#"
+A script reads one JSON object on stdin and prints {"actions": [...]}:
+{
+  "event_type_id": "tcp_data_received",
+  "server": {"id": 1, "port": 8080, "stack": "ETH>IP>TCP", "memory": "", "instruction": "..."},
+  "connection": {"id": "conn-3", "remote_addr": "127.0.0.1:54321", "bytes_sent": 0, "bytes_received": 0},
+  "event": {"data": "hello\r\n", "encoding": "utf8"}
+}
+The event's fields sit directly under data["event"]: data["event"]["path"], never data["event"]["request"]["path"] or data["event"]["data"]["path"]. "connection" is absent for events that belong to no connection.
+
+Example script (TCP echo: send back exactly what arrived, in the encoding it arrived in):
+{"event_pattern": "tcp_data_received", "handler": {"type": "script", "language": "python", "code": "<tcp_echo>"}}
+
+<tcp_echo>
+import json, sys
+data = json.load(sys.stdin)
+event = data["event"]
+print(json.dumps({"actions": [{"type": "send_tcp_data", "data": event["data"], "encoding": event.get("encoding", "utf8")}]}))
+</tcp_echo>
+"#,
+                );
+            }
+            d.push_str(
+                r#"
+Example static handler (a TCP greeting; tcp_connection_opened is raised only when the server is opened with send_first: true):
+{"event_pattern": "tcp_connection_opened", "handler": {"type": "static", "actions": [{"type": "send_tcp_data", "data": "Welcome\r\n"}]}}
+
+Example LLM handler:
+{"event_pattern": "http_request", "handler": {"type": "llm", "instruction": "You are a recipe website; answer every page in HTML"}}"#,
+            );
+        }
+        HandlerSide::Client => {
+            if script_languages.is_some() {
+                d.push_str(
+                    r#"
+A client script gets the same input as a server script except that "client" replaces "server" and there is no "connection":
+{"event_type_id": "redis_connected", "client": {"id": 1, "remote_addr": "127.0.0.1:6379", "protocol": "redis", "memory": "", "instruction": "..."}, "event": {...}}
+
+Example script (once, on connect):
+{"event_pattern": "redis_connected", "handler": {"type": "script", "language": "python", "code": "<on_connect>"}}
+
+<on_connect>
+import json, sys
+print(json.dumps({"actions": [{"type": "execute_redis_command", "command": "PING"}]}))
+</on_connect>
+"#,
+                );
+            }
+            d.push_str(
+                r#"
+Example static handler (one request when the client connects):
+{"event_pattern": "http_connected", "handler": {"type": "static", "actions": [{"type": "send_http_request", "method": "GET", "path": "/"}]}}
+
+Key a handler that sends something to the connect event, not to "*" or to the response event: a request sent in answer to every response provokes another response, and the client loops.
+
+Example LLM handler:
+{"event_pattern": "http_response_received", "handler": {"type": "llm", "instruction": "Log the status code; if it is not 200, retry once"}}"#,
+            );
+        }
+    }
+    d
+}
+
+/// The `history` parameter description shared by `open_server` and `open_client`.
+fn history_description(scope: &str) -> String {
+    format!(
+        "Optional: how many earlier exchanges on {scope} you are shown with each new event (each \
+         event and what answered it). 0 turns it off. Omit to keep the protocol's default: \
+         conversational protocols (telnet, IRC, SMTP, databases) show 40, independent requests \
+         (DNS, HTTP) none; read_documentation names each protocol's default. Memory is separate: \
+         use it for anything that must outlive the connection."
+    )
+}
+
+const BATCHING_DESCRIPTION: &str = "Optional: when events arrive on a connection while you are \
+    still answering an earlier one, hold them and give them to you together in one follow-up \
+    call. Omit to keep the protocol's default. Refused on a protocol that answers each event as \
+    it arrives.";
+
+/// The `scheduled_tasks` parameter description shared by every action that takes one.
+fn scheduled_tasks_description(owner: &str) -> String {
+    format!(
+        "Optional: time-based tasks attached to this {owner}, removed with it. Use them for \
+         anything said in time ('every 10 seconds', 'heartbeat', 'after 30 seconds'), never \
+         event_handlers, which answer network events. Each task: task_id (string), recurring \
+         (boolean), interval_secs (recurring) or delay_secs (one-shot), max_executions \
+         (optional), instruction (what the model should do when it fires), context (optional \
+         object). Example: [{{\"task_id\": \"heartbeat\", \"recurring\": true, \"interval_secs\": \
+         10, \"instruction\": \"Send a heartbeat to every connected client\"}}]"
+    )
+}
+
+/// The list of script languages a handler may name, for the prompt, or `None` when the
+/// operator has scripting off or no language it allows is installed (a script handler
+/// could then only fall back to the model).
+pub fn script_languages_for_prompt(
+    selected_mode: crate::state::app_state::ScriptingMode,
+    env: &crate::scripting::ScriptingEnvironment,
+) -> Option<String> {
+    use crate::scripting::ScriptLanguage;
+    use crate::state::app_state::ScriptingMode;
+    let only = match selected_mode {
+        ScriptingMode::Off => return None,
+        ScriptingMode::On => None,
+        ScriptingMode::Python => Some(ScriptLanguage::Python),
+        ScriptingMode::JavaScript => Some(ScriptLanguage::JavaScript),
+        ScriptingMode::Go => Some(ScriptLanguage::Go),
+        ScriptingMode::Perl => Some(ScriptLanguage::Perl),
+    };
+    let installed = [
+        ScriptLanguage::Python,
+        ScriptLanguage::JavaScript,
+        ScriptLanguage::Go,
+        ScriptLanguage::Perl,
+    ]
+    .into_iter()
+    .any(|lang| only.is_none_or(|o| o == lang) && env.is_available(lang));
+    installed.then(|| crate::llm::event_handler_executor::describe_script_languages(env, only))
+}
+
+/// The `protocol` parameter description of `open_server`, listing the protocols the
+/// operator allows: `include_disabled` and `min_stability` are the
+/// `--include-disabled-protocols` / `--min-stability` settings. Startup refuses a protocol
+/// below the floor, so the list must not offer one.
+pub fn open_server_protocol_description(
+    include_disabled: bool,
+    min_stability: Option<crate::protocol::metadata::DevelopmentState>,
+) -> String {
+    format!(
+        "Protocol to serve. Prefer the specific protocol the user names: 'dns' (not 'udp'), \
+         'http' or 'web server' (not 'tcp'), 'smtp' or 'mail server' (not 'tcp'). Use 'tcp' or \
+         'udp' only for a custom protocol with no match. Available: {}",
+        all_base_stacks(include_disabled, min_stability).join(", ")
+    )
+}
+
+/// Narrow the protocol lists in `open_server` and `read_documentation` to what the operator
+/// allows (see [`open_server_protocol_description`]). The definitions are built without
+/// access to the settings, so every prompt that offers them applies this before rendering.
+pub fn restrict_protocol_lists(
+    actions: &mut [ActionDefinition],
+    include_disabled: bool,
+    min_stability: Option<crate::protocol::metadata::DevelopmentState>,
+) {
+    for action in actions.iter_mut() {
+        match action.name.as_str() {
+            "open_server" => {
+                if let Some(p) = action.parameters.iter_mut().find(|p| p.name == "protocol") {
+                    p.description =
+                        open_server_protocol_description(include_disabled, min_stability);
+                }
+            }
+            "read_documentation" => {
+                *action =
+                    super::tools::read_documentation_action_for(include_disabled, min_stability);
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Get action definition for open_server
 pub fn open_server_action(
-    _selected_mode: crate::state::app_state::ScriptingMode,
+    selected_mode: crate::state::app_state::ScriptingMode,
     env: &crate::scripting::ScriptingEnvironment,
     is_enabled: bool,
 ) -> ActionDefinition {
     let name = "open_server".to_string();
-    let mut description = "Start a new server.\n\n\
-        PARAMETER USAGE RULES:\n\
-        1. ONLY use parameters that are explicitly documented below\n\
-        2. DO NOT invent new parameters, even if they seem logical\n\
-        3. For custom requirements (timeouts, special behavior, etc.):\n\
-           - Put them in the 'instruction' field as natural language\n\n\
-        EXAMPLE - User says 'open HTTP server with 30 second timeout':\n\
-        ❌ WRONG: {\"type\": \"open_server\", \"protocol\": \"http\", \"timeout\": 30}\n\
-        ✅ RIGHT: {\"type\": \"open_server\", \"protocol\": \"http\", \"instruction\": \"HTTP server with 30 second timeout\"}\n\n\
-        TASK SCHEDULING RULES:\n\
-        FOR PERIODIC TASKS (heartbeat, every X seconds/minutes):\n\
-        - Use 'scheduled_tasks' parameter with interval_secs\n\
-        - DO NOT use event_handlers for time-based tasks\n\n\
-        EXAMPLE - User says 'send heartbeat every 10 seconds':\n\
-        ❌ WRONG: {\"event_handlers\": [{\"event_pattern\": \"*\", \"handler\": {...}}]}\n\
-        ✅ RIGHT: {\"scheduled_tasks\": [{\"task_id\": \"heartbeat\", \"recurring\": true, \"interval_secs\": 10, \"instruction\": \"Send heartbeat log\"}]}\n\n\
-        FOR NETWORK EVENTS (data received, connection made):\n\
-        - Use 'event_handlers' parameter\n\
-        - Only for responding to actual network events".to_string();
+    let mut description = r#"Start a new server.
+
+Use only the parameters listed below; an unknown parameter is an error. A requirement with no parameter of its own (a timeout, a rate limit, what to serve) goes in 'instruction' as plain language:
+WRONG: {"type": "open_server", "protocol": "http", "timeout": 30}
+RIGHT: {"type": "open_server", "protocol": "http", "instruction": "HTTP server with a 30 second timeout"}
+
+Anything said in time ('every 10 seconds', 'heartbeat') goes in 'scheduled_tasks'; 'event_handlers' only answer network events."#
+        .to_string();
 
     if !is_enabled {
-        description.push_str(" ⚠️ DISABLED: You must first read protocol documentation using the read_documentation tool. This tool lists all available protocols (both server and client) and provides detailed configuration information including when to use server vs client mode.");
+        description.push_str(
+            "\n\nNOT AVAILABLE YET: call the read_documentation tool for the protocol first; \
+             open_server is offered once you have read it.",
+        );
         return ActionDefinition {
             name,
             description,
@@ -567,218 +797,135 @@ pub fn open_server_action(
         };
     }
 
-    let mut parameters = vec![
-            Parameter {
-                name: "mac_address".to_string(),
-                type_hint: "string".to_string(),
-                description: "Optional: MAC address for Layer 2 protocols (e.g., ARP spoofing). Format: \"00:11:22:33:44:55\". Most protocols don't need this.".to_string(),
-                required: false,
-            },
-            Parameter {
-                name: "interface".to_string(),
-                type_hint: "string".to_string(),
-                description: "Optional: Network interface to bind (for raw protocols like ICMP, ARP, DataLink). \
-                    Common interface names: \"lo\" or \"lo0\" (loopback), \"eth0\" or \"en0\" (Ethernet), \"wlan0\" (WiFi). \
-                    NOTE: Only specify if the protocol specifically requires it (e.g., DataLink). Most port-based protocols (TCP, HTTP, DNS) don't use this. \
-                    If you need to discover available interfaces, you can try common names like \"lo\" for loopback or use the system's default interface by omitting this parameter.".to_string(),
-                required: false,
-            },
-            Parameter {
-                name: "host".to_string(),
-                type_hint: "string".to_string(),
-                description: "Optional: Host address to bind (IPv4, IPv6, or hostname). Examples: \"127.0.0.1\" (loopback), \"0.0.0.0\" (all interfaces), \"::\". Protocols will use sensible defaults if omitted.".to_string(),
-                required: false,
-            },
-            Parameter {
-                name: "port".to_string(),
-                type_hint: "number".to_string(),
-                description: "Optional: Port number to listen on. Use 0 to automatically find an available port. Required for port-based protocols (TCP, HTTP, DNS). Raw protocols (ICMP, ARP) don't use this.".to_string(),
-                required: false,
-            },
-            Parameter {
-                name: "protocol".to_string(),
-                type_hint: "string".to_string(),
-                description: format!(
-                    "Protocol to use. ALWAYS prefer high-level protocols when user keywords match: \
-                    if user says 'dns' or 'dns server' → use 'dns' (NOT 'udp'), \
-                    if user says 'http' or 'web server' → use 'http' (NOT 'tcp'), \
-                    if user says 'smtp' or 'mail server' → use 'smtp' (NOT 'tcp'). \
-                    Only use low-level protocols (tcp, udp) for custom protocols without a specific high-level match. \
-                    Available: {}",
-                    all_base_stacks(false, None).join(", ")
-                ),
-                required: true,
-            },
-            Parameter {
-                name: "send_first".to_string(),
-                type_hint: "boolean".to_string(),
-                description: "True if server sends data first (FTP, SMTP), false if it waits for client (HTTP)".to_string(),
-                required: false,
-            },
-            Parameter {
-                name: "initial_memory".to_string(),
-                type_hint: "string".to_string(),
-                description: "Optional initial memory as a string. Use for storing persistent context across connections. Example: \"user_count: 0\"".to_string(),
-                required: false,
-            },
-            Parameter {
-                name: "instruction".to_string(),
-                type_hint: "string".to_string(),
-                description: "Detailed instructions for handling network events. \
-                    Use this field for custom requirements that don't have dedicated parameters \
-                    (e.g., 'with 30 second timeout', 'log all requests to file', 'rate limit to 10 requests per second', etc.)".to_string(),
-                required: true,
-            },
-            Parameter {
-                name: "startup_params".to_string(),
-                type_hint: "object".to_string(),
-                description: "Optional protocol-specific startup parameters. ONLY the \
-                              parameters the protocol's documentation declares are accepted: an \
-                              undeclared key is refused by name and THE SERVER DOES NOT START. \
-                              A protocol that declares none takes no startup_params at all. \
-                              Anything the protocol does not declare - what the server should \
-                              answer, which mailbox or database exists, what data to serve - \
-                              belongs in 'instruction', not here."
-                    .to_string(),
-                required: false,
-            },
-            Parameter {
-                name: "scheduled_tasks".to_string(),
-                type_hint: "array".to_string(),
-                description: "Optional: Array of TIME-BASED tasks that execute periodically or after a delay. \
-                    \
-                    USE WHEN: User says 'every X seconds/minutes', 'heartbeat', 'periodic', 'scheduled', or describes time-based automation. \
-                    \
-                    EXAMPLES: \
-                    - 'send heartbeat every 10 seconds' → scheduled_tasks with interval_secs: 10 \
-                    - 'check status every minute' → scheduled_tasks with interval_secs: 60 \
-                    - 'cleanup after 30 seconds' → scheduled_tasks with delay_secs: 30 \
-                    \
-                    DO NOT use event_handlers for periodic tasks - event_handlers respond to network events, NOT time-based triggers! \
-                    \
-                    Each task has: task_id (string), recurring (boolean), interval_secs (for periodic) OR delay_secs (for one-shot), max_executions (optional), instruction (what to do), context (optional).".to_string(),
-                required: false,
-            },
-        ];
-
-    // Add event_handlers parameter with description based on handler mode
-    let handler_mode_guidance = "You can configure different handlers for different events. Each handler specifies an event_pattern (specific event ID or \"*\" for all events) and a handler type (script, static, or llm). Handlers are matched in order - first match wins.";
-
-    let available_runtimes = env.format_available();
-    let event_handlers_description = format!(
-        "Optional: Array of event handlers to configure how events are processed. {}\\n\\n\
-Each handler has:\\n\
-- event_pattern: Event ID to match (e.g., \\\"tcp_data_received\\\") or \\\"*\\\" for all events\\n\
-- handler: Object with:\\n\
-  - type: \\\"script\\\" (inline code), \\\"static\\\" (predefined actions), or \\\"llm\\\" (dynamic processing)\\n\\n\
-REQUIRED FIELDS BY TYPE:\\n\
-  - For script: language ({}), code (inline script)\\n\
-  - For static: actions (array of action objects)\\n\
-  - For llm: instruction (string, REQUIRED) - describes how the LLM should handle this event\\n\\n\
-CRITICAL: LLM handlers MUST include 'instruction' field. Example: {{\\\"type\\\": \\\"llm\\\", \\\"instruction\\\": \\\"Handle HTTP requests...\\\"}}\\n\\n\
-SCRIPT EVENT DATA STRUCTURE:\\n\
-Scripts receive JSON via stdin with this structure:\\n\
-{{\\n\
-  \\\"event_type_id\\\": \\\"http_request\\\",  // Event type identifier\\n\
-  \\\"server\\\": {{\\\"id\\\": 1, \\\"port\\\": 8080, \\\"stack\\\": \\\"HTTP\\\", \\\"memory\\\": \\\"\\\", \\\"instruction\\\": \\\"...\\\"}},\\n\
-  \\\"connection\\\": {{\\\"id\\\": \\\"1\\\", \\\"remote_addr\\\": \\\"127.0.0.1:12345\\\"}},  // Optional\\n\
-  \\\"event\\\": {{\\n\
-    // Protocol-specific event data (fields vary by event type)\\n\
-    // For HTTP: method, path, query_string, query, headers, body\\n\
-    // For TCP: data (hex-encoded bytes)\\n\
-    // For DNS: query_id, domain, query_type\\n\
-  }}\\n\
-}}\\n\\n\
-IMPORTANT: Event data is directly under data['event'], NOT data['event']['data']!\\n\
-Access pattern: data['event']['field_name'] (e.g., data['event']['method'])\\n\\n\
-CRITICAL - COMMON MISTAKES TO AVOID:\\n\
-❌ WRONG: data['event']['request']['query_string']      # NO 'request' wrapper!\\n\
-❌ WRONG: data['event']['http_request']['query_string'] # NO 'http_request' wrapper!\\n\
-❌ WRONG: data['event']['data']['method']               # NO 'data' wrapper!\\n\
-✅ RIGHT: data['event']['query_string']                 # Direct access\\n\
-✅ RIGHT: data['event']['method']                       # Direct access\\n\\n\
-The event_type_id tells you WHAT event occurred, but data fields are DIRECTLY under data['event'].\\n\\n\
-Example HTTP script (sum query parameters x and y):\\n\
-{{\\\"event_pattern\\\": \\\"http_request\\\", \\\"handler\\\": {{\\\"type\\\": \\\"script\\\", \\\"language\\\": \\\"python\\\", \\\"code\\\": \\\"<http_sum_script>\\\"}}}}\\n\\n\
-<http_sum_script>\\n\
-import json\\n\
-import sys\\n\
-\\n\
-data = json.load(sys.stdin)\\n\
-# Access event data: data['event']['field_name']\\n\
-query_params = data['event']['query']  # Pre-parsed query parameters object\\n\
-x = float(query_params['x'])\\n\
-y = float(query_params['y'])\\n\
-result = x + y\\n\
-\\n\
-print(json.dumps({{\\n\
-  'actions': [{{\\n\
-    'type': 'send_http_response',\\n\
-    'status': 200,\\n\
-    'body': str(result)\\n\
-  }}]\\n\
-}}))\\n\
-</http_sum_script>\\n\\n\
-Example TCP script (echo received data):\\n\
-{{\\\"event_pattern\\\": \\\"tcp_data_received\\\", \\\"handler\\\": {{\\\"type\\\": \\\"script\\\", \\\"language\\\": \\\"python\\\", \\\"code\\\": \\\"<tcp_echo_script>\\\"}}}}\\n\\n\
-<tcp_echo_script>\\n\
-import json\\n\
-import sys\\n\
-\\n\
-data = json.load(sys.stdin)\\n\
-# TCP data is hex-encoded in data['event']['data']\\n\
-received_hex = data['event']['data']\\n\
-\\n\
-print(json.dumps({{\\n\
-  'actions': [{{\\n\
-    'type': 'send_tcp_data',\\n\
-    'data': received_hex  # Echo back the same hex data\\n\
-  }}]\\n\
-}}))\\n\
-</tcp_echo_script>\\n\\n\
-Example static handler:\\n\
-{{\\\"event_pattern\\\": \\\"*\\\", \\\"handler\\\": {{\\\"type\\\": \\\"static\\\", \\\"actions\\\": [{{\\\"type\\\": \\\"send_data\\\", \\\"data\\\": \\\"Welcome\\\"}}]}}}}\\n\\n\
-Example LLM handler:\\n\
-{{\\\"event_pattern\\\": \\\"http_request\\\", \\\"handler\\\": {{\\\"type\\\": \\\"llm\\\", \\\"instruction\\\": \\\"You are a recipe website\\\"}}}}",
-        handler_mode_guidance,
-        available_runtimes
-    );
-
-    parameters.push(Parameter {
-        name: "event_handlers".to_string(),
-        type_hint: "array".to_string(),
-        description: event_handlers_description,
-        required: false,
-    });
-
-    parameters.push(Parameter {
-        name: "feedback_instructions".to_string(),
-        type_hint: "string".to_string(),
-        description: "Optional: Instructions for automatic server adjustment based on network request feedback. When set, network requests can provide feedback via the 'provide_feedback' action. Feedback is accumulated and debounced (leading edge), then the LLM is invoked with these instructions to decide how to adjust the server behavior (e.g., update instructions, modify handlers, change configuration). Example: \"Adjust response time if clients are timing out\" or \"Learn from failed requests and improve error handling\".".to_string(),
-        required: false,
-    });
-
-    parameters.push(Parameter {
-        name: "history".to_string(),
-        type_hint: "number".to_string(),
-        description: "Optional: how many earlier exchanges on the same connection you are shown with each new event (each event and what answered it). 0 turns it off. Omit to keep the protocol's default — conversational protocols (telnet, IRC, SMTP, databases) show 40, independent requests (DNS, HTTP) none; get_protocol_docs names the default. Memory is separate: use it for anything that must outlive the connection.".to_string(),
-        required: false,
-    });
-
-    parameters.push(Parameter {
-        name: "batching".to_string(),
-        type_hint: "boolean".to_string(),
-        description: "Optional: when events arrive on a connection while you are still answering an earlier one, hold them and give them to you together in one follow-up call. Omit to keep the protocol's default. Refused on a protocol that answers each event as it arrives.".to_string(),
-        required: false,
-    });
+    let script_languages = script_languages_for_prompt(selected_mode, env);
+    let parameters = vec![
+        Parameter {
+            name: "protocol".to_string(),
+            type_hint: "string".to_string(),
+            description: open_server_protocol_description(false, None),
+            required: true,
+        },
+        Parameter {
+            name: "instruction".to_string(),
+            type_hint: "string".to_string(),
+            description: "Required unless event_handlers answer every event. How the model \
+                should answer this server's events, in plain language, including any \
+                requirement with no parameter of its own ('30 second timeout', 'log every \
+                request')."
+                .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "port".to_string(),
+            type_hint: "number".to_string(),
+            description: "Optional: port to listen on. Omit it to use the protocol's \
+                well-known port (53 for dns, 6379 for redis); if that port needs privileges \
+                this process lacks, or is already in use, the server starts on an \
+                OS-assigned port instead and says so. 0 asks for an OS-assigned port. A port \
+                you give is used as given. Protocols that bind no port (link-layer, raw, \
+                pipes) ignore it."
+                .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "host".to_string(),
+            type_hint: "string".to_string(),
+            description: "Optional: address to bind. Omitted, the server listens on \
+                127.0.0.1 (this machine only); \"0.0.0.0\" or \"::\" exposes it to other \
+                machines, so use them only when the user asks for that."
+                .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "interface".to_string(),
+            type_hint: "string".to_string(),
+            description: "Optional: network interface for link-layer and raw protocols (arp, \
+                datalink, icmp), e.g. \"lo0\"/\"lo\" (loopback), \"en0\"/\"eth0\". Socket \
+                protocols ignore it; omit it unless the protocol's documentation asks for it."
+                .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "mac_address".to_string(),
+            type_hint: "string".to_string(),
+            description: "Optional: source MAC address for layer-2 protocols, \
+                \"00:11:22:33:44:55\". Only meaningful with 'interface'."
+                .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "send_first".to_string(),
+            type_hint: "boolean".to_string(),
+            description: "Optional: the server speaks first on each new connection (a banner \
+                or prompt). Honoured only by protocols whose documentation declares it, such \
+                as tcp; protocols like ftp and smtp already greet by themselves."
+                .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "initial_memory".to_string(),
+            type_hint: "string".to_string(),
+            description: "Optional: the server's memory to start with, shown to the model with \
+                every event and kept across connections. Example: \"user_count: 0\""
+                .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "startup_params".to_string(),
+            type_hint: "object".to_string(),
+            description: "Optional protocol-specific startup parameters. ONLY the parameters \
+                the protocol's documentation (read_documentation) declares are accepted: an \
+                undeclared key is refused by name and THE SERVER DOES NOT START. A protocol \
+                that declares none takes no startup_params at all. Anything the protocol does \
+                not declare - what the server should answer, which mailbox or database exists, \
+                what data to serve - belongs in 'instruction', not here."
+                .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "event_handlers".to_string(),
+            type_hint: "array".to_string(),
+            description: event_handlers_description(
+                HandlerSide::Server,
+                script_languages.as_deref(),
+            ),
+            required: false,
+        },
+        Parameter {
+            name: "scheduled_tasks".to_string(),
+            type_hint: "array".to_string(),
+            description: scheduled_tasks_description("server"),
+            required: false,
+        },
+        Parameter {
+            name: "feedback_instructions".to_string(),
+            type_hint: "string".to_string(),
+            description: "Optional: instructions for adjusting this server automatically. \
+                When set, the model answering its events may call 'provide_feedback'; the \
+                feedback is collected and the model is later asked, with these instructions, \
+                how to change the server (instruction, handlers, configuration). Example: \
+                \"Learn from failed requests and improve error handling\"."
+                .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "history".to_string(),
+            type_hint: "number".to_string(),
+            description: history_description("the same connection"),
+            required: false,
+        },
+        Parameter {
+            name: "batching".to_string(),
+            type_hint: "boolean".to_string(),
+            description: BATCHING_DESCRIPTION.to_string(),
+            required: false,
+        },
+    ];
 
     let example = json!({
         "type": "open_server",
-        "port": 21,
-        "protocol": "tcp",
-        "send_first": true,
-        "initial_memory": "login_count: 0\nfiles: data.txt,readme.md",
-        "instruction": "You are an FTP server. Respond to FTP commands like USER, PASS, LIST, RETR, QUIT with appropriate FTP response codes."
+        "protocol": "ftp",
+        "instruction": "FTP server with one user, alice / secret, whose home directory holds readme.txt containing 'hello'."
     });
 
     ActionDefinition {
@@ -824,15 +971,21 @@ pub fn close_all_servers_action() -> ActionDefinition {
 
 /// Get action definition for open_client
 pub fn open_client_action(
-    _selected_mode: crate::state::app_state::ScriptingMode,
+    selected_mode: crate::state::app_state::ScriptingMode,
     env: &crate::scripting::ScriptingEnvironment,
     is_enabled: bool,
 ) -> ActionDefinition {
     let name = "open_client".to_string();
-    let mut description = "Connect to a remote server as a client.".to_string();
+    let mut description =
+        "Connect to a remote server as a client: NetGet opens the connection and the model (or \
+         the event handlers) decides what to send and how to read each answer."
+            .to_string();
 
     if !is_enabled {
-        description.push_str(" ⚠️ DISABLED: You must first read protocol documentation using the read_documentation tool. This tool lists all available protocols (both server and client) and provides detailed configuration information including when to use server vs client mode.");
+        description.push_str(
+            "\n\nNOT AVAILABLE YET: call the read_documentation tool for the protocol first; \
+             open_client is offered once you have read it.",
+        );
         return ActionDefinition {
             name,
             description,
@@ -842,99 +995,88 @@ pub fn open_client_action(
         };
     }
 
-    let mut parameters = vec![
+    let script_languages = script_languages_for_prompt(selected_mode, env);
+    let parameters = vec![
         Parameter {
             name: "protocol".to_string(),
             type_hint: "string".to_string(),
-            description: "Protocol to use for connection (e.g., 'tcp', 'http', 'redis', 'ssh')".to_string(),
+            description: "Client protocol (e.g. 'tcp', 'http', 'redis', 'ssh'); \
+                read_documentation lists every client protocol."
+                .to_string(),
             required: true,
         },
         Parameter {
             name: "remote_addr".to_string(),
             type_hint: "string".to_string(),
-            description: "Remote server address as 'hostname:port' or 'IP:port' (e.g., 'example.com:80', '192.168.1.1:6379', 'localhost:8080')".to_string(),
+            description: "Address to connect to, 'host:port' (e.g. 'example.com:80', \
+                '192.168.1.1:6379', 'localhost:8080')."
+                .to_string(),
             required: true,
         },
         Parameter {
             name: "instruction".to_string(),
             type_hint: "string".to_string(),
-            description: "Detailed instructions for controlling the client (how to send data, interpret responses, make decisions)".to_string(),
-            required: true,
+            description: "Required unless event_handlers answer every event. What the client \
+                should do: what to send, how to read the answers, when to stop."
+                .to_string(),
+            required: false,
         },
         Parameter {
             name: "initial_memory".to_string(),
             type_hint: "string".to_string(),
-            description: "Optional initial memory as a string. Use for storing persistent context. Example: \"auth_token: abc123\\nrequest_count: 0\"".to_string(),
+            description: "Optional: the client's memory to start with, shown to the model with \
+                every event. Example: \"auth_token: abc123\\nrequest_count: 0\""
+                .to_string(),
             required: false,
         },
         Parameter {
             name: "startup_params".to_string(),
             type_hint: "object".to_string(),
             description: "Optional protocol-specific startup parameters. ONLY the parameters \
-                          the protocol's documentation declares are accepted; an undeclared key \
-                          is refused by name and the client does not connect. Behavioural \
-                          detail belongs in 'instruction', not here. For example, HTTP clients \
-                          may accept default headers or user agent settings."
+                the protocol's documentation declares are accepted; an undeclared key is \
+                refused by name and the client does not connect. Behavioural detail belongs \
+                in 'instruction', not here."
                 .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "event_handlers".to_string(),
+            type_hint: "array".to_string(),
+            description: event_handlers_description(
+                HandlerSide::Client,
+                script_languages.as_deref(),
+            ),
             required: false,
         },
         Parameter {
             name: "scheduled_tasks".to_string(),
             type_hint: "array".to_string(),
-            description: "Optional: Array of scheduled tasks to create with this client. Each task will be attached to the client and execute at specified intervals or delays. Tasks are automatically cleaned up when the client disconnects.".to_string(),
+            description: scheduled_tasks_description("client"),
+            required: false,
+        },
+        Parameter {
+            name: "feedback_instructions".to_string(),
+            type_hint: "string".to_string(),
+            description: "Optional: instructions for adjusting this client automatically. \
+                When set, the model answering its events may call 'provide_feedback'; the \
+                feedback is collected and the model is later asked, with these instructions, \
+                how to change the client. Example: \"Slow down if the server throttles\"."
+                .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "history".to_string(),
+            type_hint: "number".to_string(),
+            description: history_description("this client's session"),
+            required: false,
+        },
+        Parameter {
+            name: "batching".to_string(),
+            type_hint: "boolean".to_string(),
+            description: BATCHING_DESCRIPTION.to_string(),
             required: false,
         },
     ];
-
-    // Add event_handlers parameter
-    let handler_mode_guidance = "You can configure different handlers for different client events. Each handler specifies an event_pattern (specific event ID or \"*\" for all events) and a handler type (script, static, or llm). Handlers are matched in order - first match wins.";
-
-    let available_runtimes = env.format_available();
-    let event_handlers_description = format!(
-        "Optional: Array of event handlers to configure how client events are processed. {}\\n\\n\
-Each handler has:\\n\
-- event_pattern: Event ID to match (e.g., \\\"http_response_received\\\") or \\\"*\\\" for all events\\n\
-- handler: Object with:\\n\
-  - type: \\\"script\\\" (inline code), \\\"static\\\" (predefined actions), or \\\"llm\\\" (dynamic processing)\\n\
-  - For script: language ({}), code (inline script)\\n\
-  - For static: actions (array of action objects)\\n\
-  - For llm: instruction (REQUIRED - describes how the LLM should handle this event)\\n\\n\
-Note: Client scripts use the same event data structure as server scripts (see open_server documentation for details).\\n\
-Access pattern: data['event']['field_name'] (e.g., data['event']['status_code'] for HTTP responses)\\n\\n\
-Example script handler: {{\\\"event_pattern\\\": \\\"redis_response_received\\\", \\\"handler\\\": {{\\\"type\\\": \\\"script\\\", \\\"language\\\": \\\"python\\\", \\\"code\\\": \\\"import json,sys;data=json.load(sys.stdin);print(json.dumps({{'actions':[{{'type':'execute_redis_command','command':'PING'}}]}}))\\\"}}}}\\n\\n\
-Example static handler: {{\\\"event_pattern\\\": \\\"*\\\", \\\"handler\\\": {{\\\"type\\\": \\\"static\\\", \\\"actions\\\": [{{\\\"type\\\": \\\"send_http_request\\\", \\\"method\\\": \\\"GET\\\", \\\"path\\\": \\\"/\\\"}}]}}}}\\n\\n\
-Example LLM handler: {{\\\"event_pattern\\\": \\\"http_response_received\\\", \\\"handler\\\": {{\\\"type\\\": \\\"llm\\\", \\\"instruction\\\": \\\"You are a recipe website\\\"}}}}",
-        handler_mode_guidance,
-        available_runtimes
-    );
-
-    parameters.push(Parameter {
-        name: "event_handlers".to_string(),
-        type_hint: "array".to_string(),
-        description: event_handlers_description,
-        required: false,
-    });
-
-    parameters.push(Parameter {
-        name: "feedback_instructions".to_string(),
-        type_hint: "string".to_string(),
-        description: "Optional: Instructions for automatic client adjustment based on server response feedback. When set, server responses can provide feedback via the 'provide_feedback' action. Feedback is accumulated and debounced (leading edge), then the LLM is invoked with these instructions to decide how to adjust the client behavior (e.g., update request strategy, modify retry logic, change authentication method). Example: \"Adjust request rate if server is throttling\" or \"Learn from error responses and modify request format\".".to_string(),
-        required: false,
-    });
-
-    parameters.push(Parameter {
-        name: "history".to_string(),
-        type_hint: "number".to_string(),
-        description: "Optional: how many earlier exchanges on this client's session you are shown with each new event (each event and what answered it). 0 turns it off. Omit to keep the protocol's default — conversational protocols (telnet, IRC, SMTP, databases) show 40, independent requests (DNS, HTTP) none; get_protocol_docs names the default. Memory is separate: use it for anything that must outlive the connection.".to_string(),
-        required: false,
-    });
-
-    parameters.push(Parameter {
-        name: "batching".to_string(),
-        type_hint: "boolean".to_string(),
-        description: "Optional: when events arrive on a connection while you are still answering an earlier one, hold them and give them to you together in one follow-up call. Omit to keep the protocol's default. Refused on a protocol that answers each event as it arrives.".to_string(),
-        required: false,
-    });
 
     let example = json!({
         "type": "open_client",
@@ -988,16 +1130,20 @@ pub fn close_all_clients_action() -> ActionDefinition {
 pub fn close_connection_by_id_action() -> ActionDefinition {
     ActionDefinition {
         name: "close_connection_by_id".to_string(),
-        description: "Close a specific connection by its unified ID.".to_string(),
+        description: "Close one live connection on a running server. Connection ids are \
+            listed under each server in Current State."
+            .to_string(),
         parameters: vec![Parameter {
             name: "connection_id".to_string(),
-            type_hint: "number".to_string(),
-            description: "Unified ID of the connection to close (e.g., 3, 5).".to_string(),
+            type_hint: "string".to_string(),
+            description: "Id of the connection to close, as listed: \"conn-3\" (a bare 3 is \
+                accepted too)."
+                .to_string(),
             required: true,
         }],
         example: json!({
             "type": "close_connection_by_id",
-            "connection_id": 3
+            "connection_id": "conn-3"
         }),
         log_template: None,
     }
@@ -1056,63 +1202,104 @@ pub fn update_client_instruction_action() -> ActionDefinition {
 pub fn update_server_action() -> ActionDefinition {
     ActionDefinition {
         name: "update_server".to_string(),
-        description: "Update a RUNNING server in place, by its id, instead of opening a second \
-            one. Supply only the fields you want to change. Changing the instruction, memory, \
-            event_handlers, feedback_instructions, scheduled_tasks, history or batching is applied \
-            WITHOUT dropping \
-            connections. Changing the port, host, interface, mac_address or startup_params \
-            requires a clean stop+start (connections are dropped and the server gets a new id). \
-            Prefer this over open_server when a server for the protocol already exists."
+        description: "Change a RUNNING server, by its id, instead of opening a second one. \
+            Supply only the fields you want to change; each one you supply REPLACES the \
+            current value (scheduled_tasks are added). Changing the instruction, memory, \
+            event_handlers, feedback_instructions, scheduled_tasks, history or batching is \
+            applied WITHOUT dropping connections. Changing the port, host, interface, \
+            mac_address or startup_params restarts the server: its connections \
+            are dropped and it gets a new id. Use this whenever the user wants to change a \
+            server that exists."
             .to_string(),
         parameters: vec![
             Parameter {
                 name: "server_id".to_string(),
                 type_hint: "number".to_string(),
-                description: "Id of the server to update (from the running servers list)."
-                    .to_string(),
+                description: "Id of the server to change (Current State lists them).".to_string(),
                 required: true,
             },
             Parameter {
                 name: "instruction".to_string(),
                 type_hint: "string".to_string(),
-                description: "New LLM instruction (hot-applied).".to_string(),
+                description: "New instruction; replaces the whole current one, so restate \
+                    anything that should still hold."
+                    .to_string(),
+                required: false,
+            },
+            Parameter {
+                name: "memory".to_string(),
+                type_hint: "string".to_string(),
+                description: "New memory; replaces the current memory.".to_string(),
                 required: false,
             },
             Parameter {
                 name: "event_handlers".to_string(),
                 type_hint: "array".to_string(),
-                description: "Replacement deterministic event handlers (hot-applied). Same shape \
-                    as open_server's."
+                description: "Replacement event handlers, same shape as open_server's; they \
+                    replace every current rule."
                     .to_string(),
                 required: false,
             },
             Parameter {
-                name: "startup_params".to_string(),
-                type_hint: "object".to_string(),
-                description: "Startup parameters to merge in. Validated against the protocol \
-                    schema; triggers a restart."
-                    .to_string(),
+                name: "scheduled_tasks".to_string(),
+                type_hint: "array".to_string(),
+                description: "Tasks to add to the server, same shape as open_server's.".to_string(),
                 required: false,
             },
             Parameter {
-                name: "port".to_string(),
-                type_hint: "number".to_string(),
-                description: "New port to bind. Triggers a restart.".to_string(),
+                name: "feedback_instructions".to_string(),
+                type_hint: "string".to_string(),
+                description: "New feedback instructions (see open_server).".to_string(),
                 required: false,
             },
             Parameter {
                 name: "history".to_string(),
                 type_hint: "number".to_string(),
-                description: "Earlier exchanges per connection shown with each event; 0 turns \
-                    it off (hot-applied)."
+                description: "Earlier exchanges per connection shown with each event; 0 \
+                    turns it off."
                     .to_string(),
                 required: false,
             },
             Parameter {
                 name: "batching".to_string(),
                 type_hint: "boolean".to_string(),
-                description: "Batch events arriving during a call (hot-applied; refused where \
-                    the protocol cannot batch)."
+                description: "Batch events arriving during a call (refused where the \
+                    protocol cannot batch)."
+                    .to_string(),
+                required: false,
+            },
+            Parameter {
+                name: "port".to_string(),
+                type_hint: "number".to_string(),
+                description: "New port. Restarts the server.".to_string(),
+                required: false,
+            },
+            Parameter {
+                name: "host".to_string(),
+                type_hint: "string".to_string(),
+                description: "New bind address. Restarts the server.".to_string(),
+                required: false,
+            },
+            Parameter {
+                name: "interface".to_string(),
+                type_hint: "string".to_string(),
+                description: "New network interface (link-layer and raw protocols). Restarts \
+                    the server."
+                    .to_string(),
+                required: false,
+            },
+            Parameter {
+                name: "mac_address".to_string(),
+                type_hint: "string".to_string(),
+                description: "New source MAC address (layer-2 protocols). Restarts the server."
+                    .to_string(),
+                required: false,
+            },
+            Parameter {
+                name: "startup_params".to_string(),
+                type_hint: "object".to_string(),
+                description: "Startup parameters to merge in, validated against the \
+                    protocol's declared ones. Restarts the server."
                     .to_string(),
                 required: false,
             },
@@ -1130,50 +1317,79 @@ pub fn update_server_action() -> ActionDefinition {
 pub fn update_client_action() -> ActionDefinition {
     ActionDefinition {
         name: "update_client".to_string(),
-        description: "Update a RUNNING client in place, by its id, instead of opening a second \
-            one. Supply only the fields you want to change. Changing the instruction, memory, \
-            event_handlers, feedback_instructions, scheduled_tasks, history or batching is applied \
-            in place. \
-            Changing the remote_addr or startup_params reconnects (new id)."
+        description: "Change a RUNNING client, by its id, instead of opening a second one. \
+            Supply only the fields you want to change; each one you supply REPLACES the \
+            current value (scheduled_tasks are added). Changing the instruction, memory, \
+            event_handlers, feedback_instructions, scheduled_tasks, history or batching is \
+            applied in place. Changing the remote_addr or startup_params reconnects, and the \
+            client gets a new id."
             .to_string(),
         parameters: vec![
             Parameter {
                 name: "client_id".to_string(),
                 type_hint: "number".to_string(),
-                description: "Id of the client to update.".to_string(),
+                description: "Id of the client to change (Current State lists them).".to_string(),
                 required: true,
             },
             Parameter {
                 name: "instruction".to_string(),
                 type_hint: "string".to_string(),
-                description: "New LLM instruction (hot-applied).".to_string(),
+                description: "New instruction; replaces the whole current one.".to_string(),
+                required: false,
+            },
+            Parameter {
+                name: "memory".to_string(),
+                type_hint: "string".to_string(),
+                description: "New memory; replaces the current memory.".to_string(),
                 required: false,
             },
             Parameter {
                 name: "event_handlers".to_string(),
                 type_hint: "array".to_string(),
-                description: "Replacement deterministic event handlers (hot-applied).".to_string(),
+                description: "Replacement event handlers, same shape as open_client's; they \
+                    replace every current rule."
+                    .to_string(),
                 required: false,
             },
             Parameter {
-                name: "remote_addr".to_string(),
+                name: "scheduled_tasks".to_string(),
+                type_hint: "array".to_string(),
+                description: "Tasks to add to the client, same shape as open_client's.".to_string(),
+                required: false,
+            },
+            Parameter {
+                name: "feedback_instructions".to_string(),
                 type_hint: "string".to_string(),
-                description: "New remote address 'host:port'. Triggers a reconnect.".to_string(),
+                description: "New feedback instructions (see open_client).".to_string(),
                 required: false,
             },
             Parameter {
                 name: "history".to_string(),
                 type_hint: "number".to_string(),
-                description: "Earlier exchanges per connection shown with each event; 0 turns \
-                    it off (hot-applied)."
+                description: "Earlier exchanges on the session shown with each event; 0 \
+                    turns it off."
                     .to_string(),
                 required: false,
             },
             Parameter {
                 name: "batching".to_string(),
                 type_hint: "boolean".to_string(),
-                description: "Batch events arriving during a call (hot-applied; refused where \
-                    the protocol cannot batch)."
+                description: "Batch events arriving during a call (refused where the \
+                    protocol cannot batch)."
+                    .to_string(),
+                required: false,
+            },
+            Parameter {
+                name: "remote_addr".to_string(),
+                type_hint: "string".to_string(),
+                description: "New address 'host:port'. Reconnects.".to_string(),
+                required: false,
+            },
+            Parameter {
+                name: "startup_params".to_string(),
+                type_hint: "object".to_string(),
+                description: "Startup parameters to merge in, validated against the \
+                    protocol's declared ones. Reconnects."
                     .to_string(),
                 required: false,
             },
@@ -1188,15 +1404,21 @@ pub fn update_client_action() -> ActionDefinition {
 }
 
 /// Get action definition for update_instruction
+///
+/// Offered where one instance is in context (feedback processing). The operator prompt has
+/// none, so it offers `update_server` / `update_client` instead; see
+/// [`get_user_input_common_actions`].
 pub fn update_instruction_action() -> ActionDefinition {
     ActionDefinition {
         name: "update_instruction".to_string(),
-        description: "Update the current server instruction (combines with existing instruction)"
+        description: "Replace the instruction of the server or client this prompt is about. \
+            The current instruction is discarded, so the new one must restate everything that \
+            should still hold."
             .to_string(),
         parameters: vec![Parameter {
             name: "instruction".to_string(),
             type_hint: "string".to_string(),
-            description: "New instruction to add/combine".to_string(),
+            description: "The complete new instruction.".to_string(),
             required: true,
         }],
         example: json!({
@@ -1230,15 +1452,17 @@ pub fn change_model_action() -> ActionDefinition {
 pub fn set_memory_action() -> ActionDefinition {
     ActionDefinition {
         name: "set_memory".to_string(),
-        description: "Replace this server's (or client's) memory with new content. Any existing memory is discarded. Memory is shared by every connection and outlives each one; the bounded history of the current connection is shown to you separately and ends with it, so keep here anything you will need later.".to_string(),
-        parameters: vec![
-            Parameter {
-                name: "value".to_string(),
-                type_hint: "string".to_string(),
-                description: "New memory value as a string. Replaces all existing memory.".to_string(),
-                required: true,
-            },
-        ],
+        description: "Replace this server's (or client's) memory with new content; the old \
+            memory is discarded. Memory is shown to the model with every event, is shared by \
+            all of the instance's connections and outlives each one, unlike the history of a \
+            single connection, which ends with it. Keep here anything needed later."
+            .to_string(),
+        parameters: vec![Parameter {
+            name: "value".to_string(),
+            type_hint: "string".to_string(),
+            description: "New memory value as a string. Replaces all existing memory.".to_string(),
+            required: true,
+        }],
         example: json!({
             "type": "set_memory",
             "value": "session_id: abc123\nuser_preferences: dark_mode=true\nlast_command: LIST"
@@ -1251,15 +1475,18 @@ pub fn set_memory_action() -> ActionDefinition {
 pub fn append_memory_action() -> ActionDefinition {
     ActionDefinition {
         name: "append_memory".to_string(),
-        description: "Add new content to the end of this server's (or client's) memory. Existing memory is preserved and a newline is automatically added before the new content. Memory is shared by every connection and outlives each one; the history of the current connection is bounded and ends with it.".to_string(),
-        parameters: vec![
-            Parameter {
-                name: "value".to_string(),
-                type_hint: "string".to_string(),
-                description: "Text to append as a string. Will be added after existing memory with newline separator.".to_string(),
-                required: true,
-            },
-        ],
+        description: "Add text to the end of this server's (or client's) memory, after a \
+            newline; existing memory is kept. Memory is shown to the model with every event, \
+            is shared by all of the instance's connections and outlives each one."
+            .to_string(),
+        parameters: vec![Parameter {
+            name: "value".to_string(),
+            type_hint: "string".to_string(),
+            description: "Text to append as a string. Will be added after existing memory with \
+                newline separator."
+                .to_string(),
+            required: true,
+        }],
         example: json!({
             "type": "append_memory",
             "value": "connection_count: 5\nlast_file_requested: readme.md"
@@ -1323,11 +1550,11 @@ pub fn provide_feedback_action() -> ActionDefinition {
 }
 
 /// Get action definition for schedule_task
-pub fn schedule_task_action(
-    selected_mode: crate::state::app_state::ScriptingMode,
-    env: &crate::scripting::ScriptingEnvironment,
-) -> ActionDefinition {
-    let mut parameters = vec![
+///
+/// A task always calls the model with its instruction; it runs no script. The handler
+/// refuses a reply that carries script fields rather than dropping them.
+pub fn schedule_task_action() -> ActionDefinition {
+    let parameters = vec![
         Parameter {
             name: "task_id".to_string(),
             type_hint: "string".to_string(),
@@ -1361,95 +1588,44 @@ pub fn schedule_task_action(
         Parameter {
             name: "server_id".to_string(),
             type_hint: "number".to_string(),
-            description: "Optional: Server ID to scope this task to. If provided, task uses server's instruction and protocol actions. If omitted, task is global and uses user input actions.".to_string(),
+            description: "Optional: id of the server to attach the task to (Current State lists them). When it fires, the model gets that server's instruction and actions, and the task is removed with the server. Omit server_id, client_id and connection_id for a global task, which gets these operator actions.".to_string(),
             required: false,
         },
         Parameter {
             name: "connection_id".to_string(),
             type_hint: "string".to_string(),
-            description: "Optional: Connection ID (e.g., 'conn-123') to scope this task to a specific connection. Requires server_id to be specified. Task will be automatically cleaned up when the connection closes. Useful for connection-specific timeouts, session cleanup, or per-connection monitoring.".to_string(),
+            description: "Optional: id of one of that server's connections (e.g. 'conn-3', listed under the server in Current State), to attach the task to it; requires server_id. The task is removed when the connection closes.".to_string(),
             required: false,
         },
         Parameter {
             name: "client_id".to_string(),
             type_hint: "number".to_string(),
-            description: "Optional: Client ID to scope this task to. If provided, task uses client's instruction and protocol actions. Task will be automatically cleaned up when the client disconnects. Useful for client-specific timeouts, reconnection logic, or per-client monitoring.".to_string(),
+            description: "Optional: id of the client to attach the task to (Current State lists them). When it fires, the model gets that client's instruction and actions, and the task is removed when the client disconnects.".to_string(),
             required: false,
         },
         Parameter {
             name: "instruction".to_string(),
             type_hint: "string".to_string(),
-            description: "Instruction/prompt for LLM when task executes. Describes what the task should do.".to_string(),
+            description: "What the model should do each time the task fires.".to_string(),
             required: true,
         },
         Parameter {
             name: "context".to_string(),
             type_hint: "object".to_string(),
-            description: "Optional: Additional context data to pass to LLM when task executes (e.g., thresholds, parameters).".to_string(),
+            description: "Optional: data handed to the model with the instruction each time the task fires (e.g. thresholds).".to_string(),
             required: false,
         },
     ];
 
-    // Add script parameters based on scripting mode
-    match selected_mode {
-        crate::state::app_state::ScriptingMode::On => {
-            // ON mode: LLM chooses runtime from available options
-            let available_runtimes = env.format_available();
-            parameters.extend(vec![
-                Parameter {
-                    name: "script_runtime".to_string(),
-                    type_hint: "string".to_string(),
-                    description: format!(
-                        "Required when script_inline is provided: Choose runtime for script execution. Available: {}",
-                        available_runtimes
-                    ),
-                    required: false,
-                },
-                Parameter {
-                    name: "script_inline".to_string(),
-                    type_hint: "string".to_string(),
-                    description: "Optional: Inline script code to handle task execution instead of LLM. Must match the script_runtime language. If provided, script_runtime MUST also be specified.".to_string(),
-                    required: false,
-                },
-                Parameter {
-                    name: "script_handles".to_string(),
-                    type_hint: "array".to_string(),
-                    description: "Optional: Event types the script handles (e.g., [\"scheduled_task_cleanup\"]). Defaults to [\"all\"].".to_string(),
-                    required: false,
-                },
-            ]);
-        }
-        crate::state::app_state::ScriptingMode::Off => {
-            // OFF mode: no script parameters
-        }
-        crate::state::app_state::ScriptingMode::Python
-        | crate::state::app_state::ScriptingMode::JavaScript
-        | crate::state::app_state::ScriptingMode::Go
-        | crate::state::app_state::ScriptingMode::Perl => {
-            let lang = selected_mode.as_str();
-            parameters.extend(vec![
-                Parameter {
-                    name: "script_inline".to_string(),
-                    type_hint: "string".to_string(),
-                    description: format!(
-                        "Optional: Inline {} script code to handle task execution instead of LLM. If provided, the script will be executed for each task trigger.",
-                        lang
-                    ),
-                    required: false,
-                },
-                Parameter {
-                    name: "script_handles".to_string(),
-                    type_hint: "array".to_string(),
-                    description: "Optional: Event types the script handles (e.g., [\"scheduled_task_cleanup\"]). Defaults to [\"all\"].".to_string(),
-                    required: false,
-                },
-            ]);
-        }
-    }
-
     ActionDefinition {
         name: "schedule_task".to_string(),
-        description: "Schedule a task (one-shot or recurring). The task will call the LLM or execute a script with the provided instruction. One-shot tasks execute once after a delay and are automatically removed. Recurring tasks execute at intervals until cancelled or max_executions is reached. Useful for delayed operations, timeouts, periodic health checks, heartbeats, SSE messages, metrics collection, etc.".to_string(),
+        description: "Schedule a task (one-shot or recurring). Each time it fires, the model \
+            is called with the task's instruction and acts on it; a task runs no script. \
+            One-shot tasks execute once after a delay and are then removed. Recurring tasks \
+            execute at intervals until cancelled or max_executions is reached. Useful for \
+            delayed operations, timeouts, periodic health checks, heartbeats, SSE messages, \
+            metrics collection, etc."
+            .to_string(),
         parameters,
         example: json!({
             "type": "schedule_task",
@@ -1596,7 +1772,7 @@ pub fn get_all_common_actions(
     actions.push(append_memory_action());
 
     // === Task Management ===
-    actions.push(schedule_task_action(selected_mode, env));
+    actions.push(schedule_task_action());
     actions.push(cancel_task_action());
 
     // === System/Utility ===
@@ -1629,6 +1805,32 @@ pub fn get_user_input_common_actions(
     )
 }
 
+/// Actions in [`get_user_input_common_actions`] that the operator prompt does not offer.
+///
+/// Each acts on "the instance this prompt is about", which is right where there is one
+/// (feedback processing) and wrong at the operator prompt, where there is none and the
+/// handler could only fall back to whichever server happens to be first. `update_server` /
+/// `update_client` change an instance named by id, its memory included.
+pub const NOT_OFFERED_TO_OPERATOR: &[&str] = &["update_instruction", "set_memory", "append_memory"];
+
+/// The common actions the operator prompt offers: [`get_user_input_common_actions`] less
+/// [`NOT_OFFERED_TO_OPERATOR`].
+pub fn get_operator_common_actions(
+    selected_mode: crate::state::app_state::ScriptingMode,
+    env: &crate::scripting::ScriptingEnvironment,
+    is_open_server_enabled: bool,
+    is_open_client_enabled: bool,
+) -> Vec<ActionDefinition> {
+    let mut actions = get_user_input_common_actions(
+        selected_mode,
+        env,
+        is_open_server_enabled,
+        is_open_client_enabled,
+    );
+    actions.retain(|a| !NOT_OFFERED_TO_OPERATOR.contains(&a.name.as_str()));
+    actions
+}
+
 /// Get common actions for network events (exclude server management actions)
 ///
 /// Network events only get server configuration and utility actions,
@@ -1650,7 +1852,7 @@ pub fn get_network_event_common_actions() -> Vec<ActionDefinition> {
 /// Get all protocol names that should be available to the LLM
 /// Filters out protocols with ProtocolState::Disabled unless include_disabled is true
 /// Dynamically determined from the ProtocolRegistry based on compiled features
-fn all_base_stacks(
+pub(crate) fn all_base_stacks(
     include_disabled: bool,
     min_stability: Option<crate::protocol::metadata::DevelopmentState>,
 ) -> Vec<String> {
@@ -1737,114 +1939,4 @@ pub fn generate_base_stack_documentation(
     }
 
     doc
-}
-
-/// Structured protocol documentation data for templates
-#[derive(Debug, serde::Serialize)]
-pub struct ProtocolDocData {
-    pub protocol_name: String,
-    pub both_modes: bool,
-    pub server: Option<ProtocolModeData>,
-    pub client: Option<ProtocolModeData>,
-}
-
-/// Documentation for a single mode (server or client)
-#[derive(Debug, serde::Serialize)]
-pub struct ProtocolModeData {
-    pub stack_name: String,
-    pub group_name: String,
-    pub description: String,
-    pub example_prompt: String,
-    pub keywords: Vec<String>,
-    pub startup_params: Vec<super::ParameterDefinition>,
-    pub state: String,
-    pub notes: Option<String>,
-}
-
-/// Generate structured documentation data for a single protocol
-///
-/// This is used by the read_base_stack_docs tool to provide detailed information
-/// about a specific protocol on demand. Includes both server and client capabilities
-/// if available.
-///
-/// # Arguments
-/// * `protocol_name` - Name of the protocol (e.g., "http", "ssh", "tor")
-///
-/// # Returns
-/// * `Ok(ProtocolDocData)` - Structured documentation for the protocol (server and/or client)
-/// * `Err(_)` - If protocol not found in either registry
-pub fn generate_single_protocol_doc_data(protocol_name: &str) -> anyhow::Result<ProtocolDocData> {
-    let server_registry = crate::protocol::server_registry::registry();
-    let client_registry = &crate::protocol::client_registry::CLIENT_REGISTRY;
-
-    // Protocol names are stored in uppercase (e.g., "HTTP", "SSH", "TCP")
-    // Normalize input to lowercase for client registry and uppercase for server
-    let normalized_name_upper = protocol_name.to_uppercase();
-    let normalized_name_lower = protocol_name.to_lowercase();
-
-    let server_protocol = server_registry.get(&normalized_name_upper);
-    let client_protocol = client_registry.get(&normalized_name_lower);
-
-    // Error if neither found
-    if server_protocol.is_none() && client_protocol.is_none() {
-        return Err(anyhow::anyhow!(
-            "Protocol '{}' not found in server or client registry",
-            protocol_name
-        ));
-    }
-
-    let both_modes = server_protocol.is_some() && client_protocol.is_some();
-
-    // Build server mode data
-    let server = server_protocol.map(|protocol| {
-        let metadata = protocol.metadata();
-        // Format startup parameters with JSON-serialized examples
-        let mut startup_params = protocol.get_startup_parameters();
-        for param in &mut startup_params {
-            // Convert the example Value to a formatted JSON string
-            if let Ok(json_str) = serde_json::to_string(&param.example) {
-                param.example = serde_json::Value::String(json_str);
-            }
-        }
-        ProtocolModeData {
-            stack_name: protocol.stack_name().to_string(),
-            group_name: protocol.group_name().to_string(),
-            description: protocol.description().to_string(),
-            example_prompt: protocol.example_prompt().to_string(),
-            keywords: protocol.keywords().iter().map(|s| s.to_string()).collect(),
-            startup_params,
-            state: format!("{:?}", metadata.state),
-            notes: metadata.notes.map(|s| s.to_string()),
-        }
-    });
-
-    // Build client mode data
-    let client = client_protocol.map(|protocol| {
-        let metadata = protocol.metadata();
-        // Format startup parameters with JSON-serialized examples
-        let mut startup_params = protocol.get_startup_parameters();
-        for param in &mut startup_params {
-            // Convert the example Value to a formatted JSON string
-            if let Ok(json_str) = serde_json::to_string(&param.example) {
-                param.example = serde_json::Value::String(json_str);
-            }
-        }
-        ProtocolModeData {
-            stack_name: protocol.stack_name().to_string(),
-            group_name: protocol.group_name().to_string(),
-            description: protocol.description().to_string(),
-            example_prompt: protocol.example_prompt().to_string(),
-            keywords: protocol.keywords().iter().map(|s| s.to_string()).collect(),
-            startup_params,
-            state: format!("{:?}", metadata.state),
-            notes: metadata.notes.map(|s| s.to_string()),
-        }
-    });
-
-    Ok(ProtocolDocData {
-        protocol_name: protocol_name.to_uppercase(),
-        both_modes,
-        server,
-        client,
-    })
 }

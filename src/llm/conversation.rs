@@ -961,8 +961,9 @@ impl ConversationHandler {
                     .and_then(|t| t.as_str())
                     .unwrap_or("unknown");
 
-                // Skip validation for actions that don't map to CommonAction (protocol-specific actions)
-                // These will be validated later by their respective handlers
+                // Every CommonAction variant is checked here, so a malformed one gets the retry
+                // instead of failing silently in the executor. Protocol-specific actions are
+                // validated later by their own executors.
                 let is_common_action = matches!(
                     action_type,
                     "open_server"
@@ -974,6 +975,13 @@ impl ConversationHandler {
                         | "update_instruction"
                         | "change_model"
                         | "set_memory"
+                        | "append_memory"
+                        | "append_to_log"
+                        | "provide_feedback"
+                        | "update_server"
+                        | "update_client"
+                        | "create_database"
+                        | "delete_database"
                         | "schedule_task"
                         | "cancel_task"
                         | "show_message"
@@ -1744,8 +1752,13 @@ impl ConversationHandler {
                             full_prompt.push_str("\n\n");
                         }
                         "assistant" => {
-                            // Include previous assistant responses in conversation
-                            full_prompt.push_str("Actions you have executed:\n");
+                            // Neutral on purpose. On a network event the earlier turns are replies
+                            // that were rejected — nothing in them ran — and the old "Actions you
+                            // have executed" told the model its rejected action had already gone
+                            // out, contradicting the retry message that follows. Where tools are
+                            // offered an earlier turn may have run tools, so "rejected" would be
+                            // just as wrong; the message after each turn says which it was.
+                            full_prompt.push_str("Your previous response:\n");
                             full_prompt.push_str(&msg.content);
                             full_prompt.push_str("\n\n");
                         }

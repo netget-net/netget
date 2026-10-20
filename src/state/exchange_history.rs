@@ -121,7 +121,8 @@ impl ExchangeHistory {
             ));
         }
         out.push_str(
-            ". Each was already answered; it is here for context. Answer only the event below.\n",
+            ". These were already handled and are shown for context only; do not answer them \
+             again.\n",
         );
         for entry in chosen {
             out.push_str(&format!("#{} {}\n", entry.seq, entry.text));
@@ -145,6 +146,20 @@ fn render_entry(event_type: &str, request: &Value, response: &[Value]) -> String
     let text = if event_type == INJECTED_ACTION_EVENT {
         // The request is the action the operator sent; the response is its outcome.
         format!("operator sent {}", render_action(request))
+    } else if response.iter().any(|action| {
+        action
+            .get("type")
+            .and_then(Value::as_str)
+            .is_some_and(|t| t.starts_with("FAILED"))
+    }) {
+        // A failed event is recorded with a `FAILED: …` envelope carrying the backend error.
+        // Shown as answered, under a header saying everything was handled, it told the model
+        // the peer had been answered — and leaked the error text into the prompt.
+        format!(
+            "{} {}\n   not answered: handling it failed",
+            event_type,
+            compact(&crate::utils::redact::redact_sensitive(request))
+        )
     } else if response.len() == 1
         && response[0].get("type").and_then(Value::as_str) == Some(ANSWERED_WITH_NEXT)
     {

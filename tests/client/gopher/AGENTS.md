@@ -86,7 +86,7 @@ server it talks to. Rules are first-match-wins, and the ordering carries weight:
 |---|---|---|
 | 1 | `on_event("gopher_request")` — the server, branching on `selector` inside one generator | 3 / 1 |
 | 2–4 | `on_event("gopher_menu_received" \| "gopher_document_received" \| "gopher_error_received")` — the client | 1 each |
-| last | `on_prompt_containing("Waiting for instructions")` — the client's opening turn | 1 |
+| last | `on_prompt_containing("No network event yet: the client has just started")` — the client's opening turn | 1 |
 
 **The server is one rule branching on the selector, not three rules on
 `gopher_request`.** Two rules on the same event with no way to tell them apart
@@ -98,7 +98,7 @@ extracts `context.instruction` from the *last user message*, and for a client's
 `event: None` call that message is the literal string `Waiting for
 instructions` — the system prompt, where `Your instruction:` actually lives, is
 never searched. So `on_instruction_containing("<the client's instruction>")`
-matches nothing at all here. `on_prompt_containing("Waiting for instructions")`
+matches nothing at all here. `on_prompt_containing("No network event yet: the client has just started")`
 is the reliable form, and it must come **last** so every event rule is tried
 first.
 

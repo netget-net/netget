@@ -63,52 +63,48 @@ async fn execute_due_tasks(
     }
 }
 
-/// Build the list of actions a scheduled task may invoke.
-///
-/// This mirrors, scope for scope, the action list that
-/// `PromptBuilder::build_task_execution_prompt` advertises to the model, and then applies
-/// the same scripting-mode filter `PromptBuilder::build_action_prompt` applies. The result
-/// is that the set the model is told about and the set `ConversationHandler` validates
-/// against are identical rather than merely overlapping.
-///
-/// Previously an empty `Vec` was handed to the validator, so every action a scheduled task
-/// returned was flagged unknown, retried twice, then `bail!`d — no scheduled task could
-/// ever execute an action.
-async fn build_task_actions(
+/// How long a protocol action injected into a connection or client may take to report.
+const INJECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Why a task's instance is gone, if it is: a task whose server, connection or client has
+/// closed has nothing to act on, so it is failed and removed without a model call.
+async fn task_target_gone(
     state: &AppState,
     scope: &crate::state::task::TaskScope,
-    protocol_actions: Vec<crate::llm::actions::ActionDefinition>,
-) -> Vec<crate::llm::actions::ActionDefinition> {
-    use crate::llm::actions::{
-        get_all_tool_actions, get_network_event_common_actions, get_network_event_tool_actions,
-        get_user_input_common_actions,
-    };
-    use crate::llm::prompt::PromptBuilder;
+) -> Option<String> {
+    use crate::state::server::{ConnectionStatus, ServerStatus};
     use crate::state::task::TaskScope;
 
-    let selected_mode = state.get_selected_scripting_mode().await;
-    let web_search_mode = state.get_web_search_mode().await;
-
-    let actions = match scope {
-        TaskScope::Global => {
-            // Global tasks run in the user-input context, with open_server/open_client enabled.
-            let scripting_env = state.get_scripting_env().await;
-            let mut actions =
-                get_user_input_common_actions(selected_mode, &scripting_env, true, true);
-            actions.extend(get_all_tool_actions(web_search_mode));
-            actions
+    match scope {
+        TaskScope::Global => None,
+        TaskScope::Server(sid) | TaskScope::Connection(sid, _) => {
+            let Some(server) = state.get_server(*sid).await else {
+                return Some(format!("server #{} no longer exists", sid.as_u32()));
+            };
+            if matches!(
+                server.status,
+                ServerStatus::Stopped | ServerStatus::Error(_)
+            ) {
+                return Some(format!("server #{} is {}", sid.as_u32(), server.status));
+            }
+            if let TaskScope::Connection(_, cid) = scope {
+                match server.connections.get(cid) {
+                    Some(conn) if conn.status == ConnectionStatus::Active => None,
+                    _ => Some(format!(
+                        "connection {} on server #{} has closed",
+                        cid,
+                        sid.as_u32()
+                    )),
+                }
+            } else {
+                None
+            }
         }
-        TaskScope::Server(_) | TaskScope::Connection(_, _) | TaskScope::Client(_) => {
-            // Server-, connection- and client-scoped tasks run in the network-event context.
-            let mut actions = get_network_event_common_actions();
-            actions.extend(protocol_actions);
-            actions.extend(get_network_event_tool_actions(web_search_mode));
-            actions
-        }
-    };
-
-    let has_scripting = selected_mode != crate::state::app_state::ScriptingMode::Off;
-    PromptBuilder::filter_actions_by_scripting_mode(actions, has_scripting)
+        TaskScope::Client(cid) => match state.get_client(*cid).await {
+            Some(_) => None,
+            None => Some(format!("client #{} no longer exists", cid.as_u32())),
+        },
+    }
 }
 
 /// Execute a single task
@@ -119,59 +115,35 @@ async fn execute_single_task(
     task: crate::state::ScheduledTask,
 ) {
     use crate::llm::prompt::PromptBuilder;
-    use crate::state::task::{TaskExecutionResult, TaskScope};
+    use crate::state::task::{TaskExecutionResult, TaskScope, TaskStatus};
 
     let _ = status_tx.send(format!("[TASK] Executing task '{}'", task.name));
 
-    // Get protocol actions if server, connection, or client-scoped
-    let protocol_actions = match &task.scope {
-        TaskScope::Server(server_id) | TaskScope::Connection(server_id, _) => {
-            if let Some(protocol_name) = state.get_protocol_name(*server_id).await {
-                if let Some(protocol) =
-                    crate::protocol::server_registry::registry().get(&protocol_name)
-                {
-                    protocol.get_sync_actions()
-                } else {
-                    Vec::new()
-                }
-            } else {
-                Vec::new()
-            }
-        }
-        TaskScope::Client(client_id) => {
-            if let Some(protocol_name) = state.get_protocol_name_for_client(*client_id).await {
-                if let Some(protocol) =
-                    crate::protocol::client_registry::CLIENT_REGISTRY.get(&protocol_name)
-                {
-                    // Clients union; servers narrow. A client has one LLM entry point, so it
-                    // cannot express an async/sync narrowing and `get_sync_actions()` alone
-                    // hides most of its vocabulary - 81 of 99 client protocols, including
-                    // `disconnect` on nearly all of them, so a scheduled task could not tell
-                    // a client to hang up. This is the same defect `call_llm_for_client` and
-                    // `action_catalog_for_pattern` each had; `client_llm_action_set` is the
-                    // one place the rule lives.
-                    crate::llm::actions::client_trait::client_llm_action_set(
-                        protocol.as_ref(),
-                        &state,
-                        None,
-                    )
-                } else {
-                    Vec::new()
-                }
-            } else {
-                Vec::new()
-            }
-        }
-        TaskScope::Global => Vec::new(),
-    };
+    if let Some(gone) = task_target_gone(&state, &task.scope).await {
+        let error = format!("{gone}; the task was removed");
+        let _ = status_tx.send(format!(
+            "[ERROR] Task '{}' cannot run: {}",
+            task.name, error
+        ));
+        tracing::warn!("Scheduled task '{}' cannot run: {}", task.name, error);
+        let result = TaskExecutionResult {
+            success: false,
+            actions: Vec::new(),
+            error: Some(error.clone()),
+        };
+        state.record_task_execution(task.id, &result).await;
+        state
+            .update_task_status(task.id, TaskStatus::Failed(error))
+            .await;
+        state.remove_task(task.id).await;
+        return;
+    }
 
-    // Actions genuinely available to this task. This MUST match the set advertised by
-    // `PromptBuilder::build_task_execution_prompt` below, because `ConversationHandler`
-    // derives `valid_action_names` from it and rejects anything else as an unknown action.
-    let task_actions = build_task_actions(&state, &task.scope, protocol_actions.clone()).await;
-
-    // Build prompt
-    let prompt = PromptBuilder::build_task_execution_prompt(&state, &task, protocol_actions).await;
+    // What this task may do, computed once: the prompt advertises exactly `set.actions`, the
+    // conversation validates against exactly `set.actions`, and `run_task_actions` routes the
+    // model's answer by the same set.
+    let set = PromptBuilder::task_action_set(&state, &task).await;
+    let prompt = PromptBuilder::build_task_execution_prompt(&state, &task, &set).await;
 
     // Get current model, ensuring one is selected
     let model = match crate::llm::ensure_model_selected(
@@ -189,10 +161,7 @@ async fn execute_single_task(
             ));
             // Update task status to failed
             state
-                .update_task_status(
-                    task.id,
-                    crate::state::task::TaskStatus::Failed(error_msg.clone()),
-                )
+                .update_task_status(task.id, TaskStatus::Failed(error_msg.clone()))
                 .await;
             let result = TaskExecutionResult {
                 success: false,
@@ -235,7 +204,7 @@ async fn execute_single_task(
         rate_limiter,
         crate::llm::RequestSource::Network, // Scheduled tasks are discarded if rate limited
     )
-    .with_native_tools(&task_actions)
+    .with_native_tools(&set.actions)
     .with_status_tx(status_tx.clone())
     .with_tracking(state.clone(), conversation_source, truncated_instruction);
 
@@ -248,7 +217,7 @@ async fn execute_single_task(
         .generate_with_tools_and_retry(
             state.get_web_approval_channel().await,
             web_search_mode,
-            task_actions,
+            set.actions.clone(),
         )
         .await
     {
@@ -269,66 +238,199 @@ async fn execute_single_task(
         }
     };
 
-    // Get protocol for execution (if server, connection, or client-scoped)
-    let protocol = match &task.scope {
-        TaskScope::Server(server_id) | TaskScope::Connection(server_id, _) => state
-            .get_protocol_name(*server_id)
-            .await
-            .and_then(|name| crate::protocol::server_registry::registry().get(&name)),
-        TaskScope::Client(_client_id) => {
-            // Client protocols are handled differently - they don't use the server protocol registry
-            // For now, return None as task execution for clients needs client-specific implementation
-            None
-        }
-        TaskScope::Global => None,
-    };
+    let failures = run_task_actions(&state, &llm_client, &status_tx, &task, &set, &actions).await;
 
-    // Extract server_id and client_id from task scope for context
+    if failures.is_empty() {
+        let _ = status_tx.send(format!(
+            "[TASK] Task '{}' completed successfully ({} action(s))",
+            task.name,
+            actions.len()
+        ));
+        let result = TaskExecutionResult {
+            success: true,
+            actions,
+            error: None,
+        };
+        handle_task_success(&state, &status_tx, task, result).await;
+    } else {
+        let error = format!(
+            "{} of {} action(s) failed: {}",
+            failures.len(),
+            actions.len(),
+            failures.join("; ")
+        );
+        let verdict = if failures.len() < actions.len() {
+            "partly failed"
+        } else {
+            "failed"
+        };
+        let _ = status_tx.send(format!(
+            "[ERROR] Task '{}' {}: {}",
+            task.name, verdict, error
+        ));
+        tracing::error!("Scheduled task '{}' {}: {}", task.name, verdict, error);
+        let result = TaskExecutionResult {
+            success: false,
+            actions,
+            error: Some(error),
+        };
+        handle_task_failure(&state, &status_tx, task, result).await;
+    }
+}
+
+/// Execute the model's answer to a task, in order, each action where it can actually run,
+/// and return one `"<action>: <error>"` line per action that did not.
+///
+/// - The instance's protocol actions run inside the instance — `send_to_peer` for a server
+///   or connection, `send_to_client` for a client — so their bytes reach the wire. Executing
+///   them anywhere else produces output nobody writes.
+/// - `show_message` goes to the status stream, named after the task.
+/// - A global task's operator actions (open/close/update servers and clients, tasks,
+///   databases) run through the same executor the operator's own commands use.
+/// - Memory and log actions run through `execute_actions` with the task's instance as
+///   context.
+async fn run_task_actions(
+    state: &AppState,
+    llm_client: &OllamaClient,
+    status_tx: &mpsc::UnboundedSender<String>,
+    task: &crate::state::ScheduledTask,
+    set: &crate::llm::prompt::TaskActionSet,
+    actions: &[serde_json::Value],
+) -> Vec<String> {
+    use crate::llm::actions::common::CommonAction;
+    use crate::state::task::TaskScope;
+
     let (server_id, client_id) = match &task.scope {
         TaskScope::Server(sid) | TaskScope::Connection(sid, _) => (Some(*sid), None),
         TaskScope::Client(cid) => (None, Some(*cid)),
         TaskScope::Global => (None, None),
     };
 
-    // Execute actions with task context
-    match crate::llm::execute_actions(
-        actions.clone(),
-        &state,
-        protocol.as_deref(),
-        server_id,
-        client_id,
-    )
-    .await
-    {
-        Ok(_exec_result) => {
-            // Success
-            let _ = status_tx.send(format!(
-                "[TASK] Task '{}' completed successfully",
-                task.name
-            ));
+    let mut failures = Vec::new();
+    for action in actions {
+        let name = action
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
 
-            let result = TaskExecutionResult {
-                success: true,
-                actions,
-                error: None,
-            };
-
-            handle_task_success(&state, &status_tx, task, result).await;
+        if set.protocol_actions.contains(&name) {
+            match inject_protocol_action(state, task, set, &name, action.clone()).await {
+                Ok(detail) => {
+                    let _ =
+                        status_tx.send(format!("[TASK] Task '{}': {} {}", task.name, name, detail));
+                }
+                Err(e) => failures.push(format!("{name}: {e}")),
+            }
+            continue;
         }
-        Err(e) => {
-            // Execution failed
-            let error = format!("Action execution failed: {}", e);
-            let _ = status_tx.send(format!("[ERROR] Task '{}' failed: {}", task.name, error));
 
-            let result = TaskExecutionResult {
-                success: false,
-                actions,
-                error: Some(error),
-            };
+        if name == "show_message" {
+            let message = action
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let _ = status_tx.send(format!("[TASK] {}: {}", task.name, message));
+            continue;
+        }
 
-            handle_task_failure(&state, &status_tx, task, result).await;
+        if matches!(task.scope, TaskScope::Global) {
+            match CommonAction::from_json(action) {
+                Ok(common) => {
+                    let mut handler =
+                        crate::events::EventHandler::new(state.clone(), llm_client.clone());
+                    if let Err(e) = handler
+                        .execute_server_management_action(common, status_tx)
+                        .await
+                    {
+                        failures.push(format!("{name}: {e}"));
+                    }
+                }
+                Err(e) => failures.push(format!("{name}: {e}")),
+            }
+            continue;
+        }
+
+        match crate::llm::execute_actions(vec![action.clone()], state, None, server_id, client_id)
+            .await
+        {
+            Ok(result) => {
+                for msg in result.messages {
+                    let _ = status_tx.send(msg);
+                }
+                for failure in result.failures {
+                    failures.push(format!("{}: {}", failure.action, failure.error));
+                }
+            }
+            Err(e) => failures.push(format!("{name}: {e}")),
         }
     }
+    failures
+}
+
+/// Run one protocol action inside the task's instance and describe what happened.
+async fn inject_protocol_action(
+    state: &AppState,
+    task: &crate::state::ScheduledTask,
+    set: &crate::llm::prompt::TaskActionSet,
+    name: &str,
+    mut action: serde_json::Value,
+) -> anyhow::Result<String> {
+    use crate::state::client_handles::ClientSendOutcome;
+    use crate::state::task::TaskScope;
+
+    let outcome = match &task.scope {
+        TaskScope::Client(cid) => state.send_to_client(*cid, action, INJECT_TIMEOUT).await?,
+        TaskScope::Connection(sid, cid) => {
+            state
+                .send_to_peer(*sid, cid.as_u32(), action, INJECT_TIMEOUT)
+                .await?
+        }
+        TaskScope::Server(sid) => {
+            let connection_id = action
+                .get("connection_id")
+                .and_then(parse_connection_id)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "`connection_id` is required and must be one of {:?}",
+                        set.peer_connections
+                    )
+                })?;
+            if !set.peer_connections.contains(&connection_id) {
+                anyhow::bail!(
+                    "connection {} does not accept actions; use one of {:?}",
+                    connection_id,
+                    set.peer_connections
+                );
+            }
+            if set.routing_only_connection_id.contains(name) {
+                if let Some(obj) = action.as_object_mut() {
+                    obj.remove("connection_id");
+                }
+            }
+            state
+                .send_to_peer(*sid, connection_id, action, INJECT_TIMEOUT)
+                .await?
+        }
+        TaskScope::Global => anyhow::bail!("a global task has no instance to run it in"),
+    };
+    match outcome {
+        ClientSendOutcome::Sent { bytes_sent } => Ok(format!("sent {bytes_sent} byte(s)")),
+        ClientSendOutcome::Executed { detail } => Ok(format!("executed ({detail})")),
+        ClientSendOutcome::Disconnected => Ok("executed; the connection is closed".to_string()),
+        ClientSendOutcome::Rejected { error } => {
+            anyhow::bail!("the protocol rejected the action: {error}")
+        }
+    }
+}
+
+/// A connection id as the model may write it: `3`, `"3"` or `"conn-3"`.
+fn parse_connection_id(value: &serde_json::Value) -> Option<u32> {
+    if let Some(n) = value.as_u64() {
+        return u32::try_from(n).ok();
+    }
+    let s = value.as_str()?.trim();
+    s.strip_prefix("conn-").unwrap_or(s).parse().ok()
 }
 
 /// Handle task success

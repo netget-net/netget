@@ -35,8 +35,10 @@ impl Easy for HttpEasyProtocol {
         "HTTP"
     }
 
+    /// None: the HTTP server's own well-known port (80) applies, resolved by `open_server` —
+    /// falling back to an OS-assigned port, and saying so, where 80 cannot be bound.
     fn default_port(&self) -> Option<u16> {
-        Some(8080)
+        None
     }
 
     fn generate_startup_action(
@@ -44,19 +46,22 @@ impl Easy for HttpEasyProtocol {
         user_instruction: Option<String>,
         port: Option<u16>,
     ) -> Result<JsonValue> {
-        let port = port.unwrap_or_else(|| self.default_port().unwrap());
         let instruction = user_instruction.unwrap_or_else(|| {
             "You are a helpful HTTP server. Respond to requests with useful information."
                 .to_string()
         });
 
-        // Generate open_server action for HTTP protocol
-        Ok(json!({
+        // Generate open_server action for HTTP protocol. An omitted port is the protocol's
+        // well-known port, the same as every other way of starting a server.
+        let mut action = json!({
             "type": "open_server",
             "protocol": "HTTP",
-            "port": port,
             "instruction": instruction,
-        }))
+        });
+        if let Some(port) = port.or(self.default_port()) {
+            action["port"] = json!(port);
+        }
+        Ok(action)
     }
 
     fn handle_event(
@@ -67,97 +72,47 @@ impl Easy for HttpEasyProtocol {
         app_state: Arc<AppState>,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<JsonValue>>> + Send>> {
         Box::pin(async move {
-            let event_type = &event.event_type;
-
             // Only handle http_request events
-            if event_type.id != "http_request" {
+            if event.event_type.id != "http_request" {
                 return Ok(vec![]);
             }
 
-            // Extract request details from event data
-            let method = event
-                .data
-                .get("method")
-                .and_then(|v| v.as_str())
-                .unwrap_or("GET");
-            let uri = event
-                .data
-                .get("uri")
-                .and_then(|v| v.as_str())
-                .unwrap_or("/");
-            let body = event
-                .data
-                .get("body")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let prompt = http_easy_prompt_for_event(&event, user_instruction.as_deref())?;
 
-            // Convert headers object to array for template
-            let headers_array: Vec<serde_json::Value> = event
-                .data
-                .get("headers")
-                .and_then(|v| v.as_object())
-                .map(|obj| {
-                    obj.iter()
-                        .map(|(k, v)| {
-                            json!({
-                                "name": k,
-                                "value": v.as_str().unwrap_or("")
-                            })
-                        })
-                        .collect()
-                })
-                .unwrap_or_else(Vec::new);
+            // The model the rest of NetGet uses, chosen against the configured endpoint.
+            let model = crate::llm::ensure_model_selected(
+                app_state.get_ollama_model().await,
+                &app_state.get_ollama_url().await,
+            )
+            .await
+            .context("Failed to ensure model is selected")?;
 
-            // Parse query string from URI if present
-            let (path, query_string) = if let Some(idx) = uri.find('?') {
-                (uri[..idx].to_string(), Some(uri[idx + 1..].to_string()))
-            } else {
-                (uri.to_string(), None)
-            };
-
-            // Build prompt using template engine
-            let mut data_builder = TemplateDataBuilder::new()
-                .field("protocol_name", "HTTP")
-                .field("output_format", "HTML")
-                .field("method", method)
-                .field("uri", path)
-                .field("headers", headers_array);
-
-            if let Some(qs) = query_string {
-                data_builder = data_builder.field("query_string", qs);
-            }
-
-            if !body.is_empty() {
-                data_builder = data_builder.field("body", body);
-            }
-
-            if let Some(instruction) = user_instruction {
-                data_builder = data_builder.field("user_instruction", instruction);
-            }
-
-            let template_data = data_builder.build();
-
-            // Render prompt template
-            let prompt = TEMPLATE_ENGINE
-                .render_json("easy_request/http", &template_data)
-                .context("Failed to render HTTP-easy prompt template")?;
-
-            // Get model name from app_state
-            let model = app_state
-                .get_ollama_model()
+            // A network event: wait for a permit within the configured bounds, like every
+            // other model call a peer can cause, and count its tokens against the budget.
+            let permit = app_state
+                .get_rate_limiter()
                 .await
-                .unwrap_or_else(|| "qwen2.5-coder:7b".to_string());
+                .acquire_permit(crate::llm::RequestSource::Network)
+                .await
+                .context("Rate limit exceeded")?;
 
             // Call LLM expecting Markdown response
             let response = llm_client
                 .generate(&model, &prompt)
                 .await
                 .context("Failed to call LLM for HTTP-easy response")?;
+            permit
+                .record_usage(
+                    response.token_usage.prompt_tokens,
+                    response.token_usage.completion_tokens,
+                )
+                .await;
 
             // Convert Markdown to HTML
             let html = markdown_to_html(&response.text);
 
-            // Generate send_http_response action
+            // Generate send_http_response action. Every easy answer is a 200 with these
+            // headers; the prompt says so.
             let action = json!({
                 "type": "send_http_response",
                 "status": 200,
@@ -216,8 +171,21 @@ pub fn markdown_to_html(markdown: &str) -> String {
     for line in lines {
         let trimmed = line.trim();
 
-        // Code blocks (```)
+        // Code blocks (```). A fence opens with ``` plus an optional language name and closes
+        // with ``` alone; the one-line form ```code``` is a whole block on its own, not an
+        // opening fence whose code is the rest of the page.
         if trimmed.starts_with("```") {
+            let inner = &trimmed[3..];
+            if !in_code_block && inner.len() > 3 && inner.ends_with("```") {
+                if in_list {
+                    html.push_str("</ul>\n");
+                    in_list = false;
+                }
+                html.push_str("<pre><code>");
+                html.push_str(&html_escape(&inner[..inner.len() - 3]));
+                html.push_str("</code></pre>\n");
+                continue;
+            }
             if in_code_block {
                 html.push_str("</code></pre>\n");
                 in_code_block = false;
@@ -371,20 +339,38 @@ fn html_escape(text: &str) -> String {
         .replace('\'', "&#39;")
 }
 
-/// Generate HTTP-easy prompt for testing/snapshot purposes
+/// The prompt for one `http_request` event, exactly as `handle_event` sends it.
 ///
-/// This public function generates the same prompt that would be sent to the LLM,
-/// useful for snapshot testing and debugging.
+/// Reads the fields the HTTP server's event carries — `path` and `query_string`, not a `uri`
+/// (`src/server/http/mod.rs` builds the event; its `HTTP_REQUEST_EVENT` declares them).
+pub fn http_easy_prompt_for_event(event: &Event, user_instruction: Option<&str>) -> Result<String> {
+    let data = &event.data;
+    let str_field = |name: &str| data.get(name).and_then(|v| v.as_str());
+
+    let headers: Vec<(String, String)> = data
+        .get("headers")
+        .and_then(|v| v.as_object())
+        .map(|obj| {
+            obj.iter()
+                .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    render_http_easy_prompt(
+        str_field("method").unwrap_or("GET"),
+        str_field("path").unwrap_or("/"),
+        str_field("query_string").filter(|q| !q.is_empty()),
+        &headers,
+        str_field("body").filter(|b| !b.is_empty()),
+        user_instruction,
+    )
+}
+
+/// Generate the HTTP-easy prompt from a request line's URI, for snapshot tests.
 ///
-/// # Arguments
-/// * `method` - HTTP method (GET, POST, etc.)
-/// * `uri` - Request URI
-/// * `headers` - Request headers as key-value pairs
-/// * `body` - Optional request body
-/// * `user_instruction` - Optional custom instruction
-///
-/// # Returns
-/// The generated prompt string
+/// Splits `uri` into path and query the way the HTTP server does before raising its event,
+/// then renders exactly what [`http_easy_prompt_for_event`] renders.
 pub fn generate_http_easy_prompt(
     method: &str,
     uri: &str,
@@ -392,48 +378,42 @@ pub fn generate_http_easy_prompt(
     body: Option<&str>,
     user_instruction: Option<&str>,
 ) -> Result<String> {
-    // Convert headers to array for template
+    let (path, query_string) = match uri.split_once('?') {
+        Some((path, query)) => (path, Some(query)),
+        None => (uri, None),
+    };
+    render_http_easy_prompt(method, path, query_string, headers, body, user_instruction)
+}
+
+fn render_http_easy_prompt(
+    method: &str,
+    path: &str,
+    query_string: Option<&str>,
+    headers: &[(String, String)],
+    body: Option<&str>,
+    user_instruction: Option<&str>,
+) -> Result<String> {
     let headers_array: Vec<JsonValue> = headers
         .iter()
-        .map(|(k, v)| {
-            json!({
-                "name": k,
-                "value": v
-            })
-        })
+        .map(|(k, v)| json!({ "name": k, "value": v }))
         .collect();
 
-    // Parse query string from URI if present
-    let (path, query_string) = if let Some(idx) = uri.find('?') {
-        (uri[..idx].to_string(), Some(uri[idx + 1..].to_string()))
-    } else {
-        (uri.to_string(), None)
-    };
-
-    // Build template data
     let mut data_builder = TemplateDataBuilder::new()
-        .field("protocol_name", "HTTP")
-        .field("output_format", "HTML")
         .field("method", method)
-        .field("uri", path)
+        .field("path", path)
         .field("headers", headers_array);
 
     if let Some(qs) = query_string {
         data_builder = data_builder.field("query_string", qs);
     }
-
     if let Some(body_str) = body {
         data_builder = data_builder.field("body", body_str);
     }
-
     if let Some(instruction) = user_instruction {
         data_builder = data_builder.field("user_instruction", instruction);
     }
 
-    let template_data = data_builder.build();
-
-    // Render prompt template
     TEMPLATE_ENGINE
-        .render_json("easy_request/http", &template_data)
+        .render_json("easy_request/http", &data_builder.build())
         .context("Failed to render HTTP-easy prompt template")
 }

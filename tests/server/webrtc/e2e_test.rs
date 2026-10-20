@@ -479,11 +479,13 @@ mod webrtc_server_tests {
                         ]))
                         .expect_calls(1)
                         .and()
-                        // A well-formed but decision-free reply: the model logged a note and
-                        // said nothing about admission.
+                        // A well-formed but decision-free reply: the model told the operator
+                        // something and said nothing about admission. (This used to send
+                        // append_to_log with a `message` field, which is malformed and slipped
+                        // through only while common actions went unvalidated.)
                         .on_event("webrtc_offer_received")
                         .respond_with_actions(serde_json::json!([
-                            { "type": "append_to_log", "message": "saw an offer" }
+                            { "type": "show_message", "message": "saw an offer" }
                         ]))
                         .expect_calls(1)
                         .and()

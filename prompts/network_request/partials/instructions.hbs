@@ -21,7 +21,7 @@ You may optionally include `<reasoning>` tags to explain complex decisions (auth
 
 **CRITICAL**: Always use protocol-specific response actions from the "Available Actions" list. Each protocol has its own specific actions with detailed descriptions and examples.
 
-- Do NOT use generic `send_data` or `show_message` actions for protocol responses
+- `show_message` only notifies the NetGet operator; it sends nothing to the peer. Answer the peer with this protocol's own actions
 - Read the action descriptions carefully - they explain when to use each action
 - Follow the examples provided in each action definition
 - The action definitions include all required parameters and their formats

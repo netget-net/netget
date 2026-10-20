@@ -1,0 +1,110 @@
+{{> shared/partials/role }}
+
+# Task
+
+A scheduled task has fired. Nothing arrived from the network and nobody typed a command:
+no peer is waiting for a reply. Carry out the task instruction below with the listed
+actions, then stop. If the instruction needs nothing done this time, return no actions.
+
+**Scope:** {{{scope_label}}}
+
+**Task:** `{{{task_name}}}` — {{{schedule}}}, created {{{created_ago}}} ago.
+
+## Task Instruction
+
+{{{instruction}}}
+
+{{#if task_context}}
+## Task Context
+
+```json
+{{{task_context}}}
+```
+
+{{/if}}
+{{#if previous_error}}
+## Previous Execution Error
+
+The last run of this task failed with:
+
+```text
+{{{previous_error}}}
+```
+
+Attempt to handle or resolve this issue.
+
+{{/if}}
+{{#if instance_instruction}}
+## Instance Instruction
+
+The instruction of the instance this task belongs to, for context:
+
+```text
+{{{instance_instruction}}}
+```
+
+{{/if}}
+{{#if memory_actions}}
+## Memory
+
+```text
+{{#if memory}}{{{memory}}}{{else}}(empty){{/if}}
+```
+
+Memory is a string the instance keeps between runs: `set_memory` replaces it,
+`append_memory` adds a line to it.
+
+{{/if}}
+{{#if history}}
+## Recent Exchanges
+
+{{{history}}}
+
+{{/if}}
+{{#if protocol_note}}
+## Protocol Actions
+
+{{{protocol_note}}}
+
+{{/if}}
+{{> shared/partials/actions tool_actions=tool_actions regular_actions=regular_actions }}
+
+---
+
+# Response Format
+
+Return a JSON object with an `actions` array, and nothing else — no Markdown fences, no
+narration. Each action has a `type` from the Available Actions list and that action's
+documented parameters, and the actions run in order.
+
+```json
+{"actions": [{{{example_action}}}]}
+```
+
+{{#if example_tool}}
+To gather information first, return a `tools` array instead; you are invoked again with
+the results, and only a final response without tools has its actions executed:
+
+```json
+{"tools": [{{{example_tool}}}]}
+```
+
+{{/if}}
+Optional brief reasoning may precede the JSON inside `<reasoning>` tags.
+
+# Current State
+
+{{{scope_lines}}}
+
+{{#if is_global}}
+{{#if can_bind_privileged_ports}}
+- **Privileged ports (<1024)**: available
+{{else}}
+- **Privileged ports (<1024)**: not available
+{{/if}}
+{{#if has_raw_socket_access}}
+- **Raw socket access**: available
+{{else}}
+- **Raw socket access**: not available
+{{/if}}
+{{/if}}

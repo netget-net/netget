@@ -185,12 +185,10 @@ fn record_request_fields(
 /// - `prompts/network_request/task.hbs`
 /// - `prompts/network_request/partials/instructions.hbs`
 /// - `src/llm/action_helper.rs::call_llm_for_client` (client system prompt)
-/// - `prompts/easy_request/main.hbs` (easy mode, still a network request)
 const NETWORK_EVENT_TEMPLATE_MARKERS: &[&str] = &[
     "You are being invoked in response to a network event",
     "## Network Event Instructions",
     "You are controlling a network client",
-    "## Network Request Received",
 ];
 
 /// Marker sentences emitted only by `prompts/user_input/task.hbs`.
@@ -1133,6 +1131,10 @@ fn extract_context_from_prompt(prompt: &str) -> LlmContext {
 
         // Try to find the end of the capabilities section using various markers
         let end_marker_and_len = [
+            (
+                "such as arp, icmp and datalink) refuse to start.",
+                "such as arp, icmp and datalink) refuse to start.".len(),
+            ),
             (
                 "DataLink protocol unavailable",
                 "DataLink protocol unavailable".len(),
