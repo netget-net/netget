@@ -192,16 +192,28 @@ mod tgtd {
         let disk = backing_file(dir.path(), "hello from tgt");
         let port = free_port();
         let control: u16 = 17;
+        // tgtd's own debug log goes to a file, and every assertion below prints it: tgtd says
+        // why it refused a login only there, never on the wire.
+        let log_path = dir.path().join("tgtd.log");
+        let log = std::fs::File::create(&log_path).unwrap();
+        let tgtd_log = || {
+            format!(
+                "\n--- tgtd -d 1 ---\n{}",
+                std::fs::read_to_string(&log_path).unwrap_or_default()
+            )
+        };
         let _daemon = tokio::process::Command::new(&tgtd)
             .args([
                 "-f",
+                "-d",
+                "1",
                 "-C",
                 &control.to_string(),
                 "--iscsi",
                 &format!("portal=127.0.0.1:{port}"),
             ])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stdout(log.try_clone().unwrap())
+            .stderr(log)
             .kill_on_drop(true)
             .spawn()
             .unwrap();
@@ -238,6 +250,17 @@ mod tgtd {
             ],
         )
         .await;
+        // tgt's own digest setting is None, which it answers to an offer of CRC32C alone.
+        for key in ["HeaderDigest", "DataDigest"] {
+            tgtadm(
+                control,
+                &[
+                    "--lld", "iscsi", "--op", "update", "--mode", "target", "--tid", "1", "--name",
+                    key, "--value", "CRC32C",
+                ],
+            )
+            .await;
+        }
         tgtadm(
             control,
             &[
@@ -296,25 +319,37 @@ mod tgtd {
         )
         .await;
 
-        // tgt's LUN 0 is its controller; the disk is LUN 1. CRC32C both ways.
+        // tgt's LUN 0 is its controller; the disk is LUN 1. Both digests are offered as
+        // "None,CRC32C": tgt negotiates a discovery session from its global setting, None,
+        // and the normal session from the target's, CRC32C, which is asserted below.
         let (state, id) = client(
             format!("127.0.0.1:{port}"),
             json!({"chap_name": "alice", "chap_secret": "wonderland12",
                    "target_chap_name": "tgt-target", "target_chap_secret": "targetsecret1",
-                   "digests": "crc32c"}),
+                   "digests": "either"}),
             chain(&session_policy(1)),
         )
         .await
         .unwrap();
         let targets = wait_event(&state, id, "iscsi_targets", 0).await;
-        assert_eq!(targets["targets"][0]["name"], TARGET, "{targets}");
+        assert_eq!(
+            targets["targets"][0]["name"],
+            TARGET,
+            "{targets}{}",
+            tgtd_log()
+        );
         let login = wait_event(&state, id, "iscsi_login_result", 0).await;
-        assert_eq!(login["logged_in"], true, "{login}");
-        assert_eq!(login["negotiated"]["data_digest"], "CRC32C", "{login}");
+        assert_eq!(login["logged_in"], true, "{login}{}", tgtd_log());
+        assert_eq!(
+            login["negotiated"]["data_digest"],
+            "CRC32C",
+            "{login}{}",
+            tgtd_log()
+        );
         let r = results(&state, id, 6).await;
-        assert_eq!(r[0]["luns"], json!([0, 1]), "{}", r[0]);
-        assert_eq!(r[3]["data"], "hello from tgt", "{}", r[3]);
-        assert_eq!(r[5]["data"], WRITE_TEXT, "{}", r[5]);
+        assert_eq!(r[0]["luns"], json!([0, 1]), "{}{}", r[0], tgtd_log());
+        assert_eq!(r[3]["data"], "hello from tgt", "{}{}", r[3], tgtd_log());
+        assert_eq!(r[5]["data"], WRITE_TEXT, "{}{}", r[5], tgtd_log());
         wait_for_write(&disk).await;
 
         // A wrong secret is refused by tgtd.
@@ -328,7 +363,7 @@ print(json.dumps({'actions':[{'type':'iscsi_login'}] if i['event_type_id']=='isc
         .await
         .unwrap();
         let login = wait_event(&state, id, "iscsi_login_result", 0).await;
-        assert_eq!(login["logged_in"], false, "{login}");
-        assert_eq!(login["status"], "0x0201", "{login}");
+        assert_eq!(login["logged_in"], false, "{login}{}", tgtd_log());
+        assert_eq!(login["status"], "0x0201", "{login}{}", tgtd_log());
     }
 }
