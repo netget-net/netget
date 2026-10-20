@@ -174,9 +174,13 @@ impl Session {
         let mut chap_state: Option<(u8, Vec<u8>)> = None; // our challenge to the target
         let mut auth_done = config.chap.is_none();
         for _ in 0..MAX_LOGIN_ROUNDS {
-            // Ask to move on whenever nothing is left to settle in this stage.
+            // Ask to move on whenever nothing is left to settle in this stage. The PDU that
+            // carries our CHAP_R asks too, mutual challenge or not (RFC 7143's own example):
+            // tgt is done with the security stage once CHAP_R verifies, and refuses any later
+            // security-stage PDU with 0x0200. The target's answer to our challenge then rides
+            // on its transit response, and is checked before the operational stage begins.
             let transit = match csg {
-                stage::SECURITY if auth_done => Some(stage::OPERATIONAL),
+                stage::SECURITY if auth_done || chap_state.is_some() => Some(stage::OPERATIONAL),
                 stage::SECURITY => None,
                 _ => Some(stage::FULL_FEATURE),
             };
@@ -297,12 +301,28 @@ impl Session {
                     _ if (csg != stage::SECURITY || text::get(&keys, "AuthMethod").is_none())
                         && !matches!(v.as_str(), "NotUnderstood" | "Irrelevant" | "Reject") =>
                     {
+                        // The answer must be one of the values offered (RFC 7143 6.2). tgt
+                        // answers its own default, None, to an offer of CRC32C alone; taking
+                        // that would run without the digests the operator asked for.
+                        if matches!(k.as_str(), "HeaderDigest" | "DataDigest") {
+                            let offered = config.digests.offer();
+                            ensure!(
+                                offered.split(',').any(|o| o == v),
+                                "the target answered {k}={v}, which was not offered ({offered})"
+                            );
+                        }
                         text::apply_as_initiator(&mut params, k, v)
                             .map_err(|e| anyhow::anyhow!("the target answered {e}"))?;
                     }
                     _ => {}
                 }
             }
+            // A target that answers our mutual challenge with anything but CHAP_R has not
+            // proved itself, so the login goes no further.
+            ensure!(
+                chap_state.is_none(),
+                "the target did not answer the mutual CHAP challenge"
+            );
             // The challenge: answer it, and challenge back for mutual CHAP.
             if let (Some(i), Some(c)) = (text::get(&keys, "CHAP_I"), text::get(&keys, "CHAP_C")) {
                 if text::get(&keys, "CHAP_R").is_none() {

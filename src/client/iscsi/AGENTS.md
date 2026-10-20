@@ -29,9 +29,16 @@ and are zero-padded to whole blocks, whose size comes from READ CAPACITY (asked 
 **Login.** InitiatorName (default `iqn.2026-10.net.netget:initiator`), AuthMethod CHAP,None when
 `chap_name`/`chap_secret` are set; CHAP MD5; with `target_chap_secret` (and optionally
 `target_chap_name`) the target is challenged back and must prove the secret, or the login is
-abandoned. Operational offer: digests per `digests` (either → `None,CRC32C`, crc32c, none),
+abandoned. The PDU carrying CHAP_N/CHAP_R (and our CHAP_I/CHAP_C) also asks to transit to the
+operational stage, as RFC 7143's own example does: tgt considers the security stage over once
+CHAP_R verifies and answers any later security-stage PDU with 0x0200 (initiator error), so an
+empty "now let me move on" PDU is refused there. The target's CHAP_R rides on its transit
+response and is checked before the operational stage starts; a response without it ends the
+login. Operational offer: digests per `digests` (either → `None,CRC32C`, crc32c, none),
 InitialR2T No, ImmediateData Yes, bursts 256 KiB / 64 KiB, MaxRecvDataSegmentLength 256 KiB,
-ERL 0. Values the target answers outside what was offered are refused. A final response
+ERL 0. A digest answer outside what was offered is refused (tgt answers its own default, None,
+to an offer of CRC32C alone — taking it would drop the digests the operator asked for); the
+other keys are bounded by `apply_as_initiator`. A final response
 without a TSIH (gotgt 0.2.2 sends 0) is accepted and reported as `tsih: 0`.
 
 **Commands.** Immediate data and unsolicited Data-Out as negotiated, R2Ts answered within the

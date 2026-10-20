@@ -25,9 +25,15 @@ calls: zero.
   first sector and writes block 100, which the test reads back from the file. gotgt has no
   discovery session (it closes a login without a TargetName unanswered), so this session logs
   straight in; it also finishes logins with TSIH 0, which the initiator reports.
-- **tgtd** (Ubuntu `tgt`, Linux, as root in the `iscsi` pair job): `tgtd -f` on its own control
-  port, a target with the backing file as LUN 1, CHAP and outgoing (mutual) accounts bound;
-  discovery, login with CHAP + mutual CHAP + CRC32C, the same session against LUN 1 (LUN 0 is
-  tgt's controller), the write found in the file, and a wrong secret refused with 0x0201.
+- **tgtd** (Ubuntu `tgt`, Linux, as root in the `iscsi` pair job): `tgtd -f -d 1` on its own
+  control port, a target with the backing file as LUN 1, CHAP and outgoing (mutual) accounts
+  bound, and the target's HeaderDigest/DataDigest set to CRC32C (tgt's default is None);
+  discovery, login with CHAP + mutual CHAP, CRC32C asserted on the normal session (the client
+  offers `None,CRC32C`, because tgt negotiates discovery from its global None), the same
+  session against LUN 1 (LUN 0 is tgt's controller), the write found in the file, and a wrong
+  secret refused with 0x0201. tgtd's debug output goes to a file in the test's temp dir and is
+  printed with every failed assertion: tgtd says why it refused a login only there. Its
+  `Login request (security negotiation): N` lines name the connection state (`iscsid.h`
+  `STATE_*`); a security-stage PDU arriving in state 3 (`STATE_SECURITY_DONE`) is its 0x0200.
 
 Both fail, never skip, when their target is missing.
