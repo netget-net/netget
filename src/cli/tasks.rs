@@ -242,7 +242,7 @@ async fn execute_single_task(
 
     if failures.is_empty() {
         let _ = status_tx.send(format!(
-            "[TASK] Task '{}' completed ({} action(s))",
+            "[TASK] Task '{}' completed successfully ({} action(s))",
             task.name,
             actions.len()
         ));

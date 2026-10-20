@@ -100,8 +100,10 @@ async fn memory_and_instruction_are_not_html_escaped_in_the_event_prompt() {
     let current = &prompt[prompt
         .find("# Current State")
         .expect("the Current State section")..];
+    // Memory is fenced so a multi-line value cannot break out of its bullet; inside the
+    // fence it must still be the exact text, quotes, ampersands and angle brackets included.
     assert!(
-        current.contains(&format!("- **Memory**: {memory}")),
+        current.contains(&format!("- **Memory**:\n```text\n{memory}\n```")),
         "memory is not verbatim:\n{current}"
     );
     assert!(
