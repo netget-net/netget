@@ -215,6 +215,8 @@ pub use mdns::actions::MdnsClientProtocol;
 
 // mqtt client
 #[cfg(not(target_arch = "wasm32"))]
+pub mod iscsi;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod managesieve;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod mqtt;

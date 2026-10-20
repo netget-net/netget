@@ -503,6 +503,10 @@ impl ClientRegistry {
         ));
         #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
+            crate::client::iscsi::actions::IscsiClientProtocol::new(),
+        ));
+        #[cfg(not(target_arch = "wasm32"))]
+        self.register(Arc::new(
             crate::client::managesieve::actions::ManageSieveClientProtocol::new(),
         ));
         #[cfg(not(target_arch = "wasm32"))]
@@ -1272,6 +1276,7 @@ pub(crate) const ALL_KNOWN_CLIENT_PROTOCOLS: &[(&str, &str)] = &[
     ("BMP", "a native build (not the browser)"),
     ("MQTT-SN", "a native build (not the browser)"),
     ("NBD", "a native build (not the browser)"),
+    ("iSCSI", "a native build (not the browser)"),
     ("ManageSieve", "a native build (not the browser)"),
     ("Zenoh", "a native build (not the browser)"),
     ("LwM2M", "a native build (not the browser)"),

@@ -158,6 +158,7 @@ fn canonical_port(protocol: &str, framing: Framing) -> u16 {
         "snmp" => 161,
         "syslog" => 514,
         "radius" => 1812,
+        "iscsi" => 3260,
         "tftp" => 69,
         "coap" => 5683,
         "stun" | "turn" => 3478,
