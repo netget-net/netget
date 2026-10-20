@@ -51,8 +51,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Pattern for matching events
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
+///
+/// On the wire a pattern is the string the operator wrote: an event id, or `"*"` for every
+/// event. Serde is implemented by hand so the two directions agree: a derived `untagged`
+/// encoding writes the wildcard as `null` and reads `"*"` back as an event literally named
+/// `*`, so a configuration sent through JSON and back (a restart, the dashboard's driver
+/// swap, status output) would change meaning.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EventPattern {
     /// Match a specific event type ID
     Specific(String),
@@ -77,6 +82,26 @@ impl EventPattern {
     /// Create a specific pattern
     pub fn specific(event_type_id: impl Into<String>) -> Self {
         EventPattern::Specific(event_type_id.into())
+    }
+}
+
+impl Serialize for EventPattern {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            EventPattern::Specific(id) => serializer.serialize_str(id),
+            EventPattern::Wildcard => serializer.serialize_str("*"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for EventPattern {
+    /// `"*"` and `"all"` are the wildcard, as in [`From<&str>`]; so is `null`, matching
+    /// `parse_event_handlers`, where a rule without a pattern matches every event.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match Option::<String>::deserialize(deserializer)? {
+            Some(pattern) => EventPattern::from(pattern),
+            None => EventPattern::Wildcard,
+        })
     }
 }
 
