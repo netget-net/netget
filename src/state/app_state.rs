@@ -1452,15 +1452,6 @@ impl AppState {
         }
     }
 
-    /// Get first server ID (synchronous version for use in non-async contexts)
-    ///
-    /// This is a non-blocking helper that attempts to get the first server ID
-    /// Returns None if unable to acquire lock or no servers exist
-    pub fn get_first_server_id_sync(&self) -> Option<ServerId> {
-        // Try non-blocking read
-        self.inner.try_read().ok()?.servers.keys().next().copied()
-    }
-
     /// Get the Ollama model name
     pub async fn get_ollama_model(&self) -> Option<String> {
         self.inner.read().await.ollama_model.clone()
@@ -2724,7 +2715,9 @@ impl AppState {
 
     // ========== Backwards Compatibility Methods ==========
     // These methods help bridge old single-server code to new multi-server architecture
-    // They typically operate on "the first server" or aggregate across all servers
+    // They typically operate on "the first server" or aggregate across all servers.
+    // "First" is the lowest id, the instance started earliest: the maps are HashMaps, whose
+    // iteration order is arbitrary, so `.next()` would pick a different server from run to run.
 
     /// Get the first server's port (for backwards compat)
     pub async fn get_port(&self) -> Option<u16> {
@@ -2733,7 +2726,7 @@ impl AppState {
             .await
             .servers
             .values()
-            .next()
+            .min_by_key(|s| s.id)
             .map(|s| s.port)
     }
 
@@ -2744,7 +2737,7 @@ impl AppState {
             .await
             .servers
             .values()
-            .next()
+            .min_by_key(|s| s.id)
             .map(|s| s.protocol_name.clone())
     }
 
@@ -2755,7 +2748,7 @@ impl AppState {
             .await
             .servers
             .values()
-            .next()
+            .min_by_key(|s| s.id)
             .map(|s| s.instruction.clone())
             .unwrap_or_default()
     }
@@ -2767,19 +2760,19 @@ impl AppState {
             .await
             .servers
             .values()
-            .next()
+            .min_by_key(|s| s.id)
             .map(|s| s.memory.clone())
             .unwrap_or_default()
     }
 
     /// Get the first server's ID (for backwards compat)
     pub async fn get_first_server_id(&self) -> Option<ServerId> {
-        self.inner.read().await.servers.keys().next().copied()
+        self.inner.read().await.servers.keys().min().copied()
     }
 
     /// Get the first client's ID (for backwards compat)
     pub async fn get_first_client_id(&self) -> Option<ClientId> {
-        self.inner.read().await.clients.keys().next().copied()
+        self.inner.read().await.clients.keys().min().copied()
     }
 
     /// Get local address of first server (for backwards compat)
@@ -2789,7 +2782,7 @@ impl AppState {
             .await
             .servers
             .values()
-            .next()
+            .min_by_key(|s| s.id)
             .and_then(|s| s.local_addr)
     }
 

@@ -188,11 +188,10 @@ async fn send_to_client_puts_the_action_on_the_wire() {
     })
     .await;
     // …and its echo came back to the client.
-    let echo_hex = hex::encode("ping from mcp\n");
     wait_for_log(&state, "the client's echoed tcp_data_received", |e| {
         e.client_id == Some(client_id as u32)
             && e.event_type == "tcp_data_received"
-            && e.request.get("data_hex").and_then(|d| d.as_str()) == Some(echo_hex.as_str())
+            && e.request.get("data").and_then(|d| d.as_str()) == Some("ping from mcp\n")
     })
     .await;
 

@@ -6,7 +6,9 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 /// Unique identifier for a client instance
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct ClientId(u32);
 
 impl ClientId {

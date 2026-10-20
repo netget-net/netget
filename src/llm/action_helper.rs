@@ -1337,7 +1337,7 @@ async fn call_llm_for_client_inner(
 /// write it. A model told "remember what you learned" could only answer with a protocol
 /// action, and if it reached for `set_memory` anyway the name was rejected as unknown and the
 /// call retried. The executor half of this was worse: with no `server_id`, `SetMemory` fell
-/// through to `get_first_server_id_sync()` and wrote the client's note into whichever *server*
+/// through to the first server id and wrote the client's note into whichever *server*
 /// happened to be first.
 pub const CLIENT_COMMON_ACTION_NAMES: &[&str] = &[
     "provide_feedback",

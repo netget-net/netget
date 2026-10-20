@@ -123,43 +123,27 @@ async fn session(
     calls
 }
 
-fn hex(s: &str) -> String {
-    s.bytes().map(|b| format!("{b:02x}")).collect()
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcp_client_joins_or_separates_what_arrived_during_a_call() {
-    let separate = session(
-        "tcp",
-        "tcp_data_received",
-        ("data_hex", &hex("first")),
-        false,
-    )
-    .await;
+    let separate = session("tcp", "tcp_data_received", ("data", "first"), false).await;
     let payloads: Vec<String> = separate
         .iter()
-        .map(|(d, _)| d["data_hex"].as_str().unwrap_or_default().to_string())
+        .map(|(d, _)| d["data"].as_str().unwrap_or_default().to_string())
         .collect();
     assert_eq!(
         payloads,
-        vec![hex("first"), hex("second"), hex("third")],
+        vec!["first", "second", "third"],
         "CONTROL FAILED: with batching off each read must be answered on its own"
     );
 
-    let batched = session(
-        "tcp",
-        "tcp_data_received",
-        ("data_hex", &hex("first")),
-        true,
-    )
-    .await;
+    let batched = session("tcp", "tcp_data_received", ("data", "first"), true).await;
     let payloads: Vec<String> = batched
         .iter()
-        .map(|(d, _)| d["data_hex"].as_str().unwrap_or_default().to_string())
+        .map(|(d, _)| d["data"].as_str().unwrap_or_default().to_string())
         .collect();
     assert_eq!(
         payloads,
-        vec![hex("first"), hex("secondthird")],
+        vec!["first", "secondthird"],
         "with batching on everything that arrived during the call is the next payload"
     );
 }

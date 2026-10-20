@@ -231,3 +231,39 @@ fn llm_handler_requires_an_instruction() {
     .expect_err("an llm handler with no instruction must not be accepted");
     assert!(err.to_string().contains("instruction"), "{err}");
 }
+
+/// A routing table survives JSON both ways: the wildcard is written `"*"` and `"*"` reads back
+/// as the wildcard, not as an event named `*`. Restarts and the dashboard's driver swap send
+/// the table through JSON, so a lossy encoding changes what the instance answers.
+#[test]
+fn event_patterns_round_trip_through_json() {
+    use netget::scripting::{EventHandler, EventHandlerType, EventPattern};
+
+    let rule = EventHandler::new(
+        EventPattern::wildcard(),
+        EventHandlerType::Static { actions: vec![] },
+    );
+    let json = serde_json::to_value(&rule).expect("serialize");
+    assert_eq!(json["event_pattern"], "*", "{json}");
+    let back: EventHandler = serde_json::from_value(json).expect("deserialize");
+    assert_eq!(back.event_pattern, EventPattern::Wildcard);
+    assert!(back.matches("tcp_data_received"));
+
+    for (written, expected) in [
+        (serde_json::json!("*"), EventPattern::Wildcard),
+        (serde_json::json!("all"), EventPattern::Wildcard),
+        (serde_json::Value::Null, EventPattern::Wildcard),
+        (
+            serde_json::json!("http_request"),
+            EventPattern::specific("http_request"),
+        ),
+    ] {
+        let pattern: EventPattern = serde_json::from_value(written.clone()).expect("pattern");
+        assert_eq!(pattern, expected, "{written}");
+        assert_eq!(
+            serde_json::from_value::<EventPattern>(serde_json::to_value(&pattern).unwrap())
+                .unwrap(),
+            expected
+        );
+    }
+}

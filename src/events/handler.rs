@@ -798,20 +798,27 @@ impl EventHandler {
                         }
                     }
 
-                    // Then execute all other actions (including append_to_log)
+                    // Then everything the loop above did not run: actions that are not common
+                    // actions, and the two common actions it leaves to the executor. The loop
+                    // has already run every other common action, and running one again would
+                    // land each append_memory twice and print each show_message twice.
                     let protocol_ref: Option<&dyn Server> =
                         protocol.as_ref().map(|p| p.as_ref() as &dyn Server);
+                    let remaining: Vec<serde_json::Value> = action_values
+                        .iter()
+                        .filter(|action| {
+                            matches!(
+                                CommonAction::from_json(action),
+                                Err(_)
+                                    | Ok(CommonAction::AppendToLog { .. })
+                                    | Ok(CommonAction::ProvideFeedback { .. })
+                            )
+                        })
+                        .cloned()
+                        .collect();
 
                     // User input context - no specific server/client (global actions)
-                    match execute_actions(
-                        action_values.clone(),
-                        &self.state,
-                        protocol_ref,
-                        None,
-                        None,
-                    )
-                    .await
-                    {
+                    match execute_actions(remaining, &self.state, protocol_ref, None, None).await {
                         Ok(result) => {
                             // Display messages
                             for msg in result.messages {
@@ -1138,12 +1145,20 @@ impl EventHandler {
             // Memory actions need server_id context
             CommonAction::SetMemory { value } => {
                 if let Some(server_id) = self.state.get_first_server_id().await {
-                    self.state.set_memory(server_id, value).await;
+                    let bounded = crate::llm::actions::executor::bound_server_memory(value);
+                    self.state.set_memory(server_id, bounded).await;
                 }
             }
             CommonAction::AppendMemory { value } => {
                 if let Some(server_id) = self.state.get_first_server_id().await {
-                    self.state.append_memory(server_id, value).await;
+                    let current = self.state.get_memory(server_id).await.unwrap_or_default();
+                    let combined = if current.is_empty() {
+                        value
+                    } else {
+                        format!("{current}\n{value}")
+                    };
+                    let bounded = crate::llm::actions::executor::bound_server_memory(combined);
+                    self.state.set_memory(server_id, bounded).await;
                 }
             }
             CommonAction::AppendToLog { .. } => {
