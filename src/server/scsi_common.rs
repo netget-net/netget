@@ -83,6 +83,11 @@ impl Sense {
     pub const INVALID_OPCODE: Sense = Sense::new(sense_key::ILLEGAL_REQUEST, 0x20, 0x00);
     pub const LBA_OUT_OF_RANGE: Sense = Sense::new(sense_key::ILLEGAL_REQUEST, 0x21, 0x00);
     pub const INVALID_FIELD_IN_CDB: Sense = Sense::new(sense_key::ILLEGAL_REQUEST, 0x24, 0x00);
+    /// iSCSI's "unexpected unsolicited data" (RFC 7143 §11.4.7.2).
+    pub const UNEXPECTED_UNSOLICITED_DATA: Sense =
+        Sense::new(sense_key::ABORTED_COMMAND, 0x0C, 0x0C);
+    /// DATA PHASE ERROR: write data out of sequence.
+    pub const DATA_PHASE_ERROR: Sense = Sense::new(sense_key::ABORTED_COMMAND, 0x4B, 0x00);
     pub const INVALID_FIELD_IN_IU: Sense = Sense::new(sense_key::ILLEGAL_REQUEST, 0x0E, 0x03);
     pub const LUN_NOT_SUPPORTED: Sense = Sense::new(sense_key::ILLEGAL_REQUEST, 0x25, 0x00);
     pub const SAVING_NOT_SUPPORTED: Sense = Sense::new(sense_key::ILLEGAL_REQUEST, 0x39, 0x00);
@@ -206,7 +211,9 @@ pub fn asc_meaning(asc: u8, ascq: u8) -> String {
         (0x04, 0x00) => "LOGICAL UNIT NOT READY",
         (0x08, 0x00) => "LOGICAL UNIT COMMUNICATION FAILURE",
         (0x0C, 0x00) => "WRITE ERROR",
+        (0x0C, 0x0C) => "WRITE ERROR - UNEXPECTED UNSOLICITED DATA",
         (0x0E, 0x03) => "INVALID FIELD IN INFORMATION UNIT",
+        (0x4B, 0x00) => "DATA PHASE ERROR",
         (0x11, 0x00) => "UNRECOVERED READ ERROR",
         (0x1A, 0x00) => "PARAMETER LIST LENGTH ERROR",
         (0x20, 0x00) => "INVALID COMMAND OPERATION CODE",

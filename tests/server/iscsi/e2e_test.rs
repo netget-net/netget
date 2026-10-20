@@ -64,18 +64,40 @@ async fn discovery_lists_the_models_targets_and_tshark_reads_the_session() {
     assert_eq!(events(&srv.state, srv.id, "iscsi_discovery").await.len(), 1);
 
     oracle(&raw).also_named("iscsi").assert_clean();
-    let fields = oracle(&raw)
-        .fields(&["iscsi.login.send_targets", "iscsi.login.target_name"])
-        .unwrap();
+    // Wireshark 4.6 gives the well-known keys fields of their own (iscsi.login.*); 4.2, which
+    // Ubuntu 24.04 ships, has only iscsi.keyvalue, one "Key=Value" string per pair, and refuses
+    // the 4.6 names outright. Read whichever this tshark has.
+    let (send_targets, target_names) =
+        match oracle(&raw).fields(&["iscsi.login.send_targets", "iscsi.login.target_name"]) {
+            Ok(rows) => (
+                rows.iter().map(|r| r[0].clone()).collect::<Vec<_>>(),
+                rows.iter().map(|r| r[1].clone()).collect::<Vec<_>>(),
+            ),
+            Err(e) if e.contains("aren't valid") => {
+                let rows = oracle(&raw).fields(&["iscsi.keyvalue"]).unwrap();
+                let pairs: Vec<String> = rows
+                    .iter()
+                    .flat_map(|r| r[0].split(',').map(str::to_string).collect::<Vec<_>>())
+                    .collect();
+                let of = |key: &str| {
+                    pairs
+                        .iter()
+                        .filter_map(|p| p.strip_prefix(key).map(str::to_string))
+                        .collect::<Vec<_>>()
+                };
+                (of("SendTargets="), vec![of("TargetName=").join(",")])
+            }
+            Err(e) => panic!("{e}"),
+        };
     assert!(
-        fields.iter().any(|r| r[0] == "All"),
-        "tshark reads SendTargets=All: {fields:?}"
+        send_targets.iter().any(|v| v == "All"),
+        "tshark reads SendTargets=All: {send_targets:?}"
     );
     assert!(
-        fields
+        target_names
             .iter()
-            .any(|r| r[1] == "iqn.2026-10.net.netget:disk0,iqn.2026-10.net.netget:backup"),
-        "tshark reads both TargetName keys of the answer: {fields:?}"
+            .any(|v| v == "iqn.2026-10.net.netget:disk0,iqn.2026-10.net.netget:backup"),
+        "tshark reads both TargetName keys of the answer: {target_names:?}"
     );
 }
 
@@ -326,25 +348,30 @@ async fn r2t_solicits_write_data_in_bursts() {
     let (back, _) = raw.read_cmd(0, 2560, &read10(300, 5)).await;
     assert_eq!(back, data);
 
-    // A Data-Out whose offset skips ahead is a protocol error: Reject, and the connection ends.
-    let (b, itt) = raw.scsi_bhs(0xA0, 0, 512, &write10(400, 1));
-    raw.send(b, &[]).await;
-    let g = raw.recv().await;
-    assert_eq!(g.opcode(), 0x31);
-    let mut d = [0u8; 48];
-    d[0] = 0x05;
-    d[1] = 0x80;
-    d[16..20].copy_from_slice(&itt.to_be_bytes());
-    d[20..24].copy_from_slice(&g.u32(20).to_be_bytes());
-    d[40..44].copy_from_slice(&256u32.to_be_bytes());
-    raw.send(d, &[0u8; 256]).await;
-    let g = raw.recv().await;
-    assert_eq!(
-        (g.opcode(), g.bhs[2]),
-        (0x3f, 0x04),
-        "Reject: protocol error"
-    );
-    assert!(raw.closed().await);
+    // A Data-Out whose offset skips ahead, and one whose DataSN is wrong, are protocol errors:
+    // their task ends with CHECK CONDITION, nothing written, and the session goes on (no
+    // Reject and no close: libiscsi's iSCSIDataSnInvalid hangs on Linux after either).
+    for (lba, data_sn, offset) in [(400u32, 0u32, 256u32), (401, 7, 0)] {
+        let (b, itt) = raw.scsi_bhs(0xA0, 0, 512, &write10(lba, 1));
+        raw.send(b, &[]).await;
+        let g = raw.recv().await;
+        assert_eq!(g.opcode(), 0x31);
+        let mut d = [0u8; 48];
+        d[0] = 0x05;
+        d[1] = 0x80;
+        d[16..20].copy_from_slice(&itt.to_be_bytes());
+        d[20..24].copy_from_slice(&g.u32(20).to_be_bytes());
+        d[36..40].copy_from_slice(&data_sn.to_be_bytes());
+        d[40..44].copy_from_slice(&offset.to_be_bytes());
+        raw.send(d, &[0x5Au8; 512][..512 - offset as usize]).await;
+        let g = raw.recv().await;
+        assert_eq!((g.opcode(), g.itt()), (0x21, itt), "the task's own answer");
+        assert_eq!(g.status(), 2);
+        assert_eq!(g.sense(), Some((0x0B, 0x4B, 0x00)), "DATA PHASE ERROR");
+    }
+    let (back, _) = raw.read_cmd(0, 1024, &read10(400, 2)).await;
+    assert!(back.iter().all(|b| *b == 0), "nothing was written");
+    assert_eq!(raw.tur(0).await.status(), 0, "the session goes on");
     oracle(&raw).assert_clean();
 }
 
