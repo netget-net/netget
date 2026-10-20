@@ -9504,7 +9504,7 @@ jobs:
             -- --test-threads=32
   nvme-tcp:
     if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'nvme-tcp')
-    name: NVMe/TCP target against the Linux kernel host, host against the Linux kernel target
+    name: NVMe/TCP target against the Linux kernel host and SPDK, host against the Linux kernel target and SPDK nvmf_tgt
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -9513,6 +9513,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: protocol-pairs-${{ github.job }}
+      - name: Cache the SPDK v26.09 build
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/spdk-peer/spdk
+          key: spdk-v26.09-0bbb7fe-${{ runner.os }}-${{ runner.arch }}-x86-64-v2
       - name: Install nvme-cli and tshark; load nvme-tcp, nvmet and nvmet-tcp
         run: |
           set -euo pipefail
@@ -9535,12 +9540,17 @@ jobs:
           test -d /sys/kernel/config/nvmet
           dpkg-query -W nvme-cli tshark
           nvme version
+          # SPDK: a second, userspace host (spdk_nvme_identify, spdk_dd, spdk_nvme_perf) and
+          # target (nvmf_tgt), run without hugepages.
+          spdk=$(sh scripts/test-peers/build-spdk.sh "$RUNNER_TEMP/spdk-peer" | tail -1)
+          echo "NETGET_SPDK_DIR=$spdk" >> "$GITHUB_ENV"
           # nvme connect and configfs need root.
           sudo -n true
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
           command -v nvme tshark
+          test -x "$NETGET_SPDK_DIR/build/bin/nvmf_tgt"
           # cargo builds as the runner user and runs each test binary as root, with the PATH
           # that finds the peers.
           export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER="sudo -E env PATH=$PATH"

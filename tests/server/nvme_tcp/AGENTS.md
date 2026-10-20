@@ -39,4 +39,28 @@ subsystem gone. A second test has the kernel refused a subsystem the model does 
 failure each prints `nvme list -v`, `nvme list-subsys`, the sysfs subsystems and controllers
 (state, transport, address) and the tail of `dmesg`.
 
-Every peer test fails, never skips, when nvme-cli, root or the module is missing.
+## `spdk_host_test.rs` — SPDK's userspace host
+
+Linux, in the `nvme-tcp` pair job, SPDK v26.09 built by `scripts/test-peers/build-spdk.sh`
+(`NETGET_SPDK_DIR`), every tool with `--no-huge`: `spdk_nvme_identify` reads the discovery log
+and identifies the controller (model, serial, subsystem NQN) and both namespaces' sizes;
+`spdk_dd` reads the first 8 KiB of namespace 1 through `bdev_nvme_attach_controller` over TCP,
+compared with the description; `spdk_nvme_perf` runs 8 KiB random reads and writes, 16
+outstanding, for 2 s, and nothing fails during the run. The target's own `decision=` lines go to
+stderr, so a failure shows both sides.
+
+**SPDK found a defect.** Shutting a controller down, SPDK completes its outstanding
+Asynchronous Event Requests itself and reuses their CIDs for the Property Get/Set of CC.SHN; the
+target answered COMMAND ID CONFLICT and SPDK logged "Failed to read the CC register". A held
+AER's CID coming back now drops that AER (`an_association_serves_the_described_namespaces`
+pins it).
+
+**One SPDK log line is not a fault.** After perf's totals SPDK logs "CQ transport error -6" for
+its own I/O qpair. A loopback capture shows SPDK sending its FIN first and the target answering
+with its own 50 µs later, so the line is SPDK's teardown; the test allows exactly that line after
+the totals and nothing else. Against the kernel target SPDK does not log it.
+
+Running these in a rootless container needs `--security-opt seccomp=unconfined`: spdk_dd's AIO
+output was refused with EPERM under the default profile.
+
+Every peer test fails, never skips, when nvme-cli, root, the module or SPDK is missing.

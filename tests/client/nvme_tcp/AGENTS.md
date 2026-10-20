@@ -24,8 +24,24 @@ TCP port on 127.0.0.1 — and torn down in reverse when the test ends.
 | Test | What it pins |
 |---|---|
 | `the_kernel_target_serves_the_models_session_from_its_backing_file` | nvmet's discovery log lists the subsystem; the whole session above against nvmet; the read is the file's bytes, and the model's write lands in the file |
-| `the_kernel_target_with_digests_and_a_large_write` | CRC32C digests with nvmet; an 8 KiB write and read back; LBA OUT OF RANGE; Identify Controller's SUBNQN; 7 s idle past a 5 s KATO with the association held by Keep Alive; the write in the backing file |
+| `the_kernel_target_with_digests_and_a_large_write` | CRC32C digests with nvmet; an 8 KiB write and read back; a read past the end refused by name, with no data; Identify Controller's SUBNQN; 7 s idle past a 5 s KATO with the association held by Keep Alive; the write in the backing file |
 | `the_kernel_target_refuses_a_host_it_does_not_allow` | CONNECT INVALID HOST for a host not in `allowed_hosts` |
 
-On failure each prints the configfs tree it made and the tail of `dmesg`. Every test fails,
-never skips, when root, the modules or configfs are missing.
+On failure each prints the configfs tree it made and the tail of `dmesg`.
+
+nvmet taught two things the tests now encode: its discovery log lists itself first (as the
+current discovery subsystem), so the session policy picks the first NVM subsystem; and its file
+backend answers a read past the end with CAPACITY EXCEEDED rather than LBA OUT OF RANGE, and
+takes the backing file system's block size (4096 on the VM), which the tests read rather than
+assume.
+
+## `spdk_target_test.rs` — SPDK's nvmf_tgt
+
+Linux, in the `nvme-tcp` pair job, SPDK v26.09 built by `scripts/test-peers/build-spdk.sh`
+(`NETGET_SPDK_DIR`): `nvmf_tgt --no-huge` configured through `scripts/rpc.py` (a TCP transport,
+an AIO bdev over a 4 MiB file the test wrote, a subsystem with serial and model, listeners for it
+and for the discovery service), then the whole session above — the discovery log, the
+controller's serial and model, the file's bytes read and the model's write landing in the file.
+On failure it prints nvmf_tgt's log.
+
+Every test fails, never skips, when root, the modules, configfs or SPDK is missing.

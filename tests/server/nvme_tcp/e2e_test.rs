@@ -340,8 +340,9 @@ async fn an_association_serves_the_described_namespaces() {
     let (_, c) = admin.get_log(0x05, 0, 4096).await;
     assert_eq!(c.sc(), INVALID_LOG_PAGE);
     // An Asynchronous Event Request is held; the fifth is over AERL.
+    let mut held = Vec::new();
     for _ in 0..4 {
-        admin.capsule(&Sqe::new(0x0C, 0), &[]).await;
+        held.push(admin.capsule(&Sqe::new(0x0C, 0), &[]).await);
     }
     assert!(
         admin
@@ -352,6 +353,21 @@ async fn an_association_serves_the_described_namespaces() {
     );
     let (_, c) = admin.cmd(&Sqe::new(0x0C, 0), &[]).await;
     assert_eq!(c.sc(), AER_LIMIT);
+    // A held AER's CID coming back means the host gave the AER up (SPDK does this when it
+    // shuts a controller down): the command runs, and the AER's place is free again.
+    let next = admin.cid;
+    admin.cid = held[0] - 1;
+    let (_, c) = admin.cmd(&Sqe::new(0x18, 0), &[]).await;
+    assert!(c.ok(), "Keep Alive on a held AER's CID: {c:?}");
+    admin.cid = next;
+    let aer = admin.capsule(&Sqe::new(0x0C, 0), &[]).await;
+    assert!(
+        admin
+            .recv_within(Duration::from_millis(300))
+            .await
+            .is_none(),
+        "AER {aer} is held again, within AERL"
+    );
     assert_eq!(
         events(&srv.state, srv.id, "nvme_tcp_connect").await.len(),
         1,

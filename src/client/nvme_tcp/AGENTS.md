@@ -45,7 +45,8 @@ from Identify Namespace (asked once per NSID).
 `MAX_FOLLOWUP_DEPTH` (16) follow-ups — a whole discover, connect, identify, read, write, read
 back, health log, flush and disconnect session is nine.
 
-**Evidence.** `tests/client/nvme_tcp`: NetGet's own target (regression, not evidence) and the
+**Evidence.** `tests/client/nvme_tcp`: NetGet's own target (regression, not evidence), the
 Linux kernel target (`nvmet` + `nvmet-tcp` configured through configfs, a file-backed namespace
-read back from the file), as root in the `nvme-tcp` pair job. Experimental: one independent
-target family.
+read back from the file, as root) and SPDK v26.09's `nvmf_tgt` (configured through `rpc.py`, an
+AIO bdev over a file, without hugepages), both in the `nvme-tcp` pair job. Experimental: both
+pass on a Linux 7.2 aarch64 kernel, and the pair job had not run in CI when this landed.

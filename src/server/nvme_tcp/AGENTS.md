@@ -79,8 +79,11 @@ CSTS.SHST complete at once.
 - **Digests:** a header digest mismatch is fatal (C2HTermReq FES 03h); a data digest mismatch
   fails that command with TRANSIENT TRANSPORT ERROR and the queue goes on (the PDU was read
   whole). HDGSTF/DDGSTF that disagree with what was negotiated: FES 01h FEI 1.
-- A command ID already outstanding is COMMAND ID CONFLICT; more commands outstanding than the
-  queue holds is fatal (FES 02h).
+- A command ID a write waiting for its data still holds is COMMAND ID CONFLICT. One a held
+  Asynchronous Event Request holds drops that AER and runs: SPDK, shutting a controller down,
+  completes its AERs itself and reuses their CIDs for the Property Get/Set that follow, and a
+  conflict there failed its shutdown. More commands outstanding than the queue holds is fatal
+  (FES 02h).
 
 ## Write handling (the storage question)
 
@@ -101,6 +104,8 @@ model, more than one R2T outstanding per command, the Command Supported and Effe
 
 ## Maturity
 
-Experimental: one independent host family (the Linux kernel's nvme-tcp, driven by nvme-cli) and
-it runs only as root in the `nvme-tcp` pair job. See `tests/server/nvme_tcp/AGENTS.md`. The fuzz
-target is `fuzz/fuzz_targets/nvme_tcp_pdu.rs`.
+Experimental. Two independent hosts pass — the Linux kernel's nvme-tcp (driven by nvme-cli)
+and SPDK v26.09's userspace host — and the pcap oracle (tshark 4.6 and Ubuntu's 4.2.2) is clean,
+all measured on a Linux 7.2 aarch64 kernel in the podman VM. In CI both peers run only in the
+`nvme-tcp` pair job, which had not run when this landed, so the rating waits for it. See
+`tests/server/nvme_tcp/AGENTS.md`. The fuzz target is `fuzz/fuzz_targets/nvme_tcp_pdu.rs`.

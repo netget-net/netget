@@ -963,7 +963,22 @@ impl<'a> Conn<'a> {
                 return Ok(false);
             }
         }
-        if self.pending.contains_key(&cid) || self.aers.contains(&cid) {
+        // A held Asynchronous Event Request whose CID comes back has been given up by the host:
+        // SPDK, shutting a controller down, completes its AERs itself and reuses their CIDs for
+        // the Property Get/Set that follow. Forget the AER and run the command.
+        if let Some(i) = self.aers.iter().position(|a| *a == cid) {
+            self.aers.swap_remove(i);
+            outcome(
+                self.ctx,
+                self.id,
+                "command",
+                "protocol_accept",
+                &format!(
+                    "command ID {cid} reused: the Asynchronous Event Request it named is dropped"
+                ),
+            );
+        }
+        if self.pending.contains_key(&cid) {
             outcome(
                 self.ctx,
                 self.id,
