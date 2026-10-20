@@ -38,7 +38,7 @@ assume.
 ## `spdk_target_test.rs` — SPDK's nvmf_tgt
 
 Linux, in the `nvme-tcp` pair job, SPDK v26.09 built by `scripts/test-peers/build-spdk.sh`
-(`NETGET_SPDK_DIR`): `nvmf_tgt --no-huge` configured through `scripts/rpc.py` (a TCP transport,
+(`NETGET_SPDK_DIR`): `nvmf_tgt --no-huge` configured through SPDK's own rpc.py (a TCP transport,
 an AIO bdev over a 4 MiB file the test wrote, a subsystem with serial and model, listeners for it
 and for the discovery service), then the whole session above — the discovery log, the
 controller's serial and model, the file's bytes read and the model's write landing in the file.

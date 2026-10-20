@@ -191,6 +191,7 @@ export const protocolStacks = [
     ["nsq", "ETH>IP>TCP>NSQ"],
     ["ntp", "ETH>IP>UDP>NTP"],
     ["nut", "ETH>IP>TCP>NUT"],
+    ["nvme_tcp", "ETH>IP>TCP>NVMe/TCP"],
     ["oauth2", "ETH>IP>TCP>HTTP>OAuth2"],
     ["oci-registry", "ETH>IP>TCP>HTTP>OCI"],
     ["ocpp", "ETH>IP>TCP>HTTP>WebSocket>OCPP"],
