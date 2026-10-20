@@ -9423,12 +9423,17 @@ jobs:
           echo exit 101 | sudo tee /usr/sbin/policy-rc.d >/dev/null
           sudo chmod +x /usr/sbin/policy-rc.d
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            open-iscsi tgt tshark build-essential autoconf automake libtool libcunit1-dev \
-            "linux-modules-extra-$(uname -r)"
+            open-iscsi tgt tshark build-essential autoconf automake libtool libcunit1-dev
           sudo rm -f /usr/sbin/policy-rc.d
           for s in tgt iscsid open-iscsi; do sudo systemctl stop "$s" 2>/dev/null || true; done
           # The kernel initiator: its transport module and iscsid, which iscsiadm talks to.
-          sudo modprobe iscsi_tcp
+          # Only reach for linux-modules-extra when the base modules lack iscsi_tcp: a freshly
+          # booted runner kernel can be ahead of the archive, and then that package does not exist.
+          if ! sudo modprobe iscsi_tcp; then
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+              "linux-modules-extra-$(uname -r)"
+            sudo modprobe iscsi_tcp
+          fi
           sudo systemctl start iscsid
           # libiscsi builds into a directory this (non-root) user owns.
           sh scripts/test-peers/build-libiscsi.sh "$RUNNER_TEMP/libiscsi" | tail -1 >> "$GITHUB_PATH"
