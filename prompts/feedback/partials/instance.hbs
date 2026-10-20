@@ -1,0 +1,37 @@
+# The {{{instance_type}}} under review
+
+{{#if instance.kind}}
+- **{{{instance.kind}}} #{{instance.id}}**: {{{instance.protocol}}}, {{{instance.address}}}, status {{{instance.status}}}
+- **History**: {{{instance.history}}}
+- **Batching**: {{{instance.batching}}}
+{{/if}}
+
+## Feedback Instructions
+
+What the operator wants you to watch for and adjust:
+
+{{{feedback_instructions}}}
+
+## Current instruction
+
+{{{instance.instruction}}}
+
+## Current memory
+
+{{#if instance.memory}}
+{{{instance.memory}}}
+{{else}}
+(empty)
+{{/if}}
+{{#if instance.kind}}
+
+## Current event handlers
+
+{{#if instance.event_handlers}}
+Matched in order, first match wins; an event no handler matches is answered by the model with the current instruction.
+
+{{{instance.event_handlers}}}
+{{else}}
+None: every event is answered by the model with the current instruction.
+{{/if}}
+{{/if}}
