@@ -73,6 +73,7 @@ jobs:
           - lorawan_semtech
           - iscsi_pdu
           - nvme_tcp_pdu
+          - fuse_tree_description
           - bgp_message
           - ndef_message
           - nfc_apdu

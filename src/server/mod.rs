@@ -35,6 +35,11 @@ pub mod tls_cert_manager;
 pub mod described_disk;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod scsi_common;
+// A file tree the model describes (directories, files, symlinks, content as described_disk
+// extents) with an in-memory overlay for the changes it accepts, served by the FUSE server.
+// Compiled on every Unix so its bounds are tested and fuzzed off Linux too.
+#[cfg(unix)]
+pub mod described_tree;
 
 pub mod tcp;
 pub use tcp::actions::TcpProtocol;

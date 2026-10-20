@@ -342,6 +342,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "fuse_tree_description"
+path = "fuzz_targets/fuse_tree_description.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "lorawan_semtech"
 path = "fuzz_targets/lorawan_semtech.rs"
 test = false
