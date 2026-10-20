@@ -71,6 +71,7 @@ jobs:
           - nis_yp
           - rsh_handshake
           - lorawan_semtech
+          - iscsi_pdu
           - bgp_message
           - ndef_message
           - nfc_apdu

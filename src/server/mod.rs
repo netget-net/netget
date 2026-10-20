@@ -28,6 +28,14 @@ pub mod http_common;
 // so POP3S could not be built at all.
 pub mod tls_cert_manager;
 
+// A disk the model describes (size, extents, failing regions), served by the block servers
+// (NBD, iSCSI) from the description, and the SCSI command set the USB mass-storage device and
+// the iSCSI target and initiator share.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod described_disk;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod scsi_common;
+
 pub mod tcp;
 pub use tcp::actions::TcpProtocol;
 pub use tcp::TcpServer;
@@ -547,6 +555,8 @@ pub mod nntp;
 pub use nntp::actions::NntpProtocol;
 pub use nntp::NntpServer;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod iscsi;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod managesieve;
 #[cfg(not(target_arch = "wasm32"))]

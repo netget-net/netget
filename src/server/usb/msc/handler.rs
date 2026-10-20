@@ -258,22 +258,17 @@ impl UsbMscHandler {
         let alloc_len = alloc_len as usize;
         debug!("SCSI INQUIRY (alloc_len={})", alloc_len);
 
-        #[rustfmt::skip]
-        let response = vec![
-            0x00, // Direct access block device
-            0x80, // Removable media
-            0x05, // SPC-3 compliant
-            0x02, // Response format (v2)
-            0x1F, // Additional length (31 bytes)
-            0x00, 0x00, 0x00,
-            // Vendor ID (8 bytes, padded with spaces)
-            b'N', b'e', b't', b'G', b'e', b't', b' ', b' ',
-            // Product ID (16 bytes, padded with spaces)
-            b'V', b'i', b'r', b't', b'u', b'a', b'l', b' ',
-            b'D', b'i', b's', b'k', b' ', b' ', b' ', b' ',
-            // Product revision (4 bytes)
-            b'1', b'.', b'0', b' ',
-        ];
+        let response = crate::server::scsi_common::standard_inquiry(
+            &crate::server::scsi_common::Identity {
+                vendor: "NetGet".into(),
+                product: "Virtual Disk".into(),
+                revision: "1.0".into(),
+            },
+            true, // removable media
+            0x05, // SPC-3
+            false,
+            &[],
+        );
 
         self.pending_data = response[..alloc_len.min(response.len())].to_vec();
         self.clear_sense();
@@ -308,11 +303,8 @@ impl UsbMscHandler {
             last_lba, block_size
         );
 
-        let mut response = Vec::with_capacity(8);
-        response.extend_from_slice(&last_lba.to_be_bytes());
-        response.extend_from_slice(&block_size.to_be_bytes());
-
-        self.pending_data = response;
+        self.pending_data =
+            crate::server::scsi_common::read_capacity_10(last_lba as u64, block_size).to_vec();
         self.clear_sense();
         CommandStatusWrapper::STATUS_PASSED
     }
@@ -396,18 +388,12 @@ impl UsbMscHandler {
             self.sense_key, self.sense_asc, self.sense_ascq
         );
 
-        #[rustfmt::skip]
-        let response = vec![
-            0x70,             // Response code (current error)
-            0x00,
-            self.sense_key,   // Sense key
-            0x00, 0x00, 0x00, 0x00,
-            0x0A,             // Additional sense length
-            0x00, 0x00, 0x00, 0x00,
-            self.sense_asc,   // Additional sense code
-            self.sense_ascq,  // Additional sense code qualifier
-            0x00, 0x00, 0x00, 0x00,
-        ];
+        let response = crate::server::scsi_common::fixed_sense(
+            self.sense_key,
+            self.sense_asc,
+            self.sense_ascq,
+        )
+        .to_vec();
 
         self.pending_data = response;
         // Reporting the sense consumes it, which is what a host expects. An ejected medium is

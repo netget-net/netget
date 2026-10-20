@@ -1,7 +1,7 @@
 //! NBD constants (the fixed newstyle handshake, options, transmission) and the read-only export
 //! a handler describes: a size, data extents, fill extents and error regions; everything else
 //! reads as zeroes.
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{ensure, Context, Result};
 use serde_json::Value as Json;
 
 pub const NBDMAGIC: u64 = 0x4e42444d41474943;
@@ -79,9 +79,10 @@ pub const STATE_ZERO: u32 = 2;
 /// One request or option payload at most; a read or block status at most.
 pub const MAX_OPTION: usize = 64 * 1024;
 pub const MAX_REQUEST: u32 = 32 * 1024 * 1024;
+use crate::server::described_disk as disk;
 /// Bytes of explicit content one export may carry, and extents.
-pub const MAX_CONTENT: usize = 16 * 1024 * 1024;
-pub const MAX_EXTENTS: usize = 4096;
+pub use crate::server::described_disk::{Content, Extent, MAX_CONTENT, MAX_EXTENTS};
+use disk::u64_of;
 
 pub fn errno(name: &str) -> Option<u32> {
     Some(match name {
@@ -110,19 +111,6 @@ pub fn errno_name(n: u32) -> String {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum Content {
-    Bytes(Vec<u8>),
-    Fill(u8),
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct Extent {
-    pub offset: u64,
-    pub length: u64,
-    pub content: Content,
-}
-
-#[derive(Clone, Debug, PartialEq)]
 pub struct Export {
     pub size: u64,
     pub description: Option<String>,
@@ -140,84 +128,19 @@ pub enum Piece {
     Hole(u64, u32),
 }
 
-fn u64_of(v: &Json, key: &str) -> Result<u64> {
-    v.get(key)
-        .and_then(Json::as_u64)
-        .with_context(|| format!("{key} is a non-negative number"))
-}
-
 impl Export {
     /// The export an `nbd_export` action describes.
     pub fn from_action(v: &Json) -> Result<Self> {
         let size = u64_of(v, "size")?;
         ensure!(size <= 1 << 40, "size is at most 1 TiB");
-        let mut extents = Vec::new();
-        let mut content = 0usize;
-        let list = |key: &str| -> Result<Vec<Json>> {
-            match v.get(key) {
-                None | Some(Json::Null) => Ok(vec![]),
-                Some(Json::Array(a)) => {
-                    ensure!(
-                        a.len() <= MAX_EXTENTS,
-                        "{key} has more than {MAX_EXTENTS} entries"
-                    );
-                    Ok(a.clone())
-                }
-                _ => bail!("{key} is an array"),
-            }
-        };
-        for e in list("extents")? {
-            let offset = u64_of(&e, "offset")?;
-            let content_of = if let Some(t) = e.get("text").and_then(Json::as_str) {
-                Content::Bytes(t.as_bytes().to_vec())
-            } else if let Some(h) = e.get("hex").and_then(Json::as_str) {
-                Content::Bytes(hex::decode(h).context("hex is not hex")?)
-            } else if let Some(f) = e.get("fill") {
-                Content::Fill(
-                    f.as_u64()
-                        .and_then(|f| u8::try_from(f).ok())
-                        .context("fill is a byte value 0-255")?,
-                )
-            } else {
-                bail!("each extent has text, hex or fill");
-            };
-            let length = match &content_of {
-                Content::Bytes(b) => {
-                    content += b.len();
-                    b.len() as u64
-                }
-                Content::Fill(_) => u64_of(&e, "length")?,
-            };
-            ensure!(
-                content <= MAX_CONTENT,
-                "extents carry more than {MAX_CONTENT} bytes"
-            );
-            ensure!(
-                offset.checked_add(length).is_some_and(|end| end <= size),
-                "an extent at {offset} runs past the export size {size}"
-            );
-            if length > 0 {
-                extents.push(Extent {
-                    offset,
-                    length,
-                    content: content_of,
-                });
-            }
-        }
-        let mut errors = Vec::new();
-        for e in list("errors")? {
-            let (offset, length) = (u64_of(&e, "offset")?, u64_of(&e, "length")?);
-            ensure!(
-                offset.checked_add(length).is_some_and(|end| end <= size),
-                "an error region runs past the export size"
-            );
-            let name = e.get("error").and_then(Json::as_str).unwrap_or("EIO");
-            errors.push((
-                offset,
-                length,
-                errno(name).context("error is EIO, EPERM, ENOMEM, EINVAL or ENOSPC")?,
-            ));
-        }
+        let extents = disk::parse_extents(v, size)?;
+        let errors = disk::parse_errors(
+            v,
+            size,
+            errno,
+            "EIO",
+            "EIO, EPERM, ENOMEM, EINVAL or ENOSPC",
+        )?;
         let bs = v.get("block_size").filter(|b| !b.is_null());
         let get = |k: &str, d: u32| -> Result<u32> {
             match bs.and_then(|b| b.get(k)).filter(|x| !x.is_null()) {
@@ -265,58 +188,17 @@ impl Export {
 
     /// The first errored byte in a range, with its errno.
     pub fn error_in(&self, offset: u64, length: u64) -> Option<(u64, u32)> {
-        self.errors
-            .iter()
-            .filter(|(o, l, _)| *o < offset + length && offset < o + l)
-            .map(|(o, _, e)| ((*o).max(offset), *e))
-            .min_by_key(|(o, _)| *o)
+        disk::error_in(&self.errors, offset, length)
     }
 
     /// The bytes of a range, zeroes where no extent covers it.
     pub fn read(&self, offset: u64, length: u32) -> Vec<u8> {
-        let mut out = vec![0u8; length as usize];
-        let end = offset + length as u64;
-        for e in &self.extents {
-            let (s, t) = (e.offset.max(offset), (e.offset + e.length).min(end));
-            if s >= t {
-                continue;
-            }
-            let dst = &mut out[(s - offset) as usize..(t - offset) as usize];
-            match &e.content {
-                Content::Bytes(b) => {
-                    dst.copy_from_slice(&b[(s - e.offset) as usize..(t - e.offset) as usize])
-                }
-                Content::Fill(f) => dst.fill(*f),
-            }
-        }
-        out
+        disk::read(&self.extents, offset, length as usize)
     }
 
     /// Covered (data) and uncovered (zero) runs of a range, in order.
     pub fn runs(&self, offset: u64, length: u64) -> Vec<(u64, u64, bool)> {
-        let end = offset + length;
-        let mut cuts = vec![offset, end];
-        for e in &self.extents {
-            for p in [e.offset, e.offset + e.length] {
-                if p > offset && p < end {
-                    cuts.push(p);
-                }
-            }
-        }
-        cuts.sort_unstable();
-        cuts.dedup();
-        let mut runs: Vec<(u64, u64, bool)> = Vec::new();
-        for w in cuts.windows(2) {
-            let data = self
-                .extents
-                .iter()
-                .any(|e| e.offset < w[1] && w[0] < e.offset + e.length);
-            match runs.last_mut() {
-                Some(last) if last.2 == data => last.1 += w[1] - w[0],
-                _ => runs.push((w[0], w[1] - w[0], data)),
-            }
-        }
-        runs
+        disk::runs(&self.extents, offset, length)
     }
 
     /// A read as structured-reply pieces: data where extents are, holes elsewhere.
