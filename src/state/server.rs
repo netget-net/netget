@@ -8,7 +8,9 @@ use std::path::PathBuf;
 use crate::server::connection::ConnectionId;
 
 /// Unique identifier for a server instance
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct ServerId(u32);
 
 impl ServerId {

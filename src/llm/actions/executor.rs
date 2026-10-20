@@ -447,7 +447,7 @@ async fn execute_common_action(
 
         CommonAction::SetMemory { value } => {
             // A client's memory belongs to that client. Falling through to
-            // `get_first_server_id_sync()` in a client context wrote it into whichever server
+            // `get_first_server_id()` in a client context wrote it into whichever server
             // happened to be first — an unrelated server's prompt, silently corrupted, while
             // the client's own memory stayed empty.
             if server_id.is_none() {
@@ -464,7 +464,10 @@ async fn execute_common_action(
                     return Ok(());
                 }
             }
-            let sid = server_id.or_else(|| state.get_first_server_id_sync());
+            let sid = match server_id {
+                Some(id) => Some(id),
+                None => state.get_first_server_id().await,
+            };
             if let Some(server_id) = sid {
                 // Memory is injected into every prompt for this server, so it is bounded
                 // here rather than trusted to stay small.
@@ -499,7 +502,10 @@ async fn execute_common_action(
                     return Ok(());
                 }
             }
-            let sid = server_id.or_else(|| state.get_first_server_id_sync());
+            let sid = match server_id {
+                Some(id) => Some(id),
+                None => state.get_first_server_id().await,
+            };
             if let Some(server_id) = sid {
                 let current = state.get_memory(server_id).await.unwrap_or_default();
                 let new_memory = if current.is_empty() {
@@ -521,7 +527,10 @@ async fn execute_common_action(
             output_name,
             content,
         } => {
-            let sid = server_id.or_else(|| state.get_first_server_id_sync());
+            let sid = match server_id {
+                Some(id) => Some(id),
+                None => state.get_first_server_id().await,
+            };
             if let Some(server_id) = sid {
                 // Get or create the log file path
                 let log_path = state
