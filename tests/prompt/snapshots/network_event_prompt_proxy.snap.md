@@ -53,7 +53,7 @@ Unknown actions will be rejected and you will be asked to retry.
 
 ## 0. set_memory
 
-Replace this server's (or client's) memory with new content. Any existing memory is discarded. Memory is shared by every connection and outlives each one; the bounded history of the current connection is shown to you separately and ends with it, so keep here anything you will need later.
+Replace this server's (or client's) memory with new content; the old memory is discarded. Memory is shown to the model with every event, is shared by all of the instance's connections and outlives each one, unlike the history of a single connection, which ends with it. Keep here anything needed later.
 
 Parameters:
 - `value` (string, required): New memory value as a string. Replaces all existing memory.
@@ -65,7 +65,7 @@ Example:
 
 ## 1. append_memory
 
-Add new content to the end of this server's (or client's) memory. Existing memory is preserved and a newline is automatically added before the new content. Memory is shared by every connection and outlives each one; the history of the current connection is bounded and ends with it.
+Add text to the end of this server's (or client's) memory, after a newline; existing memory is kept. Memory is shown to the model with every event, is shared by all of the instance's connections and outlives each one.
 
 Parameters:
 - `value` (string, required): Text to append as a string. Will be added after existing memory with newline separator.
@@ -238,8 +238,11 @@ may precede the JSON inside `<reasoning>` tags; it is not sent to the peer.
 - **Port**: 8080
 - **Status**: Running
 - **Instruction**: Act as HTTP proxy
-- **Memory**: connections: 0
+- **Memory**:
+```text
+connections: 0
 requests_intercepted: 5
+```
 
 ## System Capabilities
 

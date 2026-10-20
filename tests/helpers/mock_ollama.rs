@@ -1132,6 +1132,10 @@ fn extract_context_from_prompt(prompt: &str) -> LlmContext {
         // Try to find the end of the capabilities section using various markers
         let end_marker_and_len = [
             (
+                "such as arp, icmp and datalink) refuse to start.",
+                "such as arp, icmp and datalink) refuse to start.".len(),
+            ),
+            (
                 "DataLink protocol unavailable",
                 "DataLink protocol unavailable".len(),
             ),

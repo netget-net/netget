@@ -43,7 +43,7 @@ const SNAPSHOTS: &[&str] = &[
     "retry_mechanism_prompt",
     "unknown_action_retry_prompt",
     "user_input_prompt",
-    "user_input_prompt_after_docs",
+    "user_input_prompt_docs_gate",
     "user_input_prompt_proxy_server",
     "user_input_prompt_without_scripting",
     "user_input_prompt_without_web_search",
@@ -61,7 +61,7 @@ const SNAPSHOTS: &[&str] = &[
 //    protocol features), and protocols are added continuously, so the lists enumerating
 //    the registry change with every new protocol. Snapshotting them would make every
 //    protocol addition a prompt-snapshot diff, which teaches people to regenerate without
-//    reading. See `normalize_registry_lists` for exactly which five spots are replaced and
+//    reading. See `normalize_registry_lists` for exactly which four spots are replaced and
 //    the check each one gets instead, so the normalisation cannot hide an empty or broken
 //    list.
 //
@@ -137,9 +137,8 @@ fn check_registry_list(what: &str, list: &str, separator: &str, must_name: &[&st
 /// Replace the parts of a prompt that enumerate the compiled protocol registry with fixed
 /// placeholders, checking each list is a plausible registry list before discarding it.
 ///
-/// The five spots, and nothing else:
+/// The four spots, and nothing else:
 /// - `read_documentation`'s `**Server protocols**:` and `**Client protocols**:` lines;
-/// - `read_documentation`'s example `"protocols":[…]` array (every compiled protocol);
 /// - `open_server`'s `protocol` parameter, whose description ends `Available: <list>`;
 /// - the body of the `## Available Base Stacks` section (group headings and one
 ///   `Name (keywords)` line per protocol), up to the next `#` or `##` heading.
@@ -151,9 +150,6 @@ fn normalize_registry_lists(prompt: &str) -> String {
         LazyLock::new(|| Regex::new(r"(?m)^(\*\*Server protocols\*\*: )(.*)$").unwrap());
     static CLIENT_LIST_RE: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"(?m)^(\*\*Client protocols\*\*: )(.*)$").unwrap());
-    static READ_DOCS_EXAMPLE_RE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r#"(\{"type":"read_documentation","protocols":)\[([^\]]*)\]"#).unwrap()
-    });
     static OPEN_SERVER_PROTOCOL_RE: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"(?m)^(- `protocol` \(string, required\): .*? Available: )(.*)$").unwrap()
     });
@@ -175,15 +171,6 @@ fn normalize_registry_lists(prompt: &str) -> String {
             &["HTTP", "SSH", "TCP"],
         );
         format!("{}<normalized: compiled client registry>", &c[1])
-    });
-    let prompt = READ_DOCS_EXAMPLE_RE.replace_all(&prompt, |c: &regex::Captures| {
-        check_registry_list(
-            "read_documentation example",
-            &c[2],
-            ",",
-            &["\"HTTP\"", "\"Proxy\"", "\"SSH\"", "\"TCP\""],
-        );
-        format!("{}[\"<normalized: every compiled protocol>\"]", &c[1])
     });
     let prompt = OPEN_SERVER_PROTOCOL_RE.replace_all(&prompt, |c: &regex::Captures| {
         check_registry_list(
@@ -313,7 +300,7 @@ async fn snapshot_comparison_is_live() {
     for placeholder in [
         "**Server protocols**: <normalized: compiled server registry>",
         "**Client protocols**: <normalized: compiled client registry>",
-        "\"protocols\":[\"<normalized: every compiled protocol>\"]",
+        "Available: <normalized: compiled server registry>",
     ] {
         assert!(
             normalized.contains(placeholder),
@@ -515,69 +502,66 @@ async fn test_user_input_prompt_proxy_server() {
 #[cfg(all(unix, feature = "sqlite"))]
 #[tokio::test]
 async fn test_user_input_prompt() {
-    // No servers, every scripting runtime (the common case).
+    // No servers, every scripting runtime: the prompt an operator's first turn renders.
+    // The documentation gate is off in the shipped build
+    // (`events::handler::REQUIRE_DOCS_FOR_OPEN_ACTIONS`), so open_server and open_client
+    // are offered from the start and this is the production prompt.
     let prompt = build_user_input_prompt().await;
 
-    // Assert snapshot
     assert_prompt_snapshot("user_input_prompt", &prompt);
 
-    // CRITICAL: In the initial prompt (before docs are read), base stacks and scripting
-    // sections are NOT shown - they only appear after documentation has been fetched.
-    // This prevents the LLM from trying to use open_server/open_client before learning the protocols.
+    for offered in [
+        "## 0. open_server",
+        "open_client",
+        "update_server",
+        "read_documentation",
+    ] {
+        assert!(
+            prompt.contains(offered),
+            "the operator prompt should offer {offered}"
+        );
+    }
     assert!(
-        !prompt.contains("Available Base Stacks"),
-        "Base stacks should NOT be shown in initial prompt (before reading docs)"
+        prompt.contains("Available Base Stacks") && prompt.contains("# Event Handlers"),
+        "the protocol menu and the event handler guidance belong in the production prompt"
     );
     assert!(
-        !prompt.contains("Script Handlers"),
-        "Script handlers should NOT be shown in initial prompt (before reading docs)"
-    );
-
-    // But read_documentation tool MUST be available
-    assert!(
-        prompt.contains("read_documentation"),
-        "Initial prompt should mention read_documentation tool"
-    );
-
-    // CRITICAL: open_server and open_client actions should NOT EXIST as action definitions
-    // They are only included after calling read_documentation
-    // Note: They may still be mentioned in instructions (e.g., "use open_server after reading docs")
-    // but should NOT have action definition headers like "## 0. open_server"
-    assert!(
-        !prompt.contains("## 0. open_server") && !prompt.contains("## 1. open_server"),
-        "open_server should NOT have an action definition in initial prompt"
-    );
-    assert!(
-        !prompt.contains("## 0. open_client")
-            && !prompt.contains("## 1. open_client")
-            && !prompt.contains("## 2. open_client")
-            && !prompt.contains("## 3. open_client"),
-        "open_client should NOT have an action definition in initial prompt"
+        !prompt.contains("NOT AVAILABLE YET") && !prompt.contains("are not offered yet"),
+        "nothing should be described as gated when the gate is off"
     );
 
-    // CRITICAL: No JSON examples with open_server or open_client should exist
-    // These would teach the LLM to use these actions before documentation is read
+    // Acting on "the first server" is not offered here: there is no instance in context.
+    for gone in [
+        "## 1. update_instruction",
+        ". update_instruction\n",
+        ". set_memory\n",
+        ". append_memory\n",
+    ] {
+        assert!(
+            !prompt.contains(gone),
+            "the operator prompt offers {gone:?}"
+        );
+    }
+
+    // Every LLM handler example carries the instruction parse_event_handlers requires.
     assert!(
-        !prompt.contains(r#""type": "open_server""#)
-            && !prompt.contains(r#"\"type\": \"open_server\""#)
-            && !prompt.contains(r#""type":"open_server""#),
-        "Initial prompt should NOT contain JSON examples with open_server action"
+        !prompt.contains(r#"{"type": "llm"}"#),
+        "an LLM handler example without 'instruction' is refused at startup"
     );
+    // Script languages are the tokens the executor accepts, with the installed versions.
     assert!(
-        !prompt.contains(r#""type": "open_client""#)
-            && !prompt.contains(r#"\"type\": \"open_client\""#)
-            && !prompt.contains(r#""type":"open_client""#),
-        "Initial prompt should NOT contain JSON examples with open_client action"
+        prompt.contains("`python` (Python 3.11.0)")
+            && prompt.contains("`javascript` (Node.js v20.0.0)"),
+        "script languages should be listed as accepted tokens"
     );
 }
 
+/// The documentation-gated variant (`REQUIRE_DOCS_FOR_OPEN_ACTIONS = true`): no
+/// open_server / open_client definitions or examples, and the instructions say why.
 #[cfg(all(unix, feature = "sqlite"))]
 #[tokio::test]
-async fn test_user_input_prompt_after_docs_read() {
-    // Create state and mark protocols as documented
+async fn test_user_input_prompt_docs_gate() {
     let state = Arc::new(AppState::new());
-
-    // Set up mock scripting environment
     let scripting_env = netget::scripting::ScriptingEnvironment {
         python: Some("Python 3.11.0".to_string()),
         javascript: Some("v20.0.0".to_string()),
@@ -586,69 +570,38 @@ async fn test_user_input_prompt_after_docs_read() {
     };
     state.set_scripting_env(scripting_env).await;
 
-    // Mark multiple server protocols as documented (simulates read_documentation call)
-    state
-        .mark_server_protocols_documented(&["HTTP".to_string(), "SSH".to_string()])
-        .await;
-
-    // Mark a client protocol as documented
-    state
-        .mark_client_protocols_documented(&["http".to_string()])
-        .await;
-
-    let user_input = "start an HTTP server on port 8080";
-
-    // Build prompt WITH docs enabled (is_open_server_enabled = true, is_open_client_enabled = true)
-    let system_prompt = PromptBuilder::build_user_input_system_prompt_with_docs(
-        &state,
-        vec![],
-        None,
-        true, // is_open_server_enabled
-        true, // is_open_client_enabled
-    )
-    .await;
+    let system_prompt =
+        PromptBuilder::build_user_input_system_prompt_with_docs(&state, vec![], None, false, false)
+            .await;
     let prompt = format!(
         "{}\n\nTrigger: User input: \"{}\"",
-        system_prompt, user_input
+        system_prompt, "start a DNS server on port 53"
     );
 
-    // Assert snapshot
-    assert_prompt_snapshot("user_input_prompt_after_docs", &prompt);
+    assert_prompt_snapshot("user_input_prompt_docs_gate", &prompt);
 
-    // open_server should be ENABLED (have parameters, not marked as DISABLED)
-    // The action should have a "port" parameter which is only present when enabled
     assert!(
-        prompt.contains("open_server") && prompt.contains("port"),
-        "open_server should be ENABLED and have port parameter after docs are read"
+        prompt.contains("are not offered yet") && prompt.contains("read_documentation"),
+        "the gated prompt should say to read the documentation first"
     );
     assert!(
-        !prompt.contains("open_server") || !prompt.contains("⚠️ DISABLED"),
-        "open_server should NOT be marked as DISABLED after docs are read"
+        !prompt.contains(". open_server\n") && !prompt.contains(". open_client\n"),
+        "open_server / open_client should have no definition before the docs are read"
     );
-
-    // open_client should be ENABLED
+    for example in [
+        r#""type": "open_server""#,
+        r#""type":"open_server""#,
+        r#""type": "open_client""#,
+        r#""type":"open_client""#,
+    ] {
+        assert!(
+            !prompt.contains(example),
+            "the gated prompt should not teach {example} before it is offered"
+        );
+    }
     assert!(
-        prompt.contains("open_client") && prompt.contains("remote_addr"),
-        "open_client should be ENABLED and have remote_addr parameter after docs are read"
-    );
-
-    // Should have base_stack parameter (enabled open_server has this)
-    assert!(
-        prompt.contains("base_stack"),
-        "Enabled open_server should have base_stack parameter"
-    );
-
-    // After docs are read, base stacks section SHOULD be present
-    assert!(
-        prompt.contains("Available Base Stacks"),
-        "Base stacks should be shown after reading docs"
-    );
-
-    // Scripting section should be present (since scripting env is set up)
-    // The scripting section is titled "Event Handler Configuration"
-    assert!(
-        prompt.contains("Event Handler Configuration"),
-        "Event Handler Configuration section should be present after docs are read"
+        !prompt.contains("Available Base Stacks"),
+        "Base stacks should NOT be shown before reading docs"
     );
 }
 
@@ -707,13 +660,19 @@ async fn test_user_input_prompt_no_scripting() {
         !prompt.contains("update_script"),
         "Prompt should not contain 'update_script'"
     );
-    // Note: script_inline and script_handles appear in scheduled_tasks param docs, which is OK
-
-    // Since docs haven't been read, base stacks should NOT be present
-    assert!(
-        !prompt.contains("Available Base Stacks"),
-        "Base stacks should NOT be shown before reading docs"
-    );
+    // With scripting Off no script handler type is offered anywhere, including in the
+    // event_handlers parameters and the event handler guidance.
+    for script in [
+        r#""type": "script""#,
+        "script_inline",
+        "script_handles",
+        "script_runtime",
+    ] {
+        assert!(
+            !prompt.contains(script),
+            "Prompt should not offer scripts with scripting Off: found {script:?}"
+        );
+    }
 }
 
 #[cfg(all(unix, feature = "sqlite"))]
@@ -761,12 +720,6 @@ async fn test_user_input_prompt_without_web_search() {
     assert!(
         prompt.contains("read_file"),
         "Prompt should still contain 'read_file'"
-    );
-
-    // Since docs haven't been read, base stacks should NOT be present
-    assert!(
-        !prompt.contains("Available Base Stacks"),
-        "Base stacks should NOT be shown before reading docs"
     );
 }
 
@@ -1327,5 +1280,88 @@ async fn test_feedback_prompt_client() {
         "reconnect_client",
     ] {
         assert!(!prompt.contains(absent), "{absent} in:\n{prompt}");
+    }
+}
+
+/// Current State names every id an operator action takes: each server's live connections
+/// (for `close_connection_by_id` and connection-scoped tasks) and every client (for
+/// `close_client`, `update_client`, `reconnect_client`, client-scoped tasks).
+#[tokio::test]
+async fn operator_current_state_lists_connections_and_clients() {
+    use netget::server::connection::ConnectionId;
+    use netget::state::client::ClientInstance;
+    use netget::state::server::{ConnectionState, ConnectionStatus, ProtocolConnectionInfo};
+    use netget::state::ClientId;
+    use netget::utils::clock::Instant;
+
+    let state = Arc::new(AppState::new());
+    let server_id = state
+        .add_server(ServerInstance::new(
+            ServerId::new(1),
+            7000,
+            "TCP".to_string(),
+            "echo".to_string(),
+        ))
+        .await;
+    let connection = |id: u32, status: ConnectionStatus| ConnectionState {
+        id: ConnectionId::new(id),
+        remote_addr: format!("127.0.0.1:{}", 50000 + id).parse().unwrap(),
+        local_addr: "127.0.0.1:7000".parse().unwrap(),
+        bytes_sent: 0,
+        bytes_received: 0,
+        packets_sent: 0,
+        packets_received: 0,
+        last_activity: Instant::now(),
+        status,
+        status_changed_at: Instant::now(),
+        protocol_info: ProtocolConnectionInfo::new(serde_json::json!({})),
+    };
+    state
+        .add_connection_to_server(server_id, connection(7, ConnectionStatus::Active))
+        .await;
+    state
+        .add_connection_to_server(server_id, connection(8, ConnectionStatus::Closed))
+        .await;
+    let client_id = state
+        .add_client(ClientInstance::new(
+            ClientId::new(2),
+            "127.0.0.1:6379".to_string(),
+            "redis".to_string(),
+            "PING".to_string(),
+        ))
+        .await;
+
+    let prompt = PromptBuilder::build_user_input_system_prompt(&state, vec![], None).await;
+
+    assert!(
+        prompt.contains("live connections: `conn-7` from 127.0.0.1:50007"),
+        "a live connection should be listed with its id:\n{prompt}"
+    );
+    assert!(
+        !prompt.contains("conn-8"),
+        "a closed connection should not be offered as closable"
+    );
+    assert!(
+        prompt.contains(&format!(
+            "- Client #{}: **redis** to 127.0.0.1:6379",
+            client_id.as_u32()
+        )),
+        "running clients should be listed with their ids:\n{prompt}"
+    );
+
+    // The id the prompt shows is the id close_connection_by_id accepts.
+    for id in [
+        serde_json::json!("conn-7"),
+        serde_json::json!(7),
+        serde_json::json!("7"),
+    ] {
+        let action = netget::llm::CommonAction::from_json(
+            &serde_json::json!({"type": "close_connection_by_id", "connection_id": id}),
+        )
+        .expect("close_connection_by_id should accept the listed connection id");
+        assert!(matches!(
+            action,
+            netget::llm::CommonAction::CloseConnectionById { connection_id: 7 }
+        ));
     }
 }

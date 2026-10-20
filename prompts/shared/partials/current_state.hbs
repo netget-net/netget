@@ -8,17 +8,40 @@
 - **Port**: {{active_server.port}}
 - **Status**: {{{active_server.status}}}
 - **Instruction**: {{#if active_server.instruction}}{{{active_server.instruction}}}{{else}}(none){{/if}}
-- **Memory**: {{#if active_server.memory}}{{{active_server.memory}}}{{else}}(empty){{/if}}
+{{#if active_server.memory}}
+- **Memory**:
+```text
+{{{active_server.memory}}}
+```
 {{else}}
-{{#each servers}}
+- **Memory**: (empty)
+{{/if}}
+{{else}}
 ## Running Servers
 
-You may be asked to update these servers and you need to refer to them by number:
+{{#if servers}}
+Refer to a server by its id (`server_id`) and to a connection by its id (`connection_id`):
 
-- Server #{{this.id}}: **{{{this.protocol_name}}}** on port {{this.port}} ({{{this.status}}})
+{{#each servers}}
+- Server #{{this.id}}: **{{{this.protocol_name}}}** on port {{this.port}} ({{{this.status}}}){{#if this.connections}}, live connections: {{#each this.connections}}`{{{this.id}}}` from {{{this.remote_addr}}}{{#unless @last}}, {{/unless}}{{/each}}{{else}}, no live connections{{/if}}
+{{/each}}
 {{else}}
 No servers currently running.
+{{/if}}
+{{#if list_clients}}
+
+## Running Clients
+
+{{#if clients}}
+Refer to a client by its id (`client_id`):
+
+{{#each clients}}
+- Client #{{this.id}}: **{{{this.protocol_name}}}** to {{{this.remote_addr}}} ({{{this.status}}})
 {{/each}}
+{{else}}
+No clients currently running.
+{{/if}}
+{{/if}}
 {{/if}}
 
 ## System Capabilities
@@ -26,11 +49,11 @@ No servers currently running.
 {{#if can_bind_privileged_ports}}
 - **Privileged ports (<1024)**: ✓ Available
 {{else}}
-- **Privileged ports (<1024)**: ✗ Not available — Warn user if they request port <1024
+- **Privileged ports (<1024)**: ✗ Not available — a port below 1024 that you give explicitly cannot be bound. With no port given, a protocol whose well-known port is below 1024 starts on an OS-assigned port instead and says which; tell the user when the port matters to them.
 {{/if}}
 
 {{#if has_raw_socket_access}}
 - **Raw socket access**: ✓ Available
 {{else}}
-- **Raw socket access**: ✗ Not available — DataLink protocol unavailable
+- **Raw socket access**: ✗ Not available — protocols that need raw sockets or packet capture (link-layer and raw-IP protocols such as arp, icmp and datalink) refuse to start.
 {{/if}}
