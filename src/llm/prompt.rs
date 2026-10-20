@@ -6,7 +6,7 @@
 
 use crate::llm::actions::{
     generate_base_stack_documentation, get_all_tool_actions, get_network_event_tool_actions,
-    get_user_input_common_actions, ActionDefinition,
+    ActionDefinition,
 };
 use crate::llm::ollama_client::Message;
 use crate::llm::template_engine::{TemplateDataBuilder, TEMPLATE_ENGINE};
@@ -22,12 +22,9 @@ impl PromptBuilder {
     // (Only used for programmatic generation, not in templates)
     // ============================================================================
 
-    /// Build current state section (server state + system capabilities)
-    async fn build_current_state_section(state: &AppState, server_id: Option<ServerId>) -> String {
-        Self::build_current_state_section_public(state, server_id).await
-    }
-
-    /// Public version of build_current_state_section for use by conversation handler
+    /// Current State section (server state + system capabilities) for the conversation
+    /// handler, which refreshes it mid-conversation. The prompt templates render their own
+    /// from `shared/partials/current_state.hbs`.
     pub async fn build_current_state_section_public(
         state: &AppState,
         server_id: Option<ServerId>,
@@ -97,7 +94,7 @@ impl PromptBuilder {
             if system_caps.can_bind_privileged_ports {
                 ""
             } else {
-                "— Warn user if they request port <1024"
+                "— a port below 1024 that you give explicitly cannot be bound. With no port given, a protocol whose well-known port is below 1024 starts on an OS-assigned port instead and says which; tell the user when the port matters to them."
             },
             if system_caps.has_raw_socket_access {
                 "✓ Available"
@@ -107,7 +104,7 @@ impl PromptBuilder {
             if system_caps.has_raw_socket_access {
                 ""
             } else {
-                "— DataLink protocol unavailable"
+                "— protocols that need raw sockets or packet capture (link-layer and raw-IP protocols such as arp, icmp and datalink) refuse to start."
             }
         ));
 
@@ -345,38 +342,43 @@ Check the action definition in "Available Actions" for required parameters and p
     }
 
     /// Filter actions based on scripting mode
+    ///
+    /// With scripting Off nothing the model is shown may offer a script: the
+    /// `update_script` action goes, every `script_*` parameter goes, and the
+    /// `event_handlers` parameter of `open_server` / `open_client` is re-rendered without
+    /// the script handler type. The definitions built by `common` already follow the mode;
+    /// this holds for a list assembled under another mode, or by a protocol.
     pub(crate) fn filter_actions_by_scripting_mode(
         actions: Vec<ActionDefinition>,
         has_scripting: bool,
     ) -> Vec<ActionDefinition> {
+        use crate::llm::actions::common::{event_handlers_description, HandlerSide};
+
         if has_scripting {
-            actions
-        } else {
-            // Remove script-related actions and parameters when LLM mode is selected
-            actions
-                .into_iter()
-                .filter_map(|mut action| {
-                    if action.name == "update_script" {
-                        // Remove update_script action entirely when in LLM mode
-                        None
-                    } else if action.name == "open_server" {
-                        // Remove script parameters from open_server
-                        action.parameters.retain(|p| {
-                            !matches!(
-                                p.name.as_str(),
-                                "script_language"
-                                    | "script_path"
-                                    | "script_inline"
-                                    | "script_handles"
-                            )
-                        });
-                        Some(action)
-                    } else {
-                        Some(action)
-                    }
-                })
-                .collect()
+            return actions;
         }
+        actions
+            .into_iter()
+            .filter(|action| action.name != "update_script")
+            .map(|mut action| {
+                action.parameters.retain(|p| !p.name.starts_with("script_"));
+                let side = match action.name.as_str() {
+                    "open_server" => Some(HandlerSide::Server),
+                    "open_client" => Some(HandlerSide::Client),
+                    _ => None,
+                };
+                if let Some(side) = side {
+                    for p in action
+                        .parameters
+                        .iter_mut()
+                        .filter(|p| p.name == "event_handlers")
+                    {
+                        p.description = event_handlers_description(side, None);
+                    }
+                }
+                action
+            })
+            .collect()
     }
 
     // ============================================================================
@@ -406,9 +408,32 @@ Check the action definition in "Available Actions" for required parameters and p
         let selected_mode = state.get_selected_scripting_mode().await;
         let has_scripting = selected_mode != crate::state::app_state::ScriptingMode::Off;
 
-        // Filter actions based on scripting mode
-        let filtered_actions =
+        // Prepare template data
+        let servers = state.get_all_servers().await;
+        let include_disabled = state.get_include_disabled_protocols().await;
+        // The operator's --min-stability floor also shapes the model's base-stack
+        // menu, so it is not guided toward a protocol it would be refused at start.
+        let min_stability = state.get_min_stability().await;
+
+        // Filter actions based on scripting mode, and narrow the protocol lists in
+        // open_server / read_documentation to what the operator allows.
+        let mut filtered_actions =
             Self::filter_actions_by_scripting_mode(available_actions, has_scripting);
+        crate::llm::actions::common::restrict_protocol_lists(
+            &mut filtered_actions,
+            include_disabled,
+            min_stability,
+        );
+        // Script guidance only where a script handler could actually run.
+        let scripting_offered = crate::llm::actions::common::script_languages_for_prompt(
+            selected_mode,
+            &state.get_scripting_env().await,
+        )
+        .is_some();
+        // Offered only once enabled (see events::handler::open_actions_enabled).
+        let open_actions_enabled = filtered_actions
+            .iter()
+            .any(|a| a.name == "open_server" || a.name == "open_client");
 
         // Try to use template first
         let template_name = if server_id.is_some() {
@@ -416,13 +441,6 @@ Check the action definition in "Available Actions" for required parameters and p
         } else {
             "user_input/main"
         };
-
-        // Prepare template data
-        let servers = state.get_all_servers().await;
-        let include_disabled = state.get_include_disabled_protocols().await;
-        // The operator's --min-stability floor also shapes the model's base-stack
-        // menu, so it is not guided toward a protocol it would be refused at start.
-        let min_stability = state.get_min_stability().await;
 
         // Split actions into tools and regular actions and convert to JSON
         let (tool_actions_raw, regular_actions_raw): (Vec<_>, Vec<_>) =
@@ -482,19 +500,71 @@ Check the action definition in "Available Actions" for required parameters and p
         // Get system capabilities
         let system_caps = state.get_system_capabilities().await;
 
-        // Convert servers to simple objects for templates
+        // Convert servers to simple objects for templates, each with its live connections:
+        // close_connection_by_id and connection-scoped tasks need ids the model can see.
         let servers_data: Vec<serde_json::Value> = servers
             .iter()
             .map(|s| {
+                let mut connections: Vec<_> = s
+                    .connections
+                    .values()
+                    .filter(|c| c.status == crate::state::server::ConnectionStatus::Active)
+                    .collect();
+                connections.sort_by_key(|c| c.id.as_u32());
+                let connections: Vec<serde_json::Value> = connections
+                    .iter()
+                    .map(|c| {
+                        serde_json::json!({
+                            "id": c.id.to_string(),
+                            "remote_addr": c.remote_addr.to_string(),
+                        })
+                    })
+                    .collect();
                 serde_json::json!({
                     "id": s.id.as_u32(),
                     "protocol_name": s.protocol_name,
                     "port": s.port,
                     "status": s.status.to_string(),
-                    "memory": s.memory
+                    "memory": s.memory,
+                    "connections": connections
                 })
             })
             .collect();
+
+        // Clients, for the operator prompt: close_client, update_client, reconnect_client
+        // and client-scoped tasks all take an id.
+        let mut clients = state.get_all_clients().await;
+        clients.sort_by_key(|c| c.id.as_u32());
+        let clients_data: Vec<serde_json::Value> = clients
+            .iter()
+            .map(|c| {
+                serde_json::json!({
+                    "id": c.id.as_u32(),
+                    "protocol_name": c.protocol_name,
+                    "remote_addr": c.remote_addr,
+                    "status": c.status.to_string(),
+                })
+            })
+            .collect();
+
+        // --event-handler-mode is an operator preference about how handlers are written;
+        // it is honoured by telling the model, since nothing else enforces it.
+        let handler_mode_preference = match state.get_event_handler_mode().await {
+            crate::state::app_state::EventHandlerMode::Any => None,
+            crate::state::app_state::EventHandlerMode::Script => Some(
+                "answer events with `script` handlers wherever the behaviour can be written \
+                 as code, and leave to the model (`llm` handlers or the instruction) only what \
+                 cannot.",
+            ),
+            crate::state::app_state::EventHandlerMode::Static => Some(
+                "answer events with `static` handlers wherever a fixed answer (with fields \
+                 copied from the event) will do, and leave to the model only what cannot.",
+            ),
+            crate::state::app_state::EventHandlerMode::Llm => Some(
+                "leave events to the model (the instruction, or `llm` handlers); configure \
+                 script or static handlers only when the user asks for them.",
+            ),
+        };
 
         let active_server_data = server_id.and_then(|id| {
             servers.iter().find(|s| s.id == id).map(|s| {
@@ -519,15 +589,12 @@ Check the action definition in "Available Actions" for required parameters and p
             .field("tool_actions", &tool_actions)
             .field("regular_actions", &regular_actions)
             .field("include_base_stacks", include_base_stacks)
-            .field("include_disabled_protocols", include_disabled)
-            .field("scripting_enabled", has_scripting)
-            .field("selected_scripting_mode", selected_mode.as_str())
-            .field(
-                "event_handler_mode",
-                state.get_event_handler_mode().await.as_str(),
-            )
-            .field("mode", state.get_mode().await.as_str())
+            .field("scripting_enabled", scripting_offered)
+            .field("open_actions_enabled", open_actions_enabled)
+            .optional_field("handler_mode_preference", handler_mode_preference)
             .field("servers", &servers_data)
+            .field("clients", &clients_data)
+            .field("list_clients", server_id.is_none())
             .optional_field("active_server", active_server_data)
             .field("web_search_enabled", web_search_enabled)
             .field(
@@ -542,11 +609,6 @@ Check the action definition in "Available Actions" for required parameters and p
                 "base_stack_docs",
                 Self::build_base_stack_docs_section(include_disabled, min_stability),
             )
-            .field(
-                "current_state",
-                Self::build_current_state_section(state, server_id).await,
-            )
-            .field("scripting_environment", selected_mode.as_str())
             .field(
                 "can_bind_privileged_ports",
                 system_caps.can_bind_privileged_ports,
@@ -580,9 +642,9 @@ Check the action definition in "Available Actions" for required parameters and p
     /// This builds the SYSTEM prompt only (without the user input trigger).
     /// The caller should add the user input as a separate user message.
     ///
-    /// By default, `open_server` and `open_client` are DISABLED. They become enabled
-    /// only after `read_documentation` tool is called.
-    /// Use `build_user_input_system_prompt_with_docs` to explicitly enable them.
+    /// Offers `open_server` / `open_client` exactly when an operator turn would
+    /// (`events::handler::open_actions_enabled`): with the documentation gate off, which is
+    /// the shipped setting, that is always. So what this renders is what the model is shown.
     ///
     /// # Arguments
     /// * `state` - Application state
@@ -593,22 +655,24 @@ Check the action definition in "Available Actions" for required parameters and p
         protocol_async_actions: Vec<ActionDefinition>,
         conversation_history: Option<String>,
     ) -> String {
-        // By default, open_server and open_client are DISABLED
-        // Use build_user_input_system_prompt_with_docs to enable them after docs are read
+        let (is_open_server_enabled, is_open_client_enabled) =
+            crate::events::handler::open_actions_enabled(state).await;
         Self::build_user_input_system_prompt_with_docs(
             state,
             protocol_async_actions,
             conversation_history,
-            false, // is_open_server_enabled
-            false, // is_open_client_enabled
+            is_open_server_enabled,
+            is_open_client_enabled,
         )
         .await
     }
 
     /// Build system prompt for user input with explicit open_server/open_client enablement
     ///
-    /// This variant allows explicitly controlling whether open_server/open_client are enabled.
-    /// Used by ConversationHandler after documentation tools have been called.
+    /// `false` renders the documentation-gated variant: `open_server` / `open_client` are
+    /// left out, the instructions say to call `read_documentation` first, and the event
+    /// handler guidance is held back until they are offered. The guidance itself is one
+    /// template (`user_input/partials/instructions.hbs`) for both variants.
     ///
     /// # Arguments
     /// * `state` - Application state
@@ -640,7 +704,7 @@ Check the action definition in "Available Actions" for required parameters and p
 
         let has_running_servers = !state.get_all_servers().await.is_empty();
 
-        let mut actions = get_user_input_common_actions(
+        let mut actions = crate::llm::actions::common::get_operator_common_actions(
             selected_mode,
             &scripting_env,
             is_open_server_enabled,
@@ -654,61 +718,6 @@ Check the action definition in "Available Actions" for required parameters and p
         // Add protocol async actions
         actions.extend(protocol_async_actions);
 
-        let web_search_available = web_search_mode != crate::state::app_state::WebSearchMode::Off;
-        let tool_examples = if web_search_available {
-            "`read_file` and `web_search`"
-        } else {
-            "`read_file`"
-        };
-        let instructions = if is_open_server_enabled || is_open_client_enabled {
-            format!(
-                r#"## Your Mission
-
-Understand what the user wants and respond with the appropriate actions to make it happen.
-
-### Important Guidelines
-
-1. **Use built-in protocols**: When users ask to start servers, use the `open_server` action with the appropriate `base_stack` (e.g., `http`, `ssh`, `dns`, `s3`). NetGet has 50+ protocols built-in - leverage them!
-
-2. **Gather information first**: Use tools like {} to read files or search for information before taking action.
-
-3. **Update, don't recreate**: If a user asks to modify an existing server (e.g., "add an endpoint", "change the behavior"), use `update_instruction` - don't create a new server on the same port.
-
-4. **JSON responses only**: Your entire response must be valid JSON: `{{"actions": [...]}}`
-            "#,
-                tool_examples
-            )
-        } else {
-            format!(
-                r#"## Your Mission
-
-Understand what the user wants and respond with the appropriate actions to make it happen.
-
-### Important Guidelines
-
-1. **Read documentation first**: Before starting servers or clients, you MUST call `read_documentation` with the protocol(s) you need. This enables the server/client actions and explains when to use each mode.
-
-2. **Understanding Server vs Client** (CRITICAL):
-   - **Server (hosting)**: Use when user wants to HOST/SERVE content
-     - Keywords: "serve", "host", "listen", "provide", "run server"
-     - Example: "host a website", "start HTTP server", "run DNS server"
-   - **Client (connecting)**: Use when user wants to CONNECT to existing remote server
-     - Keywords: "connect to", "fetch from", "query", "send to", "access remote"
-     - Example: "connect to Redis at localhost:6379", "send ping to host"
-   - ⚠️ If user says "serve", "host", or "provide", use server mode even if they say "client". The ACTION matters more than the word choice!
-
-3. **Gather information**: Use tools like {} to read files or search for information before taking action.
-
-4. **Update, don't recreate**: If a user asks to modify an existing server (e.g., "add an endpoint", "change the behavior"), use `update_instruction` - don't create a new server on the same port.
-
-5. **JSON responses only**: Your entire response must be valid JSON: `{{"actions": [...]}}`
-
-**IMPORTANT**: The server and client actions are DISABLED until you read protocol documentation. Use `read_documentation` first!
-            "#,
-                tool_examples
-            )
-        };
-
         // Build prompt with conditional base stack docs
         // Only show full base stack docs after documentation has been fetched or explicitly enabled
         // Also check if protocols have been documented in AppState
@@ -720,10 +729,11 @@ Understand what the user wants and respond with the appropriate actions to make 
             || is_open_server_enabled
             || is_open_client_enabled;
 
+        // The instructions are rendered by the user_input template itself.
         Self::build_action_prompt(
             state,
             None,
-            &instructions,
+            "",
             actions,
             include_base_stacks,
             conversation_history,

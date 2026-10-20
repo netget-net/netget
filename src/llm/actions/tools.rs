@@ -1465,72 +1465,68 @@ pub fn read_base_stack_docs_action() -> ActionDefinition {
 ///
 /// This unified tool replaces both `read_server_documentation` and `read_client_documentation`.
 /// It looks up protocols in both server and client registries and explains when to use each mode.
+///
+/// Lists every protocol available to the model with no operator floor; a prompt applies the
+/// operator's settings through [`read_documentation_action_for`] (via
+/// `common::restrict_protocol_lists`).
 pub fn read_documentation_action() -> ActionDefinition {
-    // Get all available server protocols from registry
-    let server_registry = crate::protocol::server_registry::registry();
-    let mut server_protocols: Vec<String> = server_registry
-        .all_protocols()
-        .into_iter()
-        .filter(|(_, protocol)| {
-            server_registry
-                .metadata(protocol.protocol_name())
-                .map(|m| m.is_available_to_llm())
-                .unwrap_or(true)
-        })
-        .map(|(name, _)| name)
-        .collect();
-    server_protocols.sort();
+    read_documentation_action_for(false, None)
+}
 
-    // Get all available client protocols from registry
+/// `read_documentation`, listing only the protocols the operator allows:
+/// `include_disabled` and `min_stability` are the `--include-disabled-protocols` /
+/// `--min-stability` settings, under which startup refuses anything below the floor.
+pub fn read_documentation_action_for(
+    include_disabled: bool,
+    min_stability: Option<crate::protocol::metadata::DevelopmentState>,
+) -> ActionDefinition {
+    let server_protocols = super::common::all_base_stacks(include_disabled, min_stability);
+
     let client_registry = &crate::protocol::client_registry::CLIENT_REGISTRY;
-    let mut client_protocols: Vec<String> = client_registry.list_protocols();
+    let mut client_protocols: Vec<String> = client_registry
+        .list_protocols()
+        .into_iter()
+        .filter(|name| match client_registry.get(name) {
+            Some(client) => {
+                let meta = client.metadata();
+                (include_disabled || meta.is_available_to_llm())
+                    && min_stability.map(|min| meta.state >= min).unwrap_or(true)
+            }
+            None => true,
+        })
+        .collect();
     client_protocols.sort();
 
-    let server_list = if server_protocols.is_empty() {
-        "None".to_string()
-    } else {
-        server_protocols.join(", ")
-    };
-
-    let client_list = if client_protocols.is_empty() {
-        "None".to_string()
-    } else {
-        client_protocols.join(", ")
-    };
-
-    // Build example protocols array with all available protocols
-    let mut all_protocols: Vec<String> = server_protocols.clone();
-    for client_proto in &client_protocols {
-        if !all_protocols
-            .iter()
-            .any(|s| s.eq_ignore_ascii_case(client_proto))
-        {
-            all_protocols.push(client_proto.clone());
+    let list = |names: &[String]| {
+        if names.is_empty() {
+            "None".to_string()
+        } else {
+            names.join(", ")
         }
-    }
-    all_protocols.sort();
+    };
 
     ActionDefinition {
         name: "read_documentation".to_string(),
         description: format!(
-            r#"Get detailed protocol documentation. After you fetch documentation, you will be able to open a server or a client.
-
-## Available Protocols
+            r#"Get the documentation of one or more protocols, server and client side. For each it gives the event ids the protocol raises (with their fields), the actions that answer them (with parameters and examples), its startup parameters, and its history and batching defaults. Read it before writing event_handlers or startup_params for a protocol: both must use the names it gives.
 
 **Server protocols**: {}
 
 **Client protocols**: {}"#,
-            server_list, client_list
+            list(&server_protocols),
+            list(&client_protocols)
         ),
         parameters: vec![Parameter {
             name: "protocols".to_string(),
             type_hint: "array".to_string(),
-            description: "Array of protocol names to get documentation for. Maximum 5 protocols per call. Returns both server and client docs if available for each protocol.".to_string(),
+            description: "Protocol names to document, at most 5 per call (more is refused). \
+                Each returns its server and client documentation where both exist."
+                .to_string(),
             required: true,
         }],
         example: json!({
             "type": "read_documentation",
-            "protocols": all_protocols
+            "protocols": ["http"]
         }),
         log_template: None,
     }
