@@ -329,7 +329,9 @@ mod open_iscsi {
         Ok(buf)
     }
 
-    #[tokio::test]
+    // Multi-thread, and the read below off the runtime: the target answering the kernel's READ
+    // runs on this runtime, so a blocking read of its disk on the only worker never returns.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn the_linux_kernel_initiator_reads_the_described_disk() {
         require_root();
         let iscsiadm = require_tool(
@@ -371,12 +373,19 @@ mod open_iscsi {
         let mut last = String::new();
         let mut data = None;
         for _ in 0..150 {
-            match read_start(&link, 8192) {
-                Ok(d) => {
+            let path = link.clone();
+            let read = tokio::task::spawn_blocking(move || read_start(&path, 8192));
+            match tokio::time::timeout(std::time::Duration::from_secs(60), read).await {
+                Ok(Ok(Ok(d))) => {
                     data = Some(d);
                     break;
                 }
-                Err(e) => last = format!("{}: {e}", link.display()),
+                Ok(Ok(Err(e))) => last = format!("{}: {e}", link.display()),
+                Ok(Err(e)) => last = format!("{}: the read task failed: {e}", link.display()),
+                Err(_) => {
+                    last = format!("{}: a read took over 60 s", link.display());
+                    break;
+                }
             }
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         }
