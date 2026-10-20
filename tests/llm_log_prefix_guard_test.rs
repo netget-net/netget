@@ -33,7 +33,7 @@ const PREFIXES: [&str; 5] = [
 /// listed must be at zero.
 fn baseline() -> HashMap<&'static str, usize> {
     // Paths relative to `src/llm/`.
-    HashMap::from([("conversation.rs", 24usize), ("feedback.rs", 6usize)])
+    HashMap::from([("conversation.rs", 24usize)])
 }
 
 fn count_prefixes(contents: &str) -> usize {
