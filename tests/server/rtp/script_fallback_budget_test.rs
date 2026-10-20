@@ -3,7 +3,7 @@
 //! RTP's budget gate used to ask `find_handler` what was *configured*. A `Script` rule read as
 //! "answers in-process, costs no model call", so `RtpLlmBudget` was skipped outright — and then
 //! `action_helper::call_llm` dispatched the very same handler itself. When
-//! `execute_script_handler` answered `FallbackToLlm` — an unknown language name, a missing
+//! `execute_script_handler` answered `FallbackToLlm` — a language with no runtime, a missing
 //! interpreter, a script that threw — the model was consulted with the budget already bypassed.
 //!
 //! On RTP that is the worst place for it: a single G.711 stream is 50 packets per second, so
@@ -13,8 +13,8 @@
 //!
 //! # The measurement
 //!
-//! One configuration — a `*`-matching script rule whose language the executor does not know —
-//! run at two ceilings, against a mock model that records every call it receives:
+//! One configuration — a `*`-matching script rule whose language has no runtime on this
+//! instance — run at two ceilings, against a mock model that records every call it receives:
 //!
 //! | `llm_max_per_minute` | old code (gate skipped on configuration) | this code |
 //! |---|---|---|
@@ -50,18 +50,20 @@ const DATAGRAMS: usize = 5;
 /// The event every inbound RTP datagram raises.
 const EVENT: &str = "rtp_packet_received";
 
-/// A `*` rule whose language `execute_script_handler` does not recognise.
+/// A `*` rule in a language this instance has no runtime for (see [`start_rtp`], which gives
+/// the state an empty scripting environment).
 ///
 /// This is not a contrived input: it is the same `FallbackToLlm` the shipped script-mode
-/// example produces on a box without `python3`, reached by the one route that needs no
-/// assumption about what is installed on the machine running the suite.
+/// example produces on a box without `python3`, reached without depending on what is installed
+/// on the machine running the suite. (An unknown language name would be refused when the handler
+/// is configured, so it cannot stand in.)
 fn unanswerable_script_rule() -> serde_json::Value {
     serde_json::json!({
         "event_pattern": "*",
         "handler": {
             "type": "script",
-            "language": "no-such-language",
-            "code": "respond([])"
+            "language": "go",
+            "code": "package main\nfunc main() {}"
         }
     })
 }
@@ -85,6 +87,11 @@ async fn start_rtp(
     let state = AppState::new_with_options(false, mock.base_url());
     state
         .set_llm_client(::netget::llm::OllamaClient::new(mock.base_url()))
+        .await;
+    // No runtime at all, whatever this machine has installed: a script rule can then never
+    // answer and must fall through to the model, which is the path this file measures.
+    state
+        .set_scripting_env(::netget::scripting::ScriptingEnvironment::default())
         .await;
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 

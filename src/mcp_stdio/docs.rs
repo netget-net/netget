@@ -1,10 +1,9 @@
 //! MCP-shaped protocol documentation.
 //!
-//! The internal TUI LLM has its own documentation renderer
-//! (`llm::actions::tools::execute_read_documentation`) which describes the
-//! `open_server` / `open_client` **actions** and the `base_stack` parameter.
-//! None of that exists on the MCP surface: an MCP caller has `start_server` /
-//! `start_client` tools with a fixed argument list.
+//! The model's own `read_documentation` tool (`llm::actions::tools`) frames a
+//! protocol around the `open_server` / `open_client` **actions**. Neither exists
+//! on the MCP surface: an MCP caller has `start_server` / `start_client` tools
+//! with a fixed argument list.
 //!
 //! This module renders documentation aimed at an MCP caller — the exact tool
 //! arguments that apply, the protocol's event ids with their field names and
@@ -19,11 +18,15 @@
 //! protocol registers a peer handle.
 //!
 //! Nothing here mentions `open_server`, `open_client` or `base_stack`.
+//!
+//! What it says about the protocol itself — events and their fields, actions and their
+//! parameters, startup parameters and their defaults — comes from the renderers in
+//! `crate::protocol::docs`, which the model's `read_documentation` and `--docs` use too.
 
 use std::fmt::Write as _;
 
-use crate::llm::actions::{ActionDefinition, Parameter, ParameterDefinition};
-use crate::protocol::EventType;
+use crate::llm::actions::ActionDefinition;
+use crate::protocol::docs::{failure_mode_text, render_action, render_event, render_startup_param};
 use crate::state::app_state::AppState;
 
 /// Render MCP-shaped documentation for one protocol.
@@ -261,7 +264,7 @@ pub async fn render_protocol_docs(protocol: &str, state: &AppState) -> Option<St
                 ids.join(", ")
             );
             for event in &event_types {
-                render_event(&mut out, event);
+                render_event(&mut out, event, "####");
             }
         }
 
@@ -274,7 +277,7 @@ pub async fn render_protocol_docs(protocol: &str, state: &AppState) -> Option<St
                  static handler).\n\n",
             );
             for action in &sync_actions {
-                render_action(&mut out, action);
+                render_action(&mut out, action, "####");
             }
         }
 
@@ -291,7 +294,7 @@ pub async fn render_protocol_docs(protocol: &str, state: &AppState) -> Option<St
                  accepts them alongside the response actions above.\n\n",
             );
             for action in &async_actions {
-                render_action(&mut out, action);
+                render_action(&mut out, action, "####");
             }
         }
 
@@ -394,7 +397,7 @@ pub async fn render_protocol_docs(protocol: &str, state: &AppState) -> Option<St
                 ids.join(", ")
             );
             for event in &event_types {
-                render_event(&mut out, event);
+                render_event(&mut out, event, "####");
             }
         }
 
@@ -402,7 +405,7 @@ pub async fn render_protocol_docs(protocol: &str, state: &AppState) -> Option<St
         if !sync_actions.is_empty() {
             out.push_str("### Response actions\n\nAction objects a client handler may return.\n\n");
             for action in &sync_actions {
-                render_action(&mut out, action);
+                render_action(&mut out, action, "####");
             }
         }
 
@@ -418,7 +421,7 @@ pub async fn render_protocol_docs(protocol: &str, state: &AppState) -> Option<St
                  of them — or of the response actions above — on the wire now.\n\n",
             );
             for action in &async_actions {
-                render_action(&mut out, action);
+                render_action(&mut out, action, "####");
             }
         } else if !sync_actions.is_empty() {
             out.push_str(
@@ -437,116 +440,4 @@ pub async fn render_protocol_docs(protocol: &str, state: &AppState) -> Option<St
     }
 
     Some(out)
-}
-
-/// What `failure_mode` means for a peer, in one sentence.
-fn failure_mode_text(mode: crate::protocol::metadata::FailureMode) -> &'static str {
-    match mode {
-        crate::protocol::metadata::FailureMode::Answers => {
-            "answers — the peer gets the protocol's own error reply carrying a category \
-             (overloaded or unavailable), never an invented success and never the error text"
-        }
-        crate::protocol::metadata::FailureMode::DeliberatelySilent => {
-            "deliberately silent — nothing is written, because every reply this protocol \
-             defines would assert something the server does not know; the log records \
-             `decision=…` instead"
-        }
-    }
-}
-
-fn render_event(out: &mut String, event: &EventType) {
-    let _ = writeln!(out, "#### `{}`\n", event.id);
-    let _ = writeln!(out, "{}\n", event.description);
-
-    if event.parameters.is_empty() {
-        out.push_str("Event data: (no documented fields)\n\n");
-    } else {
-        out.push_str("Event data fields (a script reads these as `data['event'][…]`):\n\n");
-        for param in &event.parameters {
-            render_parameter(out, param);
-        }
-        out.push('\n');
-    }
-
-    let action_names: Vec<String> = event
-        .actions
-        .iter()
-        .map(|a| format!("`{}`", a.name))
-        .collect();
-    if !action_names.is_empty() {
-        let _ = writeln!(out, "Respond with: {}\n", action_names.join(", "));
-    }
-
-    out.push_str("Example handler response:\n\n```json\n");
-    let example = serde_json::json!({ "actions": [event.effective_response_example()] });
-    out.push_str(&serde_json::to_string_pretty(&example).unwrap_or_default());
-    out.push_str("\n```\n\n");
-
-    for alt in &event.alternative_examples {
-        out.push_str("Alternative:\n\n```json\n");
-        let example = serde_json::json!({ "actions": [alt.clone()] });
-        out.push_str(&serde_json::to_string_pretty(&example).unwrap_or_default());
-        out.push_str("\n```\n\n");
-    }
-}
-
-fn render_action(out: &mut String, action: &ActionDefinition) {
-    let _ = writeln!(out, "#### `{}`\n", action.name);
-    let _ = writeln!(out, "{}\n", action.description);
-    if action.parameters.is_empty() {
-        out.push_str("Parameters: none.\n\n");
-    } else {
-        out.push_str("Parameters:\n\n");
-        for param in &action.parameters {
-            render_parameter(out, param);
-        }
-        out.push('\n');
-    }
-    out.push_str("```json\n");
-    out.push_str(&serde_json::to_string_pretty(&action.example).unwrap_or_default());
-    out.push_str("\n```\n\n");
-}
-
-fn render_parameter(out: &mut String, param: &Parameter) {
-    let _ = writeln!(
-        out,
-        "- `{}` ({}, {}) — {}",
-        param.name,
-        param.type_hint,
-        if param.required {
-            "**required**"
-        } else {
-            "optional"
-        },
-        param.description
-    );
-}
-
-fn render_startup_param(out: &mut String, param: &ParameterDefinition) {
-    let example = serde_json::to_string(&param.example).unwrap_or_default();
-    // The value the server uses when the parameter is omitted, where the protocol declares one.
-    let default = param
-        .default
-        .as_ref()
-        .map(|d| {
-            format!(
-                ", default: `{}`",
-                serde_json::to_string(d).unwrap_or_default()
-            )
-        })
-        .unwrap_or_default();
-    let _ = writeln!(
-        out,
-        "- `{}` ({}, {}{}) — {} Example: `{}`",
-        param.name,
-        param.type_hint,
-        if param.required {
-            "**required**"
-        } else {
-            "optional"
-        },
-        default,
-        param.description,
-        example
-    );
 }

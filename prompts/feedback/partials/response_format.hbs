@@ -1,0 +1,13 @@
+---
+
+# Response Format
+
+Return a JSON object with an `actions` array. Each action has a `type` from the
+Available Actions list ({{{action_names}}}) and that action's documented parameters.
+
+Put every adjustment in this single response, in the order it should be applied.
+No tools are available for this response. Return `{"actions": []}` when nothing
+should change.
+
+Return JSON only, without Markdown fences or narration. Optional brief reasoning
+may precede the JSON inside `<reasoning>` tags; it is logged for the operator.

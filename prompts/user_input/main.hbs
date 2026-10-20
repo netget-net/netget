@@ -10,7 +10,11 @@
 {{/if}}
 # Your Task
 
+{{#if instructions}}
 {{{instructions}}}
+{{else}}
+{{> user_input/partials/instructions }}
+{{/if}}
 
 {{> shared/partials/actions tool_actions=tool_actions regular_actions=regular_actions }}
 
@@ -18,10 +22,10 @@
 {{> shared/partials/base_stack_docs base_stack_docs=base_stack_docs }}
 
 {{/if}}
-{{#if scripting_enabled}}
-{{> shared/partials/scripting selected_mode=selected_scripting_mode }}
+{{#if open_actions_enabled}}
+{{> shared/partials/scripting }}
 
 {{/if}}
 {{> shared/partials/response_format }}
 
-{{> shared/partials/current_state servers=servers mode=mode can_bind_privileged_ports=can_bind_privileged_ports has_raw_socket_access=has_raw_socket_access }}
+{{> shared/partials/current_state }}

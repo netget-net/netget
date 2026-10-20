@@ -2,10 +2,12 @@
 
 {{> feedback/task }}
 
+{{> feedback/partials/instance }}
+
 {{> feedback/partials/instructions }}
 
 {{> shared/partials/actions tool_actions=tool_actions regular_actions=regular_actions }}
 
-{{> shared/partials/response_format }}
+{{> feedback/partials/response_format }}
 
-{{> shared/partials/current_state active_server=active_server can_bind_privileged_ports=can_bind_privileged_ports has_raw_socket_access=has_raw_socket_access }}
+{{> feedback/partials/entries }}

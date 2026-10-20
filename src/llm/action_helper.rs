@@ -798,7 +798,7 @@ async fn call_llm_inner(
     );
 
     // Use the event's prompt description
-    let event_description = event.to_prompt_description();
+    let event_description = event.to_trigger_description();
 
     // Build system prompt using action system (NO trigger - that goes in user message).
     // `advertised_actions` is what the prompt actually offered (tools added, script actions
@@ -927,11 +927,16 @@ async fn call_llm_inner(
 /// trigger's labels (`Event ID:`, `Event:`, `Context data:`), so the newest event stays the
 /// one the prompt — and the test mock — reads as current.
 fn render_unanswered(earlier: &[Event], last: &Event) -> String {
+    // Read together with the history block above it, which says those entries were already
+    // handled: these were NOT, and this one response answers all of them.
     let mut out = format!(
-        "{} more arrived on this connection while you were answering, before the event below \
-         and not yet answered. Your reply answers all {} together: answer each, some or none, \
-         in the order the actions should happen.\n",
+        "{} more events arrived on this connection while you were answering and have NOT been \
+         answered yet; ({}) is the event below. Your reply answers all {} together: include \
+         actions for every event that needs a reply, in the order they should happen. An event \
+         that needs no reply gets no action; return {{\"actions\": []}} only if none of them \
+         needs one.\n",
         earlier.len(),
+        earlier.len() + 1,
         earlier.len() + 1
     );
     for (i, event) in earlier.iter().enumerate() {
@@ -943,7 +948,7 @@ fn render_unanswered(earlier: &[Event], last: &Event) -> String {
         ));
     }
     out.push_str(&format!(
-        "({}) is the event below ({}).\n",
+        "({}) {} — the event below\n",
         earlier.len() + 1,
         last.id()
     ));
@@ -1120,24 +1125,46 @@ async fn call_llm_for_client_inner(
         }
     }
 
-    // Build simple prompt for client
-    let system_prompt =
-        format!(
-        "You are controlling a network client ({}). Your instruction: {}\n\nAvailable actions:\n{}",
+    // The client prompt used to be the instruction and the action list and nothing else: no
+    // response envelope, no "one response", no way to say "nothing now". A model that wrote two
+    // JSON objects lost the second without an error, because the parser takes the first.
+    let system_prompt = format!(
+        "You are controlling a network client ({}). Your instruction: {}\n\n\
+         # Response Format\n\
+         Return ONE JSON object {{\"actions\": [ ... ]}} holding every action to perform now, in \
+         order. Return {{\"actions\": []}} to do nothing now{}. JSON only — no prose, no code \
+         fences; an optional <reasoning>…</reasoning> block may precede it.\n\
+         `set_memory` / `append_memory` keep notes that are shown to you as \"Memory:\" on every \
+         later call; what happened earlier in this session is shown above the event when the \
+         client keeps history.\n\n\
+         # Available actions\n{}",
         protocol.protocol_name(),
         instruction,
-        all_actions.iter().map(|a| a.to_prompt_text()).collect::<Vec<_>>().join("\n\n")
+        if all_actions.iter().any(|a| a.name == "wait_for_more") {
+            " (or `wait_for_more` when a reply is incomplete and more is coming)"
+        } else {
+            ""
+        },
+        all_actions
+            .iter()
+            .map(|a| a.to_prompt_text())
+            .collect::<Vec<_>>()
+            .join("\n\n")
     );
 
-    // Build user message
+    // Build user message. `Event: <id>` and `Data:` stay as the labels: the test mock finds the
+    // current event by them, and the history and batch blocks above carry neither.
     let user_message = if let Some(ev) = event {
         format!(
-            "Event: {}\nData: {}",
+            "Event: {}\nDescription: {}\nData: {}",
             ev.id(),
+            ev.event_type.description,
             serde_json::to_string_pretty(&ev.data).unwrap_or_default()
         )
     } else {
-        "Waiting for instructions".to_string()
+        // "Waiting for instructions" read as "wait", on the one call meant to start the work.
+        "No network event yet: the client has just started. Act on your instruction now."
+            .to_string()
     };
     let user_message = match event {
         Some(ev) if !earlier.is_empty() => {
@@ -1156,9 +1183,20 @@ async fn call_llm_for_client_inner(
         None => user_message,
     };
 
-    // Add memory context if present
+    // Memory comes from the client's state, which is where `set_memory`/`append_memory` write
+    // and where `initial_memory` lands. Most clients passed a local copy updated only from
+    // `memory_updates` — always `None` — or a literal "", so the model's own notes never came
+    // back. The caller's string is kept only when the state has none to offer.
+    let state_memory = match crate::state::ClientId::from_string(&client_id) {
+        Some(cid) => state.get_memory_for_client(cid).await,
+        None => None,
+    };
+    let memory = match &state_memory {
+        Some(m) if !m.is_empty() => m.as_str(),
+        _ => memory,
+    };
     let full_message = if !memory.is_empty() {
-        format!("Memory: {}\n\n{}", memory, user_message)
+        format!("Memory:\n```text\n{}\n```\n\n{}", memory, user_message)
     } else {
         user_message
     };
@@ -1356,28 +1394,15 @@ pub async fn call_llm_for_feedback(
     feedback_entries: &[serde_json::Value],
     status_tx: &tokio::sync::mpsc::UnboundedSender<String>,
 ) -> Result<Vec<serde_json::Value>> {
-    use crate::llm::actions::get_user_input_common_actions;
+    use crate::llm::feedback::{get_feedback_actions, FeedbackTarget};
     use crate::llm::prompt::PromptBuilder;
 
-    // Get available adjustment actions (user input actions for modifying server/client)
-    let selected_mode = state.get_selected_scripting_mode().await;
-    let scripting_env = state.get_scripting_env().await;
-    let is_open_server_enabled = true;
-    let is_open_client_enabled = true;
-    let available_actions = get_user_input_common_actions(
-        selected_mode,
-        &scripting_env,
-        is_open_server_enabled,
-        is_open_client_enabled,
-    );
-
-    // Apply the same scripting-mode filter the prompt builder applies, so the
-    // list we advertise to the model is exactly the list we validate against.
-    // (Previously an empty Vec was passed to the validator, so every action the
-    // model returned was rejected as "unknown action" and the call always failed.)
-    let has_scripting = selected_mode != crate::state::app_state::ScriptingMode::Off;
-    let feedback_actions =
-        PromptBuilder::filter_actions_by_scripting_mode(available_actions, has_scripting);
+    // The adjustments a feedback answer may make: this instance only, nothing that opens,
+    // closes or restarts anything. One list for the prompt, the validator and execution
+    // (`feedback::apply_feedback_actions` refuses anything outside it).
+    let target = FeedbackTarget::from_ids(server_id, client_id)
+        .context("feedback batch names neither a server nor a client")?;
+    let feedback_actions = get_feedback_actions(target);
 
     // Build feedback processing prompt
     let system_prompt = PromptBuilder::build_feedback_system_prompt(

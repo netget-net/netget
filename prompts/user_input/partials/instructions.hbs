@@ -1,82 +1,21 @@
 ## Your Mission
 
-Understand what the user wants and respond with the appropriate actions to make it happen.
+Understand what the user wants and answer with the actions that make it happen.
 
-**Use the `<reasoning>` tag** to explain your understanding and decisions. This helps with:
-- Clarifying ambiguous requests
-- Showing why you chose update vs create
-- Explaining port conflicts or blockers
-- Documenting multi-step decision making
+### Guidelines
 
-### Important Guidelines
+1. **Server or client.** A server *listens*: use `open_server` when the user wants to host, serve, run or listen ("start an HTTP server", "host a website", "run a DNS server"). A client *connects out*: use `open_client` when the user wants to connect to, fetch from, query or send to something that already exists ("connect to Redis at localhost:6379"). What the user wants done decides it, not whether they said "server" or "client".
 
-{{#unless include_base_stacks}}
-1. **Read documentation first**: Before starting servers or clients, you MUST call `read_documentation` with the protocol(s) you need. This enables the server/client actions and explains when to use each mode.
+2. **Use the protocol's own name.** Set `protocol` to the application protocol the user means (`http`, `dns`, `ssh`, `s3`), never a stack such as `ETH>IP>UDP>DNS`, and never `tcp` or `udp` when a specific protocol fits.
 
-2. **Understanding Server vs Client** (CRITICAL):
-   - **Server (hosting)**: Use when user wants to HOST/SERVE content
-     - Keywords: "serve", "host", "listen", "provide", "run server"
-     - Example: "host a website", "start HTTP server", "run DNS server"
-   - **Client (connecting)**: Use when user wants to CONNECT to existing remote server
-     - Keywords: "connect to", "fetch from", "query", "send to", "access remote"
-     - Example: "connect to Redis at localhost:6379", "send ping to host"
-   - ⚠️ If user says "serve", "host", or "provide", use server mode even if they say "client". The ACTION matters more than the word choice!
+3. **Put the behaviour in `instruction`.** What the user says the server or client should do goes in its `instruction`, in plain language. Parts that never need judgement (a fixed banner, an echo, a lookup) can be `event_handlers` instead, which answer without a model call; read the protocol's documentation first for its event ids and actions.
 
-3. **Gather information**: Use tools like `read_file` and `web_search` to read files or search for information before taking action.
+4. **Change, don't duplicate.** To change something already running ("add an endpoint", "answer differently", "move it to port 9000"), use `update_server` with its `server_id`, or `update_client` with its `client_id`; Current State lists both. Do not open a second server for the same job.
 
-4. **Update, don't recreate**: If a user asks to modify an existing server (e.g., "add an endpoint", "change the behavior"), use `update_instruction` - don't create a new server on the same port.
+5. **Gather information first.** Use `read_documentation` for a protocol's events, actions and parameters, and tools such as {{{tool_examples}}} for anything else. A response with tools is a draft: its actions do not run. Only your final response, with no tools, is executed.
 
-5. **JSON responses only**: Your entire response must be valid JSON: `{"actions": [...]}`
+6. **Answer with one JSON object**, optionally preceded by a `<reasoning>…</reasoning>` block: `{"actions": [...]}` to act, `{"tools": [...]}` to look something up.
+{{#unless open_actions_enabled}}
 
-**IMPORTANT**: The server and client actions are DISABLED until you read protocol documentation. Use `read_documentation` first!
-
-{{else}}
-1. **Use built-in protocols**: When users ask to start servers, use the `open_server` action with the appropriate `protocol` (e.g., `http`, `ssh`, `dns`, `s3`). NetGet has 50+ protocols built-in - leverage them!
-
-2. **Protocol naming**: Always use the **application-layer protocol name** for `protocol`. Use simple names like `"http"`, `"dns"`, `"tcp"` - NOT full protocol stacks like `"ETH>IP>UDP>DNS"`.
-
-3. **Include user instructions**: When users provide instructions or describe behavior, always include the `instruction` field in the `open_server` or `open_client` action. The instruction is how the server/client will behave.
-   ```json
-   {
-     "actions": [
-       {"type": "open_server", "port": 8080, "protocol": "http", "instruction": "Echo server that returns Hello World"}
-     ]
-   }
-   ```
-
-4. **Scheduled tasks**: To add periodic tasks to a server, use the `scheduled_tasks` field:
-   ```json
-   {
-     "actions": [
-       {
-         "type": "open_server",
-         "port": 8080,
-         "protocol": "http",
-         "scheduled_tasks": [
-           {
-             "task_id": "heartbeat",
-             "recurring": true,
-             "interval_secs": 10,
-             "instruction": "Send heartbeat to all connected clients"
-           }
-         ]
-       }
-     ]
-   }
-   ```
-
-5. **Client connections**: When opening client connections, use `host` and `port` fields separately:
-   ```json
-   {
-     "actions": [
-       {"type": "open_client", "host": "localhost", "port": 6379, "protocol": "redis"}
-     ]
-   }
-   ```
-
-6. **Gather information first**: Use tools like {{{tool_examples}}} to read files or search for information before taking action.
-
-7. **Update, don't recreate**: If a user asks to modify an existing server (e.g., "add an endpoint", "change the behavior"), use `update_instruction` - don't create a new server on the same port.
-
-8. **Explain your reasoning**: Use `<reasoning>` tags to show your thought process, especially for non-trivial decisions.
+**`open_server` and `open_client` are not offered yet.** Call `read_documentation` for the protocol first; both become available once you have read it.
 {{/unless}}

@@ -95,6 +95,61 @@ pub async fn try_execute_event_handler(
     }
 }
 
+/// The `language` values a script handler accepts, as the prompt and errors state them.
+pub const SCRIPT_LANGUAGE_TOKENS: &str =
+    "python (or python3, py), javascript (or js, node, nodejs), go (or golang), perl";
+
+/// A script handler's `language`, or `None` when it names no language NetGet can run.
+///
+/// The one place the token is read, so that what the prompt advertises, what
+/// `parse_event_handlers` accepts and what the executor runs cannot drift apart. The common
+/// aliases are accepted because the model reads the prompt's runtime list ("Node.js
+/// v20.0.0") and writes what it saw.
+pub fn parse_script_language(language: &str) -> Option<crate::scripting::ScriptLanguage> {
+    use crate::scripting::ScriptLanguage;
+    match language.trim().to_ascii_lowercase().as_str() {
+        "python" | "python3" | "py" => Some(ScriptLanguage::Python),
+        "javascript" | "js" | "node" | "nodejs" | "node.js" => Some(ScriptLanguage::JavaScript),
+        "go" | "golang" => Some(ScriptLanguage::Go),
+        "perl" => Some(ScriptLanguage::Perl),
+        _ => None,
+    }
+}
+
+/// The languages a script handler may name on this machine, for the prompt: the token to
+/// write, then the installed version, e.g. `` `python` (Python 3.11.0) ``. `only` narrows the
+/// list to the operator's chosen language. A language that is not installed is left out,
+/// because a handler naming it would fall back to the model at every event.
+pub fn describe_script_languages(
+    env: &crate::scripting::ScriptingEnvironment,
+    only: Option<crate::scripting::ScriptLanguage>,
+) -> String {
+    use crate::scripting::ScriptLanguage;
+    let installed = [
+        (ScriptLanguage::Python, "python", env.python.as_deref(), ""),
+        (
+            ScriptLanguage::JavaScript,
+            "javascript",
+            env.javascript.as_deref(),
+            "Node.js ",
+        ),
+        (ScriptLanguage::Go, "go", env.go.as_deref(), ""),
+        (ScriptLanguage::Perl, "perl", env.perl.as_deref(), ""),
+    ];
+    let parts: Vec<String> = installed
+        .iter()
+        .filter(|(lang, ..)| only.is_none_or(|o| o == *lang))
+        .filter_map(|(_, token, version, prefix)| {
+            version.map(|v| format!("`{token}` ({prefix}{v})"))
+        })
+        .collect();
+    if parts.is_empty() {
+        "none installed on this machine".to_string()
+    } else {
+        parts.join(", ")
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn try_execute_event_handler_inner(
     state: &AppState,
@@ -485,18 +540,14 @@ async fn execute_client_script_handler(
         event: event_json,
     };
 
-    let script_language = match language.to_lowercase().as_str() {
-        "python" => crate::scripting::ScriptLanguage::Python,
-        "javascript" | "js" => crate::scripting::ScriptLanguage::JavaScript,
-        "go" => crate::scripting::ScriptLanguage::Go,
-        "perl" => crate::scripting::ScriptLanguage::Perl,
-        _ => {
-            warn!(
-                "Unknown script language '{}', falling back to LLM",
-                language
-            );
-            return Ok(ClientEventHandlerResult::FallbackToLlm { instruction: None });
-        }
+    // `parse_event_handlers` refuses an unknown language when the handler is configured,
+    // so this arm is reached only by a config built some other way.
+    let Some(script_language) = parse_script_language(language) else {
+        warn!(
+            "Unknown script language '{}' (accepted: {}), falling back to LLM",
+            language, SCRIPT_LANGUAGE_TOKENS
+        );
+        return Ok(ClientEventHandlerResult::FallbackToLlm { instruction: None });
     };
 
     let scripting_env = state.get_scripting_env().await;
@@ -634,18 +685,14 @@ async fn execute_script_handler(
     };
 
     // Parse language
-    let script_language = match language.to_lowercase().as_str() {
-        "python" => crate::scripting::ScriptLanguage::Python,
-        "javascript" | "js" => crate::scripting::ScriptLanguage::JavaScript,
-        "go" => crate::scripting::ScriptLanguage::Go,
-        "perl" => crate::scripting::ScriptLanguage::Perl,
-        _ => {
-            warn!(
-                "Unknown script language '{}', falling back to LLM",
-                language
-            );
-            return Ok(EventHandlerResult::FallbackToLlm { instruction: None });
-        }
+    // `parse_event_handlers` refuses an unknown language when the handler is configured,
+    // so this arm is reached only by a config built some other way.
+    let Some(script_language) = parse_script_language(language) else {
+        warn!(
+            "Unknown script language '{}' (accepted: {}), falling back to LLM",
+            language, SCRIPT_LANGUAGE_TOKENS
+        );
+        return Ok(EventHandlerResult::FallbackToLlm { instruction: None });
     };
 
     // Check if language is available

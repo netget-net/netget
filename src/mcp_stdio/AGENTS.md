@@ -111,10 +111,10 @@ OllamaClient (3 backends)
 
 ## Protocol documentation (`docs.rs`)
 
-`get_protocol_docs` has its own renderer (`src/mcp_stdio/docs.rs`) rather than
-reusing the TUI LLM's `read_documentation`. The internal renderer describes the
-`open_server` / `open_client` **actions** and a `base_stack` parameter — an API
-no MCP caller can invoke. `docs.rs` renders what an MCP caller actually has:
+`get_protocol_docs` has its own framing (`src/mcp_stdio/docs.rs`) rather than
+reusing the model's `read_documentation`, which is framed around the `open_server` /
+`open_client` **actions** — an API no MCP caller can invoke. `docs.rs` renders what an
+MCP caller actually has:
 
 - the exact `start_server` / `start_client` arguments that apply to the protocol
   (interface-bound protocols get `interface`/`mac_address` instead of `port`/`host`);
@@ -128,8 +128,11 @@ no MCP caller can invoke. `docs.rs` renders what an MCP caller actually has:
 - for a server, its `failure_mode` (what the peer gets when the model cannot answer) and
   whether it is `connectionless`.
 
-`llm::actions::tools::execute_read_documentation` is untouched — the TUI's
-`/docs` command and the internal LLM still use it.
+What both say about the protocol itself — each event with its fields, each action with its
+parameters and example, each startup parameter with its default — is written by the shared
+renderers in `src/protocol/docs.rs` (`render_event`, `render_action`, `render_startup_param`),
+which `--docs` uses too, so the three cannot drift. `tests/prompt/mod.rs` snapshots both the
+model's `read_documentation` output and this module's output for `http` and `ssh`.
 
 ## `start_server` without a `port`
 

@@ -3,17 +3,17 @@
 
 # Response Format
 
-**CRITICAL:** Your response must be **valid JSON only**. No explanations, no markdown, no code blocks.
+**CRITICAL:** Your response is **one JSON object**, optionally preceded by a `<reasoning>…</reasoning>` block. No other text, no markdown, no code fences.
 
 ## Required Format
 
 ```json
 {
-  "actions": [{"type": "cancel_task", "task_id": "cleanup_logs"}]
+  "actions": [{"type": "show_message", "message": "Done"}]
 }
 ```
 
-- Must start with `{` and end with `}`
+- Apart from an optional `<reasoning>` block before it, the response starts with `{` and ends with `}`
 - **`tools`** (optional): Array of tool calls (read_file{{#if web_search_enabled}}, web_search{{/if}}, generate_random, etc.)
   - Tools return their results for another response; any actions in that intermediate response are drafts
   - Use tools to gather information before deciding on actions
@@ -44,7 +44,7 @@ Brief explanation of your understanding and decision (1-3 sentences)
 **Reasoning rules:**
 1. **Tag is optional** - You can omit it for simple, straightforward cases
 2. **Keep it brief** - 1-3 sentences explaining key points
-3. **Tag can be anywhere** - Before or after JSON (will be extracted and logged)
+3. **Put it before the JSON** - It is extracted and logged, never executed
 4. **Valid JSON still required** - After removing reasoning tag, valid JSON must remain
 
 ## Examples
@@ -90,7 +90,7 @@ Brief explanation of your understanding and decision (1-3 sentences)
 {
   "actions": [
     {"type": "close_server", "server_id": 1},
-    {"type": "cancel_task", "task_id": "cleanup_logs"}
+    {"type": "show_message", "message": "Server #1 stopped"}
   ]
 }
 ```

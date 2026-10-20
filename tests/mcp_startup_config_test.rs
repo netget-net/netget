@@ -212,8 +212,14 @@ async fn background_ticker_stops_when_the_last_service_clone_is_dropped() {
         .unwrap()
     };
     state.add_task(task("live-owner")).await;
+    // The owner does not exist, so a tick fails the task and removes it: either outcome
+    // shows the ticker ran.
     tokio::time::timeout(Duration::from_secs(3), async {
-        while state.get_task("live-owner").await.unwrap().status == TaskStatus::Scheduled {
+        while state
+            .get_task("live-owner")
+            .await
+            .is_some_and(|t| t.status == TaskStatus::Scheduled)
+        {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     })

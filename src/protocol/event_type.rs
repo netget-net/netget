@@ -388,6 +388,26 @@ impl Event {
     pub fn to_prompt_description(&self) -> String {
         self.event_type.to_prompt_description()
     }
+
+    /// What the model reads about the event it is answering: its description and the fields
+    /// its data carries — not its actions. The system prompt already lists the offered actions;
+    /// repeating them here numbered from 1 (the system prompt numbers from 0) contradicted it
+    /// twice: on the fallback path, where the event declares none but the protocol's are
+    /// offered ("No specific actions available"), and in a batch, where earlier events'
+    /// actions are offered but only the newest event's were listed "for this event".
+    pub fn to_trigger_description(&self) -> String {
+        let mut result = format!("{}\n", self.event_type.description);
+        if !self.event_type.parameters.is_empty() {
+            result.push_str("Fields in the data below:\n");
+            for param in &self.event_type.parameters {
+                result.push_str(&format!(
+                    "  - {} ({}): {}\n",
+                    param.name, param.type_hint, param.description
+                ));
+            }
+        }
+        result
+    }
 }
 
 /// Format event types for inclusion in LLM prompts

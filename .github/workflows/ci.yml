@@ -302,7 +302,13 @@ jobs:
         run: python3 .github/scripts/test_summarize_evidence.py
 
       - name: cargo check (fuzz targets still compile)
-        run: cargo check --manifest-path fuzz/Cargo.toml --all-targets
+        # fuzz/ is its own workspace and its lockfile is not committed, so without a seed it
+        # resolves every dependency fresh and breaks whenever an upstream release does. Seed
+        # it from the root lockfile: the fuzz build then uses the versions the crate is built
+        # and tested with, and cargo adds only what fuzz/ needs on top (libfuzzer-sys, …).
+        run: |
+          cp Cargo.lock fuzz/Cargo.lock
+          cargo check --manifest-path fuzz/Cargo.toml --all-targets
 
   registry-audit:
     name: Registry-wide audits (--all-features, advisory)

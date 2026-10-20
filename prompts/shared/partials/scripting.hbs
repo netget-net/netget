@@ -1,102 +1,73 @@
 ---
 
-# Event Handler Configuration
+# Event Handlers
 
-**Current handler mode:** {{{event_handler_mode}}}
+`open_server`, `open_client`, `update_server` and `update_client` take an `event_handlers` array: rules deciding who answers each event the instance raises. Each rule is `{"event_pattern": "<event id>", "handler": {...}}`; `"*"` matches every event. Rules are checked in order and the first match answers. An event no rule matches is answered by the model, following the instance's `instruction`.
 
-## Choosing the Right Handler Mode
+Event ids and the actions that answer them differ per protocol: read them with `read_documentation` before writing a rule. A generic action such as `send_data` does not exist; use the protocol's own (`send_tcp_data`, `send_http_response`, ...).
+{{#if handler_mode_preference}}
 
-When configuring event handlers, you have three powerful options at your disposal. Choose wisely based on the nature of your response:
+**Operator preference:** {{{handler_mode_preference}}}
+{{/if}}
 
-### 🔒 Static Mode - For Unchanging Responses
-**Use when:** The response is completely fixed and will never vary.
-**Perfect for:**
-- Welcome banners that are always identical
-- Fixed error messages
-- Constant redirects to specific URLs
-- Hardcoded status responses
+## Choosing a handler
 
-**Think:** "Would this exact response work forever, regardless of context, time, or user?"
-
-### ⚙️ Script Mode - For Deterministic Logic
-**Use when:** The response varies based on input, but the logic is deterministic and can be expressed in code.
-**Perfect for:**
-- Authentication rules (if username == "admin" then allow)
-- Routing based on paths or headers
-- Simple protocol state machines
-- Conditional responses based on predictable patterns
-- Data transformations and formatting
-
-**Think:** "Can I write an if/else statement or function that perfectly captures this logic?"
-
-**Key distinction from LLM:** Scripts execute deterministic code - given the same input, they ALWAYS produce the same output. No creativity, no interpretation, just pure logic.
-
-### 🧠 LLM Mode - For Intelligence and Adaptation
-**Use when:** The response requires understanding, reasoning, creativity, or context awareness.
-**Perfect for:**
-- Natural language conversations
-- Context-dependent decisions
-- Interpreting user intent
-- Creative or varied responses
-- Complex reasoning that's hard to codify
-- Adaptive behavior based on conversation history
-
-**Think:** "Does this need understanding, interpretation, or creativity that code alone can't provide?"
-
-**Key distinction from Script:** LLMs can understand nuance, context, and meaning. They don't just match patterns - they reason about intent.
+- **static** — the answer is fixed, apart from fields copied from the event: a banner, a canned status page, a constant redirect, echoing a correlation id. No model call.
+{{#if scripting_enabled}}
+- **script** — the answer follows rules you can write as code: authentication against a list, routing on a path, a small state machine, a calculation. Same input, same output. No model call.
+{{/if}}
+- **llm** — the answer needs understanding: conversation, interpreting intent, varied or creative content. One model call per event.
+- **manual** — a person answers each matching event at the NetGet dashboard.
 
 ---
 
-## Event Handlers System
+## Handler type: static
 
-When opening servers or clients, you can configure how different events are handled by providing an `event_handlers` array. Each handler specifies:
+```json
+{"event_pattern": "<event_id>", "handler": {"type": "static", "actions": [{"type": "<protocol_action>", "<param>": "<value>"}]}}
+```
 
-1. **event_pattern**: Event ID to match (from your protocol's documentation) or "*" for all events
-2. **handler**: Configuration object (see sections below for each type)
+A string in the actions may contain `\{{event.<field>}}`, replaced by that field of the triggering event. A string that is nothing but the reference keeps the field's JSON type, which is how a protocol that must echo a correlation id stays correct: `"query_id": "\{{event.query_id}}"` stays a number. A reference to a field the event does not have is an error, not an empty string.
 
-Handlers are matched in order - the first matching pattern wins.
+For large content, use an XML reference instead of escaping it into JSON:
+
+```json
+{"event_pattern": "<event_id>", "handler": {"type": "static", "actions": [{"type": "<protocol_action>", "body": "<content_ref>"}]}}
+
+<content_ref>
+Large content goes here without JSON escaping.
+Multiple lines, special characters, all preserved.
+</content_ref>
+```
+
+The reference `<content_ref>` is replaced with the text between `<content_ref>` and `</content_ref>`.
+{{#if scripting_enabled}}
 
 ---
 
-## Handler Type: Script
+## Handler type: script
 
-Use scripts when responses are **deterministic and rule-based**. Scripts receive event data as JSON, execute code logic, and output actions.
+```json
+{"event_pattern": "<event_id>", "handler": {"type": "script", "language": "python", "code": "<handler>"}}
+```
 
-**When to use:**
-- Authentication with predefined user lists or password rules
-- Routing requests based on paths, headers, or patterns
-- Protocol state machines with clear state transitions
-- Data validation with specific criteria
-- Simple calculations or transformations
+`language` is one of the languages listed in `open_server`'s `event_handlers` parameter. A script must finish within 30 seconds per event or it is killed and the event goes to the model. It can also print `{"fallback_to_llm": true}` to hand one event to the model.
 
-**When NOT to use:**
-- Responses requiring natural language understanding
-- Creative or varied output
-- Context-dependent reasoning
-- Interpretation of user intent
-
-**Script Input (JSON via stdin):**
+**Input (one JSON object on stdin):**
 ```json
 {
-  "event_type_id": "<event_type_from_protocol>",
-  "server": {"id": 1, "port": 9000, "stack": "<protocol_stack>", "memory": "", "instruction": "..."},
-  "connection": {"id": "conn_123", "remote_addr": "127.0.0.1:54321", "bytes_sent": 0, "bytes_received": 0},
+  "event_type_id": "<event id>",
+  "server": {"id": 1, "port": 9000, "stack": "<protocol stack>", "memory": "", "instruction": "..."},
+  "connection": {"id": "conn-123", "remote_addr": "127.0.0.1:54321", "bytes_sent": 0, "bytes_received": 0},
   "event": {"<event_field>": "<event_value>"}
 }
 ```
 
-**Script Output (CRITICAL - must output JSON with actions array):**
-```json
-{"actions": [{"type": "send_http_response", "status": 200, "body": "Hello"}]}
-```
+A client's script gets `"client": {"id", "remote_addr", "protocol", "memory", "instruction"}` instead of `"server"`, and no `"connection"`. The event's fields sit directly under `event`.
 
-**CRITICAL**: Use the **protocol-specific action types** from your protocol's documentation. **DO NOT** use generic actions like "send_data" - instead use the actual action types available for your protocol. Check the protocol documentation (via `read_documentation`) to see the exact action types and their parameters for your protocol.
+**Output (stdout):** `{"actions": [...]}` using the protocol's own action types.
 
-**ALWAYS branch on `event_type_id` with a switch/case (or if/elif) — even for a single event.**
-One handler routed with `event_pattern: "*"` receives every event type the protocol
-emits, so the first thing your code should do is switch on `event["event_type_id"]` (or,
-in resident mode, the `event_type` argument) and handle each case explicitly. This keeps
-the handler correct when new event types arrive and makes the intended behavior obvious:
+**Branch on `event_type_id`, even for a single event.** A rule on `"*"` receives every event the protocol raises, so handle each case explicitly:
 
 ```python
 import json, sys
@@ -106,320 +77,100 @@ event = data["event"]
 
 if event_type == "http_request":
     actions = [{"type": "send_http_response", "status": 200, "body": "ok"}]
-elif event_type == "connection_opened":
-    actions = []
 else:
-    # Unknown event: do nothing (or return {"fallback_to_llm": true} to defer)
-    actions = []
+    # Not handled here: let the model answer it.
+    print(json.dumps({"fallback_to_llm": True}))
+    sys.exit(0)
 
 print(json.dumps({"actions": actions}))
 ```
 
----
+### Write code as an XML reference
 
-## 📝 Using XML References for Code (NO JSON ESCAPING!)
+Put the code in a tag after your JSON and name the tag in `code`; no JSON escaping is needed:
 
-**ALWAYS use XML references for code** - even simple scripts benefit from this format!
-
-Instead of JSON-escaping your code (painful and error-prone), use simple XML-style tags:
-
-**Format:**
-```json
-{
-  "event_pattern": "event_name",
-  "handler": {
-    "type": "script",
-    "language": "python",
-    "code": "<script001>"
-  }
-}
-
-<script001>
-import json
-import sys
-
-# No escaping needed! Write code naturally.
-data = json.load(sys.stdin)
-result = {"actions": [{"type": "send_http_response", "status": 200, "body": "Hello"}]}
-print(json.dumps(result))
-</script001>
-```
-
-**Tag naming:** Use simple names like `<script001>`, `<script002>`, `<auth>`, `<handler>`, etc.
-**Placement:** Tags can appear before or after your JSON response.
-**Closing:** Use `</tagname>` or just `<tagname>` to close (both work).
-
-**Why use references?**
-- ✅ No JSON string escaping (no `\n`, `\"`, `\\`)
-- ✅ Write code naturally with proper formatting
-- ✅ Much easier to read and debug
-- ✅ Fewer token errors from malformed escape sequences
-
-**Example with reference:**
-```json
-{
-  "event_pattern": "<event_id>",
-  "handler": {
-    "type": "script",
-    "language": "python",
-    "code": "<event_handler>"
-  }
-}
-
-<event_handler>
-import json
-import sys
-
-data = json.load(sys.stdin)
-event = data['event']
-
-# Process event data and decide response
-result = {
-    "actions": [{
-        "type": "<protocol_action>",
-        "<param>": "<value>"
-    }]
-}
-
-print(json.dumps(result))
-</event_handler>
-```
-
-**Multiple scripts example (different handlers for different events):**
 ```json
 {
   "event_handlers": [
-    {
-      "event_pattern": "<event_type_1>",
-      "handler": {"type": "script", "language": "python", "code": "<handler1>"}
-    },
-    {
-      "event_pattern": "<event_type_2>",
-      "handler": {"type": "script", "language": "python", "code": "<handler2>"}
-    }
+    {"event_pattern": "<event_type_1>", "handler": {"type": "script", "language": "python", "code": "<handler1>"}},
+    {"event_pattern": "<event_type_2>", "handler": {"type": "script", "language": "python", "code": "<handler2>"}}
   ]
 }
 
 <handler1>
 import json, sys
 data = json.load(sys.stdin)
-# Handle event type 1
-print(json.dumps({"actions": [{"type": "<protocol_action>", ...}]}))
+print(json.dumps({"actions": [{"type": "<protocol_action>", "<param>": "<value>"}]}))
 </handler1>
 
 <handler2>
 import json, sys
 data = json.load(sys.stdin)
-# Handle event type 2
-print(json.dumps({"actions": [{"type": "<protocol_action>", ...}]}))
+print(json.dumps({"actions": [{"type": "<protocol_action>", "<param>": "<value>"}]}))
 </handler2>
 ```
 
-**Script constraints:**
-- Must complete within 30 seconds per event or it is terminated
-- Can return `{"fallback_to_llm": true}` to delegate complex cases back to LLM
-- Supported languages: python, javascript, go, perl
+Tags can appear before or after the JSON. Close with `</tagname>`.
 
----
+### Resident scripts (state across events)
 
-## Handler Type: Script (Resident / Persistent Mode)
+By default a script starts a fresh interpreter for every event and keeps nothing between events. With **`"resident": true`** one interpreter stays alive and module-level variables persist: a request counter, a parsed config, a per-connection map.
 
-By default a script handler spawns a **fresh interpreter for every event**, so it keeps
-**no state between events** and pays start-up each time. Set **`"resident": true`** to keep
-one interpreter process **alive across events**: it is started once and then receives each
-event on stdin, so module-level variables persist — a running counter, a parsed config, a
-per-connection map — with no re-reading.
-
-**Use resident mode when the handler needs memory across events:** counting requests,
-accumulating a session, maintaining a small state machine, caching a parsed structure.
-Use the default per-event mode for stateless logic (routing, fixed transforms).
-
-**Contract — you define a `handle` function, do NOT read stdin yourself.** The runtime
-feeds events to your `handle` and serializes its return value as the actions. **Always
-switch/case on `event_type`.**
+A resident script defines a `handle` function and does **not** read stdin; the runtime calls it for each event and serialises what it returns:
 
 ```json
-{
-  "event_pattern": "*",
-  "handler": {
-    "type": "script",
-    "language": "python",
-    "resident": true,
-    "scope": "server",
-    "code": "<resident>"
-  }
-}
+{"event_pattern": "*", "handler": {"type": "script", "language": "python", "resident": true, "scope": "server", "code": "<resident>"}}
 
 <resident>
-# Module-level state persists across every event (this is the whole point):
 request_count = 0
-seen = {}
 
 def handle(event_type, event, message):
     global request_count
-    # ALWAYS switch on the event type:
     if event_type == "http_request":
         request_count += 1
-        return [{"type": "send_http_response", "status": 200,
-                 "body": "request #%d" % request_count}]
-    elif event_type == "connection_opened":
-        return []
-    else:
-        return []   # unknown event: no action
+        return [{"type": "send_http_response", "status": 200, "body": "request #%d" % request_count}]
+    return []
 </resident>
 ```
 
-JavaScript uses the same shape (`function handle(event_type, event, message) { ... }`
-with module-level `let` for state and a `switch (event_type)`); Perl uses
-`sub handle { my ($event_type, $event, $message) = @_; ... }` returning an array-ref.
+JavaScript uses `function handle(event_type, event, message) { ... }` with module-level `let`; Perl uses `sub handle { my ($event_type, $event, $message) = @_; ... }` returning an array-ref.
 
-**`handle` return values:** an array of actions, or `{"actions": [...]}`, or an empty
-array / `None` for "do nothing". Raising an exception defers this one event to the LLM
-(the process stays alive for the next event).
-
-**`scope`** decides which events share one process and therefore share state:
-- `"server"` (default) — one process for the whole server; every connection's events share
-  the same state (e.g. a server-wide counter).
-- `"connection"` — one process **per connection**; each connection has independent state.
-
-**Notes:**
-- Resident languages: `python`, `javascript`, `perl`. `go` has no persistent form and
-  transparently falls back to per-event execution.
-- Each event still has the 30-second budget; a resident that hangs on one event is killed
-  and the event is deferred to the LLM. Resident processes are shut down when the server
-  closes.
+- `handle` returns an array of actions, `{"actions": [...]}`, or an empty array / `None` for nothing. An exception hands that one event to the model; the process stays alive.
+- `scope`: `"server"` (default) shares one process, and its state, across every connection; `"connection"` gives each connection its own.
+- Resident languages: `python`, `javascript`, `perl`. `go` has no resident form and runs per event.
+- A resident `handle` that hangs past 30 seconds on an event is killed and that event goes to the model. Resident processes stop with the server.
+{{/if}}
 
 ---
 
-## Handler Type: Static
+## Handler type: llm
 
-Use static handlers for completely **fixed, unchanging responses**. No code, no logic - just predefined actions that never vary.
-
-**When to use:**
-- Welcome messages that are always identical
-- Fixed banners or MOTD
-- Constant redirects
-- Hardcoded status responses
-- Error messages that never change
-
-**IMPORTANT**: Use protocol-specific action types from your protocol's documentation. Each protocol has its own specific action types. Do NOT use generic "send_data" - check your protocol's documentation to see the available action types and their parameters.
-
-**Example static handler pattern:**
 ```json
-{
-  "event_pattern": "<event_id>",
-  "handler": {
-    "type": "static",
-    "actions": [
-      {"type": "<protocol_specific_action>", ...protocol_params...}
-    ]
-  }
-}
+{"event_pattern": "<event_id>", "handler": {"type": "llm", "instruction": "<how to handle this event>"}}
 ```
 
-**Key points:**
-- Replace `<event_id>` with the actual event ID for your protocol (from documentation)
-- Replace `<protocol_specific_action>` with your protocol's action type (from documentation)
-- Use `*` as event_pattern to match all events
+`instruction` is required. The model answers the matched event with this instruction added to the instance's own, so it can say how this one event differs. Leaving an event to no rule at all also sends it to the model, with the instance's `instruction`.
 
-**For large static content (HTML, configs, etc.), use XML references:**
+## Handler type: manual
+
 ```json
-{
-  "event_pattern": "<event_id>",
-  "handler": {
-    "type": "static",
-    "actions": [
-      {"type": "<protocol_action>", "body": "<content_ref>", ...other_params...}
-    ]
-  }
-}
-
-<content_ref>
-Large content goes here without JSON escaping.
-Multiple lines, special characters, all preserved.
-</content_ref>
+{"event_pattern": "<event_id>", "handler": {"type": "manual", "timeout_secs": 300}}
 ```
 
-The XML reference `<content_ref>` is replaced with the actual content between `<content_ref>` and `</content_ref>` tags.
+The event waits for a person to answer it at the NetGet dashboard. With no answer within `timeout_secs` (default 300) it fails closed: the peer gets the protocol's refusal. Use it only when the user wants to answer events themselves.
 
 ---
 
-## Handler Type: LLM
+## Combining rules
 
-Use LLM handlers (default) for **intelligent, context-aware, and adaptive responses**. The LLM receives the event and uses its instruction, memory, and reasoning to generate appropriate actions.
-
-**When to use:**
-- Natural language processing and conversation
-- Context-aware decision making
-- Interpreting user intent
-- Creative or varied responses
-- Complex reasoning that's hard to codify
-- Adaptive behavior based on history
-
-**Example LLM handler:**
-```json
-{
-  "event_pattern": "<event_id>",
-  "handler": {
-    "type": "llm"
-  }
-}
-```
-
-Use `*` as event_pattern to route all events to the LLM.
-
----
-
-## Configuration Examples
-
-**Mixed handlers - Pattern (use different handlers for different events):**
 ```json
 "event_handlers": [
-  {
-    "event_pattern": "<connection_event>",
-    "handler": {"type": "static", "actions": [{"type": "<protocol_action>", ...}]}
-  },
-  {
-    "event_pattern": "<data_event>",
-    "handler": {"type": "script", "language": "python", "code": "<handler>"}
-  },
-  {
-    "event_pattern": "*",
-    "handler": {"type": "llm"}
-  }
+  {"event_pattern": "<connection_event>", "handler": {"type": "static", "actions": [{"type": "<protocol_action>", "<param>": "<value>"}]}},
+{{#if scripting_enabled}}
+  {"event_pattern": "<data_event>", "handler": {"type": "script", "language": "python", "code": "<handler>"}},
+{{/if}}
+  {"event_pattern": "*", "handler": {"type": "llm", "instruction": "<how to handle everything else>"}}
 ]
 ```
 
-**All scripts (deterministic handling for all events):**
-```json
-"event_handlers": [
-  {
-    "event_pattern": "*",
-    "handler": {"type": "script", "language": "python", "code": "<handler>"}
-  }
-]
-```
-
-**All static (fixed response for all events):**
-```json
-"event_handlers": [
-  {
-    "event_pattern": "*",
-    "handler": {"type": "static", "actions": [{"type": "<protocol_action>", ...}]}
-  }
-]
-```
-
-**All LLM (intelligent handling - default):**
-```json
-"event_handlers": [
-  {
-    "event_pattern": "*",
-    "handler": {"type": "llm"}
-  }
-]
-```
-
-**Note:** Replace `<protocol_action>`, `<connection_event>`, `<data_event>` with actual values from your protocol's documentation. Use `read_documentation` to get protocol-specific event IDs and action types.
-
-
+Replace `<connection_event>`, `<data_event>` and `<protocol_action>` with the ids and actions `read_documentation` gives for the protocol.

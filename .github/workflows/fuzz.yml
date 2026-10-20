@@ -121,7 +121,10 @@ jobs:
       # is caught by libFuzzer's signal handler rather than by ASan.
       - name: Build target
         working-directory: fuzz
-        run: cargo fuzz build ${{ matrix.target }}
+        # Seeded from the root lockfile for the reason ci.yml's fuzz check gives.
+        run: |
+          cp ../Cargo.lock Cargo.lock
+          cargo fuzz build ${{ matrix.target }}
 
       # -timeout=25 makes a single slow input a reported crash rather than a job that
       # silently overruns its budget: libFuzzer only checks the wall clock between

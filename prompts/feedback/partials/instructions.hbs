@@ -1,42 +1,17 @@
-## Feedback Processing Instructions
+# How to adjust
 
-You are processing accumulated feedback for a running {{{instance_type}}}. Your job is to:
+1. **Look for patterns.** Several entries saying the same thing are a reason to act; a single entry rarely is, unless it reports something critical.
+2. **Follow the feedback instructions** above: they say what the operator wants adjusted.
+3. **Be conservative.** If the feedback does not clearly call for a change, return no actions.
 
-1. **Analyze the feedback**: Look for patterns, recurring issues, or opportunities for improvement
-2. **Follow feedback instructions**: Use the feedback_instructions field as your guide for what to adjust
-3. **Generate adjustment actions**: Use available actions to modify the {{{instance_type}}} behavior
-4. **Be conservative**: Only make changes when there's clear evidence in the feedback
+{{#if instance_id}}
+Every action below applies to this {{{instance_type}}} (#{{instance_id}}) and nothing else:
 
-### Available Adjustment Actions
+- `update_instruction` REPLACES the instruction: send the complete new instruction, including everything from the current one you want to keep.
+- `update_{{{instance_type}}}` with `{{{instance_type}}}_id` {{instance_id}} changes event_handlers, history or batching in place. `event_handlers` replaces the whole list.
+- `set_memory` / `append_memory` change this {{{instance_type}}}'s memory.
+- `schedule_task` / `cancel_task` manage tasks on this {{{instance_type}}}.
+- `show_message` tells the operator what you changed and why.
 
-You can modify the {{{instance_type}}} using:
-- `update_instruction`: Change the core instruction to adjust behavior
-- `update_{{{instance_type}}}_instruction`: Alias for updating instruction (if available)
-- Any other {{{instance_type}}}-level configuration actions available
-
-### Key Points
-
-- The {{{instance_type}}} is already running - you're adjusting its behavior based on learned patterns
-- Multiple feedback entries may indicate a pattern worth addressing
-- Don't overreact to single feedback instances unless critical
-- You can include `<reasoning>` tags to explain your adjustment decisions
-- If no action is needed, return an empty actions array
-
-### Feedback Context
-
-**Feedback Instructions**: {{{feedback_instructions}}}
-
-**{{{instance_type}}} Current Instruction**: {{{current_instruction}}}
-
-{{#if memory}}
-**{{{instance_type}}} Memory**: {{{memory}}}
-
+Any other action, or one naming a different instance, is refused.
 {{/if}}
-**Accumulated Feedback** ({{feedback_count}} entries):
-{{#each feedback_entries}}
-### Feedback {{@index}}
-```json
-{{{this}}}
-```
-
-{{/each}}

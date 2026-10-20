@@ -2,29 +2,10 @@
 
 {{> network_request/task }}
 
-{{#if global_instructions}}
-## Global Instructions
-{{{global_instructions}}}
-
-{{/if}}
-{{#if event_instructions}}
-## Event-Specific Instructions
-{{{event_instructions}}}
-
-{{/if}}
 {{#if instructions}}
-## Event-Specific Instructions
+## Server Instruction
 {{{instructions}}}
 
-{{/if}}
-{{#if examples}}
-## Examples
-{{#each examples}}
-### Example {{@index}}
-Input: {{{this.input}}}
-Output: {{{this.output}}}
-
-{{/each}}
 {{/if}}
 {{> network_request/partials/instructions }}
 

@@ -7,7 +7,7 @@ use tracing::info;
 use super::errors::ActionExecutionError;
 use super::types::{AppEvent, UserCommand};
 use crate::cli::server_startup;
-use crate::llm::actions::{get_all_tool_actions, get_user_input_common_actions};
+use crate::llm::actions::get_all_tool_actions;
 use crate::llm::format_indented_dimmed_lines;
 use crate::llm::OllamaClient;
 use crate::llm::{execute_actions, CommonAction, Server};
@@ -45,6 +45,22 @@ use crate::ui::App;
 /// If it ever needs to vary at runtime, that is the moment to add it to
 /// `Settings`, not before.
 const REQUIRE_DOCS_FOR_OPEN_ACTIONS: bool = false;
+
+/// Whether the operator prompt offers `open_server` and `open_client` right now.
+///
+/// Always both while [`REQUIRE_DOCS_FOR_OPEN_ACTIONS`] is off; with it on, each once its
+/// side's documentation has been read. The prompt builder's default entry point asks this
+/// too, so what a test renders is what an operator's turn renders.
+pub async fn open_actions_enabled(state: &AppState) -> (bool, bool) {
+    if REQUIRE_DOCS_FOR_OPEN_ACTIONS {
+        (
+            state.is_server_docs_read().await,
+            state.is_client_docs_read().await,
+        )
+    } else {
+        (true, true)
+    }
+}
 
 /// Log detailed open_server action summary to the status channel
 fn log_open_server_summary(
@@ -615,16 +631,8 @@ impl EventHandler {
         let conversation_history = self.state.get_user_conversation_history().await;
 
         // Check if open_server/open_client should be enabled based on configuration
-        let is_open_server_enabled = if REQUIRE_DOCS_FOR_OPEN_ACTIONS {
-            self.state.is_server_docs_read().await
-        } else {
-            true
-        };
-        let is_open_client_enabled = if REQUIRE_DOCS_FOR_OPEN_ACTIONS {
-            self.state.is_client_docs_read().await
-        } else {
-            true
-        };
+        let (is_open_server_enabled, is_open_client_enabled) =
+            open_actions_enabled(&self.state).await;
 
         // Build system prompt (without user input - that's added as a message)
         let system_prompt = PromptBuilder::build_user_input_system_prompt_with_docs(
@@ -639,7 +647,7 @@ impl EventHandler {
         // Get available actions for retry correction messages
         let selected_mode = self.state.get_selected_scripting_mode().await;
         let scripting_env = self.state.get_scripting_env().await;
-        let mut available_actions = get_user_input_common_actions(
+        let mut available_actions = crate::llm::actions::common::get_operator_common_actions(
             selected_mode,
             &scripting_env,
             is_open_server_enabled,
@@ -647,6 +655,11 @@ impl EventHandler {
         );
         available_actions.extend(get_all_tool_actions(web_search_mode));
         available_actions.extend(protocol_async_actions);
+        crate::llm::actions::common::restrict_protocol_lists(
+            &mut available_actions,
+            self.state.get_include_disabled_protocols().await,
+            self.state.get_min_stability().await,
+        );
 
         // Narrow to what the prompt actually advertises before this list is used as the native
         // tool schema and as the retry-correction catalogue. The prompt builder applies
@@ -1097,7 +1110,10 @@ impl EventHandler {
                 let _ = status_tx.send("__UPDATE_UI__".to_string());
             }
             CommonAction::UpdateInstruction { instruction } => {
-                // Update instruction for first server (TODO: support targeting specific server ID)
+                // No instance is in context here, so this can only mean the first server. The
+                // operator prompt does not offer update_instruction for that reason (see
+                // common::NOT_OFFERED_TO_OPERATOR); update_server names its target. This arm
+                // remains for the scheduled-task path, which still offers it.
                 if let Some(server_id) = self.state.get_first_server_id().await {
                     self.state
                         .set_instruction(server_id, instruction.clone())
@@ -1146,12 +1162,35 @@ impl EventHandler {
                 instruction,
                 context,
                 script_runtime,
-                script_language: _,
-                script_path: _,
+                script_language,
+                script_path,
                 script_inline,
                 script_handles,
             } => {
                 use crate::state::task::{ScheduledTask, TaskScope};
+
+                // A scheduled task always calls the model with its instruction; it runs no
+                // script. Refuse script fields by name rather than scheduling a task that
+                // silently does something other than what was asked.
+                let script_fields: Vec<&str> = [
+                    ("script_runtime", script_runtime.is_some()),
+                    ("script_language", script_language.is_some()),
+                    ("script_path", script_path.is_some()),
+                    ("script_inline", script_inline.is_some()),
+                    ("script_handles", script_handles.is_some()),
+                ]
+                .into_iter()
+                .filter_map(|(name, present)| present.then_some(name))
+                .collect();
+                if !script_fields.is_empty() {
+                    let _ = status_tx.send(format!(
+                        "[ERROR] schedule_task '{}' not scheduled: a scheduled task runs no \
+                         script, it calls the model with its instruction ({} not supported)",
+                        task_id,
+                        script_fields.join(", ")
+                    ));
+                    return Ok(());
+                }
 
                 // Determine scope: Connection > Server > Client > Global
                 let scope = if let Some(conn_id_str) = connection_id {
@@ -1242,12 +1281,6 @@ impl EventHandler {
                 task.next_execution = crate::state::task::checked_task_deadline(delay)?;
 
                 let task_id_num = self.state.add_task(task).await;
-
-                // TODO: Add script configuration support for standalone scheduled tasks
-                // For now, tasks use LLM by default. Script support will be added in a future iteration.
-                let _ = script_runtime; // Silence unused variable warning
-                let _ = script_inline; // Silence unused variable warning
-                let _ = script_handles; // Silence unused variable warning
 
                 if recurring {
                     let interval = interval_secs.unwrap_or(delay);
@@ -1579,8 +1612,8 @@ impl EventHandler {
                             .close_connection_on_server(server.id, conn_id)
                             .await;
                         let _ = status_tx.send(format!(
-                            "[CONNECTION] Closed connection #{} on server #{}",
-                            connection_id,
+                            "[CONNECTION] Closed connection {} on server #{}",
+                            conn_id,
                             server.id.as_u32()
                         ));
                         found = true;
@@ -1589,8 +1622,10 @@ impl EventHandler {
                 }
 
                 if !found {
-                    let _ =
-                        status_tx.send(format!("[ERROR] Connection #{} not found", connection_id));
+                    let _ = status_tx.send(format!(
+                        "[ERROR] Connection {} not found on any running server",
+                        conn_id
+                    ));
                 }
 
                 let _ = status_tx.send("__UPDATE_UI__".to_string());
@@ -1924,6 +1959,14 @@ impl EventHandler {
                         .ok_or_else(|| {
                             anyhow::anyhow!("Missing 'language' field for script handler")
                         })?;
+                    if crate::llm::event_handler_executor::parse_script_language(language).is_none()
+                    {
+                        anyhow::bail!(
+                            "Unknown script language '{}' for script handler; accepted: {}",
+                            language,
+                            crate::llm::event_handler_executor::SCRIPT_LANGUAGE_TOKENS
+                        );
+                    }
                     let code = handler_type_json
                         .get("code")
                         .and_then(|v| v.as_str())
