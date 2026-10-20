@@ -68,12 +68,16 @@ raw bytes, and interpret responses.
 
 ### Data Encoding
 
-**Critical**: Data is hex-encoded for LLM interaction:
+The same contract as the TCP server: text travels as text, and `encoding` says when it is hex.
 
-- Received: `{"data_hex": "48656c6c6f", "data_length": 5}`
-- Sent: `{"type": "send_tcp_data", "data_hex": "776f726c64"}`
+- Received: `{"data": "hello\r\n", "encoding": "utf8", "data_length": 7}` when every byte is
+  printable ASCII or whitespace; otherwise `{"data": "00ff10", "encoding": "hex", …}`.
+- Sent: `{"type": "send_tcp_data", "data": "world"}`, or
+  `{"type": "send_tcp_data", "data": "776f726c64", "encoding": "hex"}` for bytes.
 
-LLMs cannot work with raw bytes but can construct hex strings.
+There is no detection on the way out: `"776f726c64"` is valid text and valid hex, and only the
+sender knows which it means. `data_hex` is still accepted by the executor for handlers written
+against it, but the model is shown only `data` + `encoding`.
 
 ### Dual Logging
 

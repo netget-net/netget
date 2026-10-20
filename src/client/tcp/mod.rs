@@ -274,10 +274,22 @@ impl TcpClient {
 
                 if let Some(instruction) = app_state.get_instruction_for_client(client_id).await {
                     let protocol = Arc::new(crate::client::tcp::actions::TcpClientProtocol::new());
+                    // Text arrives as text, anything else as hex, and `encoding` says which,
+                    // so the model can read a text protocol and echo either kind back with a
+                    // matching `encoding` on send_tcp_data — the TCP server's contract.
+                    let (data_str, data_encoding) = if data
+                        .iter()
+                        .all(|&b| b.is_ascii_graphic() || b.is_ascii_whitespace())
+                    {
+                        (String::from_utf8_lossy(&data).to_string(), "utf8")
+                    } else {
+                        (hex::encode(&data), "hex")
+                    };
                     let event = Event::new(
                         &TCP_CLIENT_DATA_RECEIVED_EVENT,
                         serde_json::json!({
-                            "data_hex": hex::encode(&data),
+                            "data": data_str,
+                            "encoding": data_encoding,
                             "data_length": data.len(),
                         }),
                     );
