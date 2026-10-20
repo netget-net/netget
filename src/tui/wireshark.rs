@@ -632,6 +632,15 @@ pub fn wire_for(protocol: &str) -> Wire {
         "datalink" => raw("", ""),
         // ---- not on a network --------------------------------------------
         "pty" | "stdio" | "named_pipe" | "socket_file" | "ssh_agent" => offline(LOCAL_NOTE),
+        // The kernel's FUSE driver talks to the daemon over /dev/fuse; nothing reaches an
+        // interface, and Wireshark has no FUSE capture source.
+        "fuse" => offline(
+            "FUSE is the kernel talking to NetGet over /dev/fuse, never a network interface. \
+             Watch the system calls of the processes using the mount with `strace -f`, or the \
+             FUSE requests with the kernel's fuse tracepoints (`perf trace -e 'fuse:*'` or \
+             /sys/kernel/tracing/events/fuse); NetGet's own log has a decision= line for every \
+             description and change.",
+        ),
         // The client only. `wire_for_role` overrides this for the server, which is a plain
         // TCP vpcd socket. On Linux the reader's own USB traffic is capturable through usbmon
         // and Wireshark has a real `usbccid` dissector (confirmed present in `-G protocols`),

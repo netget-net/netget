@@ -102,6 +102,11 @@ const NO_WELL_KNOWN_PORT: &[(&str, &str)] = &[
     ("socket_file", "a Unix domain socket path, not a port"),
     ("ssh_agent", "a Unix domain socket path (SSH_AUTH_SOCK), not a port"),
     ("stdio", "the process's own stdin and stdout; nothing to bind"),
+    (
+        "fuse",
+        "a local filesystem mount: the kernel's FUSE driver over /dev/fuse at a mount_point, no \
+         socket and no port",
+    ),
     ("nfc", "a PC/SC reader device; no network port"),
     ("bluetooth_ble", "a Bluetooth LE radio; GATT has no IP port"),
     ("bluetooth_ble_battery", "a Bluetooth LE GATT profile; no IP port"),

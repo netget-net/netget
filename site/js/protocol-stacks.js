@@ -86,6 +86,7 @@ export const protocolStacks = [
     ["fix", "ETH>IP>TCP>FIX"],
     ["fluent-forward", "ETH>IP>TCP>FluentForward"],
     ["ftp", "ETH>IP>TCP>FTP"],
+    ["fuse", "VFS>FUSE"],
     ["gearman", "ETH>IP>TCP>Gearman"],
     ["gelf", "ETH>IP>UDP|TCP>GELF"],
     ["gemini", "ETH>IP>TCP>TLS>GEMINI"],

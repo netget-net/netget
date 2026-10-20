@@ -480,6 +480,10 @@ bluer = { version = "0.17", optional = true, features = ["bluetoothd"] }
 # same reason as bluer above: the `can` feature compiles everywhere, and the protocol returns a
 # clear Err naming the platform rather than being hidden, on every other OS.
 socketcan = { version = "3.5" }
+# FUSE: the kernel's /dev/fuse, mounted through the setuid fusermount3 helper. Without the
+# `libfuse` feature fuser links no C library on Linux (its build script selects the pure-Rust
+# mount); on macOS its build script needs macFUSE, which is why this is Linux-only.
+fuser = { version = "0.18", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }

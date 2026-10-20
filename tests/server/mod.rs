@@ -310,6 +310,8 @@ pub mod bmp;
 
 pub mod mqtt_sn;
 
+#[cfg(unix)]
+pub mod fuse;
 pub mod iscsi;
 pub mod nbd;
 pub mod nvme_tcp;

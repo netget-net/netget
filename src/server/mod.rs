@@ -572,6 +572,9 @@ pub mod mqtt_sn;
 pub mod nbd;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod nvme_tcp;
+// FUSE: Linux's /dev/fuse through fusermount3; there is no macOS or Windows FUSE NetGet links.
+#[cfg(target_os = "linux")]
+pub mod fuse;
 #[cfg(not(target_arch = "wasm32"))]
 pub use mqtt::actions::MqttProtocol;
 #[cfg(not(target_arch = "wasm32"))]
