@@ -364,3 +364,10 @@ path = "fuzz_targets/lorawan_semtech.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "zigbee_ash_ezsp"
+path = "fuzz_targets/zigbee_ash_ezsp.rs"
+test = false
+doc = false
+bench = false

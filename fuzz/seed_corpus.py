@@ -1089,6 +1089,77 @@ write("hdfs_wire", "acks_and_responses",
 write("hdfs_wire", "depth_bomb",
       rpc_call(3, "create", pb_ld(1, b"/tmp/a") + pb_key(15, 3) * 10000 + pb_key(15, 4) * 10000))
 
+# ---------------------------------------------------------------------------- zigbee_ash_ezsp
+# ASH as a Zigbee host writes it (UG101): CRC-CCITT over control+data, the data field of a
+# DATA frame XORed with the LFSR sequence (seed 0x42, feedback 0xB8), reserved bytes escaped.
+ASH_RESERVED = {0x7E, 0x7D, 0x11, 0x13, 0x18, 0x1A}
+
+
+def ash_crc(b):
+    c = 0xFFFF
+    for x in b:
+        c ^= x << 8
+        for _ in range(8):
+            c = ((c << 1) ^ 0x1021) & 0xFFFF if c & 0x8000 else (c << 1) & 0xFFFF
+    return c
+
+
+def ash_stuff(b):
+    out = bytearray()
+    for x in b:
+        out += bytes([0x7D, x ^ 0x20]) if x in ASH_RESERVED else bytes([x])
+    return bytes(out) + b"\x7e"
+
+
+def ash_frame(body):
+    return ash_stuff(body + struct.pack(">H", ash_crc(body)))
+
+
+def ash_data(frm, ack, ezsp):
+    r, data = 0x42, bytearray()
+    for x in ezsp:
+        data.append(x ^ r)
+        r = (r >> 1) ^ 0xB8 if r & 1 else r >> 1
+    return ash_frame(bytes([(frm << 4) | ack]) + bytes(data))
+
+
+def ezsp_ext(seq, frame_id, params=b""):
+    return bytes([seq, 0x00, 0x01]) + struct.pack("<H", frame_id) + params
+
+
+RST = b"\x1a" + ash_frame(b"\xc0")
+write("zigbee_ash_ezsp", "rst_version", RST + ash_data(0, 0, b"\x00\x00\x00\x04") +
+      ash_data(1, 1, ezsp_ext(1, 0x0000, b"\x11")) + ash_frame(b"\x82"))
+write("zigbee_ash_ezsp", "startup",
+      RST + ash_data(0, 0, ezsp_ext(0, 0x0000, b"\x11")) +
+      ash_data(1, 0, ezsp_ext(1, 0x0052, b"\x01")) +
+      ash_data(2, 0, ezsp_ext(2, 0x0002, b"\x01\x04\x01\x00\x04\x00\x01\x00\x06\x00")) +
+      ash_data(3, 0, ezsp_ext(3, 0x0017, b"\x00\x00")))
+SEC = struct.pack("<H", 0x0B04) + b"ZigBeeAlliance09" + bytes(range(16)) + b"\x00" + b"\xff" * 8
+FORM = b"\xdd" * 8 + struct.pack("<HBBBHBI", 0x1A62, 8, 15, 0, 0, 0, 1 << 15)
+write("zigbee_ash_ezsp", "form_permit",
+      RST + ash_data(0, 0, ezsp_ext(0, 0x0000, b"\x11")) +
+      ash_data(1, 0, ezsp_ext(1, 0x0068, SEC)) + ash_data(2, 0, ezsp_ext(2, 0x001E, FORM)) +
+      ash_data(3, 0, ezsp_ext(3, 0x0022, b"\x1e")))
+APS = struct.pack("<HHBBHHB", 0x0104, 0x0006, 1, 1, 0x0140, 0, 0)
+write("zigbee_ash_ezsp", "send_unicast_on",
+      RST + ash_data(0, 0, ezsp_ext(0, 0x0000, b"\x11")) +
+      ash_data(1, 0, ezsp_ext(1, 0x0034, b"\x00" + struct.pack("<H", 0x1234) + APS +
+                                  struct.pack("<H", 7) + b"\x03\x01\x2a\x01")))
+write("zigbee_ash_ezsp", "zcl_write_attributes",
+      b"\x00\x00\x09\x00\x00\x02\x00\x00\x10\x01\x00\x40\x42\x05hello")
+write("zigbee_ash_ezsp", "zcl_configure_reporting",
+      b"\x00\x00\x09\x00\x00\x06\x00\x00\x00\x10\x00\x00\x2c\x01\x00\x00\x00\x20\x01\x00\x10\x00\x05")
+write("zigbee_ash_ezsp", "zdo_match_desc", b"\x06\x00\x01\x34\x12\x04\x01\x02\x06\x00\x08\x00\x01\x19\x00")
+write("zigbee_ash_ezsp", "max_frame", RST + ash_data(0, 0, ezsp_ext(0, 0x0005) + b"\x00" * 215))
+write("zigbee_ash_ezsp", "bad_crc", RST + ash_data(0, 0, b"\x00\x00\x00\x04")[:-2] + b"\x00\x7e")
+# The shapes a byte bound alone does not stop: a long run of escapes with no flag, and a write
+# whose string lengths claim more than the frame holds, repeated. Nothing here recurses; these
+# are for the day something does.
+write("zigbee_ash_ezsp", "escape_run", RST + b"\x7d\x5e" * 50000)
+write("zigbee_ash_ezsp", "deep_attributes",
+      b"\x00\x00\x09\x00\x00\x02" + b"\x00\x00\x42\xff" * 2000)
+
 total = sum(len(files) for _, _, files in os.walk(CORPUS))
 print("seeded %d corpus files across %d targets" %
       (total, len(os.listdir(CORPUS))))

@@ -477,6 +477,7 @@
  "server::lmtp::actions::LmtpProtocol": "lmtp",
  "server::loki::actions::LokiProtocol": "loki",
  "server::lorawan::actions::LorawanProtocol": "lorawan",
+ "server::zigbee::actions::ZigbeeProtocol": "zigbee",
  "server::lpd::actions::LpdProtocol": "lpd",
  "server::lwm2m::actions::Lwm2mProtocol": "lwm2m",
  "server::managesieve::actions::ManageSieveProtocol": "managesieve",
