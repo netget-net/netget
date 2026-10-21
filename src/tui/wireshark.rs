@@ -236,6 +236,10 @@ pub fn wire_for(protocol: &str) -> Wire {
         // No Semtech UDP packet-forwarder dissector exists in this build (4.6.8: `tshark -G protocols`
         // lists loratap and lorawan only, and lorawan is reached through LoRaTap captures, never
         // UDP). tests/server/lorawan writes the frames into a LoRaTap pcap to use it.
+        // No ASH, EZSP or ZNP dissector exists in this build (4.6.8: `tshark -G protocols` has
+        // zbee_nwk, zbee_aps, zbee_zcl and zep, all of which read over-the-air frames, and
+        // silabs-dch, Silicon Labs' debug channel). The co-processor link is plain TCP.
+        "zigbee" => with_note(PLAIN_TCP, "Wireshark has no ASH or EZSP dissector: each frame is stuffed bytes ending in 0x7E (0x7D escapes, data XORed with an LFSR seeded 0x42, CRC-CCITT); a DATA frame carries one EZSP frame — sequence, two frame-control bytes, a little-endian frame id and parameters. Its zbee_* dissectors read Zigbee over the air, which this link does not carry."),
         "lorawan" => with_note(PLAIN_UDP, "Wireshark has no Semtech UDP packet-forwarder dissector: each datagram is a 4-byte header (version, token, identifier), the gateway EUI on PUSH_DATA/PULL_DATA/TX_ACK, then JSON whose rxpk/txpk `data` is the base64 LoRaWAN PHYPayload. Its lorawan dissector reads LoRaTap captures only."),
         "gelf" | "graylog" => Wire {
             transport: Transport::TcpOrUdp,

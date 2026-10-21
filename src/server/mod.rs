@@ -1164,6 +1164,7 @@ pub mod libp2p;
 pub mod lmtp;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod lorawan;
+// Zigbee: an EZSP network co-processor over ASH, reached over TCP.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod lpd;
 #[cfg(not(target_arch = "wasm32"))]
@@ -1224,6 +1225,8 @@ pub mod wsdiscovery;
 pub mod zenoh;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod zeromq;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod zigbee;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod zipkin;
 
