@@ -96,9 +96,11 @@ What is left from this document, with the reason each is still open:
   ~~gtp~~ landed 15 October 2026 (S5/S11 GTPv2 and Gn GTPv1, control and user plane),
   against wmnsk/go-gtp and osmo-ggsn with the kernel tun, under tshark's `gtpv2`/`gtp`
   dissectors.
-- **Tier C**: all deferred, unchanged, for the reasons in the table below. This includes
-  the LoRaWAN Semtech UDP packet-forwarder slice, which could be promoted if IoT is
-  wanted.
+- **Tier C**: every row has landed except **PCoIP**, which has no published wire
+  specification and no open implementation to test against (see its row). Each landed row
+  says what of its protocol is not built.
+- **Storage additions**: iSCSI, NVMe over TCP, FUSE and HDFS have all landed (see that
+  section).
 - **Maturity**: almost everything above landed at `Experimental` or `Beta`. The client
   promotions that came with it are Kafka, DNS and RDP (Beta). None of these items has
   been taken through the six Stable conditions in `AGENTS.md`.
@@ -190,10 +192,10 @@ is a phone or a switch). The genuinely missing **client** roles, with their peer
 |---|---|---|
 | ~~**mercurial**~~ | `hg` binary | Already existed (see status above). |
 | ~~**svn**~~ | `svn` / `svnserve` | Already existed (see status above). |
-| **rtsp / rtp / hls** | `ffmpeg`/`ffprobe` (installed), VLC | Media clients; ffmpeg is already a test peer. |
-| **rdp** | `xfreerdp` | Remote-desktop client (server exists). |
-| **zabbix** | `zabbix_server`/`zabbix_sender` | Agent/sender client. |
-| gtp, db2, snowflake, spark, yarn | peer-limited | Lower priority: no clean local independent server for most. |
+| ~~**rtsp / rtp / hls**~~ | `ffmpeg`/`ffprobe` (installed), VLC | Landed (see "Missing roles" above). |
+| ~~**rdp**~~ | `xfreerdp` | Landed (see "Missing roles" above). |
+| ~~**zabbix**~~ | `zabbix_server`/`zabbix_sender` | Landed (see "Missing roles" above). |
+| ~~gtp, db2, snowflake, spark, yarn~~ | peer-limited | Landed 15 October 2026 (see "Peer-limited missing clients" above). |
 
 ## Extensions to shipped protocols (the "separated extension" tradition)
 
