@@ -312,7 +312,7 @@ fn number(v: &Json, key: &str) -> anyhow::Result<Option<u64>> {
 
 pub fn check_block_size(bs: u64) -> anyhow::Result<u64> {
     ensure!(
-        (MIN_BLOCK_SIZE..=MAX_BLOCK_SIZE).contains(&bs) && bs % 512 == 0,
+        (MIN_BLOCK_SIZE..=MAX_BLOCK_SIZE).contains(&bs) && bs.is_multiple_of(512),
         "a block size is a multiple of 512 from {MIN_BLOCK_SIZE} to {MAX_BLOCK_SIZE} bytes"
     );
     Ok(bs)

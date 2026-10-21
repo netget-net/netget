@@ -469,7 +469,7 @@ pub fn denial(v: &Value) -> (&'static str, String) {
         .unwrap_or(rpc::class::ACCESS_CONTROL);
     let message = v["message"]
         .as_str()
-        .map(|m| crate::utils::sanitize::line_field(m))
+        .map(crate::utils::sanitize::line_field)
         .filter(|m| !m.trim().is_empty())
         .unwrap_or_else(|| "Permission denied".into());
     (class, message)

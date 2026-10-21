@@ -493,7 +493,7 @@ pub fn check(v: &Value) -> Result<()> {
             if !v["block_size"].is_null() {
                 let b = v["block_size"].as_u64().context("block_size is a number")?;
                 ensure!(
-                    b >= 512 && b % 512 == 0 && b <= 1 << 30,
+                    b >= 512 && b.is_multiple_of(512) && b <= 1 << 30,
                     "block_size is a multiple of 512 up to 1 GiB"
                 );
             }
