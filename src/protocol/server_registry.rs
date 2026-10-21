@@ -344,6 +344,8 @@ impl ServerRegistry {
         self.register(Arc::new(
             crate::server::nvme_tcp::actions::NvmeTcpProtocol::new(),
         ));
+        #[cfg(target_os = "linux")]
+        self.register(Arc::new(crate::server::fuse::actions::FuseProtocol::new()));
         #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::managesieve::actions::ManageSieveProtocol::new(),
@@ -1698,6 +1700,7 @@ pub(crate) const ALL_KNOWN_PROTOCOLS: &[(&str, &str)] = &[
     ("NBD", "a native build (not the browser)"),
     ("iSCSI", "a native build (not the browser)"),
     ("NVMe-TCP", "a native build (not the browser)"),
+    ("FUSE", "a Linux build (the kernel's FUSE driver through fusermount3; NetGet links no macFUSE or FUSE-T)"),
     ("ManageSieve", "a native build (not the browser)"),
     ("Zenoh", "a native build (not the browser)"),
     ("LwM2M", "a native build (not the browser)"),

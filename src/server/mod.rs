@@ -35,6 +35,11 @@ pub mod tls_cert_manager;
 pub mod described_disk;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod scsi_common;
+// A file tree the model describes (directories, files, symlinks, content as described_disk
+// extents) with an in-memory overlay for the changes it accepts, served by the FUSE server.
+// Compiled on every Unix so its bounds are tested and fuzzed off Linux too.
+#[cfg(unix)]
+pub mod described_tree;
 
 pub mod tcp;
 pub use tcp::actions::TcpProtocol;
@@ -567,6 +572,9 @@ pub mod mqtt_sn;
 pub mod nbd;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod nvme_tcp;
+// FUSE: Linux's /dev/fuse through fusermount3; there is no macOS or Windows FUSE NetGet links.
+#[cfg(target_os = "linux")]
+pub mod fuse;
 #[cfg(not(target_arch = "wasm32"))]
 pub use mqtt::actions::MqttProtocol;
 #[cfg(not(target_arch = "wasm32"))]

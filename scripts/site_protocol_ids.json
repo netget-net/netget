@@ -446,6 +446,7 @@
  "server::fastcgi::actions::FastcgiProtocol": "fastcgi",
  "server::fix::actions::FixProtocol": "fix",
  "server::fluent_forward::actions::FluentForwardProtocol": "fluent-forward",
+ "server::fuse::actions::FuseProtocol": "fuse",
  "server::gelf::actions::GelfProtocol": "gelf",
  "server::gnmi::actions::GnmiProtocol": "gnmi",
  "server::gnutella::actions::GnutellaProtocol": "gnutella",
