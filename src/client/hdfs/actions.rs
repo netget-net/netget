@@ -55,7 +55,12 @@ fn action(
 }
 
 fn path_param() -> Parameter {
-    p("path", "string", "An absolute HDFS path, e.g. /user/alice/a.txt", true)
+    p(
+        "path",
+        "string",
+        "An absolute HDFS path, e.g. /user/alice/a.txt",
+        true,
+    )
 }
 
 pub fn client_actions() -> Vec<ActionDefinition> {
@@ -278,7 +283,7 @@ pub static STATUS_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         json!({"type": READ, "path": "/user/alice/a.txt"}),
     )
     .with_parameters(vec![
-        p("path", "string", "The path", true),
+        p("path", "string", "The absolute HDFS path it is about", true),
         p("exists", "boolean", "Whether it exists", true),
         p("status", "object", status_params(), false),
     ])
@@ -292,10 +297,15 @@ pub static READ_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         json!({"type": READ, "path": "/user/alice/a.txt", "offset": 4096}),
     )
     .with_parameters(vec![
-        p("path", "string", "The file", true),
+        p("path", "string", "The absolute HDFS path of the file", true),
         p("offset", "number", "The first byte read", true),
-        p("bytes", "number", "Bytes returned", true),
-        p("data", "string", "The bytes, in the encoding named beside it", true),
+        p("bytes", "number", "How many bytes data holds", true),
+        p(
+            "data",
+            "string",
+            "The bytes, in the encoding named beside it",
+            true,
+        ),
         p(
             "encoding",
             "string",
@@ -327,9 +337,9 @@ pub static WRITE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         json!({"type": READ, "path": "/user/alice/hello.txt"}),
     )
     .with_parameters(vec![
-        p("path", "string", "The file", true),
-        p("bytes", "number", "Bytes written", true),
-        p("blocks", "number", "Blocks written", true),
+        p("path", "string", "The absolute HDFS path of the file", true),
+        p("bytes", "number", "How many bytes were written", true),
+        p("blocks", "number", "How many blocks were written", true),
         p(
             "datanodes",
             "array",
@@ -353,7 +363,7 @@ pub static MUTATION_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             "mkdir, delete, rename or set_permission",
             true,
         ),
-        p("path", "string", "The path", true),
+        p("path", "string", "The absolute HDFS path it is about", true),
         p("destination", "string", "rename: the new path", false),
         p(
             "result",
@@ -382,7 +392,12 @@ pub static ERROR_EVENT: LazyLock<EventType> = LazyLock::new(|| {
              org.apache.hadoop.security.AccessControlException (empty for a transport failure)",
             true,
         ),
-        p("message", "string", "The exception's message, or what failed", true),
+        p(
+            "message",
+            "string",
+            "The exception's message, or what failed",
+            true,
+        ),
     ])
     .with_actions(client_actions())
 });
@@ -403,7 +418,9 @@ pub fn write_data(v: &Value) -> Result<Vec<u8>> {
 }
 
 fn check_path(v: &Value, key: &str) -> Result<()> {
-    let p = v[key].as_str().with_context(|| format!("{key} is a path"))?;
+    let p = v[key]
+        .as_str()
+        .with_context(|| format!("{key} is a path"))?;
     crate::server::hdfs::namespace::components(p).map_err(|t| anyhow::anyhow!("{}", t.message))?;
     Ok(())
 }
@@ -468,7 +485,9 @@ pub fn check(v: &Value) -> Result<()> {
             check_bool(v, "overwrite")?;
             if !v["replication"].is_null() {
                 crate::server::hdfs::namespace::check_replication(
-                    v["replication"].as_u64().context("replication is a number")?,
+                    v["replication"]
+                        .as_u64()
+                        .context("replication is a number")?,
                 )?;
             }
             if !v["block_size"].is_null() {

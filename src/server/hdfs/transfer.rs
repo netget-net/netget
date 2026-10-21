@@ -124,7 +124,12 @@ pub fn checksums(kind: Checksum, bpc: u32, data: &[u8]) -> Vec<u8> {
 
 /// Check `data` against the checksums a packet carried: `Err(i)` names the first chunk whose
 /// checksum does not match (or the count, when the checksum bytes do not fit the data).
-pub fn verify(kind: Checksum, bpc: u32, data: &[u8], sums: &[u8]) -> std::result::Result<(), usize> {
+pub fn verify(
+    kind: Checksum,
+    bpc: u32,
+    data: &[u8],
+    sums: &[u8],
+) -> std::result::Result<(), usize> {
     if kind == Checksum::Null {
         return if sums.is_empty() { Ok(()) } else { Err(0) };
     }
@@ -222,7 +227,10 @@ pub fn check_prefix(plen: u32, hlen: u16, limits: &PacketLimits) -> Result<usize
 pub fn check_header(h: &PacketHeaderProto, payload: usize, limits: &PacketLimits) -> Result<()> {
     ensure!(h.data_len >= 0, "a negative data length");
     let data = h.data_len as usize;
-    ensure!(data <= limits.max_data, "{data} bytes of data is over the bound");
+    ensure!(
+        data <= limits.max_data,
+        "{data} bytes of data is over the bound"
+    );
     ensure!(
         data <= payload,
         "the header names {data} bytes of data in a payload of {payload}"
@@ -433,7 +441,9 @@ pub fn block_md5(sums: &[u8]) -> [u8; 16] {
 /// The chunk size a request asks for, within bounds.
 pub fn check_bytes_per_checksum(bpc: u32) -> Result<u32> {
     if !(MIN_BYTES_PER_CHECKSUM..=MAX_BYTES_PER_CHECKSUM).contains(&bpc) {
-        bail!("bytesPerChecksum {bpc} is outside {MIN_BYTES_PER_CHECKSUM}..={MAX_BYTES_PER_CHECKSUM}");
+        bail!(
+            "bytesPerChecksum {bpc} is outside {MIN_BYTES_PER_CHECKSUM}..={MAX_BYTES_PER_CHECKSUM}"
+        );
     }
     Ok(bpc)
 }

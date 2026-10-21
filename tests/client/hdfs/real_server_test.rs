@@ -9,8 +9,8 @@
 //!   export JAVA_HOME=<a JDK 17>
 //!   ./cargo-isolated.sh test --no-default-features --test client -- client::hdfs:: --test-threads=2
 
-use crate::helpers::real_server::{InstallHint, RealServer};
 use crate::helpers::common::E2EResult;
+use crate::helpers::real_server::{InstallHint, RealServer};
 use netget::cli::management::ClientForm;
 use netget::state::app_state::AppState;
 use netget::state::{AccessLogOwner, ClientId};
@@ -28,12 +28,14 @@ const HADOOP: InstallHint = InstallHint {
 };
 
 fn hadoop_home() -> E2EResult<PathBuf> {
-    let home = std::env::var_os("NETGET_HADOOP_HOME").map(PathBuf::from).ok_or(
-        "NETGET_HADOOP_HOME is not set. The HDFS client's evidence is Apache Hadoop's own \
+    let home = std::env::var_os("NETGET_HADOOP_HOME")
+        .map(PathBuf::from)
+        .ok_or(
+            "NETGET_HADOOP_HOME is not set. The HDFS client's evidence is Apache Hadoop's own \
          NameNode and DataNode, and this test FAILS rather than skipping without them: run \
          `sh tests/client/yarn/install_peers.sh /some/dir` (needs a JDK 17) and export the \
          NETGET_HADOOP_HOME it prints.",
-    )?;
+        )?;
     if !home.join("bin/hdfs").is_file() {
         return Err(format!(
             "{}/bin/hdfs is missing; re-run tests/client/yarn/install_peers.sh",
@@ -91,7 +93,11 @@ impl Cluster {
             .extra_ports(5)
             .setup_env("HADOOP_CONF_DIR", "{dir}/conf")
             .setup_env("HADOOP_LOG_DIR", "{dir}/logs/format")
-            .setup_command(&hdfs, HADOOP, ["namenode", "-format", "-force", "-nonInteractive"])
+            .setup_command(
+                &hdfs,
+                HADOOP,
+                ["namenode", "-format", "-force", "-nonInteractive"],
+            )
             .args(["namenode"])
             .env("HADOOP_CONF_DIR", "{dir}/conf")
             .env("HADOOP_LOG_DIR", "{dir}/logs/nn")
@@ -186,7 +192,11 @@ impl Cluster {
                         .find_map(|f| f.strip_prefix(k))
                         .map(str::to_string)
                 };
-                Some((field("cmd=")?, field("src=").unwrap_or_default(), field("dst=").unwrap_or_default()))
+                Some((
+                    field("cmd=")?,
+                    field("src=").unwrap_or_default(),
+                    field("dst=").unwrap_or_default(),
+                ))
             })
             .collect()
     }
@@ -213,7 +223,11 @@ struct Client {
     logs: Arc<Mutex<Vec<String>>>,
 }
 
-async fn client(remote: String, user: &str, handlers: Option<Vec<Value>>) -> anyhow::Result<Client> {
+async fn client(
+    remote: String,
+    user: &str,
+    handlers: Option<Vec<Value>>,
+) -> anyhow::Result<Client> {
     let state = AppState::new_with_options(false, "http://127.0.0.1:1".into());
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
     let logs = Arc::new(Mutex::new(Vec::new()));
@@ -231,7 +245,11 @@ async fn client(remote: String, user: &str, handlers: Option<Vec<Value>>) -> any
         event_handlers: handlers,
         ..Default::default()
     }
-    .create(&state, netget::llm::OllamaClient::new("http://127.0.0.1:1"), tx)
+    .create(
+        &state,
+        netget::llm::OllamaClient::new("http://127.0.0.1:1"),
+        tx,
+    )
     .await?;
     Ok(Client { state, id, logs })
 }
@@ -295,7 +313,10 @@ fn seed_binary() -> Vec<u8> {
 
 /// 140 000 bytes of text the client writes in 64 KiB blocks, crossing two block boundaries.
 fn written_big() -> String {
-    (0..9000).map(|i| format!("line {i:05} netget\n")).collect::<String>()[..140_000].to_string()
+    (0..9000)
+        .map(|i| format!("line {i:05} netget\n"))
+        .collect::<String>()[..140_000]
+        .to_string()
 }
 
 /// The model for a whole session, one step per event.
@@ -339,7 +360,14 @@ async fn hdfs_client_drives_a_real_cluster() -> E2EResult<()> {
     let seed = seed_dir.to_string_lossy().into_owned();
     cluster.dfs(&["-mkdir", "-p", "/seed"]).await?;
     cluster
-        .dfs(&["-D", "dfs.blocksize=65536", "-put", &format!("{seed}/hello.txt"), &format!("{seed}/bin.dat"), "/seed/"])
+        .dfs(&[
+            "-D",
+            "dfs.blocksize=65536",
+            "-put",
+            &format!("{seed}/hello.txt"),
+            &format!("{seed}/bin.dat"),
+            "/seed/",
+        ])
         .await?;
 
     let user = me();
@@ -348,7 +376,12 @@ async fn hdfs_client_drives_a_real_cluster() -> E2EResult<()> {
     let connected = c.wait("hdfs_connected", 0, &cluster).await;
     assert_eq!(connected["server_defaults"]["checksum_type"], "CRC32C");
     let listing = c.wait("hdfs_listing", 0, &cluster).await;
-    let names: Vec<&str> = listing["entries"].as_array().unwrap().iter().map(|e| e["name"].as_str().unwrap()).collect();
+    let names: Vec<&str> = listing["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["name"].as_str().unwrap())
+        .collect();
     assert_eq!(names, ["bin.dat", "hello.txt"], "{listing}");
     assert_eq!(listing["entries"][0]["length"], 150_000);
     assert_eq!(listing["entries"][0]["block_size"], 65536);
@@ -374,31 +407,57 @@ async fn hdfs_client_drives_a_real_cluster() -> E2EResult<()> {
     let big = c.wait("hdfs_write_result", 1, &cluster).await;
     assert_eq!(big["blocks"], 3, "{big}");
     let gone = c.wait("hdfs_file_status", 1, &cluster).await;
-    assert_eq!(gone["exists"], false, "the recursive delete took /out/tmp: {gone}");
+    assert_eq!(
+        gone["exists"], false,
+        "the recursive delete took /out/tmp: {gone}"
+    );
     let error = c.wait("hdfs_error", 0, &cluster).await;
     assert_eq!(error["operation"], "read");
-    assert_eq!(error["exception_class"], "java.io.FileNotFoundException", "{error}");
+    assert_eq!(
+        error["exception_class"], "java.io.FileNotFoundException",
+        "{error}"
+    );
     assert!(error["message"].as_str().unwrap().contains("/missing.txt"));
 
     // What the client wrote, read back by Hadoop's own client.
-    assert_eq!(cluster.dfs(&["-cat", "/out/renamed.txt"]).await?, "written by the netget client\n");
+    assert_eq!(
+        cluster.dfs(&["-cat", "/out/renamed.txt"]).await?,
+        "written by the netget client\n"
+    );
     assert_eq!(cluster.dfs(&["-cat", "/out/big.txt"]).await?, written_big());
-    assert_eq!(cluster.dfs(&["-stat", "%a %o", "/out/renamed.txt"]).await?.trim(), "640 134217728");
-    assert_eq!(cluster.dfs(&["-stat", "%o", "/out/big.txt"]).await?.trim(), "65536");
+    assert_eq!(
+        cluster
+            .dfs(&["-stat", "%a %o", "/out/renamed.txt"])
+            .await?
+            .trim(),
+        "640 134217728"
+    );
+    assert_eq!(
+        cluster.dfs(&["-stat", "%o", "/out/big.txt"]).await?.trim(),
+        "65536"
+    );
     let ls = cluster.dfs(&["-ls", "/out"]).await?;
-    assert!(!ls.contains("/out/tmp") && !ls.contains("/out/netget.txt"), "{ls}");
+    assert!(
+        !ls.contains("/out/tmp") && !ls.contains("/out/netget.txt"),
+        "{ls}"
+    );
 
     // Every change the model asked for reached the NameNode, as the NameNode recorded it.
     let audit = cluster.audited(&user);
     println!("audit: {audit:?}");
     let has = |cmd: &str, src: &str, dst: &str| {
-        audit.iter().any(|(c, s, d)| c == cmd && s == src && (dst.is_empty() || d == dst))
+        audit
+            .iter()
+            .any(|(c, s, d)| c == cmd && s == src && (dst.is_empty() || d == dst))
     };
     assert!(has("listStatus", "/seed", ""), "{audit:?}");
     assert!(has("mkdirs", "/out/tmp", ""), "{audit:?}");
     assert!(has("create", "/out/netget.txt", ""), "{audit:?}");
     assert!(has("create", "/out/big.txt", ""), "{audit:?}");
-    assert!(has("rename", "/out/netget.txt", "/out/renamed.txt"), "{audit:?}");
+    assert!(
+        has("rename", "/out/netget.txt", "/out/renamed.txt"),
+        "{audit:?}"
+    );
     assert!(has("setPermission", "/out/renamed.txt", ""), "{audit:?}");
     assert!(has("delete", "/out/tmp", ""), "{audit:?}");
     assert!(has("open", "/seed/bin.dat", ""), "{audit:?}");
@@ -422,13 +481,27 @@ async fn the_namenodes_refusal_reaches_the_model() -> E2EResult<()> {
     cluster.dfs(&["-chmod", "755", "/locked"]).await?;
     let c = client(cluster.rpc(), "mallory", chain(REFUSED)).await?;
     let mkdir = c.wait("hdfs_error", 0, &cluster).await;
-    assert_eq!(mkdir["exception_class"], "org.apache.hadoop.security.AccessControlException", "{mkdir}");
-    assert!(mkdir["message"].as_str().unwrap().contains("user=mallory"), "{mkdir}");
+    assert_eq!(
+        mkdir["exception_class"], "org.apache.hadoop.security.AccessControlException",
+        "{mkdir}"
+    );
+    assert!(
+        mkdir["message"].as_str().unwrap().contains("user=mallory"),
+        "{mkdir}"
+    );
     let write = c.wait("hdfs_error", 1, &cluster).await;
     assert_eq!(write["operation"], "write");
-    assert_eq!(write["exception_class"], "org.apache.hadoop.security.AccessControlException");
+    assert_eq!(
+        write["exception_class"],
+        "org.apache.hadoop.security.AccessControlException"
+    );
     let audit = cluster.audited("mallory");
-    assert!(audit.iter().any(|(c, s, _)| c == "mkdirs" && s == "/locked/inside"), "{audit:?}");
+    assert!(
+        audit
+            .iter()
+            .any(|(c, s, _)| c == "mkdirs" && s == "/locked/inside"),
+        "{audit:?}"
+    );
     Ok(())
 }
 
@@ -440,11 +513,27 @@ print(json.dumps({'actions':[{'type':'hdfs_stat','path':'/'}]}))"#;
 async fn followup_chain_stops_at_the_bound() -> E2EResult<()> {
     let cluster = Cluster::start().await?;
     let c = client(cluster.rpc(), &me(), chain(LOOP)).await?;
-    assert!(c.wait_log("decision=followup_depth").await, "the chain did not stop");
+    assert!(
+        c.wait_log("decision=followup_depth").await,
+        "the chain did not stop"
+    );
     let stats = c.events("hdfs_file_status").await.len();
-    assert_eq!(stats, netget::client::hdfs::MAX_FOLLOWUP_DEPTH, "one stat per allowed follow-up");
-    let audited = cluster.audited(&me()).iter().filter(|(c, _, _)| c == "getfileinfo").count();
-    assert_eq!(audited, netget::client::hdfs::MAX_FOLLOWUP_DEPTH, "{:?}", cluster.audited(&me()));
+    assert_eq!(
+        stats,
+        netget::client::hdfs::MAX_FOLLOWUP_DEPTH,
+        "one stat per allowed follow-up"
+    );
+    let audited = cluster
+        .audited(&me())
+        .iter()
+        .filter(|(c, _, _)| c == "getfileinfo")
+        .count();
+    assert_eq!(
+        audited,
+        netget::client::hdfs::MAX_FOLLOWUP_DEPTH,
+        "{:?}",
+        cluster.audited(&me())
+    );
     Ok(())
 }
 
@@ -453,8 +542,14 @@ async fn followup_chain_stops_at_the_bound() -> E2EResult<()> {
 async fn llm_failure_sends_nothing() -> E2EResult<()> {
     let cluster = Cluster::start().await?;
     let c = client(cluster.rpc(), &me(), None).await?;
-    assert!(c.wait_log("decision=fail_closed_llm_error").await, "no fail-closed line");
+    assert!(
+        c.wait_log("decision=fail_closed_llm_error").await,
+        "no fail-closed line"
+    );
     let audited = cluster.audited(&me());
-    assert!(audited.is_empty(), "the client acted without an answer: {audited:?}");
+    assert!(
+        audited.is_empty(),
+        "the client acted without an answer: {audited:?}"
+    );
     Ok(())
 }

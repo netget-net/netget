@@ -6,10 +6,9 @@
 //! a block exists only because the NameNode described or allocated it.
 use super::namespace::ReadableBlock;
 use super::proto::hdfs::{
-    op_write_block_proto::BlockConstructionStage, BlockChecksumTypeProto,
-    BlockOpResponseProto, ChecksumProto, ClientReadStatusProto, OpBlockChecksumProto,
-    OpBlockChecksumResponseProto, OpReadBlockProto, OpWriteBlockProto, PipelineAckProto,
-    ReadOpChecksumInfoProto, Status,
+    op_write_block_proto::BlockConstructionStage, BlockChecksumTypeProto, BlockOpResponseProto,
+    ChecksumProto, ClientReadStatusProto, OpBlockChecksumProto, OpBlockChecksumResponseProto,
+    OpReadBlockProto, OpWriteBlockProto, PipelineAckProto, ReadOpChecksumInfoProto, Status,
 };
 use super::transfer::{self, op, Checksum, PacketLimits, ReadError};
 use super::Hdfs;
@@ -180,7 +179,11 @@ impl Conn {
 
     /// Refuse an op: an error response, then the connection closes.
     async fn refuse(&mut self, op: &str, status: Status, why: &str) -> anyhow::Result<Next> {
-        self.outcome(op, "protocol_refusal", &format!("{why}; answered {}", status.as_str_name()));
+        self.outcome(
+            op,
+            "protocol_refusal",
+            &format!("{why}; answered {}", status.as_str_name()),
+        );
         self.reply(&response(status, why)).await?;
         Ok(Next::Close)
     }
@@ -240,13 +243,22 @@ impl Conn {
         }
     }
 
-    fn readable(&self, b: &super::proto::hdfs::ExtendedBlockProto) -> Result<ReadableBlock, String> {
+    fn readable(
+        &self,
+        b: &super::proto::hdfs::ExtendedBlockProto,
+    ) -> Result<ReadableBlock, String> {
         self.hdfs.ns().readable_block(b)
     }
 
     async fn read_block(&mut self, body: &[u8]) -> anyhow::Result<Next> {
         let Ok(r) = transfer::decode_op::<OpReadBlockProto>(body) else {
-            return self.refuse("READ_BLOCK", Status::ErrorInvalid, "a malformed OpReadBlockProto").await;
+            return self
+                .refuse(
+                    "READ_BLOCK",
+                    Status::ErrorInvalid,
+                    "a malformed OpReadBlockProto",
+                )
+                .await;
         };
         let b = r.header.base_header.block.clone();
         let block = match self.readable(&b) {
@@ -267,7 +279,11 @@ impl Conn {
         }
         let end = r.offset.saturating_add(r.len).min(block.len);
         let checksums = r.send_checksums.unwrap_or(true);
-        let kind = if checksums { Checksum::Crc32c } else { Checksum::Null };
+        let kind = if checksums {
+            Checksum::Crc32c
+        } else {
+            Checksum::Null
+        };
         let bpc = transfer::BYTES_PER_CHECKSUM;
         let start = r.offset / bpc as u64 * bpc as u64;
         self.reply(&BlockOpResponseProto {
@@ -284,7 +300,10 @@ impl Conn {
         .await?;
         // Chunk-aligned packets from the chunk holding `offset` to the end of the chunk holding
         // the last byte asked for (never past the block).
-        let stop = end.div_ceil(bpc as u64).saturating_mul(bpc as u64).min(block.len);
+        let stop = end
+            .div_ceil(bpc as u64)
+            .saturating_mul(bpc as u64)
+            .min(block.len);
         let mut pos = start;
         let mut seqno = 0i64;
         while pos < stop {
@@ -301,7 +320,10 @@ impl Conn {
                     self.outcome(
                         "READ_BLOCK",
                         "protocol_refusal",
-                        &format!("block {} could not be read at {pos}; closed mid-block", b.block_id),
+                        &format!(
+                            "block {} could not be read at {pos}; closed mid-block",
+                            b.block_id
+                        ),
                     );
                     return Ok(Next::Close);
                 }
@@ -332,19 +354,33 @@ impl Conn {
 
     async fn block_checksum(&mut self, body: &[u8]) -> anyhow::Result<Next> {
         let Ok(r) = transfer::decode_op::<OpBlockChecksumProto>(body) else {
-            return self.refuse("BLOCK_CHECKSUM", Status::ErrorInvalid, "a malformed OpBlockChecksumProto").await;
+            return self
+                .refuse(
+                    "BLOCK_CHECKSUM",
+                    Status::ErrorInvalid,
+                    "a malformed OpBlockChecksumProto",
+                )
+                .await;
         };
         if let Some(o) = &r.block_checksum_options {
             if o.block_checksum_type == Some(BlockChecksumTypeProto::CompositeCrc as i32) {
                 return self
-                    .refuse("BLOCK_CHECKSUM", Status::ErrorUnsupported, "COMPOSITE_CRC is not supported; MD5CRC only")
+                    .refuse(
+                        "BLOCK_CHECKSUM",
+                        Status::ErrorUnsupported,
+                        "COMPOSITE_CRC is not supported; MD5CRC only",
+                    )
                     .await;
             }
         }
         let b = r.header.block.clone();
         let block = match self.readable(&b) {
             Ok(v) => v,
-            Err(why) => return self.refuse("BLOCK_CHECKSUM", Status::ErrorInvalid, &why).await,
+            Err(why) => {
+                return self
+                    .refuse("BLOCK_CHECKSUM", Status::ErrorInvalid, &why)
+                    .await
+            }
         };
         let bpc = transfer::BYTES_PER_CHECKSUM;
         let mut sums = Vec::with_capacity(block.len.div_ceil(bpc as u64) as usize * 4);
@@ -399,7 +435,13 @@ impl Conn {
 
     async fn write_block(&mut self, body: &[u8]) -> anyhow::Result<Next> {
         let Ok(r) = transfer::decode_op::<OpWriteBlockProto>(body) else {
-            return self.refuse("WRITE_BLOCK", Status::ErrorInvalid, "a malformed OpWriteBlockProto").await;
+            return self
+                .refuse(
+                    "WRITE_BLOCK",
+                    Status::ErrorInvalid,
+                    "a malformed OpWriteBlockProto",
+                )
+                .await;
         };
         if r.stage != BlockConstructionStage::PipelineSetupCreate as i32 {
             let stage = BlockConstructionStage::try_from(r.stage)
@@ -426,13 +468,22 @@ impl Conn {
             Some(k @ (Checksum::Crc32 | Checksum::Crc32c)) => k,
             _ => {
                 return self
-                    .refuse("WRITE_BLOCK", Status::ErrorUnsupported, "the checksum type is CRC32C or CRC32")
+                    .refuse(
+                        "WRITE_BLOCK",
+                        Status::ErrorUnsupported,
+                        "the checksum type is CRC32C or CRC32",
+                    )
                     .await
             }
         };
-        let bpc = match transfer::check_bytes_per_checksum(r.requested_checksum.bytes_per_checksum) {
+        let bpc = match transfer::check_bytes_per_checksum(r.requested_checksum.bytes_per_checksum)
+        {
             Ok(b) => b,
-            Err(e) => return self.refuse("WRITE_BLOCK", Status::ErrorInvalid, &format!("{e:#}")).await,
+            Err(e) => {
+                return self
+                    .refuse("WRITE_BLOCK", Status::ErrorInvalid, &format!("{e:#}"))
+                    .await
+            }
         };
         let b = r.header.base_header.block.clone();
         let client = crate::utils::sanitize::token(&r.header.client_name, 256);
@@ -451,19 +502,36 @@ impl Conn {
         let mut data: Vec<u8> = Vec::new();
         let mut reserved = 0u64;
         let result = self
-            .receive(&b, &client, kind, bpc, &limits, target.block_size, &mut data, &mut reserved)
+            .receive(
+                &b,
+                &client,
+                kind,
+                bpc,
+                &limits,
+                target.block_size,
+                &mut data,
+                &mut reserved,
+            )
             .await;
         match result {
             Ok(true) => {
                 let len = data.len();
                 let received = self.hdfs.ns().block_received(&b, &client, data);
                 if let Err(why) = received {
-                    self.outcome("WRITE_BLOCK", "protocol_refusal", &format!("{why}; the block is dropped"));
+                    self.outcome(
+                        "WRITE_BLOCK",
+                        "protocol_refusal",
+                        &format!("{why}; the block is dropped"),
+                    );
                 } else {
                     self.outcome(
                         "WRITE_BLOCK",
                         "accepted",
-                        &format!("block {} received whole: {len} bytes, every chunk's {} verified", b.block_id, kind.name()),
+                        &format!(
+                            "block {} received whole: {len} bytes, every chunk's {} verified",
+                            b.block_id,
+                            kind.name()
+                        ),
                     );
                 }
                 Ok(Next::Close)
@@ -489,14 +557,32 @@ impl Conn {
         reserved: &mut u64,
     ) -> anyhow::Result<bool> {
         loop {
-            let p = match transfer::read_packet(&mut self.stream, limits, PACKET_IDLE, super::FRAME_DEADLINE).await {
+            let p = match transfer::read_packet(
+                &mut self.stream,
+                limits,
+                PACKET_IDLE,
+                super::FRAME_DEADLINE,
+            )
+            .await
+            {
                 Ok(p) => p,
                 Err(ReadError::Closed) => {
-                    self.outcome("WRITE_BLOCK", "protocol_refusal", &format!("the client closed before block {}'s last packet; dropped", b.block_id));
+                    self.outcome(
+                        "WRITE_BLOCK",
+                        "protocol_refusal",
+                        &format!(
+                            "the client closed before block {}'s last packet; dropped",
+                            b.block_id
+                        ),
+                    );
                     return Ok(false);
                 }
                 Err(e) => {
-                    self.outcome("WRITE_BLOCK", "protocol_refusal", &format!("{e}; block {} dropped and closed", b.block_id));
+                    self.outcome(
+                        "WRITE_BLOCK",
+                        "protocol_refusal",
+                        &format!("{e}; block {} dropped and closed", b.block_id),
+                    );
                     return Ok(false);
                 }
             };
@@ -523,7 +609,10 @@ impl Conn {
                 self.outcome(
                     "WRITE_BLOCK",
                     "protocol_refusal",
-                    &format!("packet {} of block {} starts at {offset}, but {have} bytes are in", h.seqno, b.block_id),
+                    &format!(
+                        "packet {} of block {} starts at {offset}, but {have} bytes are in",
+                        h.seqno, b.block_id
+                    ),
                 );
                 self.ack(h.seqno, Status::ErrorInvalid).await?;
                 return Ok(false);
@@ -533,7 +622,10 @@ impl Conn {
                 self.outcome(
                     "WRITE_BLOCK",
                     "protocol_refusal",
-                    &format!("block {} would grow past its block size {block_size}", b.block_id),
+                    &format!(
+                        "block {} would grow past its block size {block_size}",
+                        b.block_id
+                    ),
                 );
                 self.ack(h.seqno, Status::ErrorInvalid).await?;
                 return Ok(false);
@@ -554,7 +646,11 @@ impl Conn {
             // The block may have been abandoned or its file deleted meanwhile.
             let still = self.hdfs.ns().writable_block(b, client);
             if let Err(why) = still {
-                self.outcome("WRITE_BLOCK", "protocol_refusal", &format!("{why}; answered ERROR"));
+                self.outcome(
+                    "WRITE_BLOCK",
+                    "protocol_refusal",
+                    &format!("{why}; answered ERROR"),
+                );
                 self.ack(h.seqno, Status::Error).await?;
                 return Ok(false);
             }

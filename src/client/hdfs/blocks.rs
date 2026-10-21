@@ -65,7 +65,11 @@ fn refused(r: &BlockOpResponseProto) -> anyhow::Error {
     )
 }
 
-fn header(block: &ExtendedBlockProto, token: &TokenProto, client: &str) -> ClientOperationHeaderProto {
+fn header(
+    block: &ExtendedBlockProto,
+    token: &TokenProto,
+    client: &str,
+) -> ClientOperationHeaderProto {
     ClientOperationHeaderProto {
         base_header: BaseHeaderProto {
             block: block.clone(),
@@ -169,7 +173,9 @@ fn ack_ok(a: &PipelineAckProto) -> Result<()> {
     ensure!(!statuses.is_empty(), "an ack with no status");
     for s in statuses {
         if s != Status::Success as i32 {
-            let name = Status::try_from(s).map(|s| s.as_str_name()).unwrap_or("unknown");
+            let name = Status::try_from(s)
+                .map(|s| s.as_str_name())
+                .unwrap_or("unknown");
             bail!("the pipeline answered {name} for packet {}", a.seqno);
         }
     }
@@ -200,7 +206,10 @@ pub async fn write(
     client: &str,
     data: &[u8],
 ) -> Result<(ExtendedBlockProto, SocketAddr)> {
-    let first = block.locs.first().context("the NameNode named no DataNode")?;
+    let first = block
+        .locs
+        .first()
+        .context("the NameNode named no DataNode")?;
     let addr = datanode_addr(first, namenode)?;
     let mut s = open(addr).await?;
     let disk = StorageTypeProto::Disk as i32;
@@ -223,7 +232,14 @@ pub async fn write(
             readahead: None,
         }),
         storage_type: Some(block.storage_types.first().copied().unwrap_or(disk)),
-        target_storage_types: block.storage_types.iter().skip(1).copied().chain(std::iter::repeat(disk)).take(rest).collect(),
+        target_storage_types: block
+            .storage_types
+            .iter()
+            .skip(1)
+            .copied()
+            .chain(std::iter::repeat(disk))
+            .take(rest)
+            .collect(),
         allow_lazy_persist: Some(false),
         pinning: Some(false),
         target_pinnings: vec![false; rest],
@@ -246,8 +262,15 @@ pub async fn write(
             let next = unacked.pop_front().expect("non-empty");
             read_ack(&mut s, next).await?;
         }
-        s.write_all(&transfer::data_packet(Checksum::Crc32c, bpc, offset, seqno, false, piece))
-            .await?;
+        s.write_all(&transfer::data_packet(
+            Checksum::Crc32c,
+            bpc,
+            offset,
+            seqno,
+            false,
+            piece,
+        ))
+        .await?;
         unacked.push_back(seqno);
         seqno += 1;
         offset += piece.len() as u64;
@@ -256,8 +279,15 @@ pub async fn write(
         read_ack(&mut s, next).await?;
     }
     // The block ends with an empty packet once every data packet is acknowledged.
-    s.write_all(&transfer::data_packet(Checksum::Crc32c, bpc, offset, seqno, true, &[]))
-        .await?;
+    s.write_all(&transfer::data_packet(
+        Checksum::Crc32c,
+        bpc,
+        offset,
+        seqno,
+        true,
+        &[],
+    ))
+    .await?;
     read_ack(&mut s, seqno).await?;
     let _ = s.shutdown().await;
     let mut b = block.b.clone();

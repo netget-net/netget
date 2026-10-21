@@ -12,8 +12,8 @@ use super::proto::common::TokenProto;
 use super::proto::hdfs::{
     datanode_info_proto::AdminState, hdfs_file_status_proto::FileType, ContentSummaryProto,
     DatanodeIdProto, DatanodeInfoProto, DirectoryListingProto, ExtendedBlockProto,
-    FsPermissionProto, HdfsFileStatusProto, LocatedBlockProto, LocatedBlocksProto,
-    QuotaUsageProto, StorageTypeProto,
+    FsPermissionProto, HdfsFileStatusProto, LocatedBlockProto, LocatedBlocksProto, QuotaUsageProto,
+    StorageTypeProto,
 };
 use super::rpc::class;
 use crate::server::described_tree::{self as tree, Changes, Kind, Outcome, Stop, Tree, ROOT};
@@ -79,7 +79,10 @@ fn thrown<T>(class: &'static str, message: impl Into<String>) -> Step<T> {
 /// The exception for an errno the tree answered, about `path`.
 pub fn thrown_for(code: i32, path: &str) -> Thrown {
     match code {
-        libc::ENOENT => Thrown::new(class::FILE_NOT_FOUND, format!("File does not exist: {path}")),
+        libc::ENOENT => Thrown::new(
+            class::FILE_NOT_FOUND,
+            format!("File does not exist: {path}"),
+        ),
         libc::ENOTDIR => Thrown::new(
             class::PARENT_NOT_DIRECTORY,
             format!("Parent path is not a directory: {path}"),
@@ -105,7 +108,10 @@ pub fn thrown_for(code: i32, path: &str) -> Thrown {
         }
         _ => Thrown::new(
             class::IO,
-            format!("{path}: {}", crate::server::described_tree::errno_name(code)),
+            format!(
+                "{path}: {}",
+                crate::server::described_tree::errno_name(code)
+            ),
         ),
     }
 }
@@ -157,7 +163,10 @@ pub fn components(path: &str) -> Result<Vec<&str>, Thrown> {
         if c.len() > tree::MAX_NAME_BYTES {
             return Err(Thrown::new(
                 "org.apache.hadoop.hdfs.protocol.FSLimitException$PathComponentTooLongException",
-                format!("The maximum path component name limit of {} is exceeded", tree::MAX_NAME_BYTES),
+                format!(
+                    "The maximum path component name limit of {} is exceeded",
+                    tree::MAX_NAME_BYTES
+                ),
             ));
         }
     }
@@ -293,10 +302,11 @@ fn principal(v: &Json, key: &str) -> anyhow::Result<Option<String>> {
 fn number(v: &Json, key: &str) -> anyhow::Result<Option<u64>> {
     match v.get(key) {
         None | Some(Json::Null) => Ok(None),
-        Some(n) => Ok(Some(
-            n.as_u64()
-                .with_context(|| format!("{key} is a non-negative number"))?,
-        )),
+        Some(n) => {
+            Ok(Some(n.as_u64().with_context(|| {
+                format!("{key} is a non-negative number")
+            })?))
+        }
     }
 }
 
@@ -504,12 +514,7 @@ impl Namespace {
         let (file_type, length, replication, block_size) = match a.kind {
             Kind::Dir => (FileType::IsDir, 0, 0, 0),
             Kind::Symlink => (FileType::IsSymlink, a.size, 0, 0),
-            _ => (
-                FileType::IsFile,
-                a.size,
-                m.replication as u32,
-                m.block_size,
-            ),
+            _ => (FileType::IsFile, a.size, m.replication as u32, m.block_size),
         };
         let children = match a.kind {
             Kind::Dir => self.tree.list(ino).map(|l| l.len() as i32).unwrap_or(0),
@@ -865,7 +870,8 @@ impl Namespace {
                 Err(e) => return step(Err(e), &path),
             }
         }
-        if self.open.len() >= MAX_OPEN_FILES && replaces.is_none_or(|i| !self.open.contains_key(&i)) {
+        if self.open.len() >= MAX_OPEN_FILES && replaces.is_none_or(|i| !self.open.contains_key(&i))
+        {
             return thrown(
                 class::IO,
                 format!("{MAX_OPEN_FILES} files are already open for writing"),
@@ -987,7 +993,10 @@ impl Namespace {
             (None, Some(p)) => {
                 return thrown(
                     class::IO,
-                    format!("{path} has no block yet, but the request names block {}", p.block_id),
+                    format!(
+                        "{path} has no block yet, but the request names block {}",
+                        p.block_id
+                    ),
                 )
             }
             (Some(last), p) => {
@@ -1015,15 +1024,14 @@ impl Namespace {
         if index + 1 > MAX_BLOCKS_PER_FILE || index * m.block_size >= tree::MAX_FILE_SIZE {
             return thrown(
                 class::QUOTA,
-                format!("{path}: a file holds at most {MAX_BLOCKS_PER_FILE} blocks and {} bytes", tree::MAX_FILE_SIZE),
+                format!(
+                    "{path}: a file holds at most {MAX_BLOCKS_PER_FILE} blocks and {} bytes",
+                    tree::MAX_FILE_SIZE
+                ),
             );
         }
         let id = block_id(ino, index);
-        self.open
-            .get_mut(&ino)
-            .expect("leased")
-            .blocks
-            .push(id);
+        self.open.get_mut(&ino).expect("leased").blocks.push(id);
         Ok(self.locate(id, m.generation, index * m.block_size, 0, dn))
     }
 
@@ -1045,7 +1053,10 @@ impl Namespace {
         if b.pool_id != self.pool_id || !o.blocks.contains(&b.block_id) {
             return Err(Thrown::new(
                 class::IO,
-                format!("Block {} is not a block of {path} being written", b.block_id),
+                format!(
+                    "Block {} is not a block of {path} being written",
+                    b.block_id
+                ),
             ));
         }
         let m = self.meta(ino);
@@ -1093,7 +1104,10 @@ impl Namespace {
             (Some(l), b) => {
                 return thrown(
                     class::IO,
-                    format!("{path}: the last block is {l}, not {:?}", b.map(|b| b.block_id)),
+                    format!(
+                        "{path}: the last block is {l}, not {:?}",
+                        b.map(|b| b.block_id)
+                    ),
                 )
             }
         }
@@ -1326,17 +1340,24 @@ impl Namespace {
             if (a.kind == Kind::Dir) != (kind == Kind::Dir) {
                 return thrown(
                     class::IO,
-                    format!("Source {src_path} and destination {dst_path} must both be directories"),
+                    format!(
+                        "Source {src_path} and destination {dst_path} must both be directories"
+                    ),
                 );
             }
         }
-        match self.tree.check_rename(src_parent, src_name, dst_parent, dst_name, false) {
+        match self
+            .tree
+            .check_rename(src_parent, src_name, dst_parent, dst_name, false)
+        {
             Ok(_) => {}
             Err(Stop::Errno(_)) if old => return Ok(None),
             Err(Stop::Errno(libc::EINVAL)) => {
                 return thrown(
                     class::IO,
-                    format!("Rename destination {dst_path} is a directory or file under source {src_path}"),
+                    format!(
+                    "Rename destination {dst_path} is a directory or file under source {src_path}"
+                ),
                 )
             }
             Err(Stop::Errno(libc::ENOTEMPTY)) => {
@@ -1410,7 +1431,13 @@ impl Namespace {
     }
 
     /// Times in milliseconds; `None` leaves one unchanged.
-    pub fn set_times(&mut self, ino: u64, mtime: Option<u64>, atime: Option<u64>, path: &str) -> Step<()> {
+    pub fn set_times(
+        &mut self,
+        ino: u64,
+        mtime: Option<u64>,
+        atime: Option<u64>,
+        path: &str,
+    ) -> Step<()> {
         let at = |ms: u64| UNIX_EPOCH + Duration::from_millis(ms);
         step(
             self.tree.setattr(
@@ -1446,13 +1473,22 @@ impl Namespace {
         }
         let (ino, index) = split_block_id(b.block_id);
         let Some(o) = self.open.get(&ino) else {
-            return Err(format!("block {} belongs to no file open for writing", b.block_id));
+            return Err(format!(
+                "block {} belongs to no file open for writing",
+                b.block_id
+            ));
         };
         if o.client != client {
-            return Err(format!("{client} does not hold the lease on block {}", b.block_id));
+            return Err(format!(
+                "{client} does not hold the lease on block {}",
+                b.block_id
+            ));
         }
         if o.blocks.last() != Some(&b.block_id) {
-            return Err(format!("block {} is not the file's newest block", b.block_id));
+            return Err(format!(
+                "block {} is not the file's newest block",
+                b.block_id
+            ));
         }
         if self.received.contains_key(&b.block_id) {
             return Err(format!("block {} has already been written", b.block_id));
@@ -1485,7 +1521,12 @@ impl Namespace {
     }
 
     /// A block arrived whole; its bytes stay reserved until the file completes or goes.
-    pub fn block_received(&mut self, b: &ExtendedBlockProto, client: &str, data: Vec<u8>) -> Result<(), String> {
+    pub fn block_received(
+        &mut self,
+        b: &ExtendedBlockProto,
+        client: &str,
+        data: Vec<u8>,
+    ) -> Result<(), String> {
         if let Err(e) = self.writable_block(b, client) {
             self.release(data.len() as u64);
             return Err(e);
@@ -1526,7 +1567,13 @@ impl Namespace {
     }
 
     /// The DataNode as the NameNode reports it, reached at `ip`:`xfer_port`.
-    pub fn datanode(ip: &str, xfer_port: u16, uuid: &str, capacity: u64, used: u64) -> DatanodeInfoProto {
+    pub fn datanode(
+        ip: &str,
+        xfer_port: u16,
+        uuid: &str,
+        capacity: u64,
+        used: u64,
+    ) -> DatanodeInfoProto {
         DatanodeInfoProto {
             id: DatanodeIdProto {
                 ip_addr: ip.into(),

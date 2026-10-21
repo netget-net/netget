@@ -221,10 +221,10 @@ pub mod bmp;
 
 pub mod mqtt_sn;
 
-pub mod nbd;
-pub mod nvme_tcp;
 #[cfg(unix)]
 pub mod hdfs;
+pub mod nbd;
+pub mod nvme_tcp;
 
 pub mod managesieve;
 

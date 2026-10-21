@@ -141,7 +141,10 @@ pub fn delimited(buf: &[u8]) -> Result<(&[u8], &[u8])> {
 /// Decode the delimited message at the front of `buf`.
 pub fn decode_delimited<M: Message + Default>(buf: &[u8]) -> Result<(M, &[u8])> {
     let (bytes, rest) = delimited(buf)?;
-    Ok((M::decode(bytes).context("a malformed protocol buffer")?, rest))
+    Ok((
+        M::decode(bytes).context("a malformed protocol buffer")?,
+        rest,
+    ))
 }
 
 /// A frame: the four-byte length, then the parts.

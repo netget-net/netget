@@ -205,7 +205,12 @@ impl Session {
     }
 
     async fn fatal(&mut self, call_id: i32, class: &str, message: &str, code: RpcErrorCodeProto) {
-        self.outcome("connection", "", "protocol_refusal", &format!("{class}: {message}; closed"));
+        self.outcome(
+            "connection",
+            "",
+            "protocol_refusal",
+            &format!("{class}: {message}; closed"),
+        );
         let frame = rpc::failure(call_id, &[], -1, true, class, message, code);
         let _ = self.send(&frame).await;
     }
@@ -320,10 +325,7 @@ impl Session {
         }
         self.user = user;
         let protocol = context.protocol.unwrap_or_default();
-        if let Err(t) = self
-            .admit(info.real_user.as_deref(), &protocol, auth)
-            .await
-        {
+        if let Err(t) = self.admit(info.real_user.as_deref(), &protocol, auth).await {
             self.fatal(
                 rpc::CONNECTION_CONTEXT_CALL_ID,
                 t.class,
@@ -450,7 +452,10 @@ impl Session {
                             retry,
                             false,
                             class::NO_SUCH_METHOD,
-                            &format!("Unknown method {name} called on {} protocol.", rpc::CLIENT_PROTOCOL),
+                            &format!(
+                                "Unknown method {name} called on {} protocol.",
+                                rpc::CLIENT_PROTOCOL
+                            ),
                             RpcErrorCodeProto::ErrorNoSuchMethod,
                         )
                     }
@@ -511,7 +516,11 @@ impl Session {
             }
         };
         let message = rpc::decode_request(&frame).and_then(|(h, rest)| {
-            anyhow::ensure!(h.call_id == rpc::SASL_CALL_ID, "call id {} is not SASL's", h.call_id);
+            anyhow::ensure!(
+                h.call_id == rpc::SASL_CALL_ID,
+                "call id {} is not SASL's",
+                h.call_id
+            );
             Ok(rpc::decode_delimited::<RpcSaslProto>(rest)?.0)
         });
         match message {
@@ -528,7 +537,8 @@ impl Session {
                         challenge: None,
                     }],
                 };
-                self.send(&rpc::success(rpc::SASL_CALL_ID, &[], -1, &reply)).await?;
+                self.send(&rpc::success(rpc::SASL_CALL_ID, &[], -1, &reply))
+                    .await?;
                 Ok(true)
             }
             Ok(_) => {
@@ -555,7 +565,12 @@ impl Session {
     }
 
     /// Whether this connection's user may connect: remembered, or asked once.
-    async fn admit(&mut self, real_user: Option<&str>, protocol: &str, auth: &str) -> Result<(), Thrown> {
+    async fn admit(
+        &mut self,
+        real_user: Option<&str>,
+        protocol: &str,
+        auth: &str,
+    ) -> Result<(), Thrown> {
         let key = self.user.clone();
         let remembered = self.hdfs.users().get(&key).cloned();
         match remembered {
@@ -628,7 +643,10 @@ impl Session {
                     "fail_closed_deadline",
                     "the deadline passed while the call waited for another decision",
                 );
-                Err(Thrown::new(class::IO, "The NameNode could not decide in time"))
+                Err(Thrown::new(
+                    class::IO,
+                    "The NameNode could not decide in time",
+                ))
             }
         }
     }
@@ -641,7 +659,12 @@ impl Session {
     }
 
     /// Describe a pending directory; the caller holds the gate.
-    async fn describe(&self, dir: u64, method: &str, deadline: tokio::time::Instant) -> Result<(), Thrown> {
+    async fn describe(
+        &self,
+        dir: u64,
+        method: &str,
+        deadline: tokio::time::Instant,
+    ) -> Result<(), Thrown> {
         let (path, depth) = {
             let ns = self.hdfs.ns();
             match ns.tree.dir_state(dir) {
@@ -657,13 +680,27 @@ impl Session {
         let event = Event::new(&actions::DESCRIBE_EVENT, Value::Object(fields));
         let answer = self
             .hdfs
-            .ask(self.id, &event, &[actions::DIRECTORY, actions::DENY], deadline)
+            .ask(
+                self.id,
+                &event,
+                &[actions::DIRECTORY, actions::DENY],
+                deadline,
+            )
             .await;
-        let failed_suffix = |failed: bool| if failed { ", and the directory has failed for good" } else { "" };
+        let failed_suffix = |failed: bool| {
+            if failed {
+                ", and the directory has failed for good"
+            } else {
+                ""
+            }
+        };
         match answer {
             Ok(a) if a["type"] == actions::DENY => {
                 let (c, m) = denial(&a);
-                self.hdfs.ns().tree.description_refused(dir, errno_for_class(c));
+                self.hdfs
+                    .ns()
+                    .tree
+                    .description_refused(dir, errno_for_class(c));
                 self.outcome("describe", &path, "model_reject", &format!("answered {c}"));
                 Err(Thrown::new(c, m))
             }
@@ -695,7 +732,12 @@ impl Session {
                     "describe",
                     &path,
                     f.decision(),
-                    &format!("{}; answered {}{}", f.detail(), f.thrown().class, failed_suffix(failed)),
+                    &format!(
+                        "{}; answered {}{}",
+                        f.detail(),
+                        f.thrown().class,
+                        failed_suffix(failed)
+                    ),
                 );
                 Err(f.thrown())
             }
@@ -779,11 +821,21 @@ impl Session {
     }
 
     fn refused(&self, op: &str, path: &str, t: Thrown) -> CallError {
-        self.outcome(op, path, "protocol_refusal", &format!("answered {}", t.class));
+        self.outcome(
+            op,
+            path,
+            "protocol_refusal",
+            &format!("answered {}", t.class),
+        );
         CallError::Thrown(t)
     }
 
-    async fn call(&mut self, method: &str, body: &[u8], deadline: tokio::time::Instant) -> CallResult {
+    async fn call(
+        &mut self,
+        method: &str,
+        body: &[u8],
+        deadline: tokio::time::Instant,
+    ) -> CallResult {
         let read = super::MAX_DESCRIBES_PER_CALL;
         match method {
             "getServerDefaults" => {
@@ -807,9 +859,11 @@ impl Session {
             }
             "getFileInfo" | "getFileLinkInfo" | "getLocatedFileInfo" => {
                 let src = match method {
-                    "getLocatedFileInfo" => dec::<pb::GetLocatedFileInfoRequestProto>(body, method)?
-                        .src
-                        .unwrap_or_default(),
+                    "getLocatedFileInfo" => {
+                        dec::<pb::GetLocatedFileInfoRequestProto>(body, method)?
+                            .src
+                            .unwrap_or_default()
+                    }
                     "getFileLinkInfo" => dec::<pb::GetFileLinkInfoRequestProto>(body, method)?.src,
                     _ => dec::<pb::GetFileInfoRequestProto>(body, method)?.src,
                 };
@@ -820,14 +874,18 @@ impl Session {
                 let local = self.local;
                 let fs = found.and_then(|ino| {
                     let mut s = self.hdfs.ns().status(ino, b"")?;
-                    if method == "getLocatedFileInfo" && s.file_type == pb::hdfs_file_status_proto::FileType::IsFile as i32 {
+                    if method == "getLocatedFileInfo"
+                        && s.file_type == pb::hdfs_file_status_proto::FileType::IsFile as i32
+                    {
                         let dn = self.hdfs.datanode_info(local);
                         s.locations = Some(self.hdfs.ns().located_blocks(ino, 0, u64::MAX, &dn));
                     }
                     Some(s)
                 });
                 Ok(match method {
-                    "getLocatedFileInfo" => pb::GetLocatedFileInfoResponseProto { fs }.encode_to_vec(),
+                    "getLocatedFileInfo" => {
+                        pb::GetLocatedFileInfoResponseProto { fs }.encode_to_vec()
+                    }
                     "getFileLinkInfo" => pb::GetFileLinkInfoResponseProto { fs }.encode_to_vec(),
                     _ => pb::GetFileInfoResponseProto { fs }.encode_to_vec(),
                 })
@@ -838,11 +896,13 @@ impl Session {
                 let path = joined(&comps);
                 let dn = self.hdfs.datanode_info(self.local);
                 let listing = self
-                    .settle(method, false, read, deadline, |ns| match ns.find(&comps)? {
-                        None => Ok(None),
-                        Some(ino) => ns
-                            .listing(ino, &path, &r.start_after, r.need_location, &dn)
-                            .map(Some),
+                    .settle(method, false, read, deadline, |ns| {
+                        match ns.find(&comps)? {
+                            None => Ok(None),
+                            Some(ino) => ns
+                                .listing(ino, &path, &r.start_after, r.need_location, &dn)
+                                .map(Some),
+                        }
                     })
                     .await?;
                 Ok(pb::GetListingResponseProto { dir_list: listing }.encode_to_vec())
@@ -855,7 +915,11 @@ impl Session {
                     .settle(method, false, read, deadline, |ns| ns.lookup(&comps))
                     .await?;
                 if self.hdfs.ns().kind(ino) != Some(Kind::File) {
-                    return Err(Thrown::new(class::FILE_NOT_FOUND, format!("Path is not a file: {path}")).into());
+                    return Err(Thrown::new(
+                        class::FILE_NOT_FOUND,
+                        format!("Path is not a file: {path}"),
+                    )
+                    .into());
                 }
                 let dn = self.hdfs.datanode_info(self.local);
                 let locations = self.hdfs.ns().located_blocks(ino, r.offset, r.length, &dn);
@@ -870,7 +934,9 @@ impl Session {
                 let path = joined(&comps);
                 let _g = self.gate(deadline).await?;
                 let plan = self
-                    .settle(method, true, read, deadline, |ns| ns.plan_mkdirs(&comps, r.create_parent))
+                    .settle(method, true, read, deadline, |ns| {
+                        ns.plan_mkdirs(&comps, r.create_parent)
+                    })
                     .await
                     .map_err(|t| self.refused("mkdirs", &path, t))?;
                 if let MkdirsPlan::Create { parent, names } = &plan {
@@ -880,7 +946,11 @@ impl Session {
                         names
                             .iter()
                             .map(|n| {
-                                at = if at == "/" { format!("/{n}") } else { format!("{at}/{n}") };
+                                at = if at == "/" {
+                                    format!("/{n}")
+                                } else {
+                                    format!("{at}/{n}")
+                                };
                                 at.clone()
                             })
                             .collect()
@@ -888,9 +958,14 @@ impl Session {
                     let mut f = Map::new();
                     f.insert("creates".into(), json!(creates));
                     f.insert("mode".into(), json!(r.masked.perm & 0o7777));
-                    self.decide("mkdirs", &path, &actions::MKDIRS_EVENT, f, deadline).await?;
+                    self.decide("mkdirs", &path, &actions::MKDIRS_EVENT, f, deadline)
+                        .await?;
                     let owner = self.user.clone();
-                    applied(self.hdfs.ns().apply_mkdirs(&plan, (r.masked.perm & 0o7777) as u16, &owner))?;
+                    applied(self.hdfs.ns().apply_mkdirs(
+                        &plan,
+                        (r.masked.perm & 0o7777) as u16,
+                        &owner,
+                    ))?;
                 }
                 Ok(pb::MkdirsResponseProto { result: true }.encode_to_vec())
             }
@@ -900,15 +975,37 @@ impl Session {
                 let path = joined(&comps);
                 let flag = r.create_flag;
                 if flag & (pb::CreateFlagProto::Append as u32) != 0 {
-                    return Err(self.refused("create", &path, Thrown::new(class::UNSUPPORTED, "Append is not supported by this NameNode")));
+                    return Err(self.refused(
+                        "create",
+                        &path,
+                        Thrown::new(
+                            class::UNSUPPORTED,
+                            "Append is not supported by this NameNode",
+                        ),
+                    ));
                 }
                 let overwrite = flag & (pb::CreateFlagProto::Overwrite as u32) != 0;
                 let block_size = namespace::check_block_size(r.block_size).map_err(|e| {
-                    self.refused("create", &path, Thrown::new(class::IO, format!("Specified block size {} is invalid: {e}", r.block_size)))
+                    self.refused(
+                        "create",
+                        &path,
+                        Thrown::new(
+                            class::IO,
+                            format!("Specified block size {} is invalid: {e}", r.block_size),
+                        ),
+                    )
                 })?;
-                let replication = namespace::check_replication(r.replication as u64).map_err(|e| {
-                    self.refused("create", &path, Thrown::new(class::IO, format!("Requested replication {} is invalid: {e}", r.replication)))
-                })?;
+                let replication =
+                    namespace::check_replication(r.replication as u64).map_err(|e| {
+                        self.refused(
+                            "create",
+                            &path,
+                            Thrown::new(
+                                class::IO,
+                                format!("Requested replication {} is invalid: {e}", r.replication),
+                            ),
+                        )
+                    })?;
                 let client = crate::utils::sanitize::token(&r.client_name, 256);
                 let _g = self.gate(deadline).await?;
                 let plan = self
@@ -923,7 +1020,11 @@ impl Session {
                     plan.missing
                         .iter()
                         .map(|n| {
-                            at = if at == "/" { format!("/{n}") } else { format!("{at}/{n}") };
+                            at = if at == "/" {
+                                format!("/{n}")
+                            } else {
+                                format!("{at}/{n}")
+                            };
                             at.clone()
                         })
                         .collect()
@@ -936,7 +1037,8 @@ impl Session {
                 f.insert("replication".into(), json!(replication));
                 f.insert("block_size".into(), json!(block_size));
                 f.insert("client_name".into(), json!(client));
-                self.decide("create", &path, &actions::CREATE_EVENT, f, deadline).await?;
+                self.decide("create", &path, &actions::CREATE_EVENT, f, deadline)
+                    .await?;
                 let owner = self.user.clone();
                 let ino = applied(self.hdfs.ns().apply_create(
                     &plan,
@@ -954,7 +1056,10 @@ impl Session {
                 let comps = path_of(&r.src)?;
                 let path = joined(&comps);
                 let dn = self.hdfs.datanode_info(self.local);
-                if r.exclude_nodes.iter().any(|n| n.id.datanode_uuid == dn.id.datanode_uuid) {
+                if r.exclude_nodes
+                    .iter()
+                    .any(|n| n.id.datanode_uuid == dn.id.datanode_uuid)
+                {
                     return Err(self.refused("addBlock", &path, Thrown::new(
                         class::IO,
                         format!("File {path} could only be written to 0 of the 1 minReplication nodes. There are 1 datanode(s) running and 1 node(s) are excluded in this operation."),
@@ -1006,7 +1111,10 @@ impl Session {
                     f.insert("encoding".into(), json!(encoding));
                     f.insert("data_truncated".into(), json!(truncated));
                     f.insert("client_name".into(), json!(client));
-                    if let Err(t) = self.decide("write", &path, &actions::WRITE_EVENT, f, deadline).await {
+                    if let Err(t) = self
+                        .decide("write", &path, &actions::WRITE_EVENT, f, deadline)
+                        .await
+                    {
                         // Refused or undecided: the bytes go, the file keeps what it had.
                         self.hdfs.ns().discard(plan.ino);
                         return Err(t.into());
@@ -1022,7 +1130,9 @@ impl Session {
                 let path = joined(&comps);
                 let _g = self.gate(deadline).await?;
                 let plan = self
-                    .settle(method, true, read, deadline, |ns| ns.plan_delete(&comps, r.recursive))
+                    .settle(method, true, read, deadline, |ns| {
+                        ns.plan_delete(&comps, r.recursive)
+                    })
                     .await
                     .map_err(|t| self.refused("delete", &path, t))?;
                 let Some(plan) = plan else {
@@ -1031,7 +1141,8 @@ impl Session {
                 let mut f = Map::new();
                 f.insert("kind".into(), json!(kind_name(plan.kind)));
                 f.insert("recursive".into(), json!(r.recursive));
-                self.decide("delete", &path, &actions::DELETE_EVENT, f, deadline).await?;
+                self.decide("delete", &path, &actions::DELETE_EVENT, f, deadline)
+                    .await?;
                 applied(self.hdfs.ns().apply_delete(&plan))?;
                 Ok(pb::DeleteResponseProto { result: true }.encode_to_vec())
             }
@@ -1048,7 +1159,9 @@ impl Session {
                 let path = joined(&s);
                 let _g = self.gate(deadline).await?;
                 let plan = self
-                    .settle(method, true, read, deadline, |ns| ns.plan_rename(&s, &d, overwrite))
+                    .settle(method, true, read, deadline, |ns| {
+                        ns.plan_rename(&s, &d, overwrite)
+                    })
                     .await
                     .map_err(|t| self.refused("rename", &path, t))?;
                 let reply = |ok: bool| {
@@ -1066,7 +1179,8 @@ impl Session {
                 f.insert("destination".into(), json!(plan.dst_path));
                 f.insert("kind".into(), json!(kind_name(plan.kind)));
                 f.insert("replaces".into(), json!(plan.replaces));
-                self.decide("rename", &path, &actions::RENAME_EVENT, f, deadline).await?;
+                self.decide("rename", &path, &actions::RENAME_EVENT, f, deadline)
+                    .await?;
                 applied(self.hdfs.ns().apply_rename(&plan))?;
                 Ok(reply(true))
             }
@@ -1084,7 +1198,14 @@ impl Session {
                 let mut f = Map::new();
                 f.insert("mode".into(), json!(mode));
                 f.insert("mode_before".into(), json!(before));
-                self.decide("setPermission", &path, &actions::SET_PERMISSION_EVENT, f, deadline).await?;
+                self.decide(
+                    "setPermission",
+                    &path,
+                    &actions::SET_PERMISSION_EVENT,
+                    f,
+                    deadline,
+                )
+                .await?;
                 applied(self.hdfs.ns().set_permission(ino, mode, &path))?;
                 Ok(pb::SetPermissionResponseProto {}.encode_to_vec())
             }
@@ -1093,8 +1214,15 @@ impl Session {
                 let comps = path_of(&r.src)?;
                 let path = joined(&comps);
                 let check = |v: &Option<String>| match v {
-                    Some(s) if s.is_empty() || s.len() > namespace::MAX_PRINCIPAL_BYTES || crate::utils::sanitize::has_controls(s) => {
-                        Err(Thrown::new(class::IO, "An owner or group is 1 to 256 bytes without controls"))
+                    Some(s)
+                        if s.is_empty()
+                            || s.len() > namespace::MAX_PRINCIPAL_BYTES
+                            || crate::utils::sanitize::has_controls(s) =>
+                    {
+                        Err(Thrown::new(
+                            class::IO,
+                            "An owner or group is 1 to 256 bytes without controls",
+                        ))
                     }
                     _ => Ok(()),
                 };
@@ -1115,8 +1243,11 @@ impl Session {
                 }
                 f.insert("owner_before".into(), json!(owner));
                 f.insert("group_before".into(), json!(group));
-                self.decide("setOwner", &path, &actions::SET_OWNER_EVENT, f, deadline).await?;
-                self.hdfs.ns().set_owner(ino, r.username.as_deref(), r.groupname.as_deref());
+                self.decide("setOwner", &path, &actions::SET_OWNER_EVENT, f, deadline)
+                    .await?;
+                self.hdfs
+                    .ns()
+                    .set_owner(ino, r.username.as_deref(), r.groupname.as_deref());
                 Ok(pb::SetOwnerResponseProto {}.encode_to_vec())
             }
             "setTimes" => {
@@ -1138,7 +1269,8 @@ impl Session {
                 if let Some(a) = atime {
                     f.insert("atime".into(), json!(a));
                 }
-                self.decide("setTimes", &path, &actions::SET_TIMES_EVENT, f, deadline).await?;
+                self.decide("setTimes", &path, &actions::SET_TIMES_EVENT, f, deadline)
+                    .await?;
                 applied(self.hdfs.ns().set_times(ino, mtime, atime, &path))?;
                 Ok(pb::SetTimesResponseProto {}.encode_to_vec())
             }
@@ -1165,7 +1297,14 @@ impl Session {
                 let mut f = Map::new();
                 f.insert("replication".into(), json!(replication));
                 f.insert("replication_before".into(), json!(before));
-                self.decide("setReplication", &path, &actions::SET_REPLICATION_EVENT, f, deadline).await?;
+                self.decide(
+                    "setReplication",
+                    &path,
+                    &actions::SET_REPLICATION_EVENT,
+                    f,
+                    deadline,
+                )
+                .await?;
                 self.hdfs.ns().set_replication(ino, replication);
                 Ok(pb::SetReplicationResponseProto { result: true }.encode_to_vec())
             }
@@ -1222,10 +1361,16 @@ impl Session {
                 let comps = path_of(&src)?;
                 let path = joined(&comps);
                 let summary = self
-                    .settle(method, false, super::MAX_DESCRIBES_PER_SUMMARY, deadline, |ns| {
-                        let ino = ns.lookup(&comps)?;
-                        ns.content_summary(ino, &path)
-                    })
+                    .settle(
+                        method,
+                        false,
+                        super::MAX_DESCRIBES_PER_SUMMARY,
+                        deadline,
+                        |ns| {
+                            let ino = ns.lookup(&comps)?;
+                            ns.content_summary(ino, &path)
+                        },
+                    )
                     .await?;
                 Ok(if method == "getContentSummary" {
                     pb::GetContentSummaryResponseProto { summary }.encode_to_vec()
@@ -1277,7 +1422,10 @@ impl Session {
                 if !self.hdfs.ns().may(ino, &self.user, mode) {
                     return Err(Thrown::new(
                         class::ACCESS_CONTROL,
-                        format!("Permission denied: user={}, access={mode:03b}, inode=\"{path}\"", self.user),
+                        format!(
+                            "Permission denied: user={}, access={mode:03b}, inode=\"{path}\"",
+                            self.user
+                        ),
                     )
                     .into());
                 }
@@ -1290,7 +1438,9 @@ impl Session {
                     creation_policy: pb::StorageTypesProto {
                         storage_types: vec![pb::StorageTypeProto::Disk as i32],
                     },
-                    creation_fallback_policy: Some(pb::StorageTypesProto { storage_types: vec![] }),
+                    creation_fallback_policy: Some(pb::StorageTypesProto {
+                        storage_types: vec![],
+                    }),
                     replication_fallback_policy: Some(pb::StorageTypesProto {
                         storage_types: vec![pb::StorageTypeProto::Archive as i32],
                     }),
@@ -1300,9 +1450,15 @@ impl Session {
                     let comps = path_of(&r.path)?;
                     self.settle(method, false, read, deadline, |ns| ns.lookup(&comps))
                         .await?;
-                    Ok(pb::GetStoragePolicyResponseProto { storage_policy: hot }.encode_to_vec())
+                    Ok(pb::GetStoragePolicyResponseProto {
+                        storage_policy: hot,
+                    }
+                    .encode_to_vec())
                 } else {
-                    Ok(pb::GetStoragePoliciesResponseProto { policies: vec![hot] }.encode_to_vec())
+                    Ok(pb::GetStoragePoliciesResponseProto {
+                        policies: vec![hot],
+                    }
+                    .encode_to_vec())
                 }
             }
             "getErasureCodingPolicy" => {
@@ -1349,12 +1505,17 @@ impl Session {
                 let client = crate::utils::sanitize::token(&r.client_name, 256);
                 let dn = self.hdfs.datanode_info(self.local);
                 if r.old_block.block_id != r.new_block.block_id
-                    || r.new_nodes.iter().any(|n| n.datanode_uuid != dn.id.datanode_uuid)
+                    || r.new_nodes
+                        .iter()
+                        .any(|n| n.datanode_uuid != dn.id.datanode_uuid)
                 {
                     return Err(self.refused(
                         "updatePipeline",
                         "",
-                        Thrown::new(class::IO, "Pipeline recovery is not supported by this NameNode"),
+                        Thrown::new(
+                            class::IO,
+                            "Pipeline recovery is not supported by this NameNode",
+                        ),
                     ));
                 }
                 self.hdfs

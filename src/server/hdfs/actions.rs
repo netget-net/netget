@@ -178,7 +178,12 @@ pub static CONNECT_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             "The real user, when a proxy user acts for the effective user",
             false,
         ),
-        p("client_address", "string", "Where the client connected from", true),
+        p(
+            "client_address",
+            "string",
+            "Where the client connected from",
+            true,
+        ),
         p(
             "protocol",
             "string",
@@ -236,7 +241,12 @@ pub static MKDIRS_EVENT: LazyLock<EventType> = LazyLock::new(|| {
                 "Every directory that would be made, parents first",
                 true,
             ),
-            p("mode", "number", "The permission bits asked for (decimal)", true),
+            p(
+                "mode",
+                "number",
+                "The permission bits asked for (decimal)",
+                true,
+            ),
         ],
         "HDFS mkdirs {path}",
     )
@@ -267,9 +277,19 @@ pub static CREATE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
                 "Directories that would be made on the way, parents first",
                 true,
             ),
-            p("mode", "number", "The permission bits asked for (decimal)", true),
+            p(
+                "mode",
+                "number",
+                "The permission bits asked for (decimal)",
+                true,
+            ),
             p("replication", "number", "The replication asked for", true),
-            p("block_size", "number", "The block size asked for, bytes", true),
+            p(
+                "block_size",
+                "number",
+                "The block size asked for, bytes",
+                true,
+            ),
             p(
                 "client_name",
                 "string",
@@ -290,8 +310,18 @@ pub static WRITE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
          the client's complete fails with the exception).",
         vec![
             path(),
-            p("length", "number", "Bytes written", true),
-            p("blocks", "number", "Blocks written", true),
+            p(
+                "length",
+                "number",
+                "Bytes the client wrote to the file",
+                true,
+            ),
+            p(
+                "blocks",
+                "number",
+                "How many blocks the bytes were written in",
+                true,
+            ),
             p(
                 "data",
                 "string",
@@ -373,8 +403,18 @@ pub static SET_OWNER_EVENT: LazyLock<EventType> = LazyLock::new(|| {
          present change. Allow or deny.",
         vec![
             path(),
-            p("owner", "string", "The new owner", false),
-            p("group", "string", "The new group", false),
+            p(
+                "owner",
+                "string",
+                "The user name to become the owner",
+                false,
+            ),
+            p(
+                "group",
+                "string",
+                "The group name to become the group",
+                false,
+            ),
             p("owner_before", "string", "The owner before", true),
             p("group_before", "string", "The group before", true),
         ],
@@ -395,14 +435,20 @@ pub static SET_TIMES_EVENT: LazyLock<EventType> = LazyLock::new(|| {
                 "The new modification time, Unix milliseconds",
                 false,
             ),
-            p("atime", "number", "The new access time, Unix milliseconds", false),
+            p(
+                "atime",
+                "number",
+                "The new access time, Unix milliseconds",
+                false,
+            ),
         ],
         "HDFS setTimes {path}",
     )
 });
 
-pub static SET_REPLICATION_EVENT: LazyLock<EventType> = LazyLock::new(|| {
-    change_event(
+pub static SET_REPLICATION_EVENT: LazyLock<EventType> =
+    LazyLock::new(|| {
+        change_event(
         "hdfs_set_replication",
         "A client changes a file's replication (setReplication, setrep). This NameNode has one \
          DataNode, so it changes the number reported, not the copies kept. Allow or deny.",
@@ -413,7 +459,7 @@ pub static SET_REPLICATION_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         ],
         "HDFS setReplication {path} {replication}",
     )
-});
+    });
 
 /// The Java class and message of an `hdfs_deny` answer.
 pub fn denial(v: &Value) -> (&'static str, String) {
@@ -468,7 +514,12 @@ impl HdfsProtocol {
     }
 }
 
-fn number_param(name: &str, description: &str, example: Value, default: Option<Value>) -> ParameterDefinition {
+fn number_param(
+    name: &str,
+    description: &str,
+    example: Value,
+    default: Option<Value>,
+) -> ParameterDefinition {
     ParameterDefinition {
         name: name.into(),
         type_hint: "number".into(),

@@ -62,15 +62,27 @@ pub struct Settings {
 
 pub fn settings(ctx: &SpawnContext) -> Result<Settings> {
     let params = ctx.startup_params.as_ref();
-    let datanode_port = match params.map(|p| p.get_optional_u64("datanode_port")).transpose()?.flatten() {
+    let datanode_port = match params
+        .map(|p| p.get_optional_u64("datanode_port"))
+        .transpose()?
+        .flatten()
+    {
         Some(p) => Some(u16::try_from(p).context("datanode_port is a port number (0-65535)")?),
         None => None,
     };
-    let block_size = match params.map(|p| p.get_optional_u64("block_size")).transpose()?.flatten() {
+    let block_size = match params
+        .map(|p| p.get_optional_u64("block_size"))
+        .transpose()?
+        .flatten()
+    {
         Some(b) => namespace::check_block_size(b)?,
         None => namespace::DEFAULT_BLOCK_SIZE,
     };
-    let replication = match params.map(|p| p.get_optional_u64("replication")).transpose()?.flatten() {
+    let replication = match params
+        .map(|p| p.get_optional_u64("replication"))
+        .transpose()?
+        .flatten()
+    {
         Some(r) => namespace::check_replication(r)?,
         None => DEFAULT_REPLICATION,
     };
@@ -182,7 +194,10 @@ impl Hdfs {
         let log = Log::new(Some(&self.ctx.status_tx));
         if decision.starts_with("fail_closed_") || decision == "model_silent" {
             log.error(summary);
-        } else if decision == "protocol_refusal" || decision == "model_reject" || decision == "read_only" {
+        } else if decision == "protocol_refusal"
+            || decision == "model_reject"
+            || decision == "read_only"
+        {
             log.info(summary);
         } else {
             log.debug(summary);
@@ -261,10 +276,9 @@ impl Failure {
                 rpc::class::RETRIABLE,
                 "The NameNode is busy deciding; retry",
             ),
-            Failure::Deadline => Thrown::new(
-                rpc::class::IO,
-                "The NameNode could not decide in time",
-            ),
+            Failure::Deadline => {
+                Thrown::new(rpc::class::IO, "The NameNode could not decide in time")
+            }
             _ => Thrown::new(rpc::class::IO, "The NameNode could not decide"),
         }
     }
@@ -328,9 +342,7 @@ pub async fn spawn(ctx: SpawnContext) -> Result<SocketAddr> {
         datanode_port: dn_local.port(),
         datanode_uuid: uuid,
     });
-    log.info(format!(
-        "HDFS NameNode on {local}, DataNode on {dn_local}"
-    ));
+    log.info(format!("HDFS NameNode on {local}, DataNode on {dn_local}"));
     let nn = tokio::spawn(namenode::accept_loop(listener, hdfs.clone()));
     ctx.state.register_server_task(ctx.server_id, nn).await;
     let dn = tokio::spawn(datanode::accept_loop(dn_listener, hdfs.clone()));

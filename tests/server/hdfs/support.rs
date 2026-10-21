@@ -246,8 +246,16 @@ pub fn go_hdfs() -> PathBuf {
     let gobin = std::env::var("GOBIN")
         .ok()
         .map(PathBuf::from)
-        .or_else(|| std::env::var("GOPATH").ok().map(|p| PathBuf::from(p).join("bin")))
-        .or_else(|| std::env::var("HOME").ok().map(|h| PathBuf::from(h).join("go/bin")));
+        .or_else(|| {
+            std::env::var("GOPATH")
+                .ok()
+                .map(|p| PathBuf::from(p).join("bin"))
+        })
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .map(|h| PathBuf::from(h).join("go/bin"))
+        });
     if let Some(p) = gobin.map(|d| d.join("hdfs")) {
         if p.exists() {
             return p;
@@ -336,7 +344,10 @@ pub async fn run(
         Err(_) => Run {
             status: None,
             stdout: String::new(),
-            stderr: format!("{} did not finish within {secs} s (killed)", program.display()),
+            stderr: format!(
+                "{} did not finish within {secs} s (killed)",
+                program.display()
+            ),
         },
     }
 }
@@ -373,7 +384,10 @@ pub async fn go(server: &Started, user: &str, args: &[&str], stdin: Option<Vec<u
     let env = vec![
         ("HADOOP_NAMENODE", format!("127.0.0.1:{}", server.port)),
         ("HADOOP_USER_NAME", user.to_string()),
-        ("HADOOP_CONF_DIR", "/nonexistent-netget-hdfs-conf".to_string()),
+        (
+            "HADOOP_CONF_DIR",
+            "/nonexistent-netget-hdfs-conf".to_string(),
+        ),
     ];
     run(&go_hdfs(), args, &env, stdin, 60).await
 }

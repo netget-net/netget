@@ -66,9 +66,10 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
         .await
         .map_err(|e| anyhow::anyhow!("the NameNode refused the first call: {e}"))?;
     let d = defaults.server_defaults;
-    let checksum = crate::server::hdfs::transfer::Checksum::from_proto(d.checksum_type.unwrap_or(1))
-        .map(|c| c.name())
-        .unwrap_or("unknown");
+    let checksum =
+        crate::server::hdfs::transfer::Checksum::from_proto(d.checksum_type.unwrap_or(1))
+            .map(|c| c.name())
+            .unwrap_or("unknown");
     ctx.state
         .update_client_status(ctx.client_id, crate::state::ClientStatus::Connected)
         .await;
@@ -222,7 +223,9 @@ fn status_json(s: &HdfsFileStatusProto, name: &str) -> Value {
         v["block_size"] = json!(s.blocksize.unwrap_or(0));
     }
     if let Some(t) = &s.symlink {
-        v["symlink_target"] = json!(crate::utils::sanitize::line_field(&String::from_utf8_lossy(t)));
+        v["symlink_target"] = json!(crate::utils::sanitize::line_field(
+            &String::from_utf8_lossy(t)
+        ));
     }
     v
 }
@@ -331,7 +334,10 @@ impl HdfsClient<'_> {
     ) -> std::result::Result<Resp, CallError> {
         let nn = self.nn().await.map_err(CallError::Transport)?;
         let r = nn.call(method, request).await;
-        if matches!(&r, Err(CallError::Transport(_)) | Err(CallError::Remote { fatal: true, .. })) {
+        if matches!(
+            &r,
+            Err(CallError::Transport(_)) | Err(CallError::Remote { fatal: true, .. })
+        ) {
             self.nn = None;
         }
         r
@@ -373,7 +379,11 @@ impl HdfsClient<'_> {
         }
     }
 
-    async fn list(&mut self, path: &str, action: &Value) -> std::result::Result<(&'static EventType, Value), CallError> {
+    async fn list(
+        &mut self,
+        path: &str,
+        action: &Value,
+    ) -> std::result::Result<(&'static EventType, Value), CallError> {
         let start_after = action["start_after"].as_str().unwrap_or_default();
         let r: GetListingResponseProto = self
             .call(
@@ -406,7 +416,10 @@ impl HdfsClient<'_> {
         ))
     }
 
-    async fn stat(&mut self, path: &str) -> std::result::Result<(&'static EventType, Value), CallError> {
+    async fn stat(
+        &mut self,
+        path: &str,
+    ) -> std::result::Result<(&'static EventType, Value), CallError> {
         let r: GetFileInfoResponseProto = self
             .call("getFileInfo", &GetFileInfoRequestProto { src: path.into() })
             .await?;
@@ -420,7 +433,11 @@ impl HdfsClient<'_> {
         ))
     }
 
-    async fn read(&mut self, path: &str, action: &Value) -> std::result::Result<(&'static EventType, Value), CallError> {
+    async fn read(
+        &mut self,
+        path: &str,
+        action: &Value,
+    ) -> std::result::Result<(&'static EventType, Value), CallError> {
         let offset = action["offset"].as_u64().unwrap_or(0);
         let length = action["length"].as_u64().unwrap_or(actions::DEFAULT_READ);
         let r: GetBlockLocationsResponseProto = self
@@ -480,12 +497,18 @@ impl HdfsClient<'_> {
         ))
     }
 
-    async fn write(&mut self, path: &str, action: &Value) -> std::result::Result<(&'static EventType, Value), CallError> {
+    async fn write(
+        &mut self,
+        path: &str,
+        action: &Value,
+    ) -> std::result::Result<(&'static EventType, Value), CallError> {
         let data = actions::write_data(action).map_err(CallError::Transport)?;
         let overwrite = action["overwrite"].as_bool().unwrap_or(false);
         let mode = action["mode"].as_u64().unwrap_or(0o644) as u32;
         let replication = action["replication"].as_u64().unwrap_or(1) as u32;
-        let block_size = action["block_size"].as_u64().unwrap_or(self.default_block_size);
+        let block_size = action["block_size"]
+            .as_u64()
+            .unwrap_or(self.default_block_size);
         let mut flag = CreateFlagProto::Create as u32;
         if overwrite {
             flag |= CreateFlagProto::Overwrite as u32;
@@ -561,7 +584,12 @@ impl HdfsClient<'_> {
         ))
     }
 
-    async fn mutate(&mut self, kind: &str, path: &str, action: &Value) -> std::result::Result<(&'static EventType, Value), CallError> {
+    async fn mutate(
+        &mut self,
+        kind: &str,
+        path: &str,
+        action: &Value,
+    ) -> std::result::Result<(&'static EventType, Value), CallError> {
         let operation = kind.trim_start_matches("hdfs_");
         let mut data = json!({"operation": operation, "path": path});
         let result = match kind {

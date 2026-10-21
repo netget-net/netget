@@ -128,7 +128,9 @@ impl NameNode {
         let (body, _) = rpc::delimited(rest)
             .map_err(|e| CallError::Transport(e.context("the response has no message")))?;
         Resp::decode(body).map_err(|e| {
-            CallError::Transport(anyhow::anyhow!("the {method} response does not decode: {e}"))
+            CallError::Transport(anyhow::anyhow!(
+                "the {method} response does not decode: {e}"
+            ))
         })
     }
 

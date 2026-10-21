@@ -21,7 +21,11 @@ async fn hadoop_cli_reads_the_described_namespace() {
     let ls = hdfs_dfs(&server, user, &["-ls", "/"]).await;
     ls.expect_ok("hdfs dfs -ls /", &server);
     for name in ["/README.txt", "/data", "/big.bin", "/user", "/tmp"] {
-        assert!(ls.stdout.contains(name), "ls / lists {name}:\n{}", ls.stdout);
+        assert!(
+            ls.stdout.contains(name),
+            "ls / lists {name}:\n{}",
+            ls.stdout
+        );
     }
     let readme = ls
         .stdout
@@ -29,11 +33,16 @@ async fn hadoop_cli_reads_the_described_namespace() {
         .find(|l| l.ends_with("/README.txt"))
         .expect("a README line");
     assert!(
-        readme.starts_with("-rw-r--r--") && readme.contains(" alice analysts ") && readme.contains(" 18 "),
+        readme.starts_with("-rw-r--r--")
+            && readme.contains(" alice analysts ")
+            && readme.contains(" 18 "),
         "README's mode, owner, group and length: {readme}"
     );
     let big = ls.stdout.lines().find(|l| l.ends_with("/big.bin")).unwrap();
-    assert!(big.contains("   3 alice") || big.contains(" 3 "), "replication 3: {big}");
+    assert!(
+        big.contains("   3 alice") || big.contains(" 3 "),
+        "replication 3: {big}"
+    );
 
     let cat = hdfs_dfs(&server, user, &["-cat", "/README.txt"]).await;
     cat.expect_ok("hdfs dfs -cat /README.txt", &server);
@@ -91,11 +100,20 @@ async fn hadoop_cli_gets_blocks_checksums_and_summaries() {
     // -du and -count read getContentSummary over the whole tree.
     let du = hdfs_dfs(&server, user, &["-du", "-s", "/data"]).await;
     du.expect_ok("hdfs dfs -du -s /data", &server);
-    assert!(du.stdout.trim_start().starts_with("24 "), "du /data: {}", du.stdout);
+    assert!(
+        du.stdout.trim_start().starts_with("24 "),
+        "du /data: {}",
+        du.stdout
+    );
     let count = hdfs_dfs(&server, user, &["-count", "/data"]).await;
     count.expect_ok("hdfs dfs -count /data", &server);
     let fields: Vec<&str> = count.stdout.split_whitespace().collect();
-    assert_eq!(&fields[..3], ["1", "2", "24"], "count /data: {}", count.stdout);
+    assert_eq!(
+        &fields[..3],
+        ["1", "2", "24"],
+        "count /data: {}",
+        count.stdout
+    );
 
     // -test: exists, directory, file, zero length, non-empty.
     for (flag, path, ok) in [
@@ -119,7 +137,11 @@ async fn hadoop_cli_gets_blocks_checksums_and_summaries() {
     // A missing file is Hadoop's own FileNotFoundException.
     let missing = hdfs_dfs(&server, user, &["-cat", "/nope.txt"]).await;
     missing.expect_failure("hdfs dfs -cat /nope.txt", &server);
-    assert!(missing.stderr.contains("No such file or directory"), "{}", missing.stderr);
+    assert!(
+        missing.stderr.contains("No such file or directory"),
+        "{}",
+        missing.stderr
+    );
 
     print_methods("get/checksum/summary session", &server);
     let _ = std::fs::remove_dir_all(&dir);
@@ -143,30 +165,59 @@ async fn hadoop_cli_changes_go_through_the_model() {
     hdfs_dfs(
         &server,
         user,
-        &["-D", "dfs.blocksize=65536", "-put", &local_s, "/user/alice/reports/2026/up.txt"],
+        &[
+            "-D",
+            "dfs.blocksize=65536",
+            "-put",
+            &local_s,
+            "/user/alice/reports/2026/up.txt",
+        ],
     )
     .await
     .expect_ok("hdfs dfs -put", &server);
     let cat = hdfs_dfs(&server, user, &["-cat", "/user/alice/reports/2026/up.txt"]).await;
     cat.expect_ok("hdfs dfs -cat the uploaded file", &server);
     assert_eq!(cat.stdout, text);
-    let stat = hdfs_dfs(&server, user, &["-stat", "%b %o %u", "/user/alice/reports/2026/up.txt"]).await;
+    let stat = hdfs_dfs(
+        &server,
+        user,
+        &["-stat", "%b %o %u", "/user/alice/reports/2026/up.txt"],
+    )
+    .await;
     stat.expect_ok("hdfs dfs -stat", &server);
     assert_eq!(stat.stdout.trim(), format!("{} 65536 alice", text.len()));
-    let sum = hdfs_dfs(&server, user, &["-checksum", "/user/alice/reports/2026/up.txt"]).await;
+    let sum = hdfs_dfs(
+        &server,
+        user,
+        &["-checksum", "/user/alice/reports/2026/up.txt"],
+    )
+    .await;
     sum.expect_ok("hdfs dfs -checksum of the upload", &server);
     assert!(
-        sum.stdout.contains(&hex::encode(support::md5md5crc32c(text.as_bytes(), 65536))),
+        sum.stdout
+            .contains(&hex::encode(support::md5md5crc32c(text.as_bytes(), 65536))),
         "{}",
         sum.stdout
     );
 
-    hdfs_dfs(&server, user, &["-mv", "/user/alice/reports/2026/up.txt", "/user/alice/up-moved.txt"])
-        .await
-        .expect_ok("hdfs dfs -mv", &server);
-    hdfs_dfs(&server, user, &["-chmod", "600", "/user/alice/up-moved.txt"])
-        .await
-        .expect_ok("hdfs dfs -chmod", &server);
+    hdfs_dfs(
+        &server,
+        user,
+        &[
+            "-mv",
+            "/user/alice/reports/2026/up.txt",
+            "/user/alice/up-moved.txt",
+        ],
+    )
+    .await
+    .expect_ok("hdfs dfs -mv", &server);
+    hdfs_dfs(
+        &server,
+        user,
+        &["-chmod", "600", "/user/alice/up-moved.txt"],
+    )
+    .await
+    .expect_ok("hdfs dfs -chmod", &server);
     let ls = hdfs_dfs(&server, user, &["-ls", "/user/alice"]).await;
     ls.expect_ok("hdfs dfs -ls /user/alice", &server);
     let moved = ls
@@ -190,7 +241,10 @@ async fn hadoop_cli_changes_go_through_the_model() {
     // The model's decisions, in order, as it saw them.
     let creates = support::events(&server.state, server.id, "hdfs_create").await;
     assert_eq!(creates.len(), 1, "{creates:?}");
-    assert_eq!(creates[0]["path"], "/user/alice/reports/2026/up.txt._COPYING_");
+    assert_eq!(
+        creates[0]["path"],
+        "/user/alice/reports/2026/up.txt._COPYING_"
+    );
     assert_eq!(creates[0]["block_size"], 65536);
     let writes = support::events(&server.state, server.id, "hdfs_write").await;
     assert_eq!(writes.len(), 1);
@@ -198,16 +252,36 @@ async fn hadoop_cli_changes_go_through_the_model() {
     assert_eq!(writes[0]["blocks"], text.len().div_ceil(65536));
     assert_eq!(writes[0]["encoding"], "utf8");
     assert_eq!(writes[0]["data_truncated"], true);
-    assert!(writes[0]["data"].as_str().unwrap().starts_with("uploaded through"));
+    assert!(writes[0]["data"]
+        .as_str()
+        .unwrap()
+        .starts_with("uploaded through"));
     let renames = support::events(&server.state, server.id, "hdfs_rename").await;
-    assert_eq!(renames.len(), 2, "the ._COPYING_ rename and the mv: {renames:?}");
+    assert_eq!(
+        renames.len(),
+        2,
+        "the ._COPYING_ rename and the mv: {renames:?}"
+    );
     assert_eq!(renames[1]["destination"], "/user/alice/up-moved.txt");
     let chmods = support::events(&server.state, server.id, "hdfs_set_permission").await;
     assert_eq!(chmods[0]["mode"], 0o600);
-    assert_eq!(support::events(&server.state, server.id, "hdfs_delete").await.len(), 1);
+    assert_eq!(
+        support::events(&server.state, server.id, "hdfs_delete")
+            .await
+            .len(),
+        1
+    );
 
     let methods = print_methods("change session", &server);
-    for m in ["mkdirs", "create", "addBlock", "complete", "rename", "setPermission", "delete"] {
+    for m in [
+        "mkdirs",
+        "create",
+        "addBlock",
+        "complete",
+        "rename",
+        "setPermission",
+        "delete",
+    ] {
         assert!(methods.contains_key(m), "{m} was not called: {methods:?}");
     }
     assert!(
@@ -237,7 +311,11 @@ async fn hadoop_cli_sees_the_models_refusals() {
     // A change outside the allowed tree: AccessControlException with the model's message.
     let mkdir = hdfs_dfs(&server, "bob", &["-mkdir", "/data/new"]).await;
     mkdir.expect_failure("mkdir /data/new", &server);
-    assert!(mkdir.stderr.contains("Permission denied by policy"), "{}", mkdir.stderr);
+    assert!(
+        mkdir.stderr.contains("Permission denied by policy"),
+        "{}",
+        mkdir.stderr
+    );
     hdfs_dfs(&server, "bob", &["-test", "-e", "/data/new"])
         .await
         .expect_failure("the refused mkdir left nothing", &server);
@@ -245,8 +323,7 @@ async fn hadoop_cli_sees_the_models_refusals() {
     let put = hdfs_dfs(&server, "alice", &["-put", &local_s, "/tmp/bad.txt"]).await;
     put.expect_failure("put of refused content", &server);
     assert!(
-        put.stderr.contains("put:")
-            && put.stderr.contains("the model refuses this content"),
+        put.stderr.contains("put:") && put.stderr.contains("the model refuses this content"),
         "{}",
         put.stderr
     );
@@ -257,7 +334,9 @@ async fn hadoop_cli_sees_the_models_refusals() {
     let secret = hdfs_dfs(&server, "alice", &["-ls", "/secret"]).await;
     secret.expect_failure("ls /secret", &server);
     assert!(
-        secret.stderr.contains("the model will not say what is in /secret"),
+        secret
+            .stderr
+            .contains("the model will not say what is in /secret"),
         "{}",
         secret.stderr
     );

@@ -59,13 +59,26 @@ const CLIENT_PROTOCOL: &str = "org.apache.hadoop.hdfs.protocol.ClientProtocol";
 
 /// RpcRequestHeaderProto: rpcKind PROTOCOL_BUFFER, rpcOp FINAL_PACKET, callId, clientId, retry.
 fn rpc_header(call_id: i32) -> Vec<u8> {
-    [int(1, 2), int(2, 0), sint(3, call_id), bytes(4, &CLIENT_ID), sint(5, 0)].concat()
+    [
+        int(1, 2),
+        int(2, 0),
+        sint(3, call_id),
+        bytes(4, &CLIENT_ID),
+        sint(5, 0),
+    ]
+    .concat()
 }
 
 fn connection_context(user: &str) -> Vec<u8> {
     frame(&[
         delimited(&rpc_header(-3)),
-        delimited(&[bytes(2, &bytes(1, user.as_bytes())), bytes(3, CLIENT_PROTOCOL.as_bytes())].concat()),
+        delimited(
+            &[
+                bytes(2, &bytes(1, user.as_bytes())),
+                bytes(3, CLIENT_PROTOCOL.as_bytes()),
+            ]
+            .concat(),
+        ),
     ])
 }
 
@@ -76,7 +89,11 @@ fn call(call_id: i32, method: &str, request: &[u8]) -> Vec<u8> {
         int(3, 1),
     ]
     .concat();
-    frame(&[delimited(&rpc_header(call_id)), delimited(&method_header), delimited(request)])
+    frame(&[
+        delimited(&rpc_header(call_id)),
+        delimited(&method_header),
+        delimited(request),
+    ])
 }
 
 fn src(path: &str) -> Vec<u8> {
@@ -138,7 +155,8 @@ impl Raw {
     /// The connection header (SIMPLE, no SASL) and the connection context for `user`.
     async fn hello(port: u16, user: &str) -> Raw {
         let mut r = Raw::open(port).await;
-        r.send(&[b"hrpc".to_vec(), vec![9, 0, 0], connection_context(user)].concat()).await;
+        r.send(&[b"hrpc".to_vec(), vec![9, 0, 0], connection_context(user)].concat())
+            .await;
         r
     }
 
@@ -160,7 +178,8 @@ impl Raw {
         assert!(n < 64 << 20, "a response of {n} bytes");
         let mut body = vec![0u8; n];
         self.s.read_exact(&mut body).await.unwrap();
-        self.wire.push((false, [len.to_vec(), body.clone()].concat()));
+        self.wire
+            .push((false, [len.to_vec(), body.clone()].concat()));
         let (hlen, used) = read_varint(&body);
         let header = RpcResponseHeaderProto::decode(&body[used..used + hlen as usize]).unwrap();
         Some(Response {
@@ -172,7 +191,11 @@ impl Raw {
     async fn call(&mut self, id: i32, method: &str, request: &[u8]) -> Response {
         self.send(&call(id, method, request)).await;
         let r = self.response().await.expect("a response");
-        assert_eq!(r.call_id(), id, "the response names the call it answers: {r:?}");
+        assert_eq!(
+            r.call_id(),
+            id,
+            "the response names the call it answers: {r:?}"
+        );
         r
     }
 
@@ -237,7 +260,13 @@ impl Data {
         let payload = self.read_n(plen - 4).await;
         let data_len = h.data_len as usize;
         let (sums, data) = payload.split_at(payload.len() - data_len);
-        (h.offset_in_block, h.seqno, h.last_packet_in_block, sums.to_vec(), data.to_vec())
+        (
+            h.offset_in_block,
+            h.seqno,
+            h.last_packet_in_block,
+            sums.to_vec(),
+            data.to_vec(),
+        )
     }
 
     async fn closed(&mut self) -> bool {
@@ -261,7 +290,11 @@ fn extended(b: &pb::ExtendedBlockProto) -> Vec<u8> {
 
 /// ClientOperationHeaderProto { baseHeader { block }, clientName }.
 fn op_header(b: &pb::ExtendedBlockProto, client: &str) -> Vec<u8> {
-    [bytes(1, &bytes(1, &extended(b))), bytes(2, client.as_bytes())].concat()
+    [
+        bytes(1, &bytes(1, &extended(b))),
+        bytes(2, client.as_bytes()),
+    ]
+    .concat()
 }
 
 fn op(code: u8, message: &[u8]) -> Vec<u8> {
@@ -269,7 +302,15 @@ fn op(code: u8, message: &[u8]) -> Vec<u8> {
 }
 
 fn read_block_op(b: &pb::ExtendedBlockProto, offset: u64, len: u64) -> Vec<u8> {
-    op(81, &[bytes(1, &op_header(b, "raw-client")), int(2, offset), int(3, len)].concat())
+    op(
+        81,
+        &[
+            bytes(1, &op_header(b, "raw-client")),
+            int(2, offset),
+            int(3, len),
+        ]
+        .concat(),
+    )
 }
 
 /// OpWriteBlockProto with stage PIPELINE_SETUP_CREATE and CRC32C in 512-byte chunks.
@@ -301,7 +342,9 @@ fn packet(offset: i64, seqno: i64, last: bool, data: &[u8], sums: &[u8]) -> Vec<
     ]
     .concat();
     [
-        ((4 + sums.len() + data.len()) as u32).to_be_bytes().to_vec(),
+        ((4 + sums.len() + data.len()) as u32)
+            .to_be_bytes()
+            .to_vec(),
         (header.len() as u16).to_be_bytes().to_vec(),
         header,
         sums.to_vec(),
@@ -335,7 +378,11 @@ async fn read_whole(d: &mut Data) -> Vec<u8> {
 fn oracle_rpc(r: &Raw, port: u16) -> PcapOracle {
     let mut o = PcapOracle::tcp("hdfs").port(port);
     for (to_server, b) in &r.wire {
-        o = if *to_server { o.to_server(b) } else { o.from_server(b) };
+        o = if *to_server {
+            o.to_server(b)
+        } else {
+            o.from_server(b)
+        };
     }
     o
 }
@@ -348,16 +395,29 @@ async fn raw_session_answers_every_call_by_its_id() {
     let mut r = Raw::hello(server.port, "alice").await;
 
     // Two calls in one write: each answered, in order, with its own call id.
-    r.send(&[call(41, "getFileInfo", &src("/README.txt")), call(42, "getFileInfo", &src("/data"))].concat())
-        .await;
+    r.send(
+        &[
+            call(41, "getFileInfo", &src("/README.txt")),
+            call(42, "getFileInfo", &src("/data")),
+        ]
+        .concat(),
+    )
+    .await;
     let a = r.response().await.unwrap();
     let b = r.response().await.unwrap();
     assert_eq!((a.call_id(), b.call_id()), (41, 42));
     let fa = a.decode::<pb::GetFileInfoResponseProto>().fs.unwrap();
     let fb = b.decode::<pb::GetFileInfoResponseProto>().fs.unwrap();
-    assert_eq!((fa.file_type, fa.length, fa.owner.as_str()), (2, 18, "alice"));
+    assert_eq!(
+        (fa.file_type, fa.length, fa.owner.as_str()),
+        (2, 18, "alice")
+    );
     assert_eq!(fb.file_type, 1, "/data is a directory");
-    assert_eq!(a.header.client_id.as_deref(), Some(&CLIENT_ID[..]), "the client id is echoed");
+    assert_eq!(
+        a.header.client_id.as_deref(),
+        Some(&CLIENT_ID[..]),
+        "the client id is echoed"
+    );
     assert_eq!(a.header.server_ipc_version_num, Some(9));
 
     // A missing path is no status, not an error; a missing file's blocks are Hadoop's
@@ -365,26 +425,49 @@ async fn raw_session_answers_every_call_by_its_id() {
     let none = r.call(43, "getFileInfo", &src("/nope")).await;
     assert!(none.decode::<pb::GetFileInfoResponseProto>().fs.is_none());
     let err = r
-        .call(44, "getBlockLocations", &[src("/nope"), int(2, 0), int(3, 10)].concat())
+        .call(
+            44,
+            "getBlockLocations",
+            &[src("/nope"), int(2, 0), int(3, 10)].concat(),
+        )
         .await;
     assert_eq!(err.header.status, 1, "ERROR, not FATAL");
     assert_eq!(err.class(), "java.io.FileNotFoundException");
     assert!(err.message().contains("/nope"));
     let unknown = r.call(45, "getSnapshottableDirListing", &[]).await;
-    assert_eq!(unknown.class(), "org.apache.hadoop.ipc.RpcNoSuchMethodException");
+    assert_eq!(
+        unknown.class(),
+        "org.apache.hadoop.ipc.RpcNoSuchMethodException"
+    );
     assert_eq!(unknown.header.error_detail, Some(2), "ERROR_NO_SUCH_METHOD");
 
     // A listing in pages, and the README's one block, read and checked here.
     let page = r
-        .call(46, "getListing", &[src("/"), bytes(2, b"data"), int(3, 0)].concat())
+        .call(
+            46,
+            "getListing",
+            &[src("/"), bytes(2, b"data"), int(3, 0)].concat(),
+        )
         .await
         .decode::<pb::GetListingResponseProto>()
         .dir_list
         .unwrap();
-    let names: Vec<String> = page.partial_listing.iter().map(|s| String::from_utf8_lossy(&s.path).into_owned()).collect();
-    assert_eq!(names, ["secret", "silent", "tmp", "user"], "names after `data`");
+    let names: Vec<String> = page
+        .partial_listing
+        .iter()
+        .map(|s| String::from_utf8_lossy(&s.path).into_owned())
+        .collect();
+    assert_eq!(
+        names,
+        ["secret", "silent", "tmp", "user"],
+        "names after `data`"
+    );
     let located = r
-        .call(47, "getBlockLocations", &[src("/README.txt"), int(2, 0), int(3, 1 << 20)].concat())
+        .call(
+            47,
+            "getBlockLocations",
+            &[src("/README.txt"), int(2, 0), int(3, 1 << 20)].concat(),
+        )
         .await
         .decode::<pb::GetBlockLocationsResponseProto>()
         .locations
@@ -397,20 +480,36 @@ async fn raw_session_answers_every_call_by_its_id() {
     let resp: pb::BlockOpResponseProto = d.delimited().await;
     assert_eq!(resp.status, 0, "{resp:?}");
     let info = resp.read_op_checksum_info.unwrap();
-    assert_eq!((info.checksum.r#type, info.checksum.bytes_per_checksum, info.chunk_offset), (2, 512, 0));
+    assert_eq!(
+        (
+            info.checksum.r#type,
+            info.checksum.bytes_per_checksum,
+            info.chunk_offset
+        ),
+        (2, 512, 0)
+    );
     let bytes_read = read_whole(&mut d).await;
-    assert_eq!(bytes_read, b"hello from netget\n", "the chunk holding 6..10, whole");
+    assert_eq!(
+        bytes_read, b"hello from netget\n",
+        "the chunk holding 6..10, whole"
+    );
 
     // The pcap oracle. tshark's `hdfs` and `hdfsdata` dissectors were written for Hadoop 1's
     // Writable RPC and op layout, so on Hadoop 3 they read the framing and not the protocol
     // buffers inside (they flag those as malformed, which says nothing about the bytes). What
     // they can read independently is asserted: the hrpc connection header, and the op header.
     let rpc = oracle_rpc(&r, server.port)
-        .fields(&["frame.protocols", "hdfs.type", "hdfs.version", "hdfs.auth_type"])
+        .fields(&[
+            "frame.protocols",
+            "hdfs.type",
+            "hdfs.version",
+            "hdfs.auth_type",
+        ])
         .unwrap();
     println!("tshark hdfs: {rpc:?}");
     assert!(
-        rpc.iter().any(|f| f[0].ends_with(":hdfs") && f[1] == "hrpc" && f[2] == "9" && f[3] == "0"),
+        rpc.iter()
+            .any(|f| f[0].ends_with(":hdfs") && f[1] == "hrpc" && f[2] == "9" && f[3] == "0"),
         "tshark's hdfs dissector reads hrpc, version 9: {rpc:?}"
     );
     assert!(
@@ -419,14 +518,19 @@ async fn raw_session_answers_every_call_by_its_id() {
     );
     let mut o = PcapOracle::tcp("hdfs_datanode").port(server.datanode_port);
     for (to_server, b) in &d.wire {
-        o = if *to_server { o.to_server(b) } else { o.from_server(b) };
+        o = if *to_server {
+            o.to_server(b)
+        } else {
+            o.from_server(b)
+        };
     }
     let data = o
         .fields(&["frame.protocols", "hdfsdata.version", "hdfsdata.cmd"])
         .unwrap();
     println!("tshark hdfsdata: {data:?}");
     assert!(
-        data.iter().any(|f| f[0].ends_with(":hdfsdata") && f[1] == "28" && f[2] == "81"),
+        data.iter()
+            .any(|f| f[0].ends_with(":hdfsdata") && f[1] == "28" && f[2] == "81"),
         "tshark's hdfsdata dissector reads DataTransferProtocol 28, READ_BLOCK: {data:?}"
     );
 }
@@ -442,7 +546,10 @@ async fn rpc_frames_over_the_bound_are_refused_from_their_length() {
     r.send(&((bound + 1) as u32).to_be_bytes()).await;
     let refused = r.response().await.expect("a fatal response");
     assert_eq!(refused.header.status, 2, "FATAL: {refused:?}");
-    assert!(refused.message().contains("Requested data length"), "{refused:?}");
+    assert!(
+        refused.message().contains("Requested data length"),
+        "{refused:?}"
+    );
     assert!(r.closed().await, "the connection closes");
     // Exactly the bound is read whole (and refused as the garbage it is, not for its length).
     let mut r = Raw::hello(server.port, "alice").await;
@@ -450,15 +557,33 @@ async fn rpc_frames_over_the_bound_are_refused_from_their_length() {
     big.extend(std::iter::repeat_n(0xFFu8, bound));
     r.send(&big).await;
     let garbage = r.response().await.expect("a fatal response");
-    assert!(!garbage.message().contains("Requested data length"), "{garbage:?}");
+    assert!(
+        !garbage.message().contains("Requested data length"),
+        "{garbage:?}"
+    );
     // Before the connection context too.
     let mut r = Raw::open(server.port).await;
-    r.send(&[b"hrpc".to_vec(), vec![9, 0, 0], ((bound + 1) as u32).to_be_bytes().to_vec()].concat())
-        .await;
+    r.send(
+        &[
+            b"hrpc".to_vec(),
+            vec![9, 0, 0],
+            ((bound + 1) as u32).to_be_bytes().to_vec(),
+        ]
+        .concat(),
+    )
+    .await;
     let early = r.response().await.expect("a fatal response");
-    assert!(early.message().contains("Requested data length"), "{early:?}");
+    assert!(
+        early.message().contains("Requested data length"),
+        "{early:?}"
+    );
     // No model call was spent on an oversized frame: only alice's admission was asked.
-    assert_eq!(support::events(&server.state, server.id, "hdfs_connect").await.len(), 1);
+    assert_eq!(
+        support::events(&server.state, server.id, "hdfs_connect")
+            .await
+            .len(),
+        1
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -477,7 +602,11 @@ async fn connection_header_sasl_and_version() {
     // SASL: NEGOTIATE is answered with SIMPLE, and the session goes on.
     let mut r = Raw::open(server.port).await;
     r.send(&[b"hrpc".to_vec(), vec![9, 0, 0xDF]].concat()).await;
-    r.send(&frame(&[delimited(&rpc_header(-33)), delimited(&int(2, 1))])).await;
+    r.send(&frame(&[
+        delimited(&rpc_header(-33)),
+        delimited(&int(2, 1)),
+    ]))
+    .await;
     let neg = r.response().await.unwrap();
     assert_eq!(neg.call_id(), -33);
     let sasl: RpcSaslProto = neg.decode();
@@ -491,8 +620,11 @@ async fn connection_header_sasl_and_version() {
     let mut r = Raw::open(server.port).await;
     r.send(&[b"hrpc".to_vec(), vec![9, 0, 0xDF]].concat()).await;
     let auth = [bytes(1, b"KERBEROS"), bytes(2, b"GSSAPI")].concat();
-    r.send(&frame(&[delimited(&rpc_header(-33)), delimited(&[int(2, 2), bytes(4, &auth)].concat())]))
-        .await;
+    r.send(&frame(&[
+        delimited(&rpc_header(-33)),
+        delimited(&[int(2, 2), bytes(4, &auth)].concat()),
+    ]))
+    .await;
     let k = r.response().await.unwrap();
     assert_eq!(k.header.status, 2);
     assert!(k.message().contains("SIMPLE only"), "{k:?}");
@@ -509,24 +641,44 @@ async fn model_failure_exposes_nothing() {
     // No handler and an unreachable backend: the connection itself is refused.
     let server = start(None, Some(json!({"decision_timeout_secs": 5}))).await;
     let mut r = Raw::hello(server.port, "alice").await;
-    r.send(&call(1, "getListing", &[src("/"), bytes(2, b""), int(3, 0)].concat())).await;
+    r.send(&call(
+        1,
+        "getListing",
+        &[src("/"), bytes(2, b""), int(3, 0)].concat(),
+    ))
+    .await;
     let refused = r.response().await.expect("a fatal response");
     assert_eq!(refused.header.status, 2, "{refused:?}");
     assert_eq!(refused.class(), "java.io.IOException");
-    assert!(!refused.message().contains("127.0.0.1:1"), "the backend's address does not leak: {refused:?}");
+    assert!(
+        !refused.message().contains("127.0.0.1:1"),
+        "the backend's address does not leak: {refused:?}"
+    );
     assert!(r.closed().await);
-    assert!(server.wait_line("decision=fail_closed_llm_error", 10).await.is_some());
+    assert!(server
+        .wait_line("decision=fail_closed_llm_error", 10)
+        .await
+        .is_some());
 
     // The user is let in but no description arrives: the root lists nothing and errs.
     let server = start(policy(CONNECT_ONLY), None).await;
     let mut r = Raw::hello(server.port, "alice").await;
-    let listing = r.call(1, "getListing", &[src("/"), bytes(2, b""), int(3, 0)].concat()).await;
+    let listing = r
+        .call(
+            1,
+            "getListing",
+            &[src("/"), bytes(2, b""), int(3, 0)].concat(),
+        )
+        .await;
     assert_eq!(listing.header.status, 1, "{listing:?}");
     assert_eq!(listing.class(), "java.io.IOException");
     assert!(listing.body.is_empty(), "no entries travel with an error");
     let info = r.call(2, "getFileInfo", &src("/README.txt")).await;
     assert_eq!(info.class(), "java.io.IOException", "{info:?}");
-    assert!(server.lines("decision=model_silent").iter().any(|l| l.contains("operation=describe")));
+    assert!(server
+        .lines("decision=model_silent")
+        .iter()
+        .any(|l| l.contains("operation=describe")));
 }
 
 /// Creates under /tmp are allowed and content is refused unless it says "ok".
@@ -556,7 +708,13 @@ fn create_req(path: &str, client: &str) -> Vec<u8> {
 }
 
 /// Write one block of `data` with checksums `sums`: the acks' statuses.
-async fn write_block(server: &Started, block: &pb::LocatedBlockProto, client: &str, data: &[u8], sums: &[u8]) -> (Vec<i32>, Data) {
+async fn write_block(
+    server: &Started,
+    block: &pb::LocatedBlockProto,
+    client: &str,
+    data: &[u8],
+    sums: &[u8],
+) -> (Vec<i32>, Data) {
     let mut d = Data::open(server.datanode_port).await;
     d.send(&write_block_op(&block.b, client)).await;
     let resp: pb::BlockOpResponseProto = d.delimited().await;
@@ -584,9 +742,23 @@ async fn writes_are_checksummed_and_decided() {
     // A packet whose checksums are wrong is refused with ERROR_CHECKSUM, and the block is not
     // kept: complete cannot go ahead.
     let created = r.call(1, "create", &create_req("/tmp/a.txt", client)).await;
-    let file_id = created.decode::<pb::CreateResponseProto>().fs.unwrap().file_id.unwrap();
+    let file_id = created
+        .decode::<pb::CreateResponseProto>()
+        .fs
+        .unwrap()
+        .file_id
+        .unwrap();
     let added = r
-        .call(2, "addBlock", &[src("/tmp/a.txt"), bytes(2, client.as_bytes()), int(5, file_id)].concat())
+        .call(
+            2,
+            "addBlock",
+            &[
+                src("/tmp/a.txt"),
+                bytes(2, client.as_bytes()),
+                int(5, file_id),
+            ]
+            .concat(),
+        )
         .await
         .decode::<pb::AddBlockResponseProto>()
         .block;
@@ -599,26 +771,54 @@ async fn writes_are_checksummed_and_decided() {
     let mut last = added.b.clone();
     last.num_bytes = Some(data.len() as u64);
     let incomplete = r
-        .call(3, "complete", &[src("/tmp/a.txt"), bytes(2, client.as_bytes()), bytes(3, &extended(&last)), int(4, file_id)].concat())
+        .call(
+            3,
+            "complete",
+            &[
+                src("/tmp/a.txt"),
+                bytes(2, client.as_bytes()),
+                bytes(3, &extended(&last)),
+                int(4, file_id),
+            ]
+            .concat(),
+        )
         .await;
     assert_eq!(incomplete.class(), "java.io.IOException", "{incomplete:?}");
-    assert!(incomplete.message().contains("has not been written"), "{incomplete:?}");
+    assert!(
+        incomplete.message().contains("has not been written"),
+        "{incomplete:?}"
+    );
 
     // The same block with the right checksums: acked, completed, read back.
     let (statuses, _) = write_block(&server, &added, client, &data, &sums_of(&data)).await;
     assert_eq!(statuses, [0, 0]);
     let done = r
-        .call(4, "complete", &[src("/tmp/a.txt"), bytes(2, client.as_bytes()), bytes(3, &extended(&last)), int(4, file_id)].concat())
+        .call(
+            4,
+            "complete",
+            &[
+                src("/tmp/a.txt"),
+                bytes(2, client.as_bytes()),
+                bytes(3, &extended(&last)),
+                int(4, file_id),
+            ]
+            .concat(),
+        )
         .await;
     assert!(done.decode::<pb::CompleteResponseProto>().result);
     let located = r
-        .call(5, "getBlockLocations", &[src("/tmp/a.txt"), int(2, 0), int(3, 1 << 20)].concat())
+        .call(
+            5,
+            "getBlockLocations",
+            &[src("/tmp/a.txt"), int(2, 0), int(3, 1 << 20)].concat(),
+        )
         .await
         .decode::<pb::GetBlockLocationsResponseProto>()
         .locations
         .unwrap();
     let mut rd = Data::open(server.datanode_port).await;
-    rd.send(&read_block_op(&located.blocks[0].b, 0, data.len() as u64)).await;
+    rd.send(&read_block_op(&located.blocks[0].b, 0, data.len() as u64))
+        .await;
     let resp: pb::BlockOpResponseProto = rd.delimited().await;
     assert_eq!(resp.status, 0);
     assert_eq!(read_whole(&mut rd).await, data);
@@ -628,7 +828,11 @@ async fn writes_are_checksummed_and_decided() {
     let before = used(&r.call(6, "getFsStats", &[]).await);
     r.call(7, "create", &create_req("/tmp/b.txt", client)).await;
     let b_block = r
-        .call(8, "addBlock", &[src("/tmp/b.txt"), bytes(2, client.as_bytes())].concat())
+        .call(
+            8,
+            "addBlock",
+            &[src("/tmp/b.txt"), bytes(2, client.as_bytes())].concat(),
+        )
         .await
         .decode::<pb::AddBlockResponseProto>()
         .block;
@@ -638,19 +842,43 @@ async fn writes_are_checksummed_and_decided() {
     let mut b_last = b_block.b.clone();
     b_last.num_bytes = Some(refused.len() as u64);
     let denied = r
-        .call(9, "complete", &[src("/tmp/b.txt"), bytes(2, client.as_bytes()), bytes(3, &extended(&b_last))].concat())
+        .call(
+            9,
+            "complete",
+            &[
+                src("/tmp/b.txt"),
+                bytes(2, client.as_bytes()),
+                bytes(3, &extended(&b_last)),
+            ]
+            .concat(),
+        )
         .await;
-    assert_eq!(denied.class(), "org.apache.hadoop.security.AccessControlException");
+    assert_eq!(
+        denied.class(),
+        "org.apache.hadoop.security.AccessControlException"
+    );
     assert_eq!(denied.message(), "content refused");
     let after = used(&r.call(10, "getFsStats", &[]).await);
     assert_eq!(after, before, "the refused bytes are gone, held nowhere");
-    let b = r.call(11, "getFileInfo", &src("/tmp/b.txt")).await.decode::<pb::GetFileInfoResponseProto>();
-    assert_eq!(b.fs.unwrap().length, 0, "the file keeps its earlier (empty) content");
+    let b = r
+        .call(11, "getFileInfo", &src("/tmp/b.txt"))
+        .await
+        .decode::<pb::GetFileInfoResponseProto>();
+    assert_eq!(
+        b.fs.unwrap().length,
+        0,
+        "the file keeps its earlier (empty) content"
+    );
 
     // A DataNode packet over the bound is refused from its PLEN, and the connection closes.
-    r.call(12, "create", &create_req("/tmp/c.txt", client)).await;
+    r.call(12, "create", &create_req("/tmp/c.txt", client))
+        .await;
     let c_block = r
-        .call(13, "addBlock", &[src("/tmp/c.txt"), bytes(2, client.as_bytes())].concat())
+        .call(
+            13,
+            "addBlock",
+            &[src("/tmp/c.txt"), bytes(2, client.as_bytes())].concat(),
+        )
         .await
         .decode::<pb::AddBlockResponseProto>()
         .block;
@@ -659,7 +887,14 @@ async fn writes_are_checksummed_and_decided() {
     let _: pb::BlockOpResponseProto = d.delimited().await;
     d.send(&[0x7F, 0xFF, 0xFF, 0xFF, 0, 10]).await;
     assert!(d.closed().await);
-    assert!(server.lines("is over the bound").iter().any(|l| l.contains("WRITE_BLOCK")), "{}", server.dump_logs());
+    assert!(
+        server
+            .lines("is over the bound")
+            .iter()
+            .any(|l| l.contains("WRITE_BLOCK")),
+        "{}",
+        server.dump_logs()
+    );
     // An unknown op and a wrong version are refused.
     let mut d = Data::open(server.datanode_port).await;
     d.send(&op(87, &[])).await;
@@ -677,16 +912,31 @@ async fn denied_and_read_only_changes_leave_the_namespace_alone() {
     let mut r = Raw::hello(server.port, "alice").await;
     let mkdirs = |p: &str| [src(p), bytes(2, &int(1, 0o755)), int(3, 1)].concat();
     let denied = r.call(1, "mkdirs", &mkdirs("/data/x/y")).await;
-    assert_eq!(denied.class(), "org.apache.hadoop.security.AccessControlException");
+    assert_eq!(
+        denied.class(),
+        "org.apache.hadoop.security.AccessControlException"
+    );
     let none = r.call(2, "getFileInfo", &src("/data/x")).await;
     assert!(none.decode::<pb::GetFileInfoResponseProto>().fs.is_none());
-    let rename = r.call(3, "rename2", &[src("/README.txt"), bytes(2, b"/data/r.txt"), int(3, 0)].concat()).await;
-    assert_eq!(rename.class(), "org.apache.hadoop.security.AccessControlException");
+    let rename = r
+        .call(
+            3,
+            "rename2",
+            &[src("/README.txt"), bytes(2, b"/data/r.txt"), int(3, 0)].concat(),
+        )
+        .await;
+    assert_eq!(
+        rename.class(),
+        "org.apache.hadoop.security.AccessControlException"
+    );
     let still = r.call(4, "getFileInfo", &src("/README.txt")).await;
     assert!(still.decode::<pb::GetFileInfoResponseProto>().fs.is_some());
     // Refused by Rust before the model is asked: no event.
     let exists = r.call(5, "mkdirs", &mkdirs("/README.txt")).await;
-    assert_eq!(exists.class(), "org.apache.hadoop.fs.FileAlreadyExistsException");
+    assert_eq!(
+        exists.class(),
+        "org.apache.hadoop.fs.FileAlreadyExistsException"
+    );
     let events = support::events(&server.state, server.id, "hdfs_mkdirs").await;
     assert_eq!(events.len(), 1, "only the first mkdirs asked: {events:?}");
     assert_eq!(events[0]["creates"], json!(["/data/x", "/data/x/y"]));
@@ -694,7 +944,14 @@ async fn denied_and_read_only_changes_leave_the_namespace_alone() {
     let server = start(policy(POLICY), Some(json!({"read_only": true}))).await;
     let mut r = Raw::hello(server.port, "alice").await;
     let ro = r.call(1, "mkdirs", &mkdirs("/user/alice/new")).await;
-    assert_eq!(ro.class(), "org.apache.hadoop.hdfs.server.namenode.SafeModeException");
-    assert!(support::events(&server.state, server.id, "hdfs_mkdirs").await.is_empty(), "the model was not asked");
+    assert_eq!(
+        ro.class(),
+        "org.apache.hadoop.hdfs.server.namenode.SafeModeException"
+    );
+    assert!(
+        support::events(&server.state, server.id, "hdfs_mkdirs")
+            .await
+            .is_empty(),
+        "the model was not asked"
+    );
 }
-

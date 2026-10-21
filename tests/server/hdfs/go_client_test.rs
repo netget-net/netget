@@ -15,7 +15,11 @@ async fn go_client_reads_writes_and_changes() {
     for name in ["README.txt", "data", "big.bin", "user", "tmp"] {
         assert!(ls.stdout.contains(name), "ls lists {name}:\n{}", ls.stdout);
     }
-    let readme = ls.stdout.lines().find(|l| l.ends_with("README.txt")).unwrap();
+    let readme = ls
+        .stdout
+        .lines()
+        .find(|l| l.ends_with("README.txt"))
+        .unwrap();
     assert!(
         readme.starts_with("-rw-r--r--") && readme.contains("alice") && readme.contains("analysts"),
         "{readme}"
@@ -26,19 +30,31 @@ async fn go_client_reads_writes_and_changes() {
     assert_eq!(cat.stdout, "hello from netget\n");
 
     // Three blocks, each read and its chunks checked by Go's own reader.
-    let dir = std::env::temp_dir().join(format!("netget-hdfs-go-{}-{}", std::process::id(), uuid::Uuid::new_v4().simple()));
+    let dir = std::env::temp_dir().join(format!(
+        "netget-hdfs-go-{}-{}",
+        std::process::id(),
+        uuid::Uuid::new_v4().simple()
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     let got = dir.join("big.bin");
-    go(&server, user, &["get", "/big.bin", &got.to_string_lossy()], None)
-        .await
-        .expect_ok("hdfs get /big.bin", &server);
+    go(
+        &server,
+        user,
+        &["get", "/big.bin", &got.to_string_lossy()],
+        None,
+    )
+    .await
+    .expect_ok("hdfs get /big.bin", &server);
     assert_eq!(std::fs::read(&got).unwrap(), support::big_bin());
 
     let sum = go(&server, user, &["checksum", "/big.bin"], None).await;
     sum.expect_ok("hdfs checksum /big.bin", &server);
     assert_eq!(
         sum.stdout.trim(),
-        format!("{} /big.bin", hex::encode(support::md5md5crc32c(&support::big_bin(), 65536)))
+        format!(
+            "{} /big.bin",
+            hex::encode(support::md5md5crc32c(&support::big_bin(), 65536))
+        )
     );
 
     // Writes: mkdir, put (three blocks at the server's 64 KiB default), read back, mv, rm.
@@ -48,35 +64,60 @@ async fn go_client_reads_writes_and_changes() {
     let local = dir.join("go-upload.bin");
     let content: Vec<u8> = (0..150_000u32).map(|i| (i * 7 % 256) as u8).collect();
     std::fs::write(&local, &content).unwrap();
-    go(&server, user, &["put", &local.to_string_lossy(), "/user/alice/go/up.bin"], None)
-        .await
-        .expect_ok("hdfs put", &server);
+    go(
+        &server,
+        user,
+        &["put", &local.to_string_lossy(), "/user/alice/go/up.bin"],
+        None,
+    )
+    .await
+    .expect_ok("hdfs put", &server);
     let back = dir.join("back.bin");
-    go(&server, user, &["get", "/user/alice/go/up.bin", &back.to_string_lossy()], None)
-        .await
-        .expect_ok("hdfs get of the upload", &server);
+    go(
+        &server,
+        user,
+        &["get", "/user/alice/go/up.bin", &back.to_string_lossy()],
+        None,
+    )
+    .await
+    .expect_ok("hdfs get of the upload", &server);
     assert_eq!(std::fs::read(&back).unwrap(), content);
     let sum = go(&server, user, &["checksum", "/user/alice/go/up.bin"], None).await;
     sum.expect_ok("hdfs checksum of the upload", &server);
     assert!(
-        sum.stdout.starts_with(&hex::encode(support::md5md5crc32c(&content, 65536))),
+        sum.stdout
+            .starts_with(&hex::encode(support::md5md5crc32c(&content, 65536))),
         "{}",
         sum.stdout
     );
-    go(&server, user, &["mv", "/user/alice/go/up.bin", "/user/alice/moved.bin"], None)
-        .await
-        .expect_ok("hdfs mv", &server);
+    go(
+        &server,
+        user,
+        &["mv", "/user/alice/go/up.bin", "/user/alice/moved.bin"],
+        None,
+    )
+    .await
+    .expect_ok("hdfs mv", &server);
     go(&server, user, &["rm", "-r", "/user/alice/go"], None)
         .await
         .expect_ok("hdfs rm -r", &server);
     let after = go(&server, user, &["ls", "/user/alice"], None).await;
     after.expect_ok("hdfs ls /user/alice", &server);
-    assert!(after.stdout.contains("moved.bin") && !after.stdout.contains("go\n"), "{}", after.stdout);
+    assert!(
+        after.stdout.contains("moved.bin") && !after.stdout.contains("go\n"),
+        "{}",
+        after.stdout
+    );
 
     // The model refuses a change outside the allowed tree.
     let refused = go(&server, "bob", &["mkdir", "/data/go"], None).await;
     refused.expect_failure("mkdir /data/go as bob", &server);
-    assert!(refused.stderr.contains("permission denied") || refused.stderr.contains("Permission denied"), "{}", refused.stderr);
+    assert!(
+        refused.stderr.contains("permission denied")
+            || refused.stderr.contains("Permission denied"),
+        "{}",
+        refused.stderr
+    );
 
     let writes = support::events(&server.state, server.id, "hdfs_write").await;
     assert_eq!(writes.len(), 1, "{writes:?}");
@@ -87,9 +128,21 @@ async fn go_client_reads_writes_and_changes() {
     let methods = server.methods();
     println!("Go client: NameNode methods {methods:?}");
     println!("Go client: DataNode ops {:?}", server.ops());
-    for m in ["getListing", "getFileInfo", "getBlockLocations", "mkdirs", "create", "addBlock", "complete", "delete"] {
+    for m in [
+        "getListing",
+        "getFileInfo",
+        "getBlockLocations",
+        "mkdirs",
+        "create",
+        "addBlock",
+        "complete",
+        "delete",
+    ] {
         assert!(methods.contains_key(m), "{m} was not called: {methods:?}");
     }
-    assert!(methods.contains_key("rename") || methods.contains_key("rename2"), "{methods:?}");
+    assert!(
+        methods.contains_key("rename") || methods.contains_key("rename2"),
+        "{methods:?}"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
