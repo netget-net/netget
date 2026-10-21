@@ -71,6 +71,15 @@ static allow-everything handler, as root. It prints the whole table with each fa
 198 of 238, measured in a rootless container on Linux 7.2; see `src/server/fuse/AGENTS.md` for
 what the other 40 fail on. It needs perl and openssl (`openssl md5` names its files).
 
+## Mutation-checked
+
+Each of these was broken on purpose and the suite went red: calling the model without
+`timeout_at` (the slow-model test: `ls` hung 20 s and then succeeded); removing the description
+walk's depth check (the depth tests, inline and endless); removing the overlay cap (both overlay
+tests); dropping the guard's unmount (the stop test and the tools test's final stop); and
+applying a write whatever the model answered (the refused writes in the tools test and the
+deadline test).
+
 ## Running
 
 ```bash
