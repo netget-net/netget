@@ -295,6 +295,10 @@ async fn a_killed_daemon_leaves_no_mount_behind() {
         .kill_on_drop(true)
         .spawn()
         .unwrap();
+    let pid = child.id().expect("a running child has a pid");
+    // OS-level half of the cleanup: if this test binary dies, the child goes with it. See
+    // `tests/helpers/child_guard.rs`.
+    crate::helpers::child_guard::tie_child(pid);
     eventually(60, || {
         mounted_at(&path) || child.try_wait().ok().flatten().is_some()
     })
@@ -303,6 +307,7 @@ async fn a_killed_daemon_leaves_no_mount_behind() {
     if !up {
         let _ = child.start_kill();
         let _ = child.wait().await;
+        crate::helpers::child_guard::untie_child(pid);
         panic!(
             "netget --server fuse did not mount: {}",
             std::fs::read_to_string(&err_path).unwrap_or_default()
@@ -310,15 +315,49 @@ async fn a_killed_daemon_leaves_no_mount_behind() {
     }
     let ok = sh_in(r#"stat -c %F "$M""#, &path, dir.path()).await;
     assert_eq!(String::from_utf8_lossy(&ok.stdout).trim(), "directory");
-    // SIGKILL: no destructor runs; fusermount3's auto_unmount is what cleans up.
+    // SIGKILL: no destructor runs. The unmount watchdog (and, on fuse3 3.17 and later,
+    // fusermount3's own auto_unmount) is what cleans up.
     child.start_kill().unwrap();
     let _ = child.wait().await;
-    assert!(
-        eventually(10, || !mounted_at(&path)).await,
-        "the mount went with the process"
-    );
+    crate::helpers::child_guard::untie_child(pid);
+    if !eventually(20, || !mounted_at(&path)).await {
+        let why = unmount_diagnostics(&path).await;
+        // Leave no stale mount on the machine whatever happened.
+        let _ = tokio::process::Command::new("fusermount3")
+            .args(["-u", "-z", "--"])
+            .arg(&path)
+            .status()
+            .await;
+        panic!(
+            "the mount outlived the killed process by 20 s\n{why}\nnetget's stderr:\n{}",
+            std::fs::read_to_string(&err_path).unwrap_or_default()
+        );
+    }
     let started = Instant::now();
     let ls = sh_in(r#"ls -la "$M/..""#, &path, dir.path()).await;
     assert!(ls.status.success() && started.elapsed() < Duration::from_secs(5));
     assert_eq!(std::fs::read_dir(&path).unwrap().count(), 0);
+}
+
+/// What a mount that outlived its daemon needs explaining with: the mount table's FUSE lines,
+/// every fusermount3 and watchdog process, and the kernel's last words (AppArmor denials among
+/// them).
+async fn unmount_diagnostics(path: &std::path::Path) -> String {
+    let mut out = String::new();
+    for l in std::fs::read_to_string("/proc/self/mountinfo")
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| l.contains("fuse"))
+    {
+        out.push_str(&format!("mountinfo: {l}\n"));
+    }
+    let probe = sh_in(
+        r#"ls -la "$M" 2>&1; ps -eo pid,ppid,pgid,sid,user,args | grep -E 'fusermount|netget-fuse-watchdog|PID' | grep -v grep; fusermount3 --version 2>&1; (dmesg 2>&1 || true) | tail -40; (journalctl -k --no-pager -n 40 2>&1 | grep -i -E 'apparmor|fuse' || true)"#,
+        path,
+        path.parent().unwrap_or(path),
+    )
+    .await;
+    out.push_str(&String::from_utf8_lossy(&probe.stdout));
+    out.push_str(&String::from_utf8_lossy(&probe.stderr));
+    out
 }

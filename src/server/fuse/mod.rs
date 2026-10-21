@@ -286,6 +286,7 @@ struct MountGuard {
     created_dir: bool,
     watch: Option<UnixStream>,
     helper: Option<Child>,
+    watchdog: Option<Child>,
     session: Option<fuser::BackgroundSession>,
     status_tx: tokio::sync::mpsc::UnboundedSender<String>,
 }
@@ -293,6 +294,14 @@ struct MountGuard {
 impl Drop for MountGuard {
     fn drop(&mut self) {
         unmount(&self.mount_point);
+        // Stopped on purpose: the watchdog's job is done, and killing it before its pipe closes
+        // keeps it from unmounting whatever is at this path later.
+        if let Some(mut watchdog) = self.watchdog.take() {
+            let _ = watchdog.kill();
+            std::thread::spawn(move || {
+                let _ = watchdog.wait();
+            });
+        }
         drop(self.watch.take());
         if let Some(mut helper) = self.helper.take() {
             // It exits once it sees the socket close; reap it without waiting here.
@@ -308,6 +317,39 @@ impl Drop for MountGuard {
         Log::new(Some(&self.status_tx))
             .info(format!("FUSE unmounted {}", self.mount_point.display()));
     }
+}
+
+/// A process in a session of its own that lazily unmounts `mount_point` when this process is
+/// gone, however it went.
+///
+/// fusermount3's `auto_unmount` is meant to do this, and on fuse3 3.17 and later it does. Before
+/// that (Ubuntu 24.04 ships 3.14) its check runs as root and opens the mount point to see
+/// whether the daemon died; a mount made without `allow_other` refuses root with EACCES rather
+/// than answering ENOTCONN, so the check concludes the daemon is alive and leaves the dead
+/// mount behind. The watchdog runs as this user, who owns the mount: `sh` blocks reading a pipe
+/// whose only writer is this process, the read returns at end of file when this process is gone
+/// (SIGKILL included, since the kernel closes the descriptor), and it execs `fusermount3 -u -z`.
+/// A normal stop unmounts first and then kills the watchdog before closing the pipe.
+fn spawn_watchdog(mount_point: &Path) -> std::io::Result<Child> {
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c")
+        .arg("read -r _ || true; exec fusermount3 -u -q -z -- \"$1\"")
+        .arg("netget-fuse-watchdog")
+        .arg(mount_point)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // SAFETY: only setsid, which is async-signal-safe, runs between fork and exec. A session
+    // of its own keeps a terminal's Ctrl+C or a kill of this process group from reaching it.
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    cmd.spawn()
 }
 
 /// Make sure the mount point is an empty directory: an existing one, or a new one in an
@@ -1912,9 +1954,18 @@ pub async fn spawn(ctx: SpawnContext) -> Result<SocketAddr> {
         created_dir,
         watch: Some(mounted.watch),
         helper: Some(mounted.helper),
+        watchdog: None,
         session: None,
         status_tx: ctx.status_tx.clone(),
     };
+
+    match spawn_watchdog(&mount_point) {
+        Ok(w) => guard.watchdog = Some(w),
+        Err(e) => Log::new(Some(&ctx.status_tx)).warn(format!(
+            "FUSE {label}: no unmount watchdog ({e}); if this process is killed, only \
+             fusermount3's auto_unmount (fuse3 3.17 or later) removes the mount"
+        )),
+    }
 
     let fs = FuseFs {
         tree: tree.clone(),
