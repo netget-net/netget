@@ -312,6 +312,8 @@ pub mod mqtt_sn;
 
 #[cfg(unix)]
 pub mod fuse;
+#[cfg(unix)]
+pub mod hdfs;
 pub mod iscsi;
 pub mod nbd;
 pub mod nvme_tcp;
