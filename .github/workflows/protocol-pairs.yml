@@ -9656,19 +9656,22 @@ jobs:
           set -euo pipefail
           command -v fusermount3 prove python3
           test -x "$NETGET_PJDFSTEST/pjdfstest"
-          # As the runner user: mounts go through the setuid fusermount3, the path an operator
-          # without root takes. pjdfstest is the one test that needs root.
-          user_log="$RUNNER_TEMP/${GITHUB_JOB}-user.log"
-          cargo test --locked --no-default-features \
-            --test server -- fuse:: --skip pjdfstest --test-threads=4 2>&1 | tee "$user_log"
-          grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$user_log"
-          # As root (cargo builds as the runner user and runs the test binary through sudo).
-          export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER="sudo -E env PATH=$PATH"
-          root_log="$RUNNER_TEMP/${GITHUB_JOB}-root.log"
-          cargo test --locked --no-default-features \
-            --test server -- fuse:: --test-threads=4 --nocapture 2>&1 | tee "$root_log"
-          grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$root_log"
-          grep -E '^pjdfstest: ' "$root_log"
+          for filter in \
+            fuse::; do
+            # As the runner user: mounts go through the setuid fusermount3, the path an
+            # operator without root takes. pjdfstest is the one test that needs root.
+            user_log="$RUNNER_TEMP/${GITHUB_JOB}-user.log"
+            cargo test --locked --no-default-features \
+              --test server -- "$filter" --skip pjdfstest --test-threads=4 2>&1 | tee "$user_log"
+            grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$user_log"
+            # As root (cargo builds as the runner user and runs the test binary through sudo).
+            root_log="$RUNNER_TEMP/${GITHUB_JOB}-root.log"
+            CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER="sudo -E env PATH=$PATH" \
+              cargo test --locked --no-default-features \
+              --test server -- "$filter" --test-threads=4 --nocapture 2>&1 | tee "$root_log"
+            grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$root_log"
+            grep -E '^pjdfstest: ' "$root_log"
+          done
       - name: Shared declarations, native startup, privacy and ownership
         run: |
           cargo test --locked --no-default-features \

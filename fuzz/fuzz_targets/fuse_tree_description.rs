@@ -23,7 +23,11 @@ fuzz_target!(|data: &[u8]| {
     };
     let mut tree = Tree::new(0o755, 1000, 1000, DEFAULT_MAX_OVERLAY_BYTES);
     let Ok(count) = tree.describe(ROOT, &answer) else {
-        assert_eq!(tree.node_count(), 1, "a refused description commits nothing");
+        assert_eq!(
+            tree.node_count(),
+            1,
+            "a refused description commits nothing"
+        );
         return;
     };
     assert!(count <= MAX_ENTRIES_PER_ANSWER);
@@ -56,7 +60,10 @@ fuzz_target!(|data: &[u8]| {
                     }
                     // A write then a read back, inside the overlay's bound.
                     if tree.write(ino, attr.size / 3, b"fuzz").is_ok() {
-                        assert_eq!(tree.read(ino, attr.size / 3, 4).ok().as_deref(), Some(&b"fuzz"[..]));
+                        assert_eq!(
+                            tree.read(ino, attr.size / 3, 4).ok().as_deref(),
+                            Some(&b"fuzz"[..])
+                        );
                     }
                 }
             }
