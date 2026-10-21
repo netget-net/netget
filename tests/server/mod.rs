@@ -371,6 +371,7 @@ pub mod vxlan;
 pub mod webtransport;
 pub mod wsdiscovery;
 pub mod zeromq;
+pub mod zigbee;
 pub mod zipkin;
 
 pub mod diameter;

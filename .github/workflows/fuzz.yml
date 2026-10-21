@@ -75,6 +75,7 @@ jobs:
           - nvme_tcp_pdu
           - fuse_tree_description
           - hdfs_wire
+          - zigbee_ash_ezsp
           - bgp_message
           - ndef_message
           - nfc_apdu

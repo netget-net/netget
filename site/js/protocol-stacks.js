@@ -333,6 +333,7 @@ export const protocolStacks = [
     ["zabbix", "ETH>IP>TCP>Zabbix"],
     ["zenoh", "ETH>IP>TCP>Zenoh"],
     ["zeromq", "ETH>IP>TCP>ZMTP"],
+    ["zigbee", "ETH>IP>TCP>ASH>EZSP"],
     ["zipkin", "ETH>IP>TCP>HTTP>Zipkin"],
     ["zookeeper", "ETH>IP>TCP>ZooKeeper"],
 ];
