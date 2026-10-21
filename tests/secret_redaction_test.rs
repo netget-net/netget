@@ -162,6 +162,27 @@ fn lorawan_device_keys_are_redacted_and_their_euis_are_not() {
     assert_eq!(d[1]["dev_addr"], json!("26011bda"));
 }
 
+/// The Zigbee co-processor's network key is masked; the network it belongs to is shown.
+#[test]
+fn zigbee_network_key_is_redacted_and_the_network_is_not() {
+    let shown = redact_sensitive(&json!({
+        "network": {"channel": 15, "pan_id": "0x1a62", "extended_pan_id": "dd:dd:dd:dd:dd:dd:dd:dd"},
+        "network_key": "c0ffee00112233445566778899aabbcc",
+        "devices": [{"name": "kitchen-lamp", "ieee": "00:12:4b:00:1c:a1:b2:01"}]
+    }));
+    assert_eq!(shown["network_key"], json!(REDACTED));
+    assert_eq!(shown["network"]["pan_id"], json!("0x1a62"));
+    assert_eq!(
+        shown["network"]["extended_pan_id"],
+        json!("dd:dd:dd:dd:dd:dd:dd:dd")
+    );
+    assert_eq!(
+        shown["devices"][0]["ieee"],
+        json!("00:12:4b:00:1c:a1:b2:01")
+    );
+    assert!(!shown.to_string().contains("c0ffee00"));
+}
+
 /// A startup parameter's diagnostic applies the redactor's own key/value rule. A string-valued
 /// `auth` (`username:password`) is a credential by its value, not its name, so the name-only
 /// check let it into the "expected …, got …" error a mistyped `auth` produces.
