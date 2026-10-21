@@ -104,6 +104,17 @@ pub struct CapturedFrame {
     pub experts: Vec<(u32, String)>,
 }
 
+/// One frame's 5G NAS as tshark's nas-5gs dissector read it.
+#[derive(Debug, Clone)]
+pub struct NasFrame {
+    pub number: u32,
+    pub src_port: u16,
+    pub security_headers: Vec<u8>,
+    pub mm_types: Vec<u8>,
+    pub sm_types: Vec<u8>,
+    pub experts: Vec<u32>,
+}
+
 /// A live `dumpcap` on loopback for the duration of a real-peer test (Linux only). Requires
 /// capture permission: root, or `setcap cap_net_raw,cap_net_admin=eip` on dumpcap, which the CI
 /// job does. Missing dumpcap or permission is a failure, not a skip.
@@ -203,12 +214,88 @@ impl LiveCapture {
             .unwrap_or(0)
     }
 
+    /// Stop the capture and dissect every NGAP frame and, separately, every 5G NAS message in it.
+    /// NAS protected with NEA0 is read through (`nas-5gs.null_decipher`), so the messages inside
+    /// security headers are named too.
+    pub async fn finish_with_nas(self) -> (Vec<CapturedFrame>, Vec<NasFrame>) {
+        let dir = tempfile::tempdir().unwrap();
+        let keep = dir.path().join("ngap.pcapng");
+        // `finish` deletes the capture with its directory; keep a copy for the second pass.
+        let frames = self.finish_keeping(Some(&keep)).await;
+        let out = std::process::Command::new("tshark")
+            .arg("-r")
+            .arg(&keep)
+            .args([
+                "-n",
+                "-o",
+                "nas-5gs.null_decipher:TRUE",
+                "-Y",
+                "nas-5gs",
+                "-T",
+                "fields",
+                "-E",
+                "separator=/t",
+                "-E",
+                "occurrence=a",
+                "-e",
+                "frame.number",
+                "-e",
+                "sctp.srcport",
+                "-e",
+                "nas-5gs.security_header_type",
+                "-e",
+                "nas-5gs.mm.message_type",
+                "-e",
+                "nas-5gs.sm.message_type",
+                "-e",
+                "_ws.expert.severity",
+            ])
+            .output()
+            .expect("tshark is required: sudo apt-get install tshark");
+        assert!(
+            out.status.success(),
+            "tshark: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let nums = |s: &str| -> Vec<u64> {
+            s.split(',')
+                .filter_map(|x| {
+                    let x = x.trim();
+                    x.strip_prefix("0x")
+                        .map(|h| u64::from_str_radix(h, 16).ok())
+                        .unwrap_or_else(|| x.parse().ok())
+                })
+                .collect()
+        };
+        let nas = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|line| {
+                let c: Vec<&str> = line.split('\t').collect();
+                let get = |i: usize| c.get(i).copied().unwrap_or("");
+                NasFrame {
+                    number: get(0).parse().unwrap_or(0),
+                    src_port: get(1).split(',').next().unwrap_or("0").parse().unwrap_or(0),
+                    security_headers: nums(get(2)).into_iter().map(|v| v as u8).collect(),
+                    mm_types: nums(get(3)).into_iter().map(|v| v as u8).collect(),
+                    sm_types: nums(get(4)).into_iter().map(|v| v as u8).collect(),
+                    experts: nums(get(5)).into_iter().map(|v| v as u32).collect(),
+                }
+            })
+            .collect();
+        (frames, nas)
+    }
+
     /// Stop the capture and dissect every NGAP frame in it.
     ///
     /// SIGINT stops dumpcap at once, and packets still in the kernel's capture block are lost —
     /// observed as the last NGAP messages of a test going missing. So a probe datagram is sent
     /// first and the capture is stopped only once dumpcap's count shows it read past it.
-    pub async fn finish(mut self) -> Vec<CapturedFrame> {
+    pub async fn finish(self) -> Vec<CapturedFrame> {
+        self.finish_keeping(None).await
+    }
+
+    async fn finish_keeping(mut self, keep: Option<&std::path::Path>) -> Vec<CapturedFrame> {
         let before = self.reported();
         let _ = tokio::time::timeout(std::time::Duration::from_secs(15), async {
             loop {
@@ -229,6 +316,9 @@ impl LiveCapture {
             );
         }
         let _ = tokio::time::timeout(std::time::Duration::from_secs(10), self.child.wait()).await;
+        if let Some(k) = keep {
+            std::fs::copy(&self.path, k).expect("copying the capture");
+        }
         let out = std::process::Command::new("tshark")
             .arg("-r")
             .arg(&self.path)

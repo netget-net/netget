@@ -371,3 +371,10 @@ path = "fuzz_targets/zigbee_ash_ezsp.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "ngap_nas"
+path = "fuzz_targets/ngap_nas.rs"
+test = false
+doc = false
+bench = false
