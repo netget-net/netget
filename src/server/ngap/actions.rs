@@ -792,33 +792,46 @@ impl Protocol for NgapProtocol {
             .well_known_sctp_port(38412)
             .implementation(
                 "TS 38.413 ALIGNED PER hand-written for the procedures implemented (NG Setup, \
-                 Initial UE Message, Downlink/Uplink NAS Transport, Error Indication, NG Reset, \
-                 UE Context Release), other IEs framed and skipped by length; plain 5GMM (TS \
-                 24.501) decoded and the pre-security downlink messages encoded; SCTP via a \
-                 socket2 one-to-one socket with PPID 60 and stream 0/1 selection, plus a \
-                 non-standard length-prefixed TCP transport for lab use",
+                 Initial UE Message, Downlink/Uplink NAS Transport, Initial Context Setup, PDU \
+                 Session Resource Setup with its transfers, Error Indication, NG Reset, UE \
+                 Context Release and its request), other IEs framed and skipped by length; \
+                 5GMM and 5GSM (TS 24.501) decoded and encoded; NAS security in Rust: Milenage, \
+                 the 5G-AKA key hierarchy (RES*, K_AUSF, K_SEAF, K_AMF, NAS keys, K_gNB), \
+                 NIA2/NEA2/NEA0 with per-direction COUNTs and replay refusal, SUCI \
+                 deconcealment for ECIES Profiles A and B; a minimal GTP-U user plane that \
+                 answers ICMP echo; SCTP via a socket2 one-to-one socket with PPID 60 and \
+                 stream 0/1 selection, plus a non-standard length-prefixed TCP transport",
             )
             .llm_control(
-                "The model admits or refuses gNBs (NG Setup Response/Failure with a cause) and \
-                 decides what each UE is told (Identity Request, Authentication Request, \
-                 Registration Reject with a 5GMM cause, UE Context Release). Decoding, ID \
-                 allocation, NG Reset and every protocol-validity refusal are Rust's",
+                "The model admits or refuses gNBs (NG Setup Response/Failure), decides whether \
+                 each authenticated subscriber may register and on which slices \
+                 (send_registration_accept or a reject), and decides each PDU session (the UE's \
+                 IPv4 address, DNN, slice, 5QI, AMBR and which addresses answer its ping, or a \
+                 5GSM reject). UEs without credentials stay model-driven pre-security (identity, \
+                 authentication challenge, reject). 5G-AKA, the security mode procedure, every \
+                 MAC and COUNT, K_gNB, GUTI allocation, deregistration, decoding, ID \
+                 allocation, NG Reset and protocol refusals are Rust's; the keys never reach \
+                 the model",
             )
             .e2e_testing(
-                "UERANSIM's nr-gnb and nr-ue (asn1c APER) set up N2 and register against it over \
-                 real SCTP on Linux, with tshark's ngap dissector reading a live capture; over \
-                 the lab TCP transport with a mocked model on any host, including the \
-                 fail-closed paths, the decode bounds and the pcap oracle on NetGet's own PDUs",
+                "UERANSIM v3.2.7's nr-gnb and nr-ue over real SCTP on Linux: a UE with an ECIES \
+                 Profile A SUCI authenticates, registers, gets a PDU session, pings through its \
+                 uesimtun and NetGet's GTP-U, and deregisters; another is challenged without \
+                 credentials and rejected; tshark's ngap and nas-5gs dissectors read the live \
+                 capture. In-process over the lab transport with a mocked model (three calls for \
+                 a whole registration and session) and scripted UEs: forged MACs, replayed \
+                 COUNTs, wrong RES*, MAC and synch failures, silent and failed models; \
+                 Milenage, NIA2/NEA2 and SUCI against TS 35.208, 33.401 and 33.501 vectors",
             )
             .notes(
-                "EXPERIMENTAL: one independent peer (UERANSIM), and its evidence runs only where \
-                 SCTP exists (Linux, the ngap pair job). macOS has no SCTP stack, so there the \
-                 default transport refuses to start by name and only the non-standard \
-                 transport=\"tcp\" framing runs. NAS security is not implemented: no 5G-AKA \
-                 derivation, no Security Mode Command, no integrity or ciphering — a real UE \
-                 answers NetGet's Authentication Request with MAC failure, and Registration \
-                 Accept cannot be sent. No PDU sessions, handover, paging or AMF \
-                 configuration update.",
+                "EXPERIMENTAL: one independent peer (UERANSIM) — condition 1 of the Stable bar \
+                 needs two — and its evidence runs only where SCTP exists (Linux, the ngap pair \
+                 job). macOS has no SCTP, so there only the non-standard transport=\"tcp\" runs. \
+                 Integrity is NIA2 only and ciphering NEA0/NEA2 (no SNOW 3G or ZUC); 5G-AKA only \
+                 (no EAP-AKA'); one QoS flow and IPv4 per session; the user plane answers ICMP \
+                 echo and routes nothing else. Not built: handover, paging, service request \
+                 under security, PDU session release/modification, AMF configuration update, \
+                 shared state across associations, N2 for several gNBs as one AMF.",
             )
             .max_inbound_bytes(codec::MAX_PDU_LEN)
             .history(crate::protocol::metadata::HistoryMode::Last(
@@ -829,7 +842,7 @@ impl Protocol for NgapProtocol {
     }
 
     fn description(&self) -> &'static str {
-        "NGAP (5G N2) AMF: NG Setup and initial UE registration signalling with gNBs"
+        "NGAP (5G N2) AMF: NG Setup, 5G-AKA and NAS security, registration, PDU sessions and a GTP-U user plane"
     }
 
     fn example_prompt(&self) -> &'static str {

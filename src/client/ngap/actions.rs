@@ -387,7 +387,7 @@ impl Protocol for NgapClientProtocol {
         vec!["ngap", "ngap client", "gnb", "n2", "5g ran"]
     }
     fn description(&self) -> &'static str {
-        "NGAP gNB (5G N2): sets up N2 with an AMF and brings UEs in with NAS registration"
+        "NGAP gNB (5G N2): sets up N2 with an AMF and registers UEs with 5G-AKA, NAS security and PDU sessions"
     }
     fn get_async_actions(&self, _: &AppState) -> Vec<ActionDefinition> {
         actions()
@@ -430,10 +430,10 @@ impl Protocol for NgapClientProtocol {
         ProtocolMetadataV2::builder()
             .state(DevelopmentState::Experimental)
             .privilege_requirement(PrivilegeRequirement::None)
-            .implementation("The AMF role's APER codec and 5GMM subset (src/server/ngap) as a gNB: SCTP association (PPID 60, stream 0/1) or the labelled lab TCP framing, NG Setup from the startup parameters on connect, RAN UE NGAP ID allocation, UE Context Release Complete and NG Reset Acknowledge answered in Rust")
-            .llm_control("Which UEs to bring in and with what NAS Registration Request (SUCI or 5G-GUTI, registration type), and how each UE answers the AMF's identity and authentication requests")
-            .e2e_testing("tests/client/ngap: Open5GS's AMF (open5gs-amfd) over real SCTP on Linux accepts NG Setup and processes the model's Registration Request; a canned AMF over the lab transport for bounds, follow-up depth and the model's actions")
-            .notes("Experimental: one independent AMF (Open5GS), runnable only where SCTP exists. No NAS security: RES* cannot be computed without a subscriber key, so registration ends at authentication. No PDU sessions or user plane. Handler chains stop after 8 follow-ups.")
+            .implementation("The AMF role's APER codec, 5GMM/5GSM and NAS security (src/server/ngap) as a gNB with a UE: SCTP association (PPID 60, stream 0/1) or the labelled lab TCP framing, NG Setup from the startup parameters on connect, RAN UE NGAP ID allocation; for a UE whose SUCI names the configured subscriber, the UE side of 5G-AKA (AUTN verified, RES*, SQN and AUTS), the security mode procedure (NIA2 with NEA0/NEA2, replayed capabilities checked), Registration Complete, the Initial Context Setup answered with K_gNB compared against the UE's own, and PDU Session Establishment with the resource setup answered (a downlink tunnel per session). UE Context Release Complete and NG Reset Acknowledge answered in Rust")
+            .llm_control("Which UEs to bring in and with what Registration Request (SUCI or 5G-GUTI), how a UE without credentials answers identity and authentication requests, and when a registered UE asks for a PDU session (DNN, slice). Keys, MACs, COUNTs and the security procedures are Rust's and never reach the model")
+            .e2e_testing("tests/client/ngap: a whole Open5GS 2.8 core (MongoDB, NRF, AUSF, UDM, UDR, PCF, NSSF, BSF, SMF, UPF, AMF) over real SCTP on Linux registers the model's UE after 5G-AKA, hands the gNB a K_gNB equal to the UE's own, and creates the PDU session the SMF logs; Open5GS's AMF alone identifies a UE and refuses a foreign PLMN; a canned AMF over the lab transport for bounds and follow-up depth; tshark's ngap and nas-5gs dissectors read the captures")
+            .notes("Experimental: one independent AMF (Open5GS), runnable only where SCTP exists. The UE side implements NIA2 with NEA0/NEA2 only, 5G-AKA only, null-scheme SUCI only, one PDU session type (IPv4). The gNB runs no user plane: it answers the resource setup with a downlink tunnel address but carries no packets. Not built: handover, paging, UE context modification, RAN configuration update, service request, more than one AMF per client. Handler chains stop after 8 follow-ups.")
             .max_inbound_bytes(codec::MAX_PDU_LEN)
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
             .batching(crate::protocol::metadata::BatchingMode::Unsupported)

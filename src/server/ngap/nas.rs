@@ -1,27 +1,19 @@
-//! 5GS mobility management (5GMM, TS 24.501) — the plain-NAS subset NGAP carries during initial
-//! registration.
+//! 5GS mobility management (5GMM, TS 24.501) as NGAP carries it, in two layers.
 //!
-//! NAS is opaque to NGAP: a NAS-PDU IE is just octets. NetGet decodes the 5GMM messages that cross
-//! N2 before a NAS security context exists, so the model sees *what the UE asked for* —
+//! NAS is opaque to NGAP: a NAS-PDU IE is just octets. [`decode`] turns a plain 5GMM message (and
+//! a 5GSM payload, through `sm`) into fields, so the model sees *what the UE asked for* —
 //! registration type, the SUCI's PLMN, routing indicator and protection scheme, the 5GMM cause of
-//! a failure — instead of a hex string, and answers with a structured action that Rust encodes.
+//! a failure — instead of a hex string, and [`encode`] builds what the model may say to a UE from
+//! structured fields: the messages TS 24.501 section 4.4.4.2 lets a UE process before security,
+//! which the session protects for it once security is on.
 //!
-//! # What is out of scope, and why
+//! The second layer, from "Structured 5GMM for the security procedures" down, is Rust's own:
+//! the parsers and builders 5G-AKA, the security mode procedure, registration and the 5GSM NAS
+//! transport need. Protection itself (MAC, COUNT, ciphering) is `security::NasContext`'s.
 //!
-//! **NAS security.** 5G-AKA (deriving RES*, K_AUSF, K_SEAF, K_AMF), Security Mode Command and
-//! integrity/ciphering of later messages are not implemented. Without them a UE accepts only the
-//! messages TS 24.501 section 4.4.4.2 lists as processable before security is established —
-//! Identity Request, Authentication Request/Reject, Registration Reject, Service Reject,
-//! Deregistration Accept — which is exactly the set [`encode`] offers the AMF. An Authentication
-//! Request NetGet sends carries a RAND and AUTN the model chooses (random by default); a real UE
-//! computes the expected MAC from its own key, finds it does not match, and answers with
-//! Authentication Failure #20 (MAC failure). That round trip is real and is what the tests prove;
-//! a *successful* authentication is not available without the subscriber key and the AKA
-//! derivations.
-//!
-//! A security-protected message is reported with its header fields; when it is integrity
-//! protected but not ciphered, the plain message inside is decoded too, because its octets are in
-//! the clear. The MAC is not verified — there is no key to verify it with — and the event says so.
+//! A security-protected message given to [`decode`] directly is reported with its header fields
+//! and, when not ciphered, the plain message inside, marked `mac_verified: false`: [`decode`] has
+//! no key. The AMF and the gNB's UE decode only after `security` verified the MAC.
 
 use serde_json::{json, Map, Value};
 
