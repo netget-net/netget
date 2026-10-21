@@ -226,6 +226,9 @@ pub mod mqtt_sn;
 pub mod nbd;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod nvme_tcp;
+// HDFS client: shares the server's IPC and DataTransferProtocol modules, which are Unix-only.
+#[cfg(unix)]
+pub mod hdfs;
 #[cfg(not(target_arch = "wasm32"))]
 pub use mqtt::actions::MqttClientProtocol;
 
