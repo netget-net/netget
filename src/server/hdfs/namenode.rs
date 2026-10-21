@@ -1329,8 +1329,41 @@ impl Session {
             }
             .encode_to_vec()),
             "msync" => Ok(pb::MsyncResponseProto {}.encode_to_vec()),
-            "append" | "truncate" | "concat" | "createSymlink" | "updateBlockForPipeline"
-            | "updatePipeline" => Err(Thrown::new(
+            "updateBlockForPipeline" => {
+                // colinmarc/hdfs calls this after every block it finishes. With one DataNode
+                // and no pipeline recovery there is nothing to re-stamp: the block keeps its
+                // generation stamp, and a recovery that would need a new one is refused at the
+                // DataNode (only PIPELINE_SETUP_CREATE is served).
+                let r = dec::<pb::UpdateBlockForPipelineRequestProto>(body, method)?;
+                let client = crate::utils::sanitize::token(&r.client_name, 256);
+                let dn = self.hdfs.datanode_info(self.local);
+                let block = self
+                    .hdfs
+                    .ns()
+                    .block_for_pipeline(&r.block, &client, &dn)
+                    .map_err(|t| self.refused("updateBlockForPipeline", "", t))?;
+                Ok(pb::UpdateBlockForPipelineResponseProto { block }.encode_to_vec())
+            }
+            "updatePipeline" => {
+                let r = dec::<pb::UpdatePipelineRequestProto>(body, method)?;
+                let client = crate::utils::sanitize::token(&r.client_name, 256);
+                let dn = self.hdfs.datanode_info(self.local);
+                if r.old_block.block_id != r.new_block.block_id
+                    || r.new_nodes.iter().any(|n| n.datanode_uuid != dn.id.datanode_uuid)
+                {
+                    return Err(self.refused(
+                        "updatePipeline",
+                        "",
+                        Thrown::new(class::IO, "Pipeline recovery is not supported by this NameNode"),
+                    ));
+                }
+                self.hdfs
+                    .ns()
+                    .block_for_pipeline(&r.old_block, &client, &dn)
+                    .map_err(|t| self.refused("updatePipeline", "", t))?;
+                Ok(pb::UpdatePipelineResponseProto {}.encode_to_vec())
+            }
+            "append" | "truncate" | "concat" | "createSymlink" => Err(Thrown::new(
                 class::UNSUPPORTED,
                 format!("{method} is not supported by this NameNode"),
             )

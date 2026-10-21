@@ -1027,6 +1027,43 @@ impl Namespace {
         Ok(self.locate(id, m.generation, index * m.block_size, 0, dn))
     }
 
+    /// A block of a file `client` holds open, located again with its generation stamp
+    /// unchanged (updateBlockForPipeline: there is one DataNode and no recovery to re-stamp).
+    pub fn block_for_pipeline(
+        &self,
+        b: &ExtendedBlockProto,
+        client: &str,
+        dn: &DatanodeInfoProto,
+    ) -> Result<LocatedBlockProto, Thrown> {
+        let (ino, index) = split_block_id(b.block_id);
+        let path = self.tree.path(ino);
+        let o = match self.lease(ino, client, &path) {
+            Ok(o) => o,
+            Err(Halt::Thrown(t)) => return Err(t),
+            Err(Halt::Describe(_)) => unreachable!("a lease check describes nothing"),
+        };
+        if b.pool_id != self.pool_id || !o.blocks.contains(&b.block_id) {
+            return Err(Thrown::new(
+                class::IO,
+                format!("Block {} is not a block of {path} being written", b.block_id),
+            ));
+        }
+        let m = self.meta(ino);
+        if b.generation_stamp != m.generation {
+            return Err(Thrown::new(
+                class::IO,
+                format!(
+                    "Block {} has generation stamp {}, not {}",
+                    b.block_id, m.generation, b.generation_stamp
+                ),
+            ));
+        }
+        let len = b
+            .num_bytes
+            .unwrap_or_else(|| self.received.get(&b.block_id).map_or(0, |d| d.len() as u64));
+        Ok(self.locate(b.block_id, m.generation, index * m.block_size, len, dn))
+    }
+
     /// Give back the last block allocated to an open file.
     pub fn abandon_block(&mut self, ino: u64, path: &str, client: &str, id: u64) -> Step<()> {
         let last = self.lease(ino, client, path)?.blocks.last().copied();
