@@ -67,7 +67,7 @@ impl Nvram {
     /// waiting.
     pub fn erase_network(&mut self) {
         self.network = None;
-        let left: Vec<Device> = self.joined.drain(..).collect();
+        let left: Vec<Device> = std::mem::take(&mut self.joined);
         for d in left {
             if !self.waiting.iter().any(|w| w.ieee == d.ieee) {
                 self.waiting.push(d);
@@ -608,9 +608,7 @@ fn answer(
             let params = NetworkParameters::read(r)?;
             let st = if ram.up {
                 sl::INVALID_STATE
-            } else if !(11..=26).contains(&params.radio_channel) {
-                sl::INVALID_PARAMETER
-            } else if params.pan_id >= 0xFFFF {
+            } else if !(11..=26).contains(&params.radio_channel) || params.pan_id == 0xFFFF {
                 sl::INVALID_PARAMETER
             } else if let Some(sec) = ram.security.clone() {
                 // Forming starts a new network: whatever was joined before is gone.

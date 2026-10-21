@@ -1136,8 +1136,10 @@ pub fn zcl(dev: &Device, ep: u8, cluster: u16, data: &[u8]) -> ZclOutcome {
             }
             let mut p = Vec::new();
             for id in body
-                .chunks_exact(2)
-                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| u16::from_le_bytes(*c))
             {
                 let mut rec = id.to_le_bytes().to_vec();
                 match endpoint.attributes.get(&(cluster, id)) {
