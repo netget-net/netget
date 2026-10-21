@@ -148,10 +148,22 @@ description that breaks any of them is refused whole before anything is committe
 -u`, then `fusermount3 -u -z` if the mount is busy (lazy: it leaves the tree at once and goes when
 the last process lets go), closes the auto_unmount socket, and removes a mount point it created.
 The session thread ends by itself when the kernel ends the connection. If the process dies
-instead — SIGKILL, a crash, `std::process::exit` — no destructor runs, but the descriptor closes,
-the connection aborts, and the `fusermount3` that mounted it (still running, watching the socket)
-sees the mount return ENOTCONN and unmounts it. Either way the mount point is an ordinary empty
-directory again and `ls` of its parent never hangs.
+instead — SIGKILL, a crash, `std::process::exit` — no destructor runs, but the descriptor closes
+and the connection aborts. Two things then unmount it:
+
+- **The watchdog** (`spawn_watchdog`): `sh` in a session of its own, running as this user,
+  blocked reading a pipe whose only writer is this process. The read returns at end of file
+  when the process is gone and it execs `fusermount3 -u -z`. A normal stop unmounts first and
+  kills the watchdog before closing the pipe, so it never unmounts anything later.
+- **fusermount3's own `auto_unmount`**, which works only on fuse3 3.17 and later. Before that
+  (Ubuntu 24.04 ships 3.14) its check runs as root and opens the mount point to see whether the
+  daemon died; a mount without `allow_other` answers root EACCES rather than ENOTCONN, so the
+  check concludes the daemon is alive and leaves the dead mount. CI's first run of the `fuse`
+  job found exactly that, and it reproduces in an Ubuntu 24.04 container as an unprivileged
+  user with the watchdog disabled; 3.18 added `recheck_ENOTCONN_as_owner` for it.
+
+Either way the mount point is an ordinary empty directory again and `ls` of its parent never
+hangs.
 
 FIFOs, sockets and device nodes are names with a type and a device number: the kernel serves
 a FIFO's or socket's I/O itself, and the mount is `nodev` (fusermount3 forces it for a user

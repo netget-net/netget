@@ -60,7 +60,7 @@ unchanged; `rm`; and stop unmounting.
 | `the_overlay_cap_is_enospc_and_removal_frees_it` | `max_overlay_bytes` 1 MiB: `dd` of 2 MiB stops at exactly 1 MiB with ENOSPC, `stat -f` free blocks 0, one more byte refused, `rm` frees all 256 blocks, a new 512 KiB write succeeds |
 | `a_read_only_mount_refuses_changes_without_asking` | `read_only`: `cat` works; `touch`, `rm`, `mkdir` and a write are EROFS with no model call |
 | `stop_unmounts_even_while_the_mount_is_busy` | a shell whose working directory is in the mount; stop unmounts (lazily) and the mount point is an empty directory again, its parent lists at once; a mount point the server created is removed |
-| `a_killed_daemon_leaves_no_mount_behind` | `netget --server fuse` in a child process, SIGKILLed once mounted: fusermount3's auto_unmount removes the mount, `ls` of the parent answers at once, the mount point is an empty directory |
+| `a_killed_daemon_leaves_no_mount_behind` | `netget --server fuse` in a child process, SIGKILLed once mounted (death-tied through `child_guard` until then): the watchdog removes the mount within 20 s, `ls` of the parent answers at once, the mount point is an empty directory. On failure it prints the mount table, every fusermount3 and watchdog process, fusermount3's version, the dmesg tail and any AppArmor/FUSE journal lines, then lazily unmounts what was left |
 
 ## `pjdfstest_test.rs` — the compliance suite
 
@@ -78,7 +78,8 @@ Each of these was broken on purpose and the suite went red: calling the model wi
 walk's depth check (the depth tests, inline and endless); removing the overlay cap (both overlay
 tests); dropping the guard's unmount (the stop test and the tools test's final stop); and
 applying a write whatever the model answered (the refused writes in the tools test and the
-deadline test).
+deadline test); and not starting the unmount watchdog (the killed-daemon test, run as an
+unprivileged user on Ubuntu 24.04's fuse3 3.14, where the mount outlived the process).
 
 ## Running
 
