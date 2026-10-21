@@ -93,6 +93,9 @@ impl Cluster {
             .extra_ports(5)
             .setup_env("HADOOP_CONF_DIR", "{dir}/conf")
             .setup_env("HADOOP_LOG_DIR", "{dir}/logs/format")
+            // Hadoop's launcher writes and checks a pid file even for a foreground `-format`;
+            // left at its /tmp default, two tests formatting at once refuse each other.
+            .setup_env("HADOOP_PID_DIR", "{dir}/pids/format")
             .setup_command(
                 &hdfs,
                 HADOOP,
