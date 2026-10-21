@@ -985,6 +985,110 @@ write("ntlmssp_token", "kerberos_only", der(0x60, SPNEGO_OID + der(0xa0, der(0x3
 write("ntlmssp_token", "der_depth_bomb",
       b"\x30\x80" * 20000 + NTLM_NEGOTIATE + b"\x00\x00" * 8000)
 
+# ---------------------------------------------------------------------------------- hdfs_wire
+# Hadoop IPC frame bodies (what follows the four-byte length) and DataTransferProtocol packets,
+# encoded here field by field from the .proto files in proto/hadoop rather than by NetGet.
+
+def pb_varint(n):
+    out = bytearray()
+    while True:
+        b = n & 0x7F
+        n >>= 7
+        if n:
+            out.append(b | 0x80)
+        else:
+            out.append(b)
+            return bytes(out)
+
+
+def pb_key(num, wire):
+    return pb_varint(num << 3 | wire)
+
+
+def pb_ld(num, payload):
+    return pb_key(num, 2) + pb_varint(len(payload)) + payload
+
+
+def pb_int(num, n):
+    return pb_key(num, 0) + pb_varint(n)
+
+
+def pb_sint(num, n):
+    return pb_int(num, (n << 1) ^ (n >> 31))
+
+
+def pb_delimited(msg):
+    return pb_varint(len(msg)) + msg
+
+
+CLIENT_ID = bytes(range(16))
+
+
+def rpc_header(call_id):
+    return pb_int(1, 2) + pb_int(2, 0) + pb_sint(3, call_id) + pb_ld(4, CLIENT_ID) + pb_sint(5, 0)
+
+
+def rpc_call(call_id, method, body):
+    method_header = (pb_ld(1, method.encode()) +
+                     pb_ld(2, b"org.apache.hadoop.hdfs.protocol.ClientProtocol") + pb_int(3, 1))
+    return (pb_delimited(rpc_header(call_id)) + pb_delimited(method_header) +
+            pb_delimited(body))
+
+
+def packet(offset, seqno, last, data, sums):
+    header = (pb_key(1, 1) + struct.pack("<q", offset) + pb_key(2, 1) + struct.pack("<q", seqno) +
+              pb_int(3, 1 if last else 0) + pb_key(4, 5) + struct.pack("<i", len(data)))
+    return struct.pack(">IH", 4 + len(sums) + len(data), len(header)) + header + sums + data
+
+
+def crc32c_py(data):
+    crc = 0xFFFFFFFF
+    for b in data:
+        crc ^= b
+        for _ in range(8):
+            crc = (crc >> 1) ^ 0x82F63B78 if crc & 1 else crc >> 1
+    return crc ^ 0xFFFFFFFF
+
+
+def chunk_sums(data):
+    return b"".join(struct.pack(">I", crc32c_py(data[i:i + 512])) for i in range(0, len(data), 512))
+
+
+write("hdfs_wire", "connection_context",
+      pb_delimited(rpc_header(-3)) +
+      pb_delimited(pb_ld(2, pb_ld(1, b"alice")) +
+                   pb_ld(3, b"org.apache.hadoop.hdfs.protocol.ClientProtocol")))
+write("hdfs_wire", "sasl_negotiate", pb_delimited(rpc_header(-33)) + pb_delimited(pb_int(2, 1)))
+write("hdfs_wire", "get_file_info", rpc_call(0, "getFileInfo", pb_ld(1, b"/user/alice")))
+write("hdfs_wire", "get_listing",
+      rpc_call(1, "getListing", pb_ld(1, b"/") + pb_ld(2, b"") + pb_int(3, 0)))
+write("hdfs_wire", "create",
+      rpc_call(2, "create", pb_ld(1, b"/tmp/a") + pb_ld(2, pb_int(1, 0o644)) +
+               pb_ld(3, b"DFSClient_1") + pb_int(4, 1) + pb_int(5, 1) + pb_int(6, 1) +
+               pb_int(7, 134217728)))
+write("hdfs_wire", "response_success",
+      pb_delimited(pb_int(1, 0) + pb_int(2, 0) + pb_int(3, 9)) +
+      pb_delimited(pb_ld(1, pb_ld(1, b""))))
+write("hdfs_wire", "response_error",
+      pb_delimited(pb_int(1, 7) + pb_int(2, 1) + pb_ld(4, b"java.io.FileNotFoundException") +
+                   pb_ld(5, b"File does not exist: /x") + pb_int(6, 1)))
+DATA = b"hello from netget\n" * 40
+write("hdfs_wire", "packet", packet(0, 0, False, DATA, chunk_sums(DATA)))
+write("hdfs_wire", "packet_train",
+      b"".join(packet(i * 512, i, False, b"x" * 512, chunk_sums(b"x" * 512)) for i in range(64)) +
+      packet(64 * 512, 64, True, b"", b""))
+write("hdfs_wire", "packet_bad_checksum", packet(0, 0, False, DATA, b"\x00" * len(chunk_sums(DATA))))
+write("hdfs_wire", "oversize_plen", struct.pack(">IH", 0xFFFFFFF0, 25) + b"\x00" * 25)
+write("hdfs_wire", "acks_and_responses",
+      pb_delimited(pb_int(1, 0)) + pb_delimited(pb_key(1, 0) + pb_varint(2) + pb_int(2, 0)) +
+      pb_delimited(pb_int(1, 6)))
+# The depth bomb. None of Hadoop's messages nests itself, but prost skips an unknown group by
+# recursing into it, one level per start-group key: 10 000 of them (field 15, wire type 3) in
+# a create request's body. prost stops at 100 levels; a decoder without that counter would
+# overflow the stack.
+write("hdfs_wire", "depth_bomb",
+      rpc_call(3, "create", pb_ld(1, b"/tmp/a") + pb_key(15, 3) * 10000 + pb_key(15, 4) * 10000))
+
 total = sum(len(files) for _, _, files in os.walk(CORPUS))
 print("seeded %d corpus files across %d targets" %
       (total, len(os.listdir(CORPUS))))

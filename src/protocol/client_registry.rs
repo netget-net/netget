@@ -509,6 +509,10 @@ impl ClientRegistry {
         self.register(Arc::new(
             crate::client::nvme_tcp::actions::NvmeTcpClientProtocol::new(),
         ));
+        #[cfg(unix)]
+        self.register(Arc::new(
+            crate::client::hdfs::actions::HdfsClientProtocol::new(),
+        ));
         #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::client::managesieve::actions::ManageSieveClientProtocol::new(),
@@ -1282,6 +1286,7 @@ pub(crate) const ALL_KNOWN_CLIENT_PROTOCOLS: &[(&str, &str)] = &[
     ("NBD", "a native build (not the browser)"),
     ("iSCSI", "a native build (not the browser)"),
     ("NVMe-TCP", "a native build (not the browser)"),
+    ("HDFS", "a Unix build (macOS or Linux)"),
     ("ManageSieve", "a native build (not the browser)"),
     ("Zenoh", "a native build (not the browser)"),
     ("LwM2M", "a native build (not the browser)"),

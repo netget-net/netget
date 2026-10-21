@@ -9482,6 +9482,7 @@ dependencies = [
  "cosmic-text",
  "couch_rs",
  "crc32c",
+ "crc32fast",
  "crossterm",
  "ctor",
  "ctr 0.9.2",

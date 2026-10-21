@@ -221,6 +221,8 @@ pub mod bmp;
 
 pub mod mqtt_sn;
 
+#[cfg(unix)]
+pub mod hdfs;
 pub mod nbd;
 pub mod nvme_tcp;
 

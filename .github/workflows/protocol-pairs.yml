@@ -9717,3 +9717,108 @@ jobs:
             --test doc_paths_exist_test \
             --test doc_test_counts_test \
             -- --test-threads=32
+
+  hdfs:
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'hdfs')
+    name: HDFS NameNode and DataNode against Apache Hadoop 3.5.0's hdfs CLI and colinmarc/hdfs (Go), client against a single-node Hadoop 3.5.0 HDFS
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: false
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: protocol-pairs-${{ github.job }}
+      - name: Cache the Hadoop 3.5.0 distribution
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/hadoop-peers/hadoop-3.5.0.tar.gz
+          key: hadoop-3.5.0
+      - name: Install Apache Hadoop 3.5.0 (SHA-512 pinned), colinmarc/hdfs v2.4.0 and tshark
+        run: |
+          set -euo pipefail
+          sh tests/client/yarn/install_peers.sh "$RUNNER_TEMP/hadoop-peers" | tee "$RUNNER_TEMP/hadoop-env"
+          sed -n 's/^export //p' "$RUNNER_TEMP/hadoop-env" >> "$GITHUB_ENV"
+          GOBIN="$RUNNER_TEMP/go-peers" go install github.com/colinmarc/hdfs/v2/cmd/hdfs@v2.4.0
+          echo "NETGET_GO_HDFS=$RUNNER_TEMP/go-peers/hdfs" >> "$GITHUB_ENV"
+          echo 'wireshark-common wireshark-common/install-setuid boolean false' | sudo debconf-set-selections
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tshark
+          dpkg-query -W tshark
+      - name: Server against both clients, client against a real HDFS
+        run: |
+          set -euo pipefail
+          test -x "$NETGET_GO_HDFS"
+          test -x "$NETGET_HADOOP_HOME/bin/hdfs"
+          command -v tshark
+          for filter in \
+            hdfs:: \
+            client/hdfs::; do
+            case "$filter" in
+              client/*) target=client; filter=${filter#client/} ;;
+              *) target=server ;;
+            esac
+            pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
+            cargo test --locked --no-default-features \
+              --test "$target" -- "$filter" --test-threads=4 --nocapture 2>&1 | tee "$pair_log"
+            grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
+          done
+      - name: Shared declarations, native startup, privacy and ownership
+        run: |
+          cargo test --locked --no-default-features \
+            --test event_action_declarations_test \
+            --test advertised_actions_test \
+            --test action_descriptions_test \
+            --test startup_examples_validation_test \
+            --test examples \
+            --test startup_param_defaults_test \
+            --test startup_param_drift_test \
+            --test protocol_startup_examples_test \
+            --test startup_params_result_test \
+            --test startup_constructed_input_test \
+            --test management_test \
+            --test management_form_test \
+            --test dual_protocol_test \
+            --test dashboard_wireshark_test \
+            --test client_event_wiring_test \
+            --test event_emit_sites_test \
+            --test task_registration_cancellation_test \
+            --test server_task_registry_test \
+            --test client_stop_releases_socket_test \
+            --test peer_handle_coverage_ratchet_test \
+            --test client_credential_logging_test \
+            --test client_llm_budget_test \
+            --test secret_redaction_test \
+            --test wire_failure_test \
+            --test site_protocol_list_test \
+            --test well_known_port_declaration_test \
+            --test failure_mode_declaration_test \
+            --test decision_tag_ratchet_test \
+            --test max_inbound_bytes_declaration_test \
+            --test max_inbound_bytes_bound_plus_one_test \
+            --test test_suite_hygiene_test \
+            --test real_client_evidence_is_run_test \
+            --test startup_privilege_transport_test \
+            --test parameter_type_agreement_test \
+            --test history_batching_declaration_test \
+            --test control_character_sanitizer_ratchet_test \
+            --test recursive_decoder_depth_test \
+            --test executable_examples_test \
+            --test no_protocol_is_hidden_from_the_model_test \
+            --test detached_task_drift_test \
+            --test tool_classification_test \
+            --test connectionless_audit_test \
+            --test request_only_declaration_test \
+            --test base_stack_test \
+            --test doc_paths_exist_test \
+            --test doc_test_counts_test \
+            --test tcp_server_bounds_ratchet_test \
+            -- --test-threads=32

@@ -1025,6 +1025,33 @@ impl Tree {
         Ok(())
     }
 
+    /// Remove `name` from `parent` with everything below it, whether or not the directories
+    /// below were ever described; the inodes removed, the top one first. Iterative. This is
+    /// HDFS's recursive delete, which is one namespace operation rather than an unlink or rmdir
+    /// per entry, so it does not ask for a description of a directory it is about to discard.
+    /// Open counts are not consulted: nothing that uses it opens nodes.
+    pub fn remove_subtree(&mut self, parent: u64, name: &str) -> Outcome<Vec<u64>> {
+        let d = self.dir(parent)?;
+        let top = *d.entries.get(name).ok_or(Stop::Errno(libc::ENOENT))?;
+        let mut removed = Vec::new();
+        let mut work = vec![top];
+        while let Some(ino) = work.pop() {
+            if let Some(Node {
+                body: Body::Dir(d), ..
+            }) = self.nodes.get(&ino)
+            {
+                work.extend(d.entries.values().copied());
+            }
+            removed.push(ino);
+        }
+        self.dir_mut(parent).entries.remove(name);
+        self.touch_dir(parent, SystemTime::now());
+        for ino in &removed {
+            self.drop_node(*ino);
+        }
+        Ok(removed)
+    }
+
     /// The deepest directory level under `ino`, relative to it (0 for a non-directory or an
     /// empty one). Iterative, and bounded by the tree.
     fn height(&self, ino: u64) -> usize {

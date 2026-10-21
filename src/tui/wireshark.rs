@@ -487,6 +487,14 @@ pub fn wire_for(protocol: &str) -> Wire {
         // commands inside are dissected as `nvme`, which matches each completion to its command
         // only when it saw the command, so capture from the start of the connection.
         "nvme_tcp" => tcp("nvme-tcp"),
+        // HDFS: the NameNode's Hadoop IPC decodes as `hdfs` and the DataNode's transfers as
+        // `hdfsdata`; neither has a default port in the tcp.port table (both are empty-range
+        // preferences), so -d names the port. Both dissectors predate Hadoop 2's protocol
+        // buffers: on Hadoop 3 traffic `hdfs` reads the hrpc connection header and frame
+        // lengths, and `hdfsdata` the op header and packet framing, not the messages inside.
+        "hdfs" => with_note(tcp("hdfs"), "The DataNode listener (datanode_port, 9866 by default) decodes as hdfsdata: add -d tcp.port==<datanode port>,hdfsdata. Wireshark's hdfs and hdfsdata dissectors were written for Hadoop 1's Writable RPC; on Hadoop 3 they show the hrpc header, frame lengths, op codes and packet framing, while the protocol buffers inside show as data."),
+        // The hdfs server's second listener, named so the pcap oracle can frame it.
+        "hdfs_datanode" => tcp("hdfsdata"),
         // iSCSI is not in the tcp.port decode-as table (4.6.8: `tshark -G decodes` has no iscsi
         // row); the dissector claims the ports in its own `iscsi.target_ports` preference (3260
         // by default), so a capture on another port needs that preference set, not `-d`. The

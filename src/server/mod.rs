@@ -575,6 +575,9 @@ pub mod nvme_tcp;
 // FUSE: Linux's /dev/fuse through fusermount3; there is no macOS or Windows FUSE NetGet links.
 #[cfg(target_os = "linux")]
 pub mod fuse;
+// HDFS NameNode and DataNode: the namespace is described_tree, which is Unix-only.
+#[cfg(unix)]
+pub mod hdfs;
 #[cfg(not(target_arch = "wasm32"))]
 pub use mqtt::actions::MqttProtocol;
 #[cfg(not(target_arch = "wasm32"))]
