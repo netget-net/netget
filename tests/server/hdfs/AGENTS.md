@@ -1,6 +1,6 @@
 # HDFS server tests
 
-11 tests, all passing on macOS, none `#[ignore]`d. 4 in `hadoop_cli_test.rs`, 1 in `go_client_test.rs`, 6 in `wire_test.rs`.
+12 tests, all passing on macOS, none `#[ignore]`d. 4 in `hadoop_cli_test.rs`, 1 in `go_client_test.rs`, 7 in `wire_test.rs`.
 
 Every test starts the server in-process on loopback with an unreachable model; a python policy
 (`support.rs`, `POLICY`) answers as the model, so an event it does not cover is the fail-closed
@@ -34,12 +34,13 @@ directory the model will not describe, and one it does not answer for.
 put of 150 000 bytes in three blocks at the server's 64 KiB default (with Go's
 updateBlockForPipeline after each), get and checksum of the upload, mv, rm -r, a refused mkdir.
 
-`wire_test.rs` — 6 tests, a raw client writing every request by hand: pipelined calls answered
+`wire_test.rs` — 7 tests, a raw client writing every request by hand: pipelined calls answered
 in order with their call ids and the client id echoed, a missing path, FileNotFoundException,
 RpcNoSuchMethodException, a listing after `startAfter`, a READ_BLOCK whose CRC32Cs are checked
 here, and the pcap oracle; the RPC frame bound (bound + 1 refused FATAL from the length, before
 and after the connection context; exactly the bound read whole); not-hrpc, a wrong IPC
-version, SASL NEGOTIATE answered SIMPLE and Kerberos refused; a model that fails refusing the
+version, SASL NEGOTIATE answered SIMPLE and Kerberos refused; a request of ten thousand nested
+groups refused as malformed (prost stops at 100 levels) with the server alive for the next call; a model that fails refusing the
 connection and a model that does not describe exposing nothing; a write with a wrong chunk
 checksum answered ERROR_CHECKSUM and not kept, the same block written right and read back, a
 refused write leaving getFsStats' `used` unchanged and the file empty, a packet over the bound,

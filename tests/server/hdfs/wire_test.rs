@@ -586,6 +586,29 @@ async fn rpc_frames_over_the_bound_are_refused_from_their_length() {
     );
 }
 
+/// A request body of ten thousand nested start-groups (field 15, wire type 3): prost skips an
+/// unknown group by recursing into it, and stops at 100 levels. The call is refused as a
+/// malformed request and the server — the whole process — is still there for the next call.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_nesting_bomb_is_refused_and_the_server_lives() {
+    let server = start(policy(POLICY), None).await;
+    let mut r = Raw::hello(server.port, "alice").await;
+    let bomb = [
+        src("/tmp/a"),
+        key(15, 3).repeat(10_000),
+        key(15, 4).repeat(10_000),
+    ]
+    .concat();
+    let refused = r.call(1, "create", &bomb).await;
+    assert_eq!(refused.class(), "java.io.IOException", "{refused:?}");
+    assert!(
+        refused.message().contains("not a valid protocol buffer"),
+        "{refused:?}"
+    );
+    let after = r.call(2, "getFileInfo", &src("/README.txt")).await;
+    assert!(after.decode::<pb::GetFileInfoResponseProto>().fs.is_some());
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn connection_header_sasl_and_version() {
     let server = start(policy(POLICY), None).await;
