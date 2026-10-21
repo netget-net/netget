@@ -19,6 +19,7 @@ pub const INITIAL_UE: &str = "ngap_initial_ue_message";
 pub const UPLINK_NAS: &str = "ngap_uplink_nas_transport";
 pub const ERROR_INDICATION: &str = "ngap_error_indication";
 pub const NG_SETUP: &str = "ngap_ng_setup";
+pub const PDU_SESSION_REQUEST: &str = "ngap_pdu_session_request";
 
 /// Defaults for the gNB's NG Setup, used when the startup parameters name none.
 pub const DEFAULT_MCC: &str = "001";
@@ -156,6 +157,36 @@ pub fn actions() -> Vec<ActionDefinition> {
             json!({"type": ERROR_INDICATION, "cause": "protocol/semantic-error"}),
         ),
         action(
+            PDU_SESSION_REQUEST,
+            "Ask for a PDU session for a registered UE (one this gNB holds the subscriber's \
+             credentials for, after ngap_ue_registered). Rust sends the protected 5GSM PDU \
+             Session Establishment Request (IPv4, SSC mode 1), answers the AMF's PDU Session \
+             Resource Setup with a downlink tunnel, and raises ngap_pdu_session_established.",
+            vec![
+                p(
+                    "ran_ue_ngap_id",
+                    "number",
+                    "The UE, from ngap_ue_registered",
+                    true,
+                ),
+                p(
+                    "pdu_session_id",
+                    "number",
+                    "1-15; default the first free one",
+                    false,
+                ),
+                p("dnn", "string", "The data network, e.g. internet", false),
+                p(
+                    "s_nssai",
+                    "object",
+                    "The slice {\"sst\": 1, \"sd\"?: \"010203\"}; default none (the AMF chooses)",
+                    false,
+                ),
+            ],
+            json!({"type": PDU_SESSION_REQUEST, "ran_ue_ngap_id": 1, "pdu_session_id": 1,
+                   "dnn": "internet", "s_nssai": {"sst": 1}}),
+        ),
+        action(
             NG_SETUP,
             "Repeat NG Setup with this gNB's configuration (it is done on connect already).",
             vec![],
@@ -222,6 +253,48 @@ pub static RELEASE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     )
 });
 
+pub static REGISTERED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    ev(
+        "ngap_ue_registered",
+        "A UE with credentials on this gNB completed 5G-AKA, NAS security and registration: the \
+         AMF accepted it and Rust sent Registration Complete. guti, allowed_nssai and tai_list \
+         are what the AMF assigned; k_gnb_verified says whether the AMF's K_gNB equals the one \
+         this UE derived. Ask for a session with ngap_pdu_session_request.",
+        vec![
+            p("ran_ue_ngap_id", "number", "This gNB's id for the UE", true),
+            p("supi", "string", "The subscriber", true),
+            p("guti", "object", "The 5G-GUTI the AMF assigned", true),
+            p("allowed_nssai", "array", "The slices the UE may use", true),
+            p(
+                "k_gnb_verified",
+                "boolean",
+                "Whether the AMF's K_gNB matched this UE's",
+                true,
+            ),
+        ],
+    )
+});
+
+pub static PDU_SESSION_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    ev(
+        "ngap_pdu_session_established",
+        "The AMF answered a PDU session request: result accepted (with ue_ipv4, dnn, s_nssai, \
+         QoS flows, session AMBR and the UPF's uplink tunnel) or rejected (with the 5GSM \
+         cause).",
+        vec![
+            p("ran_ue_ngap_id", "number", "This gNB's id for the UE", true),
+            p("pdu_session_id", "number", "The session", true),
+            p("result", "string", "accepted or rejected", true),
+            p(
+                "ue_ipv4",
+                "string",
+                "The address the network assigned",
+                false,
+            ),
+        ],
+    )
+});
+
 pub static ERROR_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     ev(
         "ngap_amf_error",
@@ -269,6 +342,18 @@ pub fn check(v: &Value) -> Result<()> {
             }
         }
         NG_SETUP => {}
+        PDU_SESSION_REQUEST => {
+            codec::json_u64(v, "ran_ue_ngap_id", codec::MAX_RAN_UE_NGAP_ID)?;
+            if let Some(p) = codec::json_opt_u64(v, "pdu_session_id", 15)? {
+                anyhow::ensure!(p >= 1, "pdu_session_id must be 1..15");
+            }
+            if let Some(s) = v.get("s_nssai").filter(|s| !s.is_null()) {
+                nas::Snssai::from_json(s).map_err(|e| anyhow!(e))?;
+            }
+            if let Some(d) = v.get("dnn").and_then(Value::as_str) {
+                crate::server::gtp::codec::encode_apn(d).map_err(|e| anyhow!("dnn: {e}"))?;
+            }
+        }
         other => bail!("Unknown NGAP client action {other:?}"),
     }
     Ok(())
@@ -315,6 +400,8 @@ impl Protocol for NgapClientProtocol {
             CONNECTED_EVENT.clone(),
             DOWNLINK_NAS_EVENT.clone(),
             RELEASE_EVENT.clone(),
+            REGISTERED_EVENT.clone(),
+            PDU_SESSION_EVENT.clone(),
             ERROR_EVENT.clone(),
         ]
     }
@@ -330,6 +417,12 @@ impl Protocol for NgapClientProtocol {
             param("sd", "string", "Slice differentiator, six hex digits (default: none)", json!("010203"), None),
             param("nr_cell_id", "number", "The NR cell identity UEs are reported in (36 bits)", json!(16), Some(json!(DEFAULT_NR_CELL_ID))),
             param("ran_node_name", "string", "The RAN node name sent in NG Setup", json!("netget-gnb"), Some(json!(DEFAULT_RAN_NODE_NAME))),
+            param("supi", "string", "The subscriber whose credentials follow (imsi-<digits>). A UE brought in with a null-scheme SUCI naming it runs 5G-AKA, NAS security, registration and PDU sessions in Rust", json!("imsi-001010000000001"), None),
+            param("subscriber_key", "string", "The subscriber's permanent key K, 32 hex digits. Redacted wherever parameters are shown; never in an event", json!("465B5CE8B199B49FAA5F0A2EE238A6BC"), None),
+            param("subscriber_opc", "string", "The operator key OPc, 32 hex digits (or give subscriber_op)", json!("E8ED289DEBA952E4283B54E88E6183CA"), None),
+            param("subscriber_op", "string", "The operator key OP, 32 hex digits, when OPc is not known", json!("CDC202D5123E20F62B6D676AC72CB318"), None),
+            param("sqn", "number", "The USIM's highest accepted SQN at start (48 bits)", json!(0), None),
+            param("imeisv", "string", "The IMEISV reported when the AMF asks, 16 digits", json!("4370816125816151"), Some(json!(super::ue::DEFAULT_IMEISV))),
         ]
     }
     fn metadata(&self) -> crate::protocol::metadata::ProtocolMetadataV2 {

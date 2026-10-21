@@ -10,7 +10,12 @@
 //! Context Release Command and NG Reset are answered by Rust (the complete / acknowledge carry no
 //! decision). The model's actions run in this task, so it owns the RAN UE NGAP IDs and the UE
 //! table; a chain of model turns stops after [`MAX_FOLLOWUP_DEPTH`].
+//!
+//! Given a subscriber's credentials (`supi`, `subscriber_key`, `subscriber_opc`), the UE whose
+//! SUCI names that subscriber is taken through 5G-AKA, NAS security, registration and PDU session
+//! establishment by Rust ([`ue`]); the model brings it in and asks for sessions.
 pub mod actions;
+pub mod ue;
 
 use crate::client::llm_budget::call_llm_for_client;
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
@@ -28,6 +33,7 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::sync::mpsc;
+use tracing::debug;
 
 /// How many model turns may follow from one another before the chain stops.
 pub const MAX_FOLLOWUP_DEPTH: u32 = 8;
@@ -48,6 +54,24 @@ struct UeSlot {
     /// it is raised at that depth, so a model and an AMF that keep answering each other stop at
     /// [`MAX_FOLLOWUP_DEPTH`].
     depth: u32,
+    /// Present when the UE is the subscriber this gNB holds credentials for; see [`ue`].
+    sec: Option<Box<ue::UeSec>>,
+    /// Whether the AMF's K_gNB matched this UE's own, once an Initial Context Setup arrived.
+    k_gnb_verified: Option<bool>,
+    /// PDU session id → the UPF's uplink tunnel the AMF named.
+    sessions: BTreeMap<u8, codec::GtpTunnel>,
+}
+
+impl UeSlot {
+    fn new(amf: Option<u64>, depth: u32) -> Self {
+        UeSlot {
+            amf,
+            depth,
+            sec: None,
+            k_gnb_verified: None,
+            sessions: BTreeMap::new(),
+        }
+    }
 }
 
 struct Gnb {
@@ -59,6 +83,11 @@ struct Gnb {
     setup: Vec<u8>,
     events: mpsc::Sender<(Event, u32)>,
     client: crate::state::ClientId,
+    creds: Option<ue::Credentials>,
+    /// The serving network name for this gNB's PLMN (TS 24.501 9.12.1).
+    snn: String,
+    /// The address this gNB puts in its downlink GTP-U tunnels: its N2 address.
+    gtp_address: std::net::IpAddr,
 }
 
 fn startup_u64(ctx: &ConnectContext, key: &str, default: u64, max: u64) -> Result<u64> {
@@ -108,6 +137,8 @@ async fn resolve(raw: &str) -> Result<SocketAddr> {
 pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
     let transport = Transport::from_params(ctx.startup_params.as_ref())?;
     let plmn = actions::plmn(&ctx)?;
+    let creds = ue::Credentials::from_ctx(&ctx)?;
+    let snn = crate::server::ngap::security::serving_network_name(&plmn.mcc, &plmn.mnc);
     let gnb_id_bits = startup_u64(&ctx, "gnb_id_bits", actions::DEFAULT_GNB_ID_BITS, 32)?;
     anyhow::ensure!(gnb_id_bits >= 22, "gnb_id_bits must be 22..32");
     let gnb_id = startup_u64(
@@ -234,6 +265,9 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
         setup,
         events: event_tx,
         client: ctx.client_id,
+        creds,
+        snn,
+        gtp_address: local.ip(),
     };
     let session_ctx = ctx.clone();
     let task = tokio::spawn(async move {
@@ -376,20 +410,31 @@ impl Gnb {
                     .as_str()
                     .unwrap_or(actions::DEFAULT_RRC_CAUSE);
                 let pdu = codec::initial_ue_message(ran, &nas, &self.user_location, cause)?;
-                self.ues.insert(ran, UeSlot { amf: None, depth });
+                let mut slot = UeSlot::new(None, depth);
+                slot.sec = self
+                    .creds
+                    .as_ref()
+                    .and_then(|c| ue::UeSec::for_registration(c, &nas))
+                    .map(Box::new);
+                self.ues.insert(ran, slot);
                 self.next_ran_id = ran + 1;
                 pdu
             }
             actions::UPLINK_NAS => {
                 let amf = codec::json_u64(action, "amf_ue_ngap_id", codec::MAX_AMF_UE_NGAP_ID)?;
                 let ran = codec::json_u64(action, "ran_ue_ngap_id", codec::MAX_RAN_UE_NGAP_ID)?;
-                let nas =
+                let mut nas =
                     nas::encode(&action["nas"], nas::UPLINK_MESSAGES).map_err(|e| anyhow!(e))?;
                 if let Some(slot) = self.ues.get_mut(&ran) {
                     slot.depth = depth;
+                    // A UE under NAS security sends the model's message protected.
+                    if let Some(sec) = slot.sec.as_deref_mut() {
+                        nas = sec.protect(&nas);
+                    }
                 }
                 codec::uplink_nas_transport(amf, ran, &nas, &self.user_location)?
             }
+            actions::PDU_SESSION_REQUEST => self.request_pdu_session(action, depth).await?,
             actions::ERROR_INDICATION => {
                 let cause = match action.get("cause").filter(|c| !c.is_null()) {
                     Some(c) => Some(Cause::from_json(c)?),
@@ -447,6 +492,18 @@ impl Gnb {
                         return self.send(&ei).await;
                     }
                 };
+                let has_sec = self
+                    .ues
+                    .get(&t.ran_ue_ngap_id)
+                    .map(|s| s.sec.is_some())
+                    .unwrap_or(false);
+                if has_sec
+                    && self
+                        .ue_downlink(t.amf_ue_ngap_id, t.ran_ue_ngap_id, &t.nas, depth, log)
+                        .await?
+                {
+                    return Ok(());
+                }
                 self.emit(
                     &actions::DOWNLINK_NAS_EVENT,
                     json!({
@@ -457,6 +514,12 @@ impl Gnb {
                     }),
                     depth,
                 );
+            }
+            (PduKind::Initiating, codec::PROC_INITIAL_CONTEXT_SETUP) => {
+                self.on_initial_context_setup(&pdu, log).await?;
+            }
+            (PduKind::Initiating, codec::PROC_PDU_SESSION_RESOURCE_SETUP) => {
+                self.on_pdu_session_setup(&pdu, log).await?;
             }
             (PduKind::Initiating, codec::PROC_UE_CONTEXT_RELEASE) => {
                 let mut budget = codec::Budget::default();

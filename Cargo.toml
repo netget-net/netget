@@ -357,6 +357,9 @@ chacha20poly1305 = { version = "0.10" }
 sha3 = { version = "0.10" }
 snap = { version = "1.1" }
 x25519-dalek = { version = "2.0", features = ["static_secrets"] }  # For WireGuard key generation
+# NGAP: SUCI concealment Profile B (TS 33.501 Annex C.3.4.2), ECDH on secp256r1. The 0.13 line is
+# already in the tree through other crates; only its `ecdh` feature is new.
+p256 = { version = "0.13", features = ["ecdh"] }
 # MCP (Model Context Protocol) server
 axum = { version = "0.7" }
 tower-http = { version = "0.5", features = ["fs", "trace"] }

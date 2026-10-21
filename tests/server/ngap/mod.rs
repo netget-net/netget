@@ -2,5 +2,7 @@ pub mod codec_test;
 pub mod e2e_test;
 #[cfg(target_os = "linux")]
 pub mod real_client_test;
+pub mod security_e2e_test;
+pub mod security_test;
 pub mod support;
 pub mod transport_test;

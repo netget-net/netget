@@ -52,6 +52,11 @@ pub const SENSITIVE_KEY_PARTS: &[&str] = &[
     "networkkey",
     "link_key",
     "linkkey",
+    // NGAP: a 5G subscriber's permanent key K and its operator key (OPc, or OP), from which every
+    // 5G-AKA vector and NAS key derives (the AMF's `subscribers` and the gNB's UE). The SUCI
+    // home network key matches `private_key` above.
+    "subscriber_key",
+    "subscriber_op",
 ];
 
 /// Substrings of a key name whose value is masked wherever it is displayed, without making
