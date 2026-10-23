@@ -388,3 +388,10 @@ path = "fuzz_targets/onvif_request.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "stratum_v2_message"
+path = "fuzz_targets/stratum_v2_message.rs"
+test = false
+doc = false
+bench = false

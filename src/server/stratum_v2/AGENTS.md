@@ -218,6 +218,10 @@ and SRI's pool v0.8.0 checks custom-job tokens only with its own embedded JDS, s
 `jd-not-supported`; PushSolution is exercised with raw frames.
 
 `fuzz/fuzz_targets/stratum_v2_message.rs` decodes every message and the Bitcoin structures
-these roles parse, with count-bomb seeds; nothing recurses. There is no pcap oracle: Wireshark
+these roles parse, with count-bomb seeds; nothing recurses. It has run clean: 167,287 executions
+over 301 seconds (current nightly, `-s none` on macOS), coverage 492 → 1426 edges. On this Mac
+the fuzz build needed `RUSTFLAGS=-Clink-arg=-Wl,-undefined,dynamic_lookup`: `crc-fast` (under
+the AWS SDK) links a dylib at build time, which fails against the sancov symbols only libFuzzer
+provides; that affects every target, not this one. There is no pcap oracle: Wireshark
 has no SV2 dissector and every frame after the handshake is ciphertext. Nobody has reviewed
 beyond the evidence.
