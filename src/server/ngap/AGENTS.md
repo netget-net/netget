@@ -15,10 +15,16 @@ SCTP per TS 38.412. NetGet plays the **AMF**; the peer is a **gNB**. The gNB rol
 |---|---|
 | `aper.rs` | ALIGNED PER (X.691) reader and writer: constrained whole numbers, length determinants, open types, extension skipping. Bounded, non-recursive. |
 | `codec.rs` | NGAP PDU framing, every IE of the procedures implemented, Cause, message builders and parsers. Shared with the client. |
-| `nas.rs` | Plain 5GMM (TS 24.501): decode for the model, encode from structured actions. Shared with the client. |
+| `nas.rs` | 5GMM (TS 24.501): decode for the model, encode from structured actions, and the structured parsers/builders the security procedures use. Shared with the client. |
+| `sm.rs` | 5GSM: PDU Session Establishment Request/Accept/Reject, causes. Shared with the client. |
+| `security.rs` | Milenage, the 5G-AKA key hierarchy, NIA2/NEA2/NEA0, protected-message framing with COUNTs. Shared with the client. |
+| `suci.rs` | SUCI concealment and deconcealment, ECIES Profiles A and B. |
+| `subscribers.rs` | The AMF's credential store (K, OPc/OP, AMF field, SQN) and SUCI keys, from startup parameters. |
+| `amf.rs` | The secured UE procedures: 5G-AKA, Security Mode, registration, PDU sessions, deregistration. |
+| `upf.rs` | The minimal GTP-U user plane: TEIDs, ICMP echo for the model's addresses. |
 | `transport.rs` | SCTP (probe, PPID 60, stream 0/1, `MSG_EOR`) and the labelled lab TCP framing. Shared with the client. |
 | `mod.rs` | The AMF: accept loop, association session, UE table, fail-closed rules. |
-| `actions.rs` | Actions, events, metadata, startup parameter. |
+| `actions.rs` | Actions, events, metadata, startup parameters. |
 
 ## Why APER is hand-written
 
@@ -73,6 +79,10 @@ All are refused **before the model** with an Error Indication carrying a protoco
 | Missing mandatory IE | refused | `abstract-syntax-error-reject` |
 | UE contexts per association | 4096 (`MAX_UE_CONTEXTS`) | an Initial UE Message beyond it gets `misc/control-processing-overload` |
 | Associations | 256 (`accept_bounded`) | closed without a message (see `CONNECTION_CAP_REFUSAL`) |
+| SQN resynchronisations | 1 per registration (`amf::MAX_RESYNCS`) | a second synch failure is an Authentication Reject |
+| PDU sessions per UE | 8 established or pending (`amf::MAX_PDU_SESSIONS_PER_UE`) | the ninth is 5GSM #26 before the model |
+| Subscribers / SUCI keys | 1024 / 16 (`subscribers::MAX_*`) | refused at startup |
+| 5GMM optional IEs, S-NSSAIs, TAIs | 64 / 16 / 16 per message | parse errors, never the model |
 | First message | 30 s | NG Setup Request is sent as soon as the association is up |
 | Idle | 3600 s | N2 has no application keepalive; SCTP HEARTBEAT covers a dead peer |
 
@@ -105,89 +115,186 @@ connection's `protocol_info`, and every event's `transport` field.
 ```text
 accept                         -> awaiting NG Setup
 NGSetupRequest   -> ngap_ng_setup_request    -> Response (setup complete) | Failure
-InitialUEMessage -> ngap_initial_ue_message  -> AMF UE NGAP ID allocated; model's NAS / release
-UplinkNASTransport -> ngap_uplink_nas_transport (ids checked against the UE table first)
-UEContextReleaseComplete -> context dropped                    (Rust, no model)
+InitialUEMessage -> AMF UE NGAP ID allocated; then either
+   Registration Request whose SUCI names a subscriber with credentials -> 5G-AKA (Rust, below)
+   anything else -> ngap_initial_ue_message -> model's NAS / release
+UplinkNASTransport -> ids checked against the UE table first; then
+   UE in the security procedure -> Rust (below), never the model per message
+   Identity Response naming a subscriber with credentials -> 5G-AKA (Rust)
+   anything else -> ngap_uplink_nas_transport
+UEContextReleaseComplete -> context and its user-plane tunnels dropped  (Rust, no model)
+UEContextReleaseRequest  -> UE Context Release Command with the gNB's cause (Rust)
 NGReset          -> NGResetAcknowledge, contexts cleared         (Rust, no model)
 ErrorIndication  -> ngap_error_indication                       (observational)
 anything else before NG Setup -> Error Indication protocol/message-not-compatible-with-receiver-state
 unimplemented initiating procedure -> Error Indication by its criticality (reject/notify), or nothing (ignore)
 ```
 
+The secured procedure (`amf.rs`), all Rust except the two marked:
+
+```text
+Registration Request (plain)     -> Authentication Request (RAND, AUTN = SQN^AK|AMF|MAC, ngKSI, ABBA 0000)
+Authentication Response          -> HRES* = HXRES* and RES* = XRES*? K_SEAF, K_AMF;
+                                    Security Mode Command (header 3: NIA2, NEA0|NEA2, replayed
+                                    capabilities, IMEISV request, RINMR)
+Authentication Failure #21+AUTS  -> MAC-S verified, SQN resynchronised, one new Authentication Request
+Authentication Failure #20/#26/#71, wrong RES* -> Authentication Reject, release
+Security Mode Complete (header 4, MAC verified) -> security active;
+                                    ngap_registration_request -> MODEL: send_registration_accept | reject
+send_registration_accept         -> 5G-GUTI under the announced GUAMI; Registration Accept (header 2)
+                                    inside Initial Context Setup with K_gNB (A.9, uplink COUNT of
+                                    Security Mode Complete) and the UE security capabilities
+Registration Complete            -> registered
+UL NAS Transport (5GSM PDU Session Establishment Request)
+                                 -> ngap_pdu_session_establishment_request -> MODEL: accept | reject
+send_pdu_session_accept          -> 5GSM accept (default QoS rule, flow, AMBR, PDU address, S-NSSAI,
+                                    DNN) inside PDU Session Resource Setup Request with a UL GTP-U
+                                    tunnel on this server's user plane and one QoS flow
+PDU Session Resource Setup Response -> the gNB's DL tunnel recorded; ICMP echo now answered
+Deregistration Request           -> Deregistration Accept (unless switch-off), release (nas/deregister)
+```
+
+Once Security Mode Complete verifies, an uplink message is processed only if its MAC verifies
+at a COUNT above every one accepted before; anything else is discarded and logged
+(`decision=nas_integrity_failure`, `nas_count_replay`, `nas_unprotected_refused`,
+`nas_header_refused`, `nas_malformed`). The model writes plain 5GMM in
+`send_downlink_nas_transport`; to a secured UE the session re-encodes it protected.
+
 The model's actions are encoded statelessly and the session reads each PDU back off its own
-octets (procedure, kind, AMF UE NGAP ID) to apply the fail-closed rule — the `m3ua` design.
+octets (procedure, kind, AMF UE NGAP ID) to apply the fail-closed rule — the `m3ua` design. The
+three decisions that need the UE's keys (`send_registration_accept`, `send_pdu_session_accept`,
+`send_pdu_session_reject`) are validated by `execute_action` and carried out by the session,
+which refuses one that does not fit the UE's state (`decision=refused_decision`).
 
 ## Fail closed
 
-| Situation | NG Setup | Initial UE Message | Log tag |
-|---|---|---|---|
-| model answered | its Response or Failure | its NAS / release | — |
-| model refused | its Failure | its reject | `decision=model_reject` |
-| model said nothing | Failure `misc/unspecified` | Registration/Service Reject #111, then release | `decision=model_silent` |
-| model could not run | Failure `misc/control-processing-overload` + Time to Wait v5s, or `misc/unspecified` + v10s | Reject #22 (overloaded) or #111, then release | `decision=fail_closed_llm_error` |
-| no policy | Failure `misc/om-intervention` | Reject #111, then release | `decision=no_policy_configured` |
+| Situation | NG Setup | Initial UE Message | Registration decision | PDU session decision | Log tag |
+|---|---|---|---|---|---|
+| model answered | its Response or Failure | its NAS / release | its accept or reject | its accept or reject | — |
+| model refused | its Failure | its reject | its reject | its 5GSM cause | `decision=model_reject` |
+| model said nothing | Failure `misc/unspecified` | Registration/Service Reject #111, release | Registration Reject #111 (protected), release | 5GSM reject #31 | `decision=model_silent` |
+| model could not run | Failure `misc/control-processing-overload` + v5s, or `misc/unspecified` + v10s | Reject #22 or #111, release | Reject #22 or #111, release | #26 or #31 | `decision=fail_closed_llm_error` |
+| no policy | Failure `misc/om-intervention` | Reject #111, release | Reject #111, release | #31 | `decision=no_policy_configured` |
+
+Rust's own refusals: wrong RES* (`auth_res_mismatch`), the UE's MAC failure
+(`auth_mac_failure`), an AUTS whose MAC-S fails or a second synch failure
+(`auth_auts_invalid`, `auth_resync_exhausted`) — each an Authentication Reject and a release; a UE
+without 128-5G-IA2 is Registration Reject #23 (`ue_security_capabilities_mismatch`); an accepted
+PDU session with no user plane configured, or one the user plane cannot hold, is 5GSM #26
+(`no_user_plane`, `up_refused`). A subscriber is never registered and a session never accepted
+because nothing answered.
 
 An Uplink NAS Transport the model stays silent on sends nothing (a UE's Registration Complete
 needs no answer); one it cannot evaluate is rejected the same way. Nothing derived from an
-error reaches the peer: the wire carries a Cause or a 5GMM cause.
+error reaches the peer: the wire carries a Cause or a 5GMM/5GSM cause.
 
-## NAS (5GMM)
+## NAS security
+
+Implemented: 5G-AKA per TS 33.501 Annex A (Milenage f1-f5* with OPc or OP; RES*/XRES*, HXRES*,
+K_AUSF, K_SEAF, K_AMF with ABBA 0x0000, K_NASint/K_NASenc, K_gNB), 128-NIA2 (AES-CMAC),
+128-NEA2 (AES-CTR) and NEA0; BEARER 1 for 3GPP access (what UERANSIM, Open5GS and free5GC
+use); header types 1-4; per-direction NAS COUNT with an 8-bit sequence number estimated into a
+24-bit COUNT and replays refused. SUCI: null scheme, and ECIES Profiles A (X25519) and B
+(secp256r1, compressed points) with `suci_keys`; a SUCI whose key id has no configured key is
+left to the model, unread. Not implemented: NIA1/NEA1 (SNOW 3G), NIA3/NEA3 (ZUC), EAP-AKA',
+horizontal K_AMF derivation, NAS COUNT wrap-around rekeying.
+
+Checked against: TS 35.208 test set 1 (Milenage), TS 33.401 Annex C (EIA2 and EEA2 sets, which
+TS 33.501 Annex D reuses), TS 33.501 Annex C.4.3 and C.4.4 (SUCI), and live: UERANSIM's UE
+verifies every AUTN and MAC the AMF produces; on the client side Open5GS's AUSF verifies the
+UE's RES* and its AMF's K_gNB equals the UE's own. TS 33.501 publishes no vectors for the KDF
+derivations; tshark's nas-5gs dissector cannot verify MACs (it has no key preferences), so the
+peers are the check there.
+
+Where the keys are: `subscribers` and `suci_keys` startup parameters, held in `Core`'s
+`Credentials` (one per server, shared by associations so SQNs advance once), and each UE's
+`NasContext`. `src/utils/redact.rs` masks `subscriber_key`, `subscriber_op`/`subscriber_opc` and
+`home_network_private_key` wherever parameters are shown; no event, log line or prompt carries
+them (`security_e2e_test` asserts K and OPc appear in no event and no status line).
+
+## NAS (5GMM) for the model
 
 Decoded for the model: Registration Request (type, follow-on, ngKSI, the 5GS mobile identity —
 a SUCI's PLMN, routing indicator, protection scheme, key id and, for the null scheme, MSIN; a
 5G-GUTI; an IMEI — UE security capability, requested NSSAI, names of other IEs), Identity
 Response, Authentication Failure (cause, AUTS present), Authentication Response (RES* length),
-Deregistration Request, Service Request, the rejects and 5GMM Status. Integrity-protected,
-unciphered messages are decoded through the header with `mac_verified: false`.
+Deregistration Request, Service Request, Security Mode Command/Complete, Registration Accept,
+UL/DL NAS Transport with their 5GSM payloads, the rejects and 5GMM Status.
 
-Encoded from structured actions, downlink: only what TS 24.501 section 4.4.4.2 lets a UE process
-before security — Registration Reject, Identity Request, Authentication Request, Authentication
-Reject, Service Reject, 5GMM Status.
+Encoded from structured actions, downlink: Registration Reject, Identity Request,
+Authentication Request, Authentication Reject, Service Reject, 5GMM Status — protected by the
+session for a secured UE. For a UE with no credentials on this AMF an Authentication Request
+carries the model's RAND and AUTN (random by default), and a real UE answers MAC failure #20.
 
-**NAS security is not implemented**: no 5G-AKA derivation (RES*, K_AUSF, K_SEAF, K_AMF), no
-Security Mode Command, no integrity or ciphering, so Registration Accept cannot be sent. An
-Authentication Request carries the model's RAND and AUTN (random by default); a real UE computes
-the MAC from its own key and answers Authentication Failure #20. The tests use exactly that.
+## User plane
+
+`user_plane_address` binds a GTP-U socket (UDP 2152, or IP:port) and is the address in every
+UL tunnel. A G-PDU on a session's TEID whose inner packet is an IPv4 ICMP echo request from the
+UE's own address to one of the session's `reachable_addresses` is answered: addresses swapped,
+TTL 64, both checksums recomputed, sent to the gNB's DL tunnel on port 2152 with a PDU Session
+Container carrying the QFI. Everything else is dropped and counted (`up_no_session`,
+`up_spoofed_source`, `up_not_answered`, …). GTP-U Echo Request is answered. Nothing is routed:
+no N6, no NAT. Bounds: 4096 sessions per server, 16 answering addresses per session, one UE
+address per session.
 
 ## Events and actions
 
 | Event | Useful replies |
 |---|---|
 | `ngap_ng_setup_request` | `send_ng_setup_response`, `send_ng_setup_failure` |
-| `ngap_initial_ue_message` | `send_downlink_nas_transport` (identity / authentication request, registration reject), `send_ue_context_release_command` |
-| `ngap_uplink_nas_transport` | the same, or `wait_for_more` |
+| `ngap_initial_ue_message` (UEs without credentials) | `send_downlink_nas_transport` (identity / authentication request, registration reject), `send_ue_context_release_command` |
+| `ngap_uplink_nas_transport` (same) | the same, or `wait_for_more` |
+| `ngap_registration_request` (authenticated subscriber) | `send_registration_accept`, or `send_downlink_nas_transport` with registration_reject then a release |
+| `ngap_pdu_session_establishment_request` | `send_pdu_session_accept`, `send_pdu_session_reject` |
 | `ngap_error_indication` | observational; `send_ue_context_release_command` |
 
 Also `send_error_indication` and `send_ng_reset`. `close_connection` is executable but not
 advertised (the dashboard's disconnect). There are no async actions: every verb addresses one
 association, and the dashboard's "message this peer" runs the sync actions through the peer
 command channel. PLMNs are `{"mcc": "001", "mnc": "01"}` (or `"001-01"`), causes `group/value`
-with 38.413's names, 5GMM causes by Annex A name.
+with 38.413's names, 5GMM and 5GSM causes by name.
+
+Model-call budget: one call per NG Setup; per subscriber with credentials, one for registration
+and one per PDU session — none per NAS message (`security_e2e_test` asserts three calls for a
+whole registration with a session; `real_client_test` asserts the same three events for
+UERANSIM).
 
 ## Startup parameters
 
-`transport`: `"sctp"` (default) or `"tcp"` (non-standard lab framing).
+`transport`: `"sctp"` (default) or `"tcp"` (non-standard lab framing). `subscribers`:
+`[{"supi", "subscriber_key", "subscriber_opc" | "subscriber_op", "amf_field", "sqn"}]`.
+`suci_keys`: `[{"key_id", "scheme": "profile_a" | "profile_b", "home_network_private_key"}]`.
+`nas_ciphering`: `"nea0"` (default, `DEFAULT_NAS_CIPHERING`) or `"nea2"`. `user_plane_address`:
+an IP (port 2152) or IP:port; without it PDU sessions are refused with #26.
 
 ## Verification
 
-- `tests/server/ngap/real_client_test.rs` (Linux): UERANSIM v3.2.7's `nr-gnb` and `nr-ue` over SCTP,
-  with a live capture through tshark's ngap dissector. See that directory's `AGENTS.md`.
-- `codec_test.rs`: UERANSIM's captured NG Setup Request decoded and re-encoded octet for octet;
-  hand-derived NG Setup Request, NG Setup Failure and Downlink NAS Transport vectors; 5GMM
-  literals; every bound; NetGet's PDUs through the pcap oracle in SCTP DATA chunks.
-- `e2e_test.rs`: the session over the lab transport with a mocked model and python policies,
-  every fail-closed row above, the protocol refusals, the UE table cap.
-- `transport_test.rs`: SCTP binds or is refused by name; on Linux, one association carries whole
-  messages and an oversized one is drained without losing the next boundary.
+- `tests/server/ngap/real_client_test.rs` (Linux): UERANSIM v3.2.7's `nr-gnb` and `nr-ue` over
+  SCTP — the secured registration, PDU session, ping through the tunnel and deregistration; the
+  pre-security challenge; the NG Setup failure. Live captures through tshark's ngap and nas-5gs
+  dissectors. See that directory's `AGENTS.md`.
+- `security_test.rs`: the published vectors and the protection rules.
+- `security_e2e_test.rs`: the secured flow in-process over the lab transport with a scripted
+  UE, a mocked model and every refusal above.
+- `codec_test.rs`, `e2e_test.rs`, `transport_test.rs`: the codec against literal vectors, the
+  pre-security session and its fail-closed paths, the SCTP transport.
+- `fuzz/fuzz_targets/ngap_nas.rs`: every NGAP procedure decoder, the 5GMM/5GSM parsers and the
+  protected-NAS path, with nesting and length-bomb corpus entries.
 
 ## Maturity
 
 `Experimental`. Against the six conditions in the root `AGENTS.md`: one independent client
-(UERANSIM; condition 1 needs two), the oracle is green over real and lab traffic (2), no fuzz
-target (3), bounds are tested (4), these files were written against the source in this pass
-(5), no `#[ignore]` or skip gate — but the evidence runs only where SCTP exists, i.e. the `ngap`
-pair job, which has not yet run in CI. Not reviewed beyond its tests.
+(UERANSIM; condition 1 needs two — Open5GS's gNB-side tools do not exist and srsRAN/OAI gNBs are
+not in the tree), the oracle is green over real and lab traffic (2), a fuzz target exists
+and has run clean (`ngap_nas`, 3: 39,178 executions over three minutes on 22 October 2026 with
+the seeded lockfile and the current nightly — `nightly-2025-12-04` is now too old for the AWS
+crates in the lockfile), bounds are tested (4), these files were written
+against the source in this pass (5), no `#[ignore]` or skip gate — but the evidence runs only
+where SCTP exists, i.e. the `ngap` pair job.
 
-Not implemented: NAS security; PDU sessions and the whole of the user plane; handover, paging,
-AMF/RAN configuration update, AMF status indication; multiple associations' shared state (each
-association is independent); IPv6 SCTP multi-homing.
+Not implemented: NIA1/NEA1, NIA3/NEA3, EAP-AKA'; handover, paging, service request under
+security, PDU session release and modification, AMF/RAN configuration update, AMF status
+indication; IPv6 PDU sessions, more than one QoS flow per session, any routing beyond the ICMP
+echo answer; shared UE state across associations (one AMF for several gNBs: each association
+has its own UE table, though credentials and the user plane are shared); IPv6 SCTP
+multi-homing.

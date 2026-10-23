@@ -9575,6 +9575,7 @@ dependencies = [
  "openidconnect",
  "opensrv-mysql",
  "openssl-sys",
+ "p256 0.13.2",
  "pavao",
  "pcap",
  "pcsc",

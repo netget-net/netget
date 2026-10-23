@@ -1,4 +1,4 @@
-"""Build the NGAP server tests' peer into an owned ROOT, pinned: UERANSIM v3.2.7 (`nr-gnb`,
+"""Build the NGAP server tests' peer into an owned ROOT, pinned: UERANSIM v3.2.7 (`nr-gnb`, `nr-cli`,
 `nr-ue`), from its release tarball with the SHA-256 below. UERANSIM is Linux-only C++; building
 it needs cmake, g++ and the lksctp headers (Ubuntu: cmake g++ libsctp-dev lksctp-tools). Only the
 two binaries are kept (ROOT/ueransim/build), so ROOT is small enough to cache.
@@ -31,7 +31,7 @@ def run(cmd, cwd):
         sys.exit(f"{' '.join(cmd)} exited {done.returncode} in {cwd}")
 
 
-if not ((build / "nr-gnb").exists() and (build / "nr-ue").exists()):
+if not all((build / b).exists() for b in ("nr-gnb", "nr-ue", "nr-cli")):
     url, digest = UERANSIM
     archive = root / "ueransim.tar.gz"
     with urllib.request.urlopen(url, timeout=300) as response:
@@ -55,9 +55,9 @@ if not ((build / "nr-gnb").exists() and (build / "nr-ue").exists()):
     cmake_dir = src / "cmake-build-release"
     cmake_dir.mkdir()
     run(["cmake", "-DCMAKE_BUILD_TYPE=Release", ".."], cmake_dir)
-    run(["make", f"-j{max(2, os.cpu_count() or 2)}", "nr-gnb", "nr-ue"], cmake_dir)
+    run(["make", f"-j{max(2, os.cpu_count() or 2)}", "nr-gnb", "nr-ue", "nr-cli"], cmake_dir)
     build.mkdir(parents=True, exist_ok=True)
-    for binary in ("nr-gnb", "nr-ue"):
+    for binary in ("nr-gnb", "nr-ue", "nr-cli"):
         shutil.copy2(cmake_dir / binary, build / binary)
     shutil.rmtree(src)
     archive.unlink()

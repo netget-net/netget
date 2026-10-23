@@ -19,6 +19,7 @@ use std::sync::LazyLock;
 
 use super::codec::{self, Cause};
 use super::nas;
+use super::sm;
 
 pub struct NgapProtocol;
 
@@ -134,7 +135,102 @@ impl NgapProtocol {
         let cause = cause_field(a, "cause", Some("misc/om-intervention"))?;
         Ok(ActionResult::Output(codec::ng_reset(&cause, None)?))
     }
+
+    /// Validated here, carried out by the session, which holds the UE's keys and counts.
+    fn registration_accept(&self, a: &Value) -> Result<ActionResult> {
+        codec::json_u64(a, "amf_ue_ngap_id", codec::MAX_AMF_UE_NGAP_ID)?;
+        let slices = list(a, "allowed_nssai")?;
+        anyhow::ensure!(
+            (1..=8).contains(&slices.len()),
+            "allowed_nssai must hold 1..8 slices"
+        );
+        for s in slices {
+            nas::Snssai::from_json(s).map_err(|e| anyhow!(e))?;
+        }
+        if let Some(t) = a.get("tac_list").filter(|v| !v.is_null()) {
+            let t = t.as_array().context("tac_list must be a list of TACs")?;
+            anyhow::ensure!(
+                (1..=nas::MAX_TAI_LIST).contains(&t.len()),
+                "tac_list must hold 1..{} TACs",
+                nas::MAX_TAI_LIST
+            );
+            anyhow::ensure!(
+                t.iter()
+                    .all(|x| x.as_u64().map(|v| v <= 0xFF_FFFF).unwrap_or(false)),
+                "tac_list entries are 24-bit numbers"
+            );
+        }
+        codec::json_opt_u64(a, "tmsi", u32::MAX as u64)?;
+        Ok(ActionResult::Custom {
+            name: REGISTRATION_ACCEPT.into(),
+            data: a.clone(),
+        })
+    }
+
+    fn pdu_session_accept(&self, a: &Value) -> Result<ActionResult> {
+        codec::json_u64(a, "amf_ue_ngap_id", codec::MAX_AMF_UE_NGAP_ID)?;
+        let psi = codec::json_u64(a, "pdu_session_id", 15)?;
+        anyhow::ensure!(psi >= 1, "pdu_session_id must be 1..15");
+        let ip: std::net::Ipv4Addr = a
+            .get("ue_ipv4")
+            .and_then(Value::as_str)
+            .context("ue_ipv4 is required: the IPv4 address this AMF assigns the UE")?
+            .parse()
+            .context("ue_ipv4 must be an IPv4 address")?;
+        anyhow::ensure!(
+            !(ip.is_unspecified() || ip.is_broadcast() || ip.is_multicast()),
+            "ue_ipv4 {ip} cannot be a UE's address"
+        );
+        if let Some(r) = a.get("reachable_addresses").filter(|v| !v.is_null()) {
+            let r = r
+                .as_array()
+                .context("reachable_addresses must be a list of IPv4 addresses")?;
+            anyhow::ensure!(
+                r.len() <= super::upf::MAX_ANSWERING_ADDRESSES,
+                "at most {} reachable_addresses",
+                super::upf::MAX_ANSWERING_ADDRESSES
+            );
+            for x in r {
+                x.as_str()
+                    .and_then(|s| s.parse::<std::net::Ipv4Addr>().ok())
+                    .context("reachable_addresses must be IPv4 addresses")?;
+            }
+        }
+        if let Some(s) = a.get("s_nssai").filter(|v| !v.is_null()) {
+            nas::Snssai::from_json(s).map_err(|e| anyhow!(e))?;
+        }
+        if let Some(t) = a.get("pdu_session_type").and_then(Value::as_str) {
+            anyhow::ensure!(
+                t.eq_ignore_ascii_case("ipv4"),
+                "pdu_session_type {t:?}: only ipv4 sessions are built"
+            );
+        }
+        if let Some(d) = a.get("dnn").and_then(Value::as_str) {
+            crate::server::gtp::codec::encode_apn(d).map_err(|e| anyhow!("dnn: {e}"))?;
+        }
+        codec::json_opt_u64(a, "five_qi", 255)?;
+        Ok(ActionResult::Custom {
+            name: PDU_SESSION_ACCEPT.into(),
+            data: a.clone(),
+        })
+    }
+
+    fn pdu_session_reject(&self, a: &Value) -> Result<ActionResult> {
+        codec::json_u64(a, "amf_ue_ngap_id", codec::MAX_AMF_UE_NGAP_ID)?;
+        let psi = codec::json_u64(a, "pdu_session_id", 15)?;
+        anyhow::ensure!(psi >= 1, "pdu_session_id must be 1..15");
+        sm::parse_cause(a.get("cause").unwrap_or(&Value::Null)).map_err(|e| anyhow!(e))?;
+        Ok(ActionResult::Custom {
+            name: PDU_SESSION_REJECT.into(),
+            data: a.clone(),
+        })
+    }
 }
+
+/// The names the session knows the stateful decisions by.
+pub const REGISTRATION_ACCEPT: &str = "registration_accept";
+pub const PDU_SESSION_ACCEPT: &str = "pdu_session_accept";
+pub const PDU_SESSION_REJECT: &str = "pdu_session_reject";
 
 // ============================================================================
 // Action definitions
@@ -215,12 +311,14 @@ fn downlink_nas_action() -> ActionDefinition {
         name: "send_downlink_nas_transport".into(),
         description:
             "Send a NAS message to one UE in a Downlink NAS Transport. The NAS message is \
-                      structured and Rust encodes it. Only what a UE accepts before NAS security \
-                      exists is offered: registration_reject {cause}, identity_request \
+                      structured and Rust encodes it — and protects it, when the UE is under NAS \
+                      security. Offered: registration_reject {cause}, identity_request \
                       {identity_type}, authentication_request {ngksi, rand?, autn? — 32 hex digits \
-                      each, random when omitted; without the subscriber's key a real UE answers \
-                      with authentication_failure mac_failure}, authentication_reject, \
-                      service_reject {cause}, 5gmm_status {cause}."
+                      each, random when omitted; for a UE with no credentials on this AMF a real \
+                      UE answers with authentication_failure mac_failure}, authentication_reject, \
+                      service_reject {cause}, 5gmm_status {cause}. Subscribers with credentials \
+                      are authenticated by Rust; you are asked only whether to register them \
+                      (ngap_registration_request) and about their PDU sessions."
                 .into(),
         parameters: vec![
             p(
@@ -344,6 +442,129 @@ fn ng_reset_action() -> ActionDefinition {
     }
 }
 
+fn registration_accept_action() -> ActionDefinition {
+    ActionDefinition {
+        name: "send_registration_accept".into(),
+        description: "Admit an authenticated subscriber (answer to ngap_registration_request): \
+                      Rust allocates its 5G-GUTI under this AMF's GUAMI, sends the protected \
+                      Registration Accept inside an Initial Context Setup with K_gNB, and \
+                      completes registration. You choose the allowed slices and the tracking \
+                      areas. To refuse instead, send_downlink_nas_transport with \
+                      registration_reject (Rust protects it) and release the UE."
+            .into(),
+        parameters: vec![
+            p("amf_ue_ngap_id", "number", "The UE's AMF UE NGAP ID, from the event", true),
+            p(
+                "allowed_nssai",
+                "array",
+                "The slices this UE may use (1-8): [{\"sst\": 1, \"sd\": \"010203\"}] — sd optional",
+                true,
+            ),
+            p(
+                "tac_list",
+                "array",
+                "Tracking area codes of its registration area (1-16), in the UE's PLMN; \
+                 default: the tracking area it is in",
+                false,
+            ),
+            p("tmsi", "number", "The 5G-TMSI to assign (32 bits); default random", false),
+            p(
+                "ue_ambr",
+                "object",
+                "UE aggregate maximum bit rate {\"uplink_kbps\", \"downlink_kbps\"}; default none",
+                false,
+            ),
+        ],
+        example: json!({
+            "type": "send_registration_accept",
+            "amf_ue_ngap_id": 1,
+            "allowed_nssai": [{"sst": 1}]
+        }),
+        log_template: Some(
+            LogTemplate::new()
+                .with_info("-> NGAP Registration Accept ue={amf_ue_ngap_id}")
+                .with_debug("NGAP send_registration_accept ue={amf_ue_ngap_id} nssai={allowed_nssai}"),
+        ),
+    }
+}
+
+fn pdu_session_accept_action() -> ActionDefinition {
+    ActionDefinition {
+        name: "send_pdu_session_accept".into(),
+        description: "Accept a PDU session (answer to ngap_pdu_session_establishment_request): \
+                      Rust sends the protected PDU Session Establishment Accept with one default \
+                      QoS rule and flow inside a PDU Session Resource Setup Request, and opens a \
+                      GTP-U tunnel on this AMF's user plane. You choose the UE's IPv4 address \
+                      and which addresses answer its ICMP echo through the tunnel; packets to \
+                      anything else are dropped."
+            .into(),
+        parameters: vec![
+            p("amf_ue_ngap_id", "number", "The UE's AMF UE NGAP ID, from the event", true),
+            p("pdu_session_id", "number", "The session's id, from the event (1-15)", true),
+            p("ue_ipv4", "string", "The IPv4 address assigned to the UE, e.g. 10.45.0.2", true),
+            p(
+                "reachable_addresses",
+                "array",
+                "IPv4 addresses that answer the UE's ping through the tunnel (0-16), e.g. [\"10.45.0.1\"]",
+                false,
+            ),
+            p("dnn", "string", "The DNN; default the one the UE asked for, else internet", false),
+            p("s_nssai", "object", "The slice {\"sst\", \"sd\"?}; default the one the UE asked for", false),
+            p("five_qi", "number", "Standardised 5QI of the session's flow (1-255), default 9", false),
+            p(
+                "session_ambr",
+                "object",
+                "{\"uplink_kbps\", \"downlink_kbps\"}, default 1000000 each",
+                false,
+            ),
+            p("pdu_session_type", "string", "ipv4 (the only type built)", false),
+        ],
+        example: json!({
+            "type": "send_pdu_session_accept",
+            "amf_ue_ngap_id": 1,
+            "pdu_session_id": 1,
+            "ue_ipv4": "10.45.0.2",
+            "reachable_addresses": ["10.45.0.1"]
+        }),
+        log_template: Some(
+            LogTemplate::new()
+                .with_info("-> NGAP PDU session {pdu_session_id} accepted ue={amf_ue_ngap_id} ip={ue_ipv4}")
+                .with_debug("NGAP send_pdu_session_accept {pdu_session_id} {ue_ipv4}"),
+        ),
+    }
+}
+
+fn pdu_session_reject_action() -> ActionDefinition {
+    ActionDefinition {
+        name: "send_pdu_session_reject".into(),
+        description: "Refuse a PDU session with a 5GSM cause (PDU Session Establishment Reject, \
+                      protected by Rust)."
+            .into(),
+        parameters: vec![
+            p("amf_ue_ngap_id", "number", "The UE's AMF UE NGAP ID", true),
+            p("pdu_session_id", "number", "The session's id (1-15)", true),
+            p(
+                "cause",
+                "string",
+                "5GSM cause: missing_or_unknown_dnn, insufficient_resources, \
+                 request_rejected_unspecified, requested_service_option_not_subscribed, …",
+                true,
+            ),
+        ],
+        example: json!({
+            "type": "send_pdu_session_reject",
+            "amf_ue_ngap_id": 1,
+            "pdu_session_id": 1,
+            "cause": "missing_or_unknown_dnn"
+        }),
+        log_template: Some(
+            LogTemplate::new()
+                .with_info("-> NGAP PDU session {pdu_session_id} rejected {cause}")
+                .with_debug("NGAP send_pdu_session_reject {pdu_session_id} {cause}"),
+        ),
+    }
+}
+
 fn wait_for_more_action() -> ActionDefinition {
     ActionDefinition {
         name: "wait_for_more".into(),
@@ -368,6 +589,9 @@ fn response_actions() -> Vec<ActionDefinition> {
         release_action(),
         error_indication_action(),
         ng_reset_action(),
+        registration_accept_action(),
+        pdu_session_accept_action(),
+        pdu_session_reject_action(),
         wait_for_more_action(),
     ]
 }
@@ -451,6 +675,54 @@ pub static NGAP_UPLINK_NAS_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     )
 });
 
+pub static NGAP_REGISTRATION_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    EventType::new(
+        "ngap_registration_request",
+        "A subscriber this AMF holds credentials for has completed 5G-AKA and NAS security is on \
+         (Rust did both: the keys never leave it). supi is the authenticated identity; \
+         requested_nssai the slices it asked for; user_location its cell and tracking area; \
+         plmn_support what this AMF announced. Decide whether it may register: \
+         send_registration_accept with the allowed slices, or send_downlink_nas_transport with \
+         registration_reject and a 5GMM cause (then send_ue_context_release_command). No \
+         answer, or a failed model, is a Registration Reject: registering is never the default.",
+        registration_accept_action().example,
+    )
+    .with_alternative_example(json!({
+        "type": "send_downlink_nas_transport",
+        "amf_ue_ngap_id": 1,
+        "ran_ue_ngap_id": 1,
+        "nas": {"message": "registration_reject", "cause": "plmn_not_allowed"}
+    }))
+    .with_actions(response_actions())
+    .with_log_template(
+        LogTemplate::new()
+            .with_info("NGAP registration decision ue={amf_ue_ngap_id} {supi}")
+            .with_debug("NGAP registration request {supi} nssai={requested_nssai}")
+            .with_trace("NGAP registration request: {json_pretty(.)}"),
+    )
+});
+
+pub static NGAP_PDU_SESSION_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    EventType::new(
+        "ngap_pdu_session_establishment_request",
+        "A registered UE asks for a PDU session (5GSM PDU Session Establishment Request, \
+         delivered under NAS security). pdu_session_id, dnn, s_nssai and pdu_session_type are \
+         what it asked for; user_plane_available says whether this AMF has a GTP-U user plane \
+         (without one an accept is answered with insufficient_resources). Decide: \
+         send_pdu_session_accept with the UE's IPv4 address and the addresses that answer its \
+         ping, or send_pdu_session_reject with a 5GSM cause. No answer is a reject.",
+        pdu_session_accept_action().example,
+    )
+    .with_alternative_example(pdu_session_reject_action().example)
+    .with_actions(response_actions())
+    .with_log_template(
+        LogTemplate::new()
+            .with_info("NGAP PDU session {pdu_session_id} request ue={amf_ue_ngap_id} dnn={dnn}")
+            .with_debug("NGAP PDU session request {supi} {pdu_session_id} {dnn} {s_nssai}")
+            .with_trace("NGAP PDU session request: {json_pretty(.)}"),
+    )
+});
+
 pub static NGAP_ERROR_INDICATION_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "ngap_error_indication",
@@ -493,6 +765,8 @@ impl Protocol for NgapProtocol {
             NGAP_NG_SETUP_EVENT.clone(),
             NGAP_INITIAL_UE_MESSAGE_EVENT.clone(),
             NGAP_UPLINK_NAS_EVENT.clone(),
+            NGAP_REGISTRATION_EVENT.clone(),
+            NGAP_PDU_SESSION_EVENT.clone(),
             NGAP_ERROR_INDICATION_EVENT.clone(),
         ]
     }
@@ -518,33 +792,46 @@ impl Protocol for NgapProtocol {
             .well_known_sctp_port(38412)
             .implementation(
                 "TS 38.413 ALIGNED PER hand-written for the procedures implemented (NG Setup, \
-                 Initial UE Message, Downlink/Uplink NAS Transport, Error Indication, NG Reset, \
-                 UE Context Release), other IEs framed and skipped by length; plain 5GMM (TS \
-                 24.501) decoded and the pre-security downlink messages encoded; SCTP via a \
-                 socket2 one-to-one socket with PPID 60 and stream 0/1 selection, plus a \
-                 non-standard length-prefixed TCP transport for lab use",
+                 Initial UE Message, Downlink/Uplink NAS Transport, Initial Context Setup, PDU \
+                 Session Resource Setup with its transfers, Error Indication, NG Reset, UE \
+                 Context Release and its request), other IEs framed and skipped by length; \
+                 5GMM and 5GSM (TS 24.501) decoded and encoded; NAS security in Rust: Milenage, \
+                 the 5G-AKA key hierarchy (RES*, K_AUSF, K_SEAF, K_AMF, NAS keys, K_gNB), \
+                 NIA2/NEA2/NEA0 with per-direction COUNTs and replay refusal, SUCI \
+                 deconcealment for ECIES Profiles A and B; a minimal GTP-U user plane that \
+                 answers ICMP echo; SCTP via a socket2 one-to-one socket with PPID 60 and \
+                 stream 0/1 selection, plus a non-standard length-prefixed TCP transport",
             )
             .llm_control(
-                "The model admits or refuses gNBs (NG Setup Response/Failure with a cause) and \
-                 decides what each UE is told (Identity Request, Authentication Request, \
-                 Registration Reject with a 5GMM cause, UE Context Release). Decoding, ID \
-                 allocation, NG Reset and every protocol-validity refusal are Rust's",
+                "The model admits or refuses gNBs (NG Setup Response/Failure), decides whether \
+                 each authenticated subscriber may register and on which slices \
+                 (send_registration_accept or a reject), and decides each PDU session (the UE's \
+                 IPv4 address, DNN, slice, 5QI, AMBR and which addresses answer its ping, or a \
+                 5GSM reject). UEs without credentials stay model-driven pre-security (identity, \
+                 authentication challenge, reject). 5G-AKA, the security mode procedure, every \
+                 MAC and COUNT, K_gNB, GUTI allocation, deregistration, decoding, ID \
+                 allocation, NG Reset and protocol refusals are Rust's; the keys never reach \
+                 the model",
             )
             .e2e_testing(
-                "UERANSIM's nr-gnb and nr-ue (asn1c APER) set up N2 and register against it over \
-                 real SCTP on Linux, with tshark's ngap dissector reading a live capture; over \
-                 the lab TCP transport with a mocked model on any host, including the \
-                 fail-closed paths, the decode bounds and the pcap oracle on NetGet's own PDUs",
+                "UERANSIM v3.2.7's nr-gnb and nr-ue over real SCTP on Linux: a UE with an ECIES \
+                 Profile A SUCI authenticates, registers, gets a PDU session, pings through its \
+                 uesimtun and NetGet's GTP-U, and deregisters; another is challenged without \
+                 credentials and rejected; tshark's ngap and nas-5gs dissectors read the live \
+                 capture. In-process over the lab transport with a mocked model (three calls for \
+                 a whole registration and session) and scripted UEs: forged MACs, replayed \
+                 COUNTs, wrong RES*, MAC and synch failures, silent and failed models; \
+                 Milenage, NIA2/NEA2 and SUCI against TS 35.208, 33.401 and 33.501 vectors",
             )
             .notes(
-                "EXPERIMENTAL: one independent peer (UERANSIM), and its evidence runs only where \
-                 SCTP exists (Linux, the ngap pair job). macOS has no SCTP stack, so there the \
-                 default transport refuses to start by name and only the non-standard \
-                 transport=\"tcp\" framing runs. NAS security is not implemented: no 5G-AKA \
-                 derivation, no Security Mode Command, no integrity or ciphering — a real UE \
-                 answers NetGet's Authentication Request with MAC failure, and Registration \
-                 Accept cannot be sent. No PDU sessions, handover, paging or AMF \
-                 configuration update.",
+                "EXPERIMENTAL: one independent peer (UERANSIM) — condition 1 of the Stable bar \
+                 needs two — and its evidence runs only where SCTP exists (Linux, the ngap pair \
+                 job). macOS has no SCTP, so there only the non-standard transport=\"tcp\" runs. \
+                 Integrity is NIA2 only and ciphering NEA0/NEA2 (no SNOW 3G or ZUC); 5G-AKA only \
+                 (no EAP-AKA'); one QoS flow and IPv4 per session; the user plane answers ICMP \
+                 echo and routes nothing else. Not built: handover, paging, service request \
+                 under security, PDU session release/modification, AMF configuration update, \
+                 shared state across associations, N2 for several gNBs as one AMF.",
             )
             .max_inbound_bytes(codec::MAX_PDU_LEN)
             .history(crate::protocol::metadata::HistoryMode::Last(
@@ -555,7 +842,7 @@ impl Protocol for NgapProtocol {
     }
 
     fn description(&self) -> &'static str {
-        "NGAP (5G N2) AMF: NG Setup and initial UE registration signalling with gNBs"
+        "NGAP (5G N2) AMF: NG Setup, 5G-AKA and NAS security, registration, PDU sessions and a GTP-U user plane"
     }
 
     fn example_prompt(&self) -> &'static str {
@@ -563,18 +850,78 @@ impl Protocol for NgapProtocol {
     }
 
     fn get_startup_parameters(&self) -> Vec<crate::llm::actions::ParameterDefinition> {
-        vec![crate::llm::actions::ParameterDefinition {
-            name: "transport".into(),
-            type_hint: "string".into(),
-            description: "\"sctp\" (default — TS 38.412, PPID 60) or \"tcp\". TCP IS \
+        vec![
+            crate::llm::actions::ParameterDefinition {
+                name: "transport".into(),
+                type_hint: "string".into(),
+                description: "\"sctp\" (default — TS 38.412, PPID 60) or \"tcp\". TCP IS \
                           NON-STANDARD: a NetGet length-prefixed framing that no real gNB speaks, \
                           for local protocol work on hosts with no SCTP (macOS has none). A host \
                           without SCTP refuses \"sctp\" rather than falling back."
-                .into(),
-            required: false,
-            example: json!("sctp"),
-            default: None,
-        }]
+                    .into(),
+                required: false,
+                example: json!("sctp"),
+                default: None,
+            },
+            crate::llm::actions::ParameterDefinition {
+                name: "subscribers".into(),
+                type_hint: "array".into(),
+                description: "Subscriber credentials this AMF authenticates with 5G-AKA (it plays \
+                          AUSF/UDM too): [{\"supi\": \"imsi-001010000000001\", \
+                          \"subscriber_key\": K (32 hex), \"subscriber_opc\": OPc (32 hex) or \
+                          \"subscriber_op\": OP, \"amf_field\": \"8000\", \"sqn\": the last SQN \
+                          used (number or 12 hex)}]. A UE whose SUCI resolves to one of these is \
+                          authenticated, secured (NIA2) and offered to the model once, already \
+                          authenticated. Keys are redacted wherever parameters are shown and never \
+                          reach an event. Without this, NAS security is not used."
+                    .into(),
+                required: false,
+                example: json!([{"supi": "imsi-001010000000001",
+                             "subscriber_key": "465B5CE8B199B49FAA5F0A2EE238A6BC",
+                             "subscriber_opc": "E8ED289DEBA952E4283B54E88E6183CA",
+                             "amf_field": "8000"}]),
+                default: None,
+            },
+            crate::llm::actions::ParameterDefinition {
+                name: "suci_keys".into(),
+                type_hint: "array".into(),
+                description: "Home network private keys for SUCI concealment (TS 33.501 Annex C): \
+                          [{\"key_id\": 1, \"scheme\": \"profile_a\" | \"profile_b\", \
+                          \"home_network_private_key\": 64 hex}]. A SUCI with an ECIES profile \
+                          and no matching key is left to the model, unread."
+                    .into(),
+                required: false,
+                example: json!([{"key_id": 1, "scheme": "profile_a",
+                             "home_network_private_key": "c80949f13ebe61af4ebdbd293ea4f942696b9e815d7e8f0096bbf6ed7de62256"}]),
+                default: None,
+            },
+            crate::llm::actions::ParameterDefinition {
+                name: "nas_ciphering".into(),
+                type_hint: "string".into(),
+                description:
+                    "NAS ciphering preference: \"nea0\" (null ciphering, the protected NAS \
+                          stays readable on the wire) or \"nea2\" (AES-CTR, used when the UE \
+                          supports it). Integrity is always NIA2."
+                        .into(),
+                required: false,
+                example: json!("nea2"),
+                default: Some(json!(super::DEFAULT_NAS_CIPHERING)),
+            },
+            crate::llm::actions::ParameterDefinition {
+                name: "user_plane_address".into(),
+                type_hint: "string".into(),
+                description:
+                    "Run a GTP-U user plane on this address (UDP 2152, or IP:port) and put \
+                          it in each accepted PDU session's uplink tunnel. It answers a UE's ICMP \
+                          echo for the addresses the model chose for the session; nothing else is \
+                          routed. Without it PDU sessions are refused with \
+                          insufficient_resources."
+                        .into(),
+                required: false,
+                example: json!("127.0.0.5"),
+                default: None,
+            },
+        ]
     }
 
     fn group_name(&self) -> &'static str {
@@ -667,6 +1014,9 @@ impl Server for NgapProtocol {
             "send_ue_context_release_command" => self.ue_context_release(&action),
             "send_error_indication" => self.error_indication(&action),
             "send_ng_reset" => self.ng_reset(&action),
+            "send_registration_accept" => self.registration_accept(&action),
+            "send_pdu_session_accept" => self.pdu_session_accept(&action),
+            "send_pdu_session_reject" => self.pdu_session_reject(&action),
             "wait_for_more" => Ok(ActionResult::WaitForMore),
             // Not offered to the model; the dashboard's "disconnect this peer" injects it.
             "close_connection" => Ok(ActionResult::CloseConnection),

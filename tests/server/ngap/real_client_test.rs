@@ -45,6 +45,12 @@ elif t == "ngap_uplink_nas_transport" and e["nas"].get("message") == "authentica
 print(json.dumps({"actions": a}))"#;
 
 fn ueransim(command: &str) -> Command {
+    // Every UERANSIM process registers itself in /tmp/UERANSIM.proc-table/, created with a
+    // check-then-mkdir: two started at once both see it missing and the loser aborts with
+    // "File exists". Creating it first, before any of the parallel tests spawns one, closes that.
+    let table = std::path::Path::new("/tmp/UERANSIM.proc-table");
+    let _ = std::fs::create_dir_all(table);
+    let _ = std::fs::set_permissions(table, std::os::unix::fs::PermissionsExt::from_mode(0o777));
     let mut c = Command::new(command);
     if let Ok(dir) = std::env::var("NETGET_UERANSIM_DIR") {
         let path = std::env::var("PATH").unwrap_or_default();
@@ -55,6 +61,13 @@ fn ueransim(command: &str) -> Command {
 
 /// Start NetGet's AMF over SCTP on an OS-assigned port; returns where it actually listens.
 async fn start_amf(handlers: Vec<Value>) -> (AppState, ServerId, std::net::SocketAddr) {
+    start_amf_with(handlers, json!({"transport": "sctp"})).await
+}
+
+async fn start_amf_with(
+    handlers: Vec<Value>,
+    startup_params: Value,
+) -> (AppState, ServerId, std::net::SocketAddr) {
     let host = "127.0.0.1";
     let state = AppState::new_with_options(false, "http://127.0.0.1:1".into());
     state
@@ -66,7 +79,7 @@ async fn start_amf(handlers: Vec<Value>) -> (AppState, ServerId, std::net::Socke
         port: Some(0),
         host: Some(host.into()),
         instruction: Some("Be an AMF".into()),
-        startup_params: Some(json!({"transport": "sctp"})),
+        startup_params: Some(startup_params),
         event_handlers: Some(handlers),
         ..Default::default()
     }
@@ -112,11 +125,23 @@ fn gnb_config(dir: &std::path::Path, ip: &str, amf: std::net::SocketAddr) -> std
 }
 
 fn ue_config(dir: &std::path::Path, gnb_ip: &str) -> std::path::PathBuf {
+    ue_config_with(dir, gnb_ip, "imsi-001010000000001", 0, "[]")
+}
+
+/// A UE config: its SUPI, SUCI protection scheme (0 null, 1 Profile A with the TS 33.501 C.4.3
+/// home network key) and PDU sessions.
+fn ue_config_with(
+    dir: &std::path::Path,
+    gnb_ip: &str,
+    supi: &str,
+    scheme: u8,
+    sessions: &str,
+) -> std::path::PathBuf {
     let path = dir.join("ue.yaml");
     std::fs::write(
         &path,
         format!(
-            "supi: 'imsi-001010000000001'\nmcc: '001'\nmnc: '01'\nprotectionScheme: 0\n\
+            "supi: '{supi}'\nmcc: '001'\nmnc: '01'\nprotectionScheme: {scheme}\n\
              homeNetworkPublicKey: '5a8d38864820197c3394b92613b20b91633cbd897119273bf8e4a6f4eec0a650'\n\
              homeNetworkPublicKeyId: 1\nroutingIndicator: '0000'\n\
              key: '465B5CE8B199B49FAA5F0A2EE238A6BC'\nop: 'E8ED289DEBA952E4283B54E88E6183CA'\n\
@@ -124,7 +149,7 @@ fn ue_config(dir: &std::path::Path, gnb_ip: &str) -> std::path::PathBuf {
              tunNetmask: '255.255.255.0'\ngnbSearchList:\n  - {gnb_ip}\n\
              uacAic:\n  mps: false\n  mcs: false\n\
              uacAcc:\n  normalClass: 0\n  class11: false\n  class12: false\n  class13: false\n  class14: false\n  class15: false\n\
-             sessions: []\nconfigured-nssai:\n  - sst: 1\ndefault-nssai:\n  - sst: 1\n\
+             sessions: {sessions}\nconfigured-nssai:\n  - sst: 1\ndefault-nssai:\n  - sst: 1\n\
              integrity:\n  IA1: true\n  IA2: true\n  IA3: true\n\
              ciphering:\n  EA1: true\n  EA2: true\n  EA3: true\n\
              integrityMaxRate:\n  uplink: 'full'\n  downlink: 'full'\n"
@@ -281,4 +306,255 @@ async fn ueransim_reports_the_models_ng_setup_failure() {
     drop(gnb);
     let frames = capture.finish().await;
     assert_capture(&frames, port, &[(codec::PROC_NG_SETUP, 2)]);
+}
+
+/// The model of the secured test: admit the gNB, register the authenticated subscriber on slice
+/// 1, give its session 10.60.0.2 and let 10.60.0.1 answer its ping.
+const SECURE_POLICY: &str = r#"import json, sys
+i = json.load(sys.stdin); t = i["event_type_id"]; e = i["event"]
+a = []
+if t == "ngap_ng_setup_request":
+    plmn = e["global_ran_node_id"]["plmn"]
+    a = [{"type": "send_ng_setup_response", "amf_name": "netget-amf",
+          "served_guami": [{"plmn": plmn, "amf_region_id": 2, "amf_set_id": 1, "amf_pointer": 0}],
+          "plmn_support": [{"plmn": plmn, "slices": [{"sst": 1}]}]}]
+elif t == "ngap_registration_request" and e["supi"] == "imsi-001010000000002":
+    a = [{"type": "send_registration_accept", "amf_ue_ngap_id": e["amf_ue_ngap_id"], "allowed_nssai": [{"sst": 1}]}]
+elif t == "ngap_pdu_session_establishment_request" and e["dnn"] == "internet":
+    a = [{"type": "send_pdu_session_accept", "amf_ue_ngap_id": e["amf_ue_ngap_id"],
+          "pdu_session_id": e["pdu_session_id"], "ue_ipv4": "10.60.0.2", "reachable_addresses": ["10.60.0.1"]}]
+print(json.dumps({"actions": a}))"#;
+
+const PING_HINT: crate::helpers::real_server::InstallHint =
+    crate::helpers::real_server::InstallHint {
+        brew: "(none: the UE's tunnel is Linux-only)",
+        apt: "iputils-ping",
+    };
+
+/// UERANSIM's UE registers for real: its SUCI is concealed with ECIES Profile A and deconcealed
+/// by NetGet's AMF, it verifies the AUTN NetGet built from its key, accepts the Security Mode
+/// Command's MAC and every protected message after it, gets a PDU session, brings up
+/// `uesimtun*` with the model's address, and its ping crosses the GTP-U tunnel to NetGet's user
+/// plane and back. Then it deregisters under security.
+///
+/// `nr-ue` needs to create a TUN device and add routes: root, or `cap_net_admin` on `nr-ue` and
+/// on `ip` (the CI job does the latter). It fails, naming that, rather than skipping.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ueransim_registers_gets_a_pdu_session_and_pings_through_the_tunnel() {
+    let handlers = vec![
+        json!({"event_pattern": "*", "handler": {"type": "script", "language": "python", "code": SECURE_POLICY}}),
+    ];
+    let (state, id, amf) = start_amf_with(
+        handlers,
+        json!({
+            "transport": "sctp",
+            "subscribers": [{"supi": "imsi-001010000000002",
+                             "subscriber_key": "465B5CE8B199B49FAA5F0A2EE238A6BC",
+                             "subscriber_opc": "E8ED289DEBA952E4283B54E88E6183CA",
+                             "amf_field": "8000"}],
+            "suci_keys": [{"key_id": 1, "scheme": "profile_a",
+                           "home_network_private_key": "c53c22208b61860b06c62e5406a7b330c2b577aa5558981510d128247d38bd1d"}],
+            "user_plane_address": "127.0.0.62",
+        }),
+    )
+    .await;
+    let port = amf.port();
+    let capture = LiveCapture::start(port).await;
+    let dir = tempfile::tempdir().unwrap();
+
+    let mut gnb_cmd = ueransim("nr-gnb");
+    gnb_cmd
+        .arg("-c")
+        .arg(gnb_config(dir.path(), "127.0.0.61", amf));
+    let gnb = ToolProcess::spawn(gnb_cmd, "nr-gnb", HINT).unwrap();
+    gnb.wait_for_line("NG Setup success", Duration::from_secs(30), |l| {
+        l.contains("NG Setup procedure is successful")
+    })
+    .await
+    .unwrap();
+
+    let mut ue_cmd = ueransim("nr-ue");
+    ue_cmd.arg("-c").arg(ue_config_with(
+        dir.path(),
+        "127.0.0.61",
+        "imsi-001010000000002",
+        1,
+        "\n  - type: 'IPv4'\n    apn: 'internet'\n    slice:\n      sst: 1",
+    ));
+    let ue = ToolProcess::spawn(ue_cmd, "nr-ue", HINT).unwrap();
+    fn fail(what: &str, ue: &ToolProcess, gnb: &ToolProcess) -> ! {
+        panic!(
+            "{what}\n--- nr-ue ---\n{}\n--- nr-gnb ---\n{}",
+            ue.lines().join("\n"),
+            gnb.lines().join("\n")
+        )
+    }
+    if ue
+        .wait_for_line("registration", Duration::from_secs(60), |l| {
+            l.contains("Initial Registration is successful")
+        })
+        .await
+        .is_err()
+    {
+        fail("UERANSIM's UE did not register", &ue, &gnb);
+    }
+    if ue
+        .wait_for_line("PDU session", Duration::from_secs(60), |l| {
+            l.contains("PDU Session establishment is successful")
+        })
+        .await
+        .is_err()
+    {
+        fail("UERANSIM's UE got no PDU session", &ue, &gnb);
+    }
+    let tun_line = match ue
+        .wait_for_line("TUN", Duration::from_secs(30), |l| {
+            l.contains("TUN interface[") && l.contains("is up")
+        })
+        .await
+    {
+        Ok(l) => l,
+        Err(_) => fail(
+            "the UE's TUN interface never came up: nr-ue needs root, or cap_net_admin on nr-ue \
+             and on ip (sudo setcap cap_net_admin+ep $(command -v ip) <nr-ue>)",
+            &ue,
+            &gnb,
+        ),
+    };
+    // "TUN interface[uesimtun0, 10.60.0.2] is up."
+    let inside = tun_line
+        .split("TUN interface[")
+        .nth(1)
+        .and_then(|s| s.split(']').next())
+        .unwrap_or_default()
+        .to_string();
+    let (iface, addr) = inside
+        .split_once(", ")
+        .unwrap_or_else(|| fail(&tun_line, &ue, &gnb));
+    assert_eq!(
+        addr, "10.60.0.2",
+        "the UE has the model's address: {tun_line}"
+    );
+
+    // Ping through the tunnel: the UE's kernel -> nr-ue -> nr-gnb (GTP-U) -> NetGet's UPF, and
+    // the reply the whole way back.
+    let mut ping = Command::new("ping");
+    ping.args(["-I", iface, "-c", "3", "-W", "3", "10.60.0.1"]);
+    let out = match crate::helpers::real_server::run_tool(ping, "ping", PING_HINT).await {
+        Ok(o) => o,
+        Err(e) => fail(&format!("ping through {iface} failed: {e}"), &ue, &gnb),
+    };
+    assert!(out.contains("3 received"), "{out}");
+    // An address the model did not choose does not answer.
+    let mut ping = Command::new("ping");
+    ping.args(["-I", iface, "-c", "1", "-W", "1", "10.60.0.9"]);
+    assert!(
+        crate::helpers::real_server::run_tool(ping, "ping", PING_HINT)
+            .await
+            .is_err(),
+        "10.60.0.9 answered"
+    );
+
+    // Deregistration under security, asked of the UE through UERANSIM's own CLI.
+    let mut cli = ueransim("nr-cli");
+    cli.args(["imsi-001010000000002", "-e", "deregister normal"]);
+    if let Err(e) = crate::helpers::real_server::run_tool(cli, "nr-cli", HINT).await {
+        fail(&format!("nr-cli: {e}"), &ue, &gnb);
+    }
+    if ue
+        .wait_for_line("deregistration", Duration::from_secs(30), |l| {
+            l.contains("De-registration is successful")
+        })
+        .await
+        .is_err()
+    {
+        fail("the UE did not deregister", &ue, &gnb);
+    }
+
+    // The model was asked three things — the gNB, the subscriber, the session — and nothing per
+    // NAS message.
+    assert_eq!(events(&state, id, "ngap_ng_setup_request").await.len(), 1);
+    let reg = events(&state, id, "ngap_registration_request").await;
+    assert_eq!(reg.len(), 1);
+    assert_eq!(reg[0]["supi"], "imsi-001010000000002");
+    assert_eq!(reg[0]["suci"]["protection_scheme"], "profile_a");
+    let pdu = events(&state, id, "ngap_pdu_session_establishment_request").await;
+    assert_eq!(pdu.len(), 1, "{pdu:?}");
+    assert_eq!(pdu[0]["dnn"], "internet");
+    assert!(events(&state, id, "ngap_initial_ue_message")
+        .await
+        .is_empty());
+    assert!(events(&state, id, "ngap_uplink_nas_transport")
+        .await
+        .is_empty());
+
+    drop(ue);
+    drop(gnb);
+    let (frames, nas) = capture.finish_with_nas().await;
+    assert_capture(
+        &frames,
+        port,
+        &[
+            (codec::PROC_NG_SETUP, 1),
+            (codec::PROC_DOWNLINK_NAS_TRANSPORT, 0),
+            (codec::PROC_INITIAL_CONTEXT_SETUP, 0),
+            (codec::PROC_PDU_SESSION_RESOURCE_SETUP, 0),
+            (codec::PROC_UE_CONTEXT_RELEASE, 0),
+        ],
+    );
+    for (code, kind) in [
+        (codec::PROC_INITIAL_CONTEXT_SETUP, 1u8),
+        (codec::PROC_PDU_SESSION_RESOURCE_SETUP, 1),
+    ] {
+        assert!(
+            frames.iter().any(|f| f.src_port != port
+                && f.procedures
+                    .iter()
+                    .zip(&f.pdu_kinds)
+                    .any(|(c, k)| *c == code && *k == kind)),
+            "UERANSIM never answered procedure {code}: {frames:#?}"
+        );
+    }
+    // tshark's nas-5gs dissector, reading through NEA0: the AMF's Security Mode Command (header
+    // type 3), Registration Accept and PDU Session Establishment Accept, the UE's Security Mode
+    // Complete (header type 4), Registration Complete and Deregistration Request — every
+    // message of the procedure, in both directions, with no Warn-or-worse expert info.
+    let from = |netget: bool| {
+        nas.iter()
+            .filter(move |f| (f.src_port == port) == netget)
+            .collect::<Vec<_>>()
+    };
+    let has = |frames: &[&super::support::NasFrame], mm: u8| {
+        frames.iter().any(|f| f.mm_types.contains(&mm))
+    };
+    let amf_side = from(true);
+    let ue_side = from(false);
+    assert!(
+        amf_side.iter().any(|f| f.security_headers.contains(&3)),
+        "{nas:#?}"
+    );
+    for mm in [0x56, 0x5d, 0x42, 0x68, 0x46] {
+        assert!(
+            has(&amf_side, mm),
+            "NetGet never sent 5GMM 0x{mm:02x}: {nas:#?}"
+        );
+    }
+    assert!(
+        amf_side.iter().any(|f| f.sm_types.contains(&0xc2)),
+        "no PDU Session Establishment Accept dissected: {nas:#?}"
+    );
+    assert!(ue_side.iter().any(|f| f.security_headers.contains(&4)));
+    for mm in [0x41, 0x57, 0x5e, 0x43, 0x67, 0x45] {
+        assert!(
+            has(&ue_side, mm),
+            "UERANSIM never sent 5GMM 0x{mm:02x}: {nas:#?}"
+        );
+    }
+    for f in &nas {
+        assert!(
+            f.experts.iter().all(|s| *s < 0x0060_0000),
+            "tshark flags NAS frame {}: {nas:#?}",
+            f.number
+        );
+    }
 }
