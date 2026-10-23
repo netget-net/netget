@@ -21,7 +21,9 @@
 //! everything SRI never sends — each field of a custom job that disagrees with its declaration,
 //! tokens unknown, reused or issued by another server, work selection without negotiating it,
 //! a model that fails — and the shares and PushSolution of a custom job rebuilt into the same
-//! block. No LLM calls in either test: python policies are the model.
+//! block. `declarations_and_custom_jobs_are_checked_against_the_node` does the same with a node:
+//! a stale height, another prev hash and the wrong nbits refused, and the pool's own relay of a
+//! custom job's block moving the node's tip. No LLM calls: python policies are the model.
 use super::support::{self, Raw};
 use super::{peers, support::SECRET};
 use netget::server::stratum_v2::bitcoin::{self as btc, Tx, TxOut};
@@ -422,6 +424,7 @@ fn tx(seed: u8) -> Tx {
 }
 
 /// A declaration accepted by a JDS: its new token and its coinbase halves.
+#[derive(Debug)]
 struct Declared {
     token: Vec<u8>,
     prefix: Vec<u8>,
@@ -429,9 +432,23 @@ struct Declared {
     extranonce_len: usize,
 }
 
-/// Allocate a token on `jd`, declare `txs` with a coinbase leaving `extranonce_len` bytes,
-/// supply whatever the JDS asks for, and return what DeclareMiningJob.Success issued.
+/// Allocate a token on `jd`, declare `txs` at `HEIGHT` with a coinbase leaving
+/// `extranonce_len` bytes, supply whatever the JDS asks for, and return what
+/// DeclareMiningJob.Success issued.
 async fn declare(jd: &mut Raw, request_id: u32, txs: &[Tx], extranonce_len: usize) -> Declared {
+    declare_at(jd, request_id, HEIGHT, txs, extranonce_len)
+        .await
+        .unwrap_or_else(|answer| panic!("declaration {request_id} not accepted: {answer:?}"))
+}
+
+/// As `declare`, at `height`, returning the JDS's answer when it is not a success.
+async fn declare_at(
+    jd: &mut Raw,
+    request_id: u32,
+    height: u32,
+    txs: &[Tx],
+    extranonce_len: usize,
+) -> Result<Declared, Option<Message>> {
     jd.send(&Message::AllocateMiningJobToken {
         user_identifier: b"netget".to_vec(),
         request_id,
@@ -454,7 +471,7 @@ async fn declare(jd: &mut Raw, request_id: u32, txs: &[Tx], extranonce_len: usiz
     // The request id in the coinbase keeps every declaration's block distinct, so a
     // PushSolution (which names no job) matches exactly one.
     let (prefix, suffix) = netget::client::stratum_v2::job_declarator::declared_coinbase(
-        HEIGHT,
+        height,
         format!("raw {request_id}").as_bytes(),
         &outputs,
         extranonce_len,
@@ -490,14 +507,14 @@ async fn declare(jd: &mut Raw, request_id: u32, txs: &[Tx], extranonce_len: usiz
         ..
     }) = answer
     else {
-        panic!("declaration {request_id} not accepted: {answer:?}")
+        return Err(answer);
     };
-    Declared {
+    Ok(Declared {
         token: new_mining_job_token,
         prefix,
         suffix,
         extranonce_len,
-    }
+    })
 }
 
 /// The SetCustomMiningJob a JDC sends for a declaration: every field as declared.
@@ -845,4 +862,146 @@ async fn custom_jobs_are_checked_against_their_declaration() {
     let d = declare(&mut jd, 60, &txs, full).await;
     device.send(&custom(1, 60, &d, &txs)).await;
     assert!(device.recv().await.is_none());
+}
+
+/// With a node (`bitcoin_rpc_url`, raw frames, Bitcoin Core 31.0 regtest): a declaration must
+/// commit to the node's next height, a custom job must build on the tip recorded with its
+/// declaration and carry that block's nbits, and a share on it that meets nbits is a block the
+/// pool relays — the node's tip becomes NetGet's block, assembled from the declaration and the
+/// share, with nobody else submitting it. PushSolution for the same block is not relayed twice.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn declarations_and_custom_jobs_are_checked_against_the_node() {
+    let node = peers::Regtest::start(false, 101).await;
+    let (tip, height, earliest) = node.tip().await;
+    let next = u32::try_from(height + 1).unwrap();
+    let tip_bytes = wire::parse_display_hash(Some(&tip)).unwrap();
+    let (state, id, port, status) = support::start_role(
+        support::script(POLICY),
+        json!({"role": "pool_and_job_declarator", "network": "regtest",
+               "authority_secret_key": SECRET,
+               "bitcoin_rpc_url": format!("http://127.0.0.1:{}", node.rpc),
+               "bitcoin_rpc_user": "netget", "bitcoin_rpc_password": "netget"}),
+    )
+    .await;
+    let mut jd = Raw::connect(port).await;
+    jd.send(&setup(1, wire::DECLARE_TX_DATA)).await;
+    assert!(matches!(
+        jd.recv().await,
+        Some(Message::SetupConnectionSuccess { .. })
+    ));
+    let (mut pool, channel, prefix) = work_selecting_channel(port, "netget.ws").await;
+    let full = prefix.len() + 8;
+
+    // A height that is not the node's next block.
+    let stale = declare_at(&mut jd, 1, next + 5, &[], full).await;
+    assert!(
+        matches!(&stale, Err(Some(Message::DeclareMiningJobError { error_code, .. })) if error_code == b"stale-chain-tip"),
+        "{stale:?}"
+    );
+
+    // Another prev hash, then nbits the node's next block does not have.
+    let d = declare_at(&mut jd, 2, next, &[], full).await.unwrap();
+    let mut m = custom(channel, 2, &d, &[]);
+    if let Message::SetCustomMiningJob { nbits, .. } = &mut m {
+        *nbits = 0x207f_ffff;
+    }
+    pool.send(&m).await;
+    assert!(refused(pool.recv().await, 2, "stale-chain-tip"));
+    let d = declare_at(&mut jd, 3, next, &[], full).await.unwrap();
+    let mut m = custom(channel, 3, &d, &[]);
+    if let Message::SetCustomMiningJob {
+        prev_hash, nbits, ..
+    } = &mut m
+    {
+        *prev_hash = tip_bytes;
+        *nbits = 0x1f00_ffff;
+    }
+    pool.send(&m).await;
+    assert!(refused(pool.recv().await, 3, "invalid-nbits"));
+
+    // On the node's tip with its nbits: taken, and its first share is a block.
+    let d = declare_at(&mut jd, 4, next, &[], full).await.unwrap();
+    let mut m = custom(channel, 4, &d, &[]);
+    if let Message::SetCustomMiningJob {
+        prev_hash, nbits, ..
+    } = &mut m
+    {
+        *prev_hash = tip_bytes;
+        *nbits = 0x207f_ffff;
+    }
+    pool.send(&m).await;
+    let Some(Message::SetCustomMiningJobSuccess { job_id, .. }) = pool.recv().await else {
+        panic!(
+            "the custom job on the node's tip was not accepted:\n{}",
+            status.text()
+        )
+    };
+    let asked = support::events(&state, id, "stratum_v2_custom_job").await;
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    assert_eq!(asked[0]["tip_checked"], true);
+    assert_eq!(asked[0]["prev_hash"], tip.as_str());
+    let declared = support::events(&state, id, "stratum_v2_jd_declare_job").await;
+    assert!(
+        declared.iter().all(|e| e["prev_hash"] == tip.as_str()),
+        "{declared:?}"
+    );
+
+    let extranonce = [9u8; 8];
+    let coinbase = [&d.prefix[..], &prefix, &extranonce, &d.suffix[..]].concat();
+    let root = Tx::parse(&coinbase).unwrap().txid();
+    // Quickly generated regtest blocks put the median time past ahead of the clock.
+    let ntime = wire::now_secs().max(u32::try_from(earliest).unwrap());
+    let (nonce, hash) = support::find_nonce(
+        0x2000_0000,
+        &tip_bytes,
+        &root,
+        ntime,
+        0x207f_ffff,
+        &btc::compact_to_target(0x207f_ffff).unwrap(),
+        true,
+    );
+    pool.send(&Message::SubmitSharesExtended {
+        channel_id: channel,
+        sequence_number: 1,
+        job_id,
+        nonce,
+        ntime,
+        version: 0x2000_0000,
+        extranonce: extranonce.to_vec(),
+    })
+    .await;
+    assert!(matches!(
+        pool.recv().await,
+        Some(Message::SubmitSharesSuccess { .. })
+    ));
+    let hash = wire::display_hex(&hash);
+    assert_eq!(
+        node.cli(&["getbestblockhash"]).await.as_deref(),
+        Ok(hash.as_str()),
+        "NetGet's pool relayed nothing the node took:\n{}",
+        status.text()
+    );
+    let block: Value = node.json(&["getblock", &hash, "2"]).await;
+    assert_eq!(block["height"], next, "{block}");
+    assert_eq!(
+        block["tx"][0]["vout"][0]["scriptPubKey"]["asm"], "1",
+        "{block}"
+    );
+    let share = &support::events(&state, id, "stratum_v2_share").await[0];
+    assert_eq!(share["relay"], "accepted", "{share}");
+
+    // The same block pushed to the JDS is rebuilt to the same hash and not relayed again.
+    jd.send(&Message::PushSolution {
+        extranonce: [&prefix[..], &extranonce].concat(),
+        prev_hash: tip_bytes,
+        nonce,
+        ntime,
+        nbits: 0x207f_ffff,
+        version: 0x2000_0000,
+    })
+    .await;
+    let pushed = wait_events(&state, id, "stratum_v2_jd_solution", 20, |_| true).await;
+    assert_eq!(pushed.len(), 1, "{pushed:?}");
+    assert_eq!(pushed[0]["hash"], hash.as_str());
+    assert_eq!(pushed[0]["relay"], "already-relayed");
 }
