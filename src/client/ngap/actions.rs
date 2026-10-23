@@ -262,7 +262,7 @@ pub static REGISTERED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
          this UE derived. Ask for a session with ngap_pdu_session_request.",
         vec![
             p("ran_ue_ngap_id", "number", "This gNB's id for the UE", true),
-            p("supi", "string", "The subscriber", true),
+            p("supi", "string", "The registered subscriber's permanent identity, imsi-<digits> (the one this gNB holds credentials for)", true),
             p("guti", "object", "The 5G-GUTI the AMF assigned", true),
             p("allowed_nssai", "array", "The slices the UE may use", true),
             p(
@@ -283,7 +283,12 @@ pub static PDU_SESSION_EVENT: LazyLock<EventType> = LazyLock::new(|| {
          cause).",
         vec![
             p("ran_ue_ngap_id", "number", "This gNB's id for the UE", true),
-            p("pdu_session_id", "number", "The session", true),
+            p(
+                "pdu_session_id",
+                "number",
+                "The PDU session identity (1-15) the request asked for, as the AMF answered it",
+                true,
+            ),
             p("result", "string", "accepted or rejected", true),
             p(
                 "ue_ipv4",
@@ -428,12 +433,12 @@ impl Protocol for NgapClientProtocol {
     fn metadata(&self) -> crate::protocol::metadata::ProtocolMetadataV2 {
         use crate::protocol::metadata::*;
         ProtocolMetadataV2::builder()
-            .state(DevelopmentState::Experimental)
+            .state(DevelopmentState::Beta)
             .privilege_requirement(PrivilegeRequirement::None)
             .implementation("The AMF role's APER codec, 5GMM/5GSM and NAS security (src/server/ngap) as a gNB with a UE: SCTP association (PPID 60, stream 0/1) or the labelled lab TCP framing, NG Setup from the startup parameters on connect, RAN UE NGAP ID allocation; for a UE whose SUCI names the configured subscriber, the UE side of 5G-AKA (AUTN verified, RES*, SQN and AUTS), the security mode procedure (NIA2 with NEA0/NEA2, replayed capabilities checked), Registration Complete, the Initial Context Setup answered with K_gNB compared against the UE's own, and PDU Session Establishment with the resource setup answered (a downlink tunnel per session). UE Context Release Complete and NG Reset Acknowledge answered in Rust")
             .llm_control("Which UEs to bring in and with what Registration Request (SUCI or 5G-GUTI), how a UE without credentials answers identity and authentication requests, and when a registered UE asks for a PDU session (DNN, slice). Keys, MACs, COUNTs and the security procedures are Rust's and never reach the model")
             .e2e_testing("tests/client/ngap: a whole Open5GS 2.8 core (MongoDB, NRF, AUSF, UDM, UDR, PCF, NSSF, BSF, SMF, UPF, AMF) over real SCTP on Linux registers the model's UE after 5G-AKA, hands the gNB a K_gNB equal to the UE's own, and creates the PDU session the SMF logs; Open5GS's AMF alone identifies a UE and refuses a foreign PLMN; a canned AMF over the lab transport for bounds and follow-up depth; tshark's ngap and nas-5gs dissectors read the captures")
-            .notes("Experimental: one independent AMF (Open5GS), runnable only where SCTP exists. The UE side implements NIA2 with NEA0/NEA2 only, 5G-AKA only, null-scheme SUCI only, one PDU session type (IPv4). The gNB runs no user plane: it answers the resource setup with a downlink tunnel address but carries no packets. Not built: handover, paging, UE context modification, RAN configuration update, service request, more than one AMF per client. Handler chains stop after 8 follow-ups.")
+            .notes("Beta on the client bar: the peer is a whole Open5GS 2.8 core (a third-party server, not a crate NetGet links), the test fails rather than skips without it, the session is real (5G-AKA verified by Open5GS's AUSF, registration, a PDU session the SMF allocates), and the model's Initial UE Message and PDU session request are asserted from Open5GS's own logs. The evidence runs only where SCTP exists (Linux, the ngap pair job). The UE side implements NIA2 with NEA0/NEA2 only, 5G-AKA only, null-scheme SUCI only, one PDU session type (IPv4). The gNB runs no user plane: it answers the resource setup with a downlink tunnel address but carries no packets. Not built: handover, paging, UE context modification, RAN configuration update, service request, more than one AMF per client. Handler chains stop after 8 follow-ups.")
             .max_inbound_bytes(codec::MAX_PDU_LEN)
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
             .batching(crate::protocol::metadata::BatchingMode::Unsupported)

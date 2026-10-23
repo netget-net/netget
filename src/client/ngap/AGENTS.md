@@ -4,7 +4,12 @@ NetGet as a **gNB** on one N2 association with one AMF (TS 38.413 over SCTP, TS 
 codec, 5GMM subset and transport are the server's (`src/server/ngap/`, read its `AGENTS.md` for
 APER, bounds and the transport); this directory is the gNB's session and its actions.
 
-**Status**: `Experimental` — one independent AMF (Open5GS, as a whole core), runnable only where SCTP exists.
+**Status**: `Beta` — all four conditions of the client bar in the root `AGENTS.md`: a third-party
+server (a whole Open5GS 2.8 core), a test that fails rather than skips without it, a real session
+(5G-AKA, registration, a PDU session), and the model's actions asserted from Open5GS's own logs
+(the AMF registers the model's SUCI; the SMF creates the session the model asked for). It runs
+only where SCTP exists, in the `ngap` pair job. One AMF implementation; not reviewed beyond its
+tests.
 
 ## What Rust does and what the model does
 

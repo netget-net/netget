@@ -70,6 +70,11 @@ const CONNECTIONLESS_EXCEPTIONS: &[&str] = &[
     // and the devices behind it have counters and queued downlinks. The server drops a
     // gateway silent for 90 s itself; a 10-second sweep would cut one between keepalives.
     "LoRaWAN",
+    // NGAP is SCTP associations; its UdpSocket is the GTP-U user plane, a side channel that
+    // registers no connection entries at all (its tunnels live and die with the UE contexts of
+    // an association). Sweeping would reap the N2 associations, which are idle by design
+    // between UE procedures.
+    "NGAP",
     // GELF also serves live TCP sessions, which must survive a slow handler. Its UDP
     // path creates only a temporary entry for one decoded message and explicitly
     // removes it after dispatch on success or error. Chunk reassembly is bounded and
