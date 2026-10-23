@@ -4,6 +4,7 @@
 //! hashed with the same code the pool role verifies them with.
 pub mod actions;
 pub mod job_declarator;
+pub mod template_client;
 use crate::client::llm_budget::call_llm_for_client;
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::logging::emit::Log;
@@ -291,7 +292,8 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
     {
         "mining" => {}
         "job_declarator" => return job_declarator::connect(ctx).await,
-        other => bail!("role must be mining or job_declarator, not {other:?}"),
+        "template_client" => return template_client::connect(ctx).await,
+        other => bail!("role must be mining, job_declarator or template_client, not {other:?}"),
     }
     let authority_text = param(&ctx, "authority_public_key")?
         .context("authority_public_key is required: the pool's base58check authority key")?;

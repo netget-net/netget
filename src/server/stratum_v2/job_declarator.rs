@@ -152,7 +152,7 @@ impl Conn {
 /// Split a declared coinbase the way SRI's JDS does: the prefix runs to the end of the
 /// scriptSig bytes the client wrote, the full extranonce fills the rest of the scriptSig, and
 /// the suffix follows. Both the segwit layout SRI's jd_client writes and a legacy one parse.
-fn split_coinbase(prefix: &[u8], suffix: &[u8]) -> Result<(Tx, usize)> {
+pub fn split_coinbase(prefix: &[u8], suffix: &[u8]) -> Result<(Tx, usize)> {
     let segwit = prefix.get(4..6) == Some(&[0x00, 0x01][..]);
     let script_len_at = if segwit { 43 } else { 41 };
     ensure!(

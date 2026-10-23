@@ -10,15 +10,19 @@
   template_distribution_sv2), none of which NetGet links.
 - Bitcoin Core 31.0 (SHA-256 pinned): `bitcoin-node`, whose IPC socket `pool_sv2` takes its
   templates from, and `bitcoin-cli`.
+- sv2-tp 1.1.2 (stratum-mining/sv2-tp, SHA-256 pinned): the C++ Template Provider derived from
+  Bitcoin Core, which serves the Template Distribution Protocol over the network from a
+  bitcoin-node's IPC socket. NetGet's template client takes templates from it. The release
+  publishes no checksum file, so the digests below were taken from the release assets.
 
 Building sv2-apps needs a Rust toolchain and the Cap'n Proto compiler with its standard schemas
 (Ubuntu: capnproto and libcapnp-dev — the Bitcoin Core IPC schemas import /capnp/c++.capnp, which
-only libcapnp-dev installs; macOS: brew install capnp, which ships both). Only the two binaries
+only libcapnp-dev installs; macOS: brew install capnp, which ships both). Only the three binaries
 are kept (ROOT/bin), so ROOT is small enough to cache.
 
 Usage: python3 install_peers.py /absolute/owned/root
 Prints the NETGET_SV2_POOL, NETGET_SV2_MINING_DEVICE, NETGET_SV2_JD_CLIENT,
-NETGET_SV2_BITCOIN_NODE and NETGET_SV2_BITCOIN_CLI exports the tests read.
+NETGET_SV2_BITCOIN_NODE, NETGET_SV2_BITCOIN_CLI and NETGET_SV2_TP exports the tests read.
 """
 import hashlib, os, pathlib, platform, shutil, subprocess, sys, tarfile, urllib.request
 
@@ -31,6 +35,15 @@ BITCOIN = {
                            "4de1d568dedd48604f75132421bc0abeca432639589b49a3909c81db3a813112"),
     ("Darwin", "arm64"):("bitcoin-31.0-arm64-apple-darwin.tar.gz",
                           "a2d7a13b4da53d4a3e4c517f3a0269e2429813417bb320d3b268993cfdc545d0"),
+}
+
+SV2_TP = {
+    ("Linux", "x86_64"): ("sv2-tp-1.1.2-x86_64-linux-gnu.tar.gz",
+                          "927e9a4dc985fe1ad747feca5f1736198d18c138ba46787cdcb8013bf547b57f"),
+    ("Linux", "aarch64"): ("sv2-tp-1.1.2-aarch64-linux-gnu.tar.gz",
+                           "f3d4aee17bc08274b8953d4f45af1115dec0986c23e772aae778e2d6c5238df6"),
+    ("Darwin", "arm64"): ("sv2-tp-1.1.2-arm64-apple-darwin.tar.gz",
+                          "8cdc1a7cc860d411319d412a25788d8bbad3187a044a57e69557d21c9dbe1249"),
 }
 
 root = pathlib.Path(sys.argv[1]).resolve()
@@ -104,9 +117,31 @@ def bitcoin():
     return home / "libexec" / "bitcoin-node", home / "bin" / "bitcoin-cli"
 
 
+def sv2_tp():
+    key = (platform.system(), platform.machine())
+    if key not in SV2_TP:
+        sys.exit(f"no pinned sv2-tp 1.1.2 build for {key}")
+    name, digest = SV2_TP[key]
+    home = root / "sv2-tp-1.1.2"
+    if not home.exists():
+        url = f"https://github.com/stratum-mining/sv2-tp/releases/download/v1.1.2/{name}"
+        with urllib.request.urlopen(url, timeout=600) as r:
+            data = r.read()
+        got = hashlib.sha256(data).hexdigest()
+        if got != digest:
+            sys.exit(f"{url}: sha256 {got}, expected {digest}")
+        archive = root / name
+        archive.write_bytes(data)
+        with tarfile.open(archive) as t:
+            t.extractall(root, filter="data")
+        archive.unlink()
+    return home / "bin" / "sv2-tp"
+
+
 pool, device, jdc = sv2_apps()
 node, cli = bitcoin()
-for exe in [pool, device, jdc, node, cli]:
+tp = sv2_tp()
+for exe in [pool, device, jdc, node, cli, tp]:
     if not exe.exists():
         sys.exit(f"{exe} was not built")
 print("export NETGET_SV2_POOL=" + str(pool))
@@ -114,3 +149,4 @@ print("export NETGET_SV2_MINING_DEVICE=" + str(device))
 print("export NETGET_SV2_JD_CLIENT=" + str(jdc))
 print("export NETGET_SV2_BITCOIN_NODE=" + str(node))
 print("export NETGET_SV2_BITCOIN_CLI=" + str(cli))
+print("export NETGET_SV2_TP=" + str(tp))
