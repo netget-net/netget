@@ -521,6 +521,18 @@ pub fn cdb_len(opcode: u8) -> Option<usize> {
 pub fn decode_read_write(cdb: &[u8]) -> Option<ReadWrite> {
     use opcode::*;
     let op = *cdb.first()?;
+    // The whole form, control byte included: reading only the fields used let a 9-byte
+    // READ(10) through with any transfer length (found by `iscsi_pdu`).
+    let form = match op {
+        READ_6 | WRITE_6 => 6,
+        READ_10 | WRITE_10 => 10,
+        READ_12 | WRITE_12 => 12,
+        READ_16 | WRITE_16 => 16,
+        _ => return None,
+    };
+    if cdb.len() < form {
+        return None;
+    }
     let write = matches!(op, WRITE_6 | WRITE_10 | WRITE_12 | WRITE_16);
     let be = |r: std::ops::Range<usize>| -> Option<u64> {
         Some(

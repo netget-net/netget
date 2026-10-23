@@ -471,6 +471,11 @@ pub fn handle(version: u8, ram: &mut Ram, nv: &mut Nvram, cmd: &Command) -> Hand
     let mut r = Reader::new(&cmd.params);
     match answer(version, ram, nv, cmd.frame_id, &mut r, &mut h) {
         Ok(params) => h.response = ezsp::response(cmd, &params),
+        Err(e) if e.is::<NotACommand>() => {
+            h.callbacks.clear();
+            h.effects.clear();
+            h.response = ezsp::invalid_command(cmd, ezsp::ezsp_status::ERROR_INVALID_FRAME_ID);
+        }
         Err(_) => {
             // The parameters ended before the command's fields did.
             h.callbacks.clear();
@@ -483,6 +488,18 @@ pub fn handle(version: u8, ram: &mut Ram, nv: &mut Nvram, cmd: &Command) -> Hand
 
 /// `EzspStatus` ERROR_INVALID_VALUE, for a command whose parameters are truncated.
 const ERROR_INVALID_VALUE: u8 = 0x36;
+
+/// A frame id `ezsp::name` knows that is not a command the host may send.
+#[derive(Debug)]
+struct NotACommand;
+
+impl std::fmt::Display for NotACommand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("not a command a host sends")
+    }
+}
+
+impl std::error::Error for NotACommand {}
 
 fn answer(
     version: u8,
@@ -1126,7 +1143,9 @@ fn answer(
                 .u8(0)
                 .u32(nv.nwk_frame_counter);
         }
-        _ => unreachable!("every named frame id has an arm"),
+        // `ezsp::name` also names the callbacks, which only an NCP sends. A host that sends
+        // one gets what firmware answers an id it does not accept (found by `zigbee_ash_ezsp`).
+        _ => return Err(NotACommand.into()),
     }
     Ok(w.done())
 }
