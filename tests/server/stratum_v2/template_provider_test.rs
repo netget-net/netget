@@ -142,12 +142,24 @@ elif t=='stratum_v2_tp_solution' and e['height']=={next} and not e['stale']:
     );
 
     // The model heard of the solution, verified, and moved the pool onto a block on top of it.
-    let solutions = support::events(&state, id, "stratum_v2_tp_solution").await;
+    // The relay is logged before the model is asked, so the event may trail it a little.
+    let heard = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let solutions = support::events(&state, id, "stratum_v2_tp_solution").await;
+            if solutions
+                .iter()
+                .any(|s| s["hash"] == hash.as_str() && s["relay"] == "accepted")
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    })
+    .await;
     assert!(
-        solutions
-            .iter()
-            .any(|s| s["hash"] == hash.as_str() && s["relay"] == "accepted"),
-        "{solutions:?}"
+        heard.is_ok(),
+        "{:?}",
+        support::events(&state, id, "stratum_v2_tp_solution").await
     );
     assert!(
         peers::wait_log(&pool_log, "Received: NewTemplate(template_id: 2", 30).await,
