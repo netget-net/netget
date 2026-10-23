@@ -95,6 +95,8 @@ jobs:
           - gearman_packet
           - nostr_message
           - stratum_v2_message
+          - unixfs_dag
+          - ipns_record
     steps:
       - uses: actions/checkout@v4
 

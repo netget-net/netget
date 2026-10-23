@@ -395,3 +395,17 @@ path = "fuzz_targets/stratum_v2_message.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "unixfs_dag"
+path = "fuzz_targets/unixfs_dag.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ipns_record"
+path = "fuzz_targets/ipns_record.rs"
+test = false
+doc = false
+bench = false

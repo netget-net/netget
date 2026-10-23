@@ -397,3 +397,53 @@ async fn a_tampered_block_never_completes_a_fetch() {
     );
     drop(liar);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn netget_reads_an_ipns_record_from_kubos_dht() {
+    let kubo = Kubo::start("dhtserver").await;
+    let target = "/ipfs/QmUNLLsPACCz1vLxQVkXqqLX5R1X345qqfHbsf67hvA3Nn";
+    kubo.ok(&[
+        "name",
+        "publish",
+        "--resolve=false",
+        "--allow-offline",
+        "--timeout=60s",
+        target,
+    ])
+    .await;
+    let (state, id, _rx) = client(
+        &kubo.swarm_addr,
+        vec![json!({"event_pattern":"*","handler":{"type":"static","actions":[]}})],
+    )
+    .await;
+    let outcome = state
+        .send_to_client(
+            id,
+            json!({"type": "ipfs_kad_get_value", "name": kubo.peer_id,
+                   "protocol": "/ipfs/lan/kad/1.0.0"}),
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap();
+    let ClientSendOutcome::Executed { detail } = &outcome else {
+        panic!("{outcome:?}")
+    };
+    let r: Value = serde_json::from_str(detail).unwrap();
+    let rec = &r["record"];
+    assert_eq!(rec["valid"], true, "{r}");
+    assert_eq!(rec["value"], target, "{r}");
+    assert_eq!(rec["name"], kubo.peer_id.as_str(), "{r}");
+    // A name that is not a peer id is refused before anything is sent.
+    let outcome = state
+        .send_to_client(
+            id,
+            json!({"type": "ipfs_kad_get_value", "name": "not-a-name"}),
+            Duration::from_secs(10),
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(&outcome, ClientSendOutcome::Rejected { .. }),
+        "{outcome:?}"
+    );
+}

@@ -22,6 +22,7 @@ pub const DISCONNECT: &str = "libp2p_disconnect";
 pub const BLOCKS: &str = "ipfs_bitswap_blocks";
 pub const KAD_REPLY: &str = "ipfs_kad_reply";
 pub const ADD: &str = "ipfs_add";
+pub const KAD_QUERY: &str = "ipfs_kad_query";
 /// IPFS (Bitswap and the DHT) is off unless asked for.
 pub const IPFS_DEFAULT: bool = false;
 
@@ -205,8 +206,28 @@ pub fn add_action() -> ActionDefinition {
     )
 }
 
+pub fn kad_query_action() -> ActionDefinition {
+    action(
+        KAD_QUERY,
+        "Ask this peer's Kademlia DHT one question: FIND_NODE (peer_id), GET_PROVIDERS (cid) or GET_VALUE (name, an IPNS name). The answer arrives as ipfs_kad_answer; an IPNS record in it is verified (signature, name, expiry) before you see it. At most 8 questions a minute per peer.",
+        vec![
+            p("request", "string", "FIND_NODE, GET_PROVIDERS or GET_VALUE", true),
+            p("peer_id", "string", "For FIND_NODE: the peer id to look up", false),
+            p("cid", "string", "For GET_PROVIDERS: the content's CID", false),
+            p("name", "string", "For GET_VALUE: the IPNS name, a peer id (12D3KooW…)", false),
+            p("protocol", "string", "/ipfs/kad/1.0.0 (default) or the LAN DHT's /ipfs/lan/kad/1.0.0", false),
+        ],
+        json!({"type": KAD_QUERY, "request": "GET_PROVIDERS", "cid": "QmUNLLsPACCz1vLxQVkXqqLX5R1X345qqfHbsf67hvA3Nn"}),
+    )
+}
+
 pub fn ipfs_actions() -> Vec<ActionDefinition> {
-    vec![blocks_action(), kad_reply_action(), add_action()]
+    vec![
+        blocks_action(),
+        kad_reply_action(),
+        add_action(),
+        kad_query_action(),
+    ]
 }
 
 /// The blocks an `ipfs_bitswap_blocks` action supplies, each checked and encoded, its CID
@@ -356,6 +377,26 @@ pub static KAD_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     .with_actions(vec![kad_reply_action(), disconnect_action()])
 });
 
+pub static KAD_ANSWER_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    EventType::new(
+        "ipfs_kad_answer",
+        "This peer's DHT answered an ipfs_kad_query (or the question failed: ok false, with why). An IPNS record in it was verified before you see it.",
+        json!({"type": KAD_QUERY, "request": "FIND_NODE", "peer_id": "12D3KooWD3eckifWpRn9wQpMG9R9hX3sD158z7EqHWmweQAJU5SA"}),
+    )
+    .with_parameters(vec![
+        p("peer_id", "string", "The peer that was asked", true),
+        p("ok", "boolean", "Whether the peer answered", true),
+        p("request", "string", "FIND_NODE, GET_PROVIDERS or GET_VALUE", true),
+        p("protocol", "string", "The DHT protocol asked", false),
+        p("key", "string", "What was asked about", false),
+        p("closer_peers", "array", "[{peer_id, addrs}] the peer says are closer", false),
+        p("provider_peers", "array", "For GET_PROVIDERS: [{peer_id, addrs}] that have the content", false),
+        p("record", "object", "For GET_VALUE: {name, value, sequence, validity, ttl_secs, valid} (valid false with error when it does not verify)", false),
+        p("error", "string", "Why the question failed", false),
+    ])
+    .with_actions(vec![kad_query_action(), add_action(), disconnect_action()])
+});
+
 pub static CONNECTED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "libp2p_peer_connected",
@@ -369,7 +410,12 @@ pub static CONNECTED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         p("protocols", "array", "The protocols the peer says it supports", true),
         p("listen_addrs", "array", "Where the peer says it listens", true),
     ])
-    .with_actions(vec![open_action(), add_action(), disconnect_action()])
+    .with_actions(vec![
+        open_action(),
+        add_action(),
+        kad_query_action(),
+        disconnect_action(),
+    ])
 });
 
 pub static MESSAGE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
@@ -398,6 +444,7 @@ pub static MESSAGE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     .with_actions({
         let mut a = all_actions();
         a.push(add_action());
+        a.push(kad_query_action());
         a
     })
 });
@@ -437,6 +484,10 @@ pub fn check(v: &Value) -> Result<()> {
             // The shape and every bound; hashing waits for the add itself.
             super::unixfs::parse(v)?;
         }
+        KAD_QUERY => {
+            kad::request_of(v["request"].as_str().unwrap_or_default(), v)?;
+            kad::protocol_of(v)?;
+        }
         KAD_REPLY => {
             // Checked against a stand-in host: the real one fills in "self" when it answers.
             let stand_in = Config {
@@ -447,6 +498,7 @@ pub fn check(v: &Value) -> Result<()> {
                 kad: false,
                 directory: Default::default(),
                 dag: Default::default(),
+                dht: Default::default(),
             };
             kad_peers(v, &stand_in)?;
         }
@@ -476,10 +528,12 @@ impl Protocol for Libp2pProtocol {
             "kademlia",
             "cid",
             "kubo",
+            "unixfs",
+            "ipns",
         ]
     }
     fn description(&self) -> &'static str {
-        "libp2p host over TCP (multistream-select, Noise, yamux): answers identify and ping, talks length-prefixed messages on its application protocols' streams, and with ipfs on serves Bitswap blocks the model supplies and answers the Kademlia DHT"
+        "libp2p host over TCP (multistream-select, Noise, yamux): answers identify and ping, talks length-prefixed messages on its application protocols' streams, and with ipfs on serves over Bitswap the files and directories the model describes (built as Kubo builds them) and the blocks it supplies, and keeps IPNS and provider records in its Kademlia DHT"
     }
     fn get_async_actions(&self, _: &AppState) -> Vec<ActionDefinition> {
         Vec::new()
@@ -495,6 +549,7 @@ impl Protocol for Libp2pProtocol {
             MESSAGE_EVENT.clone(),
             WANT_EVENT.clone(),
             KAD_EVENT.clone(),
+            KAD_ANSWER_EVENT.clone(),
         ]
     }
     fn default_binding(&self) -> Option<crate::protocol::BindingDefaults> {
@@ -542,10 +597,10 @@ impl Protocol for Libp2pProtocol {
             .state(DevelopmentState::Experimental)
             .privilege_requirement(PrivilegeRequirement::None)
             .well_known_port(4001)
-            .implementation("Hand-rolled (src/server/libp2p): multistream-select 1.0; Noise XX (25519, ChaChaPoly, SHA256) with the libp2p handshake payload, on ring, x25519-dalek and ed25519-dalek; yamux with per-stream windows; identify (/ipfs/id/1.0.0, push accepted) and ping answered in Rust; Ed25519 peer ids. With ipfs: Bitswap 1.2.0/1.1.0/1.0.0 (answers on a stream of its own), CIDv0/CIDv1 (base58btc, base32) over sha2-256, raw and dag-pb, single-block UnixFS files, and the Kademlia DHT message on /ipfs/kad/1.0.0 and /ipfs/lan/kad/1.0.0")
-            .llm_control("Every message on the application protocols' streams: reply, open streams to the peer, close them, drop the peer. With ipfs: which wanted blocks it has (their content and format; Rust computes each CID and sends only blocks that hash to a want), and who provides a key (GET_PROVIDERS); it is told of ADD_PROVIDER. FIND_NODE is a routing fact answered in Rust")
-            .e2e_testing("tests/server/libp2p: go-libp2p (TCP, Noise, yamux) dials NetGet, verifies its peer id, runs identify and ping, and talks on /netget/chat/1.0.0; Kubo 0.43.1 (loopback only) fetches model-served content with ipfs cat and ipfs block get (raw, CIDv0 UnixFS, a 200 KB block), finds NetGet as a provider through its LAN DHT and sends it ADD_PROVIDER; over go-libp2p, go-cid recomputes the CID of every block sent, a block that does not hash is never sent, a failed model answers DONT_HAVE, and oversized, malformed and unknown-codec messages are refused before the model")
-            .notes("TCP only: no QUIC, WebTransport, WebRTC, TLS security or mplex. Ed25519 identities only (RSA/secp256k1/ECDSA peers are refused). No gossipsub, no relay, no hole punching, no signed peer records. Messages are uvarint-length-prefixed, at most 1 MiB (Bitswap 4 MiB, DHT 64 KiB). A model failure resets the stream it was answering; a failed Bitswap answer is DONT_HAVE, never a block. IPFS limits: sha2-256 only; raw and dag-pb only (dag-cbor and others answered DONT_HAVE); the model serves raw blocks and single-block UnixFS files, not chunked DAGs or directories; DHT records (PUT_VALUE, GET_VALUE values, IPNS) are not stored; provider records are not kept by Rust (the model may remember ADD_PROVIDER); no Bitswap sessions, ledgers or want rebroadcast.")
+            .implementation("Hand-rolled (src/server/libp2p): multistream-select 1.0; Noise XX (25519, ChaChaPoly, SHA256) with the libp2p handshake payload, on ring, x25519-dalek and ed25519-dalek; yamux with per-stream windows; identify (/ipfs/id/1.0.0, push accepted) and ping answered in Rust; Ed25519 peer ids. With ipfs: Bitswap 1.2.0/1.1.0/1.0.0 (answers on a stream of its own) with a per-peer ledger of remembered wants, CIDv0/CIDv1 (base58btc, base32) over sha2-256, raw and dag-pb, UnixFS files and directories built from descriptions exactly as Kubo's ipfs add builds them (fixed-size chunker, balanced layout, CIDv0 UnixFS or CIDv1 raw leaves) and served from the description, and the Kademlia DHT message on /ipfs/kad/1.0.0 and /ipfs/lan/kad/1.0.0 with IPNS records (signatureV2, DAG-CBOR data, sequence) and provider records kept in Rust")
+            .llm_control("Every message on the application protocols' streams: reply, open streams to the peer, close them, drop the peer. With ipfs: which files and directories to serve (ipfs_add or ipfs_content: a description Rust turns into a DAG whose blocks it then serves at no model cost), which wanted blocks it has otherwise (their content and format; Rust computes each CID and sends only blocks that hash to a want), who provides a key Rust does not know (GET_PROVIDERS), and what to ask a peer's DHT (ipfs_kad_query); it is told of ADD_PROVIDER. FIND_NODE, GET_VALUE, PUT_VALUE and known providers are answered in Rust")
+            .e2e_testing("tests/server/libp2p: go-libp2p (TCP, Noise, yamux) dials NetGet, verifies its peer id, runs identify and ping, and talks on /netget/chat/1.0.0; Kubo 0.43.1 (loopback only) fetches model-served content with ipfs cat and ipfs block get, and reads described trees and multi-block files with ipfs ls, cat, get, dag get and refs -r, every root CID first checked against Kubo's ipfs add --only-hash (seven layout profiles, files 0 B to 2.2 MB, trees with empty files, empty directories, symlinks and UTF-8 names) and against Helia's ipfs-unixfs-importer 17.1.1; Helia 7.1.16 (js-libp2p 3.5.1) reads the same trees; Kubo's cat waits on a remembered want until the model adds the content; Kubo publishes an IPNS name into NetGet's DHT and a second Kubo resolves it there; over go-libp2p, go-cid recomputes the CID of every block sent, remembered wants are answered when content arrives and forgotten on CANCEL, a block that does not hash is never sent, a failed model answers DONT_HAVE, stale and tampered IPNS records are refused, and oversized, malformed and unknown-codec messages are refused before the model")
+            .notes("TCP only: no QUIC, WebTransport, WebRTC, TLS security or mplex. Ed25519 identities only (RSA/secp256k1/ECDSA peers are refused). No gossipsub, no relay, no hole punching, no signed peer records. Messages are uvarint-length-prefixed, at most 1 MiB (Bitswap 4 MiB, DHT 64 KiB). A model failure resets the stream it was answering; a failed Bitswap answer is DONT_HAVE, never a block. IPFS limits: sha2-256 only; raw and dag-pb only (dag-cbor and others answered DONT_HAVE); fixed-size chunker and balanced layout only (no rabin, buzhash, trickle or inline); no HAMT-sharded directories (a directory Kubo would shard is refused); an add is at most 256 MiB and 65536 blocks, DAGs at most 32 deep; at most 1024 remembered wants per peer; IPNS records only under Ed25519 names, at most 1024 names; the host's DHT answers from what it holds and asks one connected peer at a time (no iterative lookups, no republishing).")
             .max_inbound_bytes(host::MAX_MESSAGE)
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
             .batching(crate::protocol::metadata::BatchingMode::Unsupported)

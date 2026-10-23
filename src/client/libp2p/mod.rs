@@ -73,6 +73,7 @@ pub async fn connect(ctx: ConnectContext) -> Result<std::net::SocketAddr> {
         kad: false,
         directory: Default::default(),
         dag: Default::default(),
+        dht: Default::default(),
     });
     let wants: Arc<std::sync::Mutex<WantSet>> = Default::default();
     let bitswap_session: Arc<ipfs::Session> = Default::default();
@@ -413,7 +414,7 @@ async fn run(
                     ));
                     Ok(Some(r))
                 }
-                "ipfs_kad_find_node" | "ipfs_kad_get_providers" => Ok(Some(match ipfs::kad_ask(peer, &action).await {
+                "ipfs_kad_find_node" | "ipfs_kad_get_providers" | "ipfs_kad_get_value" => Ok(Some(match ipfs::kad_ask(peer, &action).await {
                     Ok(mut r) => {
                         r["operation"] = json!(operation);
                         r["ok"] = json!(true);

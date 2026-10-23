@@ -33,6 +33,55 @@ pub struct Ledger {
     seq: u64,
     pub received: Counts,
     pub sent: Counts,
+    /// Where this connection's DHT answers go to become `ipfs_kad_answer`, and when its
+    /// recent questions were asked (for the rate bound).
+    pub kad_answers: Option<tokio::sync::mpsc::Sender<Value>>,
+    kad_asked: std::collections::VecDeque<crate::utils::clock::Instant>,
+}
+
+/// Questions the model may put to one peer's DHT per [`KAD_QUERY_WINDOW`].
+pub const MAX_KAD_QUERIES: usize = 8;
+pub const KAD_QUERY_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// `ipfs_kad_query`: ask this peer's DHT, and queue the answer as an event. The detail of
+/// what was asked, for the log and an injected command's reply.
+pub async fn kad_query(
+    cfg: &Config,
+    peer: &Peer,
+    ledger: &mut Ledger,
+    action: &Value,
+) -> anyhow::Result<String> {
+    anyhow::ensure!(cfg.kad, "ipfs is off on this host");
+    ledger
+        .kad_asked
+        .retain(|at| at.elapsed() < KAD_QUERY_WINDOW);
+    anyhow::ensure!(
+        ledger.kad_asked.len() < MAX_KAD_QUERIES,
+        "at most {MAX_KAD_QUERIES} DHT questions a minute per peer"
+    );
+    ledger
+        .kad_asked
+        .push_back(crate::utils::clock::Instant::now());
+    let kind = action["request"].as_str().unwrap_or_default();
+    let req = kad::request_of(kind, action)?;
+    let protocol = kad::protocol_of(action)?;
+    let mut answer = match kad::ask(peer, protocol, &req).await {
+        Ok(m) => {
+            let mut j = kad::answer_json(protocol, &req, &m);
+            j["ok"] = json!(true);
+            j
+        }
+        Err(e) => {
+            json!({"ok": false, "request": kind, "protocol": protocol, "error": format!("{e:#}")})
+        }
+    };
+    answer["peer_id"] = json!(peer.remote_peer);
+    let detail = answer.to_string();
+    if let Some(tx) = &ledger.kad_answers {
+        tx.try_send(answer)
+            .map_err(|_| anyhow::anyhow!("the DHT answer queue is full"))?;
+    }
+    Ok(detail)
 }
 
 impl Ledger {
@@ -478,16 +527,40 @@ pub async fn kad(
             return;
         }
         Kind::PutValue => {
-            log.info(format!(
-                "libp2p connection {id} operation=kad request={op} decision=refused_unsupported: records are not stored"
-            ));
-            reset(peer, stream_id);
+            // An IPNS record, kept in Rust when it verifies and is not older than the one
+            // held; the reply echoes the request, which is what the putter checks.
+            let stored = match &req.record {
+                Some((key, value)) if *key == req.key => cfg.dht.put(&req.key, value),
+                Some(_) => Err(anyhow::anyhow!("the record's key is not the message's")),
+                None => Err(anyhow::anyhow!("PUT_VALUE without a record")),
+            };
+            match stored {
+                Ok((put, rec)) => {
+                    log.info(format!(
+                        "libp2p connection {id} operation=kad request={op} decision={} name={} sequence={} value={}",
+                        if put == super::ipns::Put::Stored { "stored" } else { "same" },
+                        wire::base58(&rec.name),
+                        rec.sequence,
+                        String::from_utf8_lossy(&rec.value)
+                    ));
+                    send_kad(ctx, id, peer, stream_id, &req).await;
+                }
+                Err(e) => {
+                    log.warn(format!(
+                        "libp2p connection {id} operation=kad request={op} decision=refused_record: {e:#}"
+                    ));
+                    reset(peer, stream_id);
+                }
+            }
             return;
         }
         Kind::FindNode | Kind::GetValue => {
-            if req.kind == Kind::FindNode && kad::parse_peer_id(&req.key_text()).is_err() {
+            // FIND_NODE asks for the peers closest to any key, not only to a peer id: Kubo
+            // looks up an IPNS record's key (`/ipns/…`) this way before it puts the record.
+            // Only an empty key is malformed, as go-libp2p-kad-dht says.
+            if req.key.is_empty() {
                 log.warn(format!(
-                    "libp2p connection {id} operation=kad request={op} decision=refused_malformed: the key is not a peer id"
+                    "libp2p connection {id} operation=kad request={op} decision=refused_malformed: an empty key"
                 ));
                 reset(peer, stream_id);
                 return;
@@ -498,9 +571,20 @@ pub async fn kad(
             }
             reply.closer.extend(closest_known);
             reply.closer.truncate(kad::MAX_PEERS);
+            if req.kind == Kind::GetValue {
+                if let Some(rec) = cfg.dht.get(&req.key) {
+                    log.info(format!(
+                        "libp2p connection {id} operation=kad request={op} source=store name={} sequence={}",
+                        wire::base58(&rec.name),
+                        rec.sequence
+                    ));
+                    reply.record = Some((req.key.clone(), rec.bytes));
+                }
+            }
             log.debug(format!(
-                "libp2p connection {id} operation=kad request={op} closer={} providers=0",
-                reply.closer.len()
+                "libp2p connection {id} operation=kad request={op} closer={} providers=0 record={}",
+                reply.closer.len(),
+                reply.record.is_some()
             ));
             send_kad(ctx, id, peer, stream_id, &reply).await;
             return;
@@ -513,17 +597,26 @@ pub async fn kad(
                 reset(peer, stream_id);
                 return;
             }
-            // Content this host serves from its store: it is the provider, a fact Rust knows.
-            if req.kind == Kind::GetProviders && serves(cfg, &req.key) {
-                let mut reply = kad::Message::request(req.kind, req.key.clone());
-                reply.providers.push(me.clone());
-                reply.closer = closest_known;
-                log.info(format!(
-                    "libp2p connection {id} operation=kad request={op} source=store closer={} providers=1",
-                    reply.closer.len()
-                ));
-                send_kad(ctx, id, peer, stream_id, &reply).await;
-                return;
+            // Providers Rust knows of: this host for content it serves, and peers that
+            // announced it with ADD_PROVIDER. Facts, answered without the model.
+            if req.kind == Kind::GetProviders {
+                let mut known = cfg.dht.providers(&req.key);
+                if serves(cfg, &req.key) {
+                    known.insert(0, me.clone());
+                }
+                if !known.is_empty() {
+                    let mut reply = kad::Message::request(req.kind, req.key.clone());
+                    known.truncate(kad::MAX_PEERS);
+                    reply.providers = known;
+                    reply.closer = closest_known;
+                    log.info(format!(
+                        "libp2p connection {id} operation=kad request={op} source=store closer={} providers={}",
+                        reply.closer.len(),
+                        reply.providers.len()
+                    ));
+                    send_kad(ctx, id, peer, stream_id, &reply).await;
+                    return;
+                }
             }
             if req.kind == Kind::AddProvider {
                 // A peer may only announce itself (as go-libp2p-kad-dht requires).
@@ -542,6 +635,18 @@ pub async fn kad(
                 if providers.is_empty() {
                     return;
                 }
+                for p in &providers {
+                    let mut p = p.clone();
+                    if p.addrs.is_empty() {
+                        p.addrs = known_addrs(cfg, &p.id);
+                    }
+                    cfg.dht.add_provider(&req.key, p);
+                }
+                log.info(format!(
+                    "libp2p connection {id} operation=kad request={op} decision=stored key={} provider={}",
+                    req.key_text(),
+                    peer.remote_peer
+                ));
             }
         }
     }

@@ -6,7 +6,7 @@ use crate::protocol::Event;
 use crate::server::libp2p::bitswap::{self, Counts, Entry, WantSet, WantType};
 use crate::server::libp2p::host::{self, Peer};
 use crate::server::libp2p::ipfs::{self, Cid};
-use crate::server::libp2p::kad::{self, Kind};
+use crate::server::libp2p::kad;
 use crate::server::libp2p::unixfs::{self, Walk};
 use crate::server::libp2p::wire;
 use anyhow::{ensure, Context, Result};
@@ -193,68 +193,28 @@ pub fn received(
     Ok((events, refused))
 }
 
-fn peers(list: &[kad::Peer]) -> Vec<Value> {
-    list.iter().map(kad::Peer::to_json).collect()
-}
-
 /// The DHT protocol an action names (the public DHT's by default).
 pub fn kad_protocol(v: &Value) -> Result<&'static str> {
-    match v["protocol"].as_str() {
-        None => Ok(kad::KAD),
-        Some(p) => kad::PROTOCOLS
-            .iter()
-            .find(|x| **x == p)
-            .copied()
-            .with_context(|| format!("protocol must be {} or {}", kad::KAD, kad::LAN_KAD)),
-    }
+    kad::protocol_of(v)
 }
 
 /// The request an `ipfs_kad_*` action makes.
 pub fn kad_request(v: &Value) -> Result<kad::Message> {
     match v["type"].as_str().unwrap_or_default() {
-        "ipfs_kad_find_node" => {
-            let id = v["peer_id"].as_str().context("peer_id is required")?;
-            Ok(kad::Message::request(
-                Kind::FindNode,
-                kad::parse_peer_id(id)?,
-            ))
-        }
-        "ipfs_kad_get_providers" => {
-            let cid = Cid::parse(v["cid"].as_str().context("cid is required")?)?;
-            Ok(kad::Message::request(Kind::GetProviders, cid.multihash()))
-        }
+        "ipfs_kad_find_node" => kad::request_of("FIND_NODE", v),
+        "ipfs_kad_get_providers" => kad::request_of("GET_PROVIDERS", v),
+        "ipfs_kad_get_value" => kad::request_of("GET_VALUE", v),
         other => anyhow::bail!("{other} is not a DHT request"),
     }
 }
 
-/// Ask the remote's DHT one question on a stream of its own: the answer, or why not.
+/// Ask the remote's DHT one question on a stream of its own: the answer (a record verified
+/// before it is shown), or why not.
 pub async fn kad_ask(peer: &Peer, v: &Value) -> Result<Value> {
     let req = kad_request(v)?;
     let protocol = kad_protocol(v)?;
-    tokio::time::timeout(kad::REQUEST_TIMEOUT, async {
-        let Some((mut s, _)) = host::open_negotiated(peer, &[protocol]).await? else {
-            anyhow::bail!("the remote does not serve {protocol}");
-        };
-        s.writer().send(wire::length_prefixed(&kad::encode(&req)))?;
-        let reply = wire::read_length_prefixed(&mut s, kad::MAX_MESSAGE).await?;
-        s.writer().close();
-        let m = kad::decode(&reply)?;
-        ensure!(
-            m.kind == req.kind,
-            "the remote answered {} to {}",
-            m.kind.name(),
-            req.kind.name()
-        );
-        Ok(json!({
-            "protocol": protocol,
-            "request": req.kind.name(),
-            "key": req.key_text(),
-            "closer_peers": peers(&m.closer),
-            "provider_peers": peers(&m.providers),
-        }))
-    })
-    .await
-    .context("the DHT request timed out")?
+    let m = kad::ask(peer, protocol, &req).await?;
+    Ok(kad::answer_json(protocol, &req, &m))
 }
 
 // ---------------------------------------------------------------------------------------

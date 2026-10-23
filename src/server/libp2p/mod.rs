@@ -5,6 +5,7 @@ pub mod actions;
 pub mod bitswap;
 pub mod host;
 pub mod ipfs;
+pub mod ipns;
 pub mod kad;
 pub mod noise;
 mod serve_ipfs;
@@ -123,6 +124,7 @@ pub async fn spawn(ctx: SpawnContext) -> Result<SocketAddr> {
         kad: ipfs,
         directory: Default::default(),
         dag,
+        dht: Default::default(),
     });
     Log::new(Some(&ctx.status_tx)).info(format!(
         "libp2p host listening on {}/p2p/{} ({})",
@@ -284,6 +286,8 @@ async fn connection(
                "agent_version": agent, "protocols": protocols, "listen_addrs": listen}),
     );
     let mut ledger = serve_ipfs::Ledger::default();
+    let (kad_answers, mut kad_answer_rx) = mpsc::channel::<Value>(serve_ipfs::MAX_KAD_QUERIES);
+    ledger.kad_answers = Some(kad_answers);
     let mut dag_rx = cfg.dag.subscribe();
     answer(&ctx, id, &peer, &spawn, &cfg, &mut ledger, connected, None).await;
 
@@ -327,6 +331,11 @@ async fn connection(
             command = peer_rx.recv() => {
                 let Some(command) = command else { continue };
                 inject(&ctx, id, &peer, &spawn, &cfg, &mut ledger, command).await;
+            }
+            // This peer's DHT answered a question the model asked.
+            Some(answered) = kad_answer_rx.recv() => {
+                let event = Event::new(&actions::KAD_ANSWER_EVENT, answered);
+                answer(&ctx, id, &peer, &spawn, &cfg, &mut ledger, event, None).await;
             }
             // Content was added (on any connection): wants this peer still has may be met.
             Ok(()) = dag_rx.changed(), if cfg.bitswap => {
@@ -501,6 +510,7 @@ async fn apply(
             anyhow::ensure!(cfg.bitswap, "ipfs is off on this host");
             serve_ipfs::supply_tracked(ctx, id, peer, ledger, action).await
         }
+        actions::KAD_QUERY => serve_ipfs::kad_query(cfg, peer, ledger, action).await,
         t @ actions::KAD_REPLY => {
             anyhow::bail!("{t} answers a DHT request, and can only be given as that answer")
         }

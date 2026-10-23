@@ -131,6 +131,15 @@ pub fn actions() -> Vec<ActionDefinition> {
             json!({"type": "ipfs_kad_get_providers", "cid": "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku"}),
         ),
         action(
+            "ipfs_kad_get_value",
+            "Ask the remote's Kademlia DHT for an IPNS record (GET_VALUE /ipns/<name>). The answer arrives as libp2p_response with the record verified (signature, name, expiry) and shown as {name, value, sequence, validity, valid}, and closer_peers.",
+            vec![
+                p("name", "string", "The IPNS name: a peer id (12D3KooW…)", true),
+                p("protocol", "string", "/ipfs/kad/1.0.0 (default) or the LAN DHT's /ipfs/lan/kad/1.0.0", false),
+            ],
+            json!({"type": "ipfs_kad_get_value", "name": "12D3KooWD3eckifWpRn9wQpMG9R9hX3sD158z7EqHWmweQAJU5SA"}),
+        ),
+        action(
             "disconnect",
             "Close the connection.",
             vec![],
@@ -222,6 +231,12 @@ pub static RESPONSE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
                 "provider_peers",
                 "array",
                 "For ipfs_kad_get_providers: [{peer_id, addrs}] that have the content",
+                false,
+            ),
+            p(
+                "record",
+                "object",
+                "For ipfs_kad_get_value: the IPNS record, verified ({name, value, sequence, validity, ttl_secs, valid}; valid false with error when it does not verify)",
                 false,
             ),
             p(
@@ -328,7 +343,7 @@ pub fn check(v: &Value) -> Result<()> {
         "ipfs_fetch" => {
             super::ipfs::fetch_params(v)?;
         }
-        "ipfs_kad_find_node" | "ipfs_kad_get_providers" => {
+        "ipfs_kad_find_node" | "ipfs_kad_get_providers" | "ipfs_kad_get_value" => {
             super::ipfs::kad_request(v)?;
             super::ipfs::kad_protocol(v)?;
         }
@@ -358,7 +373,7 @@ impl Protocol for Libp2pClientProtocol {
         ]
     }
     fn description(&self) -> &'static str {
-        "libp2p dialler over TCP (Noise, yamux): identifies and pings the remote, talks length-prefixed messages on its protocols' streams, and with ipfs on fetches blocks by CID over Bitswap (each verified) and asks the remote's Kademlia DHT"
+        "libp2p dialler over TCP (Noise, yamux): identifies and pings the remote, talks length-prefixed messages on its protocols' streams, and with ipfs on fetches blocks and whole files and directories by CID over Bitswap (each block verified) and asks the remote's Kademlia DHT, IPNS records included"
     }
     fn get_async_actions(&self, _: &AppState) -> Vec<ActionDefinition> {
         actions()
@@ -417,10 +432,10 @@ impl Protocol for Libp2pClientProtocol {
         ProtocolMetadataV2::builder()
             .state(DevelopmentState::Experimental)
             .privilege_requirement(PrivilegeRequirement::None)
-            .implementation("The server's hand-rolled stack in the dialler role: multistream-select, Noise XX as initiator (checking the remote's peer id when one is named), yamux, identify and ping; the remote's own identify and ping are answered. With ipfs: Bitswap wants on a stream of its own and blocks accepted on the remote's streams, each hashed against the outstanding wants; DHT FIND_NODE and GET_PROVIDERS, one question per stream")
-            .llm_control("Which protocols to open streams on, what to send, when to ping, identify, close and disconnect, and how to answer the remote's messages. With ipfs: which CIDs to want or cancel (a dag-pb block's links let it walk a chunked file or directory), and what to ask the remote's DHT")
-            .e2e_testing("tests/client/libp2p: go-libp2p listening (TCP, Noise, yamux), which identifies NetGet, answers its chat stream and opens one of its own to NetGet; Kubo 0.43.1 (loopback only) serves files it added — a CIDv0 UnixFS file, a CIDv1 raw block, and a chunked file whose leaves NetGet wants from the root's links — and answers FIND_NODE and GET_PROVIDERS; a go-libp2p peer answering wants with tampered bytes is refused before the model hears of it")
-            .notes("TCP only; Ed25519 identities only; no gossipsub, relay or hole punching. remote_addr is host:port or /ip4|ip6|dns/…/tcp/…[/p2p/<id>]. A handler chain stops after 8 follow-ups. IPFS limits: sha2-256 and the raw and dag-pb codecs only (other CIDs are refused before anything is sent); at most 1024 outstanding wants; block content shown to the model is cut at 64 KiB (the block is verified whole); the client serves no blocks and answers no DHT requests; Kubo keeps its own provider records in its LAN DHT while its WAN DHT is inactive, so ask /ipfs/lan/kad/1.0.0 on a private network.")
+            .implementation("The server's hand-rolled stack in the dialler role: multistream-select, Noise XX as initiator (checking the remote's peer id when one is named), yamux, identify and ping; the remote's own identify and ping are answered. With ipfs: Bitswap wants on a stream of its own and blocks accepted on the remote's streams, each hashed against the outstanding wants; ipfs_fetch walks a whole UnixFS DAG (files of many blocks, directories, symlinks) iteratively and bounded, verifying every block; DHT FIND_NODE, GET_PROVIDERS and GET_VALUE (IPNS records verified), one question per stream")
+            .llm_control("Which protocols to open streams on, what to send, when to ping, identify, close and disconnect, and how to answer the remote's messages. With ipfs: which DAG to fetch whole, which CIDs to want or cancel block by block, and what to ask the remote's DHT")
+            .e2e_testing("tests/client/libp2p: go-libp2p listening (TCP, Noise, yamux), which identifies NetGet, answers its chat stream and opens one of its own to NetGet; Kubo 0.43.1 (loopback only) serves files it added — a CIDv0 UnixFS file, a CIDv1 raw block, a chunked file whose leaves NetGet wants from the root's links, and, through ipfs_fetch, CIDv0 and CIDv1 directory trees, a 2.2 MB file and a depth-4 file checked by size and SHA-256 — and answers FIND_NODE, GET_PROVIDERS and GET_VALUE for its own IPNS name; Helia 7.1.16 serves a tree NetGet fetches whole; a go-libp2p peer answering wants with tampered bytes is refused before the model hears of it, and never completes a fetch")
+            .notes("TCP only; Ed25519 identities only; no gossipsub, relay or hole punching. remote_addr is host:port or /ip4|ip6|dns/…/tcp/…[/p2p/<id>]. A handler chain stops after 8 follow-ups. IPFS limits: sha2-256 and the raw and dag-pb codecs only (other CIDs are refused before anything is sent); at most 1024 outstanding wants; block content shown to the model is cut at 64 KiB (the block is verified whole); a fetch is at most 8192 blocks, 32 levels and 1 GiB, shows at most 1 MiB, and runs one at a time per connection; HAMT-sharded directories are not walked; the client serves no blocks and answers no DHT requests; Kubo keeps its own provider records in its LAN DHT while its WAN DHT is inactive, so ask /ipfs/lan/kad/1.0.0 on a private network.")
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
             .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()

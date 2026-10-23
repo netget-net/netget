@@ -363,10 +363,11 @@ fn the_walker_is_bounded() {
     // A depth bomb thousands deep costs no stack: it is refused at the bound.
     let (root, blocks) = chain(10_000);
     assert!(walk_all(root, &blocks, 64).is_err());
-    // Blocks: 3000 links to a node of 3000 links to one leaf names 9 million blocks in
-    // two small nodes; the walk stops at its bound.
+    // Blocks: 3 links to a node of 3000 links to one leaf name 9004 blocks in two small nodes,
+    // past MAX_WALK_BLOCKS (8192): the walk stops at its bound. (Small enough that a walk
+    // without the bound finishes, so removing it fails this rather than hanging it.)
     let leaf = Cid::v1(ipfs::RAW, b"x");
-    let fan = |child: Cid| {
+    let fan = |child: Cid, n: usize| {
         ipfs::encode_pb_node(&PbNode {
             links: vec![
                 Link {
@@ -374,19 +375,19 @@ fn the_walker_is_bounded() {
                     name: String::new(),
                     size: 1
                 };
-                3000
+                n
             ],
             data: Some(ipfs::encode_unixfs(&UnixFs {
                 kind: "file".into(),
                 data: Vec::new(),
-                file_size: Some(9_000_000),
+                file_size: Some(n as u64 * 3000),
                 block_sizes: vec![],
             })),
         })
     };
-    let wide = fan(leaf);
+    let wide = fan(leaf, 3000);
     let wide_cid = Cid::v1(ipfs::DAG_PB, &wide);
-    let top = fan(wide_cid);
+    let top = fan(wide_cid, 3);
     let root = Cid::v1(ipfs::DAG_PB, &top);
     let e = walk_all(
         root,
