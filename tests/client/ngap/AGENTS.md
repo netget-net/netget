@@ -35,7 +35,9 @@ Shares `support.rs` with the server suite (`#[path]` in `mod.rs`).
   garbage gets an Error Indication and never reaches the model, an oversized frame ends the
   association. NetGet's PDUs go through the pcap oracle.
 
-Mutation-checked: the K_gNB derivation (Open5GS's key then differs and `k_gnb_verified` is false), the RES* computation (Open5GS's AUSF rejects), the follow-up bound, the client ignoring the model's NAS, the lab frame bound,
+Mutation-checked: the K_gNB derivation (one off in the uplink COUNT: Open5GS's key differs and
+`k_gnb_verified` is false), the UE's RES* (one bit flipped: Open5GS's AUSF rejects and the UE
+never registers), the follow-up bound, the client ignoring the model's NAS, the lab frame bound,
 and PPID 0 (the Open5GS capture then has nothing NetGet sent that dissects as NGAP).
 
 No LLM calls: python policies stand in for the model.

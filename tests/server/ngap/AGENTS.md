@@ -54,7 +54,16 @@ Linux software and macOS has no SCTP.
 - `transport_test` — SCTP binds or is refused by name; where it exists, whole messages and an
   oversized one drained without losing the next boundary.
 
-Mutation-checked (this pass): the RES* comparison, NAS MAC verification, NAS COUNT replay rejection, K_gNB derivation, fail-closed registration and PDU session decisions, redaction of K/OPc — see the root report of the pass for how each failed. Earlier: the IE-count, list-budget and NAS-PDU bounds; the UE cap; the lab frame
+Mutation-checked in the NAS-security pass, each a run-time switch built once and run against
+the suites in the Linux container: accepting any RES* (`a_wrong_res_star…` fails); skipping
+uplink MAC verification and accepting a replayed COUNT (`nea2_ciphers…` and
+`security_test::nas_protection…` fail); a silent model's registration left unrejected
+(`a_silent_model…` fails); dropping the model's PDU session accept (`a_subscriber_registers…`
+and UERANSIM's `ueransim_registers…`, "got no PDU session", fail); corrupting every downlink
+MAC (UERANSIM logs `Security Mode Command integrity check failed` and never registers);
+redaction without the `subscriber_*` parts (`secret_redaction_test` fails). A wrong K_gNB is
+**not** caught here: UERANSIM implements no AS security and never checks it — Open5GS's
+K_gNB, compared on the client side, is the check. Earlier: the IE-count, list-budget and NAS-PDU bounds; the UE cap; the lab frame
 bound; both fail-closed paths turned fail-open; the Cause CHOICE encoded with an extension bit
 (UERANSIM reads the cause as `nas/authentication-failure`); UE-associated signalling on stream 0
 (UERANSIM drops it); PPID 0 (the capture stops dissecting as NGAP — neither peer checks it).
