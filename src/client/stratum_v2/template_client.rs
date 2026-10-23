@@ -53,7 +53,6 @@ struct Template {
 
 #[derive(Clone, Copy)]
 struct Tip {
-    template_id: u64,
     prev_hash: [u8; 32],
     ntime: u32,
     nbits: u32,
@@ -581,7 +580,6 @@ fn on_message(rx: &mut Receiver, message: Message) -> Result<()> {
             target,
         } => {
             rx.tip = Some(Tip {
-                template_id,
                 prev_hash,
                 ntime: header_timestamp,
                 nbits,

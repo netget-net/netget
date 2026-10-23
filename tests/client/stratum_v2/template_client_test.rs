@@ -11,9 +11,7 @@
 //! coinbase the template describes and submits the block it finds. sv2-tp hands that to
 //! Bitcoin Core, which must then have a block with the hash NetGet computed, carrying the three
 //! transactions. A key the provider's certificate was not signed with is refused. No LLM calls.
-#[path = "../../server/stratum_v2/peers.rs"]
-#[allow(dead_code)]
-mod peers;
+use super::peers;
 
 use netget::cli::management::ClientForm;
 use netget::state::app_state::AppState;

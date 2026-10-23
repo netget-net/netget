@@ -430,7 +430,8 @@ async fn job_declarator_keeps_tokens_transactions_and_solutions_by_the_rules() {
     })
     .await;
     assert!(is_error(raw.recv().await, 12, "invalid-job"));
-    raw.send(&declare(13, &a, &[t1.clone()], true, true)).await;
+    raw.send(&declare(13, &a, std::slice::from_ref(&t1), true, true))
+        .await;
     assert!(
         is_error(raw.recv().await, 13, "invalid-mining-job-token"),
         "a refused declaration's token is spent"
@@ -469,14 +470,15 @@ async fn job_declarator_keeps_tokens_transactions_and_solutions_by_the_rules() {
     // A coinbase whose witness commitment does not cover its transactions is refused in Rust;
     // one not paying the token's output reaches the model, which refuses it.
     let c = allocate(&mut raw, 3, "netget").await.unwrap();
-    let mut bad = declare(16, &c, &[t1.clone()], true, true);
+    let mut bad = declare(16, &c, std::slice::from_ref(&t1), true, true);
     if let Message::DeclareMiningJob { wtxid_list, .. } = &mut bad {
         wtxid_list.push(t2.wtxid());
     }
     raw.send(&bad).await;
     assert!(is_error(raw.recv().await, 16, "invalid-job"));
     let d = allocate(&mut raw, 4, "netget").await.unwrap();
-    raw.send(&declare(17, &d, &[t1.clone()], false, true)).await;
+    raw.send(&declare(17, &d, std::slice::from_ref(&t1), false, true))
+        .await;
     assert!(is_error(raw.recv().await, 17, "missing-pool-output"));
     let declared = support::events(&state, id, "stratum_v2_jd_declare_job").await;
     assert_eq!(declared.len(), 2, "{declared:?}");

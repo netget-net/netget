@@ -12,9 +12,7 @@
 //! solution, which the JDS logs (SRI v0.8.0 does nothing further with a PushSolution yet).
 //! A second declaration spending an output that does not exist must be refused by the JDS, and
 //! the refusal reach the model. No LLM calls.
-#[path = "../../server/stratum_v2/peers.rs"]
-#[allow(dead_code)]
-mod peers;
+use super::peers;
 
 use netget::cli::management::ClientForm;
 use netget::state::app_state::AppState;
