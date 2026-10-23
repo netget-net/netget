@@ -16,6 +16,14 @@ use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 
 pub const PROFILE_A: u8 = 1;
+
+/// The Profile A home network private key of TS 33.501 Annex C.4.3, whose public half
+/// (`5a8d3886…a650`) is UERANSIM's default `homeNetworkPublicKey`. A test key, published in the
+/// specification: it belongs in examples and tests, never in a deployment.
+pub const TS_33_501_C_4_3_HOME_NETWORK_PRIVATE_KEY: [u8; 32] = [
+    0xc5, 0x3c, 0x22, 0x20, 0x8b, 0x61, 0x86, 0x0b, 0x06, 0xc6, 0x2e, 0x54, 0x06, 0xa7, 0xb3, 0x30,
+    0xc2, 0xb5, 0x77, 0xaa, 0x55, 0x58, 0x98, 0x15, 0x10, 0xd1, 0x28, 0x24, 0x7d, 0x38, 0xbd, 0x1d,
+];
 pub const PROFILE_B: u8 = 2;
 const MAC_LEN: usize = 8;
 

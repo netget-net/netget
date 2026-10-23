@@ -76,6 +76,7 @@ jobs:
           - fuse_tree_description
           - hdfs_wire
           - zigbee_ash_ezsp
+          - ngap_nas
           - bgp_message
           - ndef_message
           - nfc_apdu

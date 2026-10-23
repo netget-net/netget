@@ -892,7 +892,7 @@ impl Protocol for NgapProtocol {
                     .into(),
                 required: false,
                 example: json!([{"key_id": 1, "scheme": "profile_a",
-                             "home_network_private_key": "c80949f13ebe61af4ebdbd293ea4f942696b9e815d7e8f0096bbf6ed7de62256"}]),
+                             "home_network_private_key": hex::encode(super::suci::TS_33_501_C_4_3_HOME_NETWORK_PRIVATE_KEY)}]),
                 default: None,
             },
             crate::llm::actions::ParameterDefinition {

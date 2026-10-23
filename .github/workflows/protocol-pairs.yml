@@ -8244,12 +8244,13 @@ jobs:
           sudo systemctl stop 'open5gs-*' mongod || true
           sudo setcap cap_net_raw,cap_net_admin=eip "$(command -v dumpcap)"
           python3 tests/server/ngap/install_peers.py "$RUNNER_TEMP/ngap" | sed 's/^export //' >> "$GITHUB_ENV"
-          # nr-ue creates uesimtun* and routes it with `ip`; Open5GS's UPF creates its TUN. The
-          # tests run unprivileged, so each binary gets CAP_NET_ADMIN (file capabilities are not
-          # kept in the cache, hence after install_peers).
-          sudo setcap cap_net_admin+ep "$RUNNER_TEMP/ngap/ueransim/build/nr-ue"
-          sudo setcap cap_net_admin+ep "$(readlink -f "$(command -v ip)")"
+          # Open5GS's UPF creates its TUN and checks nothing but the kernel's verdict, so
+          # CAP_NET_ADMIN on the binary is enough for the unprivileged test. nr-ue is different:
+          # UERANSIM refuses to build uesimtun* unless geteuid() is 0, whatever its
+          # capabilities, so the test runs it through `sudo -n` (passwordless on this runner).
           sudo setcap cap_net_admin+ep "$(readlink -f "$(command -v open5gs-upfd)")"
+          getcap "$(readlink -f "$(command -v open5gs-upfd)")"
+          sudo -n true
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
