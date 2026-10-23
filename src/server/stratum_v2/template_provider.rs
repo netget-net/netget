@@ -622,9 +622,10 @@ async fn handle(
             }
             conn.solved.push_back(solved.hash);
             let hash = wire::display_hex(&solved.hash);
-            // The block is what a template provider exists to relay, and NetGet has no node to
-            // relay it to, so it is logged in full: to the operator for the first solution of a
-            // template (a template's size is bounded by the model's), to the file for the rest.
+            // The block is what a template provider exists to relay: to the configured node if
+            // there is one, and logged in full either way — to the operator for the first
+            // solution of a template (a template's size is bounded by the model's), to the file
+            // for the rest.
             let first = conn
                 .templates
                 .iter_mut()
@@ -639,10 +640,11 @@ async fn handle(
                     hex::encode(&solved.block)
                 ),
             );
+            let relay = super::relay(ctx, pool, id, &hash, &solved.block).await;
             let stale = conn.tip.map(|tip| tip.prev_hash) != Some(t.prev_hash);
             let event = Event::new(
                 &actions::TP_SOLUTION_EVENT,
-                json!({"template_id": template_id, "hash": hash, "height": t.height,
+                json!({"template_id": template_id, "hash": hash, "height": t.height, "relay": relay,
                        "prev_hash": wire::display_hex(&t.prev_hash), "version": version,
                        "ntime": header_timestamp, "nonce": header_nonce,
                        "nbits": format!("{:08x}", t.nbits), "transaction_count": t.txs.len(),

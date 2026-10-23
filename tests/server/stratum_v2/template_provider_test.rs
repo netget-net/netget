@@ -7,11 +7,13 @@
 //! it a template — merkle path, witness commitment, BIP 34 height — and the pool builds its
 //! coinbase and jobs from it with its own code. The device mines; the pool, finding a block,
 //! sends SubmitSolution; NetGet rebuilds the block, checks its hash against the target, logs
-//! it, and tells the model, which answers with a template on top of it. The block NetGet
-//! assembled is then handed to Bitcoin Core's `submitblock`, which accepts it only if the
-//! merkle path, the commitment, the height, the coinbase value and the transaction are all
+//! it, and tells the model, which answers with a template on top of it. NetGet relays the block
+//! it assembled to the node (`bitcoin_rpc_url`) with `submitblock`, which accepts it only if
+//! the merkle path, the commitment, the height, the coinbase value and the transaction are all
 //! right — a node agreeing with a template NetGet wrote, through a pool and a miner that are
-//! not NetGet. No LLM calls.
+//! not NetGet — and the node's tip must move to it without the test submitting anything. The
+//! block NetGet logged is then submitted by the test too, and must be a `duplicate`: the bytes
+//! logged are the bytes relayed. No LLM calls.
 //!
 //! Wireshark has no Stratum V2 dissector and every frame after the handshake is
 //! ChaCha20-Poly1305 ciphertext, so there is no pcap oracle; Bitcoin Core is the oracle for the
@@ -45,7 +47,9 @@ elif t=='stratum_v2_tp_solution' and e['height']=={next} and not e['stale']:
     let (state, id, tp_port, status) = support::start_role(
         policy,
         json!({"role": "template_provider", "network": "regtest",
-               "authority_secret_key": peers::SECRET}),
+               "authority_secret_key": peers::SECRET,
+               "bitcoin_rpc_url": format!("http://127.0.0.1:{}", node.rpc),
+               "bitcoin_rpc_user": "netget", "bitcoin_rpc_password": "netget"}),
     )
     .await;
 
@@ -89,14 +93,28 @@ elif t=='stratum_v2_tp_solution' and e['height']=={next} and not e['stale']:
         .unwrap()
         .to_string();
 
-    // Bitcoin Core takes the block NetGet assembled from its own template and SRI's coinbase.
-    let submitted = node.cli(&["submitblock", &hex]).await;
-    assert_eq!(
-        submitted.as_deref(),
-        Ok(""),
+    // NetGet relayed the block it assembled from its own template and SRI's coinbase, and
+    // Bitcoin Core took it: the block at the next height is NetGet's, though the test
+    // submitted nothing.
+    assert!(
+        status
+            .wait(&format!("Bitcoin Core accepted block {hash}"), 30)
+            .await
+            .is_some(),
         "{}",
-        dump(&format!("Bitcoin Core refused block {hash}: {submitted:?}"))
+        dump(&format!("NetGet never relayed block {hash}"))
     );
+    assert_eq!(
+        node.cli(&["getblockhash", &next.to_string()])
+            .await
+            .as_deref(),
+        Ok(hash.as_str()),
+        "{}",
+        dump("the node's chain does not have NetGet's block at the next height")
+    );
+    // What NetGet logged is what it relayed.
+    let submitted = node.cli(&["submitblock", &hex]).await;
+    assert_eq!(submitted.as_deref(), Ok("duplicate"), "{submitted:?}");
     let block: Value = node.json(&["getblock", &hash, "2"]).await;
     assert_eq!(block["height"], next, "{block}");
     assert_eq!(block["tx"].as_array().unwrap().len(), 3, "{block}");
@@ -124,10 +142,24 @@ elif t=='stratum_v2_tp_solution' and e['height']=={next} and not e['stale']:
     );
 
     // The model heard of the solution, verified, and moved the pool onto a block on top of it.
-    let solutions = support::events(&state, id, "stratum_v2_tp_solution").await;
+    // The relay is logged before the model is asked, so the event may trail it a little.
+    let heard = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let solutions = support::events(&state, id, "stratum_v2_tp_solution").await;
+            if solutions
+                .iter()
+                .any(|s| s["hash"] == hash.as_str() && s["relay"] == "accepted")
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    })
+    .await;
     assert!(
-        solutions.iter().any(|s| s["hash"] == hash.as_str()),
-        "{solutions:?}"
+        heard.is_ok(),
+        "{:?}",
+        support::events(&state, id, "stratum_v2_tp_solution").await
     );
     assert!(
         peers::wait_log(&pool_log, "Received: NewTemplate(template_id: 2", 30).await,

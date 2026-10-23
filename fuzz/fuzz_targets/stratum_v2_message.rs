@@ -16,7 +16,9 @@
 //! corpus carries those shapes: `seq_count_bomb` (a DeclareMiningJob whose wtxid list declares
 //! 65535 entries in a few bytes), `tx_count_bomb` (a SubmitSolution whose coinbase declares
 //! 2^32 inputs) and `transaction_list_bomb` (a RequestTransactionData.Success declaring 65535
-//! transactions of 16 MiB each).
+//! transactions of 16 MiB each). Work selection adds SetCustomMiningJob, whose output vector the
+//! pool parses (`custom_job_outputs_bomb` declares 2^32 - 1 outputs in five bytes) and whose
+//! merkle path is a SEQ0_255 (`custom_job_path_bomb` declares 255 hashes and carries one).
 
 #![no_main]
 
@@ -64,6 +66,15 @@ fuzz_target!(|data: &[u8]| {
             }
             Message::TemplateSetNewPrevHash { nbits, .. } | Message::PushSolution { nbits, .. } => {
                 let _ = btc::compact_to_target(*nbits);
+            }
+            Message::SetCustomMiningJob {
+                nbits,
+                coinbase_tx_outputs,
+                ..
+            } => {
+                let _ = btc::compact_to_target(*nbits);
+                // The bound the pool parses a custom job's outputs with.
+                let _ = btc::parse_output_vector(coinbase_tx_outputs, 255);
             }
             _ => {}
         }
