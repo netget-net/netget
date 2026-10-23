@@ -159,6 +159,9 @@ it waits. Media2: python onvif2-zeep 0.3.4 (zeep over the ver20 Media WSDL in it
 distribution) and Go IOTechSystems/onvif v1.3.0 — onvif-zeep-async and use-go bundle no Media2.
 All fail when absent. `pcap_oracle_test.rs` has tshark read every new service's exchange both
 ways. `fuzz/fuzz_targets/onvif_request.rs` drives the topic-filter, duration, PTZ-vector and
-imaging parsers behind the tree. Two independent clients per service is the evidence Beta asks
+imaging parsers behind the tree; it has run clean (168,703 executions over 301 seconds on 23
+October 2026, seeded lockfile, current nightly, `-s none` on macOS — and on this machine a
+linker wrapper adding `-Wl,-undefined,dynamic_lookup`, because the `crc-fast` cdylib in the
+lockfile will not link with sanitizer coverage and no sanitizer runtime). Two independent clients per service is the evidence Beta asks
 for; it stays Experimental because no person has reviewed the services beyond it and the pair
 job has not run them in CI.

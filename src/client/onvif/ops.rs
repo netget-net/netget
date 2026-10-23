@@ -117,6 +117,9 @@ pub fn spec_of(v: &Value) -> Option<&'static Spec> {
 /// The WS-Addressing Action of an Events operation (their bindings are WS-Addressing ones);
 /// None for the services whose requests carry no addressing headers.
 pub fn action_uri(spec: &Spec) -> Option<&'static str> {
+    if !matches!(spec.service, Service::Events | Service::Subscription) {
+        return None;
+    }
     Some(match spec.operation {
         "GetEventProperties" => {
             "http://www.onvif.org/ver10/events/wsdl/EventPortType/GetEventPropertiesRequest"
@@ -134,7 +137,6 @@ pub fn action_uri(spec: &Spec) -> Option<&'static str> {
         "Unsubscribe" => "http://docs.oasis-open.org/wsn/bw-2/SubscriptionManager/UnsubscribeRequest",
         _ => return None,
     })
-    .filter(|_| matches!(spec.service, Service::Events | Service::Subscription))
 }
 
 /// The longest PullMessages wait a client asks for, in seconds.
