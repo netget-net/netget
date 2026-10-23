@@ -84,13 +84,15 @@ jobs:
         working-directory: fuzz
         run: |
           cp ../Cargo.lock Cargo.lock
-          # An optimised build of the whole library with ASan does not fit a hosted runner: at one
-          # codegen unit, and again at sixteen with two jobs, the runner was shut down minutes
-          # into compiling the netget crate, with 16 GB of swap in place. The CI jobs that do
-          # compile it build unoptimised with debug info off, so this does the same. Targets run
-          # slower than optimised ones would; in exchange every one of them runs, ASan stays on,
-          # and dev builds keep overflow checks, so an arithmetic overflow is a crash here too.
-          CARGO_PROFILE_DEV_DEBUG=0 CARGO_BUILD_JOBS=2 cargo fuzz build --dev
+          # The whole library does not compile on a hosted runner with ASan, optimised or not:
+          # at one codegen unit, at sixteen with two jobs, and unoptimised, the runner was shut
+          # down minutes into the netget crate with 16 GB of swap in place. ASan instruments every
+          # load and store. So: no sanitizer, unoptimised, no debug info, as the CI jobs that do
+          # compile the library are. libFuzzer's coverage guidance is unaffected, and what these
+          # decoders can do wrong in safe Rust still kills the process: a panic, an overflow
+          # (dev builds check), a stack overflow from a depth bomb, an allocation past
+          # -rss_limit_mb. What is lost is ASan's view of unsafe code, which they do not have.
+          CARGO_PROFILE_DEV_DEBUG=0 CARGO_BUILD_JOBS=2 cargo fuzz build --dev --sanitizer none
           mkdir -p ../fuzz-bin
           for target in $(cargo fuzz list); do
             cp "target/x86_64-unknown-linux-gnu/debug/$target" ../fuzz-bin/
@@ -161,8 +163,6 @@ jobs:
           - stratum_v2_message
     env:
       TARGET: ${{ matrix.target }}
-      # cargo fuzz run sets this; running the binary directly has to as well.
-      ASAN_OPTIONS: detect_odr_violation=0
     steps:
       - uses: actions/checkout@v4
 
