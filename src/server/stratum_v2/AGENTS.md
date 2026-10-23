@@ -1,10 +1,15 @@
-# Stratum V2 pool (server)
+# Stratum V2 server: pool, template provider, job declarator
 
-Stratum V2's Mining Protocol over its Noise-encrypted transport, hand-rolled from
-[sv2-spec](https://github.com/stratum-mining/sv2-spec). Well-known port 3333: IANA assigns none,
-and SRI's pool documents 3333 in its README and mainnet configurations (the spec's URL example
-uses 34254, which SRI uses for its Job Declaration Server). Feature `stratum-v2`; the client role
-shares `noise.rs` and `wire.rs`.
+Stratum V2 over its Noise-encrypted transport, hand-rolled from
+[sv2-spec](https://github.com/stratum-mining/sv2-spec). The `role` startup parameter chooses the
+protocol: `pool` (default; the Mining Protocol, below), `template_provider` (the Template
+Distribution Protocol, `template_provider.rs`) or `job_declarator` (the Job Declaration
+Protocol's server, `job_declarator.rs`); all three share the handshake, the certificate and the
+framing, and `network` (default `mainnet`) names the chain the last two check heights, nbits and
+the subsidy against. Well-known port 3333: IANA assigns none, and SRI's pool documents 3333 in
+its README and mainnet configurations (the spec's URL example uses 34254, which SRI uses for its
+Job Declaration Server; sv2-tp listens on 8442). The client roles share `noise.rs`, `wire.rs` and
+`bitcoin.rs`.
 
 ## Why hand-rolled, and what is borrowed
 
@@ -96,11 +101,123 @@ admit, open or credit anything. Decisions are logged
 per channel; 4096 remembered shares per channel; `DEFAULT_MAX_CONNECTIONS`; difficulty in
 (0, 1e15]; `cert_validity_secs` 60..=31536000; `shares_per_minute` 0.01..=600.
 
+## Template provider (`role: template_provider`)
+
+The Template Distribution Protocol as template_distribution_sv2 7.0 (sv2-apps v0.8.0) speaks it:
+CoinbaseOutputConstraints (not the older CoinbaseOutputDataSize), NewTemplate, SetNewPrevHash
+with its `target`, RequestTransactionData(.Success/.Error) and SubmitSolution. SetupConnection
+must name protocol 2 and no flags (TDP defines none).
+
+- **The model writes the template** in answer to CoinbaseOutputConstraints or a verified
+  solution: `stratum_v2_new_template {prev_hash, height, nbits, ntime, version,
+  coinbase_value_sats, transactions}`. Transactions are structured — inputs by txid, vout and
+  the value they spend (so fees are known without a UTXO set); outputs pay `OP_TRUE` or carry an
+  `OP_RETURN` text — never bytes. Answering nothing sends no work; that is the fail-closed path
+  too, since a template the model did not write would be NetGet inventing a block.
+- **Rust makes it a template** (`bitcoin.rs`): it serialises the transactions (version 2,
+  empty scriptSigs), computes their txids and wtxids, the coinbase's merkle path (leaf 0 is the
+  coinbase; an odd level pairs its last hash with itself), the BIP 141 witness commitment for a
+  32-byte zero reserved value (the coinbase outputs it sends), and the BIP 34 height push that is
+  the whole coinbase prefix (`CScript() << height`: OP_1..OP_16 or a minimal push; at most 8
+  bytes, sv2-spec §7). It refuses a template whose first appearance lacks prev_hash and height,
+  that changes height or nbits without a new prev_hash, whose nbits is negative, zero,
+  overflowing or easier than the network's limit, whose version is below 4, whose coinbase value
+  exceeds the subsidy at that height (`network`'s halving interval) plus fees, whose outputs spend
+  more than its inputs, or whose weight (with the client's declared coinbase size) exceeds a
+  block's. A template on a new prev_hash goes out as `future_template` followed by
+  SetNewPrevHash naming it, as Bitcoin Core does; later ones on the same tip are not future.
+- **RequestTransactionData** is answered from what was sent: Success with the serialised
+  transactions, `stale-template-id` for a template on a superseded tip, `template-id-not-found`
+  otherwise. SRI's jd_client asks for it; SRI's pool never does.
+- **SubmitSolution** is rebuilt before the model hears of it: the coinbase must parse (segwit or
+  not), spend the null outpoint, start its scriptSig with the template's height push, keep the
+  template's version/sequence/locktime, end with the template's outputs, pay no more than the
+  template allows, carry the 32-byte zero reserved value if it has a witness, roll only BIP 320
+  version bits and have a timestamp from the tip's to two hours ahead; then the merkle root is
+  folded from its txid, and the header hash must meet the template's target. A verified block is
+  logged in full (`… block <hash> at height H solved template N; B bytes: <hex>`) — to the
+  operator for a template's first solution, to the file for the rest — because a template
+  provider exists to relay blocks and NetGet has no node. Refusals are logged
+  `decision=refused_*` with Bitcoin Core's reason vocabulary where one exists (`high-hash`,
+  `bad-cb-amount`, …); SubmitSolution has no reply.
+- Events: `stratum_v2_tp_setup_connection` (accept/reject), `stratum_v2_tp_coinbase_output_
+  constraints` and `stratum_v2_tp_solution` (answer with templates). Bounds: 66 KiB per frame
+  (SubmitSolution's coinbase is a B0_64K), 32 templates and 1024 solved hashes per connection,
+  4 templates per answer, 64 transactions of at most 16 inputs and 16 outputs per template.
+
+## Job declarator (`role: job_declarator`)
+
+The Job Declaration Protocol as job_declaration_sv2 10.0 speaks it: AllocateMiningJobToken
+(.Success), DeclareMiningJob (.Success/.Error), ProvideMissingTransactions(.Success) and
+PushSolution. SetupConnection must name protocol 1; DECLARE_TX_DATA is the only flag accepted
+(SRI's jd_client sets it in full-template mode, and SRI's own JDS refuses a client without it).
+
+- **The model decides** who connects, whether a token is allocated (`stratum_v2_accept` with
+  `stratum_v2_allocate_token {pay_to | op_return}`, the output a declared coinbase must pay) and
+  whether a declared job is accepted, with the error code it chooses. There is no
+  AllocateMiningJobToken.Error in this revision of the protocol, so a refused allocation ends the
+  connection.
+- **Rust keeps the token table**: 8-byte random tokens, at most `MAX_TOKENS` (64) per
+  connection with the oldest evicted, each usable once and only on the connection it was issued
+  to; an accepted declaration's token is spent and a new one issued with the Success, a refused
+  one's is spent too.
+- **Rust keeps a mempool** shared by the server's connections, keyed by wtxid, at most 16384
+  transactions and 32 MiB, oldest evicted. A declaration naming transactions it lacks is asked
+  for them (ProvideMissingTransactions with their positions); each supplied transaction must
+  parse and hash to the wtxid at its position, or the job is `invalid-job`.
+- **Before the model sees a declaration**: the token must be one this connection holds unused
+  (`invalid-mining-job-token`), the wtxid list at most `MAX_DECLARED_TXS` (8192, `invalid-job`),
+  at most 16 declarations waiting on transactions, the coinbase must split the way SRI's JDS
+  splits it — prefix to the end of the scriptSig bytes written, the rest of the scriptSig (at
+  most 32 bytes) the extranonce — and parse (`invalid-coinbase-tx`) with exactly one input on
+  the null outpoint (`invalid-coinbase-tx-input`), commit to a BIP 34 height, and, if it carries
+  a witness, its commitment must cover the declared wtxids (`invalid-job`). The event says what
+  the coinbase pays, by script type, whether it includes the token's required outputs, the
+  height, the transaction count and the weight.
+- **PushSolution** names no job: Rust rebuilds each accepted job's coinbase with the pushed
+  extranonce (newest first, at most 16 jobs per connection) and takes the one whose header
+  meets nbits (which must itself be valid for `network`). The block is logged to the file, the
+  model is told (`stratum_v2_jd_solution`, no reply exists), and anything else is logged
+  `decision=refused_invalid_solution`.
+- **Failure**: a failed model, silence or both verdicts refuse — SetupConnection.Error or
+  DeclareMiningJob.Error with `service-unavailable`/`service-overloaded`, or the connection ends
+  for an allocation — and a job is never accepted without the model's yes.
+- Bounds: 4 MiB per frame (ProvideMissingTransactions.Success carrying a block's worth),
+  every SEQ0_64K count checked against the bytes left before allocation, every CompactSize
+  count likewise and canonical.
+
+## Not built
+
+- **The Mining Protocol's work selection**: the pool refuses `REQUIRES_WORK_SELECTION`, so it
+  takes no SetCustomMiningJob and a NetGet JDS's tokens cannot be redeemed at a NetGet pool.
+- **Relaying blocks**: neither new role is connected to a node; a solved block is verified and
+  logged, and nothing submits it.
+- **Sigop accounting**: CoinbaseOutputConstraints' sigops are reported, not checked.
+- **Transactions beyond `OP_TRUE` and `OP_RETURN` outputs and empty scriptSigs** in templates
+  the model writes; a JDS accepts any transaction a client supplies.
+
 ## Maturity: Experimental
 
-SRI's `mining_device` — an independent implementation — completes the handshake against the
-certificate, opens a standard channel, mines the model's job and has its shares verified and
-credited, and prints hashes identical to NetGet's. That is one third-party client against
-Stable's two, and the extended-channel path is driven only by NetGet's own client and raw
-frames; there is no fuzz target and no pcap oracle (Wireshark has no SV2 dissector). Nobody has
-reviewed beyond the evidence, and the pair job had not yet run in CI when this was written.
+**Pool.** SRI's `mining_device` — an independent implementation — completes the handshake
+against the certificate, opens a standard channel, mines the model's job and has its shares
+verified and credited, and prints hashes identical to NetGet's. That is one third-party client
+against Stable's two, and the extended-channel path is driven only by NetGet's own client and
+raw frames.
+
+**Template provider.** SRI's `pool_sv2` takes NetGet's templates over network TDP (pinning
+NetGet's authority key), SRI's `mining_device` mines on the pool, the pool sends SubmitSolution,
+and the block NetGet assembles from its own template and SRI's coinbase is accepted by Bitcoin
+Core 31.0's `submitblock` — merkle path (with an odd level), commitment, height, value and two
+transactions. SRI's `jd_client` also takes NetGet's templates and asks for their transactions.
+Two SRI programs, but one implementation of the template-receiving code (`channels_sv2`).
+
+**Job declarator.** SRI's `jd_client` sets up, takes tokens, declares its job, supplies the
+missing transaction when asked and receives DeclareMiningJob.Success. PushSolution from an
+independent client is not shown: jd_client pushes solutions only for jobs its pool acknowledged,
+and SRI's pool v0.8.0 checks custom-job tokens only with its own embedded JDS, so it answers
+`jd-not-supported`; PushSolution is exercised with raw frames.
+
+`fuzz/fuzz_targets/stratum_v2_message.rs` decodes every message and the Bitcoin structures
+these roles parse, with count-bomb seeds; nothing recurses. There is no pcap oracle: Wireshark
+has no SV2 dissector and every frame after the handshake is ciphertext. Nobody has reviewed
+beyond the evidence.

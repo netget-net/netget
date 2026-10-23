@@ -8134,27 +8134,27 @@ jobs:
 
   stratum-v2:
     if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'stratum-v2')
-    name: Stratum V2 pool and mining device against SRI's mining_device, pool_sv2 and Bitcoin Core
+    name: Stratum V2 pool, template provider, job declarator and both clients against SRI's mining_device, pool_sv2 (and its JDS), jd_client and Bitcoin Core
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           key: protocol-pairs-${{ github.job }}
-      - name: Cache SRI's pool_sv2 and mining_device (sv2-apps v0.8.0) and Bitcoin Core 31.0
+      - name: Cache SRI's pool_sv2, mining_device and jd_client_sv2 (sv2-apps v0.8.0) and Bitcoin Core 31.0
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/stratum-v2
           key: stratum-v2-peers-${{ runner.os }}-${{ hashFiles('tests/server/stratum_v2/install_peers.py') }}
-      - name: Build SRI's pool_sv2 and mining_device, fetch Bitcoin Core 31.0
+      - name: Build SRI's pool_sv2, mining_device and jd_client_sv2, fetch Bitcoin Core 31.0
         run: |
           set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y -qq capnproto libcapnp-dev
           python3 tests/server/stratum_v2/install_peers.py "$RUNNER_TEMP/stratum-v2" | sed 's/^export //' >> "$GITHUB_ENV"
-      - name: Both roles with mandatory independent peers, bounds and fail-closed paths
+      - name: Every role with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
           for filter in \
