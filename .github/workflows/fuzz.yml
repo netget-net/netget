@@ -84,14 +84,16 @@ jobs:
         working-directory: fuzz
         run: |
           cp ../Cargo.lock Cargo.lock
-          # cargo fuzz defaults to one codegen unit outside --dev, which hands LLVM the whole
-          # library, every protocol, as a single module with ASan on: that alone outgrew 15 GB
-          # of memory and 15 GB of swap and the runner was shut down. Sixteen units bound each
-          # module; two jobs keep only a couple of them in memory at once.
-          CARGO_BUILD_JOBS=2 cargo fuzz build --codegen-units 16
+          # An optimised build of the whole library with ASan does not fit a hosted runner: at one
+          # codegen unit, and again at sixteen with two jobs, the runner was shut down minutes
+          # into compiling the netget crate, with 16 GB of swap in place. The CI jobs that do
+          # compile it build unoptimised with debug info off, so this does the same. Targets run
+          # slower than optimised ones would; in exchange every one of them runs, ASan stays on,
+          # and dev builds keep overflow checks, so an arithmetic overflow is a crash here too.
+          CARGO_PROFILE_DEV_DEBUG=0 CARGO_BUILD_JOBS=2 cargo fuzz build --dev
           mkdir -p ../fuzz-bin
           for target in $(cargo fuzz list); do
-            cp "target/x86_64-unknown-linux-gnu/release/$target" ../fuzz-bin/
+            cp "target/x86_64-unknown-linux-gnu/debug/$target" ../fuzz-bin/
           done
           ls -l ../fuzz-bin
           du -sh ../fuzz-bin
