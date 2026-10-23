@@ -7,9 +7,10 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// SRI's example authority pair: every SRI peer and NetGet's servers use it.
-pub const SECRET: &str = super::support::SECRET;
-pub const PUBLIC: &str = super::support::PUBLIC;
+/// SRI's example authority pair: every SRI peer and NetGet's servers use it. (This file is
+/// also compiled into the client test binary, so it names them itself.)
+pub const SECRET: &str = "mkDLTBBRxdBv998612qipDYoTK3YUrqLe8uWw7gu3iXbSrn2n";
+pub const PUBLIC: &str = "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72";
 
 pub fn env(var: &str) -> String {
     let v = std::env::var(var).unwrap_or_default();

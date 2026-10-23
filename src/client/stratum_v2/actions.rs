@@ -1,6 +1,7 @@
-//! What the model does as a Stratum V2 mining device: mine the current job for a bounded number
-//! of hashes (Rust does the hashing and submits what meets the channel's target), submit a
-//! share by hand, open, update and close channels.
+//! What the model does as a Stratum V2 client. As a mining device: mine the current job for a
+//! bounded number of hashes (Rust does the hashing and submits what meets the channel's
+//! target), submit a share by hand, open, update and close channels. As a job declarator
+//! client: ask for tokens, declare the jobs it chooses, and mine and push a solution.
 use crate::llm::actions::{
     client_trait::{Client, ClientActionResult},
     protocol_trait::Protocol,
@@ -8,7 +9,7 @@ use crate::llm::actions::{
 };
 use crate::protocol::{ConnectContext, EventType};
 use crate::server::stratum_v2::actions::{action, p};
-use crate::server::stratum_v2::wire;
+use crate::server::stratum_v2::{bitcoin as btc, wire};
 use crate::state::app_state::AppState;
 use anyhow::{bail, ensure, Context, Result};
 use serde_json::{json, Value};
@@ -19,6 +20,13 @@ pub const SUBMIT: &str = "stratum_v2_submit";
 pub const OPEN_CHANNEL: &str = "stratum_v2_open_channel";
 pub const UPDATE_CHANNEL: &str = "stratum_v2_update_channel";
 pub const CLOSE_CHANNEL: &str = "stratum_v2_close_channel";
+pub const REQUEST_TOKEN: &str = "stratum_v2_request_token";
+pub const DECLARE_JOB: &str = "stratum_v2_declare_job";
+pub const PUSH_SOLUTION: &str = "stratum_v2_push_solution";
+/// The role a client takes when `role` is not given.
+pub const DEFAULT_ROLE: &str = "mining";
+/// The chain a job declarator client checks heights and the subsidy against by default.
+pub const DEFAULT_NETWORK: &str = "mainnet";
 /// Hashes one stratum_v2_mine tries when the model names no number.
 pub const DEFAULT_MINE_HASHES: u64 = 1_000_000;
 /// Hashes one stratum_v2_mine may try at most.
@@ -79,6 +87,108 @@ pub fn actions() -> Vec<ActionDefinition> {
             json!({"type": CLOSE_CHANNEL, "reason_code": "shutdown"})),
         action("disconnect", "Close the connection to the pool.", vec![], json!({"type": "disconnect"})),
     ]
+}
+
+pub fn jd_actions() -> Vec<ActionDefinition> {
+    vec![
+        action(REQUEST_TOKEN, "Ask the job declarator for another mining job token (AllocateMiningJobToken); one is requested on connect, and each declaration uses one.",
+            vec![p("user_identifier", "string", "Who to ask as (default the user_identity startup parameter)", false)],
+            json!({"type": REQUEST_TOKEN})),
+        action(DECLARE_JOB, "Declare the block NetGet will mine (DeclareMiningJob), using the oldest token held. Rust builds the coinbase — BIP 34 height, the message, 8 bytes of extranonce space, the outputs the token requires with the coinbase value on the first, and the witness commitment — and answers the job declarator's ProvideMissingTransactions from these transactions.",
+            vec![
+                p("height", "number", "The height of the block being declared: the chain tip's height plus one", true),
+                p("transactions", "array", "Up to 64 transactions, each {\"inputs\": [{\"txid\": <64 hex digits as RPC shows it>, \"vout\": <output index>, \"value_sats\": <value of the output spent>}], \"outputs\": [{\"value_sats\": <n>, \"pay_to\": \"op_true\"} or {\"value_sats\": 0, \"op_return\": <text of at most 80 bytes>}]}", false),
+                p("coinbase_value_sats", "number", "What the coinbase pays, at most the height's subsidy plus the transactions' fees (default: exactly that)", false),
+                p("version", "number", "The block version (default 536870912, which is 0x20000000)", false),
+                p("message", "string", "Text the coinbase scriptSig carries, at most 32 bytes", false),
+            ],
+            json!({"type": DECLARE_JOB, "height": 120, "message": "NetGet"})),
+        action(PUSH_SOLUTION, "Mine an accepted declaration on the given tip and push the first block found (PushSolution); Rust hashes up to max_hashes nonces.",
+            vec![
+                p("prev_hash", "string", "The chain tip the block builds on, as RPC shows hashes (64 hex digits)", true),
+                p("nbits", "string", "The compact target as RPC shows it, 8 hex digits such as 207fffff", true),
+                p("ntime", "number", "The header timestamp, unix seconds (default now)", false),
+                p("request_id", "number", "The declaration (default the newest accepted)", false),
+                p("max_hashes", "number", "How many nonces to try (default 1000000, at most 50000000)", false),
+            ],
+            json!({"type": PUSH_SOLUTION, "prev_hash": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", "nbits": "207fffff"})),
+        action("disconnect", "Close the connection to the job declarator.", vec![], json!({"type": "disconnect"})),
+    ]
+}
+
+fn jd_event(
+    id: &str,
+    description: &str,
+    example: Value,
+    params: Vec<crate::llm::actions::Parameter>,
+) -> EventType {
+    EventType::new(id, description, example)
+        .with_parameters(params)
+        .with_actions(jd_actions())
+}
+
+pub static JD_TOKEN_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    jd_event(
+        "stratum_v2_jd_token",
+        "The job declarator gave NetGet a mining job token (AllocateMiningJobToken.Success). Declare a job with it (stratum_v2_declare_job) or keep it.",
+        json!({"type": DECLARE_JOB, "height": 120}),
+        vec![
+            p("request_id", "number", "The request it answers", true),
+            p("coinbase_outputs", "array", "Outputs a declared coinbase must pay: value_sats and script_type, with op_return text", true),
+            p("tokens_held", "number", "Unused tokens now held", true),
+        ],
+    )
+});
+
+pub static JD_DECLARE_RESULT_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    jd_event(
+        "stratum_v2_jd_declare_result",
+        "The job declarator answered a declaration: DeclareMiningJob.Success (accepted) or DeclareMiningJob.Error (with its error code).",
+        json!({"type": PUSH_SOLUTION, "prev_hash": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", "nbits": "207fffff"}),
+        vec![
+            p("request_id", "number", "The declaration", true),
+            p("accepted", "boolean", "Whether it was accepted", true),
+            p("height", "number", "The height declared", true),
+            p("transactions", "number", "Transactions declared besides the coinbase", true),
+            p("error_code", "string", "The job declarator's reason when it refused", false),
+            p("new_token_bytes", "number", "The length of the token issued for the accepted job", false),
+        ],
+    )
+});
+
+pub static JD_SOLUTION_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    jd_event(
+        "stratum_v2_jd_solution_pushed",
+        "A stratum_v2_push_solution run ended: with a block found and pushed (PushSolution), or without.",
+        json!({"type": REQUEST_TOKEN}),
+        vec![
+            p("request_id", "number", "The declaration mined", true),
+            p("height", "number", "Its height", true),
+            p("found", "boolean", "Whether a header met nbits", true),
+            p("pushed", "boolean", "Whether PushSolution was sent", true),
+            p("hash", "string", "The best header hash, as RPC shows hashes", true),
+            p("hashes", "number", "Nonces tried", true),
+            p("nonce", "number", "The nonce of that header", true),
+            p("ntime", "number", "Its timestamp", true),
+        ],
+    )
+});
+
+/// nbits from a hex string ("207fffff", as RPC shows it) or a number.
+pub fn nbits(v: &Value) -> Result<Option<u32>> {
+    match &v["nbits"] {
+        Value::Null => Ok(None),
+        Value::String(s) => Ok(Some(
+            u32::from_str_radix(s.trim_start_matches("0x"), 16)
+                .with_context(|| format!("nbits {s:?} is not hex"))?,
+        )),
+        Value::Number(n) => {
+            let n = n.as_u64().context("nbits must be unsigned")?;
+            ensure!(n <= u64::from(u32::MAX), "nbits must fit 32 bits");
+            Ok(Some(n as u32))
+        }
+        _ => bail!("nbits must be hex text or a number"),
+    }
 }
 
 fn event(id: &str, description: &str, params: Vec<crate::llm::actions::Parameter>) -> EventType {
@@ -315,6 +425,46 @@ pub fn check(v: &Value) -> Result<()> {
                 "reason_code must be 1-64 printable ASCII characters"
             );
         }
+        REQUEST_TOKEN => {
+            if let Some(u) = v.get("user_identifier").filter(|x| !x.is_null()) {
+                let u = u.as_str().context("user_identifier must be text")?;
+                ensure!(u.len() <= 255, "user_identifier must be at most 255 bytes");
+            }
+        }
+        DECLARE_JOB => {
+            let h = v["height"].as_u64().context("height is required")?;
+            ensure!(
+                (1..=u64::from(crate::server::stratum_v2::template_provider::MAX_HEIGHT))
+                    .contains(&h),
+                "height must be 1..=10000000"
+            );
+            btc::txs_from_json(&v["transactions"])?;
+            u32_field(v, "version", false)?;
+            if let Some(c) = v.get("coinbase_value_sats").filter(|x| !x.is_null()) {
+                ensure!(
+                    c.as_u64().is_some_and(|c| c <= btc::MAX_MONEY),
+                    "coinbase_value_sats must be 0..=21M BTC in sats"
+                );
+            }
+            if let Some(m) = v.get("message").filter(|x| !x.is_null()) {
+                let m = m.as_str().context("message must be text")?;
+                ensure!(m.len() <= 32, "message must be at most 32 bytes");
+            }
+        }
+        PUSH_SOLUTION => {
+            btc::parse_txid(v["prev_hash"].as_str().context("prev_hash is required")?)
+                .context("prev_hash")?;
+            btc::compact_to_target(nbits(v)?.context("nbits is required")?)?;
+            u32_field(v, "ntime", false)?;
+            u32_field(v, "request_id", false)?;
+            if let Some(n) = v.get("max_hashes").filter(|x| !x.is_null()) {
+                let n = n.as_u64().context("max_hashes must be a whole number")?;
+                ensure!(
+                    (1..=MAX_MINE_HASHES).contains(&n),
+                    "max_hashes must be 1..={MAX_MINE_HASHES}"
+                );
+            }
+        }
         other => bail!("Unknown Stratum V2 client action {other:?}"),
     }
     Ok(())
@@ -331,10 +481,12 @@ impl Protocol for StratumV2ClientProtocol {
         vec!["stratum v2", "stratum2", "sv2", "stratum2+tcp"]
     }
     fn description(&self) -> &'static str {
-        "Stratum V2 mining device: Noise NX handshake pinned to the pool's authority key, SetupConnection, a mining channel, and shares mined and submitted as the model directs"
+        "Stratum V2 client, Noise NX pinned to the server's authority key: a mining device (a mining channel, and shares mined and submitted as the model directs) or a job declarator client (tokens, jobs the model chooses declared to a Job Declaration Server, solutions pushed)"
     }
     fn get_async_actions(&self, _: &AppState) -> Vec<ActionDefinition> {
-        actions()
+        let mut all = actions();
+        all.extend(jd_actions().into_iter().filter(|a| a.name != "disconnect"));
+        all
     }
     fn get_sync_actions(&self) -> Vec<ActionDefinition> {
         vec![]
@@ -346,10 +498,29 @@ impl Protocol for StratumV2ClientProtocol {
             SHARE_RESULT_EVENT.clone(),
             MINED_EVENT.clone(),
             MESSAGE_EVENT.clone(),
+            JD_TOKEN_EVENT.clone(),
+            JD_DECLARE_RESULT_EVENT.clone(),
+            JD_SOLUTION_EVENT.clone(),
         ]
     }
     fn get_startup_parameters(&self) -> Vec<ParameterDefinition> {
         vec![
+            ParameterDefinition {
+                name: "role".into(),
+                type_hint: "string".into(),
+                description: "mining (a mining device on a pool's Mining Protocol) or job_declarator (a Job Declarator Client declaring its own jobs to a Job Declaration Server)".into(),
+                required: false,
+                example: json!("job_declarator"),
+                default: Some(json!(DEFAULT_ROLE)),
+            },
+            ParameterDefinition {
+                name: "network".into(),
+                type_hint: "string".into(),
+                description: "Job declarator: the chain heights, nbits and the block subsidy are checked against (mainnet, testnet4, signet or regtest)".into(),
+                required: false,
+                example: json!("regtest"),
+                default: Some(json!(DEFAULT_NETWORK)),
+            },
             ParameterDefinition {
                 name: "authority_public_key".into(),
                 type_hint: "string".into(),
@@ -361,7 +532,7 @@ impl Protocol for StratumV2ClientProtocol {
             ParameterDefinition {
                 name: "user_identity".into(),
                 type_hint: "string".into(),
-                description: "Who the first channel mines as, usually account.worker".into(),
+                description: "Who the first channel mines as, usually account.worker; a job declarator asks for tokens as this".into(),
                 required: false,
                 example: json!("netget.rig1"),
                 default: Some(json!(DEFAULT_USER)),

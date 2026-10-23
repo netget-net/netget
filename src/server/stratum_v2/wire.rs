@@ -25,7 +25,8 @@ pub const JOB_DECLARATION_PROTOCOL: u8 = 1;
 /// `SetupConnection.protocol` for the Template Distribution Protocol (sv2-spec §7).
 pub const TEMPLATE_DISTRIBUTION_PROTOCOL: u8 = 2;
 /// The one SetupConnection flag the Job Declaration Protocol defines: the client may declare
-/// full templates (DECLARE_TX_DATA). SRI's jd_client v0.8.0 sends 0 in both of its modes.
+/// full templates (DECLARE_TX_DATA). SRI's jd_client v0.8.0 sets it in FULLTEMPLATE mode, and SRI's
+/// JDS refuses a client without it (`missing-declare-tx-data-flag`).
 pub const DECLARE_TX_DATA: u32 = 1 << 0;
 
 /// SetupConnection flags a mining client may send (sv2-spec §5.3.1).
