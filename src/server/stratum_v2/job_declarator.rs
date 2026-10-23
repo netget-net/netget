@@ -267,6 +267,7 @@ fn complete(job: &Declared) -> std::result::Result<(), &'static str> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn run<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
     ctx: &SpawnContext,
     pool: &Pool,

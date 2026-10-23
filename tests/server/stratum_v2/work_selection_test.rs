@@ -448,7 +448,7 @@ async fn declare_at(
     height: u32,
     txs: &[Tx],
     extranonce_len: usize,
-) -> Result<Declared, Option<Message>> {
+) -> Result<Declared, Box<Option<Message>>> {
     jd.send(&Message::AllocateMiningJobToken {
         user_identifier: b"netget".to_vec(),
         request_id,
@@ -507,7 +507,7 @@ async fn declare_at(
         ..
     }) = answer
     else {
-        return Err(answer);
+        return Err(Box::new(answer));
     };
     Ok(Declared {
         token: new_mining_job_token,
@@ -895,7 +895,7 @@ async fn declarations_and_custom_jobs_are_checked_against_the_node() {
     // A height that is not the node's next block.
     let stale = declare_at(&mut jd, 1, next + 5, &[], full).await;
     assert!(
-        matches!(&stale, Err(Some(Message::DeclareMiningJobError { error_code, .. })) if error_code == b"stale-chain-tip"),
+        matches!(stale.as_ref().map_err(|e| e.as_ref()), Err(Some(Message::DeclareMiningJobError { error_code, .. })) if error_code == b"stale-chain-tip"),
         "{stale:?}"
     );
 
