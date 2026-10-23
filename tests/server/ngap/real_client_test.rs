@@ -325,6 +325,67 @@ elif t == "ngap_pdu_session_establishment_request" and e["dnn"] == "internet":
           "pdu_session_id": e["pdu_session_id"], "ue_ipv4": "10.60.0.2", "reachable_addresses": ["10.60.0.1"]}]
 print(json.dumps({"actions": a}))"#;
 
+/// Where a UERANSIM binary is: `NETGET_UERANSIM_DIR` when set, else on `PATH`.
+fn ueransim_binary(name: &str) -> std::path::PathBuf {
+    match std::env::var("NETGET_UERANSIM_DIR") {
+        Ok(dir) => std::path::Path::new(&dir).join(name),
+        Err(_) => crate::helpers::real_server::find_binary(name)
+            .unwrap_or_else(|| std::path::PathBuf::from(name)),
+    }
+}
+
+/// Kills a root `nr-ue` started through sudo, matched by its own temp-dir config path.
+struct RootReaper(std::path::PathBuf);
+
+impl Drop for RootReaper {
+    fn drop(&mut self) {
+        let _ = Command::new("sudo")
+            .args(["-n", "pkill", "-KILL", "-f"])
+            .arg(&self.0)
+            .status();
+    }
+}
+
+/// What decides whether nr-ue may build its tunnel, for a failure message: who runs the test,
+/// whether sudo works, the capabilities on nr-ue and ip, /dev/net/tun, and how nr-ue's
+/// directory is mounted.
+fn privilege_report() -> String {
+    let run = |cmd: &str, args: &[&str]| -> String {
+        match Command::new(cmd).args(args).output() {
+            Ok(o) => format!(
+                "$ {cmd} {}\n{}{}",
+                args.join(" "),
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            ),
+            Err(e) => format!("$ {cmd} {}: {e}\n", args.join(" ")),
+        }
+    };
+    let ue = ueransim_binary("nr-ue");
+    let ue = ue.to_string_lossy().to_string();
+    let dir = std::path::Path::new(&ue)
+        .parent()
+        .map(|d| d.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let ip = String::from_utf8_lossy(
+        &Command::new("sh")
+            .args(["-c", "readlink -f \"$(command -v ip)\""])
+            .output()
+            .map(|o| o.stdout)
+            .unwrap_or_default(),
+    )
+    .trim()
+    .to_string();
+    [
+        run("id", &[]),
+        run("sudo", &["-n", "true"]),
+        run("getcap", &[&ue, &ip]),
+        run("ls", &["-l", "/dev/net/tun"]),
+        run("findmnt", &["-no", "TARGET,OPTIONS", "-T", &dir]),
+    ]
+    .concat()
+}
+
 const PING_HINT: crate::helpers::real_server::InstallHint =
     crate::helpers::real_server::InstallHint {
         brew: "(none: the UE's tunnel is Linux-only)",
@@ -337,8 +398,11 @@ const PING_HINT: crate::helpers::real_server::InstallHint =
 /// `uesimtun*` with the model's address, and its ping crosses the GTP-U tunnel to NetGet's user
 /// plane and back. Then it deregisters under security.
 ///
-/// `nr-ue` needs to create a TUN device and add routes: root, or `cap_net_admin` on `nr-ue` and
-/// on `ip` (the CI job does the latter). It fails, naming that, rather than skipping.
+/// `nr-ue` refuses to create its TUN device unless its effective uid is 0: UERANSIM checks
+/// `geteuid() == 0` itself before opening `/dev/net/tun` (`UeAppTask::setupTunInterface`), so no
+/// capability can stand in for root. Root runs it directly; anyone else runs it through
+/// `sudo -n`, which a GitHub runner allows. Without either the test fails, saying so, rather
+/// than skipping.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ueransim_registers_gets_a_pdu_session_and_pings_through_the_tunnel() {
     let handlers = vec![
@@ -373,18 +437,35 @@ async fn ueransim_registers_gets_a_pdu_session_and_pings_through_the_tunnel() {
     .await
     .unwrap();
 
-    let mut ue_cmd = ueransim("nr-ue");
-    ue_cmd.arg("-c").arg(ue_config_with(
+    let ue_cfg = ue_config_with(
         dir.path(),
         "127.0.0.61",
         "imsi-001010000000002",
         1,
         "\n  - type: 'IPv4'\n    apn: 'internet'\n    slice:\n      sst: 1",
-    ));
+    );
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    let root = unsafe { libc::geteuid() } == 0;
+    let ue_cmd = if root {
+        let mut c = ueransim("nr-ue");
+        c.arg("-c").arg(&ue_cfg);
+        c
+    } else {
+        // sudo resets PATH, so it is handed nr-ue's absolute path.
+        let mut c = ueransim("sudo");
+        c.arg("-n")
+            .arg(ueransim_binary("nr-ue"))
+            .arg("-c")
+            .arg(&ue_cfg);
+        c
+    };
     let ue = ToolProcess::spawn(ue_cmd, "nr-ue", HINT).unwrap();
+    // Killing sudo does not kill the root nr-ue it started; this does, by its own config path.
+    let _reaper = (!root).then(|| RootReaper(ue_cfg.clone()));
     fn fail(what: &str, ue: &ToolProcess, gnb: &ToolProcess) -> ! {
         panic!(
-            "{what}\n--- nr-ue ---\n{}\n--- nr-gnb ---\n{}",
+            "{what}\n--- privileges ---\n{}\n--- nr-ue ---\n{}\n--- nr-gnb ---\n{}",
+            privilege_report(),
             ue.lines().join("\n"),
             gnb.lines().join("\n")
         )
@@ -415,8 +496,8 @@ async fn ueransim_registers_gets_a_pdu_session_and_pings_through_the_tunnel() {
     {
         Ok(l) => l,
         Err(_) => fail(
-            "the UE's TUN interface never came up: nr-ue needs root, or cap_net_admin on nr-ue \
-             and on ip (sudo setcap cap_net_admin+ep $(command -v ip) <nr-ue>)",
+            "the UE's TUN interface never came up: nr-ue creates it only as root (it checks \
+             geteuid() itself), so run the test as root or where `sudo -n` works",
             &ue,
             &gnb,
         ),

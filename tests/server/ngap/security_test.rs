@@ -81,6 +81,11 @@ fn suci_profile_a_matches_ts_33_501_c_4_3() {
     let home_private =
         arr::<32>("c53c22208b61860b06c62e5406a7b330c2b577aa5558981510d128247d38bd1d");
     let home_public = unhex("5a8d38864820197c3394b92613b20b91633cbd897119273bf8e4a6f4eec0a650");
+    assert_eq!(
+        home_private,
+        suci::TS_33_501_C_4_3_HOME_NETWORK_PRIVATE_KEY,
+        "the key the startup example is built from is the specification's"
+    );
     let eph_private = arr::<32>("c80949f13ebe61af4ebdbd293ea4f942696b9e815d7e8f0096bbf6ed7de62256");
     let expected = unhex(
         "b2e92f836055a255837debf850b528997ce0201cb82adfe4be1f587d07d8457d cb02352410 cddd9e730ef3fa87",

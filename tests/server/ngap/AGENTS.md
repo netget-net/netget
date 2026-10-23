@@ -27,7 +27,12 @@ Linux software and macOS has no SCTP.
   and one PDU session decision. The capture is read by tshark's ngap dissector (Initial
   Context Setup and PDU Session Resource Setup both ways) and nas-5gs dissector with
   `null_decipher` (every 5GMM message of the procedure, header types 3 and 4, the 5GSM accept).
-  `nr-ue` needs root, or `cap_net_admin` on `nr-ue` and on `ip`; the test fails naming that.
+  `nr-ue` builds its TUN only when `geteuid()` is 0 — UERANSIM checks that itself, so a
+  capability cannot stand in (the first CI run proved it: CAP_NET_ADMIN on nr-ue, then
+  `TUN interface could not be setup. Permission denied`). Root runs it directly, anyone else
+  through `sudo -n` (passwordless on GitHub runners), killed afterwards by its config path.
+  A failure prints `id`, `sudo -n true`, `getcap` of nr-ue and ip, `/dev/net/tun` and the
+  mount options of nr-ue's directory.
 - `real_client_test::ueransim_reports_the_models_ng_setup_failure` — the model's
   `misc/unknown-PLMN-or-SNPN` is what `nr-gnb` logs (asn1c calls the Rel-15 value
   `unknown-PLMN`).
