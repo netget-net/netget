@@ -7,11 +7,18 @@
 //!   difficulty, and whether a share already proven to meet its target is credited.
 //! - `template_provider`: the Template Distribution Protocol (`template_provider.rs`).
 //! - `job_declarator`: the Job Declaration Protocol's server (`job_declarator.rs`).
+//! - `pool_and_job_declarator`: both on one listener, the protocol each connection names in
+//!   SetupConnection choosing which serves it. The pool then takes work selection
+//!   (SetCustomMiningJob), redeeming the tokens the job declarator issued — one token table,
+//!   because one server holds it.
 //!
-//! All three share the handshake, the certificate and the framing.
+//! All share the handshake, the certificate and the framing. With `bitcoin_rpc_url`, every role
+//! hands the blocks it verifies to that Bitcoin Core node (`node.rs`), and the job declarator
+//! checks each declaration against the node's tip.
 pub mod actions;
 pub mod bitcoin;
 pub mod job_declarator;
+pub mod node;
 pub mod noise;
 pub mod template_provider;
 pub mod wire;
@@ -43,6 +50,13 @@ pub const DEFAULT_SHARES_PER_MINUTE: f64 = 6.0;
 /// The largest frame payload a device may send. The biggest message a mining device has any
 /// reason to send is a SetupConnection with five full strings, about 1.3 KiB.
 pub const MAX_INBOUND_PAYLOAD: usize = 16 * 1024;
+/// The largest frame payload a connection that negotiated work selection may send: a
+/// SetCustomMiningJob with a full B0_64K of coinbase outputs and a 255-deep merkle path is
+/// about 73 KiB.
+pub const MAX_WORK_SELECTION_PAYLOAD: usize = 80 * 1024;
+/// Block hashes remembered as handed to the node, so a block reported twice (PushSolution and
+/// the share that found it) is relayed once.
+pub const MAX_RELAYED: usize = 1024;
 /// Channels one connection may hold open.
 pub const MAX_CHANNELS: usize = 16;
 /// Jobs a channel keeps valid at once; older ones become stale.
@@ -66,6 +80,7 @@ pub enum Role {
     Pool,
     TemplateProvider,
     JobDeclarator,
+    PoolAndJobDeclarator,
 }
 
 impl Role {
@@ -74,8 +89,9 @@ impl Role {
             "pool" => Role::Pool,
             "template_provider" => Role::TemplateProvider,
             "job_declarator" => Role::JobDeclarator,
+            "pool_and_job_declarator" => Role::PoolAndJobDeclarator,
             other => anyhow::bail!(
-                "role must be pool, template_provider or job_declarator, not {other:?}"
+                "role must be pool, template_provider, job_declarator or pool_and_job_declarator, not {other:?}"
             ),
         })
     }
@@ -85,13 +101,15 @@ impl Role {
             Role::Pool => "pool",
             Role::TemplateProvider => "template provider",
             Role::JobDeclarator => "job declarator",
+            Role::PoolAndJobDeclarator => "pool and job declarator",
         }
     }
 
-    /// The largest frame payload a peer of this role may send.
+    /// The largest frame payload a peer of this role may send before SetupConnection has said
+    /// more (work selection, or the Job Declaration Protocol on a combined listener).
     pub fn max_inbound_payload(self) -> usize {
         match self {
-            Role::Pool => MAX_INBOUND_PAYLOAD,
+            Role::Pool | Role::PoolAndJobDeclarator => MAX_INBOUND_PAYLOAD,
             Role::TemplateProvider => template_provider::MAX_INBOUND_PAYLOAD,
             Role::JobDeclarator => job_declarator::MAX_INBOUND_PAYLOAD,
         }
@@ -109,6 +127,11 @@ pub(crate) struct Pool {
     role: Role,
     network: bitcoin::Network,
     mempool: std::sync::Mutex<job_declarator::Mempool>,
+    /// Accepted declarations by token, which the pool side redeems.
+    redeemable: std::sync::Mutex<job_declarator::Redeemable>,
+    /// The node blocks are relayed to and declarations checked against, if configured.
+    node: Option<node::Node>,
+    relayed: std::sync::Mutex<VecDeque<String>>,
 }
 
 struct Job {
@@ -121,6 +144,10 @@ struct Job {
     coinbase_suffix: Vec<u8>,
     /// For standard channels: the root of the coinbase with the channel's extranonce prefix.
     merkle_root: [u8; 32],
+    /// A custom job's path (the pool's own jobs carry no transactions).
+    merkle_path: Vec<[u8; 32]>,
+    /// The declaration a custom job redeemed: its transactions complete a block.
+    custom: Option<Arc<job_declarator::Accepted>>,
 }
 
 type ShareKey = (u32, u32, u32, u32, Vec<u8>);
@@ -170,6 +197,8 @@ impl Channel {
             coinbase_prefix,
             coinbase_suffix,
             merkle_root,
+            merkle_path: Vec::new(),
+            custom: None,
         }
     }
 
@@ -241,6 +270,8 @@ impl Channel {
 struct Conn {
     setup: bool,
     flags: u32,
+    /// The device negotiated REQUIRES_WORK_SELECTION (only a `pool_and_job_declarator` allows it).
+    work_selection: bool,
     channels: HashMap<u32, Channel>,
     next_channel_id: u32,
 }
@@ -323,6 +354,23 @@ fn params(ctx: &SpawnContext) -> Result<(Pool, Duration)> {
             .flatten()
             .unwrap_or_else(|| actions::DEFAULT_NETWORK.into()),
     )?;
+    let string = |key: &str| -> Result<Option<String>> {
+        Ok(p.map(|p| p.get_optional_string(key))
+            .transpose()?
+            .flatten()
+            .filter(|s| !s.is_empty()))
+    };
+    let (user, password) = (string("bitcoin_rpc_user")?, string("bitcoin_rpc_password")?);
+    let node = match string("bitcoin_rpc_url")? {
+        Some(url) => Some(node::Node::new(&url, user, password)?),
+        None => {
+            anyhow::ensure!(
+                user.is_none() && password.is_none(),
+                "bitcoin_rpc_user and bitcoin_rpc_password need bitcoin_rpc_url"
+            );
+            None
+        }
+    };
     Ok((
         Pool {
             key: noise::EllKey::generate(),
@@ -334,6 +382,9 @@ fn params(ctx: &SpawnContext) -> Result<(Pool, Duration)> {
             role,
             network,
             mempool: std::sync::Mutex::new(job_declarator::Mempool::default()),
+            redeemable: std::sync::Mutex::new(job_declarator::Redeemable::default()),
+            node,
+            relayed: std::sync::Mutex::new(VecDeque::new()),
         },
         Duration::from_secs(idle),
     ))
@@ -344,9 +395,13 @@ pub async fn spawn(ctx: SpawnContext) -> Result<SocketAddr> {
     let listener = TcpListener::bind(ctx.legacy_listen_addr()).await?;
     let addr = listener.local_addr()?;
     Log::new(Some(&ctx.status_tx)).info(format!(
-        "Stratum V2 {} listening on {addr}; authority public key {} (clients pin this)",
+        "Stratum V2 {} listening on {addr}; authority public key {} (clients pin this){}",
         pool.role.name(),
-        noise::encode_authority_key(&pool.authority.public_xonly())
+        noise::encode_authority_key(&pool.authority.public_xonly()),
+        match &pool.node {
+            Some(n) => format!("; blocks are relayed to {}", n.url()),
+            None => String::new(),
+        }
     ));
     let pool = Arc::new(pool);
     let state = ctx.state.clone();
@@ -681,8 +736,13 @@ async fn handle(
             if min_version > wire::PROTOCOL_VERSION || max_version < wire::PROTOCOL_VERSION {
                 return error(0, "protocol-version-mismatch");
             }
-            let unsupported =
-                flags & !(wire::REQUIRES_STANDARD_JOBS | wire::REQUIRES_VERSION_ROLLING);
+            // Work selection needs a job declarator to have issued the token a custom job
+            // redeems, so only the combined role offers it.
+            let mut supported = wire::REQUIRES_STANDARD_JOBS | wire::REQUIRES_VERSION_ROLLING;
+            if pool.role == Role::PoolAndJobDeclarator {
+                supported |= wire::REQUIRES_WORK_SELECTION;
+            }
+            let unsupported = flags & !supported;
             if unsupported != 0 {
                 return error(unsupported, "unsupported-feature-flags");
             }
@@ -697,6 +757,7 @@ async fn handle(
                 Verdict::Accept(_) => {
                     conn.setup = true;
                     conn.flags = flags;
+                    conn.work_selection = flags & wire::REQUIRES_WORK_SELECTION != 0;
                     Step::send(Message::SetupConnectionSuccess {
                         used_version: wire::PROTOCOL_VERSION,
                         flags: 0,
@@ -833,7 +894,335 @@ async fn handle(
             )
             .await
         }
+        m @ Message::SetCustomMiningJob { .. } => {
+            if !conn.work_selection {
+                return refuse_close("SetCustomMiningJob without REQUIRES_WORK_SELECTION");
+            }
+            custom_job(ctx, pool, conn, id, peer, &m).await
+        }
         other => refuse_close(&format!("{} is not a message a device sends", other.name())),
+    }
+}
+
+/// Why a SetCustomMiningJob does not describe the job its token's declaration accepted, as the
+/// error code SetCustomMiningJob.Error carries (SRI's vocabulary) and a detail for the log.
+/// `full_extranonce` is the channel's: the pool's prefix and the device's part.
+pub(crate) fn check_custom_job(
+    job: &job_declarator::Accepted,
+    network: bitcoin::Network,
+    full_extranonce: usize,
+    m: &Message,
+) -> std::result::Result<(), (&'static str, String)> {
+    let Message::SetCustomMiningJob {
+        version,
+        prev_hash,
+        min_ntime,
+        nbits,
+        coinbase_tx_version,
+        coinbase_prefix,
+        coinbase_tx_input_n_sequence,
+        coinbase_tx_outputs,
+        coinbase_tx_locktime,
+        merkle_path,
+        ..
+    } = m
+    else {
+        return Err(("invalid-job", "not a SetCustomMiningJob".into()));
+    };
+    if *version != job.version {
+        return Err((
+            "invalid-version",
+            format!("0x{version:08x}, declared 0x{:08x}", job.version),
+        ));
+    }
+    if let Some(tip) = job.tip {
+        if *prev_hash != tip.prev_hash {
+            return Err((
+                "stale-chain-tip",
+                format!(
+                    "builds on {}, declared on {}",
+                    wire::display_hex(prev_hash),
+                    wire::display_hex(&tip.prev_hash)
+                ),
+            ));
+        }
+        if *nbits != tip.nbits {
+            return Err((
+                "invalid-nbits",
+                format!("{nbits:08x}, the node's next block needs {:08x}", tip.nbits),
+            ));
+        }
+    }
+    if let Err(e) = bitcoin::check_bits(network, *nbits) {
+        return Err(("invalid-nbits", format!("{e:#}")));
+    }
+    if *min_ntime > wire::now_secs().saturating_add(wire::MAX_FUTURE_NTIME) {
+        return Err((
+            "invalid-min-ntime",
+            format!("{min_ntime} is more than two hours ahead"),
+        ));
+    }
+    let coinbase = &job.coinbase;
+    if *coinbase_tx_version != coinbase.version {
+        return Err((
+            "invalid-coinbase-tx-version",
+            format!("{coinbase_tx_version}, declared {}", coinbase.version),
+        ));
+    }
+    let script = &coinbase.inputs[0].script_sig;
+    let declared_prefix = &script[..script.len().saturating_sub(job.extranonce_len)];
+    if coinbase_prefix[..] != *declared_prefix {
+        return Err((
+            "invalid-coinbase-prefix",
+            format!(
+                "{}, declared {}",
+                hex::encode(coinbase_prefix),
+                hex::encode(declared_prefix)
+            ),
+        ));
+    }
+    if job.extranonce_len != full_extranonce {
+        return Err((
+            "invalid-coinbase-prefix",
+            format!(
+                "the declaration leaves {} bytes of extranonce and this channel's is {full_extranonce}",
+                job.extranonce_len
+            ),
+        ));
+    }
+    if *coinbase_tx_input_n_sequence != coinbase.inputs[0].sequence {
+        return Err((
+            "invalid-coinbase-tx-input-n-sequence",
+            format!(
+                "0x{coinbase_tx_input_n_sequence:08x}, declared 0x{:08x}",
+                coinbase.inputs[0].sequence
+            ),
+        ));
+    }
+    if coinbase_tx_outputs[..] != bitcoin::output_vector_bytes(&coinbase.outputs)[..] {
+        return Err((
+            "invalid-coinbase-tx-outputs",
+            "not the declared coinbase's outputs".into(),
+        ));
+    }
+    if *coinbase_tx_locktime != coinbase.locktime {
+        return Err((
+            "invalid-coinbase-tx-locktime",
+            format!("{coinbase_tx_locktime}, declared {}", coinbase.locktime),
+        ));
+    }
+    let txids: Vec<[u8; 32]> = job.txs.iter().map(bitcoin::Tx::txid).collect();
+    if *merkle_path != bitcoin::coinbase_merkle_path(&txids) {
+        return Err((
+            "invalid-merkle-path",
+            format!(
+                "{} hashes that are not the path of the declared {} transactions",
+                merkle_path.len(),
+                txids.len()
+            ),
+        ));
+    }
+    // The coinbase the custom job describes, around a zero extranonce of the channel's size,
+    // must be the declared one byte for byte: its prefix and its suffix.
+    let outputs = bitcoin::parse_output_vector(coinbase_tx_outputs, 255)
+        .map_err(|e| ("invalid-coinbase-tx-outputs", format!("{e:#}")))?;
+    let rebuilt = bitcoin::Tx {
+        version: *coinbase_tx_version,
+        inputs: vec![bitcoin::TxIn {
+            prev_txid: [0u8; 32],
+            vout: u32::MAX,
+            script_sig: [&coinbase_prefix[..], &vec![0u8; full_extranonce]].concat(),
+            sequence: *coinbase_tx_input_n_sequence,
+            witness: coinbase.inputs[0].witness.clone(),
+        }],
+        outputs,
+        locktime: *coinbase_tx_locktime,
+    }
+    .serialize(coinbase.has_witness());
+    let declared = [
+        &job.prefix[..],
+        &vec![0u8; job.extranonce_len],
+        &job.suffix[..],
+    ]
+    .concat();
+    if rebuilt != declared {
+        return Err((
+            "invalid-coinbase-tx",
+            "the coinbase it describes is not the declared one".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// SetCustomMiningJob: redeem the token, check the job against its declaration, ask the model,
+/// and on yes make it the channel's work.
+async fn custom_job(
+    ctx: &SpawnContext,
+    pool: &Pool,
+    conn: &mut Conn,
+    id: ConnectionId,
+    peer: SocketAddr,
+    m: &Message,
+) -> Step {
+    let Message::SetCustomMiningJob {
+        channel_id,
+        request_id,
+        token,
+        version,
+        prev_hash,
+        min_ntime,
+        nbits,
+        merkle_path,
+        ..
+    } = m
+    else {
+        return Step::default();
+    };
+    let (channel_id, request_id) = (*channel_id, *request_id);
+    let log = Log::new(Some(&ctx.status_tx));
+    let error = |code: &str, why: String| {
+        log.info(format!(
+            "Stratum V2 connection {id} custom job {request_id} on channel {channel_id} refused: {code} ({why})"
+        ));
+        Step::send(Message::SetCustomMiningJobError {
+            channel_id,
+            request_id,
+            error_code: code.as_bytes().to_vec(),
+        })
+    };
+    let Some(ch) = conn.channels.get(&channel_id) else {
+        return error("invalid-channel-id", "no such channel".into());
+    };
+    let Some(size) = ch.extranonce_size else {
+        return error(
+            "invalid-channel-id",
+            "custom jobs run on extended channels".into(),
+        );
+    };
+    let full = wire::EXTRANONCE_PREFIX_LEN + usize::from(size);
+    let user = ch.user.clone();
+    // The token is spent by asking, whatever follows: a declaration is redeemed at most once.
+    let Some(job) = job_declarator::redeemable(pool).take(token) else {
+        outcome(ctx, id, "set_custom_mining_job", "refused_invalid_token");
+        return error(
+            "invalid-mining-job-token",
+            "not a token this server's job declarator issued for an accepted job, or one already redeemed".into(),
+        );
+    };
+    if let Err((code, why)) = check_custom_job(&job, pool.network, full, m) {
+        outcome(
+            ctx,
+            id,
+            "set_custom_mining_job",
+            "refused_invalid_custom_job",
+        );
+        return error(code, why);
+    }
+    let event = Event::new(
+        &actions::CUSTOM_JOB_EVENT,
+        json!({"channel_id": channel_id, "request_id": request_id, "user_identity": user,
+               "declaration_request_id": job.request_id, "height": job.height,
+               "prev_hash": wire::display_hex(prev_hash), "nbits": format!("{nbits:08x}"),
+               "version": version, "min_ntime": min_ntime, "transactions": job.txs.len(),
+               "coinbase_outputs": job.coinbase.outputs.iter().map(bitcoin::describe_output).collect::<Vec<_>>(),
+               "coinbase_value_sats": job.coinbase.outputs.iter().map(|o| o.value).sum::<u64>(),
+               "tip_checked": job.tip.is_some(), "remote_addr": peer.to_string()}),
+    );
+    match ask(ctx, id, event, "set_custom_mining_job").await {
+        Verdict::Accept(_) => {}
+        Verdict::Reject(code, _) => return error(&code, "the model refused it".into()),
+        Verdict::Fail(code) => return error(code, "the model gave no usable answer".into()),
+    }
+    let Some(ch) = conn.channels.get_mut(&channel_id) else {
+        return error(
+            "invalid-channel-id",
+            "the channel closed while the model was asked".into(),
+        );
+    };
+    let job_id = pool.next_job.fetch_add(1, Ordering::Relaxed);
+    if *prev_hash != ch.prev_hash {
+        while let Some(old) = ch.jobs.pop_front() {
+            ch.retire(old.id);
+        }
+        ch.seen.clear();
+        ch.prev_hash = *prev_hash;
+    } else if ch.jobs.len() >= MAX_JOBS {
+        if let Some(old) = ch.jobs.pop_front() {
+            ch.retire(old.id);
+        }
+    }
+    log.info(format!(
+        "Stratum V2 connection {id} channel {channel_id}: custom job {job_id} for declaration {} at height {:?} on {}",
+        job.request_id,
+        job.height,
+        wire::display_hex(prev_hash)
+    ));
+    ch.jobs.push_back(Job {
+        id: job_id,
+        version: *version,
+        ntime_start: *min_ntime,
+        nbits: *nbits,
+        prev_hash: *prev_hash,
+        coinbase_prefix: job.prefix.clone(),
+        coinbase_suffix: job.suffix.clone(),
+        merkle_root: [0u8; 32],
+        merkle_path: merkle_path.clone(),
+        custom: Some(job),
+    });
+    Step::send(Message::SetCustomMiningJobSuccess {
+        channel_id,
+        request_id,
+        job_id,
+    })
+}
+
+/// Hand a block Rust verified to the configured node, once per hash. What the node said, for
+/// the event: `accepted`, its reason (`duplicate`, `inconclusive`, `high-hash`, …),
+/// `already-relayed` or `relay-failed`; None without a node.
+pub(crate) async fn relay(
+    ctx: &SpawnContext,
+    pool: &Pool,
+    id: ConnectionId,
+    hash: &str,
+    block: &[u8],
+) -> Option<String> {
+    let node = pool.node.as_ref()?;
+    {
+        let mut seen = pool.relayed.lock().unwrap_or_else(|e| e.into_inner());
+        if seen.iter().any(|h| h == hash) {
+            return Some("already-relayed".into());
+        }
+        if seen.len() >= MAX_RELAYED {
+            seen.pop_front();
+        }
+        seen.push_back(hash.to_string());
+    }
+    let log = Log::new(Some(&ctx.status_tx));
+    match node.submit_block(block).await {
+        Ok(None) => {
+            log.info(format!(
+                "Stratum V2 connection {id}: Bitcoin Core accepted block {hash}"
+            ));
+            outcome(ctx, id, "relay_block", "relayed");
+            Some("accepted".into())
+        }
+        Ok(Some(reason)) => {
+            log.warn(format!(
+                "Stratum V2 connection {id}: Bitcoin Core answered block {hash} with {reason}"
+            ));
+            outcome(ctx, id, "relay_block", "relay_refused");
+            Some(reason)
+        }
+        Err(e) => {
+            log.warn(format!(
+                "Stratum V2 connection {id}: block {hash} was not relayed: {e:#}"
+            ));
+            outcome(ctx, id, "relay_block", "relay_failed");
+            // Not remembered, so the next report of it tries again.
+            let mut seen = pool.relayed.lock().unwrap_or_else(|e| e.into_inner());
+            seen.retain(|h| h != hash);
+            Some("relay-failed".into())
+        }
     }
 }
 
@@ -1023,31 +1412,56 @@ async fn submit(
     if ch.seen.contains(&key) {
         return refuse("duplicate-share", String::new());
     }
+    let mut coinbase = Vec::new();
     let root = match &s.extranonce {
         None => job.merkle_root,
         Some(e) => {
-            let coinbase = [
+            coinbase = [
                 &job.coinbase_prefix[..],
                 &ch.prefix,
                 e,
                 &job.coinbase_suffix,
             ]
             .concat();
-            wire::merkle_root(&coinbase, &[])
+            match &job.custom {
+                // The pool's own coinbases are legacy-serialised and carry no transactions.
+                None => wire::merkle_root(&coinbase, &[]),
+                // A declared coinbase is serialised as declared (segwit, usually): its txid,
+                // folded up the custom job's path.
+                Some(_) => match bitcoin::Tx::parse(&coinbase) {
+                    Ok(tx) => bitcoin::fold_path(tx.txid(), &job.merkle_path),
+                    Err(e) => return refuse("invalid-share", format!(" ({e:#})")),
+                },
+            }
         }
     };
-    let hash = wire::sha256d(&wire::header(
+    let header = wire::header(
         s.version,
         &job.prev_hash,
         &root,
         s.ntime,
         job.nbits,
         s.nonce,
-    ));
+    );
+    let hash = wire::sha256d(&header);
+    // A custom job is a real block template: a share meeting its nbits is a block.
+    let block = job
+        .custom
+        .as_ref()
+        .filter(|_| {
+            bitcoin::compact_to_target(job.nbits)
+                .map(|t| wire::meets(&hash, &t))
+                .unwrap_or(false)
+        })
+        .map(|c| (c.height, bitcoin::block_bytes(&header, &coinbase, &c.txs)));
+    let custom = job.custom.is_some();
     let hash_hex = wire::display_hex(&hash);
     let share_difficulty = wire::difficulty(&hash);
     let difficulty = wire::target_difficulty(&ch.target);
-    if !wire::meets(&hash, &ch.target) {
+    // A block is never refused for missing the channel's target: a work-selecting client
+    // (SRI's jd_client does) forwards every share that meets the network target, whatever the
+    // channel's difficulty, and a pool that dropped one would be dropping the block.
+    if block.is_none() && !wire::meets(&hash, &ch.target) {
         return refuse(
             "difficulty-too-low",
             format!(" ({share_difficulty:.6} < {difficulty:.6}): {hash_hex}"),
@@ -1057,12 +1471,33 @@ async fn submit(
         ch.seen.clear();
     }
     ch.seen.insert(key);
+    let user = ch.user.clone();
+    let kind = ch.kind();
+    let relay = match &block {
+        None => None,
+        Some((height, bytes)) => {
+            let log = Log::new(Some(&ctx.status_tx));
+            log.info(format!(
+                "Stratum V2 connection {id}: share {} on custom job {} is block {hash_hex} at height {height:?} ({} bytes)",
+                s.sequence_number,
+                s.job_id,
+                bytes.len()
+            ));
+            log.info_to(
+                crate::logging::emit::Sink::FileOnly,
+                format!("Stratum V2 pool block {hash_hex}: {}", hex::encode(bytes)),
+            );
+            relay(ctx, pool, id, &hash_hex, bytes).await
+        }
+    };
     let event = Event::new(
         &actions::SHARE_EVENT,
-        json!({"user_identity": ch.user, "channel_id": s.channel_id, "channel_kind": ch.kind(),
+        json!({"user_identity": user, "channel_id": s.channel_id, "channel_kind": kind,
                "job_id": s.job_id, "sequence_number": s.sequence_number, "hash": hash_hex,
                "share_difficulty": share_difficulty, "difficulty": difficulty, "nonce": s.nonce,
-               "ntime": s.ntime, "version": s.version, "remote_addr": peer.to_string()}),
+               "ntime": s.ntime, "version": s.version, "custom_job": custom,
+               "solves_block": block.is_some(), "relay": relay,
+               "remote_addr": peer.to_string()}),
     );
     match ask(ctx, id, event, "share").await {
         Verdict::Accept(extras) => {
@@ -1121,8 +1556,36 @@ async fn session(
     };
     let (r, w) = tokio::io::split(socket);
     let (mut reader, mut writer) = wire::transport(r, w, session, pool.role.max_inbound_payload());
+    let mut first = None;
     match pool.role {
         Role::Pool => {}
+        Role::PoolAndJobDeclarator => {
+            // One listener, two protocols: the first message is SetupConnection, and its first
+            // byte names the protocol this connection speaks.
+            let Some(frame) = reader.next(idle).await? else {
+                return Ok(());
+            };
+            if frame.extension() == 0
+                && frame.msg_type == wire::msg::SETUP_CONNECTION
+                && frame.payload.first() == Some(&wire::JOB_DECLARATION_PROTOCOL)
+            {
+                reader.set_max_payload(job_declarator::MAX_INBOUND_PAYLOAD);
+                let result = job_declarator::run(
+                    ctx,
+                    pool,
+                    id,
+                    peer,
+                    &mut reader,
+                    &mut writer,
+                    idle,
+                    Some(frame),
+                )
+                .await;
+                writer.shutdown().await;
+                return result;
+            }
+            first = Some(frame);
+        }
         Role::TemplateProvider => {
             let result =
                 template_provider::run(ctx, pool, id, peer, &mut reader, &mut writer, idle).await;
@@ -1131,7 +1594,8 @@ async fn session(
         }
         Role::JobDeclarator => {
             let result =
-                job_declarator::run(ctx, pool, id, peer, &mut reader, &mut writer, idle).await;
+                job_declarator::run(ctx, pool, id, peer, &mut reader, &mut writer, idle, None)
+                    .await;
             writer.shutdown().await;
             return result;
         }
@@ -1139,11 +1603,20 @@ async fn session(
     let mut conn = Conn {
         setup: false,
         flags: 0,
+        work_selection: false,
         channels: HashMap::new(),
         next_channel_id: 0,
     };
+    let mut received: std::collections::BTreeMap<&'static str, u64> = Default::default();
     let result = async {
-        while let Some(frame) = reader.next(idle).await? {
+        loop {
+            let frame = match first.take() {
+                Some(f) => f,
+                None => match reader.next(idle).await? {
+                    Some(f) => f,
+                    None => break,
+                },
+            };
             ctx.state
                 .update_connection_stats(ctx.server_id, id, None, None, Some(1), None)
                 .await;
@@ -1156,7 +1629,11 @@ async fn session(
                 continue;
             }
             let message = Message::decode(&frame)?;
+            *received.entry(message.name()).or_default() += 1;
             let step = handle(ctx, pool, &mut conn, id, peer, message).await;
+            if conn.work_selection {
+                reader.set_max_payload(MAX_WORK_SELECTION_PAYLOAD);
+            }
             let mut sent = 0;
             for m in &step.out {
                 sent += writer.send(m).await?;
@@ -1180,6 +1657,12 @@ async fn session(
         Ok::<(), anyhow::Error>(())
     }
     .await;
+    if !received.is_empty() {
+        log.info(format!(
+            "Stratum V2 pool connection {id} received: {}",
+            template_provider::summary(&received)
+        ));
+    }
     writer.shutdown().await;
     result
 }

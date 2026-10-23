@@ -13,8 +13,13 @@
 //!
 //! There is no AllocateMiningJobToken.Error in the protocol (job_declaration_sv2 10.0, which
 //! sv2-apps v0.8.0 speaks), so a refused allocation ends the connection.
+//!
+//! An accepted job is also entered, under the token DeclareMiningJob.Success issues, in a table
+//! every connection of the server shares ([`Redeemable`]): in the `pool_and_job_declarator`
+//! role, that token is what a SetCustomMiningJob on the pool side redeems, once, and the job is
+//! what Rust checks the custom job against.
 use super::bitcoin::{self as btc, Tx, TxOut};
-use super::wire::{self, FrameReader, FrameWriter, Message};
+use super::wire::{self, Frame, FrameReader, FrameWriter, Message};
 use super::{actions, consult, outcome, Consult, Pool};
 use crate::logging::emit::{Log, Sink};
 use crate::protocol::{Event, SpawnContext};
@@ -23,6 +28,7 @@ use anyhow::{ensure, Result};
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -44,6 +50,59 @@ pub const MAX_MEMPOOL_BYTES: usize = 32 * 1024 * 1024;
 pub const MAX_EXTRANONCE: usize = 32;
 /// Outputs the model may require in AllocateMiningJobToken.Success.
 pub const MAX_ALLOCATE_OUTPUTS: usize = 4;
+/// Accepted jobs the server keeps redeemable by their token, across all connections; the
+/// oldest is evicted.
+pub const MAX_REDEEMABLE: usize = 1024;
+
+/// A job the model accepted, as Rust checked it: what a PushSolution is rebuilt against and
+/// what a SetCustomMiningJob redeeming its token must match.
+#[derive(Debug)]
+pub(crate) struct Accepted {
+    pub(crate) request_id: u32,
+    pub(crate) version: u32,
+    /// The declared coinbase around its extranonce, serialised as the client declared it.
+    pub(crate) prefix: Vec<u8>,
+    pub(crate) suffix: Vec<u8>,
+    pub(crate) extranonce_len: usize,
+    /// The declared coinbase with a zero extranonce.
+    pub(crate) coinbase: Tx,
+    pub(crate) txs: Vec<Tx>,
+    pub(crate) height: Option<u32>,
+    /// What the configured node said the next block builds on when the job was declared; None
+    /// without a node.
+    pub(crate) tip: Option<super::node::Tip>,
+}
+
+/// Accepted jobs by the token their DeclareMiningJob.Success issued, shared by every
+/// connection of one server: a token is redeemed at most once, by any pool connection.
+#[derive(Default)]
+pub(crate) struct Redeemable {
+    jobs: HashMap<[u8; 8], Arc<Accepted>>,
+    order: VecDeque<[u8; 8]>,
+}
+
+impl Redeemable {
+    pub(crate) fn insert(&mut self, token: [u8; 8], job: Arc<Accepted>) {
+        while self.jobs.len() >= MAX_REDEEMABLE {
+            match self.order.pop_front() {
+                Some(old) => {
+                    self.jobs.remove(&old);
+                }
+                None => break,
+            }
+        }
+        self.order.push_back(token);
+        self.jobs.insert(token, job);
+    }
+
+    /// The job behind `token`, which is spent by asking.
+    pub(crate) fn take(&mut self, token: &[u8]) -> Option<Arc<Accepted>> {
+        let token: [u8; 8] = token.try_into().ok()?;
+        let job = self.jobs.remove(&token)?;
+        self.order.retain(|t| *t != token);
+        Some(job)
+    }
+}
 
 /// Transactions clients have supplied, by wtxid, shared by every connection of one server.
 #[derive(Default)]
@@ -111,7 +170,7 @@ pub(crate) struct Conn {
     setup: bool,
     tokens: VecDeque<Token>,
     pending: VecDeque<Declared>,
-    jobs: VecDeque<Declared>,
+    jobs: VecDeque<Arc<Accepted>>,
     received: BTreeMap<&'static str, u64>,
 }
 
@@ -216,11 +275,20 @@ pub(super) async fn run<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
     reader: &mut FrameReader<R>,
     writer: &mut FrameWriter<W>,
     idle: Duration,
+    first: Option<Frame>,
 ) -> Result<()> {
     let log = Log::new(Some(&ctx.status_tx));
     let mut conn = Conn::new();
+    let mut first = first;
     let result = async {
-        while let Some(frame) = reader.next(idle).await? {
+        loop {
+            let frame = match first.take() {
+                Some(f) => f,
+                None => match reader.next(idle).await? {
+                    Some(f) => f,
+                    None => break,
+                },
+            };
             ctx.state
                 .update_connection_stats(ctx.server_id, id, None, None, Some(1), None)
                 .await;
@@ -264,6 +332,10 @@ fn mempool(pool: &Pool) -> std::sync::MutexGuard<'_, Mempool> {
     pool.mempool.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+pub(crate) fn redeemable(pool: &Pool) -> std::sync::MutexGuard<'_, Redeemable> {
+    pool.redeemable.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// The model's verdict on a declaration whose transactions are all known.
 async fn evaluate(
     ctx: &SpawnContext,
@@ -290,6 +362,32 @@ async fn evaluate(
         outcome(ctx, id, "jd_declare_mining_job", "refused_invalid_job");
         return error(job.request_id, code);
     }
+    let height = btc::bip34_height(&job.coinbase.inputs[0].script_sig);
+    // With a node, the job must build on the block the node would build on next: the height
+    // its coinbase commits to is the node's next height. The tip is kept, and the pool checks
+    // a custom job's prev hash and nbits against it.
+    let tip = match &pool.node {
+        None => None,
+        Some(node) => match node.tip().await {
+            Ok(tip) if Some(tip.height) == height => Some(tip),
+            Ok(tip) => {
+                log.info(format!(
+                    "Stratum V2 job declarator connection {id}: declaration {} commits to height {height:?}, but the node's next block is {}",
+                    job.request_id, tip.height
+                ));
+                outcome(ctx, id, "jd_declare_mining_job", "refused_stale_chain_tip");
+                return error(job.request_id, "stale-chain-tip");
+            }
+            Err(e) => {
+                log.warn(format!(
+                    "Stratum V2 job declarator connection {id}: declaration {} cannot be checked against the node: {e:#}",
+                    job.request_id
+                ));
+                outcome(ctx, id, "jd_declare_mining_job", "fail_closed_node_error");
+                return error(job.request_id, "service-unavailable");
+            }
+        },
+    };
     let coinbase = &job.coinbase;
     let pays_pool = outputs
         .iter()
@@ -298,7 +396,8 @@ async fn evaluate(
     let event = Event::new(
         &actions::JD_DECLARE_EVENT,
         json!({"request_id": job.request_id, "version": job.version,
-               "height": btc::bip34_height(&coinbase.inputs[0].script_sig),
+               "height": height,
+               "prev_hash": tip.map(|t| wire::display_hex(&t.prev_hash)),
                "coinbase_outputs": coinbase.outputs.iter().map(btc::describe_output).collect::<Vec<_>>(),
                "coinbase_value_sats": coinbase.outputs.iter().map(|o| o.value).sum::<u64>(),
                "pays_required_outputs": pays_pool, "transactions": job.txs.len(),
@@ -311,12 +410,23 @@ async fn evaluate(
             ..
         } => {
             let new_token = conn.issue(TokenState::Active, outputs);
-            job.token = new_token;
+            let request_id = job.request_id;
+            let accepted = Arc::new(Accepted {
+                request_id,
+                version: job.version,
+                prefix: job.prefix,
+                suffix: job.suffix,
+                extranonce_len: job.extranonce_len,
+                coinbase: job.coinbase,
+                txs: job.txs,
+                height,
+                tip,
+            });
             if conn.jobs.len() >= MAX_JOBS {
                 conn.jobs.pop_front();
             }
-            let request_id = job.request_id;
-            conn.jobs.push_back(job);
+            conn.jobs.push_back(accepted.clone());
+            redeemable(pool).insert(new_token, accepted);
             Message::DeclareMiningJobSuccess {
                 request_id,
                 new_mining_job_token: new_token.to_vec(),
@@ -640,6 +750,11 @@ async fn handle(
                 if job.extranonce_len != extranonce.len() {
                     return None;
                 }
+                // A job declared on a tip the node reported can only be solved on that tip,
+                // which keeps an easy nbits (regtest's) from matching the wrong job.
+                if job.tip.is_some_and(|t| t.prev_hash != prev_hash) {
+                    return None;
+                }
                 let coinbase = [&job.prefix[..], &extranonce, &job.suffix[..]].concat();
                 let cb = Tx::parse(&coinbase).ok()?;
                 let txids: Vec<[u8; 32]> = job.txs.iter().map(Tx::txid).collect();
@@ -675,9 +790,10 @@ async fn handle(
                     hex::encode(&block)
                 ),
             );
+            let relay = super::relay(ctx, pool, id, &hash, &block).await;
             let event = Event::new(
                 &actions::JD_SOLUTION_EVENT,
-                json!({"request_id": request_id, "hash": hash, "height": height,
+                json!({"request_id": request_id, "hash": hash, "height": height, "relay": relay,
                        "prev_hash": wire::display_hex(&prev_hash), "nbits": format!("{nbits:08x}"),
                        "ntime": ntime, "nonce": nonce, "version": version,
                        "block_size": block.len(), "remote_addr": peer.to_string()}),

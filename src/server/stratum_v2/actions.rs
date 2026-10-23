@@ -78,7 +78,7 @@ fn accept() -> ActionDefinition {
 fn reject() -> ActionDefinition {
     action(
         REJECT,
-        "Refuse the connection (SetupConnection.Error), the channel (OpenMiningChannel.Error) or the share (SubmitShares.Error) being answered.",
+        "Refuse the connection (SetupConnection.Error), the channel (OpenMiningChannel.Error), the custom job (SetCustomMiningJob.Error) or the share (SubmitShares.Error) being answered.",
         vec![p(
             "error_code",
             "string",
@@ -227,6 +227,7 @@ pub static TP_SOLUTION_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         p("block_size", "number", "The block's size in bytes", true),
         p("stale", "boolean", "Whether a newer tip has been sent since this template", true),
         p("coinbase_outputs", "array", "The coinbase's outputs: value_sats and script_type, with op_return text", true),
+        p("relay", "string", RELAY_DESCRIPTION, false),
         p("remote_addr", "string", "The client's address and port", true),
     ])
     .with_actions(template_actions())
@@ -270,13 +271,14 @@ pub static JD_ALLOCATE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
 pub static JD_DECLARE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "stratum_v2_jd_declare_job",
-        "The job declarator client declared the block it wants to mine (DeclareMiningJob), and Rust has every one of its transactions — asking for the missing ones first — checked that they are the ones it named, and checked its coinbase and witness commitment. Accept it (DeclareMiningJob.Success with a new token) or reject it with an error code (DeclareMiningJob.Error), e.g. invalid-job or stale-chain-tip.",
+        "The job declarator client declared the block it wants to mine (DeclareMiningJob), and Rust has every one of its transactions — asking for the missing ones first — checked that they are the ones it named, and checked its coinbase and witness commitment (and, with a node configured, that its height is the node's next block). Accept it (DeclareMiningJob.Success with a new token, which a SetCustomMiningJob on this server's pool can redeem once) or reject it with an error code (DeclareMiningJob.Error), e.g. invalid-job or stale-chain-tip.",
         json!({"type": ACCEPT}),
     )
     .with_parameters(vec![
         p("request_id", "number", "The declaration's request id", true),
         p("version", "number", "The block version it will mine", true),
         p("height", "number", "The height its coinbase commits to (BIP 34)", true),
+        p("prev_hash", "string", "The tip it builds on, as the configured Bitcoin Core node reported it; absent without a node, when nothing checks the job against a chain", false),
         p("coinbase_outputs", "array", "Its coinbase outputs: value_sats and script_type, with op_return text", true),
         p("coinbase_value_sats", "number", "What its coinbase pays in total", true),
         p("pays_required_outputs", "boolean", "Whether the coinbase includes every output its token required", true),
@@ -304,9 +306,38 @@ pub static JD_SOLUTION_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         p("nonce", "number", "The header nonce", true),
         p("version", "number", "The header version", true),
         p("block_size", "number", "The block's size in bytes", true),
+        p("relay", "string", RELAY_DESCRIPTION, false),
         p("remote_addr", "string", "The client's address and port", true),
     ])
     .with_no_actions()
+});
+
+/// What a `relay` event field means, everywhere one appears.
+const RELAY_DESCRIPTION: &str = "What the configured Bitcoin Core node said when Rust handed it the block: accepted, its reason (duplicate, inconclusive, high-hash, …), already-relayed or relay-failed; absent without a node";
+
+pub static CUSTOM_JOB_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    EventType::new(
+        "stratum_v2_custom_job",
+        "A device that negotiated work selection asked to mine its own job (SetCustomMiningJob) on an extended channel, redeeming a token this server's job declarator issued when it accepted the job's declaration. Rust has spent the token and checked the custom job against that declaration: version, coinbase (version, prefix, sequence, outputs, locktime, the extranonce size), merkle path, and — when a node was consulted at declaration — prev hash and nbits. Accept it (SetCustomMiningJob.Success; its shares are then verified against it) or reject it with an error code (SetCustomMiningJob.Error).",
+        json!({"type": ACCEPT}),
+    )
+    .with_parameters(vec![
+        p("channel_id", "number", "The extended channel it is for", true),
+        p("request_id", "number", "The device's request id, which the answer echoes", true),
+        p("user_identity", "string", "The channel's user", true),
+        p("declaration_request_id", "number", "The request id of the DeclareMiningJob the token came from", true),
+        p("height", "number", "The height its coinbase commits to (BIP 34)", false),
+        p("prev_hash", "string", "The block it builds on, as RPC shows hashes", true),
+        p("nbits", "string", "The compact target of its block, 8 hex digits", true),
+        p("version", "number", "The block version", true),
+        p("min_ntime", "number", "The earliest header timestamp it may use", true),
+        p("transactions", "number", "Transactions besides the coinbase", true),
+        p("coinbase_outputs", "array", "Its coinbase outputs: value_sats and script_type, with op_return text", true),
+        p("coinbase_value_sats", "number", "What its coinbase pays in total", true),
+        p("tip_checked", "boolean", "Whether prev_hash and nbits were checked against the tip a Bitcoin Core node reported at declaration (false without a node: only the network's nbits limit was checked)", true),
+        p("remote_addr", "string", "The device's address and port", true),
+    ])
+    .with_actions(vec![accept(), reject()])
 });
 
 /// The outputs a `stratum_v2_allocate_token` requires the declared coinbase to pay.
@@ -330,7 +361,7 @@ pub static SETUP_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         p("device_id", "string", "The device id it reports (often empty)", true),
         p("endpoint_host", "string", "The host it says it connected to", true),
         p("endpoint_port", "number", "The port it says it connected to", true),
-        p("flags", "array", "The features it requires: REQUIRES_STANDARD_JOBS, REQUIRES_VERSION_ROLLING", true),
+        p("flags", "array", "The features it requires: REQUIRES_STANDARD_JOBS, REQUIRES_VERSION_ROLLING, and REQUIRES_WORK_SELECTION (only a pool_and_job_declarator gets this far with it)", true),
         p("remote_addr", "string", "The device's address and port", true),
     ])
     .with_actions(all_actions())
@@ -357,7 +388,7 @@ pub static OPEN_CHANNEL_EVENT: LazyLock<EventType> = LazyLock::new(|| {
 pub static SHARE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "stratum_v2_share",
-        "A device submitted a share that Rust rebuilt into its block header and verified meets the channel's target. Accept (credit) or reject it.",
+        "A device submitted a share that Rust rebuilt into its block header and verified meets the channel's target. On a custom job a share that also meets the job's nbits is a block: Rust has logged it and handed it to the configured node. Accept (credit) or reject it.",
         json!({"type": ACCEPT}),
     )
     .with_parameters(vec![
@@ -372,6 +403,9 @@ pub static SHARE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         p("nonce", "number", "The header nonce", true),
         p("ntime", "number", "The header timestamp", true),
         p("version", "number", "The header version, with any rolled bits", true),
+        p("custom_job", "boolean", "Whether the job is the device's own (SetCustomMiningJob) rather than the pool's", true),
+        p("solves_block", "boolean", "Whether the share is a block: a custom job's hash that meets its nbits (the pool's own jobs build on no real chain and never are)", true),
+        p("relay", "string", RELAY_DESCRIPTION, false),
         p("remote_addr", "string", "The device's address and port", true),
     ])
     .with_actions(all_actions())
@@ -456,6 +490,7 @@ impl Protocol for StratumV2Protocol {
             JD_ALLOCATE_EVENT.clone(),
             JD_DECLARE_EVENT.clone(),
             JD_SOLUTION_EVENT.clone(),
+            CUSTOM_JOB_EVENT.clone(),
         ]
     }
     fn get_startup_parameters(&self) -> Vec<ParameterDefinition> {
@@ -463,7 +498,7 @@ impl Protocol for StratumV2Protocol {
             ParameterDefinition {
                 name: "role".into(),
                 type_hint: "string".into(),
-                description: "Which Stratum V2 protocol to serve: pool (the Mining Protocol, for mining devices), template_provider (the Template Distribution Protocol, for a pool or job declarator client taking block templates) or job_declarator (the Job Declaration Protocol, for miners declaring their own jobs)".into(),
+                description: "Which Stratum V2 protocol to serve: pool (the Mining Protocol, for mining devices), template_provider (the Template Distribution Protocol, for a pool or job declarator client taking block templates), job_declarator (the Job Declaration Protocol, for miners declaring their own jobs) or pool_and_job_declarator (both on this one port, the protocol each connection names choosing which serves it; the pool then takes work selection, SetCustomMiningJob, redeeming the tokens the job declarator issued)".into(),
                 required: false,
                 example: json!("template_provider"),
                 default: Some(json!(DEFAULT_ROLE)),
@@ -475,6 +510,30 @@ impl Protocol for StratumV2Protocol {
                 required: false,
                 example: json!("regtest"),
                 default: Some(json!(DEFAULT_NETWORK)),
+            },
+            ParameterDefinition {
+                name: "bitcoin_rpc_url".into(),
+                type_hint: "string".into(),
+                description: "A Bitcoin Core node's JSON-RPC endpoint (Bitcoin Core 29 or later), e.g. http://127.0.0.1:8332. With one, every block a role verifies is relayed to it with submitblock, and the job declarator refuses a declaration whose height is not the node's next block and records the node's tip, which the pool checks a custom job's prev hash and nbits against. Omitted: blocks are only logged".into(),
+                required: false,
+                example: json!("http://127.0.0.1:18443"),
+                default: None,
+            },
+            ParameterDefinition {
+                name: "bitcoin_rpc_user".into(),
+                type_hint: "string".into(),
+                description: "The RPC user for bitcoin_rpc_url (rpcuser or an rpcauth user)".into(),
+                required: false,
+                example: json!("netget"),
+                default: None,
+            },
+            ParameterDefinition {
+                name: "bitcoin_rpc_password".into(),
+                type_hint: "string".into(),
+                description: "The RPC password for bitcoin_rpc_user; never logged".into(),
+                required: false,
+                example: json!("change-me"),
+                default: None,
             },
             ParameterDefinition {
                 name: "authority_secret_key".into(),

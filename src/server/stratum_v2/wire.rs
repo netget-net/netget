@@ -70,6 +70,8 @@ pub mod msg {
     pub const SET_NEW_PREV_HASH: u8 = 0x20;
     pub const SET_TARGET: u8 = 0x21;
     pub const SET_CUSTOM_MINING_JOB: u8 = 0x22;
+    pub const SET_CUSTOM_MINING_JOB_SUCCESS: u8 = 0x23;
+    pub const SET_CUSTOM_MINING_JOB_ERROR: u8 = 0x24;
     pub const SET_GROUP_CHANNEL: u8 = 0x25;
     // Job Declaration Protocol (sv2-spec §6; job_declaration_sv2 10.0, sv2-apps v0.8.0).
     pub const ALLOCATE_MINING_JOB_TOKEN: u8 = 0x50;
@@ -152,6 +154,12 @@ impl<R: AsyncRead + Unpin> FrameReader<R> {
             cipher,
             max_payload,
         }
+    }
+
+    /// Change the largest payload this side accepts, once the session has said which protocol
+    /// it speaks (one listener can serve more than one).
+    pub fn set_max_payload(&mut self, max_payload: usize) {
+        self.max_payload = max_payload;
     }
 
     /// The next frame; None at a clean end of stream between frames. A header that does not
@@ -603,6 +611,36 @@ pub enum Message {
         channel_id: u32,
         maximum_target: [u8; 32],
     },
+    /// Work selection (sv2-spec §5.3.18, mining_sv2 12.0): a job the downstream chose and
+    /// declared to a Job Declarator Server, redeemed on an extended channel with the token that
+    /// server issued.
+    SetCustomMiningJob {
+        channel_id: u32,
+        request_id: u32,
+        token: Vec<u8>,
+        version: u32,
+        prev_hash: [u8; 32],
+        min_ntime: u32,
+        nbits: u32,
+        coinbase_tx_version: u32,
+        /// The scriptSig up to the extranonce, including the push opcode that precedes it.
+        coinbase_prefix: Vec<u8>,
+        coinbase_tx_input_n_sequence: u32,
+        /// The output vector, serialised with its count.
+        coinbase_tx_outputs: Vec<u8>,
+        coinbase_tx_locktime: u32,
+        merkle_path: Vec<[u8; 32]>,
+    },
+    SetCustomMiningJobSuccess {
+        channel_id: u32,
+        request_id: u32,
+        job_id: u32,
+    },
+    SetCustomMiningJobError {
+        channel_id: u32,
+        request_id: u32,
+        error_code: Vec<u8>,
+    },
     SetGroupChannel {
         group_channel_id: u32,
         channel_ids: Vec<u32>,
@@ -727,6 +765,9 @@ impl Message {
             NewExtendedMiningJob { .. } => msg::NEW_EXTENDED_MINING_JOB,
             SetNewPrevHash { .. } => msg::SET_NEW_PREV_HASH,
             SetTarget { .. } => msg::SET_TARGET,
+            SetCustomMiningJob { .. } => msg::SET_CUSTOM_MINING_JOB,
+            SetCustomMiningJobSuccess { .. } => msg::SET_CUSTOM_MINING_JOB_SUCCESS,
+            SetCustomMiningJobError { .. } => msg::SET_CUSTOM_MINING_JOB_ERROR,
             SetGroupChannel { .. } => msg::SET_GROUP_CHANNEL,
             AllocateMiningJobToken { .. } => msg::ALLOCATE_MINING_JOB_TOKEN,
             AllocateMiningJobTokenSuccess { .. } => msg::ALLOCATE_MINING_JOB_TOKEN_SUCCESS,
@@ -978,6 +1019,49 @@ impl Message {
                 maximum_target,
             } => {
                 w.u32(*channel_id).u256(maximum_target);
+            }
+            SetCustomMiningJob {
+                channel_id,
+                request_id,
+                token,
+                version,
+                prev_hash,
+                min_ntime,
+                nbits,
+                coinbase_tx_version,
+                coinbase_prefix,
+                coinbase_tx_input_n_sequence,
+                coinbase_tx_outputs,
+                coinbase_tx_locktime,
+                merkle_path,
+            } => {
+                w.u32(*channel_id)
+                    .u32(*request_id)
+                    .short_bytes(token)
+                    .u32(*version)
+                    .u256(prev_hash)
+                    .u32(*min_ntime)
+                    .u32(*nbits)
+                    .u32(*coinbase_tx_version)
+                    .short_bytes(coinbase_prefix)
+                    .u32(*coinbase_tx_input_n_sequence)
+                    .b0_64k(coinbase_tx_outputs)
+                    .u32(*coinbase_tx_locktime)
+                    .seq0_255_u256(merkle_path);
+            }
+            SetCustomMiningJobSuccess {
+                channel_id,
+                request_id,
+                job_id,
+            } => {
+                w.u32(*channel_id).u32(*request_id).u32(*job_id);
+            }
+            SetCustomMiningJobError {
+                channel_id,
+                request_id,
+                error_code,
+            } => {
+                w.u32(*channel_id).u32(*request_id).short_bytes(error_code);
             }
             SetGroupChannel {
                 group_channel_id,
@@ -1290,6 +1374,31 @@ impl Message {
                 channel_id: r.u32()?,
                 maximum_target: r.u256()?,
             },
+            msg::SET_CUSTOM_MINING_JOB => SetCustomMiningJob {
+                channel_id: r.u32()?,
+                request_id: r.u32()?,
+                token: r.b0_255()?,
+                version: r.u32()?,
+                prev_hash: r.u256()?,
+                min_ntime: r.u32()?,
+                nbits: r.u32()?,
+                coinbase_tx_version: r.u32()?,
+                coinbase_prefix: r.b0_255()?,
+                coinbase_tx_input_n_sequence: r.u32()?,
+                coinbase_tx_outputs: r.b0_64k()?,
+                coinbase_tx_locktime: r.u32()?,
+                merkle_path: r.seq0_255_u256()?,
+            },
+            msg::SET_CUSTOM_MINING_JOB_SUCCESS => SetCustomMiningJobSuccess {
+                channel_id: r.u32()?,
+                request_id: r.u32()?,
+                job_id: r.u32()?,
+            },
+            msg::SET_CUSTOM_MINING_JOB_ERROR => SetCustomMiningJobError {
+                channel_id: r.u32()?,
+                request_id: r.u32()?,
+                error_code: r.str0_255()?,
+            },
             msg::SET_GROUP_CHANNEL => SetGroupChannel {
                 group_channel_id: r.u32()?,
                 channel_ids: r.seq0_64k_u32()?,
@@ -1416,8 +1525,8 @@ pub fn name_of(msg_type: u8) -> &'static str {
         msg::SET_NEW_PREV_HASH => "SetNewPrevHash",
         msg::SET_TARGET => "SetTarget",
         msg::SET_CUSTOM_MINING_JOB => "SetCustomMiningJob",
-        0x23 => "SetCustomMiningJob.Success",
-        0x24 => "SetCustomMiningJob.Error",
+        msg::SET_CUSTOM_MINING_JOB_SUCCESS => "SetCustomMiningJob.Success",
+        msg::SET_CUSTOM_MINING_JOB_ERROR => "SetCustomMiningJob.Error",
         msg::SET_GROUP_CHANNEL => "SetGroupChannel",
         msg::ALLOCATE_MINING_JOB_TOKEN => "AllocateMiningJobToken",
         msg::ALLOCATE_MINING_JOB_TOKEN_SUCCESS => "AllocateMiningJobToken.Success",

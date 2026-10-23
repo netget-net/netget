@@ -6,3 +6,4 @@ pub mod support;
 pub mod tdp_jdp_wire_test;
 pub mod template_provider_test;
 pub mod wire_test;
+pub mod work_selection_test;
