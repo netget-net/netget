@@ -157,9 +157,10 @@ async fn unknown_and_malformed_requests_are_faults() {
     };
     // Operations NetGet does not serve, authenticated or not.
     for body in [
-        sign("<tds:GetHostname/>"),
-        wire::request_envelope(None, "<tds:SystemReboot/>"),
-        sign("<tptz:ContinuousMove xmlns:tptz=\"http://www.onvif.org/ver20/ptz/wsdl\"/>"),
+        sign("<tds:GetUsers/>"),
+        wire::request_envelope(None, "<tds:SetUser/>"),
+        sign("<tptz:SetHomePosition/>"),
+        sign("<trc:GetRecordings xmlns:trc=\"http://www.onvif.org/ver10/recording/wsdl\"/>"),
     ] {
         let (status, text) = post(port, body).await;
         assert_eq!(status, 500, "{text}");
@@ -171,11 +172,46 @@ async fn unknown_and_malformed_requests_are_faults() {
     }
     let (status, text) = post(
         port,
-        sign("<tds:GetCapabilities><tds:Category>PTZ</tds:Category></tds:GetCapabilities>"),
+        sign("<tds:GetCapabilities><tds:Category>Analytics</tds:Category></tds:GetCapabilities>"),
     )
     .await;
     assert_eq!(status, 500, "{text}");
     assert_eq!(subcodes(&text), vec!["ActionNotSupported", "NoSuchService"]);
+    // Every category the device has, at its path, and no other.
+    let (status, text) = post(
+        port,
+        sign("<tds:GetCapabilities><tds:Category>All</tds:Category></tds:GetCapabilities>"),
+    )
+    .await;
+    assert_eq!(status, 200, "{text}");
+    for path in [
+        "/onvif/device_service",
+        "/onvif/events_service",
+        "/onvif/imaging_service",
+        "/onvif/media_service",
+        "/onvif/ptz_service",
+    ] {
+        assert_eq!(
+            text.matches(&format!("{path}</tt:XAddr>")).count(),
+            1,
+            "{path}: {text}"
+        );
+    }
+    assert_eq!(text.matches("<tt:XAddr>").count(), 5, "{text}");
+    assert!(!text.contains("<tt:Analytics>"), "{text}");
+    let (status, text) = post(port, sign("<tds:GetServices><tds:IncludeCapability>false</tds:IncludeCapability></tds:GetServices>")).await;
+    assert_eq!(status, 200, "{text}");
+    assert_eq!(
+        text.matches("<tds:Service>").count(),
+        wire::SERVICES.len(),
+        "{text}"
+    );
+    for (ns, path) in wire::SERVICES {
+        assert!(
+            text.contains(&format!("<tds:Namespace>{ns}</tds:Namespace><tds:XAddr>http://127.0.0.1:{port}{path}</tds:XAddr>")),
+            "{ns}: {text}"
+        );
+    }
     let (status, text) = post(
         port,
         sign("<tds:GetCapabilities><tds:Category>Media</tds:Category></tds:GetCapabilities>"),

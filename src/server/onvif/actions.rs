@@ -21,6 +21,13 @@ pub const VIDEO_SOURCES: &str = "onvif_video_sources";
 pub const STREAM_URI: &str = "onvif_stream_uri";
 pub const SNAPSHOT_URI: &str = "onvif_snapshot_uri";
 pub const FAULT: &str = "onvif_fault";
+pub const HOSTNAME: &str = "onvif_hostname";
+pub const ACCEPT: &str = "onvif_accept";
+pub const PTZ_POSITION: &str = "onvif_ptz_position";
+pub const FOCUS_POSITION: &str = "onvif_focus_position";
+pub const RAISE_EVENT: &str = "onvif_raise_event";
+/// A hostname at most, in bytes (RFC 1035).
+pub const MAX_HOSTNAME: usize = 253;
 
 /// A string the model supplies, at most.
 pub const MAX_TEXT: usize = 256;
@@ -117,9 +124,71 @@ fn network_interfaces_action() -> ActionDefinition {
 }
 
 fn profiles_action() -> ActionDefinition {
-    action(PROFILES, "Answer GetProfiles: the media profiles, each a video source encoded one way.",
-        vec![p("profiles", "array", "[{token, name, encoding (H264, JPEG or MPEG4), width, height, framerate?, bitrate (kbit/s)?, quality?, video_source_token?}]", true)],
-        json!({"type": PROFILES, "profiles": [{"token": "main", "name": "Main stream", "encoding": "H264", "width": 1920, "height": 1080, "framerate": 25, "bitrate": 4096, "video_source_token": "video_source"}]}))
+    action(PROFILES, "Answer GetProfiles (Media and Media2 alike, and the Media2 configuration lists): the media profiles, each a video source encoded one way. ptz: true gives a profile the device's pan/tilt/zoom head.",
+        vec![p("profiles", "array", "[{token, name, encoding (H264, JPEG or MPEG4), width, height, framerate?, bitrate (kbit/s)?, quality?, video_source_token?, ptz?}]", true)],
+        json!({"type": PROFILES, "profiles": [{"token": "main", "name": "Main stream", "encoding": "H264", "width": 1920, "height": 1080, "framerate": 25, "bitrate": 4096, "video_source_token": "video_source", "ptz": true}]}))
+}
+
+fn hostname_action() -> ActionDefinition {
+    action(
+        HOSTNAME,
+        "Answer GetHostname: the device's host name (once a client's SetHostname is accepted, the device answers with that itself).",
+        vec![
+            p("name", "string", "The host name, e.g. lobby-cam", true),
+            p("from_dhcp", "boolean", "The name came from DHCP (default false)", false),
+        ],
+        json!({"type": HOSTNAME, "name": "lobby-cam"}),
+    )
+}
+
+fn accept_action() -> ActionDefinition {
+    action(
+        ACCEPT,
+        "Allow the change or request this event describes; the device applies it exactly as requested (refuse with onvif_fault instead).",
+        vec![p(
+            "message",
+            "string",
+            "Optional text the device answers with where the operation has one (SystemReboot's Message)",
+            false,
+        )],
+        json!({"type": ACCEPT}),
+    )
+}
+
+fn ptz_position_action() -> ActionDefinition {
+    action(
+        PTZ_POSITION,
+        "Accept this PTZ move and say where the camera ends up, in the generic spaces: pan and tilt -1..1, zoom 0..1. The event's proposed position is where plain arithmetic puts it.",
+        vec![
+            p("pan", "number", "Pan, -1..1", true),
+            p("tilt", "number", "Tilt, -1..1", true),
+            p("zoom", "number", "Zoom, 0..1", true),
+        ],
+        json!({"type": PTZ_POSITION, "pan": 0.25, "tilt": -0.1, "zoom": 0.5}),
+    )
+}
+
+fn focus_position_action() -> ActionDefinition {
+    action(
+        FOCUS_POSITION,
+        "Accept this focus move and say where focus ends up, 0..1. The event's proposed_position is where plain arithmetic puts it.",
+        vec![p("position", "number", "Focus position, 0..1", true)],
+        json!({"type": FOCUS_POSITION, "position": 0.4}),
+    )
+}
+
+pub fn raise_event_action() -> ActionDefinition {
+    action(
+        RAISE_EVENT,
+        "Raise an ONVIF event: it goes to every pull-point subscription whose filter matches and is remembered as the property's current value. Topics and their items: tns1:VideoSource/MotionAlarm {source: Source, data: State}; tns1:RuleEngine/CellMotionDetector/Motion {source: VideoSourceConfigurationToken, VideoAnalyticsConfigurationToken, Rule; data: IsMotion}; tns1:RuleEngine/TamperDetector/Tamper {same source; data: IsTamper}; tns1:Device/Trigger/DigitalInput {source: InputToken; data: LogicalState}. Boolean data are true/false.",
+        vec![
+            p("topic", "string", "One of the topics above, e.g. tns1:VideoSource/MotionAlarm", true),
+            p("source", "object", "Every source item the topic carries, e.g. {\"Source\": \"video_source\"}", true),
+            p("data", "object", "Every data item the topic carries, e.g. {\"State\": true}", true),
+            p("property_operation", "string", "Changed (default), Initialized or Deleted", false),
+        ],
+        json!({"type": RAISE_EVENT, "topic": "tns1:VideoSource/MotionAlarm", "source": {"Source": "video_source"}, "data": {"State": true}}),
+    )
 }
 
 fn video_sources_action() -> ActionDefinition {
@@ -189,6 +258,16 @@ fn event(
     answer: ActionDefinition,
     extra: Vec<Parameter>,
 ) -> EventType {
+    event_with(id, description, vec![answer], extra)
+}
+
+/// An event the model answers with one of `answers` or with `onvif_fault`.
+fn event_with(
+    id: &str,
+    description: &str,
+    answers: Vec<ActionDefinition>,
+    extra: Vec<Parameter>,
+) -> EventType {
     let mut params = vec![
         p(
             "operation",
@@ -210,10 +289,12 @@ fn event(
         ),
     ];
     params.extend(extra);
-    let example = answer.example.clone();
+    let example = answers[0].example.clone();
+    let mut actions = answers;
+    actions.push(fault_action());
     EventType::new(id, description, example)
         .with_parameters(params)
-        .with_actions(vec![answer, fault_action()])
+        .with_actions(actions)
 }
 
 pub static DEVICE_INFORMATION_EVENT: LazyLock<EventType> = LazyLock::new(|| {
@@ -270,6 +351,12 @@ pub static STREAM_URI_EVENT: LazyLock<EventType> = LazyLock::new(|| {
                 "The transport it asked for: RTSP, HTTP, UDP or TCP",
                 true,
             ),
+            p(
+                "service",
+                "string",
+                "media (ver10) or media2 (ver20; its Protocol is mapped onto stream and protocol)",
+                false,
+            ),
         ],
     )
 });
@@ -278,7 +365,123 @@ pub static SNAPSHOT_URI_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         "onvif_get_snapshot_uri",
         "A client asked where to fetch a snapshot of a profile (GetSnapshotUri).",
         snapshot_uri_action(),
-        vec![p("profile_token", "string", "The profile it wants", true)],
+        vec![
+            p("profile_token", "string", "The profile it wants", true),
+            p(
+                "service",
+                "string",
+                "media (ver10) or media2 (ver20)",
+                false,
+            ),
+        ],
+    )
+});
+pub static HOSTNAME_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    event(
+        "onvif_get_hostname",
+        "A client asked for the device's host name (GetHostname) and no SetHostname has been accepted yet.",
+        hostname_action(),
+        vec![],
+    )
+});
+pub static SET_DATE_TIME_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    event(
+        "onvif_set_system_date_and_time",
+        "A client asks to set the device's clock (SetSystemDateAndTime). Accepted, GetSystemDateAndTime reports it and WS-Security timestamps are checked against it.",
+        accept_action(),
+        vec![
+            p("date_time_type", "string", "Manual or NTP", true),
+            p("daylight_savings", "boolean", "Daylight saving in effect", true),
+            p("time_zone", "string", "POSIX TZ string, or null to keep the current one", true),
+            p("utc_date_time", "string", "The UTC time asked for (Manual), or null", true),
+            p("current_utc", "string", "The device's UTC clock now", true),
+        ],
+    )
+});
+pub static SET_SCOPES_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    event(
+        "onvif_set_scopes",
+        "A client asks to change the device's configurable scopes (SetScopes replaces them, AddScopes adds, RemoveScopes removes). Accepted, GetScopes reports the change.",
+        accept_action(),
+        vec![
+            p("scopes", "array", "The scope URIs the operation names", true),
+            p("configurable", "array", "The configurable scopes before the change", true),
+        ],
+    )
+});
+pub static SET_HOSTNAME_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    event(
+        "onvif_set_hostname",
+        "A client asks to rename the device (SetHostname). Accepted, GetHostname reports the new name.",
+        accept_action(),
+        vec![p("name", "string", "The host name asked for", true)],
+    )
+});
+pub static REBOOT_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    event(
+        "onvif_system_reboot",
+        "A client asks the device to reboot (SystemReboot). Accepting only answers it; nothing reboots.",
+        accept_action(),
+        vec![],
+    )
+});
+pub static PTZ_MOVE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    event(
+        "onvif_ptz_move",
+        "A client asks the PTZ head to move (ContinuousMove, RelativeMove, AbsoluteMove, GotoPreset, GotoHomePosition). Accept with where it ends up, or refuse with a fault (e.g. InvalidArgVal/InvalidPosition); a refused move changes nothing.",
+        ptz_position_action(),
+        vec![
+            p("profile_token", "string", "The profile the move was sent on", true),
+            p("kind", "string", "continuous, relative, absolute, preset or home", true),
+            p("velocity", "object", "continuous: {pan, tilt, zoom}, each -1..1 or null", false),
+            p("timeout_secs", "number", "continuous: how long the move runs", false),
+            p("translation", "object", "relative: {pan, tilt, zoom} to add", false),
+            p("target", "object", "absolute: {pan, tilt, zoom}; a null axis stays where it is", false),
+            p("preset_token", "string", "preset: the preset's token", false),
+            p("preset_name", "string", "preset: the preset's name", false),
+            p("speed", "object", "{pan, tilt, zoom} speeds 0..1 the client asked for, or nulls", false),
+            p("current", "object", "Where the head is: {pan, tilt, zoom}", true),
+            p("proposed", "object", "Where plain arithmetic puts it: {pan, tilt, zoom}", true),
+        ],
+    )
+});
+pub static SUBSCRIBE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    event_with(
+        "onvif_create_subscription",
+        "A client asks for a pull-point event subscription (CreatePullPointSubscription). Accept it — optionally raising events it should receive with onvif_raise_event — or refuse with a fault.",
+        vec![accept_action(), raise_event_action()],
+        vec![
+            p("subscription", "string", "The new subscription's id", true),
+            p("filter", "array", "The topic expressions it asked for, or null for every topic", true),
+            p("termination_time", "string", "When it ends unless renewed", true),
+        ],
+    )
+});
+pub static SET_IMAGING_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    event(
+        "onvif_set_imaging_settings",
+        "A client asks to change a video source's imaging settings (SetImagingSettings). Accepted, GetImagingSettings reports them.",
+        accept_action(),
+        vec![
+            p("video_source_token", "string", "The video source", true),
+            p("current", "object", "{brightness, color_saturation, contrast, sharpness (0..100), ir_cut_filter, auto_focus_mode}", true),
+            p("requested", "object", "The same, as the client asks them to be", true),
+        ],
+    )
+});
+pub static IMAGING_MOVE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    event(
+        "onvif_imaging_move",
+        "A client asks to move a video source's focus (Imaging Move). Accept with where focus ends up, or refuse with a fault.",
+        focus_position_action(),
+        vec![
+            p("video_source_token", "string", "The video source", true),
+            p("kind", "string", "absolute, relative or continuous", true),
+            p("requested", "object", "{position, speed} / {distance, speed} / {speed}", true),
+            p("current_position", "number", "Where focus is, 0..1", true),
+            p("proposed_position", "number", "Where plain arithmetic puts it", true),
+            p("auto_focus_mode", "string", "AUTO or MANUAL", true),
+        ],
     )
 });
 
@@ -388,6 +591,23 @@ fn subcode(v: &Value, key: &str, required: bool) -> Result<()> {
     }
 }
 
+/// A host name as RFC 1123 allows: dot-separated labels of letters, digits and inner hyphens.
+pub fn hostname(name: &str) -> Result<()> {
+    ensure!(
+        !name.is_empty()
+            && name.len() <= MAX_HOSTNAME
+            && name.split('.').all(|l| {
+                !l.is_empty()
+                    && l.len() <= 63
+                    && !l.starts_with('-')
+                    && !l.ends_with('-')
+                    && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+            }),
+        "name must be a host name such as lobby-cam (letters, digits, hyphens; dot-separated labels)"
+    );
+    Ok(())
+}
+
 pub fn check(v: &Value) -> Result<()> {
     match v["type"].as_str().unwrap_or_default() {
         DEVICE_INFORMATION => {
@@ -449,7 +669,32 @@ pub fn check(v: &Value) -> Result<()> {
                 number(pr, "framerate", 1..=240, false)?;
                 number(pr, "bitrate", 1..=1_000_000, false)?;
                 number(pr, "quality", 0..=100, false)?;
+                flag(pr, "ptz")?;
             }
+        }
+        HOSTNAME => {
+            hostname(v["name"].as_str().unwrap_or_default())?;
+            flag(v, "from_dhcp")?;
+        }
+        ACCEPT => {
+            if v.get("message").is_some_and(|m| !m.is_null()) {
+                text(v, "message")?;
+            }
+        }
+        PTZ_POSITION => {
+            super::ptz::Position::from_json(v)
+                .context("pan and tilt are numbers in -1..1 and zoom a number in 0..1")?;
+        }
+        FOCUS_POSITION => {
+            ensure!(
+                v["position"]
+                    .as_f64()
+                    .is_some_and(|p| (0.0..=1.0).contains(&p)),
+                "position is a number in 0..1"
+            );
+        }
+        RAISE_EVENT => {
+            super::events::notification_from_action(v, chrono::Utc::now())?;
         }
         VIDEO_SOURCES => {
             for s in list(v, "sources")? {
@@ -496,7 +741,7 @@ impl Protocol for OnvifProtocol {
         "ONVIF device (IP camera): Device and Media services over SOAP 1.2 with WS-Security digest authentication; the model decides the device's identity, profiles and stream URIs"
     }
     fn get_async_actions(&self, _: &AppState) -> Vec<ActionDefinition> {
-        Vec::new()
+        vec![raise_event_action()]
     }
     fn get_sync_actions(&self) -> Vec<ActionDefinition> {
         vec![
@@ -507,6 +752,11 @@ impl Protocol for OnvifProtocol {
             video_sources_action(),
             stream_uri_action(),
             snapshot_uri_action(),
+            hostname_action(),
+            accept_action(),
+            ptz_position_action(),
+            focus_position_action(),
+            raise_event_action(),
             fault_action(),
         ]
     }
@@ -519,6 +769,15 @@ impl Protocol for OnvifProtocol {
             VIDEO_SOURCES_EVENT.clone(),
             STREAM_URI_EVENT.clone(),
             SNAPSHOT_URI_EVENT.clone(),
+            HOSTNAME_EVENT.clone(),
+            SET_DATE_TIME_EVENT.clone(),
+            SET_SCOPES_EVENT.clone(),
+            SET_HOSTNAME_EVENT.clone(),
+            REBOOT_EVENT.clone(),
+            PTZ_MOVE_EVENT.clone(),
+            SUBSCRIBE_EVENT.clone(),
+            SET_IMAGING_EVENT.clone(),
+            IMAGING_MOVE_EVENT.clone(),
         ]
     }
     fn get_startup_parameters(&self) -> Vec<ParameterDefinition> {
@@ -546,6 +805,14 @@ impl Protocol for OnvifProtocol {
                 required: false,
                 example: json!(300),
                 default: Some(json!(super::MAX_CLOCK_SKEW.as_secs())),
+            },
+            ParameterDefinition {
+                name: "max_pull_timeout_secs".into(),
+                type_hint: "number".into(),
+                description: "The longest a PullMessages request is held waiting for an event, in seconds (1..=60); a longer Timeout is cut to it".into(),
+                required: false,
+                example: json!(60),
+                default: Some(json!(super::events::MAX_PULL_TIMEOUT.as_secs())),
             },
         ]
     }
@@ -600,6 +867,33 @@ impl Server for OnvifProtocol {
         Ok(ActionResult::Custom {
             name: action["type"].as_str().unwrap_or_default().to_string(),
             data: action,
+        })
+    }
+
+    /// `onvif_raise_event` reaches the running device's subscriptions; everything else is an
+    /// answer `execute_action` validates.
+    fn execute_action_with_state<'a>(
+        &'a self,
+        action: Value,
+        state: AppState,
+        server_id: Option<crate::state::ServerId>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ActionResult>> + Send + 'a>>
+    {
+        if action["type"].as_str() != Some(RAISE_EVENT) {
+            let result = self.execute_action(action);
+            return Box::pin(async move { result });
+        }
+        Box::pin(async move {
+            let id = server_id.context("onvif_raise_event needs the running ONVIF device")?;
+            let device = state
+                .server_handle::<super::Device>(id)
+                .await
+                .context("this server is not a running ONVIF device")?;
+            let delivered = device.raise(&action)?;
+            Ok(ActionResult::Custom {
+                name: RAISE_EVENT.into(),
+                data: json!({"delivered": delivered}),
+            })
         })
     }
 }

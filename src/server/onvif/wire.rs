@@ -31,6 +31,15 @@ pub const TDS: &str = "http://www.onvif.org/ver10/device/wsdl";
 pub const TRT: &str = "http://www.onvif.org/ver10/media/wsdl";
 pub const TT: &str = "http://www.onvif.org/ver10/schema";
 pub const TER: &str = "http://www.onvif.org/ver10/error";
+pub const TPTZ: &str = "http://www.onvif.org/ver20/ptz/wsdl";
+pub const TEV: &str = "http://www.onvif.org/ver10/events/wsdl";
+pub const TR2: &str = "http://www.onvif.org/ver20/media/wsdl";
+pub const TIMG: &str = "http://www.onvif.org/ver20/imaging/wsdl";
+pub const WSNT: &str = "http://docs.oasis-open.org/wsn/b-2";
+pub const WSA: &str = "http://www.w3.org/2005/08/addressing";
+pub const WSTOP: &str = "http://docs.oasis-open.org/wsn/t-1";
+pub const TNS1: &str = "http://www.onvif.org/ver10/topics";
+pub const XS: &str = "http://www.w3.org/2001/XMLSchema";
 pub const WSSE: &str =
     "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd";
 pub const WSU: &str =
@@ -40,9 +49,21 @@ pub const PASSWORD_DIGEST: &str =
 pub const BASE64_BINARY: &str =
     "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary";
 
-/// Where the two services live on a NetGet device, and where a client looks first.
+/// Where the services live on a NetGet device, and where a client looks first. Requests are
+/// dispatched on the Body element's namespace, so these paths are what is advertised, not what
+/// is required — except a pull-point subscription's, whose path names the subscription.
 pub const DEVICE_PATH: &str = "/onvif/device_service";
 pub const MEDIA_PATH: &str = "/onvif/media_service";
+pub const MEDIA2_PATH: &str = "/onvif/media2_service";
+pub const PTZ_PATH: &str = "/onvif/ptz_service";
+pub const EVENTS_PATH: &str = "/onvif/events_service";
+pub const IMAGING_PATH: &str = "/onvif/imaging_service";
+/// A pull-point subscription's address is this prefix and the subscription's id.
+pub const SUBSCRIPTION_PREFIX: &str = "/onvif/events/subscription/";
+/// The longest xsd:duration accepted anywhere (a subscription lifetime, a PTZ timeout).
+pub const MAX_DURATION: std::time::Duration = std::time::Duration::from_secs(86_400);
+/// An xsd:duration or xsd:dateTime string at most.
+pub const MAX_TIME_TEXT: usize = 64;
 
 #[derive(Debug, Default, Clone)]
 pub struct Element {
@@ -192,6 +213,8 @@ pub struct Request {
     pub ns: String,
     pub operation: String,
     pub body: Element,
+    /// The WS-Addressing To header, when the client sent one.
+    pub to: Option<String>,
 }
 
 pub fn parse_request(xml: &[u8]) -> Result<Request> {
@@ -222,6 +245,10 @@ pub fn parse_request(xml: &[u8]) -> Result<Request> {
                 .map(str::to_string),
             created: t.text_of("Created"),
         });
+    let to = env
+        .child("Header")
+        .and_then(|h| h.children.iter().find(|c| c.name == "To" && c.ns == WSA))
+        .map(|t| t.text.trim().to_string());
     let body = env.child("Body").context("the envelope has no Body")?;
     let op = body.children.first().context("the Body is empty")?.clone();
     Ok(Request {
@@ -230,6 +257,7 @@ pub fn parse_request(xml: &[u8]) -> Result<Request> {
         ns: op.ns.clone(),
         operation: op.name.clone(),
         body: op,
+        to,
     })
 }
 
@@ -312,8 +340,34 @@ pub fn esc(s: &str) -> String {
 /// A SOAP 1.2 response envelope around a Body's content.
 pub fn envelope(body: &str) -> String {
     format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<env:Envelope xmlns:env=\"{ENV}\" xmlns:tds=\"{TDS}\" xmlns:trt=\"{TRT}\" xmlns:tt=\"{TT}\" xmlns:ter=\"{TER}\"><env:Body>{body}</env:Body></env:Envelope>"
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<env:Envelope {}><env:Body>{body}</env:Body></env:Envelope>",
+        namespaces()
     )
+}
+
+/// Every prefix NetGet writes, declared once on the Envelope: a notification's topic is a QName
+/// in element text (`tns1:VideoSource/MotionAlarm`), so its prefix must be in scope there.
+pub fn namespaces() -> String {
+    [
+        ("env", ENV),
+        ("tds", TDS),
+        ("trt", TRT),
+        ("tr2", TR2),
+        ("tptz", TPTZ),
+        ("tev", TEV),
+        ("timg", TIMG),
+        ("tt", TT),
+        ("ter", TER),
+        ("wsnt", WSNT),
+        ("wsa", WSA),
+        ("wstop", WSTOP),
+        ("tns1", TNS1),
+        ("xs", XS),
+    ]
+    .iter()
+    .map(|(p, ns)| format!("xmlns:{p}=\"{ns}\""))
+    .collect::<Vec<_>>()
+    .join(" ")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -335,6 +389,12 @@ impl FaultCode {
 
 /// A SOAP 1.2 Fault: `env:<code>`, then each `ter:<subcode>` nested inside the last.
 pub fn fault(code: FaultCode, subcodes: &[&str], reason: &str) -> String {
+    fault_with_detail(code, subcodes, reason, "")
+}
+
+/// A Fault carrying a Detail element; `detail` is XML NetGet wrote itself, such as a
+/// WS-BaseNotification fault type (`<wsnt:UnacceptableInitialTerminationTimeFault/>`).
+pub fn fault_with_detail(code: FaultCode, subcodes: &[&str], reason: &str, detail: &str) -> String {
     let mut sub = String::new();
     for s in subcodes.iter().rev() {
         sub = format!(
@@ -342,26 +402,142 @@ pub fn fault(code: FaultCode, subcodes: &[&str], reason: &str) -> String {
             esc(s)
         );
     }
+    let detail = if detail.is_empty() {
+        String::new()
+    } else {
+        format!("<env:Detail>{detail}</env:Detail>")
+    };
     format!(
-        "<env:Fault><env:Code><env:Value>env:{}</env:Value>{sub}</env:Code><env:Reason><env:Text xml:lang=\"en\">{}</env:Text></env:Reason></env:Fault>",
+        "<env:Fault><env:Code><env:Value>env:{}</env:Value>{sub}</env:Code><env:Reason><env:Text xml:lang=\"en\">{}</env:Text></env:Reason>{detail}</env:Fault>",
         code.name(),
         esc(reason)
     )
 }
 
-fn s<'a>(v: &'a Value, k: &str) -> &'a str {
+/// An xsd:duration (`PnYnMnDTnHnMnS`, fractional seconds allowed) as a std Duration. Years and
+/// months are refused (their length is not fixed); negative durations are refused; anything past
+/// `MAX_DURATION` is refused. No recursion and no unbounded arithmetic: every component is
+/// checked against the bound before it is added.
+pub fn parse_duration(text: &str) -> Result<std::time::Duration> {
+    let t = text.trim();
+    ensure!(
+        !t.is_empty() && t.len() <= MAX_TIME_TEXT,
+        "a duration is 1-{MAX_TIME_TEXT} characters"
+    );
+    let rest = t.strip_prefix('P').context("a duration starts with P")?;
+    ensure!(!rest.is_empty(), "a duration has at least one component");
+    let mut secs = 0f64;
+    let mut in_time = false;
+    let mut number = String::new();
+    let mut components = 0;
+    let mut last_unit = 0u8;
+    for c in rest.chars() {
+        match c {
+            'T' => {
+                ensure!(!in_time && number.is_empty(), "a misplaced T in a duration");
+                in_time = true;
+                last_unit = 0;
+            }
+            '0'..='9' | '.' => {
+                ensure!(number.len() < 20, "a duration component is too long");
+                number.push(c);
+            }
+            _ => {
+                ensure!(!number.is_empty(), "a duration unit without a number");
+                let (rank, scale) = match (in_time, c) {
+                    (false, 'D') => (1, 86_400.0),
+                    (true, 'H') => (2, 3_600.0),
+                    (true, 'M') => (3, 60.0),
+                    (true, 'S') => (4, 1.0),
+                    (false, 'Y' | 'M') => bail!("durations in years or months are not supported"),
+                    _ => bail!("an unknown duration unit {c:?}"),
+                };
+                ensure!(rank > last_unit, "duration units out of order");
+                last_unit = rank;
+                ensure!(
+                    c == 'S' || !number.contains('.'),
+                    "only seconds may be fractional"
+                );
+                let n: f64 = number.parse().context("a duration number")?;
+                ensure!(n.is_finite(), "a duration number is not finite");
+                secs += n * scale;
+                ensure!(
+                    secs <= MAX_DURATION.as_secs_f64(),
+                    "a duration longer than {} seconds",
+                    MAX_DURATION.as_secs()
+                );
+                number.clear();
+                components += 1;
+            }
+        }
+    }
+    ensure!(number.is_empty(), "a duration number without a unit");
+    ensure!(components > 0, "a duration has at least one component");
+    ensure!(!in_time || last_unit > 1, "a T with no time component");
+    Ok(std::time::Duration::from_secs_f64(secs))
+}
+
+/// A duration as xsd:duration in whole seconds, the form clients read most reliably.
+pub fn format_duration(d: std::time::Duration) -> String {
+    format!("PT{}S", d.as_secs())
+}
+
+/// An xsd:dateTime; one with no zone is read as UTC, as ONVIF devices do.
+pub fn parse_datetime(text: &str) -> Result<chrono::DateTime<chrono::Utc>> {
+    let t = text.trim();
+    ensure!(
+        !t.is_empty() && t.len() <= MAX_TIME_TEXT,
+        "a dateTime is 1-{MAX_TIME_TEXT} characters"
+    );
+    if let Ok(d) = chrono::DateTime::parse_from_rfc3339(t) {
+        return Ok(d.with_timezone(&chrono::Utc));
+    }
+    let naive = chrono::NaiveDateTime::parse_from_str(t, "%Y-%m-%dT%H:%M:%S%.f")
+        .context("not an xsd:dateTime")?;
+    Ok(naive.and_utc())
+}
+
+pub fn format_datetime(t: chrono::DateTime<chrono::Utc>) -> String {
+    t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+/// A finite float attribute, or None when absent.
+pub fn float_attr(e: &Element, name: &str) -> Result<Option<f64>> {
+    match e.attr(name) {
+        None => Ok(None),
+        Some(v) => {
+            let f: f64 = v
+                .trim()
+                .parse()
+                .with_context(|| format!("{name} is not a number"))?;
+            ensure!(f.is_finite(), "{name} is not finite");
+            Ok(Some(f))
+        }
+    }
+}
+
+/// An xsd:boolean's text.
+pub fn parse_bool(text: &str) -> Option<bool> {
+    match text.trim() {
+        "true" | "1" => Some(true),
+        "false" | "0" => Some(false),
+        _ => None,
+    }
+}
+
+pub(crate) fn s<'a>(v: &'a Value, k: &str) -> &'a str {
     v[k].as_str().unwrap_or_default()
 }
 
-fn n(v: &Value, k: &str, default: u64) -> u64 {
+pub(crate) fn n(v: &Value, k: &str, default: u64) -> u64 {
     v[k].as_u64().unwrap_or(default)
 }
 
-fn b(v: &Value, k: &str, default: bool) -> bool {
+pub(crate) fn b(v: &Value, k: &str, default: bool) -> bool {
     v[k].as_bool().unwrap_or(default)
 }
 
-fn items<'a>(v: &'a Value, k: &str) -> impl Iterator<Item = &'a Value> {
+pub(crate) fn items<'a>(v: &'a Value, k: &str) -> impl Iterator<Item = &'a Value> {
     v[k].as_array().into_iter().flatten().take(MAX_ITEMS)
 }
 
@@ -377,15 +553,28 @@ pub fn device_information(v: &Value) -> String {
 }
 
 pub fn scopes(v: &Value) -> String {
+    scopes_with(v, &[])
+}
+
+/// GetScopes: the model's scopes as Fixed, then the configurable ones clients have set.
+pub fn scopes_with(v: &Value, configurable: &[String]) -> String {
     let mut out = String::from("<tds:GetScopesResponse>");
-    for scope in items(v, "scopes") {
+    let fixed = items(v, "scopes").map(|s| ("Fixed", s.as_str().unwrap_or_default()));
+    for (def, scope) in fixed.chain(configurable.iter().map(|s| ("Configurable", s.as_str()))) {
         out.push_str(&format!(
-            "<tds:Scopes><tt:ScopeDef>Fixed</tt:ScopeDef><tt:ScopeItem>{}</tt:ScopeItem></tds:Scopes>",
-            esc(scope.as_str().unwrap_or_default())
+            "<tds:Scopes><tt:ScopeDef>{def}</tt:ScopeDef><tt:ScopeItem>{}</tt:ScopeItem></tds:Scopes>",
+            esc(scope)
         ));
     }
     out.push_str("</tds:GetScopesResponse>");
     out
+}
+
+pub fn hostname(name: &str, from_dhcp: bool) -> String {
+    format!(
+        "<tds:GetHostnameResponse><tds:HostnameInformation><tt:FromDHCP>{from_dhcp}</tt:FromDHCP><tt:Name>{}</tt:Name></tds:HostnameInformation></tds:GetHostnameResponse>",
+        esc(name)
+    )
 }
 
 pub fn network_interfaces(v: &Value) -> String {
@@ -415,18 +604,35 @@ pub fn network_interfaces(v: &Value) -> String {
     out
 }
 
-fn resolution(w: u64, h: u64) -> String {
+pub(crate) fn resolution(w: u64, h: u64) -> String {
     format!("<tt:Resolution><tt:Width>{w}</tt:Width><tt:Height>{h}</tt:Height></tt:Resolution>")
+}
+
+/// The multicast block a video encoder configuration must carry (unused: NetGet streams nothing).
+pub const MULTICAST: &str = "<tt:Multicast><tt:Address><tt:Type>IPv4</tt:Type><tt:IPv4Address>0.0.0.0</tt:IPv4Address></tt:Address><tt:Port>0</tt:Port><tt:TTL>1</tt:TTL><tt:AutoStart>false</tt:AutoStart></tt:Multicast>";
+
+/// The video source a profile's source token names, as `video_source_token` (default
+/// `video_source`) — escaped.
+pub fn source_of(p: &Value) -> String {
+    match s(p, "video_source_token") {
+        "" => "video_source".to_string(),
+        t => esc(t),
+    }
+}
+
+/// A VideoSourceConfiguration for an (escaped) source token, under `tag`; Media and Media2 share
+/// its token, `vsc_<source>`.
+pub fn video_source_configuration(tag: &str, source: &str, w: u64, h: u64) -> String {
+    format!(
+        "<{tag} token=\"vsc_{source}\"><tt:Name>{source}</tt:Name><tt:UseCount>1</tt:UseCount><tt:SourceToken>{source}</tt:SourceToken><tt:Bounds x=\"0\" y=\"0\" width=\"{w}\" height=\"{h}\"/></{tag}>"
+    )
 }
 
 pub fn profiles(v: &Value) -> String {
     let mut out = String::from("<trt:GetProfilesResponse>");
     for p in items(v, "profiles") {
         let token = esc(s(p, "token"));
-        let source = match s(p, "video_source_token") {
-            "" => "video_source".to_string(),
-            t => esc(t),
-        };
+        let source = source_of(p);
         let (w, h) = (n(p, "width", 1920), n(p, "height", 1080));
         let fps = n(p, "framerate", 25);
         let encoding = match s(p, "encoding") {
@@ -438,13 +644,22 @@ pub fn profiles(v: &Value) -> String {
         } else {
             String::new()
         };
+        // A profile the model says can pan, tilt and zoom carries the device's one PTZ
+        // configuration, which is how clients (Home Assistant among them) learn it has PTZ.
+        let ptz = if b(p, "ptz", false) {
+            super::ptz::configuration("tt:PTZConfiguration")
+        } else {
+            String::new()
+        };
         out.push_str(&format!(
-            "<trt:Profiles token=\"{token}\" fixed=\"true\"><tt:Name>{}</tt:Name><tt:VideoSourceConfiguration token=\"vsc_{source}\"><tt:Name>{source}</tt:Name><tt:UseCount>1</tt:UseCount><tt:SourceToken>{source}</tt:SourceToken><tt:Bounds x=\"0\" y=\"0\" width=\"{w}\" height=\"{h}\"/></tt:VideoSourceConfiguration><tt:VideoEncoderConfiguration token=\"vec_{token}\"><tt:Name>{token}</tt:Name><tt:UseCount>1</tt:UseCount><tt:Encoding>{}</tt:Encoding>{}<tt:Quality>{}</tt:Quality><tt:RateControl><tt:FrameRateLimit>{fps}</tt:FrameRateLimit><tt:EncodingInterval>1</tt:EncodingInterval><tt:BitrateLimit>{}</tt:BitrateLimit></tt:RateControl>{h264}<tt:Multicast><tt:Address><tt:Type>IPv4</tt:Type><tt:IPv4Address>0.0.0.0</tt:IPv4Address></tt:Address><tt:Port>0</tt:Port><tt:TTL>1</tt:TTL><tt:AutoStart>false</tt:AutoStart></tt:Multicast><tt:SessionTimeout>PT60S</tt:SessionTimeout></tt:VideoEncoderConfiguration></trt:Profiles>",
+            "<trt:Profiles token=\"{token}\" fixed=\"true\"><tt:Name>{}</tt:Name>{}<tt:VideoEncoderConfiguration token=\"vec_{token}\"><tt:Name>{token}</tt:Name><tt:UseCount>1</tt:UseCount><tt:Encoding>{}</tt:Encoding>{}<tt:Quality>{}</tt:Quality><tt:RateControl><tt:FrameRateLimit>{fps}</tt:FrameRateLimit><tt:EncodingInterval>1</tt:EncodingInterval><tt:BitrateLimit>{}</tt:BitrateLimit></tt:RateControl>{h264}{}<tt:SessionTimeout>PT60S</tt:SessionTimeout></tt:VideoEncoderConfiguration>{ptz}</trt:Profiles>",
             esc(match s(p, "name") { "" => s(p, "token"), name => name }),
+            video_source_configuration("tt:VideoSourceConfiguration", &source, w, h),
             esc(encoding),
             resolution(w, h),
             n(p, "quality", 5),
             n(p, "bitrate", 4096),
+            MULTICAST,
         ));
     }
     out.push_str("</trt:GetProfilesResponse>");
@@ -476,28 +691,41 @@ pub fn media_uri(operation: &str, v: &Value) -> String {
     )
 }
 
-/// GetCapabilities for the two services NetGet serves, at `base` (`http://host:port`).
-pub fn capabilities(base: &str, device: bool, media: bool) -> String {
+/// The GetCapabilities categories a NetGet device has, in the schema's element order. Media2
+/// has no category: GetCapabilities predates it, and clients find it through GetServices.
+pub const CATEGORIES: &[&str] = &["Device", "Events", "Imaging", "Media", "PTZ"];
+
+/// GetCapabilities for the services NetGet serves whose category is in `wanted`, at `base`
+/// (`http://host:port`).
+pub fn capabilities(base: &str, wanted: &[&str]) -> String {
+    let base = esc(base);
     let mut out = String::from("<tds:GetCapabilitiesResponse><tds:Capabilities>");
-    if device {
-        out.push_str(&format!(
-            "<tt:Device><tt:XAddr>{}{DEVICE_PATH}</tt:XAddr></tt:Device>",
-            esc(base)
-        ));
-    }
-    if media {
-        out.push_str(&format!(
-            "<tt:Media><tt:XAddr>{}{MEDIA_PATH}</tt:XAddr><tt:StreamingCapabilities><tt:RTPMulticast>false</tt:RTPMulticast><tt:RTP_TCP>true</tt:RTP_TCP><tt:RTP_RTSP_TCP>true</tt:RTP_RTSP_TCP></tt:StreamingCapabilities></tt:Media>",
-            esc(base)
-        ));
+    for category in CATEGORIES.iter().filter(|c| wanted.contains(c)) {
+        out.push_str(&match *category {
+            "Device" => format!("<tt:Device><tt:XAddr>{base}{DEVICE_PATH}</tt:XAddr></tt:Device>"),
+            "Events" => format!("<tt:Events><tt:XAddr>{base}{EVENTS_PATH}</tt:XAddr><tt:WSSubscriptionPolicySupport>false</tt:WSSubscriptionPolicySupport><tt:WSPullPointSupport>true</tt:WSPullPointSupport><tt:WSPausableSubscriptionManagerInterfaceSupport>false</tt:WSPausableSubscriptionManagerInterfaceSupport></tt:Events>"),
+            "Imaging" => format!("<tt:Imaging><tt:XAddr>{base}{IMAGING_PATH}</tt:XAddr></tt:Imaging>"),
+            "Media" => format!("<tt:Media><tt:XAddr>{base}{MEDIA_PATH}</tt:XAddr><tt:StreamingCapabilities><tt:RTPMulticast>false</tt:RTPMulticast><tt:RTP_TCP>true</tt:RTP_TCP><tt:RTP_RTSP_TCP>true</tt:RTP_RTSP_TCP></tt:StreamingCapabilities></tt:Media>"),
+            _ => format!("<tt:PTZ><tt:XAddr>{base}{PTZ_PATH}</tt:XAddr></tt:PTZ>"),
+        });
     }
     out.push_str("</tds:Capabilities></tds:GetCapabilitiesResponse>");
     out
 }
 
+/// Every service a NetGet device has: namespace and path. GetServices lists exactly these.
+pub const SERVICES: &[(&str, &str)] = &[
+    (TDS, DEVICE_PATH),
+    (TRT, MEDIA_PATH),
+    (TR2, MEDIA2_PATH),
+    (TPTZ, PTZ_PATH),
+    (TEV, EVENTS_PATH),
+    (TIMG, IMAGING_PATH),
+];
+
 pub fn services(base: &str) -> String {
     let mut out = String::from("<tds:GetServicesResponse>");
-    for (ns, path) in [(TDS, DEVICE_PATH), (TRT, MEDIA_PATH)] {
+    for (ns, path) in SERVICES {
         out.push_str(&format!(
             "<tds:Service><tds:Namespace>{ns}</tds:Namespace><tds:XAddr>{}{path}</tds:XAddr><tds:Version><tt:Major>2</tt:Major><tt:Minor>40</tt:Minor></tds:Version></tds:Service>",
             esc(base)
@@ -508,6 +736,17 @@ pub fn services(base: &str) -> String {
 }
 
 pub fn system_date_and_time(now: chrono::DateTime<chrono::Utc>) -> String {
+    system_date_and_time_as(now, "Manual", "UTC0", false)
+}
+
+/// GetSystemDateAndTime with the settings a SetSystemDateAndTime last made: `date_time_type`
+/// is Manual or NTP, `tz` a POSIX TZ string.
+pub fn system_date_and_time_as(
+    now: chrono::DateTime<chrono::Utc>,
+    date_time_type: &str,
+    tz: &str,
+    daylight_savings: bool,
+) -> String {
     use chrono::{Datelike, Timelike};
     let dt = format!(
         "<tt:Time><tt:Hour>{}</tt:Hour><tt:Minute>{}</tt:Minute><tt:Second>{}</tt:Second></tt:Time><tt:Date><tt:Year>{}</tt:Year><tt:Month>{}</tt:Month><tt:Day>{}</tt:Day></tt:Date>",
@@ -519,7 +758,9 @@ pub fn system_date_and_time(now: chrono::DateTime<chrono::Utc>) -> String {
         now.day()
     );
     format!(
-        "<tds:GetSystemDateAndTimeResponse><tds:SystemDateAndTime><tt:DateTimeType>Manual</tt:DateTimeType><tt:DaylightSavings>false</tt:DaylightSavings><tt:TimeZone><tt:TZ>UTC0</tt:TZ></tt:TimeZone><tt:UTCDateTime>{dt}</tt:UTCDateTime><tt:LocalDateTime>{dt}</tt:LocalDateTime></tds:SystemDateAndTime></tds:GetSystemDateAndTimeResponse>"
+        "<tds:GetSystemDateAndTimeResponse><tds:SystemDateAndTime><tt:DateTimeType>{}</tt:DateTimeType><tt:DaylightSavings>{daylight_savings}</tt:DaylightSavings><tt:TimeZone><tt:TZ>{}</tt:TZ></tt:TimeZone><tt:UTCDateTime>{dt}</tt:UTCDateTime><tt:LocalDateTime>{dt}</tt:LocalDateTime></tds:SystemDateAndTime></tds:GetSystemDateAndTimeResponse>",
+        esc(date_time_type),
+        esc(tz)
     )
 }
 
@@ -542,7 +783,8 @@ pub fn request_envelope(security: Option<&str>, body: &str) -> String {
         .map(|h| format!("<env:Header>{h}</env:Header>"))
         .unwrap_or_default();
     format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<env:Envelope xmlns:env=\"{ENV}\" xmlns:tds=\"{TDS}\" xmlns:trt=\"{TRT}\" xmlns:tt=\"{TT}\">{header}<env:Body>{body}</env:Body></env:Envelope>"
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<env:Envelope {}>{header}<env:Body>{body}</env:Body></env:Envelope>",
+        namespaces()
     )
 }
 

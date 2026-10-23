@@ -116,7 +116,7 @@ fn normal(op: &str) -> String {
         "GetSystemDateAndTime" => {
             wire::system_date_and_time(chrono::Utc::now() + chrono::Duration::hours(2))
         }
-        "GetCapabilities" => wire::capabilities("http://203.0.113.9:80", true, true),
+        "GetCapabilities" => wire::capabilities("http://203.0.113.9:80", &["Device", "Media"]),
         "GetProfiles" => {
             wire::profiles(&json!({"profiles": [{"token": "p1", "width": 640, "height": 480}]}))
         }
