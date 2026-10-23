@@ -59,7 +59,11 @@ fuzz_target!(|data: &[u8]| {
             let Some(first) = set.first() else {
                 return;
             };
-            let codec = if flags & 1 == 1 { ipfs::RAW } else { ipfs::DAG_PB };
+            let codec = if flags & 1 == 1 {
+                ipfs::RAW
+            } else {
+                ipfs::DAG_PB
+            };
             let keep = 4096;
             let mut walk = Walk::new(Cid::v1(codec, first), keep);
             for _ in 0..(unixfs::MAX_WALK_BLOCKS + 8) {
@@ -102,7 +106,10 @@ fuzz_target!(|data: &[u8]| {
                 assert!(built.depth <= unixfs::MAX_DAG_DEPTH);
                 for (cid, source) in &built.blocks {
                     let bytes = source.bytes();
-                    assert!(cid.matches(&bytes), "a built block does not hash to its CID");
+                    assert!(
+                        cid.matches(&bytes),
+                        "a built block does not hash to its CID"
+                    );
                     assert_eq!(bytes.len(), source.len());
                 }
                 assert!(built.blocks.iter().any(|(c, _)| *c == built.root));

@@ -55,3 +55,27 @@ Kubo 0.43.1 (`NETGET_KUBO`) run by `tests/helpers/kubo.rs`, confined to loopback
   CID is rejected before anything is sent.
 
 Mutation-checked: reporting blocks that match no want fails the liar test.
+
+## Whole DAGs (`dag_test.rs`, `ipfs_fetch`)
+
+Every fetch starts from the model's own `ipfs_fetch` action (a python chain on connect), so
+dropping the model's actions fails these tests.
+
+- `netget_fetches_trees_and_files_kubo_added`: Kubo `ipfs add`s a tree (CIDv0 and CIDv1), a
+  2.2 MB file, a depth-4 file (256-byte chunks, 3 links) and has a symlink; NetGet fetches
+  each. Asserted against the bytes on disk: the listings (name, kind, size, in order), the
+  2.2 MB file's size, SHA-256, first 100 bytes and its 10 blocks at depth 1, the depth-4
+  file's bytes, the symlink's target; a CID nobody added ends in DONT_HAVE. Prints NetGet's
+  counts per fetch, `ipfs bitswap stat` and Kubo's ledger for NetGet. (Kubo answers DONT_HAVE
+  for the empty raw block; the walk never asks for it.)
+- `netget_fetches_a_tree_helia_serves`: Helia serves a CIDv1 tree; the chain fetches the root,
+  then `big.bin` and `sub` from its listing.
+- `a_tampered_block_never_completes_a_fetch`: from the go-libp2p liar, injected: the block it
+  has is fetched; the one it tampers with is refused (`refused_block`) and the fetch gives up
+  at its timeout; a bad `max_bytes` is refused before anything is sent.
+- `netget_reads_an_ipns_record_from_kubos_dht`: `ipfs_kad_get_value` against a Kubo DHT
+  server returns its name's record, verified.
+
+Mutation-checked: routing a block to the walk by its prefix and dropping `Walk::give`'s
+hash check (the tampered block completes the fetch); dropping the model's actions (no fetch
+happens).
