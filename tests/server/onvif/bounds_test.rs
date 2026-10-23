@@ -312,13 +312,14 @@ async fn a_failing_model_changes_nothing() {
         let (status, text) = call(port, wire::PTZ_PATH, body).await;
         assert!(status == 500 || status == 503, "{status} {text}");
         assert!(text.contains("<env:Value>env:Receiver</env:Value>") && subcodes(&text).is_empty(), "{text}");
+        // After each one, the head is where it was and not moving.
+        let (_, after) = call(port, wire::PTZ_PATH, get_status).await;
+        assert_eq!(status_of(&after), status_of(&before), "after {body}");
+        assert!(
+            status_of(&after).contains("<tt:PanTilt>IDLE</tt:PanTilt>"),
+            "{after}"
+        );
     }
-    let (_, after) = call(port, wire::PTZ_PATH, get_status).await;
-    assert_eq!(status_of(&after), status_of(&before));
-    assert!(
-        status_of(&after).contains("<tt:PanTilt>IDLE</tt:PanTilt>"),
-        "{after}"
-    );
 
     // Set*: the hostname, scopes, clock and imaging stay as they were.
     let (status, text) = call(
