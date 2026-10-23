@@ -57,8 +57,8 @@ func call(dev *onvif.Device, request interface{}, out interface{}) (int, string,
 }
 
 func main() {
-	if len(os.Args) != 4 {
-		fmt.Fprintln(os.Stderr, "usage: onvif-go-client host:port username password")
+	if len(os.Args) != 4 && !(len(os.Args) == 5 && os.Args[4] == "services") {
+		fmt.Fprintln(os.Stderr, "usage: onvif-go-client host:port username password [services]")
 		os.Exit(2)
 	}
 	out := map[string]interface{}{}
@@ -71,6 +71,9 @@ func main() {
 		out["connect_error"] = err.Error()
 		emit()
 		return
+	}
+	if len(os.Args) == 5 {
+		runServices(dev, os.Args[2], os.Args[3])
 	}
 	out["endpoints"] = dev.GetServices()
 

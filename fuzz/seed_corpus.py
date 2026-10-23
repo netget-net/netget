@@ -1160,6 +1160,56 @@ write("zigbee_ash_ezsp", "escape_run", RST + b"\x7d\x5e" * 50000)
 write("zigbee_ash_ezsp", "deep_attributes",
       b"\x00\x00\x09\x00\x00\x02" + b"\x00\x00\x42\xff" * 2000)
 
+# --- onvif_request: SOAP 1.2 requests to the ONVIF device's PTZ, Events and Imaging services --
+ONVIF_NS = ('xmlns:s="http://www.w3.org/2003/05/soap-envelope" '
+            'xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl" '
+            'xmlns:tev="http://www.onvif.org/ver10/events/wsdl" '
+            'xmlns:timg="http://www.onvif.org/ver20/imaging/wsdl" '
+            'xmlns:wsnt="http://docs.oasis-open.org/wsn/b-2" '
+            'xmlns:tt="http://www.onvif.org/ver10/schema"')
+
+
+def onvif(body):
+    return ('<?xml version="1.0" encoding="UTF-8"?><s:Envelope %s><s:Body>%s</s:Body></s:Envelope>'
+            % (ONVIF_NS, body)).encode()
+
+
+write("onvif_request", "create_pull_point", onvif(
+    '<tev:CreatePullPointSubscription><tev:Filter><wsnt:TopicExpression '
+    'Dialect="http://www.onvif.org/ver10/tev/topicExpression/ConcreteSet">'
+    'tns1:RuleEngine//.|tns1:VideoSource/MotionAlarm</wsnt:TopicExpression></tev:Filter>'
+    '<tev:InitialTerminationTime>PT1H</tev:InitialTerminationTime></tev:CreatePullPointSubscription>'))
+write("onvif_request", "pull_messages", onvif(
+    '<tev:PullMessages><tev:Timeout>PT1M30.5S</tev:Timeout><tev:MessageLimit>10</tev:MessageLimit>'
+    '</tev:PullMessages>'))
+write("onvif_request", "renew_absolute", onvif(
+    '<wsnt:Renew><wsnt:TerminationTime>2026-10-23T10:00:00Z</wsnt:TerminationTime></wsnt:Renew>'))
+write("onvif_request", "continuous_move", onvif(
+    '<tptz:ContinuousMove><tptz:ProfileToken>main</tptz:ProfileToken><tptz:Velocity>'
+    '<tt:PanTilt x="0.5" y="-0.25" space="http://www.onvif.org/ver10/tptz/PanTiltSpaces/VelocityGenericSpace"/>'
+    '<tt:Zoom x="0.1"/></tptz:Velocity><tptz:Timeout>PT5S</tptz:Timeout></tptz:ContinuousMove>'))
+write("onvif_request", "absolute_move", onvif(
+    '<tptz:AbsoluteMove><tptz:ProfileToken>main</tptz:ProfileToken><tptz:Position>'
+    '<tt:PanTilt x="-1" y="1"/><tt:Zoom x="0.5"/></tptz:Position><tptz:Speed><tt:PanTilt x="1" y="1"/>'
+    '</tptz:Speed></tptz:AbsoluteMove>'))
+write("onvif_request", "set_imaging_settings", onvif(
+    '<timg:SetImagingSettings><timg:VideoSourceToken>cam</timg:VideoSourceToken><timg:ImagingSettings>'
+    '<tt:Brightness>70</tt:Brightness><tt:Focus><tt:AutoFocusMode>MANUAL</tt:AutoFocusMode></tt:Focus>'
+    '<tt:IrCutFilter>AUTO</tt:IrCutFilter></timg:ImagingSettings></timg:SetImagingSettings>'))
+write("onvif_request", "focus_move", onvif(
+    '<timg:Move><timg:VideoSourceToken>cam</timg:VideoSourceToken><timg:Focus><tt:Relative>'
+    '<tt:Distance>-0.25</tt:Distance></tt:Relative></timg:Focus></timg:Move>'))
+# Elements nested far past wire::MAX_DEPTH inside a real Body; a topic filter of 20,000
+# alternatives (past MAX_TOPIC_ALTERNATIVES and MAX_TOPIC_EXPRESSION); a duration whose number
+# is 4,000 digits.
+write("onvif_request", "depth_bomb", onvif("<a>" * 20000 + "</a>" * 20000))
+write("onvif_request", "alternatives_bomb", onvif(
+    '<tev:CreatePullPointSubscription><tev:Filter><wsnt:TopicExpression Dialect="">'
+    + "|".join(["tns1:VideoSource/MotionAlarm"] * 20000)
+    + '</wsnt:TopicExpression></tev:Filter></tev:CreatePullPointSubscription>'))
+write("onvif_request", "duration_bomb", onvif(
+    '<tev:PullMessages><tev:Timeout>PT' + "9" * 4000 + 'S</tev:Timeout></tev:PullMessages>'))
+
 total = sum(len(files) for _, _, files in os.walk(CORPUS))
 print("seeded %d corpus files across %d targets" %
       (total, len(os.listdir(CORPUS))))

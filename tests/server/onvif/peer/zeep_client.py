@@ -66,7 +66,7 @@ async def main(host, port, user, password):
         req.StreamSetup = {"Stream": "RTP-Unicast", "Transport": {"Protocol": "RTSP"}}
         await call("stream_uri", media.GetStreamUri(req), lambda r: {"uri": r.Uri, "timeout": str(r.Timeout)})
         await call("snapshot_uri", media.GetSnapshotUri({"ProfileToken": tokens[0]}), lambda r: {"uri": r.Uri})
-    await call("unsupported", device.GetHostname(), lambda r: {"name": str(r)})
+    await call("unsupported", device.GetUsers(), lambda r: {"users": str(r)})
     await cam.close()
     print(json.dumps(out, default=str))
 

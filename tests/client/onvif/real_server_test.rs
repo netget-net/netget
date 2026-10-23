@@ -61,9 +61,15 @@ impl Rpos {
 /// RPOS on a free port with user admin, its own RTSP server off (it hands out the URI of an
 /// external one), all its log output kept.
 async fn rpos() -> Rpos {
+    rpos_with(None).await
+}
+
+/// RPOS, with its `rposascii` PTZ driver writing every PTZ and imaging command it executes to
+/// `ptz_output` (a TCP address) when one is given: RPOS's own record of what it did.
+async fn rpos_with(ptz_output: Option<std::net::SocketAddr>) -> Rpos {
     let dir = tempfile::tempdir().unwrap();
     let port = free_port();
-    let config = json!({
+    let mut config = json!({
         "NetworkAdapters": [], "IpAddress": "127.0.0.1", "ServicePort": port,
         "Username": "admin", "Password": "rpos-secret",
         "CameraType": "testsrc", "CameraDevice": "",
@@ -75,6 +81,11 @@ async fn rpos() -> Rpos {
         "DeviceInformation": {"Manufacturer": "RPOS Evidence", "Model": "Peer", "HardwareId": "HW-RPOS", "SerialNumber": "RPOS-0001"},
         "logLevel": 4, "logSoapCalls": true
     });
+    if let Some(out) = ptz_output {
+        config["PTZDriver"] = json!("rposascii");
+        config["PTZOutput"] = json!("tcp");
+        config["PTZOutputURL"] = json!(out.to_string());
+    }
     let config_path = dir.path().join("rposConfig.json");
     std::fs::write(&config_path, config.to_string()).unwrap();
     let log = std::fs::File::create(dir.path().join("rpos.log")).unwrap();
@@ -110,6 +121,14 @@ async fn rpos() -> Rpos {
 }
 
 async fn client(rpos: &Rpos, password: &str) -> (AppState, anyhow::Result<ClientId>) {
+    client_with(rpos, password, CHAIN).await
+}
+
+async fn client_with(
+    rpos: &Rpos,
+    password: &str,
+    chain: &str,
+) -> (AppState, anyhow::Result<ClientId>) {
     let state = AppState::new_with_options(false, "http://127.0.0.1:1".into());
     let (tx, _) = mpsc::unbounded_channel();
     let id = ClientForm {
@@ -118,7 +137,7 @@ async fn client(rpos: &Rpos, password: &str) -> (AppState, anyhow::Result<Client
         instruction: Some("Find the camera's stream".into()),
         startup_params: Some(json!({"username": "admin", "password": password})),
         event_handlers: Some(vec![
-            json!({"event_pattern":"*","handler":{"type":"script","language":"python","code":CHAIN}}),
+            json!({"event_pattern":"*","handler":{"type":"script","language":"python","code":chain}}),
         ]),
         ..Default::default()
     }
@@ -138,7 +157,7 @@ async fn responses(state: &AppState, id: ClientId) -> Vec<Value> {
         .collect()
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn netget_reads_rpos_with_a_digest_rpos_verifies() {
     let rpos = rpos().await;
     let (state, id) = client(&rpos, "rpos-secret").await;
@@ -225,7 +244,7 @@ async fn netget_reads_rpos_with_a_digest_rpos_verifies() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn rpos_refuses_the_wrong_password_and_the_connection_fails() {
     let rpos = rpos().await;
     let (_state, id) = client(&rpos, "not-the-password").await;
@@ -236,4 +255,155 @@ async fn rpos_refuses_the_wrong_password_and_the_connection_fails() {
         "RPOS did not check the digest:\n{}",
         rpos.log()
     );
+}
+
+/// The model drives RPOS's PTZ head and imaging: moves, stop, a preset set, listed, gone to and
+/// removed, home; imaging settings read and changed, a focus move and stop. Each request it
+/// accepts is asserted in the command RPOS's rposascii PTZ driver wrote for it.
+const PTZ_CHAIN: &str = r#"import json,sys
+i=json.load(sys.stdin); t=i['event_type_id']; e=i['event']
+a=[]
+if t=='onvif_connected':
+  a=[{'type':'onvif_get_profiles'},{'type':'onvif_ptz_get_nodes'},{'type':'onvif_ptz_get_configurations'}]
+elif e.get('operation')=='GetProfiles' and e['ok']:
+  p=e['result']['profiles'][0]['token']
+  a=[{'type':'onvif_ptz_get_status','profile_token':p},
+     {'type':'onvif_ptz_absolute_move','profile_token':p,'pan':0.5,'tilt':-0.25,'zoom':0.1},
+     {'type':'onvif_ptz_relative_move','profile_token':p,'pan':0.1,'tilt':0.2},
+     {'type':'onvif_ptz_continuous_move','profile_token':p,'pan':-0.5,'tilt':0.0,'timeout_secs':5},
+     {'type':'onvif_ptz_stop','profile_token':p},
+     {'type':'onvif_ptz_set_preset','profile_token':p,'preset_name':'Door'},
+     {'type':'onvif_ptz_get_presets','profile_token':p},
+     {'type':'onvif_ptz_goto_home','profile_token':p},
+     {'type':'onvif_get_video_sources'}]
+elif e.get('operation')=='GetPresets' and e['ok'] and e['result']['presets']:
+  p=e['request']['profile_token']; tok=e['result']['presets'][0]['token']
+  a=[{'type':'onvif_ptz_goto_preset','profile_token':p,'preset_token':tok},
+     {'type':'onvif_ptz_remove_preset','profile_token':p,'preset_token':tok}]
+elif e.get('operation')=='GetVideoSources' and e['ok']:
+  s=e['result']['sources'][0]['token']
+  a=[{'type':'onvif_imaging_get_settings','video_source_token':s},
+     {'type':'onvif_imaging_get_options','video_source_token':s},
+     {'type':'onvif_imaging_set_settings','video_source_token':s,'brightness':70},
+     {'type':'onvif_imaging_move','video_source_token':s,'kind':'continuous','speed':0.5},
+     {'type':'onvif_imaging_stop','video_source_token':s},
+     {'type':'onvif_imaging_get_status','video_source_token':s}]
+print(json.dumps({'actions':a}))"#;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn netget_drives_rpos_ptz_head_and_imaging() {
+    // RPOS's rposascii driver connects here and writes one line per command it executed.
+    let driver = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let driver_addr = driver.local_addr().unwrap();
+    let commands = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let sink = commands.clone();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = driver.accept().await {
+            let sink = sink.clone();
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                while let Ok(n) = tokio::io::AsyncReadExt::read(&mut s, &mut buf).await {
+                    if n == 0 {
+                        break;
+                    }
+                    sink.lock()
+                        .unwrap()
+                        .push_str(&String::from_utf8_lossy(&buf[..n]));
+                }
+            });
+        }
+    });
+    let rpos = rpos_with(Some(driver_addr)).await;
+    let (state, id) = client_with(&rpos, "rpos-secret", PTZ_CHAIN).await;
+    let id = id.unwrap_or_else(|e| panic!("connect: {e:#}\n{}", rpos.log()));
+    // 3 on connect, 9 on the profiles, 2 on the presets, 6 on the sources.
+    let all = tokio::time::timeout(Duration::from_secs(90), async {
+        loop {
+            let r = responses(&state, id).await;
+            if r.len() >= 20 {
+                return r;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "the chain did not finish:\n{}\nRPOS's driver got:\n{}",
+            rpos.log(),
+            commands.lock().unwrap()
+        )
+    });
+    let sent: Vec<String> = all
+        .iter()
+        .map(|r| {
+            format!(
+                "{}:{}",
+                r["service"].as_str().unwrap_or("?"),
+                r["operation"].as_str().unwrap_or("?")
+            )
+        })
+        .collect();
+    println!("NetGet sent RPOS {} operations: {sent:?}", sent.len());
+    for r in &all {
+        assert_eq!(r["ok"], true, "{r}\n{}", rpos.log());
+    }
+    let by = |service: &str, op: &str| -> Value {
+        all.iter()
+            .find(|r| r["service"] == service && r["operation"] == op)
+            .cloned()
+            .unwrap_or_else(|| panic!("no {service}:{op} in {sent:?}"))
+    };
+    assert_eq!(
+        by("ptz", "GetNodes")["result"]["nodes"][0]["token"],
+        "ptz_node_token_0"
+    );
+    assert_eq!(
+        by("ptz", "GetConfigurations")["result"]["configurations"][0]["node_token"],
+        "ptz_node_token_0"
+    );
+    assert!(by("ptz", "GetStatus")["result"]["utc_time"].is_string());
+    let presets = by("ptz", "GetPresets");
+    assert_eq!(presets["result"]["presets"][0]["name"], "Door", "{presets}");
+    assert_eq!(by("ptz", "SetPreset")["result"]["preset_token"], "1");
+    let brightness = by("imaging", "GetOptions")["result"]["brightness"].clone();
+    assert_eq!(
+        (brightness["min"].as_f64(), brightness["max"].as_f64()),
+        (Some(0.0), Some(100.0)),
+        "{brightness}"
+    );
+    assert!(by("imaging", "GetImagingSettings")["result"]["brightness"].is_number());
+
+    // What RPOS's PTZ driver executed, in RPOS's own words.
+    let wrote = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let c = commands.lock().unwrap().clone();
+            if c.contains("focusstop") && c.contains("clearpreset") {
+                return c;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| commands.lock().unwrap().clone());
+    println!("RPOS's rposascii driver wrote:\n{wrote}");
+    for line in [
+        "absolute-ptz\t0.5\t-0.25\t0.1",
+        "relative-ptz\t0.1\t0.2\t",
+        "ptz\t-0.5\t0\t",
+        "ptz\t0\t0\t0",
+        "setpreset\tDoor\t1",
+        "gotohome",
+        "gotopreset\tDoor\t1",
+        "clearpreset\tDoor\t1",
+        "brightness\t70",
+        "focus\t0.5",
+        "focusstop",
+    ] {
+        assert!(
+            wrote.contains(line),
+            "RPOS never executed {line:?}; its driver wrote:\n{wrote}\n{}",
+            rpos.log()
+        );
+    }
 }

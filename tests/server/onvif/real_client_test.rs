@@ -20,12 +20,15 @@ use tokio::sync::mpsc;
 pub const USER: &str = "admin";
 pub const PASSWORD: &str = "s3cret pass";
 
-/// The model: a lobby camera with two profiles. A stream for any other profile is refused with
-/// InvalidArgVal/NoProfile.
+/// The model: a lobby camera with two profiles, `main` with the PTZ head. A stream for any other
+/// profile is refused with InvalidArgVal/NoProfile; a pan past 0.9 is refused (the lobby wall);
+/// turning the IR-cut filter OFF and any scope under `forbidden/` are refused; a new subscription
+/// is accepted and told the motion alarm is on.
 pub const POLICY: &str = r#"import json,sys
 i=json.load(sys.stdin); t=i['event_type_id']; e=i['event']
-P=[{'token':'main','name':'Main stream','encoding':'H264','width':1920,'height':1080,'framerate':25,'bitrate':4096,'video_source_token':'lobby_cam'},
+P=[{'token':'main','name':'Main stream','encoding':'H264','width':1920,'height':1080,'framerate':25,'bitrate':4096,'video_source_token':'lobby_cam','ptz':True},
    {'token':'sub','name':'Sub stream','encoding':'JPEG','width':640,'height':360,'framerate':10,'video_source_token':'lobby_cam'}]
+def refuse(sub,det,why): return [{'type':'onvif_fault','subcode':sub,'detail':det,'reason':why}]
 a=[]
 if t=='onvif_get_device_information':
   a=[{'type':'onvif_device_information','manufacturer':'NetGet Optics','model':'Lobby-9000','firmware_version':'4.2.1','serial_number':'NG-ONVIF-0042','hardware_id':'HW-7'}]
@@ -45,6 +48,26 @@ elif t=='onvif_get_stream_uri':
     a=[{'type':'onvif_fault','subcode':'InvalidArgVal','detail':'NoProfile','reason':'No such profile'}]
 elif t=='onvif_get_snapshot_uri':
   a=[{'type':'onvif_snapshot_uri','uri':'http://192.0.2.42/snapshot/'+e['profile_token']+'.jpg'}]
+elif t=='onvif_get_hostname':
+  a=[{'type':'onvif_hostname','name':'lobby-cam'}]
+elif t=='onvif_ptz_move':
+  p=e['proposed']
+  if e['kind']=='absolute' and (e['target']['pan'] or 0)>0.9:
+    a=refuse('InvalidArgVal','InvalidPosition','The lobby wall is there')
+  else:
+    a=[{'type':'onvif_ptz_position','pan':p['pan'],'tilt':p['tilt'],'zoom':p['zoom']}]
+elif t=='onvif_create_subscription':
+  a=[{'type':'onvif_accept'},{'type':'onvif_raise_event','topic':'tns1:VideoSource/MotionAlarm','source':{'Source':'lobby_cam'},'data':{'State':True}}]
+elif t=='onvif_set_imaging_settings':
+  a=refuse('InvalidArgVal','SettingsInvalid','The IR-cut filter stays on') if e['requested']['ir_cut_filter']=='OFF' else [{'type':'onvif_accept'}]
+elif t=='onvif_imaging_move':
+  a=[{'type':'onvif_focus_position','position':e['proposed_position']}]
+elif t=='onvif_set_scopes':
+  a=refuse('OperationProhibited','ScopeOverwrite','Not that scope') if any('forbidden' in s for s in e['scopes']) else [{'type':'onvif_accept'}]
+elif t=='onvif_system_reboot':
+  a=[{'type':'onvif_accept','message':'Rebooting in 30 seconds'}]
+elif t in ('onvif_set_hostname','onvif_set_system_date_and_time'):
+  a=[{'type':'onvif_accept'}]
 print(json.dumps({'actions':a}))"#;
 
 pub fn env(var: &str) -> String {
@@ -57,11 +80,40 @@ pub fn env(var: &str) -> String {
 }
 
 pub async fn start(handlers: Option<Vec<Value>>, params: Value) -> (AppState, ServerId, u16) {
+    let (state, id, port, _) = start_logged(handlers, params).await;
+    (state, id, port)
+}
+
+/// The device's status lines, as they arrive.
+pub type StatusLog = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
+
+/// The operations clients sent, as the device logged them (`service:Operation`), with counts.
+pub fn operations(log: &StatusLog) -> std::collections::BTreeMap<String, usize> {
+    let mut out = std::collections::BTreeMap::new();
+    for line in log.lock().unwrap().iter() {
+        if let Some((_, op)) = line.split_once(" request ") {
+            *out.entry(op.trim().to_string()).or_insert(0) += 1;
+        }
+    }
+    out
+}
+
+pub async fn start_logged(
+    handlers: Option<Vec<Value>>,
+    params: Value,
+) -> (AppState, ServerId, u16, StatusLog) {
     let state = AppState::new_with_options(false, "http://127.0.0.1:1".into());
     state
         .set_llm_client(netget::llm::OllamaClient::new("http://127.0.0.1:1"))
         .await;
-    let (tx, _) = mpsc::unbounded_channel();
+    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+    let log: StatusLog = Default::default();
+    let sink = log.clone();
+    tokio::spawn(async move {
+        while let Some(line) = rx.recv().await {
+            sink.lock().unwrap().push(line);
+        }
+    });
     let id = ServerForm {
         protocol: "onvif".into(),
         port: Some(0),
@@ -84,7 +136,7 @@ pub async fn start(handlers: Option<Vec<Value>>, params: Value) -> (AppState, Se
     })
     .await
     .unwrap();
-    (state, id, port)
+    (state, id, port, log)
 }
 
 pub fn policy() -> Option<Vec<Value>> {
@@ -162,7 +214,7 @@ async fn go(port: u16, password: &str) -> Value {
     .await
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn onvif_zeep_async_reads_what_the_model_supplied() {
     let (state, id, port) = start(policy(), credentials()).await;
     let r = zeep(port, PASSWORD).await;
@@ -240,7 +292,7 @@ async fn onvif_zeep_async_reads_what_the_model_supplied() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn use_go_onvif_reads_what_the_model_supplied() {
     let (state, id, port) = start(policy(), credentials()).await;
     let r = go(port, PASSWORD).await;

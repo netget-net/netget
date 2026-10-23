@@ -8048,9 +8048,9 @@ jobs:
 
   onvif:
     if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'onvif')
-    name: ONVIF device and client against onvif-zeep-async, use-go/onvif and RPOS
+    name: ONVIF device and client against onvif-zeep-async, use-go/onvif, onvif2-zeep, IOTechSystems/onvif, RPOS and onvif_simple_server
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -8060,16 +8060,26 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      # IOTechSystems/onvif v1.3.0 needs go 1.25.
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
-          cache-dependency-path: tests/server/onvif/peer/go/go.sum
-      - name: Install onvif-zeep-async 4.3.0, use-go/onvif v0.0.9 and RPOS
+          go-version: '1.25'
+          cache-dependency-path: |
+            tests/server/onvif/peer/go/go.sum
+            tests/server/onvif/peer/go-media2/go.sum
+      - name: Install onvif-zeep-async 4.3.0, use-go/onvif v0.0.9, onvif2-zeep 0.3.4, IOTechSystems/onvif v1.3.0, RPOS and onvif_simple_server 40fd108
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends python3-venv
+          # onvif_simple_server builds against libtomcrypt, json-c and zlib, runs as CGI under
+          # lighttpd, and logs to two fixed files in /var/log that the test user must write.
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3-venv build-essential \
+            libtomcrypt-dev libjson-c-dev zlib1g-dev lighttpd tshark
+          tshark --version | head -1
+          sudo install -m 666 /dev/null /var/log/onvif_simple_server.log
+          sudo install -m 666 /dev/null /var/log/onvif_notify_server.log
           python3 tests/server/onvif/install_peers.py "$RUNNER_TEMP/onvif" | sed 's/^export //' >> "$GITHUB_ENV"
+          test -n "$(grep NETGET_ONVIF_SIMPLE_SERVER "$GITHUB_ENV")"
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
