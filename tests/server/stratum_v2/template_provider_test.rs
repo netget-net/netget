@@ -24,11 +24,16 @@ async fn sri_pool_mines_netget_templates_into_a_block_bitcoin_core_accepts() {
     let node = peers::Regtest::start(false, 101).await;
     let (tip, height, ntime) = node.tip().await;
     let (cb_txid, cb_value) = node.coinbase(1).await;
+    let (cb2_txid, cb2_value) = node.coinbase(2).await;
     let next = height + 1;
     let fee = 10_000u64;
+    // Two transactions: with the coinbase that is three leaves, so the path's second level
+    // pairs a hash with itself, the case a merkle construction gets wrong first.
     let txs = json!([{"inputs": [{"txid": cb_txid, "vout": 0, "value_sats": cb_value}],
         "outputs": [{"value_sats": cb_value - fee, "pay_to": "op_true"},
-                    {"value_sats": 0, "op_return": "netget template"}]}]);
+                    {"value_sats": 0, "op_return": "netget template"}]},
+        {"inputs": [{"txid": cb2_txid, "vout": 0, "value_sats": cb2_value}],
+         "outputs": [{"value_sats": cb2_value - fee, "pay_to": "op_true"}]}]);
     let policy = support::script(&format!(
         r#"if t=='stratum_v2_tp_setup_connection':
   a=[{{'type':'stratum_v2_accept'}}]
@@ -94,6 +99,8 @@ elif t=='stratum_v2_tp_solution' and e['height']=={next} and not e['stale']:
     );
     let block: Value = node.json(&["getblock", &hash, "2"]).await;
     assert_eq!(block["height"], next, "{block}");
+    assert_eq!(block["tx"].as_array().unwrap().len(), 3, "{block}");
+    assert_eq!(block["tx"][2]["vin"][0]["txid"], cb2_txid, "{block}");
     let spent = &block["tx"][1];
     assert_eq!(
         spent["vin"][0]["txid"], cb_txid,
@@ -112,8 +119,8 @@ elif t=='stratum_v2_tp_solution' and e['height']=={next} and not e['stale']:
         .sum();
     assert_eq!(
         (paid * 1e8).round() as u64,
-        cb_value + fee,
-        "the coinbase claims the subsidy and the fee: {block}"
+        cb_value + 2 * fee,
+        "the coinbase claims the subsidy and both fees: {block}"
     );
 
     // The model heard of the solution, verified, and moved the pool onto a block on top of it.
