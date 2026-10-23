@@ -40,12 +40,78 @@ env:
   SECONDS_PER_TARGET: ${{ github.event.inputs.seconds_per_target || '300' }}
 
 jobs:
-  fuzz:
+  # One build, many runs. Every target links the netget library, and compiling that library
+  # peaks at ~12 GB, so a job per target meant ~45 full compiles of ~70 minutes each on runners
+  # that, without swap, are shut down mid-compile rather than failing ("The runner has received
+  # a shutdown signal", exit 143). On 23 October 2026 every one of 45 jobs died that way and no
+  # target was fuzzed at all. The build job compiles every target once with the room ci.yml's
+  # heavy jobs make for themselves; each matrix job then fuzzes a prebuilt binary.
+  build:
     runs-on: ubuntu-22.04
     timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: make room (swap and disk)
+        run: |
+          sudo swapoff -a || true
+          sudo fallocate -l 16G /mnt/netget-swap
+          sudo chmod 600 /mnt/netget-swap
+          sudo mkswap /mnt/netget-swap
+          sudo swapon /mnt/netget-swap
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          free -h
+          df -h / /mnt
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+
+      # The fuzz crate turns on `lldp`/`cdp` (libpcap) and `nfc`/`nfc-client` (pcsclite); keep
+      # this list in step with ci.yml's ratchets job, which `cargo check`s the same crate.
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libpcap-dev libpcsclite-dev
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Build every target
+        working-directory: fuzz
+        run: |
+          cp ../Cargo.lock Cargo.lock
+          # The whole library does not compile on a hosted runner with ASan, optimised or not:
+          # at one codegen unit, at sixteen with two jobs, and unoptimised, the runner was shut
+          # down minutes into the netget crate with 16 GB of swap in place. ASan instruments every
+          # load and store. So: no sanitizer, unoptimised, no debug info, as the CI jobs that do
+          # compile the library are. libFuzzer's coverage guidance is unaffected, and what these
+          # decoders can do wrong in safe Rust still kills the process: a panic, an overflow
+          # (dev builds check), a stack overflow from a depth bomb, an allocation past
+          # -rss_limit_mb. What is lost is ASan's view of unsafe code, which they do not have.
+          CARGO_PROFILE_DEV_DEBUG=0 CARGO_BUILD_JOBS=2 cargo fuzz build --dev --sanitizer none
+          mkdir -p ../fuzz-bin
+          for target in $(cargo fuzz list); do
+            cp "target/x86_64-unknown-linux-gnu/debug/$target" ../fuzz-bin/
+          done
+          ls -l ../fuzz-bin
+          du -sh ../fuzz-bin
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-binaries
+          path: fuzz-bin/
+          if-no-files-found: error
+          retention-days: 1
+
+  fuzz:
+    needs: build
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
     strategy:
-      # One job per target: a crash in one must not cancel the search in the others,
-      # and a per-target job makes the crashing target obvious in the run summary.
       fail-fast: false
       matrix:
         target:
@@ -97,48 +163,22 @@ jobs:
           - stratum_v2_message
           - unixfs_dag
           - ipns_record
+    env:
+      TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@v4
 
-      # libFuzzer needs the sanitizer support that only nightly ships.
-      - uses: dtolnay/rust-toolchain@nightly
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: fuzz
-
-      # The fuzz crate enables lldp/cdp (libpcap) and nfc/nfc-client (pcsclite).
-      # Keep in sync with the same list in ci.yml's registry-audit job.
+      # The binaries link these dynamically.
       - name: Install system libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libpcap-dev libpcsclite-dev
+          sudo apt-get install -y --no-install-recommends libpcap0.8 libpcsclite1
 
-      - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz --locked
+      - uses: actions/download-artifact@v4
+        with:
+          name: fuzz-binaries
+          path: fuzz-bin
 
-      # Separate from the run so a harness that stopped compiling is reported as a
-      # build failure rather than as a fuzzing result.
-      #
-      # AddressSanitizer is left at cargo-fuzz's default here, which is correct on Linux.
-      # It is NOT usable on macOS 26/27, where ASan deadlocks re-entrantly in its own
-      # initialiser before `main` and every target hangs having executed nothing —
-      # fuzz/README.md has the stack. Anyone reproducing a finding from this job on a Mac
-      # needs `-s none`; the inputs are identical either way, since a Rust stack overflow
-      # is caught by libFuzzer's signal handler rather than by ASan.
-      - name: Build target
-        working-directory: fuzz
-        # Seeded from the root lockfile for the reason ci.yml's fuzz check gives.
-        run: |
-          cp ../Cargo.lock Cargo.lock
-          cargo fuzz build ${{ matrix.target }}
-
-      # -timeout=25 makes a single slow input a reported crash rather than a job that
-      # silently overruns its budget: libFuzzer only checks the wall clock between
-      # executions, so without it one hanging input looks exactly like a long run.
-      # -rss_limit_mb catches an allocation driven by an attacker-declared length,
-      # which is a real finding in this codebase and not merely a resource limit.
       - name: Fuzz ${{ matrix.target }}
         working-directory: fuzz
         run: |
@@ -146,14 +186,15 @@ jobs:
             echo "::error::seconds_per_target must be a positive integer"
             exit 1
           fi
-          cargo fuzz run ${{ matrix.target }} -- \
+          chmod +x "../fuzz-bin/$TARGET"
+          mkdir -p "corpus/$TARGET" "artifacts/$TARGET"
+          "../fuzz-bin/$TARGET" "corpus/$TARGET" \
+            "-artifact_prefix=artifacts/$TARGET/" \
             "-max_total_time=$SECONDS_PER_TARGET" \
             -timeout=25 \
             -rss_limit_mb=2048 \
             -print_final_stats=1
 
-      # `if: failure()` is the point of the whole job: the crashing input is the
-      # deliverable, and without it a red run says only that something broke.
       - name: Upload crash artefacts
         if: failure()
         uses: actions/upload-artifact@v4
@@ -164,9 +205,6 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-      # The corpus libFuzzer grew during the run. Feeding it back in makes the next
-      # night start where this one stopped instead of rediscovering the same headers;
-      # download it into fuzz/corpus/<target>/ to reproduce a run's coverage locally.
       - name: Upload grown corpus
         if: always()
         uses: actions/upload-artifact@v4
