@@ -130,3 +130,6 @@ pub mod p2p;
 pub mod radsec_pki;
 
 pub mod kubo;
+
+pub mod helia;
+pub mod ipfs_fixtures;

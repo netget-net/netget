@@ -2,14 +2,17 @@
 //! it is malformed or over a bound, otherwise put to the model, whose answer Rust checks
 //! before anything goes back. A failed model answers nothing: wants get DONT_HAVE (where the
 //! peer asked for it) and a DHT request has its stream reset.
-use super::bitswap::{self, Entry, Version};
+use super::bitswap::{self, Counts, Entry, Version, WantType};
 use super::host::{self, Config, Peer};
+use super::ipfs::Cid;
 use super::kad::{self, Kind};
+use super::unixfs;
 use super::{actions, wire};
 use crate::logging::emit::Log;
 use crate::protocol::{Event, SpawnContext};
 use crate::server::connection::ConnectionId;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 fn reset(peer: &Peer, stream_id: u32) {
@@ -18,12 +21,108 @@ fn reset(peer: &Peer, stream_id: u32) {
     }
 }
 
+/// Wants a connection remembers: what the peer still wants that this host has not given it
+/// (declined, or not yet known). Bounded; the oldest is forgotten first.
+pub const MAX_TRACKED_WANTS: usize = bitswap::MAX_OUTSTANDING_WANTS;
+
+/// One peer's Bitswap session with this host: its outstanding wants and what passed each way.
+#[derive(Default)]
+pub struct Ledger {
+    /// (order, the want, whether the model answered it — declined — rather than failed)
+    wants: HashMap<(u64, [u8; 32]), (u64, Entry, bool)>,
+    seq: u64,
+    pub received: Counts,
+    pub sent: Counts,
+}
+
+impl Ledger {
+    fn track(&mut self, e: &Entry, declined: bool) {
+        let key = (e.cid.codec, e.cid.digest);
+        if !self.wants.contains_key(&key) && self.wants.len() >= MAX_TRACKED_WANTS {
+            let oldest = self
+                .wants
+                .iter()
+                .min_by_key(|(_, (s, _, _))| *s)
+                .map(|(k, _)| *k);
+            if let Some(oldest) = oldest {
+                self.wants.remove(&oldest);
+            }
+        }
+        self.seq += 1;
+        let declined = declined || self.declined(&e.cid);
+        self.wants.insert(key, (self.seq, e.clone(), declined));
+    }
+    /// Whether the model already answered this want without the block (a failed model is
+    /// asked again the next time the peer wants it).
+    fn declined(&self, cid: &Cid) -> bool {
+        self.wants
+            .get(&(cid.codec, cid.digest))
+            .is_some_and(|(_, _, d)| *d)
+    }
+    fn forget(&mut self, cid: &Cid) {
+        self.wants.remove(&(cid.codec, cid.digest));
+    }
+    /// The wants still outstanding, oldest first.
+    pub fn outstanding(&self) -> Vec<Entry> {
+        let mut v: Vec<&(u64, Entry, bool)> = self.wants.values().collect();
+        v.sort_by_key(|(s, _, _)| *s);
+        v.into_iter().map(|(_, e, _)| e.clone()).collect()
+    }
+    pub fn summary(&self) -> String {
+        format!("received {} | sent {}", self.received, self.sent)
+    }
+}
+
+enum Reply {
+    Block(bitswap::Block),
+    Have(Cid),
+}
+
+/// What the host's store answers for a want: the block for want-block (and for want-have
+/// when the block is small, as boxo does), HAVE for a larger want-have; None when the store
+/// does not hold it.
+fn from_store(cfg: &Config, want: &Entry) -> Option<Reply> {
+    cfg.dag.with(|store| {
+        let size = store.has(&want.cid)?;
+        if want.want_type == WantType::Have && size > unixfs::HAVE_AS_BLOCK {
+            return Some(Reply::Have(want.cid));
+        }
+        store.get(&want.cid).map(|data| {
+            Reply::Block(bitswap::Block {
+                cid: want.cid,
+                data,
+            })
+        })
+    })
+}
+
+/// Build an add (off the runtime: it hashes every byte) and keep it in the host's store,
+/// which tells every connection.
+pub async fn add_content(cfg: &Config, description: Value) -> anyhow::Result<unixfs::Added> {
+    let built = tokio::task::spawn_blocking(move || unixfs::add(&description))
+        .await
+        .map_err(|e| anyhow::anyhow!("the add did not finish: {e}"))??;
+    cfg.dag.insert(built)
+}
+
+pub fn added_line(a: &unixfs::Added) -> String {
+    format!(
+        "operation=ipfs_add decision=added root={} kind={} name={:?} size={} blocks={}",
+        a.root, a.kind, a.name, a.size, a.blocks
+    )
+}
+
 /// One Bitswap message the peer sent. Blocks and presences sent to the host are not asked
-/// for and are dropped; wants are answered.
+/// for and are dropped. Wants are answered from the store when it holds them, otherwise by
+/// the model; what neither can give is remembered, so content added later still reaches the
+/// peer, and a want the model already declined is not asked again while the peer keeps it.
+#[allow(clippy::too_many_arguments)]
 pub async fn bitswap(
     ctx: &SpawnContext,
     id: ConnectionId,
     peer: &Arc<Peer>,
+    cfg: &Config,
+    ledger: &mut Ledger,
     stream_id: u32,
     data: &[u8],
 ) {
@@ -43,6 +142,22 @@ pub async fn bitswap(
             "libp2p connection {id} operation=bitswap decision=refused_unreadable: {why}"
         ));
     }
+    let count = |cancel: bool, kind: Option<WantType>| {
+        msg.entries
+            .iter()
+            .filter(|e| e.cancel == cancel && kind.is_none_or(|k| e.want_type == k))
+            .count() as u64
+    };
+    let (want_block, want_have, cancels) = (
+        count(false, Some(WantType::Block)),
+        count(false, Some(WantType::Have)),
+        count(true, None),
+    );
+    ledger.received.message(&msg);
+    log.info(format!(
+        "libp2p connection {id} operation=bitswap_in want_block={want_block} want_have={want_have} cancel={cancels} full={}",
+        msg.full
+    ));
     if !msg.blocks.is_empty() || !msg.presences.is_empty() {
         log.debug(format!(
             "libp2p connection {id}: {} unrequested blocks and {} presences dropped",
@@ -50,29 +165,52 @@ pub async fn bitswap(
             msg.presences.len()
         ));
     }
-    let wants: Vec<&Entry> = msg.entries.iter().filter(|e| !e.cancel).collect();
+    // A full wantlist replaces what the peer wanted before; a cancel withdraws one want.
+    if msg.full {
+        ledger.wants.clear();
+    }
+    for e in msg.entries.iter().filter(|e| e.cancel) {
+        ledger.forget(&e.cid);
+    }
+    let wants: Vec<Entry> = msg.entries.iter().filter(|e| !e.cancel).cloned().collect();
     if wants.is_empty() {
         return;
     }
-    // A CID in a codec NetGet cannot build is answered before the model is asked.
-    let (servable, unservable): (Vec<Entry>, Vec<Entry>) = wants
-        .into_iter()
-        .cloned()
-        .partition(|e| e.cid.supported().is_ok());
-    for e in &unservable {
-        log.info(format!(
-            "libp2p connection {id} operation=bitswap decision=refused_codec cid={}: {:#}",
-            e.cid,
-            e.cid.supported().unwrap_err()
-        ));
+    let mut out = Out::default();
+    let mut ask = Vec::new();
+    for e in wants {
+        if let Err(why) = e.cid.supported() {
+            // A CID in a codec NetGet cannot build is answered before anyone is asked.
+            log.info(format!(
+                "libp2p connection {id} operation=bitswap decision=refused_codec cid={}: {why:#}",
+                e.cid
+            ));
+            if e.send_dont_have {
+                out.dont_have.push(e.cid);
+            }
+            continue;
+        }
+        if let Some(reply) = from_store(cfg, &e) {
+            ledger.forget(&e.cid);
+            out.push(reply);
+        } else if ledger.declined(&e.cid) {
+            // The model said no before and nothing has been added since: remember the newer
+            // want, say so again, and spare the model the same question.
+            ledger.track(&e, true);
+            if e.send_dont_have {
+                out.dont_have.push(e.cid);
+            }
+        } else {
+            ask.push(e);
+        }
     }
-    let mut supplied = Vec::new();
-    if !servable.is_empty() {
+    let from_store_count = out.blocks.len() + out.have.len();
+    if !ask.is_empty() {
         let event = Event::new(
             &actions::WANT_EVENT,
             json!({
                 "peer_id": peer.remote_peer,
-                "wants": servable.iter().map(|e| json!({
+                "wants": ask.iter().map(|e| json!({
                     "cid": e.cid.to_string(),
                     "codec": super::ipfs::codec_name(e.cid.codec),
                     "want": e.want_type.name(),
@@ -80,48 +218,155 @@ pub async fn bitswap(
                 "full": msg.full,
             }),
         );
-        match super::ask(ctx, id, &event).await {
-            None => {}
-            Some(todo) => {
-                for action in todo {
-                    if action["type"] != actions::BLOCKS {
-                        log.warn(format!(
-                            "libp2p connection {id}: {} does not answer a wantlist; ignored",
-                            action["type"]
-                        ));
-                        continue;
-                    }
-                    match actions::supplied_blocks(&action) {
+        let mut supplied = Vec::new();
+        let answered = super::ask(ctx, id, &event).await;
+        let declined = answered.is_some();
+        if let Some(todo) = answered {
+            for action in todo {
+                match action["type"].as_str().unwrap_or_default() {
+                    actions::BLOCKS => match actions::supplied_blocks(&action) {
                         Ok(b) => supplied.extend(b),
                         Err(e) => log.warn(format!(
                             "libp2p connection {id} operation=bitswap decision=refused_answer: {e:#}"
                         )),
-                    }
+                    },
+                    actions::ADD => match add_content(cfg, action.clone()).await {
+                        Ok(a) => log.info(format!("libp2p connection {id} {}", added_line(&a))),
+                        Err(e) => log.warn(format!(
+                            "libp2p connection {id} operation=ipfs_add decision=refused_answer: {e:#}"
+                        )),
+                    },
+                    other => log.warn(format!(
+                        "libp2p connection {id}: {other} does not answer a wantlist; ignored"
+                    )),
                 }
             }
         }
+        // Content the model just added answers its wants from the store; the rest go to
+        // the blocks it supplied, and what is left is remembered.
+        let mut rest = Vec::new();
+        for e in ask {
+            match from_store(cfg, &e) {
+                Some(reply) => out.push(reply),
+                None => rest.push(e),
+            }
+        }
+        let answer = bitswap::answer_wants(&rest, &supplied);
+        for why in &answer.refused {
+            log.warn(format!(
+                "libp2p connection {id} operation=bitswap decision=refused_block: {why}"
+            ));
+        }
+        for e in &rest {
+            if !answer.blocks.iter().any(|b| b.cid.same_block(&e.cid)) {
+                ledger.track(e, declined);
+            }
+        }
+        out.blocks.extend(answer.blocks);
+        out.dont_have.extend(answer.dont_have);
     }
-    let mut answer = bitswap::answer_wants(&servable, &supplied);
-    answer.dont_have.extend(
-        unservable
-            .iter()
-            .filter(|e| e.send_dont_have)
-            .map(|e| e.cid),
-    );
+    log.info(format!(
+        "libp2p connection {id} operation=bitswap blocks={} dont_have={} have={} from_store={from_store_count} tracked={}",
+        out.blocks.len(),
+        out.dont_have.len(),
+        out.have.len(),
+        ledger.wants.len()
+    ));
+    if let Err(e) = send_answer(ctx, id, peer, ledger, out).await {
+        log.warn(format!(
+            "libp2p connection {id}: Bitswap answer not delivered: {e:#}"
+        ));
+    }
+}
+
+/// The store changed: send every remembered want it can now answer.
+pub async fn store_changed(
+    ctx: &SpawnContext,
+    id: ConnectionId,
+    peer: &Peer,
+    cfg: &Config,
+    ledger: &mut Ledger,
+) {
+    let mut out = Out::default();
+    for e in ledger.outstanding() {
+        if let Some(reply) = from_store(cfg, &e) {
+            ledger.forget(&e.cid);
+            out.push(reply);
+        }
+    }
+    if out.is_empty() {
+        return;
+    }
+    let log = Log::new(Some(&ctx.status_tx));
+    log.info(format!(
+        "libp2p connection {id} operation=bitswap source=tracked blocks={} have={} tracked={}",
+        out.blocks.len(),
+        out.have.len(),
+        ledger.wants.len()
+    ));
+    if let Err(e) = send_answer(ctx, id, peer, ledger, out).await {
+        log.warn(format!(
+            "libp2p connection {id}: Bitswap answer not delivered: {e:#}"
+        ));
+    }
+}
+
+/// Blocks the model supplied outside a wantlist (from the dashboard or MCP): each goes to
+/// this peer only if it hashes to a want the peer still has. What was sent, for the reply.
+pub async fn supply_tracked(
+    ctx: &SpawnContext,
+    id: ConnectionId,
+    peer: &Peer,
+    ledger: &mut Ledger,
+    action: &Value,
+) -> anyhow::Result<String> {
+    let supplied = actions::supplied_blocks(action)?;
+    let wants = ledger.outstanding();
+    let answer = bitswap::answer_wants(&wants, &supplied);
+    let log = Log::new(Some(&ctx.status_tx));
     for why in &answer.refused {
         log.warn(format!(
             "libp2p connection {id} operation=bitswap decision=refused_block: {why}"
         ));
     }
+    let n = answer.blocks.len();
+    for b in &answer.blocks {
+        ledger.forget(&b.cid);
+    }
     log.info(format!(
-        "libp2p connection {id} operation=bitswap blocks={} dont_have={}",
-        answer.blocks.len(),
-        answer.dont_have.len()
+        "libp2p connection {id} operation=bitswap source=supplied blocks={n} tracked={}",
+        ledger.wants.len()
     ));
-    if let Err(e) = send_answer(ctx, id, peer, answer).await {
-        log.warn(format!(
-            "libp2p connection {id}: Bitswap answer not delivered: {e:#}"
-        ));
+    let refused = answer.refused.len();
+    // A peer that already heard DONT_HAVE needs no second one.
+    let out = Out {
+        blocks: answer.blocks,
+        ..Default::default()
+    };
+    send_answer(ctx, id, peer, ledger, out).await?;
+    Ok(format!(
+        "sent {n} block(s) to wants the peer still had ({refused} refused, {} still wanted)",
+        ledger.wants.len()
+    ))
+}
+
+/// One answer: blocks, HAVEs and DONT_HAVEs.
+#[derive(Default)]
+struct Out {
+    blocks: Vec<bitswap::Block>,
+    have: Vec<Cid>,
+    dont_have: Vec<Cid>,
+}
+
+impl Out {
+    fn push(&mut self, r: Reply) {
+        match r {
+            Reply::Block(b) => self.blocks.push(b),
+            Reply::Have(c) => self.have.push(c),
+        }
+    }
+    fn is_empty(&self) -> bool {
+        self.blocks.is_empty() && self.have.is_empty() && self.dont_have.is_empty()
     }
 }
 
@@ -130,28 +375,36 @@ async fn send_answer(
     ctx: &SpawnContext,
     id: ConnectionId,
     peer: &Peer,
-    answer: bitswap::Answer,
+    ledger: &mut Ledger,
+    out: Out,
 ) -> anyhow::Result<()> {
-    if answer.blocks.is_empty() && answer.dont_have.is_empty() {
+    if out.is_empty() {
         return Ok(());
     }
     let Some((stream, protocol)) = host::open_negotiated(peer, bitswap::PROTOCOLS).await? else {
         anyhow::bail!("the peer accepts no Bitswap protocol");
     };
     let version = Version::of(&protocol);
-    let mut blocks = answer.blocks;
+    let mut blocks = out.blocks;
     if version == Version::V100 {
         // 1.0.0 names a block by its bytes as CIDv0 would, so a CIDv1 block cannot travel.
         blocks.retain(|b| b.cid.version == 0);
     }
+    let mut presences: Vec<(Cid, bool)> = out.have.into_iter().map(|c| (c, true)).collect();
+    presences.extend(out.dont_have.into_iter().map(|c| (c, false)));
+    if version != Version::V120 {
+        // HAVE and DONT_HAVE are 1.2.0's.
+        presences.clear();
+    }
     let message = bitswap::Message {
         blocks,
-        presences: answer.dont_have.into_iter().map(|c| (c, false)).collect(),
+        presences,
         ..Default::default()
     };
     let writer = stream.writer();
     let mut sent = 0;
     for m in bitswap::split(message) {
+        ledger.sent.message(&m);
         let bytes = bitswap::encode(&m, version);
         sent += bytes.len();
         writer.send(wire::length_prefixed(&bytes))?;
@@ -161,6 +414,26 @@ async fn send_answer(
         .update_connection_stats(ctx.server_id, id, None, Some(sent as u64), None, Some(1))
         .await;
     Ok(())
+}
+
+/// Whether a DHT key (a sha2-256 multihash) names a block the store serves, in either codec.
+fn serves(cfg: &Config, key: &[u8]) -> bool {
+    let Ok((digest, used)) = super::ipfs::parse_multihash(key) else {
+        return false;
+    };
+    used == key.len()
+        && cfg.dag.with(|s| {
+            [super::ipfs::DAG_PB, super::ipfs::RAW]
+                .iter()
+                .any(|&codec| {
+                    s.has(&Cid {
+                        version: 1,
+                        codec,
+                        digest,
+                    })
+                    .is_some()
+                })
+        })
 }
 
 fn peers_json(peers: &[kad::Peer]) -> Vec<Value> {
@@ -238,6 +511,18 @@ pub async fn kad(
                     "libp2p connection {id} operation=kad request={op} decision=refused_malformed: the key is not a sha2-256 multihash"
                 ));
                 reset(peer, stream_id);
+                return;
+            }
+            // Content this host serves from its store: it is the provider, a fact Rust knows.
+            if req.kind == Kind::GetProviders && serves(cfg, &req.key) {
+                let mut reply = kad::Message::request(req.kind, req.key.clone());
+                reply.providers.push(me.clone());
+                reply.closer = closest_known;
+                log.info(format!(
+                    "libp2p connection {id} operation=kad request={op} source=store closer={} providers=1",
+                    reply.closer.len()
+                ));
+                send_kad(ctx, id, peer, stream_id, &reply).await;
                 return;
             }
             if req.kind == Kind::AddProvider {

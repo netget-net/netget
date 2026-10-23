@@ -8,6 +8,7 @@ pub mod ipfs;
 pub mod kad;
 pub mod noise;
 mod serve_ipfs;
+pub mod unixfs;
 pub mod wire;
 pub mod yamux;
 
@@ -92,6 +93,26 @@ pub async fn spawn(ctx: SpawnContext) -> Result<SocketAddr> {
         .transpose()?
         .flatten()
         .unwrap_or(actions::IPFS_DEFAULT);
+    let content = params
+        .map(|p| p.get_optional_array("ipfs_content"))
+        .transpose()?
+        .flatten()
+        .cloned()
+        .unwrap_or_default();
+    anyhow::ensure!(
+        content.is_empty() || ipfs,
+        "ipfs_content is served over Bitswap: set ipfs to true"
+    );
+    let dag: Arc<unixfs::Shared> = Default::default();
+    for (i, description) in content.into_iter().enumerate() {
+        let built = tokio::task::spawn_blocking(move || unixfs::add(&description))
+            .await
+            .map_err(|e| anyhow::anyhow!("ipfs_content[{i}] did not finish: {e}"))?
+            .with_context(|| format!("ipfs_content[{i}]"))?;
+        let added = dag.insert(built)?;
+        Log::new(Some(&ctx.status_tx))
+            .info(format!("libp2p host {}", serve_ipfs::added_line(&added)));
+    }
     let listener = tokio::net::TcpListener::bind(ctx.legacy_listen_addr()).await?;
     let local = listener.local_addr()?;
     let cfg = Arc::new(Config {
@@ -101,6 +122,7 @@ pub async fn spawn(ctx: SpawnContext) -> Result<SocketAddr> {
         bitswap: ipfs,
         kad: ipfs,
         directory: Default::default(),
+        dag,
     });
     Log::new(Some(&ctx.status_tx)).info(format!(
         "libp2p host listening on {}/p2p/{} ({})",
@@ -261,7 +283,9 @@ async fn connection(
         json!({"peer_id": remote_peer, "remote_addr": wire::multiaddr_string(&remote),
                "agent_version": agent, "protocols": protocols, "listen_addrs": listen}),
     );
-    answer(&ctx, id, &peer, &spawn, connected, None).await;
+    let mut ledger = serve_ipfs::Ledger::default();
+    let mut dag_rx = cfg.dag.subscribe();
+    answer(&ctx, id, &peer, &spawn, &cfg, &mut ledger, connected, None).await;
 
     let reason = loop {
         tokio::select! {
@@ -271,7 +295,7 @@ async fn connection(
                         .update_connection_stats(ctx.server_id, id, Some(data.len() as u64), None, Some(1), None)
                         .await;
                     if bitswap::is_bitswap(&protocol) {
-                        serve_ipfs::bitswap(&ctx, id, &peer, stream_id, &data).await;
+                        serve_ipfs::bitswap(&ctx, id, &peer, &cfg, &mut ledger, stream_id, &data).await;
                         continue;
                     }
                     if kad::is_kad(&protocol) {
@@ -284,7 +308,7 @@ async fn connection(
                         json!({"peer_id": remote_peer, "stream_id": stream_id, "protocol": protocol,
                                "data": text, "encoding": encoding}),
                     );
-                    answer(&ctx, id, &peer, &spawn, event, Some(stream_id)).await;
+                    answer(&ctx, id, &peer, &spawn, &cfg, &mut ledger, event, Some(stream_id)).await;
                 }
                 Some(Note::Closed { stream_id, error, .. }) => {
                     // Every message on it has been answered (notes are in order): close ours.
@@ -302,11 +326,21 @@ async fn connection(
             },
             command = peer_rx.recv() => {
                 let Some(command) = command else { continue };
-                inject(&ctx, id, &peer, &spawn, command).await;
+                inject(&ctx, id, &peer, &spawn, &cfg, &mut ledger, command).await;
+            }
+            // Content was added (on any connection): wants this peer still has may be met.
+            Ok(()) = dag_rx.changed(), if cfg.bitswap => {
+                serve_ipfs::store_changed(&ctx, id, &peer, &cfg, &mut ledger).await;
             }
         }
     };
     peer.opener.go_away();
+    if cfg.bitswap {
+        log.info(format!(
+            "libp2p connection {id} operation=bitswap_ledger peer={remote_peer} {}",
+            ledger.summary()
+        ));
+    }
     if cfg.kad {
         cfg.directory
             .lock()
@@ -318,11 +352,14 @@ async fn connection(
 
 /// Ask the model about one event and carry out its answer. `stream` is the stream the
 /// event arrived on, which `libp2p_send` and `libp2p_close_stream` default to.
+#[allow(clippy::too_many_arguments)]
 async fn answer(
     ctx: &SpawnContext,
     id: ConnectionId,
     peer: &Arc<Peer>,
     spawn: &Spawn,
+    cfg: &Config,
+    ledger: &mut serve_ipfs::Ledger,
     event: Event,
     stream: Option<u32>,
 ) {
@@ -335,7 +372,7 @@ async fn answer(
         return;
     };
     for action in todo {
-        if let Err(e) = apply(ctx, id, peer, spawn, &action, stream).await {
+        if let Err(e) = apply(ctx, id, peer, spawn, cfg, ledger, &action, stream).await {
             log.warn(format!(
                 "libp2p connection {id}: {} failed: {e:#}",
                 action["type"]
@@ -389,11 +426,14 @@ async fn ask(ctx: &SpawnContext, id: ConnectionId, event: &Event) -> Option<Vec<
 }
 
 /// Carry out one validated action on this connection; a description of what happened.
+#[allow(clippy::too_many_arguments)]
 async fn apply(
     ctx: &SpawnContext,
     id: ConnectionId,
     peer: &Arc<Peer>,
     spawn: &Spawn,
+    cfg: &Config,
+    ledger: &mut serve_ipfs::Ledger,
     action: &Value,
     stream: Option<u32>,
 ) -> Result<String> {
@@ -446,19 +486,37 @@ async fn apply(
             peer.opener.go_away();
             Ok("disconnecting".into())
         }
-        t @ (actions::BLOCKS | actions::KAD_REPLY) => {
-            anyhow::bail!("{t} answers an IPFS request, and can only be given as that answer")
+        actions::ADD => {
+            anyhow::ensure!(
+                cfg.bitswap,
+                "ipfs_add serves over Bitswap: start the host with ipfs true"
+            );
+            let added = serve_ipfs::add_content(cfg, action.clone()).await?;
+            let line = serve_ipfs::added_line(&added);
+            Log::new(Some(&ctx.status_tx)).info(format!("libp2p connection {id} {line}"));
+            Ok(line)
+        }
+        actions::BLOCKS => {
+            // Outside a wantlist's answer: for the wants this peer still has.
+            anyhow::ensure!(cfg.bitswap, "ipfs is off on this host");
+            serve_ipfs::supply_tracked(ctx, id, peer, ledger, action).await
+        }
+        t @ actions::KAD_REPLY => {
+            anyhow::bail!("{t} answers a DHT request, and can only be given as that answer")
         }
         other => anyhow::bail!("unknown action {other}"),
     }
 }
 
 /// An action injected from the dashboard or MCP for this peer.
+#[allow(clippy::too_many_arguments)]
 async fn inject(
     ctx: &SpawnContext,
     id: ConnectionId,
     peer: &Arc<Peer>,
     spawn: &Spawn,
+    cfg: &Config,
+    ledger: &mut serve_ipfs::Ledger,
     command: ClientCommand,
 ) {
     let action = command.action.clone();
@@ -466,7 +524,7 @@ async fn inject(
         Err(e) => ClientSendOutcome::Rejected {
             error: e.to_string(),
         },
-        Ok(()) => match apply(ctx, id, peer, spawn, &action, None).await {
+        Ok(()) => match apply(ctx, id, peer, spawn, cfg, ledger, &action, None).await {
             Ok(_) if action["type"] == actions::DISCONNECT => ClientSendOutcome::Disconnected,
             Ok(detail) => ClientSendOutcome::Executed { detail },
             Err(e) => ClientSendOutcome::Rejected {

@@ -41,6 +41,8 @@ pub struct Config {
     /// The peers connected to this host and the addresses their identify gave, for DHT
     /// answers. One entry per live connection, so it is bounded by the connection limit.
     pub directory: Directory,
+    /// The UnixFS content this host serves over Bitswap, built from descriptions.
+    pub dag: Arc<super::unixfs::Shared>,
 }
 
 /// Connected peers (base58 id) and their listen addresses (binary multiaddrs).

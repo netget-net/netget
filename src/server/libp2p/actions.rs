@@ -21,6 +21,7 @@ pub const CLOSE: &str = "libp2p_close_stream";
 pub const DISCONNECT: &str = "libp2p_disconnect";
 pub const BLOCKS: &str = "ipfs_bitswap_blocks";
 pub const KAD_REPLY: &str = "ipfs_kad_reply";
+pub const ADD: &str = "ipfs_add";
 /// IPFS (Bitswap and the DHT) is off unless asked for.
 pub const IPFS_DEFAULT: bool = false;
 
@@ -175,8 +176,37 @@ pub fn kad_reply_action() -> ActionDefinition {
     )
 }
 
+/// The fields of a file or directory description, shared by the `ipfs_add` action and the
+/// `ipfs_content` startup parameter.
+pub const DESCRIPTION_FIELDS: &str = "A file is {text} or {hex}, or {size, extents: [{offset, text|hex|fill, length}]} (zeroes where no extent covers); a directory is {entries: [{name, kind: file|dir|symlink, ...the same fields}]}; a symlink is {kind: symlink, target}. Layout options are Kubo's ipfs add flags: cid_version 0 (default, Qm… roots, UnixFS leaves) or 1 (raw leaves unless raw_leaves is false), chunk_size (default 262144), max_links (default 174)";
+
+pub fn add_action() -> ActionDefinition {
+    action(
+        ADD,
+        "Serve a file or a whole directory tree over Bitswap. Describe the content; NetGet chunks it and builds the UnixFS DAG exactly as Kubo's ipfs add does (same root CID), then answers every block of it, now and for later wants, without asking you again. The root CID is logged and returned.",
+        vec![
+            p("name", "string", "A label for the log (a directory's own name is not part of its CID)", false),
+            p("kind", "string", "file (default), dir (default when entries is given) or symlink", false),
+            p("text", "string", "A file's content as text", false),
+            p("hex", "string", "A file's content as hex", false),
+            p("size", "number", "A file's size in bytes, with extents", false),
+            p("extents", "array", "[{offset, text|hex|fill, length (for fill)}]: a file's content in pieces; zeroes elsewhere", false),
+            p("entries", "array", "A directory's entries: [{name, kind, text|hex|size+extents|entries|target}]", false),
+            p("target", "string", "A symlink's target", false),
+            p("cid_version", "number", "0 (default) or 1, as ipfs add --cid-version", false),
+            p("raw_leaves", "boolean", "Raw leaf blocks (default: true under CIDv1), as ipfs add --raw-leaves", false),
+            p("chunk_size", "number", "Bytes per leaf, 256 to 1048576 (default 262144), as ipfs add --chunker=size-N", false),
+            p("max_links", "number", "Links per file node, 2 to 1024 (default 174), as ipfs add --max-file-links", false),
+        ],
+        json!({"type": ADD, "name": "site", "entries": [
+            {"name": "index.html", "text": "<h1>served by NetGet</h1>\n"},
+            {"name": "big.bin", "size": 1000000, "extents": [{"offset": 0, "length": 1000000, "fill": 0}]}
+        ]}),
+    )
+}
+
 pub fn ipfs_actions() -> Vec<ActionDefinition> {
-    vec![blocks_action(), kad_reply_action()]
+    vec![blocks_action(), kad_reply_action(), add_action()]
 }
 
 /// The blocks an `ipfs_bitswap_blocks` action supplies, each checked and encoded, its CID
@@ -273,7 +303,7 @@ pub static WANT_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             true,
         ),
     ])
-    .with_actions(vec![blocks_action(), disconnect_action()])
+    .with_actions(vec![blocks_action(), add_action(), disconnect_action()])
 });
 
 pub static KAD_EVENT: LazyLock<EventType> = LazyLock::new(|| {
@@ -339,7 +369,7 @@ pub static CONNECTED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         p("protocols", "array", "The protocols the peer says it supports", true),
         p("listen_addrs", "array", "Where the peer says it listens", true),
     ])
-    .with_actions(vec![open_action(), disconnect_action()])
+    .with_actions(vec![open_action(), add_action(), disconnect_action()])
 });
 
 pub static MESSAGE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
@@ -365,7 +395,11 @@ pub static MESSAGE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             true,
         ),
     ])
-    .with_actions(all_actions())
+    .with_actions({
+        let mut a = all_actions();
+        a.push(add_action());
+        a
+    })
 });
 
 pub fn check(v: &Value) -> Result<()> {
@@ -399,6 +433,10 @@ pub fn check(v: &Value) -> Result<()> {
         BLOCKS => {
             supplied_blocks(v)?;
         }
+        ADD => {
+            // The shape and every bound; hashing waits for the add itself.
+            super::unixfs::parse(v)?;
+        }
         KAD_REPLY => {
             // Checked against a stand-in host: the real one fills in "self" when it answers.
             let stand_in = Config {
@@ -408,6 +446,7 @@ pub fn check(v: &Value) -> Result<()> {
                 bitswap: false,
                 kad: false,
                 directory: Default::default(),
+                dag: Default::default(),
             };
             kad_peers(v, &stand_in)?;
         }
@@ -486,6 +525,14 @@ impl Protocol for Libp2pProtocol {
                 required: false,
                 example: json!(true),
                 default: Some(json!(IPFS_DEFAULT)),
+            },
+            ParameterDefinition {
+                name: "ipfs_content".into(),
+                type_hint: "array".into(),
+                description: format!("With ipfs: files and directories to serve from the start, each described as ipfs_add describes one. {DESCRIPTION_FIELDS}"),
+                required: false,
+                example: json!([{"name": "hello.txt", "text": "hello from NetGet\n"}]),
+                default: None,
             },
         ]
     }

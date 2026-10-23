@@ -97,6 +97,16 @@ pub fn actions() -> Vec<ActionDefinition> {
             json!({"type": "ipfs_bitswap_want", "cids": ["bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku"]}),
         ),
         action(
+            "ipfs_fetch",
+            "Fetch a whole file or directory by its root CID over Bitswap (needs the ipfs startup parameter). NetGet walks the DAG itself, verifying every block's hash, and answers with ipfs_fetched: a file's content (cut at max_bytes, with its whole size and SHA-256), a directory's listing (name, cid, kind, size of each entry), or a symlink's target.",
+            vec![
+                p("cid", "string", "The root CID (Qm… or b…), raw or dag-pb", true),
+                p("max_bytes", "number", "File bytes to show, at most 1048576 (default 65536); the whole file is read and checked either way", false),
+                p("timeout_secs", "number", "How long to wait for the whole DAG, 1 to 600 (default 120)", false),
+            ],
+            json!({"type": "ipfs_fetch", "cid": "QmUNLLsPACCz1vLxQVkXqqLX5R1X345qqfHbsf67hvA3Nn"}),
+        ),
+        action(
             "ipfs_bitswap_cancel",
             "Withdraw wants sent with ipfs_bitswap_want.",
             vec![p("cids", "array", "CIDs no longer wanted", true)],
@@ -242,6 +252,28 @@ pub static BLOCK_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     )
 });
 
+pub static FETCHED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    event(
+        "ipfs_fetched",
+        "An ipfs_fetch finished: every block of the DAG arrived and hashed to its CID, or the fetch failed (ok false, with why).",
+        vec![
+            p("cid", "string", "The root CID fetched", true),
+            p("ok", "boolean", "Whether the whole DAG was fetched and verified", true),
+            p("kind", "string", "file, directory or symlink", false),
+            p("size", "number", "A file's size in bytes", false),
+            p("data", "string", "A file's content up to max_bytes (text, or hex when encoding is hex)", false),
+            p("encoding", "string", "How data is written: utf8 text, or hex for binary", false),
+            p("truncated", "boolean", "Whether data is shorter than the file", false),
+            p("sha256", "string", "SHA-256 of the whole file, hex", false),
+            p("entries", "array", "A directory's entries: [{name, cid, tsize, kind, size}]", false),
+            p("target", "string", "A symlink's target", false),
+            p("blocks", "number", "Blocks fetched and verified", true),
+            p("depth", "number", "The DAG's depth (a single block is 0)", false),
+            p("error", "string", "Why the fetch failed", false),
+        ],
+    )
+});
+
 pub static PRESENCE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     event(
         "ipfs_bitswap_presence",
@@ -293,6 +325,9 @@ pub fn check(v: &Value) -> Result<()> {
         "ipfs_bitswap_cancel" => {
             super::ipfs::cids(v)?;
         }
+        "ipfs_fetch" => {
+            super::ipfs::fetch_params(v)?;
+        }
         "ipfs_kad_find_node" | "ipfs_kad_get_providers" => {
             super::ipfs::kad_request(v)?;
             super::ipfs::kad_protocol(v)?;
@@ -338,6 +373,7 @@ impl Protocol for Libp2pClientProtocol {
             RESPONSE_EVENT.clone(),
             BLOCK_EVENT.clone(),
             PRESENCE_EVENT.clone(),
+            FETCHED_EVENT.clone(),
         ]
     }
     fn get_startup_parameters(&self) -> Vec<ParameterDefinition> {
