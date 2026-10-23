@@ -629,7 +629,7 @@ fn on_message(rx: &mut Receiver, message: Message) -> Result<()> {
             });
             rx.emit(
                 &actions::TEMPLATE_TRANSACTIONS_EVENT,
-                json!({"template_id": template_id, "transactions": txs.len(),
+                json!({"template_id": template_id, "transaction_count": txs.len(),
                        "segwit_transactions": txs.iter().filter(|t| t.has_witness()).count(),
                        "weight": txs.iter().map(Tx::weight).sum::<u64>(),
                        "merkle_path_matches": path_matches,

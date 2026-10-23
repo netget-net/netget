@@ -192,10 +192,10 @@ pub static TEMPLATE_TRANSACTIONS_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         "The template provider answered RequestTransactionData. Rust parsed the transactions and checked the template's merkle path and witness commitment against them.",
         json!({"type": MINE_TEMPLATE}),
         vec![
-            p("template_id", "number", "The template", true),
-            p("transactions", "number", "Transactions besides the coinbase", false),
+            p("template_id", "number", "The template whose transactions these are", true),
+            p("transaction_count", "number", "Transactions besides the coinbase", false),
             p("segwit_transactions", "number", "How many carry witness data", false),
-            p("weight", "number", "Their weight", false),
+            p("weight", "number", "The transactions' total weight, in weight units", false),
             p("merkle_path_matches", "boolean", "Whether the template's merkle path is the one these transactions give", false),
             p("witness_commitment_matches", "boolean", "Whether the template's witness commitment covers these transactions", false),
             p("error_code", "string", "The provider's reason when it had no data (RequestTransactionData.Error)", false),
@@ -210,11 +210,11 @@ pub static TEMPLATE_SOLUTION_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         json!({"type": REQUEST_TRANSACTIONS}),
         vec![
             p("template_id", "number", "The template mined", true),
-            p("height", "number", "Its height", false),
+            p("height", "number", "The block height the mined template commits to", false),
             p("found", "boolean", "Whether a header met the target", true),
             p("submitted", "boolean", "Whether SubmitSolution was sent", true),
             p("hash", "string", "The best header hash, as RPC shows hashes", true),
-            p("hashes", "number", "Nonces tried", true),
+            p("hashes", "number", "How many nonces the run hashed", true),
             p("nonce", "number", "The nonce of that header", true),
         ],
     )
@@ -253,7 +253,7 @@ pub static JD_DECLARE_RESULT_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             p("request_id", "number", "The declaration", true),
             p("accepted", "boolean", "Whether it was accepted", true),
             p("height", "number", "The height declared", true),
-            p("transactions", "number", "Transactions declared besides the coinbase", true),
+            p("transaction_count", "number", "Transactions declared besides the coinbase", true),
             p("error_code", "string", "The job declarator's reason when it refused", false),
             p("new_token_bytes", "number", "The length of the token issued for the accepted job", false),
         ],
@@ -267,13 +267,13 @@ pub static JD_SOLUTION_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         json!({"type": REQUEST_TOKEN}),
         vec![
             p("request_id", "number", "The declaration mined", true),
-            p("height", "number", "Its height", true),
+            p("height", "number", "The block height the mined declaration commits to", true),
             p("found", "boolean", "Whether a header met nbits", true),
             p("pushed", "boolean", "Whether PushSolution was sent", true),
             p("hash", "string", "The best header hash, as RPC shows hashes", true),
-            p("hashes", "number", "Nonces tried", true),
+            p("hashes", "number", "How many nonces the run hashed", true),
             p("nonce", "number", "The nonce of that header", true),
-            p("ntime", "number", "Its timestamp", true),
+            p("ntime", "number", "The header timestamp the run mined at, unix seconds", true),
         ],
     )
 });

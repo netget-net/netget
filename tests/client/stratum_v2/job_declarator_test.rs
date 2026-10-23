@@ -129,7 +129,7 @@ print(json.dumps({{'actions':a}}))"#
     .unwrap_or_else(|| panic!("{}", dump("no answer to the declaration")));
     assert_eq!(result["accepted"], true, "{}", dump(&result.to_string()));
     assert_eq!(result["height"], next);
-    assert_eq!(result["transactions"], 1);
+    assert_eq!(result["transaction_count"], 1);
     let pushed = wait_event(&state, id, |e| {
         e["event_type"] == "stratum_v2_jd_solution_pushed"
     })

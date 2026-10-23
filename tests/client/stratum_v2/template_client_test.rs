@@ -175,7 +175,7 @@ async fn netget_mines_sv2_tp_templates_into_bitcoin_core() {
     })
     .await
     .unwrap_or_else(|| panic!("{}", dump("the transactions never arrived")));
-    assert_eq!(txs["transactions"], 3, "{txs}");
+    assert_eq!(txs["transaction_count"], 3, "{txs}");
     assert_eq!(txs["segwit_transactions"], 3, "{txs}");
     assert_eq!(
         txs["merkle_path_matches"],

@@ -648,7 +648,7 @@ async fn on_message(jdc: &mut Jdc, message: Message, log: &Log<'_>) -> Result<()
             };
             job.accepted = Some(true);
             let data = json!({"request_id": request_id, "accepted": true, "height": job.height,
-                              "transactions": job.txs.len(),
+                              "transaction_count": job.txs.len(),
                               "new_token_bytes": new_mining_job_token.len()});
             let depth = job.depth;
             jdc.emit(&actions::JD_DECLARE_RESULT_EVENT, data, depth)
@@ -663,7 +663,7 @@ async fn on_message(jdc: &mut Jdc, message: Message, log: &Log<'_>) -> Result<()
             };
             job.accepted = Some(false);
             let data = json!({"request_id": request_id, "accepted": false, "height": job.height,
-                              "transactions": job.txs.len(), "error_code": wire::text(&error_code)});
+                              "transaction_count": job.txs.len(), "error_code": wire::text(&error_code)});
             let depth = job.depth;
             jdc.emit(&actions::JD_DECLARE_RESULT_EVENT, data, depth)
         }

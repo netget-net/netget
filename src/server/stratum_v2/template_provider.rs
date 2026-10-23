@@ -645,7 +645,7 @@ async fn handle(
                 json!({"template_id": template_id, "hash": hash, "height": t.height,
                        "prev_hash": wire::display_hex(&t.prev_hash), "version": version,
                        "ntime": header_timestamp, "nonce": header_nonce,
-                       "nbits": format!("{:08x}", t.nbits), "transactions": t.txs.len(),
+                       "nbits": format!("{:08x}", t.nbits), "transaction_count": t.txs.len(),
                        "block_size": solved.block.len(), "stale": stale,
                        "coinbase_outputs": solved.coinbase.outputs.iter().map(btc::describe_output).collect::<Vec<_>>(),
                        "remote_addr": peer.to_string()}),

@@ -223,7 +223,7 @@ pub static TP_SOLUTION_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         p("ntime", "number", "The header timestamp", true),
         p("nonce", "number", "The header nonce", true),
         p("nbits", "string", "The compact target the hash meets", true),
-        p("transactions", "number", "Transactions besides the coinbase", true),
+        p("transaction_count", "number", "Transactions besides the coinbase", true),
         p("block_size", "number", "The block's size in bytes", true),
         p("stale", "boolean", "Whether a newer tip has been sent since this template", true),
         p("coinbase_outputs", "array", "The coinbase's outputs: value_sats and script_type, with op_return text", true),
@@ -259,7 +259,7 @@ pub static JD_ALLOCATE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     )
     .with_parameters(vec![
         p("user_identifier", "string", "Who the client says it is", true),
-        p("request_id", "number", "Its request id", true),
+        p("request_id", "number", "The client's request id, which the success echoes", true),
         p("tokens_held", "number", "Tokens this connection already holds", true),
         p("max_tokens", "number", "Tokens a connection may hold before the oldest is evicted", true),
         p("remote_addr", "string", "The client's address and port", true),

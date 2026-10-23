@@ -68,7 +68,7 @@ SetupConnection names protocol 1 with DECLARE_TX_DATA (SRI's JDS refuses
   jd_client does) and the witness commitment for the transactions' wtxids; the 32-byte zero
   witness reserved value. It declares the wtxids and answers ProvideMissingTransactions from the
   declaration (a position past the end ends the session).
-- `stratum_v2_jd_declare_result {request_id, accepted, height, transactions, error_code?}`.
+- `stratum_v2_jd_declare_result {request_id, accepted, height, transaction_count, error_code?}`.
 - `stratum_v2_push_solution {prev_hash, nbits, ntime?, request_id?, max_hashes?}` mines an
   accepted declaration on the tip the model names (the protocol tells a JDC no tip) and sends
   PushSolution if a header meets nbits; `stratum_v2_jd_solution_pushed` reports it.
@@ -86,7 +86,7 @@ SetNewPrevHash activates the template it names and drops those on the old tip.
   merkle_path_len, coinbase_outputs, prev_hash?}` and `stratum_v2_template_prev_hash
   {template_id, prev_hash, ntime, nbits, target_matches_nbits}`.
 - `stratum_v2_request_transactions {template_id?}` → `stratum_v2_template_transactions
-  {template_id, transactions, segwit_transactions, weight, merkle_path_matches,
+  {template_id, transaction_count, segwit_transactions, weight, merkle_path_matches,
   witness_commitment_matches, error_code?}`: Rust parses every transaction and checks the
   provider's merkle path and commitment against them.
 - `stratum_v2_mine_template {template_id?, max_hashes?, message?}` builds the coinbase the

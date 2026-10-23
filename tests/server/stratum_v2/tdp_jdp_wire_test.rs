@@ -238,7 +238,7 @@ async fn template_provider_builds_answers_and_verifies_by_the_rules() {
     assert_eq!(solutions.len(), 1, "{solutions:?}");
     assert_eq!(solutions[0]["hash"], wire::display_hex(&hash));
     assert_eq!(solutions[0]["height"], 200);
-    assert_eq!(solutions[0]["transactions"], 2);
+    assert_eq!(solutions[0]["transaction_count"], 2);
 
     // A refused device is shown the model's code.
     let mut raw = Raw::connect(port).await;
