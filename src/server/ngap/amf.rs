@@ -85,6 +85,9 @@ pub(super) struct UeSec {
     /// True once Security Mode Complete verified: from then on only verified NAS is processed.
     active: bool,
     imeisv: Option<Value>,
+    /// K_gNB, derived when Security Mode Complete verified, from its uplink NAS COUNT
+    /// (TS 33.501 6.8.1.2, Annex A.9).
+    k_gnb: Option<security::Key256>,
     allowed_nssai: Vec<Value>,
     pending_pdu: BTreeMap<u8, PendingPdu>,
     sessions: BTreeMap<u8, PduSession>,
@@ -208,6 +211,7 @@ impl Session {
                 ctx: None,
                 active: false,
                 imeisv: None,
+                k_gnb: None,
                 allowed_nssai: Vec::new(),
                 pending_pdu: BTreeMap::new(),
                 sessions: BTreeMap::new(),
@@ -540,6 +544,7 @@ impl Session {
             return true;
         }
         sec.active = true;
+        sec.k_gnb = sec.ctx.as_ref().map(|c| c.k_gnb());
         sec.imeisv = complete.imeisv;
         // The complete Registration Request the UE retransmits under protection (RINMR).
         if let Some(r) = complete
@@ -928,7 +933,9 @@ impl Session {
         let caps = nas::ngap_security_capabilities(&sec.caps);
         let ctx = sec.ctx.as_mut().ok_or("no NAS security context")?;
         let nas_pdu = ctx.protect(&accept, security::SHT_INTEGRITY_CIPHERED);
-        let k_gnb = ctx.k_gnb();
+        let k_gnb = sec
+            .k_gnb
+            .ok_or("no K_gNB: Security Mode Complete never verified")?;
         let allowed_json: Vec<Value> = allowed_nssai.iter().map(nas::Snssai::to_json).collect();
         let ics = codec::initial_context_setup_request(&codec::InitialContext {
             amf_ue_ngap_id: amf,
@@ -939,6 +946,7 @@ impl Session {
             security_key: k_gnb,
             ue_ambr,
             nas: Some(nas_pdu),
+            pdu_sessions: Vec::new(),
         })
         .map_err(|e| e.to_string())?;
         sec.phase = Phase::Accepted;

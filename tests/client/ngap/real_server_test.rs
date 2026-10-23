@@ -462,19 +462,28 @@ async fn open5gs_registers_netgets_ue_and_creates_its_pdu_session() {
     .await
     .unwrap_or_else(|_| panic!("never registered\n{}", core.dump()));
     assert_eq!(registered["supi"], "imsi-001010000000003", "{registered}");
-    assert_eq!(
-        registered["k_gnb_verified"],
-        true,
-        "Open5GS's K_gNB is the one NetGet's UE derived: {registered}\n{}",
-        core.dump()
-    );
+    // Open5GS sends the Registration Accept in a Downlink NAS Transport and the K_gNB later,
+    // in the Initial Context Setup that carries the first PDU session; nothing to compare yet.
+    assert_ne!(registered["k_gnb_verified"], false, "{registered}");
     assert_eq!(registered["nas_security"]["integrity"], "NIA2");
     assert_eq!(registered["guti"]["amf_region_id"], 2);
+    assert_eq!(
+        registered["tai_list"],
+        json!([{"plmn": {"mcc": "001", "mnc": "01"}, "tac": 1}]),
+        "Open5GS's type-10 TAI list: {registered}"
+    );
     core.wait("amf", "[imsi-001010000000003] Registration complete", 30)
         .await;
 
     let session = wait_event(&state, id, "ngap_pdu_session_established", 60, |_| true).await;
     assert_eq!(session["result"], "accepted", "{session}\n{}", core.dump());
+    assert_eq!(
+        session["k_gnb_verified"],
+        true,
+        "Open5GS's K_gNB (in the Initial Context Setup with the session) is the one NetGet's UE \
+         derived: {session}\n{}",
+        core.dump()
+    );
     let ip = session["ue_ipv4"].as_str().unwrap_or_default().to_string();
     assert!(ip.starts_with("10.45."), "{session}");
     assert_eq!(session["upf_tunnel"]["address"], format!("{CORE}.7"));
@@ -506,14 +515,12 @@ async fn open5gs_registers_netgets_ue_and_creates_its_pdu_session() {
         &[
             (codec::PROC_INITIAL_UE_MESSAGE, 0),
             (codec::PROC_UPLINK_NAS_TRANSPORT, 0),
+            // Open5GS sets the first session up inside the Initial Context Setup, so NetGet's
+            // answer carries it (PDUSessionResourceSetupListCxtRes).
             (codec::PROC_INITIAL_CONTEXT_SETUP, 1),
-            (codec::PROC_PDU_SESSION_RESOURCE_SETUP, 1),
         ],
     );
-    for code in [
-        codec::PROC_INITIAL_CONTEXT_SETUP,
-        codec::PROC_PDU_SESSION_RESOURCE_SETUP,
-    ] {
+    for code in [codec::PROC_INITIAL_CONTEXT_SETUP] {
         assert!(
             frames.iter().any(|f| f.src_port == 38412
                 && f.procedures

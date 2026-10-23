@@ -6,3 +6,4 @@ pub mod support;
 pub mod bounds_test;
 #[cfg(target_os = "linux")]
 pub mod real_server_test;
+pub mod security_lab_test;

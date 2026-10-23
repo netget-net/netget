@@ -80,6 +80,9 @@ pub struct UeSec {
     ctx: Option<NasContext>,
     active: bool,
     registered: bool,
+    /// K_gNB from K_AMF and the uplink NAS COUNT of Security Mode Complete (TS 33.501 6.8.1.2,
+    /// Annex A.9), to compare with the one the AMF hands the gNB.
+    k_gnb: Option<security::Key256>,
     next_pti: u8,
     /// PDU session id → (PTI, the DNN asked for).
     pending: BTreeMap<u8, (u8, Option<String>)>,
@@ -106,6 +109,7 @@ impl UeSec {
             ctx: None,
             active: false,
             registered: false,
+            k_gnb: None,
             next_pti: 1,
             pending: BTreeMap::new(),
         })
@@ -400,6 +404,7 @@ impl Gnb {
             security::integrity_name(smc.ia),
             security::ciphering_name(smc.ea)
         ));
+        sec.k_gnb = Some(ctx.k_gnb());
         sec.ctx = Some(ctx);
         sec.active = true;
         let pdu = codec::uplink_nas_transport(amf, ran, &protected, &self.user_location)?;
@@ -438,6 +443,7 @@ impl Gnb {
                     .get(&ran)
                     .and_then(|s| s.sessions.get(&psi))
                     .cloned();
+                let k_gnb_verified = self.ues.get(&ran).and_then(|s| s.k_gnb_verified);
                 log.info(format!(
                     "NGAP client UE {ran}: PDU session {psi} established, UE address {} \
                      (decision=pdu_session_established)",
@@ -456,6 +462,7 @@ impl Gnb {
                         "qfis": a.qfis,
                         "session_ambr_kbps": {"uplink": a.ambr_uplink_kbps, "downlink": a.ambr_downlink_kbps},
                         "upf_tunnel": tunnel.map(|t| t.to_json()),
+                        "k_gnb_verified": k_gnb_verified,
                     }),
                     depth,
                 );
@@ -574,9 +581,7 @@ impl Gnb {
         };
         // The UE's K_gNB uses the uplink NAS COUNT of its last protected message (Security Mode
         // Complete); compare before the Registration Complete moves it.
-        let expected = self
-            .sec(ran)
-            .and_then(|s| s.ctx.as_ref().map(|c| c.k_gnb()));
+        let expected = self.sec(ran).and_then(|s| s.k_gnb);
         let verified = expected.map(|k| security::constant_time_eq(&k, &ics.security_key));
         if let Some(slot) = self.ues.get_mut(&ran) {
             slot.k_gnb_verified = verified;
@@ -592,9 +597,12 @@ impl Gnb {
             )),
             None => {}
         }
-        let response = codec::initial_context_setup_response(amf, ran)?;
+        let (established, failed) = self.setup_sessions(ran, &ics.pdu_sessions, log);
+        let response = codec::initial_context_setup_response(amf, ran, &established, &failed)?;
         self.send(&response).await?;
-        if let Some(nas_pdu) = ics.nas {
+        let session_nas: Vec<Vec<u8>> =
+            ics.pdu_sessions.into_iter().filter_map(|i| i.nas).collect();
+        for nas_pdu in ics.nas.into_iter().chain(session_nas) {
             let handled = if self.sec(ran).is_some() {
                 self.ue_downlink(amf, ran, &nas_pdu, depth, log).await?
             } else {
@@ -612,34 +620,16 @@ impl Gnb {
         Ok(())
     }
 
-    /// PDU Session Resource Setup Request: allocate a downlink tunnel per session, answer, then
-    /// deliver each session's NAS-PDU.
-    pub(super) async fn on_pdu_session_setup(
+    /// Allocate a downlink tunnel for each requested session and record the UPF's uplink one.
+    fn setup_sessions(
         &mut self,
-        pdu: &codec::Pdu,
+        ran: u64,
+        items: &[codec::SetupItem],
         log: &Log<'_>,
-    ) -> Result<()> {
-        let (amf, ran, items) = match codec::parse_pdu_session_resource_setup_request(pdu) {
-            Ok(x) => x,
-            Err(e) => {
-                log.warn(format!(
-                    "NGAP client: PDU Session Resource Setup Request: {e}"
-                ));
-                let ei = codec::error_indication(None, None, Some(&e.cause))?;
-                return self.send(&ei).await;
-            }
-        };
-        let Some(depth) = self.ues.get(&ran).map(|s| s.depth) else {
-            let ei = codec::error_indication(
-                Some(amf),
-                Some(ran),
-                Some(&Cause::radio(codec::RADIO_UNKNOWN_LOCAL_UE_NGAP_ID)),
-            )?;
-            return self.send(&ei).await;
-        };
+    ) -> (Vec<(u8, codec::SetupResponseTransfer)>, Vec<(u8, Cause)>) {
         let mut established = Vec::new();
         let mut failed = Vec::new();
-        for it in &items {
+        for it in items {
             match codec::decode_setup_request_transfer(&it.transfer) {
                 Ok(t) => {
                     let dl_teid: u32 = loop {
@@ -671,6 +661,35 @@ impl Gnb {
                 }
             }
         }
+        (established, failed)
+    }
+
+    /// PDU Session Resource Setup Request: allocate a downlink tunnel per session, answer, then
+    /// deliver each session's NAS-PDU.
+    pub(super) async fn on_pdu_session_setup(
+        &mut self,
+        pdu: &codec::Pdu,
+        log: &Log<'_>,
+    ) -> Result<()> {
+        let (amf, ran, items) = match codec::parse_pdu_session_resource_setup_request(pdu) {
+            Ok(x) => x,
+            Err(e) => {
+                log.warn(format!(
+                    "NGAP client: PDU Session Resource Setup Request: {e}"
+                ));
+                let ei = codec::error_indication(None, None, Some(&e.cause))?;
+                return self.send(&ei).await;
+            }
+        };
+        let Some(depth) = self.ues.get(&ran).map(|s| s.depth) else {
+            let ei = codec::error_indication(
+                Some(amf),
+                Some(ran),
+                Some(&Cause::radio(codec::RADIO_UNKNOWN_LOCAL_UE_NGAP_ID)),
+            )?;
+            return self.send(&ei).await;
+        };
+        let (established, failed) = self.setup_sessions(ran, &items, log);
         let response = codec::pdu_session_resource_setup_response(amf, ran, &established, &failed)?;
         self.send(&response).await?;
         for it in items {

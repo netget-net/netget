@@ -1406,7 +1406,7 @@ pub fn parse_registration_accept(b: &[u8]) -> Result<ParsedRegistrationAccept, S
     Ok(out)
 }
 
-/// Partial TAI lists of types 00 and 01 (TS 24.501 9.11.3.9); type 10 stops the walk. At most
+/// Partial TAI lists of types 00, 01 and 10 (TS 24.501 9.11.3.9). At most
 /// [`MAX_TAI_LIST`] TAIs are reported.
 fn decode_tai_list(b: &[u8]) -> Vec<Value> {
     let mut out = Vec::new();
@@ -1440,6 +1440,17 @@ fn decode_tai_list(b: &[u8]) -> Vec<Value> {
                     out.push(json!({"plmn": plmn(&p[0..3]), "tac": first + k as u32}));
                 }
                 i += 6;
+            }
+            2 => {
+                // Type 10: n TAIs, each its own PLMN and TAC (Open5GS sends this one).
+                for _ in 0..n {
+                    let Some(p) = b.get(i..i + 6) else { return out };
+                    out.push(json!({"plmn": plmn(&p[0..3]), "tac": u32::from_be_bytes([0, p[3], p[4], p[5]])}));
+                    i += 6;
+                    if out.len() >= MAX_TAI_LIST {
+                        return out;
+                    }
+                }
             }
             _ => break,
         }

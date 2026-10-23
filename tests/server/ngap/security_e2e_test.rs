@@ -340,7 +340,7 @@ impl Gnb {
         assert_eq!(accept_wire[1], 2, "integrity protected and ciphered");
         let plain = self.unprotect(&accept_wire);
         let accept = nas::parse_registration_accept(&plain).unwrap();
-        self.send(&codec::initial_context_setup_response(self.amf_id, 1).unwrap())
+        self.send(&codec::initial_context_setup_response(self.amf_id, 1, &[], &[]).unwrap())
             .await;
         self.uplink_protected(&nas::registration_complete()).await;
         accept

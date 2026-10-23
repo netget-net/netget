@@ -17,7 +17,10 @@ Shares `support.rs` with the server suite (`#[path]` in `mod.rs`).
   NSSF, BSF, UPF, SMF and AMF, each started with its own config in a temp dir and waited for by
   its own log line (`initialize...done`, `PFCP associated`, `ngap_server()`). NetGet's gNB holds
   the subscriber's K and OPc; the model brings the UE in and, on `ngap_ue_registered`, asks for
-  an internet session. Asserted: `k_gnb_verified` (Open5GS's K_gNB is the UE's own), the AMF's
+  an internet session. Open5GS sends the Registration Accept in a Downlink NAS Transport (its
+  TAI list is type 10) and K_gNB later, in the Initial Context Setup that carries the first PDU
+  session, so NetGet's gNB answers that ICS with PDUSessionResourceSetupListCxtRes. Asserted:
+  `k_gnb_verified` on the session (Open5GS's K_gNB is the UE's own), the AMF's
   `[imsi-001010000000003] Registration complete`, the session `accepted` with a 10.45/16
   address and the UPF's tunnel, the SMF's `UE SUPI[...] DNN[internet] IPv4[<that address>]`, and
   tshark's ngap and nas-5gs dissectors over the capture (NetGet's Authentication Response,

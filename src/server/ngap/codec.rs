@@ -2623,28 +2623,7 @@ pub fn pdu_session_resource_setup_request(
     if items.is_empty() || items.len() > MAX_PDU_SESSIONS {
         return enc_err(format!("1..{MAX_PDU_SESSIONS} PDU sessions"));
     }
-    let list = encode_ie(
-        IE_PDU_SESSION_RESOURCE_SETUP_LIST_SU_REQ,
-        Criticality::Reject,
-        |w| {
-            w.size(items.len(), 1, 256, "PDUSessionResourceSetupListSUReq")?;
-            for it in items {
-                w.bit(false);
-                w.bit(it.nas.is_some());
-                w.bit(false);
-                w.constrained(it.pdu_session_id as u64, 0, 255, "pDUSessionID")?;
-                if let Some(n) = &it.nas {
-                    if n.is_empty() || n.len() > MAX_NAS_PDU_LEN {
-                        return enc_err("pDUSessionNAS-PDU size");
-                    }
-                    w.octet_string(n, "pDUSessionNAS-PDU")?;
-                }
-                encode_snssai(w, &it.s_nssai)?;
-                w.octet_string(&it.transfer, "pDUSessionResourceSetupRequestTransfer")?;
-            }
-            Ok(())
-        },
-    )?;
+    let list = encode_setup_items(IE_PDU_SESSION_RESOURCE_SETUP_LIST_SU_REQ, items)?;
     let mut ies = vec![
         amf_ue_ngap_id_ie(amf, Criticality::Reject)?,
         ran_ue_ngap_id_ie(ran, Criticality::Reject)?,
@@ -2663,51 +2642,76 @@ pub fn pdu_session_resource_setup_request(
     )
 }
 
+/// A PDU Session Resource Setup item list: `PDUSessionResourceSetupListSUReq` and
+/// `PDUSessionResourceSetupListCxtReq` items share one shape.
+fn decode_setup_items(ie: &Ie, what: &str) -> CodecResult<Vec<SetupItem>> {
+    let mut budget = Budget::default();
+    decode_ie(ie, |r| {
+        let n = r.size(1, 256, what)?;
+        if n > MAX_PDU_SESSIONS {
+            return Err(AperError(format!("{n} PDU sessions exceeds {MAX_PDU_SESSIONS}")).into());
+        }
+        budget.take(n, what)?;
+        let mut out = Vec::with_capacity(n);
+        for _ in 0..n {
+            let ext = r.extension_bit("PDUSessionResourceSetupItem")?;
+            let has_nas = r.bit("item")?;
+            let has_ext = r.bit("item")?;
+            let psi = r.constrained(0, 255, "pDUSessionID")? as u8;
+            let nas = if has_nas {
+                Some(r.octet_string(MAX_NAS_PDU_LEN, "NAS-PDU")?.to_vec())
+            } else {
+                None
+            };
+            let s_nssai = decode_snssai(r, &mut budget)?;
+            let transfer = r
+                .octet_string(MAX_PDU_LEN, "pDUSessionResourceSetupRequestTransfer")?
+                .to_vec();
+            opt_extension_container(r, has_ext, &mut budget)?;
+            finish_sequence(r, ext)?;
+            out.push(SetupItem {
+                pdu_session_id: psi,
+                nas,
+                s_nssai,
+                transfer,
+            });
+        }
+        Ok(out)
+    })
+}
+
+fn encode_setup_items(id: u16, items: &[SetupItem]) -> EncodeResult<Ie> {
+    if items.is_empty() || items.len() > MAX_PDU_SESSIONS {
+        return enc_err(format!("1..{MAX_PDU_SESSIONS} PDU sessions"));
+    }
+    encode_ie(id, Criticality::Reject, |w| {
+        w.size(items.len(), 1, 256, "PDU session setup list")?;
+        for it in items {
+            w.bit(false);
+            w.bit(it.nas.is_some());
+            w.bit(false);
+            w.constrained(it.pdu_session_id as u64, 0, 255, "pDUSessionID")?;
+            if let Some(n) = &it.nas {
+                if n.is_empty() || n.len() > MAX_NAS_PDU_LEN {
+                    return enc_err("NAS-PDU size");
+                }
+                w.octet_string(n, "NAS-PDU")?;
+            }
+            encode_snssai(w, &it.s_nssai)?;
+            w.octet_string(&it.transfer, "pDUSessionResourceSetupRequestTransfer")?;
+        }
+        Ok(())
+    })
+}
+
 pub fn parse_pdu_session_resource_setup_request(
     pdu: &Pdu,
 ) -> CodecResult<(u64, u64, Vec<SetupItem>)> {
     let amf = decode_amf_ue_ngap_id(pdu.require(IE_AMF_UE_NGAP_ID)?)?;
     let ran = decode_ran_ue_ngap_id(pdu.require(IE_RAN_UE_NGAP_ID)?)?;
-    let mut budget = Budget::default();
-    let items = decode_ie(
+    let items = decode_setup_items(
         pdu.require(IE_PDU_SESSION_RESOURCE_SETUP_LIST_SU_REQ)?,
-        |r| {
-            let n = r.size(1, 256, "PDUSessionResourceSetupListSUReq")?;
-            if n > MAX_PDU_SESSIONS {
-                return Err(
-                    AperError(format!("{n} PDU sessions exceeds {MAX_PDU_SESSIONS}")).into(),
-                );
-            }
-            budget.take(n, "PDUSessionResourceSetupListSUReq")?;
-            let mut out = Vec::with_capacity(n);
-            for _ in 0..n {
-                let ext = r.extension_bit("PDUSessionResourceSetupItemSUReq")?;
-                let has_nas = r.bit("item")?;
-                let has_ext = r.bit("item")?;
-                let psi = r.constrained(0, 255, "pDUSessionID")? as u8;
-                let nas = if has_nas {
-                    Some(
-                        r.octet_string(MAX_NAS_PDU_LEN, "pDUSessionNAS-PDU")?
-                            .to_vec(),
-                    )
-                } else {
-                    None
-                };
-                let s_nssai = decode_snssai(r, &mut budget)?;
-                let transfer = r
-                    .octet_string(MAX_PDU_LEN, "pDUSessionResourceSetupRequestTransfer")?
-                    .to_vec();
-                opt_extension_container(r, has_ext, &mut budget)?;
-                finish_sequence(r, ext)?;
-                out.push(SetupItem {
-                    pdu_session_id: psi,
-                    nas,
-                    s_nssai,
-                    transfer,
-                });
-            }
-            Ok(out)
-        },
+        "PDUSessionResourceSetupListSUReq",
     )?;
     Ok((amf, ran, items))
 }
@@ -2865,6 +2869,9 @@ pub struct InitialContext {
     pub security_key: [u8; 32],
     pub ue_ambr: Option<(u64, u64)>,
     pub nas: Option<Vec<u8>>,
+    /// PDU sessions set up with the context (`PDUSessionResourceSetupListCxtReq`): an AMF that
+    /// sent the Registration Accept in a Downlink NAS Transport sets the first session up here.
+    pub pdu_sessions: Vec<SetupItem>,
 }
 
 /// Initial Context Setup Request (TS 38.413 9.2.2.1), IEs in the order the ASN.1 lists them.
@@ -2877,6 +2884,12 @@ pub fn initial_context_setup_request(c: &InitialContext) -> EncodeResult<Vec<u8>
         ies.push(ue_ambr_ie(dl, ul)?);
     }
     ies.push(guami_ie(&c.guami)?);
+    if !c.pdu_sessions.is_empty() {
+        ies.push(encode_setup_items(
+            IE_PDU_SESSION_RESOURCE_SETUP_LIST_CXT_REQ,
+            &c.pdu_sessions,
+        )?);
+    }
     ies.push(allowed_nssai_ie(&c.allowed_nssai)?);
     ies.push(ue_security_capabilities_ie(c.ue_security_capabilities)?);
     ies.push(security_key_ie(&c.security_key)?);
@@ -2910,19 +2923,50 @@ pub fn parse_initial_context_setup_request(pdu: &Pdu) -> CodecResult<InitialCont
             Some(ie) => Some(decode_nas_pdu(ie)?),
             None => None,
         },
+        pdu_sessions: match pdu.ie(IE_PDU_SESSION_RESOURCE_SETUP_LIST_CXT_REQ) {
+            Some(ie) => decode_setup_items(ie, "PDUSessionResourceSetupListCxtReq")?,
+            None => Vec::new(),
+        },
     })
 }
 
-/// Initial Context Setup Response (gNB side), with no PDU sessions.
-pub fn initial_context_setup_response(amf: u64, ran: u64) -> EncodeResult<Vec<u8>> {
+/// Initial Context Setup Response (gNB side), with the outcome of any PDU sessions the request
+/// set up.
+pub fn initial_context_setup_response(
+    amf: u64,
+    ran: u64,
+    established: &[(u8, SetupResponseTransfer)],
+    failed: &[(u8, Cause)],
+) -> EncodeResult<Vec<u8>> {
+    let mut ies = vec![
+        amf_ue_ngap_id_ie(amf, Criticality::Ignore)?,
+        ran_ue_ngap_id_ie(ran, Criticality::Ignore)?,
+    ];
+    if !established.is_empty() {
+        let items = established
+            .iter()
+            .map(|(p, t)| Ok((*p, encode_setup_response_transfer(t)?)))
+            .collect::<EncodeResult<Vec<_>>>()?;
+        ies.push(encode_outcome_list(
+            IE_PDU_SESSION_RESOURCE_SETUP_LIST_CXT_RES,
+            &items,
+        )?);
+    }
+    if !failed.is_empty() {
+        let items = failed
+            .iter()
+            .map(|(p, c)| Ok((*p, encode_unsuccessful_transfer(c)?)))
+            .collect::<EncodeResult<Vec<_>>>()?;
+        ies.push(encode_outcome_list(
+            IE_PDU_SESSION_RESOURCE_FAILED_TO_SETUP_LIST_CXT_RES,
+            &items,
+        )?);
+    }
     build(
         PduKind::Successful,
         PROC_INITIAL_CONTEXT_SETUP,
         Criticality::Reject,
-        vec![
-            amf_ue_ngap_id_ie(amf, Criticality::Ignore)?,
-            ran_ue_ngap_id_ie(ran, Criticality::Ignore)?,
-        ],
+        ies,
     )
 }
 

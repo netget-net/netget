@@ -45,6 +45,12 @@ elif t == "ngap_uplink_nas_transport" and e["nas"].get("message") == "authentica
 print(json.dumps({"actions": a}))"#;
 
 fn ueransim(command: &str) -> Command {
+    // Every UERANSIM process registers itself in /tmp/UERANSIM.proc-table/, created with a
+    // check-then-mkdir: two started at once both see it missing and the loser aborts with
+    // "File exists". Creating it first, before any of the parallel tests spawns one, closes that.
+    let table = std::path::Path::new("/tmp/UERANSIM.proc-table");
+    let _ = std::fs::create_dir_all(table);
+    let _ = std::fs::set_permissions(table, std::os::unix::fs::PermissionsExt::from_mode(0o777));
     let mut c = Command::new(command);
     if let Ok(dir) = std::env::var("NETGET_UERANSIM_DIR") {
         let path = std::env::var("PATH").unwrap_or_default();
