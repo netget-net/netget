@@ -18,8 +18,11 @@ pub fn noise(seed: u64, n: usize) -> Vec<u8> {
         .collect()
 }
 
+/// A path in a tree on disk: a file's content, or a symlink's target; a directory has neither.
+pub type DiskEntry = (String, Option<Vec<u8>>, Option<String>);
+
 /// A tree on disk and the same tree as a description.
-pub fn tree() -> (Value, Vec<(String, Option<Vec<u8>>, Option<String>)>) {
+pub fn tree() -> (Value, Vec<DiskEntry>) {
     let big = noise(42, 700_000);
     let entries = json!([
         {"name": "a.txt", "text": "hello from a directory\n"},
@@ -59,7 +62,7 @@ pub fn tree() -> (Value, Vec<(String, Option<Vec<u8>>, Option<String>)>) {
     (json!({"name": "site", "entries": entries}), disk)
 }
 
-pub fn write_tree(root: &Path, disk: &[(String, Option<Vec<u8>>, Option<String>)]) {
+pub fn write_tree(root: &Path, disk: &[DiskEntry]) {
     std::fs::create_dir_all(root).unwrap();
     for (path, content, target) in disk {
         let p = root.join(path);

@@ -324,8 +324,11 @@ pub fn now_unix_nanos() -> i128 {
 #[derive(Default)]
 pub struct Dht {
     records: std::sync::Mutex<HashMap<Vec<u8>, Record>>,
-    providers: std::sync::Mutex<HashMap<Vec<u8>, Vec<(super::kad::Peer, Instant)>>>,
+    providers: std::sync::Mutex<Providers>,
 }
+
+/// Content key to the peers that announced it, each with when.
+type Providers = HashMap<Vec<u8>, Vec<(super::kad::Peer, Instant)>>;
 
 /// What a PUT_VALUE came to.
 #[derive(Debug, PartialEq)]

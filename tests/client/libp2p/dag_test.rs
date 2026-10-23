@@ -304,7 +304,7 @@ print(json.dumps({{'actions':a}}))"#,
         .to_string();
     let big = find(&events, &big_cid);
     assert_eq!(big["sha256"], sha(&noise(42, 700_000)), "{big}");
-    assert_eq!(big["data"], hex::encode(&noise(42, 16)));
+    assert_eq!(big["data"], hex::encode(noise(42, 16)));
     let sub = events
         .iter()
         .find(|e| e["kind"] == "directory" && e["cid"] != helia.cid.as_str())
