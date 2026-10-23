@@ -306,7 +306,14 @@ so with SRI's pool in front, PushSolution never follows.)
 
 `fuzz/fuzz_targets/stratum_v2_message.rs` decodes every message and the Bitcoin structures
 these roles parse, with count-bomb seeds; nothing recurses. It has run clean: 167,287 executions
-over 301 seconds (current nightly, `-s none` on macOS), coverage 492 → 1426 edges. On this Mac
+over 301 seconds (current nightly, `-s none` on macOS), coverage 492 → 1426 edges; and again with
+work selection's SetCustomMiningJob seeds (its output vector parsed with the pool's bound, a
+2^32 − 1-output bomb and a 255-hash path carrying one), 168,717 executions over 301 seconds,
+coverage 563 → 1524. The fuzz workspace's lockfile is gitignored, so a fresh fuzz build resolves
+the newest versions — in October 2026 that was a `libc` nix 0.8.1 no longer compiles against on
+macOS and AWS SDK crates that disagree with each other; copying the root lockfile into the fuzz
+directory first builds.
+`nightly-2025-12-04` is now too old for the AWS SDK (1.94.1 is required). On this Mac
 the fuzz build needed `RUSTFLAGS=-Clink-arg=-Wl,-undefined,dynamic_lookup`: `crc-fast` (under
 the AWS SDK) links a dylib at build time, which fails against the sancov symbols only libFuzzer
 provides; that affects every target, not this one. There is no pcap oracle: Wireshark
