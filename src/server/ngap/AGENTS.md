@@ -286,7 +286,9 @@ an IP (port 2152) or IP:port; without it PDU sessions are refused with #26.
 `Experimental`. Against the six conditions in the root `AGENTS.md`: one independent client
 (UERANSIM; condition 1 needs two — Open5GS's gNB-side tools do not exist and srsRAN/OAI gNBs are
 not in the tree), the oracle is green over real and lab traffic (2), a fuzz target exists
-(`ngap_nas`, 3 — run it before believing it), bounds are tested (4), these files were written
+and has run clean (`ngap_nas`, 3: 39,178 executions over three minutes on 22 October 2026 with
+the seeded lockfile and the current nightly — `nightly-2025-12-04` is now too old for the AWS
+crates in the lockfile), bounds are tested (4), these files were written
 against the source in this pass (5), no `#[ignore]` or skip gate — but the evidence runs only
 where SCTP exists, i.e. the `ngap` pair job.
 
