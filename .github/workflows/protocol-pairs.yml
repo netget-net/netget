@@ -8134,7 +8134,7 @@ jobs:
 
   stratum-v2:
     if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'stratum-v2')
-    name: Stratum V2 pool, template provider, job declarator and both clients against SRI's mining_device, pool_sv2 (and its JDS), jd_client and Bitcoin Core
+    name: Stratum V2 pool, template provider, job declarator, work selection and the clients against SRI's mining_device, pool_sv2 (and its JDS), jd_client, sv2-tp and Bitcoin Core
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     steps:
@@ -8143,12 +8143,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: protocol-pairs-${{ github.job }}
-      - name: Cache SRI's pool_sv2, mining_device and jd_client_sv2 (sv2-apps v0.8.0) and Bitcoin Core 31.0
+      - name: Cache SRI's pool_sv2, mining_device and jd_client_sv2 (sv2-apps v0.8.0), Bitcoin Core 31.0 and sv2-tp 1.1.2
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/stratum-v2
           key: stratum-v2-peers-${{ runner.os }}-${{ hashFiles('tests/server/stratum_v2/install_peers.py') }}
-      - name: Build SRI's pool_sv2, mining_device and jd_client_sv2, fetch Bitcoin Core 31.0
+      - name: Build SRI's pool_sv2, mining_device and jd_client_sv2, fetch Bitcoin Core 31.0 and sv2-tp 1.1.2
         run: |
           set -euo pipefail
           sudo apt-get update -qq

@@ -100,7 +100,11 @@ SetNewPrevHash activates the template it names and drops those on the old tip.
 ## Not built
 
 - **SetCustomMiningJob**: the job declarator client declares jobs but does not open a mining
-  channel to redeem the token at a pool; a full JDC is that plus the mining device.
+  channel to redeem the token at a pool; a full JDC is that plus the mining device. The server
+  side exists now — a `pool_and_job_declarator` NetGet server takes SetCustomMiningJob against
+  its own JDS's tokens, driven by SRI's jd_client (`src/server/stratum_v2/AGENTS.md`) — so a
+  full JDC here would have SRI's pool and JDS to prove itself against, and would not need
+  NetGet's own server (which would be circular evidence).
 - **Payout scripts other than `OP_TRUE`** for the template client's coinbase output.
 
 ## Maturity: Experimental
