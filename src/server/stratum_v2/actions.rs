@@ -1,8 +1,10 @@
-//! What the model decides as a Stratum V2 pool: which devices may connect, which channels open
-//! and at what difficulty, which shares Rust has proven valid it credits, and the work each
-//! channel gets. Rust owns the Noise session, every message's encoding, the jobs' coinbase and
-//! header arithmetic, and every refusal that arithmetic decides.
-use super::wire;
+//! What the model decides as a Stratum V2 server. As a pool: which devices may connect, which
+//! channels open and at what difficulty, which shares Rust has proven valid it credits, and the
+//! work each channel gets. As a template provider: who may take templates and every template
+//! they get. As a job declarator: who may declare, who gets a token, and which declared jobs
+//! are accepted. Rust owns the Noise session, every message's encoding, the coinbase, merkle
+//! and header arithmetic, and every refusal that arithmetic decides.
+use super::{bitcoin as btc, wire};
 use crate::llm::actions::{
     protocol_trait::{ActionResult, Protocol, Server},
     ActionDefinition, Parameter, ParameterDefinition, StartupExamples,
@@ -19,6 +21,12 @@ pub const REJECT: &str = "stratum_v2_reject";
 pub const SET_TARGET: &str = "stratum_v2_set_target";
 pub const NEW_JOB: &str = "stratum_v2_new_job";
 pub const CLOSE_CHANNEL: &str = "stratum_v2_close_channel";
+pub const NEW_TEMPLATE: &str = "stratum_v2_new_template";
+pub const ALLOCATE_TOKEN: &str = "stratum_v2_allocate_token";
+/// The role a server takes when `role` is not given.
+pub const DEFAULT_ROLE: &str = "pool";
+/// The chain the template provider and job declarator check against when `network` is not given.
+pub const DEFAULT_NETWORK: &str = "mainnet";
 /// A difficulty must lie in (0, MAX_DIFFICULTY].
 pub const MAX_DIFFICULTY: f64 = 1e15;
 /// What a job's coinbase says when the model names nothing.
@@ -121,8 +129,192 @@ fn close_channel() -> ActionDefinition {
     )
 }
 
+pub fn new_template() -> ActionDefinition {
+    action(
+        NEW_TEMPLATE,
+        "Send the template provider's client a block template. Rust serialises the transactions, computes the merkle path, the witness commitment and the BIP 34 height push, and sends NewTemplate — followed by SetNewPrevHash when prev_hash names a new chain tip. A template on the current tip may omit prev_hash, height and nbits. Rust refuses a template whose height, nbits, version, coinbase value or weight no node would accept.",
+        vec![
+            p("prev_hash", "string", "The block this template builds on, as RPC shows hashes (64 hex digits); required for the first template and to move to a new tip", false),
+            p("height", "number", "The height of the block being built, from 1 to 10,000,000; required with a new prev_hash", false),
+            p("nbits", "string", "The compact target as RPC shows it, 8 hex digits such as 207fffff; it may be no easier than the network's limit (default: that limit)", false),
+            p("ntime", "number", "The header timestamp the tip allows from, in unix seconds (default: now)", false),
+            p("version", "number", "The block version, at least 4 (default 536870912, which is 0x20000000)", false),
+            p("coinbase_value_sats", "number", "What the coinbase may pay, in satoshis: at most the height's subsidy plus the fees of the transactions (default: exactly that)", false),
+            p("transactions", "array", "Up to 64 transactions, each {\"inputs\": [{\"txid\": <64 hex digits as RPC shows it>, \"vout\": <output index>, \"value_sats\": <value of the output spent>}], \"outputs\": [{\"value_sats\": <n>, \"pay_to\": \"op_true\"} or {\"value_sats\": 0, \"op_return\": <text of at most 80 bytes>}]}; 1 to 16 inputs and outputs each, and outputs may not exceed inputs", false),
+        ],
+        json!({"type": NEW_TEMPLATE, "prev_hash": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+               "height": 102, "nbits": "207fffff",
+               "transactions": [{"inputs": [{"txid": "5c4e9bb1b6f5f2b2d6c0cfb0e4ee2ad6a3b4bc2dfe32e7d3cd8b7d0bb2b8a0f1", "vout": 0, "value_sats": 5000000000u64}],
+                                 "outputs": [{"value_sats": 4999990000u64, "pay_to": "op_true"}]}]}),
+    )
+}
+
+fn allocate_token() -> ActionDefinition {
+    action(
+        ALLOCATE_TOKEN,
+        "Give the job declarator client a mining job token (AllocateMiningJobToken.Success), naming the output its coinbase must include. Answer an allocation with stratum_v2_accept and this; stratum_v2_reject refuses, and since the protocol has no AllocateMiningJobToken.Error the connection then ends.",
+        vec![
+            p("pay_to", "string", "The script of the output the declared coinbase must pay: op_true (default)", false),
+            p("op_return", "string", "Instead of pay_to: an OP_RETURN output carrying this text (at most 80 bytes)", false),
+        ],
+        json!({"type": ALLOCATE_TOKEN, "pay_to": "op_true"}),
+    )
+}
+
 pub fn all_actions() -> Vec<ActionDefinition> {
     vec![accept(), reject(), set_target(), new_job(), close_channel()]
+}
+
+fn template_actions() -> Vec<ActionDefinition> {
+    vec![new_template()]
+}
+
+fn job_declarator_actions() -> Vec<ActionDefinition> {
+    vec![accept(), reject(), allocate_token()]
+}
+
+pub static TP_SETUP_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    EventType::new(
+        "stratum_v2_tp_setup_connection",
+        "A pool or job declarator client completed the Noise handshake and asked to take templates (SetupConnection for the Template Distribution Protocol). Accept or reject it; templates follow once it sends CoinbaseOutputConstraints.",
+        json!({"type": ACCEPT}),
+    )
+    .with_parameters(vec![
+        p("vendor", "string", "The client's vendor string (often empty)", true),
+        p("hardware_version", "string", "The hardware version it reports", true),
+        p("firmware", "string", "The firmware it reports", true),
+        p("device_id", "string", "The device id it reports", true),
+        p("endpoint_host", "string", "The host it says it connected to", true),
+        p("endpoint_port", "number", "The port it says it connected to", true),
+        p("remote_addr", "string", "The client's address and port", true),
+    ])
+    .with_actions(vec![accept(), reject()])
+});
+
+pub static TP_CONSTRAINTS_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    EventType::new(
+        "stratum_v2_tp_coinbase_output_constraints",
+        "The template client said how much room its own coinbase outputs need (CoinbaseOutputConstraints). Answer with stratum_v2_new_template to give it work; the first template names prev_hash and height. Answering nothing sends no work.",
+        json!({"type": NEW_TEMPLATE, "prev_hash": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", "height": 102}),
+    )
+    .with_parameters(vec![
+        p("max_additional_size", "number", "Bytes its coinbase outputs add", true),
+        p("max_additional_sigops", "number", "Signature operations its coinbase outputs add", true),
+        p("tip", "object", "The current tip templates build on: prev_hash, height, nbits, ntime (null before the first template)", true),
+        p("templates_sent", "number", "Templates already sent on this connection", true),
+        p("network", "string", "The chain heights, nbits and the subsidy are checked against", true),
+        p("remote_addr", "string", "The client's address and port", true),
+    ])
+    .with_actions(template_actions())
+});
+
+pub static TP_SOLUTION_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    EventType::new(
+        "stratum_v2_tp_solution",
+        "The template client submitted a solution (SubmitSolution) that Rust rebuilt into a block and verified: its coinbase follows the template and its header hash meets the template's target. The block is logged in full. Answer with stratum_v2_new_template to move the client on, typically to a new tip on top of this block (prev_hash = its hash, height + 1), or with nothing.",
+        json!({"type": NEW_TEMPLATE, "prev_hash": "3e1b4f86ac4b8e83a6d4b0aaf5e0d0c3d0c1b6d1a5d6f4a7b8e2c9a0f1d2e3c4", "height": 103}),
+    )
+    .with_parameters(vec![
+        p("template_id", "number", "The template it solves", true),
+        p("hash", "string", "The block hash, as RPC shows hashes", true),
+        p("height", "number", "The block's height", true),
+        p("prev_hash", "string", "The block it builds on", true),
+        p("version", "number", "The header version, with any rolled bits", true),
+        p("ntime", "number", "The header timestamp", true),
+        p("nonce", "number", "The header nonce", true),
+        p("nbits", "string", "The compact target the hash meets", true),
+        p("transaction_count", "number", "Transactions besides the coinbase", true),
+        p("block_size", "number", "The block's size in bytes", true),
+        p("stale", "boolean", "Whether a newer tip has been sent since this template", true),
+        p("coinbase_outputs", "array", "The coinbase's outputs: value_sats and script_type, with op_return text", true),
+        p("remote_addr", "string", "The client's address and port", true),
+    ])
+    .with_actions(template_actions())
+});
+
+pub static JD_SETUP_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    EventType::new(
+        "stratum_v2_jd_setup_connection",
+        "A job declarator client completed the Noise handshake and asked to declare its own jobs (SetupConnection for the Job Declaration Protocol). Accept or reject it.",
+        json!({"type": ACCEPT}),
+    )
+    .with_parameters(vec![
+        p("vendor", "string", "The client's vendor string (often empty)", true),
+        p("hardware_version", "string", "The hardware version it reports", true),
+        p("firmware", "string", "The firmware it reports", true),
+        p("device_id", "string", "The device id it reports", true),
+        p("endpoint_host", "string", "The host it says it connected to", true),
+        p("endpoint_port", "number", "The port it says it connected to", true),
+        p("declare_tx_data", "boolean", "Whether it set DECLARE_TX_DATA (full-template declarations)", true),
+        p("remote_addr", "string", "The client's address and port", true),
+    ])
+    .with_actions(vec![accept(), reject()])
+});
+
+pub static JD_ALLOCATE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    EventType::new(
+        "stratum_v2_jd_allocate_token",
+        "The job declarator client asked for a mining job token (AllocateMiningJobToken). Answer stratum_v2_accept with stratum_v2_allocate_token naming the output its coinbase must pay, or stratum_v2_reject, which ends the connection (the protocol has no error for this).",
+        json!({"type": ACCEPT}),
+    )
+    .with_parameters(vec![
+        p("user_identifier", "string", "Who the client says it is", true),
+        p("request_id", "number", "The client's request id, which the success echoes", true),
+        p("tokens_held", "number", "Tokens this connection already holds", true),
+        p("max_tokens", "number", "Tokens a connection may hold before the oldest is evicted", true),
+        p("remote_addr", "string", "The client's address and port", true),
+    ])
+    .with_actions(job_declarator_actions())
+});
+
+pub static JD_DECLARE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    EventType::new(
+        "stratum_v2_jd_declare_job",
+        "The job declarator client declared the block it wants to mine (DeclareMiningJob), and Rust has every one of its transactions — asking for the missing ones first — checked that they are the ones it named, and checked its coinbase and witness commitment. Accept it (DeclareMiningJob.Success with a new token) or reject it with an error code (DeclareMiningJob.Error), e.g. invalid-job or stale-chain-tip.",
+        json!({"type": ACCEPT}),
+    )
+    .with_parameters(vec![
+        p("request_id", "number", "The declaration's request id", true),
+        p("version", "number", "The block version it will mine", true),
+        p("height", "number", "The height its coinbase commits to (BIP 34)", true),
+        p("coinbase_outputs", "array", "Its coinbase outputs: value_sats and script_type, with op_return text", true),
+        p("coinbase_value_sats", "number", "What its coinbase pays in total", true),
+        p("pays_required_outputs", "boolean", "Whether the coinbase includes every output its token required", true),
+        p("transactions", "number", "Transactions besides the coinbase", true),
+        p("weight", "number", "The block's weight without the header", true),
+        p("extranonce_size", "number", "Bytes of extranonce its coinbase leaves for mining", true),
+        p("remote_addr", "string", "The client's address and port", true),
+    ])
+    .with_actions(job_declarator_actions())
+});
+
+pub static JD_SOLUTION_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    EventType::new(
+        "stratum_v2_jd_solution",
+        "The job declarator client pushed a solution (PushSolution) that Rust matched to an accepted job, rebuilt into a block and verified against its nbits. The block is logged in full. The protocol has no reply.",
+        json!({"type": ACCEPT}),
+    )
+    .with_parameters(vec![
+        p("request_id", "number", "The declaration it solves", true),
+        p("hash", "string", "The block hash, as RPC shows hashes", true),
+        p("height", "number", "The height its coinbase commits to", false),
+        p("prev_hash", "string", "The block it builds on", true),
+        p("nbits", "string", "The compact target the hash meets", true),
+        p("ntime", "number", "The header timestamp", true),
+        p("nonce", "number", "The header nonce", true),
+        p("version", "number", "The header version", true),
+        p("block_size", "number", "The block's size in bytes", true),
+        p("remote_addr", "string", "The client's address and port", true),
+    ])
+    .with_no_actions()
+});
+
+/// The outputs a `stratum_v2_allocate_token` requires the declared coinbase to pay.
+pub fn allocation_outputs(v: &Value) -> Result<Vec<btc::TxOut>> {
+    Ok(vec![btc::TxOut {
+        value: 0,
+        script: btc::output_script(v)?,
+    }])
 }
 
 pub static SETUP_EVENT: LazyLock<EventType> = LazyLock::new(|| {
@@ -210,6 +402,10 @@ pub fn check(v: &Value) -> Result<()> {
                 "difficulty must be above 0 and at most {MAX_DIFFICULTY}"
             );
         }
+        NEW_TEMPLATE => super::template_provider::check_action(v)?,
+        ALLOCATE_TOKEN => {
+            allocation_outputs(v)?;
+        }
         NEW_JOB => {
             if let Some(m) = v.get("message").filter(|m| !m.is_null()) {
                 let m = m.as_str().context("message must be text")?;
@@ -237,23 +433,49 @@ impl Protocol for StratumV2Protocol {
         vec!["stratum v2", "stratum2", "sv2", "stratum2+tcp"]
     }
     fn description(&self) -> &'static str {
-        "Stratum V2 mining pool (Noise NX, Mining Protocol): the model admits devices and channels, sets difficulty and work, and credits shares Rust has verified"
+        "Stratum V2 server (Noise NX): a mining pool (the model admits devices and channels, sets difficulty and work, and credits shares Rust has verified), a template provider (the model writes every block template; Rust makes it consistent and verifies solutions), or a job declarator (the model allocates tokens and accepts or refuses declared jobs)"
     }
     fn get_async_actions(&self, _: &AppState) -> Vec<ActionDefinition> {
         Vec::new()
     }
     fn get_sync_actions(&self) -> Vec<ActionDefinition> {
-        all_actions()
+        let mut all = all_actions();
+        all.push(new_template());
+        all.push(allocate_token());
+        all
     }
     fn get_event_types(&self) -> Vec<EventType> {
         vec![
             SETUP_EVENT.clone(),
             OPEN_CHANNEL_EVENT.clone(),
             SHARE_EVENT.clone(),
+            TP_SETUP_EVENT.clone(),
+            TP_CONSTRAINTS_EVENT.clone(),
+            TP_SOLUTION_EVENT.clone(),
+            JD_SETUP_EVENT.clone(),
+            JD_ALLOCATE_EVENT.clone(),
+            JD_DECLARE_EVENT.clone(),
+            JD_SOLUTION_EVENT.clone(),
         ]
     }
     fn get_startup_parameters(&self) -> Vec<ParameterDefinition> {
         vec![
+            ParameterDefinition {
+                name: "role".into(),
+                type_hint: "string".into(),
+                description: "Which Stratum V2 protocol to serve: pool (the Mining Protocol, for mining devices), template_provider (the Template Distribution Protocol, for a pool or job declarator client taking block templates) or job_declarator (the Job Declaration Protocol, for miners declaring their own jobs)".into(),
+                required: false,
+                example: json!("template_provider"),
+                default: Some(json!(DEFAULT_ROLE)),
+            },
+            ParameterDefinition {
+                name: "network".into(),
+                type_hint: "string".into(),
+                description: "The chain a template provider or job declarator checks heights, nbits and the block subsidy against: mainnet, testnet4, signet or regtest".into(),
+                required: false,
+                example: json!("regtest"),
+                default: Some(json!(DEFAULT_NETWORK)),
+            },
             ParameterDefinition {
                 name: "authority_secret_key".into(),
                 type_hint: "string".into(),
@@ -294,13 +516,13 @@ impl Protocol for StratumV2Protocol {
             .state(DevelopmentState::Experimental)
             .privilege_requirement(PrivilegeRequirement::None)
             .well_known_port(3333)
-            .implementation("Hand-rolled from sv2-spec: Noise_NX_Secp256k1+EllSwift_ChaChaPoly_SHA256 with an authority-signed certificate (libsecp256k1 for the curve and BIP 340 signatures, chacha20poly1305 for the AEAD), encrypted framing, and the Common and Mining Protocol messages: SetupConnection, Open{Standard,Extended}MiningChannel, NewMiningJob, NewExtendedMiningJob, SetNewPrevHash, SetTarget, UpdateChannel, CloseChannel, SubmitShares{Standard,Extended}. Jobs are built in Rust and every share is rebuilt into its header, double-SHA-256 hashed and compared with the channel's target before anyone is asked")
-            .llm_control("Which devices may connect, which channels open and at what difficulty, which verified shares are credited, and the work and channel closures each channel gets")
-            .e2e_testing("tests/server/stratum_v2: SRI's mining_device (sv2-apps v0.8.0, its own noise_sv2/codec_sv2) pins NetGet's authority key, opens a standard channel, mines the model's job and has its shares verified and credited; raw Noise frames for every refusal Rust decides, bounds and a failed handler")
-            .notes("Experimental: one independent device (SRI's mining_device) completes a session against it, which is one short of the two Stable needs and of an independent second opinion on the extended-channel path, which only NetGet's own client drives. The pool is connected to no node: its work is its own, so a share proves hashing and nothing is ever submitted as a block. Refused before the model: a handshake or frame that does not authenticate, a frame over 16 KiB, an unknown core message, a malformed field, REQUIRES_WORK_SELECTION, and shares that are stale, duplicate, out of time, with foreign version bits or above the target.")
-            .request_only("Every message answers a device's request, except the jobs, prev-hash and targets that follow an accepted channel")
+            .implementation("Hand-rolled from sv2-spec: Noise_NX_Secp256k1+EllSwift_ChaChaPoly_SHA256 with an authority-signed certificate (libsecp256k1 for the curve and BIP 340 signatures, chacha20poly1305 for the AEAD), encrypted framing, and three roles chosen by `role`. pool: the Mining Protocol (SetupConnection, Open{Standard,Extended}MiningChannel, NewMiningJob, NewExtendedMiningJob, SetNewPrevHash, SetTarget, UpdateChannel, CloseChannel, SubmitShares{Standard,Extended}); jobs are built in Rust and every share is rebuilt into its header and compared with the channel's target before anyone is asked. template_provider: the Template Distribution Protocol (CoinbaseOutputConstraints, NewTemplate, SetNewPrevHash, RequestTransactionData, SubmitSolution); Rust serialises the model's transactions and computes the merkle path, witness commitment and BIP 34 height push, and rebuilds every solution into its block. job_declarator: the Job Declaration Protocol (AllocateMiningJobToken, DeclareMiningJob, ProvideMissingTransactions, PushSolution); Rust keeps the token table and a wtxid-keyed mempool and checks every supplied transaction and commitment")
+            .llm_control("pool: which devices may connect, which channels open and at what difficulty, which verified shares are credited, and each channel's work. template_provider: who may take templates and every template (tip, height, nbits, version, coinbase value, transactions). job_declarator: who may declare, token allocation and the output it requires, and whether each declared job is accepted, with the error code")
+            .e2e_testing("tests/server/stratum_v2: SRI's mining_device (sv2-apps v0.8.0) mines the model's job on the pool role; SRI's pool_sv2 takes the template provider's templates over network TDP with mining_device mining on it, and Bitcoin Core 31.0 accepts the block NetGet assembles from the model's template and SRI's coinbase; SRI's jd_client declares its job to the job declarator, supplies the missing transaction and receives DeclareMiningJob.Success; raw Noise frames for every refusal Rust decides, every bound and both fail-closed paths")
+            .notes("Experimental. pool: one independent device (SRI's mining_device), one short of Stable's two, and the extended-channel path is driven only by NetGet's own client; it is connected to no node, so a share proves hashing and nothing is submitted as a block. template_provider: SRI's pool and jd_client take its templates (one SRI implementation of template receiving) and Bitcoin Core accepts the resulting block; solved blocks are logged, not relayed (no node). job_declarator: SRI's jd_client declares to it, but no independent client has pushed a solution, since jd_client pushes only for jobs its pool acknowledged and SRI's pool v0.8.0 redeems tokens only from its own JDS. Inbound frames are bounded per role: 16 KiB (pool), 66 KiB (template provider), 4 MiB (job declarator, ProvideMissingTransactions.Success). Refused before the model: a handshake or frame that does not authenticate, a frame over its bound, an unknown core message, a malformed field, REQUIRES_WORK_SELECTION, shares that are stale, duplicate, out of time, with foreign version bits or above the target; template solutions above the target or not following the template; declarations with an unknown token, over 8192 transactions, a coinbase that does not parse, transactions that are not the declared ones, or a commitment that does not cover them.")
+            .request_only("Every message answers a client's request, except the jobs, prev-hash and targets that follow an accepted channel (pool) and the templates and prev-hash that follow CoinbaseOutputConstraints or a solution (template provider)")
             .answers_on_failure()
-            .max_inbound_bytes(super::MAX_INBOUND_PAYLOAD)
+            .max_inbound_bytes(super::job_declarator::MAX_INBOUND_PAYLOAD)
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
             .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()

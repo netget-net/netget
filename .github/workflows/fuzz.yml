@@ -94,6 +94,7 @@ jobs:
           - zabbix_packet
           - gearman_packet
           - nostr_message
+          - stratum_v2_message
     steps:
       - uses: actions/checkout@v4
 
