@@ -65,6 +65,59 @@ pub async fn start(handlers: Option<Vec<Value>>, params: Value) -> (AppState, Se
     (state, id, port)
 }
 
+/// Start a server with `params` (a `role` among them) and keep everything it prints to the
+/// operator, which is where a template provider's solved blocks and connection summaries go.
+pub async fn start_role(
+    handlers: Option<Vec<Value>>,
+    params: Value,
+) -> (AppState, ServerId, u16, super::peers::Status) {
+    let state = AppState::new_with_options(false, "http://127.0.0.1:1".into());
+    state
+        .set_llm_client(netget::llm::OllamaClient::new("http://127.0.0.1:1"))
+        .await;
+    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+    let status = super::peers::Status::default();
+    let sink = status.clone();
+    tokio::spawn(async move {
+        while let Some(line) = rx.recv().await {
+            sink.0.lock().unwrap().push(line);
+        }
+    });
+    let id = ServerForm {
+        protocol: "stratum_v2".into(),
+        port: Some(0),
+        host: Some("127.0.0.1".into()),
+        instruction: Some("Serve Stratum V2".into()),
+        startup_params: Some(params),
+        event_handlers: handlers,
+        ..Default::default()
+    }
+    .create(&state, tx)
+    .await
+    .unwrap();
+    let port = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if let Some(a) = state.get_server(id).await.and_then(|s| s.local_addr) {
+                break a.port();
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    (state, id, port, status)
+}
+
+/// A python script as the model: `body` sets `a` from `t` (the event id) and `e` (its data).
+pub fn script(body: &str) -> Option<Vec<Value>> {
+    let code = format!(
+        "import json,sys\ni=json.load(sys.stdin); t=i['event_type_id']; e=i['event']\na=[]\n{body}\nprint(json.dumps({{'actions':a}}))"
+    );
+    Some(vec![
+        json!({"event_pattern":"*","handler":{"type":"script","language":"python","code":code}}),
+    ])
+}
+
 /// What the model was asked, of one kind, in order.
 pub async fn events(state: &AppState, id: ServerId, kind: &str) -> Vec<Value> {
     state

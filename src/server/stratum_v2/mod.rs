@@ -1,10 +1,19 @@
-//! Stratum V2 pool (server role). Rust owns each connection — the Noise NX handshake and the
-//! certificate it presents, every frame's encryption and encoding, channels, extranonce
-//! prefixes, jobs, the share arithmetic and every refusal that arithmetic decides — and asks the
-//! model only whether a device may connect, whether a channel opens and at what difficulty, and
-//! whether a share already proven to meet its target is credited.
+//! Stratum V2 server roles, chosen by the `role` startup parameter:
+//!
+//! - `pool` (default): the Mining Protocol. Rust owns each connection — the Noise NX handshake
+//!   and the certificate it presents, every frame's encryption and encoding, channels,
+//!   extranonce prefixes, jobs, the share arithmetic and every refusal that arithmetic decides —
+//!   and asks the model only whether a device may connect, whether a channel opens and at what
+//!   difficulty, and whether a share already proven to meet its target is credited.
+//! - `template_provider`: the Template Distribution Protocol (`template_provider.rs`).
+//! - `job_declarator`: the Job Declaration Protocol's server (`job_declarator.rs`).
+//!
+//! All three share the handshake, the certificate and the framing.
 pub mod actions;
+pub mod bitcoin;
+pub mod job_declarator;
 pub mod noise;
+pub mod template_provider;
 pub mod wire;
 
 use crate::llm::action_helper::call_llm;
@@ -51,7 +60,45 @@ pub const MIN_DEFAULT_DIFFICULTY: f64 = 0.001;
 pub const POOL_NBITS: u32 = 0x207f_ffff;
 pub const POOL_VERSION: u32 = 0x2000_0000;
 
-/// What every connection of one pool shares.
+/// Which Stratum V2 protocol this server speaks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    Pool,
+    TemplateProvider,
+    JobDeclarator,
+}
+
+impl Role {
+    pub fn parse(s: &str) -> Result<Self> {
+        Ok(match s {
+            "pool" => Role::Pool,
+            "template_provider" => Role::TemplateProvider,
+            "job_declarator" => Role::JobDeclarator,
+            other => anyhow::bail!(
+                "role must be pool, template_provider or job_declarator, not {other:?}"
+            ),
+        })
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Role::Pool => "pool",
+            Role::TemplateProvider => "template provider",
+            Role::JobDeclarator => "job declarator",
+        }
+    }
+
+    /// The largest frame payload a peer of this role may send.
+    pub fn max_inbound_payload(self) -> usize {
+        match self {
+            Role::Pool => MAX_INBOUND_PAYLOAD,
+            Role::TemplateProvider => template_provider::MAX_INBOUND_PAYLOAD,
+            Role::JobDeclarator => job_declarator::MAX_INBOUND_PAYLOAD,
+        }
+    }
+}
+
+/// What every connection of one server shares.
 pub(crate) struct Pool {
     key: noise::EllKey,
     authority: noise::Authority,
@@ -59,6 +106,9 @@ pub(crate) struct Pool {
     shares_per_minute: f64,
     next_prefix: AtomicU32,
     next_job: AtomicU32,
+    role: Role,
+    network: bitcoin::Network,
+    mempool: std::sync::Mutex<job_declarator::Mempool>,
 }
 
 struct Job {
@@ -261,6 +311,18 @@ fn params(ctx: &SpawnContext) -> Result<(Pool, Duration)> {
         (1..=MAX_IDLE_TIMEOUT_SECS).contains(&idle),
         "idle_timeout_secs must be between 1 and {MAX_IDLE_TIMEOUT_SECS}"
     );
+    let role = Role::parse(
+        &p.map(|p| p.get_optional_string("role"))
+            .transpose()?
+            .flatten()
+            .unwrap_or_else(|| actions::DEFAULT_ROLE.into()),
+    )?;
+    let network = bitcoin::Network::parse(
+        &p.map(|p| p.get_optional_string("network"))
+            .transpose()?
+            .flatten()
+            .unwrap_or_else(|| actions::DEFAULT_NETWORK.into()),
+    )?;
     Ok((
         Pool {
             key: noise::EllKey::generate(),
@@ -269,6 +331,9 @@ fn params(ctx: &SpawnContext) -> Result<(Pool, Duration)> {
             shares_per_minute: spm,
             next_prefix: AtomicU32::new(rand::random()),
             next_job: AtomicU32::new(1),
+            role,
+            network,
+            mempool: std::sync::Mutex::new(job_declarator::Mempool::default()),
         },
         Duration::from_secs(idle),
     ))
@@ -279,7 +344,8 @@ pub async fn spawn(ctx: SpawnContext) -> Result<SocketAddr> {
     let listener = TcpListener::bind(ctx.legacy_listen_addr()).await?;
     let addr = listener.local_addr()?;
     Log::new(Some(&ctx.status_tx)).info(format!(
-        "Stratum V2 pool listening on {addr}; authority public key {} (miners pin this)",
+        "Stratum V2 {} listening on {addr}; authority public key {} (clients pin this)",
+        pool.role.name(),
         noise::encode_authority_key(&pool.authority.public_xonly())
     ));
     let pool = Arc::new(pool);
@@ -399,6 +465,62 @@ fn split(results: Vec<ActionResult>) -> (Answer, bool) {
         },
         invalid,
     )
+}
+
+/// What the model said about an event that may or may not call for a verdict.
+pub(crate) enum Consult {
+    Answer {
+        verdict: Option<Result<(), String>>,
+        extras: Vec<Value>,
+    },
+    /// The model failed or answered both ways: the code a peer gets, where there is one.
+    Fail(&'static str),
+}
+
+/// Ask the model about an event of the template provider or job declarator roles, logging the
+/// decision the same way `ask` does.
+pub(crate) async fn consult(
+    ctx: &SpawnContext,
+    id: ConnectionId,
+    event: Event,
+    operation: &str,
+) -> Consult {
+    match call_llm(
+        &ctx.llm_client,
+        &ctx.state,
+        ctx.server_id,
+        Some(id),
+        &event,
+        &actions::StratumV2Protocol,
+    )
+    .await
+    {
+        Ok(r) if r.failures.is_empty() => {
+            let (answer, invalid) = split(r.protocol_results);
+            if invalid {
+                outcome(ctx, id, operation, "fail_closed_invalid_reply");
+                return Consult::Fail("service-unavailable");
+            }
+            let decision = match (&answer.verdict, answer.extras.is_empty()) {
+                (Some(Err(_)), _) => "model_reject",
+                (None, true) => "model_silent",
+                _ => "model_answer",
+            };
+            outcome(ctx, id, operation, decision);
+            Consult::Answer {
+                verdict: answer.verdict,
+                extras: answer.extras,
+            }
+        }
+        Ok(_) => {
+            outcome(ctx, id, operation, "fail_closed_invalid_reply");
+            Consult::Fail("service-unavailable")
+        }
+        Err(e) => {
+            outcome(ctx, id, operation, "fail_closed_llm_error");
+            Consult::Fail(failure_code(&e))
+        }
+    }
 }
 
 async fn ask(ctx: &SpawnContext, id: ConnectionId, event: Event, operation: &str) -> Verdict {
@@ -998,7 +1120,22 @@ async fn session(
         }
     };
     let (r, w) = tokio::io::split(socket);
-    let (mut reader, mut writer) = wire::transport(r, w, session, MAX_INBOUND_PAYLOAD);
+    let (mut reader, mut writer) = wire::transport(r, w, session, pool.role.max_inbound_payload());
+    match pool.role {
+        Role::Pool => {}
+        Role::TemplateProvider => {
+            let result =
+                template_provider::run(ctx, pool, id, peer, &mut reader, &mut writer, idle).await;
+            writer.shutdown().await;
+            return result;
+        }
+        Role::JobDeclarator => {
+            let result =
+                job_declarator::run(ctx, pool, id, peer, &mut reader, &mut writer, idle).await;
+            writer.shutdown().await;
+            return result;
+        }
+    }
     let mut conn = Conn {
         setup: false,
         flags: 0,
