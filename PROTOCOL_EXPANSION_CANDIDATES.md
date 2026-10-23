@@ -47,8 +47,17 @@ What is left from this document, with the reason each is still open:
     (GetSystemDateAndTime, GetDeviceInformation, GetCapabilities, GetServices, GetScopes,
     GetNetworkInterfaces) and media ver10 (GetProfiles, GetVideoSources, GetStreamUri,
     GetSnapshotUri) with WS-Security UsernameToken digest, against onvif-zeep-async and
-    use-go/onvif (server) and RPOS (client). Media2, PTZ, Imaging, Events, Recording and
-    the Set* operations are not built.
+    use-go/onvif (server) and RPOS (client). **PTZ, Events, Media2, Imaging and the Device
+    Set\* operations landed 23 October 2026** in both roles: PTZ moves and presets (the model
+    decides each move; status and presets answered from device state), pull-point Events
+    (bounded subscriptions and queues, long-polled PullMessages, model-raised `tns1:`
+    notifications), Media2 from the same description as Media ver10, Imaging settings and
+    focus moves, and SetSystemDateAndTime/Scopes/Hostname/SystemReboot as model decisions.
+    Server peers: onvif-zeep-async and use-go/onvif for PTZ, Events, Imaging and Set\*;
+    onvif2-zeep and IOTechSystems/onvif for Media2. Client peers: RPOS (PTZ, Imaging) and
+    onvif_simple_server (Media2, Events). Still not built: Recording, Replay and Search,
+    Basic Notification (device-initiated callbacks), PTZ home-position setting and tours,
+    Imaging exposure/white-balance/WDR/backlight, Media2 configuration changes.
   - ~~**Stratum V2**~~: landed 14 October 2026 as the `stratum-v2` pair (Mining Protocol,
     standard and extended channels, Noise NX with the SV2 certificate), hand-rolled from
     sv2-spec so that SRI's `mining_device` and `pool_sv2` (over Bitcoin Core regtest) are
