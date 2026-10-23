@@ -38,6 +38,9 @@ serde_json = "1"
 # The HDFS target decodes Hadoop's protocol buffers with the same prost as netget's.
 prost = "0.13"
 
+# The ONVIF target hands the device's clock to the termination-time parser, as the server does.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
 [dependencies.netget]
 package = "netget-tool"
 path = ".."
@@ -375,6 +378,13 @@ bench = false
 [[bin]]
 name = "ngap_nas"
 path = "fuzz_targets/ngap_nas.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "onvif_request"
+path = "fuzz_targets/onvif_request.rs"
 test = false
 doc = false
 bench = false

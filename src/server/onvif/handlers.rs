@@ -838,16 +838,15 @@ async fn subscription_op(call: &Call<'_>, op: Op) -> Result<Resp, Resp> {
             };
             let limit = match b.text_of("MessageLimit").filter(|t| !t.is_empty()) {
                 None => events::MAX_MESSAGE_LIMIT,
-                Some(t) => t
-                    .parse::<u64>()
-                    .map_err(|_| {
-                        fault(
-                            FaultCode::Sender,
-                            &["InvalidArgVal"],
-                            "MessageLimit is not a number",
-                        )
-                    })?
-                    .clamp(1, events::MAX_MESSAGE_LIMIT as u64) as usize,
+                Some(t) => usize::try_from(t.parse::<u64>().map_err(|_| {
+                    fault(
+                        FaultCode::Sender,
+                        &["InvalidArgVal"],
+                        "MessageLimit is not a number",
+                    )
+                })?)
+                .unwrap_or(usize::MAX)
+                .clamp(1, events::MAX_MESSAGE_LIMIT),
             };
             let msgs = device
                 .events
