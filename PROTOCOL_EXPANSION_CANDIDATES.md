@@ -70,8 +70,13 @@ What is left from this document, with the reason each is still open:
     bounded token table and mempool) tested by SRI's jd_client; a Job Declarator Client
     against SRI's JDS, which validates with Bitcoin Core's `checkBlock`; and a Template
     Distribution client against sv2-tp 1.1.2, Bitcoin Core's tip becoming NetGet's block.
-    Still not built: SetCustomMiningJob in NetGet's pool (so no independent client has
-    driven PushSolution), block relay from the new server roles, sigop checks.
+    **Work selection landed 23 October 2026**: a `pool_and_job_declarator` role takes
+    SetCustomMiningJob against its own JDS's tokens, checked byte for byte against the
+    declaration (and against a node's tip and nbits when `bitcoin_rpc_url` is set), and every
+    server role relays the blocks it verifies with `submitblock`. SRI's jd_client, with sv2-tp
+    and SRI's mining_device, drives a block end to end through NetGet's pool and JDS, and
+    Bitcoin Core's chain holds it. Still not built: sigop checks (no UTXO set), chain checks
+    without a configured node, a NetGet JDC that opens a mining channel for its own jobs.
   - ~~**IPFS above libp2p**~~: landed 14 October 2026 on the `libp2p` feature behind an
     `ipfs` startup parameter — Bitswap 1.0–1.2, CIDv0/v1 with `raw` and `dag-pb`, single-block
     UnixFS files, and the Kademlia DHT (FIND_NODE answered in Rust, GET_PROVIDERS and
@@ -140,7 +145,7 @@ What is left from this document, with the reason each is still open:
 Taken one at a time, each covering what its protocol's own "not built" or "not tested" list
 says. Strike an item when it lands.
 
-1. Stratum V2: SetCustomMiningJob in NetGet's pool, so SRI's jd_client drives PushSolution end to end.
+1. ~~Stratum V2: SetCustomMiningJob in NetGet's pool, so SRI's jd_client drives PushSolution end to end.~~ Landed 23 October 2026.
 2. IPFS: multi-block DAGs and Bitswap sessions.
 3. GRE directly on IP protocol 47.
 4. Zigbee: TI Z-Stack MT dialect; EZSP 13 and older.
