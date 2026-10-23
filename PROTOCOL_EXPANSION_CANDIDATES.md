@@ -63,8 +63,19 @@ What is left from this document, with the reason each is still open:
     SCTP, PPID 60, with a labelled lab-TCP transport for hosts without SCTP): NG Setup,
     Initial UE Message, Downlink/Uplink NAS Transport, and pre-security 5GMM, hand-written
     APER checked by tshark's `ngap` dissector, against UERANSIM's nr-gnb/nr-ue and Open5GS's
-    AMF. NAS security (5G-AKA, Security Mode), PDU sessions, handover and paging are not
-    built, so a real UE cannot complete registration.
+    AMF. **NAS security and PDU sessions landed 23 October 2026** in both roles: 5G-AKA
+    (Milenage, RES*/XRES*, the TS 33.501 key hierarchy, SQN resynchronisation), SUCI null
+    scheme and ECIES Profiles A and B, Security Mode with NIA2/NEA2/NEA0, NAS COUNT and
+    replay checks, Registration Accept with the model's allowed NSSAI, PDU Session
+    Establishment with the model deciding admission, DNN, S-NSSAI and the UE's address, and
+    a GTP-U endpoint answering ICMP echo for the addresses the model chose. Subscriber keys
+    are redacted startup parameters the model never sees. A real UERANSIM UE registers, gets
+    a PDU session and pings through the tunnel; NetGet's gNB/UE registers with a full
+    Open5GS 2.8 core (NRF, AUSF, UDM, UDR, PCF, SMF, UPF, AMF, MongoDB) and gets a PDU
+    session, with Open5GS's K_gNB matching NetGet's. The gNB client is Beta. Still not
+    built: NIA1/NEA1 and NIA3/NEA3, EAP-AKA', handover, paging, Service Request under
+    security, PDU session release and modification, IPv6 sessions, multiple QoS flows,
+    routed user plane (N6), and a gNB user plane.
   - ~~**Redis cluster and pub/sub depth**~~: landed 15 October 2026 on the `redis` server
     and client — pub/sub (channels, patterns, shard channels, RESP2 subscribed mode and RESP3
     pushes, model-initiated publish, bounded fan-out with a slow-subscriber limit) and cluster
