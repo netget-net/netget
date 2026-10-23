@@ -779,9 +779,37 @@ pub fn security_header(username: &str, password: &str, nonce: &[u8], created: &s
 
 /// A SOAP 1.2 request envelope, with a header when `security` is given.
 pub fn request_envelope(security: Option<&str>, body: &str) -> String {
-    let header = security
-        .map(|h| format!("<env:Header>{h}</env:Header>"))
-        .unwrap_or_default();
+    request_envelope_with(security, None, body)
+}
+
+/// WS-Addressing headers for one request: a fresh MessageID, To (the full URL) and Action. The
+/// Events bindings are WS-Addressing ones, and devices answer Renew with a RelatesTo, so some
+/// (onvif_simple_server) refuse a WS-BaseNotification request without a MessageID.
+pub fn addressing(to: &str, action: &str) -> String {
+    format!(
+        "<wsa:MessageID>urn:uuid:{}</wsa:MessageID><wsa:To>{}</wsa:To><wsa:Action>{}</wsa:Action>",
+        uuid::Uuid::new_v4(),
+        esc(to),
+        esc(action)
+    )
+}
+
+/// A request envelope with WS-Security and WS-Addressing headers, either optional.
+pub fn request_envelope_with(
+    security: Option<&str>,
+    addressing: Option<&str>,
+    body: &str,
+) -> String {
+    let parts = format!(
+        "{}{}",
+        addressing.unwrap_or_default(),
+        security.unwrap_or_default()
+    );
+    let header = if parts.is_empty() {
+        String::new()
+    } else {
+        format!("<env:Header>{parts}</env:Header>")
+    };
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<env:Envelope {}>{header}<env:Body>{body}</env:Body></env:Envelope>",
         namespaces()

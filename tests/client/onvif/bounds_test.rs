@@ -145,7 +145,7 @@ async fn connect(port: u16, chain: &str) -> (AppState, anyhow::Result<netget::st
 
 const SILENT: &str = "print('{\"actions\": []}')";
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn replies_past_the_depth_or_size_bound_refuse_the_connection() {
     let deep = Arc::new(|op: &str| {
         if op == "GetCapabilities" {
@@ -193,7 +193,7 @@ async fn replies_past_the_depth_or_size_bound_refuse_the_connection() {
     id.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn chains_stop_at_the_depth_bound_and_requests_carry_the_device_clock() {
     // Profiles on connect, then scopes in answer to every response, forever.
     let chain = r#"import json,sys
@@ -235,10 +235,12 @@ print(json.dumps({'actions':a}))"#;
         "{:?}",
         s.paths
     );
-    // GetSystemDateAndTime went anonymously; every other request was signed with the device's
-    // clock (two hours ahead) and verifies.
+    // GetSystemDateAndTime went anonymously; every other request (GetCapabilities, GetServices,
+    // GetProfiles and the scopes) was signed with the device's clock (two hours ahead) and
+    // verifies.
     assert_eq!(s.ops.get("GetSystemDateAndTime"), Some(&1));
-    assert_eq!(s.tokens.len(), 1 + 1 + want, "{:?}", s.tokens);
+    assert_eq!(s.ops.get("GetServices"), Some(&1));
+    assert_eq!(s.tokens.len(), 2 + 1 + want, "{:?}", s.tokens);
     for (created, ok) in &s.tokens {
         assert!(
             ok,

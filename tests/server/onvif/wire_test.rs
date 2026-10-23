@@ -50,7 +50,7 @@ fn subcodes(body: &str) -> Vec<String> {
         .collect()
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_clock_is_anonymous_and_everything_else_needs_a_fresh_digest() {
     let (state, id, port) = start(policy(), credentials()).await;
 
@@ -139,7 +139,7 @@ async fn the_clock_is_anonymous_and_everything_else_needs_a_fresh_digest() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn without_credentials_configured_the_device_is_open() {
     let (state, id, port) = start(policy(), json!({})).await;
     let (status, body) = post(port, wire::request_envelope(None, INFO)).await;
@@ -148,7 +148,7 @@ async fn without_credentials_configured_the_device_is_open() {
     assert_eq!(asked[0]["username"], Value::Null);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn unknown_and_malformed_requests_are_faults() {
     let (state, id, port) = start(policy(), credentials()).await;
     let sign = |body: &str| {
@@ -281,7 +281,7 @@ async fn unknown_and_malformed_requests_are_faults() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_model_that_fails_or_answers_wrongly_fails_closed() {
     let nonce = || -> [u8; 16] { rand::random() };
     // No handler and no reachable model: the backend fails.

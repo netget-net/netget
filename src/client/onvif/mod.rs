@@ -1,11 +1,14 @@
-//! ONVIF client: SOAP 1.2 requests to a device's Device and Media services, each signed with a
-//! WS-Security PasswordDigest UsernameToken whose Created follows the device's clock.
+//! ONVIF client: SOAP 1.2 requests to a device's Device, Media, Media2, PTZ, Events and Imaging
+//! services, each signed with a WS-Security PasswordDigest UsernameToken whose Created follows
+//! the device's clock.
 //!
-//! `connect` reads the device's clock (unauthenticated, as ONVIF allows) and its capabilities
-//! (authenticated: a device that refuses the credentials refuses the connection), then the
-//! model asks it things. Three tasks: the session (sends, one request at a time), the
-//! dispatcher (model turns), and the connect handshake that starts them.
+//! `connect` reads the device's clock (unauthenticated, as ONVIF allows), its capabilities
+//! (authenticated: a device that refuses the credentials refuses the connection) and its services
+//! (best effort: older devices have no GetServices), then the model asks it things. Three tasks:
+//! the session (sends, one request at a time), the dispatcher (model turns), and the connect
+//! handshake that starts them.
 pub mod actions;
+pub mod ops;
 
 use crate::client::http_fetch::FetchClient;
 use crate::client::llm_budget::call_llm_for_client;
@@ -18,8 +21,11 @@ use crate::state::{AccessLogOwner, ClientStatus};
 pub use actions::OnvifClientProtocol;
 use anyhow::{bail, ensure, Context, Result};
 use hyper::Method;
+use ops::Service;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::Mutex;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -32,7 +38,10 @@ struct Conn {
     fetch: FetchClient,
     base: String,
     device_path: String,
-    media_path: Option<String>,
+    /// Each service's path on `base`, from GetCapabilities and GetServices.
+    paths: HashMap<Service, String>,
+    /// The path of the pull-point subscription onvif_create_pull_point made, if any.
+    subscription: Mutex<Option<String>>,
     credentials: Option<(String, String)>,
     /// Device clock minus ours.
     offset: chrono::Duration,
@@ -47,23 +56,46 @@ impl Conn {
         Some(wire::security_header(user, password, &nonce, &created))
     }
 
+    fn path(&self, service: Service) -> Result<String> {
+        match service {
+            Service::Device => Ok(self.device_path.clone()),
+            Service::Subscription => self
+                .subscription
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
+                .context("no pull-point subscription: call onvif_create_pull_point first"),
+            s => self.paths.get(&s).cloned().with_context(|| {
+                format!(
+                    "the device advertises no {} service",
+                    actions::service_name(s)
+                )
+            }),
+        }
+    }
+
     /// One operation: the device's answer, or the fault it refused with.
-    async fn call(&self, operation: &str, args: &Value, authenticate: bool) -> Result<Reply> {
-        let path = if actions::is_media(operation) {
-            self.media_path
-                .as_deref()
-                .context("the device advertises no media service")?
-        } else {
-            &self.device_path
-        };
+    async fn call(&self, spec: &ops::Spec, args: &Value, authenticate: bool) -> Result<Reply> {
+        let operation = spec.operation;
+        let path = self.path(spec.service)?;
         let security = if authenticate { self.security() } else { None };
-        let envelope =
-            wire::request_envelope(security.as_deref(), &wire::request_body(operation, args)?);
-        let response = self
+        let url = format!("{}{path}", self.base);
+        let addressing = ops::action_uri(spec).map(|action| wire::addressing(&url, action));
+        let envelope = wire::request_envelope_with(
+            security.as_deref(),
+            addressing.as_deref(),
+            &ops::request_body(spec, args)?,
+        );
+        let mut request = self
             .fetch
-            .request(Method::POST, &format!("{}{path}", self.base))
+            .request(Method::POST, &url)
             .header("Content-Type", "application/soap+xml; charset=utf-8")
-            .body(envelope)
+            .body(envelope);
+        if operation == "PullMessages" {
+            // A long poll: the device may hold the request for the whole Timeout.
+            request = request.timeout(Duration::from_secs(ops::pull_secs(args)?) + TIMEOUT);
+        }
+        let response = request
             .send()
             .await
             .with_context(|| format!("{operation}: the device could not be reached"))?;
@@ -82,6 +114,15 @@ impl Conn {
         }
         Ok(reply)
     }
+
+    /// A device operation by name (the connect handshake's).
+    async fn device_call(&self, operation: &str, authenticate: bool) -> Result<Reply> {
+        let spec = ops::SPECS
+            .iter()
+            .find(|s| s.service == Service::Device && s.operation == operation)
+            .context("no such device operation")?;
+        self.call(spec, &json!({}), authenticate).await
+    }
 }
 
 fn fault_text(f: &Value) -> String {
@@ -98,6 +139,18 @@ fn fault_text(f: &Value) -> String {
             .unwrap_or_default(),
         f["reason"].as_str().unwrap_or_default()
     )
+}
+
+/// The service a GetCapabilities category or a GetServices namespace names.
+fn service_of(name: &str) -> Option<Service> {
+    Some(match name {
+        "Media" | wire::TRT => Service::Media,
+        wire::TR2 => Service::Media2,
+        "PTZ" | wire::TPTZ => Service::Ptz,
+        "Events" | wire::TEV => Service::Events,
+        "Imaging" | wire::TIMG => Service::Imaging,
+        _ => return None,
+    })
 }
 
 pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
@@ -139,13 +192,14 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
             .with_user_agent("netget-onvif"),
         base,
         device_path,
-        media_path: None,
+        paths: HashMap::new(),
+        subscription: Mutex::new(None),
         credentials,
         offset: chrono::Duration::zero(),
     };
 
     // The clock first, unauthenticated: digests carry the device's time, not ours.
-    let device_time = match conn.call("GetSystemDateAndTime", &json!({}), false).await? {
+    let device_time = match conn.device_call("GetSystemDateAndTime", false).await? {
         Reply::Ok(el) => el.child("SystemDateAndTime").and_then(wire::utc_of),
         Reply::Fault(f) => {
             Log::new(Some(&ctx.status_tx)).warn(format!(
@@ -159,11 +213,46 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
     if let Some(t) = device_time {
         conn.offset = t - chrono::Utc::now();
     }
-    let services = match conn.call("GetCapabilities", &json!({}), true).await? {
+    let mut services = match conn.device_call("GetCapabilities", true).await? {
         Reply::Ok(el) => wire::result_json("GetCapabilities", &el)["services"].clone(),
         Reply::Fault(f) => bail!("the device refused GetCapabilities: {}", fault_text(&f)),
     };
-    conn.media_path = services["Media"].as_str().and_then(wire::xaddr_path);
+    // Every XAddr is followed by path only, on the host the client was given.
+    if let Some(map) = services.as_object() {
+        for (name, xaddr) in map {
+            if let (Some(s), Some(path)) =
+                (service_of(name), xaddr.as_str().and_then(wire::xaddr_path))
+            {
+                conn.paths.insert(s, path);
+            }
+        }
+    }
+    // GetServices names Media2 (GetCapabilities predates it); older devices do not have it.
+    match conn.device_call("GetServices", true).await {
+        Ok(Reply::Ok(el)) => {
+            for s in wire::result_json("GetServices", &el)["services"]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                let (Some(ns), Some(xaddr)) = (s["namespace"].as_str(), s["xaddr"].as_str()) else {
+                    continue;
+                };
+                if let (Some(service), Some(path)) = (service_of(ns), wire::xaddr_path(xaddr)) {
+                    if service == Service::Media2 {
+                        services["Media2"] = json!(xaddr);
+                    }
+                    conn.paths.entry(service).or_insert(path);
+                }
+            }
+        }
+        Ok(Reply::Fault(f)) => tracing::debug!(
+            "ONVIF client {}: no GetServices ({})",
+            ctx.client_id,
+            fault_text(&f)
+        ),
+        Err(e) => tracing::debug!("ONVIF client {}: no GetServices ({e:#})", ctx.client_id),
+    }
 
     ctx.state
         .update_client_status(ctx.client_id, ClientStatus::Connected)
@@ -311,24 +400,35 @@ async fn session(
                 continue;
             }
         }
-        let Some(operation) = actions::operation(&action) else {
+        let Some(spec) = actions::spec(&action) else {
             continue;
         };
-        let mut request = json!({});
-        for k in ["profile_token", "stream", "protocol"] {
-            if let Some(v) = action.get(k).filter(|v| !v.is_null()) {
-                request[k] = v.clone();
-            }
-        }
+        let operation = spec.operation;
         // GetSystemDateAndTime is the one operation ONVIF lets a client ask anonymously.
         let outcome = conn
-            .call(operation, &action, operation != "GetSystemDateAndTime")
+            .call(spec, &action, operation != "GetSystemDateAndTime")
             .await;
-        let mut data = json!({"operation": operation, "request": request});
+        let mut data = json!({
+            "operation": operation,
+            "service": actions::service_name(spec.service),
+            "request": ops::request_echo(&action),
+        });
         match outcome {
             Ok(Reply::Ok(el)) => {
                 data["ok"] = json!(true);
-                data["result"] = wire::result_json(operation, &el);
+                let result = ops::result_json(spec, &el);
+                match operation {
+                    // The subscription is followed by path on the host the client was given.
+                    "CreatePullPointSubscription" => {
+                        *conn.subscription.lock().unwrap_or_else(|e| e.into_inner()) =
+                            result["address"].as_str().and_then(wire::xaddr_path);
+                    }
+                    "Unsubscribe" => {
+                        *conn.subscription.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                    }
+                    _ => {}
+                }
+                data["result"] = result;
             }
             Ok(Reply::Fault(f)) => {
                 data["ok"] = json!(false);

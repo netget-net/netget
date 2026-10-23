@@ -214,7 +214,7 @@ async fn go(port: u16, password: &str) -> Value {
     .await
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn onvif_zeep_async_reads_what_the_model_supplied() {
     let (state, id, port) = start(policy(), credentials()).await;
     let r = zeep(port, PASSWORD).await;
@@ -292,7 +292,7 @@ async fn onvif_zeep_async_reads_what_the_model_supplied() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn use_go_onvif_reads_what_the_model_supplied() {
     let (state, id, port) = start(policy(), credentials()).await;
     let r = go(port, PASSWORD).await;
