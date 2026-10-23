@@ -79,9 +79,13 @@ the services tests print the operations the client actually sent, read from the 
   Imaging and the Device Set* operations.
 
 Mutation-checked: skipping the digest comparison, dropping the replay check, the clock check,
-the depth check and the size limit each fail a test here. For the new services: applying a PTZ
-move before the model answers, applying a SetHostname whatever the model says, dropping the
-subscription cap, the Timeout cut or the MessageLimit clamp, and exempting PTZ from
-authentication each fail `bounds_test` (and the first two `services_test`).
+the depth check and the size limit each fail a test here. For the new services, each of
+these fails `bounds_test`: applying a PTZ move before the model answers (it once did not —
+the failing-model test compared the status only after its last move, a GotoHomePosition that
+undid the others; it now checks after each), applying a SetHostname whatever the model says,
+dropping the subscription cap, the PullMessages Timeout cut (the pull then outlives the
+client's 120 s) or the MessageLimit clamp, and exempting PTZ from authentication. Applying a
+move the model refused fails both `services_test` PTZ checks (zeep's and Go's
+`status_refused`).
 
 No LLM calls.

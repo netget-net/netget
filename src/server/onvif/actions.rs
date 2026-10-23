@@ -160,9 +160,9 @@ fn ptz_position_action() -> ActionDefinition {
         PTZ_POSITION,
         "Accept this PTZ move and say where the camera ends up, in the generic spaces: pan and tilt -1..1, zoom 0..1. The event's proposed position is where plain arithmetic puts it.",
         vec![
-            p("pan", "number", "Pan, -1..1", true),
-            p("tilt", "number", "Tilt, -1..1", true),
-            p("zoom", "number", "Zoom, 0..1", true),
+            p("pan", "number", "Where pan ends, -1..1", true),
+            p("tilt", "number", "Where tilt ends, -1..1", true),
+            p("zoom", "number", "Where zoom ends, 0..1", true),
         ],
         json!({"type": PTZ_POSITION, "pan": 0.25, "tilt": -0.1, "zoom": 0.5}),
     )
@@ -390,7 +390,7 @@ pub static SET_DATE_TIME_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         "A client asks to set the device's clock (SetSystemDateAndTime). Accepted, GetSystemDateAndTime reports it and WS-Security timestamps are checked against it.",
         accept_action(),
         vec![
-            p("date_time_type", "string", "Manual or NTP", true),
+            p("date_time_type", "string", "How the clock is set: Manual or NTP", true),
             p("daylight_savings", "boolean", "Daylight saving in effect", true),
             p("time_zone", "string", "POSIX TZ string, or null to keep the current one", true),
             p("utc_date_time", "string", "The UTC time asked for (Manual), or null", true),
@@ -480,7 +480,7 @@ pub static IMAGING_MOVE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             p("requested", "object", "{position, speed} / {distance, speed} / {speed}", true),
             p("current_position", "number", "Where focus is, 0..1", true),
             p("proposed_position", "number", "Where plain arithmetic puts it", true),
-            p("auto_focus_mode", "string", "AUTO or MANUAL", true),
+            p("auto_focus_mode", "string", "The autofocus mode: AUTO or MANUAL", true),
         ],
     )
 });

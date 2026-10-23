@@ -52,8 +52,13 @@ fn source_token() -> Parameter {
 
 fn axes(range: &str) -> Vec<Parameter> {
     vec![
-        p("pan", "number", &format!("Pan, {range}"), false),
-        p("tilt", "number", &format!("Tilt, {range}"), false),
+        p(
+            "pan",
+            "number",
+            &format!("Pan (left/right), {range}"),
+            false,
+        ),
+        p("tilt", "number", &format!("Tilt (down/up), {range}"), false),
         p(
             "zoom",
             "number",
@@ -175,12 +180,12 @@ fn definition(name: &'static str) -> (&'static str, Vec<Parameter>, Value) {
             "Change a video source's imaging settings; give only the ones to change.",
             vec![
                 source_token(),
-                p("brightness", "number", "0..100", false),
-                p("color_saturation", "number", "0..100", false),
-                p("contrast", "number", "0..100", false),
-                p("sharpness", "number", "0..100", false),
-                p("ir_cut_filter", "string", "ON, OFF or AUTO", false),
-                p("auto_focus_mode", "string", "AUTO or MANUAL", false),
+                p("brightness", "number", "Brightness level, 0..100", false),
+                p("color_saturation", "number", "Colour saturation level, 0..100", false),
+                p("contrast", "number", "Contrast level, 0..100", false),
+                p("sharpness", "number", "Sharpness level, 0..100", false),
+                p("ir_cut_filter", "string", "IR-cut filter mode: ON, OFF or AUTO", false),
+                p("auto_focus_mode", "string", "Autofocus mode: AUTO or MANUAL", false),
             ],
             ex(json!({"video_source_token": "video_source", "brightness": 60})),
         ),
@@ -191,9 +196,9 @@ fn definition(name: &'static str) -> (&'static str, Vec<Parameter>, Value) {
             vec![
                 source_token(),
                 p("kind", "string", "absolute, relative or continuous", true),
-                p("position", "number", "absolute: 0..1", false),
-                p("distance", "number", "relative: -1..1", false),
-                p("speed", "number", "continuous: -1..1", false),
+                p("position", "number", "For kind absolute: the focus position, 0..1", false),
+                p("distance", "number", "For kind relative: how far to move focus, -1..1", false),
+                p("speed", "number", "For kind continuous: the focus speed, -1..1", false),
             ],
             ex(json!({"video_source_token": "video_source", "kind": "absolute", "position": 0.4})),
         ),
