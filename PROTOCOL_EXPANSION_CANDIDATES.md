@@ -61,7 +61,17 @@ What is left from this document, with the reason each is still open:
   - ~~**Stratum V2**~~: landed 14 October 2026 as the `stratum-v2` pair (Mining Protocol,
     standard and extended channels, Noise NX with the SV2 certificate), hand-rolled from
     sv2-spec so that SRI's `mining_device` and `pool_sv2` (over Bitcoin Core regtest) are
-    independent peers. The Job Declaration and Template Distribution protocols are not built.
+    independent peers. **The Template Distribution and Job Declaration protocols landed 23
+    October 2026**, as `role` startup parameters on the same protocol: a Template Provider
+    (the model writes each template; Rust builds the merkle path, witness commitment and
+    BIP 34 height and verifies SubmitSolution against the target) tested by SRI's pool and
+    mining_device with Bitcoin Core's `submitblock` accepting the assembled block; a Job
+    Declarator Server (the model allocates tokens and accepts or refuses declared jobs;
+    bounded token table and mempool) tested by SRI's jd_client; a Job Declarator Client
+    against SRI's JDS, which validates with Bitcoin Core's `checkBlock`; and a Template
+    Distribution client against sv2-tp 1.1.2, Bitcoin Core's tip becoming NetGet's block.
+    Still not built: SetCustomMiningJob in NetGet's pool (so no independent client has
+    driven PushSolution), block relay from the new server roles, sigop checks.
   - ~~**IPFS above libp2p**~~: landed 14 October 2026 on the `libp2p` feature behind an
     `ipfs` startup parameter — Bitswap 1.0–1.2, CIDv0/v1 with `raw` and `dag-pb`, single-block
     UnixFS files, and the Kademlia DHT (FIND_NODE answered in Rust, GET_PROVIDERS and
@@ -124,6 +134,25 @@ What is left from this document, with the reason each is still open:
 - **Maturity**: almost everything above landed at `Experimental` or `Beta`. The client
   promotions that came with it are Kafka, DNS and RDP (Beta). None of these items has
   been taken through the six Stable conditions in `AGENTS.md`.
+
+### Follow-up queue (approved 23 October 2026)
+
+Taken one at a time, each covering what its protocol's own "not built" or "not tested" list
+says. Strike an item when it lands.
+
+1. Stratum V2: SetCustomMiningJob in NetGet's pool, so SRI's jd_client drives PushSolution end to end.
+2. IPFS: multi-block DAGs and Bitswap sessions.
+3. GRE directly on IP protocol 47.
+4. Zigbee: TI Z-Stack MT dialect; EZSP 13 and older.
+5. HDFS: append, truncate, concat; tests for the fixed deadlines.
+6. The flaky `connection_history_test::lines_typed_during_a_call_are_answered_together`.
+7. NGAP: PDU session release and modification, Service Request, paging, IPv6 sessions, NIA1/NEA1 and NIA3/NEA3.
+8. ONVIF: Recording, Replay, Search; Basic Notification.
+9. NVMe/TCP: DH-HMAC-CHAP, TLS, reservations, Compare/Verify/Copy.
+10. iSCSI: error recovery levels 1 and 2, multiple connections per session, the remaining task management functions.
+11. FUSE: hard links, extended attributes, fallocate. macOS needs macFUSE or FUSE-T installed, which waits on the maintainer.
+
+PCoIP stays unbuilt: no published wire specification and no open implementation to test against.
 
 Priority: **A** strongest general fit · **B** useful follow-on · **C** workload-specific.
 Effort **S/M/L** covers both roles plus interoperability tests.
