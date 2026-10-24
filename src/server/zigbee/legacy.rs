@@ -353,7 +353,7 @@ pub fn downgrade_params(v: u8, frame_id: u16, p: &[u8]) -> Vec<u8> {
         id::GET_CHILD_DATA if v < 10 => {
             let mut out = narrow(Status::Ember, p);
             // Drop timeout_remaining from the 18-byte EmberChildData.
-            if out.len() >= 1 + 18 {
+            if out.len() > 18 {
                 out.truncate(out.len() - 4);
             }
             out
@@ -397,7 +397,7 @@ pub fn callback(v: u8, cb: Callback) -> Callback {
                 ember_status(u32::from_le_bytes([p[1], p[2], p[3], p[4]])),
             ]
         }
-        id::MESSAGE_SENT_HANDLER if p.len() >= 4 + 1 + 2 + 11 + 2 + 1 => {
+        id::MESSAGE_SENT_HANDLER if p.len() > 4 + 1 + 2 + 11 + 2 => {
             // v14: status, type, destination, APS, tag(16), contents.
             // Before: type, destination, APS, tag(8), status, contents.
             let st = ember_status(u32::from_le_bytes([p[0], p[1], p[2], p[3]]));
@@ -405,7 +405,7 @@ pub fn callback(v: u8, cb: Callback) -> Callback {
             w.raw(&p[4..4 + 1 + 2 + 11]).u8(p[18]).u8(st).raw(&p[20..]);
             w.done()
         }
-        id::INCOMING_MESSAGE_HANDLER if p.len() >= 1 + 11 + 2 + 8 + 1 + 1 + 1 + 1 + 4 + 1 => {
+        id::INCOMING_MESSAGE_HANDLER if p.len() > 1 + 11 + 2 + 8 + 1 + 1 + 1 + 1 + 4 => {
             // v14: type, APS, sender, EUI-64, binding, address index, LQI, RSSI, timestamp,
             // contents. Before: type, APS, LQI, RSSI, sender, binding, address index,
             // contents — no EUI-64, no timestamp.
