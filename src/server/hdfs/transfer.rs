@@ -463,7 +463,7 @@ pub fn packet_spans(offset: u64, len: u64, bpc: u32, max: usize) -> Vec<(u64, u6
     let mut out = Vec::new();
     let mut at = offset;
     let end = offset.saturating_add(len);
-    if at % bpc != 0 && at < end {
+    if !at.is_multiple_of(bpc) && at < end {
         let n = (bpc - at % bpc).min(end - at);
         out.push((at, n));
         at += n;
