@@ -256,7 +256,7 @@ async fn gretap_with_key_checksum_and_sequence_and_oracle() {
         Encap::Gretap,
         header,
         json!({"encapsulation": "gretap", "vni": 42}),
-        "gre",
+        "gretap",
     )
     .await;
     assert_eq!(v.sequences, [0, 1, 2]);
@@ -269,7 +269,7 @@ async fn gretap_without_a_key_and_oracle() {
         Encap::Gretap,
         Header::default(),
         json!({"encapsulation": "gretap"}),
-        "gre",
+        "gretap",
     )
     .await;
 }

@@ -117,9 +117,11 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
     Log::new(Some(&ctx.status_tx)).info(format!(
         "GRE client {} is {ip}{} behind a {} tunnel with {} from {local} to {remote}",
         ctx.client_id,
-        (tunnel == Tunnel::Gretap)
-            .then(|| format!(" ({})", frame::mac_str(&mac)))
-            .unwrap_or_default(),
+        if tunnel == Tunnel::Gretap {
+            format!(" ({})", frame::mac_str(&mac))
+        } else {
+            String::new()
+        },
         tunnel.name(),
         key_str(key),
     ));
