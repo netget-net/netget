@@ -567,7 +567,8 @@ pub fn wire_for(protocol: &str) -> Wire {
         "geneve" => udp("geneve"),
         // GRE-in-UDP (RFC 8086): tshark 4.6.8 registers `gre` on udp.port 4754 and accepts it
         // in `-d udp.port==N,gre`; protocol type 0x6558 hands the inner frame to `eth`.
-        "gre" | "gretap" => udp("gre"),
+        // Keyed `gretap` here: plain `gre` is the gre protocol, on IP protocol 47 (below).
+        "gretap" => udp("gre"),
         "bfd" => udp("bfd"),
         "sip" => either("sip"),
         // H.225.0 call signalling is Q.931 inside TPKT, which Wireshark finds on any TCP port
@@ -599,6 +600,9 @@ pub fn wire_for(protocol: &str) -> Wire {
         "icmp" => raw("icmp", "icmp"),
         "igmp" => raw("igmp", "igmp"),
         "ospf" => raw("ip proto 89", "ospf"),
+        // GRE on IP protocol 47. tshark dissects what it carries by protocol type: `eth` for a
+        // gretap payload (0x6558), `ip` for a gre one (0x0800). GRE-in-UDP is vxlan's.
+        "gre" => raw("ip proto 47", "gre"),
         // Same trap as isis: `arp` is an Ethernet-only BPF keyword and is rejected on
         // loopback (DLT_NULL on macOS). Capture on a real interface.
         "arp" => with_note(raw("arp", "arp"), ARP_LOOPBACK_NOTE),

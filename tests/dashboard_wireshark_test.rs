@@ -114,6 +114,9 @@ fn raw_protocols_have_no_port_and_use_the_declared_interface() {
     assert_eq!(plan.decode_as, None);
     assert_eq!(wire_for("arp").transport, Transport::Raw("arp"));
     assert_eq!(wire_for("ospf").transport, Transport::Raw("ip proto 89"));
+    // The gre protocol is IP protocol 47; GRE-in-UDP (vxlan's gretap) is keyed `gretap`.
+    assert_eq!(wire_for("gre").transport, Transport::Raw("ip proto 47"));
+    assert_eq!(wire_for("gretap").decode_as, Some("gre"));
     // `isis` is not a BPF keyword on loopback; the display filter selects it.
     assert_eq!(wire_for("isis").transport, Transport::Raw(""));
     assert_eq!(wire_for("isis").display, Some("isis"));

@@ -335,6 +335,8 @@ pub mod consul;
 pub mod dbus;
 pub mod epp;
 pub mod ethercat;
+#[cfg(unix)]
+pub mod gre;
 pub mod guacamole;
 pub mod inetd;
 pub mod jmap;

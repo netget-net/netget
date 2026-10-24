@@ -26,10 +26,22 @@ pub struct LiveCapture {
 impl LiveCapture {
     /// Start capturing on `iface`; returns once tshark says it is capturing.
     pub fn start(iface: &str) -> LiveCapture {
+        Self::start_filtered(iface, None)
+    }
+
+    /// As [`start`](Self::start), keeping only what the BPF capture `filter` passes: for a
+    /// link the host's own stack also talks on (a GRE peer's host kernel answers every
+    /// protocol-47 packet it has no tunnel for with an ICMP error, which is not NetGet's).
+    pub fn start_filtered(iface: &str, filter: Option<&str>) -> LiveCapture {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("live.pcapng");
-        let mut child = Command::new("tshark")
-            .args(["-n", "-q", "-i", iface, "-w"])
+        let mut command = Command::new("tshark");
+        command.args(["-n", "-q", "-i", iface]);
+        if let Some(f) = filter {
+            command.args(["-f", f]);
+        }
+        let mut child = command
+            .arg("-w")
             .arg(&path)
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -83,7 +95,8 @@ impl LiveCapture {
         let deadline = Instant::now() + Duration::from_secs(secs);
         while Instant::now() < deadline {
             if self.read_fields(&[field], true).iter().any(|r| {
-                r[0].eq_ignore_ascii_case(from) && r.get(1).is_some_and(|v| v.contains(needle))
+                outer_src(&r[0]).eq_ignore_ascii_case(from)
+                    && r.get(1).is_some_and(|v| v.contains(needle))
             }) {
                 return true;
             }
@@ -171,7 +184,7 @@ impl LiveCapture {
         let mut chains = Vec::new();
         let mut failures = Vec::new();
         for r in &rows {
-            if !r[0].eq_ignore_ascii_case(ours) {
+            if !outer_src(&r[0]).eq_ignore_ascii_case(ours) {
                 continue;
             }
             chains.push(r.get(2).cloned().unwrap_or_default());
@@ -199,6 +212,12 @@ impl LiveCapture {
         );
         chains
     }
+}
+
+/// The outermost source MAC of a row's `eth.src` cell. A tunnelled Ethernet frame (gretap,
+/// VXLAN) carries a second `eth` layer, and `-E occurrence=a` prints both, comma-joined.
+pub fn outer_src(cell: &str) -> &str {
+    cell.split(',').next().unwrap_or_default()
 }
 
 impl Drop for LiveCapture {

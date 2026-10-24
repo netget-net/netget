@@ -258,8 +258,7 @@ impl Protocol for VxlanClientProtocol {
         vec![
             "vxlan",
             "geneve",
-            "gre",
-            "gretap",
+            "gre-in-udp",
             "overlay",
             "vtep",
             "tunnel",
@@ -353,7 +352,7 @@ impl Protocol for VxlanClientProtocol {
             .implementation("The server's VXLAN/Geneve/GRE-in-UDP and Ethernet/ARP/IPv4/ICMP/UDP framing (src/server/vxlan/frame.rs); one overlay host with an ARP cache, answering ARP and echo requests for its own IP in Rust; sends wait on ARP (2 s) and report vxlan_unreachable when nobody answers; for gretap, the GRE key, checksum and sequence number are each optional")
             .llm_control("Which overlay IPs to resolve, ping and send UDP to, and what to do with what comes back")
             .e2e_testing("tests/client/vxlan: the Linux kernel's vxlan driver, and its gretap driver over a fou port (GRE key, checksum and sequence numbers on), each in a network namespace, which answers ARP and ping itself, with a UDP service behind it and a closed port for the ICMP error")
-            .notes("No TCP, no IPv6, no IP fragmentation; the tunnel goes to one remote endpoint (no flooding or learning of others). GRE is GRE-in-UDP only: GRE directly on IP protocol 47 needs a raw socket and is not implemented.")
+            .notes("No TCP, no IPv6, no IP fragmentation; the tunnel goes to one remote endpoint (no flooding or learning of others). GRE here is GRE-in-UDP only; GRE directly on IP protocol 47 needs a raw socket and is the separate gre protocol, so this one stays unprivileged.")
             .max_inbound_bytes(frame::MAX_DATAGRAM)
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
             .batching(crate::protocol::metadata::BatchingMode::Unsupported)

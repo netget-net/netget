@@ -1217,6 +1217,9 @@ pub mod sunrpc;
 pub mod tr069;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod vxlan;
+// A raw IP protocol-47 socket (root, or CAP_NET_RAW): Unix only.
+#[cfg(unix)]
+pub mod gre;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod webtransport;
 #[cfg(not(target_arch = "wasm32"))]

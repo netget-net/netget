@@ -409,3 +409,10 @@ path = "fuzz_targets/ipns_record.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "gre_packet"
+path = "fuzz_targets/gre_packet.rs"
+test = false
+doc = false
+bench = false
