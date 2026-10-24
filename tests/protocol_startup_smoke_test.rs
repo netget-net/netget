@@ -1082,3 +1082,145 @@ async fn every_registered_client_protocol_refuses_a_closed_port_promptly() {
         "{report}\nhung: {hangs:?}\npanicked: {panics:?}"
     );
 }
+
+/// Set in the child process [`a_stopped_stdio_server_does_not_keep_the_process_alive`] runs.
+#[cfg(unix)]
+const STDIO_CHILD_ENV: &str = "NETGET_SMOKE_STDIO_CHILD";
+
+/// Stopping a stdio server must leave nothing behind that the process waits for at exit.
+///
+/// The server reads the process's stdin, and a stdin read blocks and cannot be cancelled. It
+/// used to read through `tokio::io::stdin()`, on tokio's blocking pool, and dropping a runtime
+/// waits for every blocking-pool thread: so once a stdio server had been started and stopped on
+/// a stdin that stayed open with nothing written, the runtime could never be dropped. The sweep
+/// above starts and stops `stdio` like everything else, and whenever this binary's stdin was an
+/// open pipe it finished its sweep, printed its report and then never returned.
+///
+/// The case needs a stdin of its own, so it runs in a child: this binary again, running
+/// [`stdio_child_starts_and_stops_a_stdio_server`], with stdin a pipe this test holds open. The
+/// child does not outlive this test even if this test is killed: the pipe's only writer is here,
+/// so the child's read then sees end of file.
+#[cfg(unix)]
+#[test]
+fn a_stopped_stdio_server_does_not_keep_the_process_alive() {
+    use std::io::{Read, Write};
+    use std::process::{Command, Stdio};
+
+    const CHILD_DEADLINE: Duration = Duration::from_secs(60);
+
+    let mut child = Command::new(std::env::current_exe().expect("current_exe"))
+        .args([
+            "stdio_child_starts_and_stops_a_stdio_server",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(STDIO_CHILD_ENV, "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn the child");
+    // One line for the server to read, so the child knows its read loop is running and the next
+    // read is outstanding. Then the pipe stays open, with nothing more on it.
+    let mut stdin = child.stdin.take().expect("child stdin");
+    stdin.write_all(b"hello\n").expect("write to the child");
+    stdin.flush().expect("flush");
+
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("try_wait") {
+            break Some(status);
+        }
+        if started.elapsed() > CHILD_DEADLINE {
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    if status.is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    let mut output = String::new();
+    if let Some(mut out) = child.stdout.take() {
+        let _ = out.read_to_string(&mut output);
+    }
+    if let Some(mut err) = child.stderr.take() {
+        let _ = err.read_to_string(&mut output);
+    }
+    drop(stdin);
+
+    let status = status.unwrap_or_else(|| {
+        panic!(
+            "the child had not exited after {}s, though it stops its stdio server at once: \
+             something that server started is still waiting on stdin, and the runtime cannot \
+             be dropped until it returns. Child output:\n{output}",
+            CHILD_DEADLINE.as_secs()
+        )
+    });
+    assert!(status.success(), "the child failed ({status}):\n{output}");
+    assert!(
+        output.contains("stdio child: runtime dropped"),
+        "the child did not get as far as dropping its runtime:\n{output}"
+    );
+}
+
+/// The child half of [`a_stopped_stdio_server_does_not_keep_the_process_alive`]. Does nothing
+/// unless that test launched it.
+#[cfg(unix)]
+#[test]
+fn stdio_child_starts_and_stops_a_stdio_server() {
+    if std::env::var_os(STDIO_CHILD_ENV).is_none() {
+        return;
+    }
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("runtime");
+    runtime.block_on(async {
+        let state = Arc::new(AppState::new());
+        state
+            .set_llm_client(netget::llm::OllamaClient::new("http://127.0.0.1:1"))
+            .await;
+        let (status_tx, mut status_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let id = netget::cli::server_startup::start_server_from_action(
+            &state,
+            None,
+            None,
+            None,
+            None,
+            "stdio",
+            false,
+            None,
+            "smoke test: start a stdio server and stop it".to_string(),
+            None,
+            None,
+            None,
+            None,
+            Default::default(),
+            status_tx,
+        )
+        .await
+        .expect("start the stdio server");
+
+        // The line the parent wrote reaches the model as an event, which fails (no model is
+        // reachable) and says so on the status stream. By then the reader has gone back to
+        // reading, and that read is the one nothing can cancel.
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while let Some(line) = status_rx.recv().await {
+                if line.contains("stdio_input_received") {
+                    return;
+                }
+            }
+            panic!("the status stream ended before the server read its stdin");
+        })
+        .await
+        .expect("the stdio server never read the line on its stdin");
+
+        state.remove_server(id).await;
+    });
+    // This is where it used to hang.
+    drop(runtime);
+    println!("stdio child: runtime dropped");
+}
