@@ -682,7 +682,10 @@ impl DohClient {
                     "name": record.name().to_string(),
                     "type": record.record_type().to_string(),
                     "ttl": record.ttl(),
-                    "data": record.data().map(|d| d.to_string()).unwrap_or_default(),
+                    "data": record
+                        .data()
+                        .and_then(crate::utils::display::try_display)
+                        .unwrap_or_default(),
                 })
             })
             .collect();

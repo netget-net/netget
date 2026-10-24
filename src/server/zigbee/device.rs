@@ -1240,6 +1240,11 @@ pub fn zcl(dev: &Device, ep: u8, cluster: u16, data: &[u8]) -> ZclOutcome {
                 .iter()
                 .filter(|(s, _, _)| *s != zcl_status::SUCCESS)
             {
+                // As for Read Attributes: a response that would not fit one frame carries the
+                // records that do (found by `zigbee_ash_ezsp`, which saw an 86-octet reply).
+                if p.len() + 4 + 3 > MAX_APS_PAYLOAD {
+                    break;
+                }
                 p.push(*s);
                 p.push(*d);
                 p.extend_from_slice(&id.to_le_bytes());
