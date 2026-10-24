@@ -42,7 +42,8 @@ the first packet finishes that chunk alone, its CRC32C over its own bytes, as Ha
 requires. No hflush, no pipeline recovery.
 
 **Bounds.** Response frames of 16 MiB, packets of 1 MiB, 1024 packets per read, 60 s per call
-and per DataNode step, 16 follow-ups per handler chain (a whole list, stat, read, write, rename,
+and per DataNode step, 60 s (polled every 500 ms) waiting for a truncate's block recovery, 256
+sources per concat, 16 follow-ups per handler chain (a whole list, stat, read, write, rename,
 chmod and delete session is twelve). A failed model call sends nothing.
 
 **Evidence.** `tests/client/hdfs/real_server_test.rs`, against a real single-node HDFS from
