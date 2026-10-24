@@ -165,7 +165,8 @@ says. Strike an item when it lands.
 4. ~~Zigbee: TI Z-Stack MT dialect; EZSP 13 and older.~~ Landed 24 October 2026.
 5. ~~HDFS: append, truncate, concat; tests for the fixed deadlines.~~ Landed 24 October 2026.
 6. ~~The flaky telnet batching test and the startup-sweep hang.~~ Landed 24 October 2026: the telnet test's premise was wrong (it took the connect event's model call for the slow call) and is now deterministic, with a new test that a line still in the kernel buffer joins the batch; the sweep names a stuck protocol, aborts hung starts and has an overall deadline; two real defects found on the way, the stdio server holding the process open on an open stdin pipe and ActivityPub's unoptimised RSA keygen timing out under load, are fixed. What hung the 24 October run is not established.
-6a. The same `call_count() == 0` premise and a fixed 200 ms gap in `tests/server/rcon/batching_test.rs` and `tests/server/pty/batching_test.rs`; the TCP server spawning a handler task per read, which could reorder back-to-back reads.
+6a. ~~RCON/PTY batching premise; TCP read ordering.~~ Landed 24 October 2026: the TCP server answered one connection's reads out of order (140 of 200 runs under load; two locks raced and a read could be stranded in the queue) and now admits each read in arrival order (`admit_read`, `answer`); the RCON, PTY and TCP batching tests hold their first answer on a gate instead of a delay.
+6b. `tls`, `socket_file`, `bitcoin` and possibly `ssh_agent` copy TCP's old per-read spawn and two-lock check, so they very likely reorder replies the same way.
 7. NGAP: PDU session release and modification, Service Request, paging, IPv6 sessions, NIA1/NEA1 and NIA3/NEA3.
 8. ONVIF: Recording, Replay, Search; Basic Notification.
 9. NVMe/TCP: DH-HMAC-CHAP, TLS, reservations, Compare/Verify/Copy.
