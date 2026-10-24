@@ -1,7 +1,7 @@
 //! Batching on the socket_file server: what arrives while the model is answering.
 //!
 //! A Unix-socket byte stream has no message boundaries, so the server's queue keeps each read
-//! that arrived during a call and `ConnectionData::take_next` decides what the next call
+//! that arrived during a call and `ReadQueue::next_or_idle` decides what the next call
 //! answers — the whole queue with batching on, one read at a time with it off. The same shape
 //! as `tcp`'s `tests/connection_history_test.rs`.
 //!
