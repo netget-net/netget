@@ -81,8 +81,16 @@ What is left from this document, with the reason each is still open:
     `ipfs` startup parameter — Bitswap 1.0–1.2, CIDv0/v1 with `raw` and `dag-pb`, single-block
     UnixFS files, and the Kademlia DHT (FIND_NODE answered in Rust, GET_PROVIDERS and
     ADD_PROVIDER by the model) — with Kubo 0.43.1 fetching from NetGet and serving to it.
-    Serving multi-block DAGs, Bitswap sessions, IPNS/DHT records and a second independent
-    IPFS implementation are not done.
+    **Multi-block files, directories, remembered wants, whole-DAG fetch and IPNS landed 23
+    October 2026**: the model describes files and trees (`described_disk` vocabulary) and
+    Rust chunks them as Kubo does, with every root CID equal to `ipfs add --only-hash` (85
+    roots across seven profiles) and to Helia's importer 17.1.1 (38 roots three ways); the
+    client fetches whole DAGs from Kubo with every block's hash checked; per-peer wantlists
+    are remembered and answered when content arrives; IPNS records (Ed25519 signatureV2,
+    sequence, validity) and provider records are kept in Rust. Helia 7.1.16 is the second
+    independent implementation. Still not built: HAMT-sharded directories, rabin/buzhash
+    chunkers and the trickle layout, multi-peer sessions, a full Kademlia node of the
+    host's own, signed peer records.
   - ~~**NGAP/N2**~~: landed 15 October 2026 as the `ngap` pair (AMF and gNB over real
     SCTP, PPID 60, with a labelled lab-TCP transport for hosts without SCTP): NG Setup,
     Initial UE Message, Downlink/Uplink NAS Transport, and pre-security 5GMM, hand-written
@@ -146,7 +154,7 @@ Taken one at a time, each covering what its protocol's own "not built" or "not t
 says. Strike an item when it lands.
 
 1. ~~Stratum V2: SetCustomMiningJob in NetGet's pool, so SRI's jd_client drives PushSolution end to end.~~ Landed 23 October 2026.
-2. IPFS: multi-block DAGs and Bitswap sessions.
+2. ~~IPFS: multi-block DAGs and Bitswap sessions.~~ Landed 23 October 2026.
 3. GRE directly on IP protocol 47.
 4. Zigbee: TI Z-Stack MT dialect; EZSP 13 and older.
 5. HDFS: append, truncate, concat; tests for the fixed deadlines.
