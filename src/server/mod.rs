@@ -6,6 +6,7 @@ pub mod accept_bounded;
 pub mod command_batch;
 pub mod connection;
 pub mod peer_support;
+pub mod read_queue;
 // server_trait requires async-trait, so only compile when features that provide it are enabled
 pub mod server_trait;
 pub mod socket_helpers;
