@@ -37,7 +37,15 @@ Each connection has three states:
 - **Processing**: LLM is generating a response
 - **Accumulating**: LLM requested `wait_for_more` to accumulate additional data
 
-This prevents concurrent LLM calls for the same connection and ensures ordered processing.
+This prevents concurrent LLM calls for the same connection and ensures ordered processing —
+but only because the **reader** makes every transition into `Processing`, in arrival order and
+under the connection lock (`admit_read`), and the answering task (`answer`) is spawned only by
+that transition. It leaves `Processing` only by taking the next queued payload or going `Idle`
+under one lock. When each read's own spawned task checked the state and set it in two separate
+lock acquisitions, two reads could both find the connection `Idle` and be answered at once, and a
+later read's task could run first: `tests/server/tcp/read_order_test.rs` measured replies coming
+back out of order in 140 of 200 runs. It also left a read queued between "is the queue empty?"
+and "go `Idle`" stranded until the peer sent something else.
 
 ### 3. Data Queueing
 
@@ -345,7 +353,7 @@ deadline is applied and that work in flight suspends it; the value is argued her
 
 **TCP is the one server here whose read loop does not stop while a request is answered.** Every
 other protocol awaits the model inline, so its `read()` is not even being polled during the
-answer. This one hands each message to a spawned task and goes straight back to `read()`, so the
+answer. This one hands each answer to a spawned task and goes straight back to `read()`, so the
 deadline and the answer are live at the same moment. `read_bounded` therefore consults
 `ConnectionActivity`, which reports a connection with work in flight as not idle at all: the
 per-message handler and the connect-event task each hold a `BusyGuard` for the whole of
