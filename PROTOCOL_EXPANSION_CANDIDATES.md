@@ -41,8 +41,14 @@ What is left from this document, with the reason each is still open:
 - **Partial slices of shipped items:**
   - ~~**GRE**~~: landed 14 October 2026 as the `vxlan` feature's `gretap` encapsulation
     (Ethernet over GRE in UDP, RFC 8086, port 4754), tested against the Linux kernel's
-    gretap-over-fou driver. GRE directly on IP protocol 47 is still not built: it needs a
-    raw socket, and privilege is declared per protocol.
+    gretap-over-fou driver. **GRE directly on IP protocol 47 landed 24 October 2026** as its
+    own `gre` protocol (server and client, Unix, `RawSockets`, so vxlan stays unprivileged),
+    sharing vxlan's GRE codec (`src/utils/gre.rs`): gretap (0x6558) and L3 gre (0x0800)
+    payloads, key/checksum/sequence copied per RFC 2784/2890, Cisco keepalives reflected,
+    a peer allowlist, key filter, size and rate bounds. Tested against the Linux kernel's
+    `ip_gre` (gre and gretap links in a namespace: ping, ARP, UDP both ways) and scapy as a
+    second implementation, with tshark 4.2.2 reading both directions. Not built: IPv6,
+    PPTP's enhanced GRE, WCCP/ERSPAN, inner fragmentation; macOS has never run it as root.
   - ~~**ONVIF**~~: landed 14 October 2026 as the `onvif` pair — device service
     (GetSystemDateAndTime, GetDeviceInformation, GetCapabilities, GetServices, GetScopes,
     GetNetworkInterfaces) and media ver10 (GetProfiles, GetVideoSources, GetStreamUri,
@@ -155,10 +161,10 @@ says. Strike an item when it lands.
 
 1. ~~Stratum V2: SetCustomMiningJob in NetGet's pool, so SRI's jd_client drives PushSolution end to end.~~ Landed 23 October 2026.
 2. ~~IPFS: multi-block DAGs and Bitswap sessions.~~ Landed 23 October 2026.
-3. GRE directly on IP protocol 47.
+3. ~~GRE directly on IP protocol 47.~~ Landed 24 October 2026.
 4. Zigbee: TI Z-Stack MT dialect; EZSP 13 and older.
 5. HDFS: append, truncate, concat; tests for the fixed deadlines.
-6. The flaky `connection_history_test::lines_typed_during_a_call_are_answered_together`.
+6. The flaky `connection_history_test::lines_typed_during_a_call_are_answered_together`, and the intermittent hang in `protocol_startup_smoke_test::every_registered_server_protocol_starts_honestly` (a CI shard ran to its 60-minute limit on 24 October 2026; the rerun took 24 minutes; the captured per-protocol lines could not name the protocol).
 7. NGAP: PDU session release and modification, Service Request, paging, IPv6 sessions, NIA1/NEA1 and NIA3/NEA3.
 8. ONVIF: Recording, Replay, Search; Basic Notification.
 9. NVMe/TCP: DH-HMAC-CHAP, TLS, reservations, Compare/Verify/Copy.
