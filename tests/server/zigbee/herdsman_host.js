@@ -1,15 +1,17 @@
 // zigbee-herdsman (the library Zigbee2MQTT runs on) as the Zigbee host on NetGet's
-// co-processor, through its `ember` adapter on tcp://127.0.0.1:<port>.
+// co-processor, through its `ember` (EZSP) or `zstack` (Z-Stack MT) adapter on
+// tcp://127.0.0.1:<port>.
 //
 // Starts a Controller (forming or resuming a network to match its configuration), permits
 // joining, waits for the device with <ieee> to be interviewed, switches it on, waits for its
 // attribute report, and reads onOff back. Each step prints one JSON line; the exit status is 0
 // only when every step held.
 //
-// node herdsman_host.js <herdsman dir> <port> <data dir> <ieee 0x…> <channel> <network key hex>
+// node herdsman_host.js <herdsman dir> <port> <data dir> <ieee 0x…> <channel> <network key hex> [ember|zstack]
 const path = require("node:path");
 const fs = require("node:fs");
-const [herdsmanDir, port, dataDir, ieee, channel, keyHex] = process.argv.slice(2);
+const [herdsmanDir, port, dataDir, ieee, channel, keyHex, adapterName] = process.argv.slice(2);
+const adapter = adapterName || "ember";
 const herdsman = require(path.join(herdsmanDir, "node_modules", "zigbee-herdsman"));
 const log = (m) => process.stderr.write(`${m}\n`);
 herdsman.setLogger({
@@ -30,7 +32,7 @@ const timeout = (ms, what) => new Promise((_, reject) => setTimeout(() => reject
             channelList: [Number(channel)],
             networkKey: [...Buffer.from(keyHex, "hex")],
         },
-        transport: {path: `tcp://127.0.0.1:${port}`, adapter: "ember"},
+        transport: {path: `tcp://127.0.0.1:${port}`, adapter},
         databasePath: path.join(dataDir, "database.db"),
         databaseBackupPath: path.join(dataDir, "database.db.backup"),
         backupPath: path.join(dataDir, "coordinator_backup.json"),
@@ -52,7 +54,8 @@ const timeout = (ms, what) => new Promise((_, reject) => setTimeout(() => reject
             });
         });
         const started = await controller.start();
-        out({step: "started", result: started});
+        const coordinator = await controller.getCoordinatorVersion();
+        out({step: "started", result: started, coordinator});
         await controller.permitJoin(60);
         out({step: "permitted"});
         const device = await Promise.race([interviewed, timeout(45000, "interview")]);

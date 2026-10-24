@@ -471,6 +471,19 @@ impl Host {
     }
 }
 
+impl Host {
+    /// Register endpoint 1 (HA) at an EZSP version before 14: the status is one byte.
+    pub async fn add_endpoint_v13(&mut self) {
+        let mut p = vec![1];
+        p.extend_from_slice(&0x0104u16.to_le_bytes());
+        p.extend_from_slice(&0x0400u16.to_le_bytes());
+        p.extend_from_slice(&[0, 1, 0]);
+        p.extend_from_slice(&0x0006u16.to_le_bytes());
+        let (_, r) = self.command(ezsp::id::ADD_ENDPOINT, &p).await;
+        assert_eq!(r, vec![0x00], "addEndpoint: EzspStatus SUCCESS in one byte");
+    }
+}
+
 pub fn status(p: &[u8]) -> u32 {
     u32::from_le_bytes([p[0], p[1], p[2], p[3]])
 }
@@ -486,4 +499,110 @@ pub fn zcl_read(tsn: u8, attrs: &[u16]) -> Vec<u8> {
         v.extend_from_slice(&a.to_le_bytes());
     }
     v
+}
+
+/// A raw Z-Stack host: NetGet's MT framing builds the frames, the assertions read the bytes the
+/// server wrote. SRSPs and AREQs are kept apart: an SRSP answers the SREQ just sent, AREQs
+/// are indications in the order the firmware raised them.
+pub struct MtHost {
+    pub stream: TcpStream,
+    deframer: netget::server::zigbee::mt::Deframer,
+    pub srsps: VecDeque<netget::server::zigbee::mt::Frame>,
+    pub areqs: VecDeque<netget::server::zigbee::mt::Frame>,
+}
+
+impl MtHost {
+    pub async fn connect(addr: SocketAddr) -> Self {
+        Self {
+            stream: TcpStream::connect(addr).await.expect("connect"),
+            deframer: netget::server::zigbee::mt::Deframer::new(),
+            srsps: VecDeque::new(),
+            areqs: VecDeque::new(),
+        }
+    }
+
+    pub async fn write(&mut self, bytes: &[u8]) {
+        self.stream.write_all(bytes).await.expect("write");
+    }
+
+    /// Read whatever arrives before the deadline; `false` on EOF.
+    async fn fill(&mut self, deadline: tokio::time::Instant) -> bool {
+        use netget::server::zigbee::mt::{kind, Deframed};
+        let mut buf = [0u8; 1024];
+        let n = match tokio::time::timeout_at(deadline, self.stream.read(&mut buf)).await {
+            Err(_) => return true,
+            Ok(Ok(0)) | Ok(Err(_)) => return false,
+            Ok(Ok(n)) => n,
+        };
+        let mut out = Vec::new();
+        self.deframer.push(&buf[..n], &mut out);
+        for d in out {
+            match d {
+                Deframed::Frame(f) if f.kind == kind::SRSP => self.srsps.push_back(f),
+                Deframed::Frame(f) => self.areqs.push_back(f),
+                other => {
+                    panic!("the server wrote something that is not a good MT frame: {other:?}")
+                }
+            }
+        }
+        true
+    }
+
+    /// The next SRSP within `secs`.
+    pub async fn srsp(&mut self, secs: f64) -> Option<netget::server::zigbee::mt::Frame> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs_f64(secs);
+        loop {
+            if let Some(f) = self.srsps.pop_front() {
+                return Some(f);
+            }
+            if tokio::time::Instant::now() >= deadline || !self.fill(deadline).await {
+                return self.srsps.pop_front();
+            }
+        }
+    }
+
+    /// Send an SREQ and return its SRSP's data, checking it answers this command.
+    pub async fn sreq(&mut self, subsystem: u8, id: u8, data: &[u8]) -> Vec<u8> {
+        use netget::server::zigbee::mt::{kind, Frame};
+        let f = Frame::new(kind::SREQ, subsystem, id, data.to_vec());
+        self.write(&f.encode()).await;
+        let r = self
+            .srsp(5.0)
+            .await
+            .unwrap_or_else(|| panic!("no SRSP to 0x{:02x}{id:02x}", f.cmd0()));
+        assert_eq!(
+            (r.subsystem, r.id),
+            (subsystem, id),
+            "the SRSP answers the SREQ just sent: {r:?}"
+        );
+        r.data
+    }
+
+    /// The next AREQ with this subsystem and id within `secs`, the ones before it kept.
+    pub async fn areq(&mut self, subsystem: u8, id: u8, secs: f64) -> Option<Vec<u8>> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs_f64(secs);
+        loop {
+            if let Some(i) = self
+                .areqs
+                .iter()
+                .position(|f| f.subsystem == subsystem && f.id == id)
+            {
+                return self.areqs.remove(i).map(|f| f.data);
+            }
+            if tokio::time::Instant::now() >= deadline || !self.fill(deadline).await {
+                return None;
+            }
+        }
+    }
+
+    /// Whether nothing at all arrives within `secs`.
+    pub async fn silent_for(&mut self, secs: f64) -> bool {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs_f64(secs);
+        while tokio::time::Instant::now() < deadline {
+            if !self.fill(deadline).await {
+                break;
+            }
+        }
+        self.srsps.is_empty() && self.areqs.is_empty()
+    }
 }

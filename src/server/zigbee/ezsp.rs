@@ -8,7 +8,7 @@
 //! layout, and 16 and 17 changed nothing the open hosts send at startup or for messaging.
 use anyhow::{bail, Result};
 
-pub const MIN_VERSION: u8 = 14;
+pub const MIN_VERSION: u8 = 8;
 pub const MAX_VERSION: u8 = 17;
 pub const DEFAULT_VERSION: u8 = 17;
 /// `stackType` in the version response: a mesh stack (EmberZNet).
@@ -26,6 +26,8 @@ pub mod id {
     pub const NETWORK_INIT: u16 = 0x0017;
     pub const NETWORK_STATE: u16 = 0x0018;
     pub const STACK_STATUS_HANDLER: u16 = 0x0019;
+    pub const START_SCAN: u16 = 0x001A;
+    pub const SCAN_COMPLETE_HANDLER: u16 = 0x001C;
     pub const FORM_NETWORK: u16 = 0x001E;
     pub const LEAVE_NETWORK: u16 = 0x0020;
     pub const PERMIT_JOINING: u16 = 0x0022;
@@ -40,6 +42,7 @@ pub mod id {
     pub const MESSAGE_SENT_HANDLER: u16 = 0x003F;
     pub const INCOMING_MESSAGE_HANDLER: u16 = 0x0045;
     pub const CUSTOM_FRAME: u16 = 0x0047;
+    pub const ENERGY_SCAN_RESULT_HANDLER: u16 = 0x0048;
     pub const GET_CHILD_DATA: u16 = 0x004A;
     pub const GET_CONFIGURATION_VALUE: u16 = 0x0052;
     pub const SET_CONFIGURATION_VALUE: u16 = 0x0053;
@@ -95,6 +98,8 @@ pub fn name(frame_id: u16) -> Option<&'static str> {
         NETWORK_INIT => "networkInit",
         NETWORK_STATE => "networkState",
         STACK_STATUS_HANDLER => "stackStatusHandler",
+        START_SCAN => "startScan",
+        SCAN_COMPLETE_HANDLER => "scanCompleteHandler",
         FORM_NETWORK => "formNetwork",
         LEAVE_NETWORK => "leaveNetwork",
         PERMIT_JOINING => "permitJoining",
@@ -109,6 +114,7 @@ pub fn name(frame_id: u16) -> Option<&'static str> {
         MESSAGE_SENT_HANDLER => "messageSentHandler",
         INCOMING_MESSAGE_HANDLER => "incomingMessageHandler",
         CUSTOM_FRAME => "customFrame",
+        ENERGY_SCAN_RESULT_HANDLER => "energyScanResultHandler",
         GET_CHILD_DATA => "getChildData",
         GET_CONFIGURATION_VALUE => "getConfigurationValue",
         SET_CONFIGURATION_VALUE => "setConfigurationValue",

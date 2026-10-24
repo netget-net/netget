@@ -166,7 +166,7 @@ const CONFIG_DEFAULTS: &[(u8, u16)] = &[
     (56, 30),   // TC_REJOINS_USING_WELL_KNOWN_KEY_TIMEOUT_S
 ];
 
-const CONFIG_KEY_TABLE_SIZE: u8 = 30;
+pub const CONFIG_KEY_TABLE_SIZE: u8 = 30;
 const CONFIG_MULTICAST_TABLE_SIZE: u8 = 6;
 const CONFIG_MAX_END_DEVICE_CHILDREN: u8 = 17;
 
@@ -194,6 +194,12 @@ pub mod policy {
 /// The EmberZNet release each EZSP version shipped in: (major, minor, patch).
 pub fn stack_release(version: u8) -> (u8, u8, u8) {
     match version {
+        ..=8 => (6, 10, 3),
+        9 => (7, 0, 1),
+        10 => (7, 1, 1),
+        11 => (7, 2, 2),
+        12 => (7, 3, 1),
+        13 => (7, 4, 3),
         14 => (8, 0, 0),
         15 => (8, 0, 1),
         16 => (8, 0, 2),
@@ -229,23 +235,12 @@ impl Ram {
             == Some(&policy::MESSAGE_TAG_AND_CONTENTS_IN_CALLBACK)
     }
 
-    /// The coordinator as the host sees it through ZDO: its registered endpoints.
-    pub fn coordinator(&self, nv: &Nvram) -> Device {
-        Device {
-            name: "coordinator".into(),
-            ieee: nv.eui64,
-            nwk: COORDINATOR_NWK,
-            kind: device::Kind::Router,
-            manufacturer_code: self.manufacturer_code,
-            mains_powered: true,
-            endpoints: self
-                .endpoints
-                .iter()
-                .map(HostEndpoint::as_endpoint)
-                .collect(),
-            zcl_tsn: 0,
-            aps_counter: 0,
-        }
+    /// The endpoints the host registered, as the coordinator's ZDO describes them.
+    pub fn coordinator_endpoints(&self) -> Vec<Endpoint> {
+        self.endpoints
+            .iter()
+            .map(HostEndpoint::as_endpoint)
+            .collect()
     }
 }
 
@@ -407,6 +402,9 @@ pub fn network_opened(open: bool) -> Callback {
         sl::ZIGBEE_NETWORK_CLOSED
     })
 }
+
+/// What an energy scan reports for every channel: the noise floor, as there is no radio.
+pub const NOISE_FLOOR_DBM: i8 = -100;
 
 /// Incoming message types.
 pub mod incoming {
@@ -760,6 +758,36 @@ fn answer(
                 0
             };
             w.u32(st).u8(seq);
+        }
+        id::START_SCAN => {
+            // An energy scan reports every channel asked for and completes; there is no
+            // radio, so each reads the noise floor. An active scan finds no beacon.
+            let scan_type = r.u8()?;
+            let mask = r.u32()? & 0x07FF_F800;
+            let _duration = r.u8()?;
+            if scan_type > 1 {
+                w.u32(sl::INVALID_PARAMETER);
+            } else {
+                w.u32(sl::OK);
+                if scan_type == 0 {
+                    for channel in 11u8..=26 {
+                        if mask & (1 << channel) != 0 {
+                            let mut c = Writer::new();
+                            c.u8(channel).i8(NOISE_FLOOR_DBM);
+                            h.callbacks.push(Callback {
+                                frame_id: id::ENERGY_SCAN_RESULT_HANDLER,
+                                params: c.done(),
+                            });
+                        }
+                    }
+                }
+                let mut c = Writer::new();
+                c.u8(0).u32(sl::OK);
+                h.callbacks.push(Callback {
+                    frame_id: id::SCAN_COMPLETE_HANDLER,
+                    params: c.done(),
+                });
+            }
         }
         id::CUSTOM_FRAME => {
             // No XNCP extensions: the stock firmware answer.

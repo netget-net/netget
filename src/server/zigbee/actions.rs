@@ -469,10 +469,14 @@ impl Protocol for ZigbeeProtocol {
             "zigbee ncp",
             "ember znet",
             "silicon labs ezsp",
+            "znp",
+            "z-stack",
+            "ti z-stack",
+            "zigbee mt",
         ]
     }
     fn description(&self) -> &'static str {
-        "A Zigbee coordinator's network co-processor (Silicon Labs EZSP over ASH) reached over TCP, as network-attached coordinators are: a Zigbee host (zigpy/bellows, Zigbee2MQTT's ember adapter) runs its network through it, and the model decides the network's devices and how they answer"
+        "A Zigbee coordinator's network co-processor reached over TCP, as network-attached coordinators are, speaking Silicon Labs EZSP over ASH (bellows/ZHA, Zigbee2MQTT's ember adapter) or TI Z-Stack's MT API (zigpy-znp, Zigbee2MQTT's zstack adapter): the host runs its network through it, and the model decides the network's devices and how they answer"
     }
     fn get_async_actions(&self, _: &AppState) -> Vec<ActionDefinition> {
         vec![
@@ -498,9 +502,16 @@ impl Protocol for ZigbeeProtocol {
     fn get_startup_parameters(&self) -> Vec<ParameterDefinition> {
         vec![
             param(
+                "dialect",
+                "string",
+                "The co-processor's firmware, and so the host dialect: ezsp (Silicon Labs EmberZNet — EZSP over ASH, for bellows/ZHA and Zigbee2MQTT's ember adapter) or znp (TI Z-Stack 3.x.0 — the MT API, for zigpy-znp and Zigbee2MQTT's zstack adapter)",
+                json!("znp"),
+                Some(json!(super::Dialect::Ezsp.name())),
+            ),
+            param(
                 "ezsp_version",
                 "number",
-                "The EZSP protocol version the co-processor speaks, 14 to 17; a host asking for another switches to it",
+                "The EZSP protocol version the co-processor speaks, 14 to 17 (dialect ezsp only); a host asking for another switches to it",
                 json!(17),
                 Some(json!(super::ezsp::DEFAULT_VERSION)),
             ),
@@ -553,12 +564,12 @@ impl Protocol for ZigbeeProtocol {
             // (SMLIGHT SLZB-06/07, TubesZB) serve their serial bridge on, and the one ZHA's
             // and Zigbee2MQTT's documentation use in their socket:// and tcp:// examples.
             .well_known_port(6638)
-            .implementation("Hand-written ASH (src/server/zigbee/ash.rs: flag/escape stuffing, CANCEL and SUBSTITUTE, data randomisation, CRC-CCITT, DATA/ACK/NAK frame and ack numbers, a 3-frame retransmit window with UG101's adaptive 0.4–3.2 s timer, RST/RSTACK and the ERROR frame after 4 acknowledgement timeouts) and EZSP versions 14–17 (src/server/zigbee/ezsp.rs, ncp.rs: the legacy-format version negotiation, the extended frame format, 62 commands and the stackStatus, messageSent, incomingMessage, trustCenterJoin and childJoin callbacks, invalidCommand(ERROR_INVALID_FRAME_ID) for anything else). The devices behind it (src/server/zigbee/device.rs) answer ZDO descriptors, address, bind and management requests and ZCL attribute reads, discovery and reporting configuration from their descriptions")
+            .implementation("Two host dialects over one network, chosen by the dialect startup parameter. EZSP (default): hand-written ASH (src/server/zigbee/ash.rs: flag/escape stuffing, CANCEL and SUBSTITUTE, data randomisation, CRC-CCITT, DATA/ACK/NAK frame and ack numbers, a 3-frame retransmit window with UG101's adaptive 0.4–3.2 s timer, RST/RSTACK and the ERROR frame after 4 acknowledgement timeouts) and EZSP versions 8–17 (src/server/zigbee/ezsp.rs, ncp.rs speak 14–17: the legacy-format version negotiation, the extended frame format, 63 commands including the energy scan, the stackStatus, messageSent, incomingMessage, trustCenterJoin, childJoin, energyScanResult and scanComplete callbacks, invalidCommand(ERROR_INVALID_FRAME_ID) for anything else; legacy.rs carries 8–13: one-byte EmberStatus/EzspStatus, the pre-14 layouts, getKey/getKeyTableEntry/addOrUpdateKeyTableEntry/addTransientLinkKey/becomeTrustCenter/getAddressTableRemoteEui64/NodeId). ZNP: TI Z-Stack 3.x.0 as Koenkk's CC2652 coordinator firmware builds it (SYS_VERSION product 1, 2.7.1, build 20240710) — MT framing (src/server/zigbee/mt.rs: SOF, length ≤ 250, cmd0/cmd1, XOR FCS, RPC error SRSP) and the command set both open Z-Stack hosts send (src/server/zigbee/znp.rs: SYS, AF, ZDO, UTIL and APP_CNF; OSAL and extended NV memory kept as Z-Stack keeps it, STARTUP_OPTION on reset, BDB formation from the commissioning items, the aligned 116-byte NIB as the source of the network; zstack.rs the session). The devices behind both (src/server/zigbee/device.rs, network.rs) answer ZDO descriptors, address, bind and management requests and ZCL attribute reads, discovery and reporting configuration from their descriptions")
             .llm_control("Which described devices join when the host permits joining; how a device answers cluster commands, attribute writes and manufacturer-specific frames (status, attribute changes and reports, cluster responses, silence); attribute reports, button presses, joins and leaves on request")
-            .e2e_testing("tests/server/zigbee: ASH and EZSP framing, every bound and the fail-closed path over raw TCP, and two independent hosts — zigpy's bellows (CLI info/form/permit/devices and a zigpy application that interviews, switches and reads a device) and zigbee-herdsman's ember adapter (Zigbee2MQTT's) starting a controller, interviewing a joined device, switching it and receiving its report")
-            .notes("Experimental: this tests the host-to-co-processor link (ASH/EZSP over TCP), not Zigbee over the air — there is no radio, no 802.15.4 MAC, no NWK/APS security; devices are simulated behind the NCP and every frame they send is built from their description or the model's answer. Server only: no independent EZSP or ZNP firmware simulator exists to test a client against. TI Z-Stack MT (zigpy-znp, herdsman's zstack) is not implemented. No tshark dissector reads ASH, EZSP or ZNP, so there is no pcap oracle. EZSP 14–17 only (bellows and herdsman both accept 14+; v13's one-byte statuses are not spoken). Fail-closed: a ZCL request the model fails to answer (error, timeout, nothing usable) is answered with ZCL Default Response FAILURE (0x01) after the APS acknowledgement, as a device whose application rejected the command; a permit-joining question it fails admits nobody. Bounds: one host connection at a time (the NCP has one UART), ASH frames ≤ 223 bytes unstuffed, APS payloads ≤ 82 bytes (MESSAGE_TOO_LONG), ≤ 32 devices, ≤ 8 endpoints, 32 clusters and 64 attributes each, ≤ 8 model calls in flight, 64 queued callbacks.")
+            .e2e_testing("tests/server/zigbee: ASH, EZSP and MT framing, every bound and the fail-closed path over raw TCP in both dialects, and the independent hosts of each — EZSP: zigpy's bellows (CLI info/form/permit/devices and a zigpy application that interviews, switches and reads a device, at every EZSP version from 8 to 17) and zigbee-herdsman's ember adapter (at 13 and 17); Z-Stack: zigpy-znp through zigpy's application and zigbee-herdsman's zstack adapter, each forming a network on an empty co-processor and resuming the one the model described, interviewing a joined device, switching it and receiving its report")
+            .notes("Experimental: this tests the host-to-co-processor link (ASH/EZSP or MT over TCP), not Zigbee over the air — there is no radio, no 802.15.4 MAC, no NWK/APS security; devices are simulated behind the co-processor and every frame they send is built from their description or the model's answer; energy scans read every channel clear. Server only: no independent EZSP or ZNP firmware simulator exists to test a client against. No tshark dissector reads ASH, EZSP or MT/ZNP (checked in 4.2.2 and 4.6.9), so there is no pcap oracle. EZSP 8–17 (4–7 use other frame headers and are not spoken; herdsman refuses below 13). Z-Stack 3.x.0 only (not 1.2 or 3.0.x); commands neither Z-Stack host sends get the firmware's RPC error. Fail-closed: a ZCL request the model fails to answer (error, timeout, nothing usable) is answered with ZCL Default Response FAILURE (0x01) after the APS acknowledgement (EZSP messageSent SUCCESS, Z-Stack AF_DATA_CONFIRM SUCCESS), as a device whose application rejected the command; a permit-joining question it fails admits nobody. Bounds: one host connection at a time (the co-processor has one UART), ASH frames ≤ 223 bytes unstuffed, MT frames ≤ 250 data bytes, APS payloads ≤ 82 bytes, ≤ 32 devices, ≤ 8 endpoints, 32 clusters and 64 attributes each, ≤ 512 NV items of ≤ 1024 bytes, ≤ 8 model calls in flight, 64 queued callbacks.")
             .answers_on_failure()
-            .max_inbound_bytes(super::ash::MAX_FRAME)
+            .max_inbound_bytes(super::MAX_INBOUND_FRAME)
             // A host's session with its co-processor is one long conversation: the devices it
             // interviewed, the commands it sent and the states they left.
             .history(HistoryMode::Last(SESSION_HISTORY_ENTRIES))

@@ -187,3 +187,42 @@ fn dns_record_data_whose_display_fails_is_not_a_panic() {
         "the input still holds record data hickory cannot print, or this test proves nothing"
     );
 }
+
+/// `zigbee_mt` (local run, 24 October 2026), input `01 00`: the target sends the bytes as a
+/// command whose subsystem and id the first two name — here SYS 0x00, which is
+/// `SYS_RESET_REQ`. That is an AREQ; sent as an SREQ it passed the "known name" check and
+/// reached an `unreachable!()` in the firmware's dispatcher, killing the host's session. It is
+/// now the RPC error SRSP for a command the firmware does not have as a request.
+#[test]
+fn zigbee_reset_req_sent_as_an_sreq_is_an_rpc_error_not_a_panic() {
+    use netget::server::zigbee::mt::{self, kind, subsystem, Frame};
+    use netget::server::zigbee::znp;
+
+    let mut nv = ncp::Nvram {
+        eui64: znp::DEFAULT_EUI64,
+        network: None,
+        nwk_frame_counter: 0,
+        aps_frame_counter: 0,
+        joined: Vec::new(),
+        waiting: Vec::new(),
+        link_keys: Vec::new(),
+    };
+    let mut flash = znp::Flash::initial(&nv);
+    let mut ram = znp::Ram::new();
+    let sreq = Frame::new(kind::SREQ, subsystem::SYS, 0x00, Vec::new());
+    let handled = znp::handle(&mut ram, &mut flash, &mut nv, &sreq);
+    assert_eq!(
+        handled.response,
+        Some(Frame::rpc_error(mt::rpc_error::INVALID_COMMAND_ID, &sreq)),
+        "SYS_RESET_REQ as an SREQ is answered with the RPC error"
+    );
+    assert!(
+        handled.areqs.is_empty() && handled.effects.is_empty(),
+        "and does not reset"
+    );
+    // As the AREQ it is, it resets.
+    let areq = Frame::new(kind::AREQ, subsystem::SYS, 0x00, vec![1]);
+    let handled = znp::handle(&mut ram, &mut flash, &mut nv, &areq);
+    assert!(handled.response.is_none());
+    assert_eq!(handled.areqs.len(), 1, "SYS_RESET_IND");
+}

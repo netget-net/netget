@@ -9967,7 +9967,7 @@ jobs:
 
   zigbee:
     if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'zigbee')
-    name: Zigbee co-processor (EZSP over ASH, TCP) against zigpy's bellows 0.46.2 and zigbee-herdsman 11.1.1's ember adapter
+    name: Zigbee co-processor (EZSP 8-17 over ASH, Z-Stack 3.x.0 MT, TCP) against zigpy's bellows 0.46.2 and zigpy-znp 0.14.2 and zigbee-herdsman 11.1.1's ember and zstack adapters
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -9979,7 +9979,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: protocol-pairs-${{ github.job }}
-      - name: Install bellows (zigpy 0.84.0) and zigbee-herdsman, both pinned
+      - name: Install bellows and zigpy-znp (zigpy 0.84.0) and zigbee-herdsman, all pinned
         run: |
           set -euo pipefail
           sudo apt-get update
@@ -9990,6 +9990,7 @@ jobs:
         run: |
           set -euo pipefail
           test -x "$NETGET_ZIGBEE_BELLOWS_VENV/bin/bellows"
+          "$NETGET_ZIGBEE_BELLOWS_VENV/bin/python" -c "import zigpy_znp"
           test -f "$NETGET_ZIGBEE_HERDSMAN/node_modules/zigbee-herdsman/package.json"
           node --version
           for filter in \

@@ -376,6 +376,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "zigbee_mt"
+path = "fuzz_targets/zigbee_mt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "ngap_nas"
 path = "fuzz_targets/ngap_nas.rs"
 test = false

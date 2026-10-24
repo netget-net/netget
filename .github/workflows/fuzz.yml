@@ -142,6 +142,7 @@ jobs:
           - fuse_tree_description
           - hdfs_wire
           - zigbee_ash_ezsp
+          - zigbee_mt
           - ngap_nas
           - onvif_request
           - bgp_message

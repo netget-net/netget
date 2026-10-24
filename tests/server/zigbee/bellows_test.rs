@@ -37,7 +37,7 @@ pub fn bellows_venv() -> PathBuf {
 
 /// Run a bellows-venv program with a private HOME, under a deadline; returns stdout, stderr
 /// and the exit status, printing both streams when asked.
-async fn run(
+pub async fn run(
     program: PathBuf,
     args: &[&str],
     home: &std::path::Path,
@@ -64,7 +64,7 @@ async fn run(
     )
 }
 
-fn shown(what: &str, out: &(String, String, bool)) -> String {
+pub fn shown(what: &str, out: &(String, String, bool)) -> String {
     format!(
         "{what}\n--- stdout ---\n{}\n--- stderr ---\n{}",
         out.0, out.1

@@ -28,7 +28,21 @@ pub fn herdsman_dir() -> PathBuf {
     dir
 }
 
-async fn run_host(s: &Started, channel: u8, data: &std::path::Path) -> (Vec<Value>, String, bool) {
+pub async fn run_host(
+    s: &Started,
+    channel: u8,
+    data: &std::path::Path,
+) -> (Vec<Value>, String, bool) {
+    run_adapter(s, channel, data, "ember").await
+}
+
+/// herdsman_host.js with one of herdsman's adapters: `ember` (EZSP) or `zstack` (Z-Stack MT).
+pub async fn run_adapter(
+    s: &Started,
+    channel: u8,
+    data: &std::path::Path,
+    adapter: &str,
+) -> (Vec<Value>, String, bool) {
     let script =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/server/zigbee/herdsman_host.js");
     let ieee = format!("0x{}", LAMP_IEEE.replace(':', ""));
@@ -40,6 +54,7 @@ async fn run_host(s: &Started, channel: u8, data: &std::path::Path) -> (Vec<Valu
         .arg(&ieee)
         .arg(channel.to_string())
         .arg(NETWORK_KEY)
+        .arg(adapter)
         .env("HOME", data)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -63,7 +78,7 @@ async fn run_host(s: &Started, channel: u8, data: &std::path::Path) -> (Vec<Valu
     (steps, text, out.status.success())
 }
 
-fn step(steps: &[Value], name: &str, text: &str) -> Value {
+pub fn step(steps: &[Value], name: &str, text: &str) -> Value {
     steps
         .iter()
         .find(|s| s["step"] == name)
