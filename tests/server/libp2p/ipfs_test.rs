@@ -506,7 +506,7 @@ async fn refusals_before_the_model() {
     let (r, _, text) = raw(port, kad::KAD, &wire::length_prefixed(&[0x08]), 0).await;
     assert!(reset(&r), "malformed DHT message: {text}");
     let put = kad::encode(&kad::Message {
-        has_record: true,
+        record: Some((b"/ipns/x".to_vec(), b"not a record".to_vec())),
         ..kad::Message::request(kad::Kind::PutValue, b"/ipns/x".to_vec())
     });
     let (r, _, text) = raw(port, kad::KAD, &wire::length_prefixed(&put), 0).await;
@@ -561,13 +561,20 @@ async fn find_node_is_answered_from_what_netget_knows() {
     let none = kad_exchange(port, &kad::Message::request(kad::Kind::FindNode, other)).await;
     assert!(none.closer.is_empty(), "{none:?}");
 
-    // A key that is not a peer id is refused.
+    // Any other key asks for the peers closest to it (Kubo looks up `/ipns/…` record keys
+    // this way): answered, with nobody. Only an empty key is refused.
+    let record_key = kad_exchange(
+        port,
+        &kad::Message::request(kad::Kind::FindNode, b"/ipns/not a peer id".to_vec()),
+    )
+    .await;
+    assert!(record_key.closer.is_empty(), "{record_key:?}");
     let (r, _, text) = raw(
         port,
         kad::KAD,
         &wire::length_prefixed(&kad::encode(&kad::Message::request(
             kad::Kind::FindNode,
-            b"not a peer id".to_vec(),
+            Vec::new(),
         ))),
         0,
     )

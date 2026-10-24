@@ -297,6 +297,57 @@ pub fn split(m: Message) -> Vec<Message> {
     out
 }
 
+/// Message and entry counts, one direction of a connection's Bitswap traffic.
+#[derive(Default, Debug, Clone, Copy)]
+pub struct Counts {
+    pub messages: u64,
+    pub want_block: u64,
+    pub want_have: u64,
+    pub cancel: u64,
+    pub full: u64,
+    pub blocks: u64,
+    pub block_bytes: u64,
+    pub have: u64,
+    pub dont_have: u64,
+}
+
+impl std::fmt::Display for Counts {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "messages={} want_block={} want_have={} cancel={} full={} blocks={} block_bytes={} have={} dont_have={}",
+            self.messages,
+            self.want_block,
+            self.want_have,
+            self.cancel,
+            self.full,
+            self.blocks,
+            self.block_bytes,
+            self.have,
+            self.dont_have
+        )
+    }
+}
+
+impl Counts {
+    /// Count one message going this way.
+    pub fn message(&mut self, m: &Message) {
+        self.messages += 1;
+        self.full += u64::from(m.full);
+        for e in &m.entries {
+            match (e.cancel, e.want_type) {
+                (true, _) => self.cancel += 1,
+                (false, WantType::Block) => self.want_block += 1,
+                (false, WantType::Have) => self.want_have += 1,
+            }
+        }
+        self.blocks += m.blocks.len() as u64;
+        self.block_bytes += m.blocks.iter().map(|b| b.data.len() as u64).sum::<u64>();
+        self.have += m.presences.iter().filter(|p| p.1).count() as u64;
+        self.dont_have += m.presences.iter().filter(|p| !p.1).count() as u64;
+    }
+}
+
 // ---------------------------------------------------------------------------------------
 // Serving: what the model supplied, checked against what was wanted.
 

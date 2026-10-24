@@ -6604,7 +6604,7 @@ jobs:
 
   libp2p:
     if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'libp2p')
-    name: libp2p host and dialler, with IPFS (Bitswap, DHT), against go-libp2p and Kubo
+    name: libp2p host and dialler, with IPFS (Bitswap, DHT, UnixFS DAGs), against go-libp2p, Kubo and Helia
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -6617,7 +6617,12 @@ jobs:
         with:
           go-version: '1.25.x'
           cache: false
-      - name: Build the go-libp2p peer and fetch Kubo (sha256-pinned)
+      # Helia (the second IPFS implementation) runs on Node; its modules are pinned by
+      # tests/server/libp2p/helia/package-lock.json and installed with npm ci.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build the go-libp2p peer, fetch Kubo (sha256-pinned), install Helia (lockfile-pinned)
         run: |
           set -euo pipefail
           python3 tests/server/libp2p/install_peers.py "$RUNNER_TEMP/libp2p-peers" | tee "$RUNNER_TEMP/libp2p-env"
@@ -6634,7 +6639,7 @@ jobs:
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
             cargo test --locked --no-default-features \
-              --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
+              --test "$target" -- "$filter" --test-threads=4 --nocapture 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
