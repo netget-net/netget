@@ -268,6 +268,52 @@ pub fn go_hdfs() -> PathBuf {
     )
 }
 
+/// colinmarc/hdfs's own `Client.Append`, through the driver in `tests/server/hdfs/goappend`
+/// (its `hdfs` command has no append subcommand). Built with
+/// `go build -o $(go env GOPATH)/bin/netget-hdfs-append ./tests/server/hdfs/goappend`.
+pub fn go_append() -> PathBuf {
+    if let Ok(p) = std::env::var("NETGET_GO_HDFS_APPEND") {
+        let p = PathBuf::from(p);
+        assert!(
+            p.exists(),
+            "NETGET_GO_HDFS_APPEND={} does not exist",
+            p.display()
+        );
+        return p;
+    }
+    let beside = go_hdfs().with_file_name("netget-hdfs-append");
+    if beside.exists() {
+        return beside;
+    }
+    panic!(
+        "colinmarc/hdfs's append driver is not built: its hdfs command has no append, so the test \
+         drives the library's Client.Append through tests/server/hdfs/goappend. Build it with \
+         `(cd tests/server/hdfs/goappend && go build -o $(go env GOPATH)/bin/netget-hdfs-append .)` \
+         and export NETGET_GO_HDFS_APPEND to that path"
+    )
+}
+
+/// colinmarc/hdfs's `Client.Append` of `data` to `path` as `user`.
+pub async fn go_append_to(server: &Started, user: &str, path: &str, data: Vec<u8>) -> Run {
+    let env = vec![
+        ("HADOOP_NAMENODE", format!("127.0.0.1:{}", server.port)),
+        ("HADOOP_USER_NAME", user.to_string()),
+    ];
+    run(&go_append(), &[path], &env, Some(data), 60).await
+}
+
+/// `n` bytes of numbered lines, so a misplaced byte shows where it came from.
+pub fn lines(n: usize, tag: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(n + 32);
+    let mut i = 0usize;
+    while out.len() < n {
+        out.extend_from_slice(format!("{tag} line {i:06}\n").as_bytes());
+        i += 1;
+    }
+    out.truncate(n);
+    out
+}
+
 /// What a peer run produced.
 #[derive(Debug)]
 pub struct Run {
@@ -331,7 +377,9 @@ pub async fn run(
     if let Some(input) = stdin {
         use tokio::io::AsyncWriteExt;
         let mut si = child.stdin.take().unwrap();
-        si.write_all(&input).await.unwrap();
+        // A peer that fails early stops reading: its exit status and output say why, so a
+        // broken pipe here is not the failure to report.
+        let _ = si.write_all(&input).await;
         drop(si);
     }
     match tokio::time::timeout(Duration::from_secs(secs), child.wait_with_output()).await {

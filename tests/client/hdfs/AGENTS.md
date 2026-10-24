@@ -1,6 +1,6 @@
 # HDFS client tests
 
-4 tests, all passing on macOS, none `#[ignore]`d. 4 in `real_server_test.rs`.
+5 tests, all passing on macOS, none `#[ignore]`d. 5 in `real_server_test.rs`.
 
 The peer is a real single-node HDFS from Apache Hadoop 3.5.0 (`sh
 tests/client/yarn/install_peers.sh <dir>`, `NETGET_HADOOP_HOME`, a JDK 17 on `JAVA_HOME`;
@@ -20,13 +20,15 @@ The model is a python policy per test; nothing reaches a real LLM.
 | `hdfs_client_drives_a_real_cluster` | a twelve-step session: the server defaults (CRC32C), a listing of what `hdfs dfs -put` seeded (names, lengths, block size, owner), a stat, a text read, a hex read straddling a block boundary (two DataNode reads, bytes exact), mkdir, a small write and a three-block write at a 64 KiB block size (read back with `hdfs dfs -cat` and `-stat`), rename, chmod (640 by `-stat %a`), a recursive delete, a stat that finds nothing, and a read of a missing file arriving as `java.io.FileNotFoundException`; every change in the NameNode's audit log |
 | `the_namenodes_refusal_reaches_the_model` | as `mallory`, mkdir and write under a 755 directory owned by someone else arrive as `org.apache.hadoop.security.AccessControlException` with HDFS's own message; the mkdir is in the audit log as refused |
 | `followup_chain_stops_at_the_bound` | a model that stats `/` after every result: `decision=followup_depth`, exactly `MAX_FOLLOWUP_DEPTH` stats raised and audited |
+| `hdfs_client_appends_truncates_and_concats` | the model appends 130 000 bytes to a 70 000-byte file Hadoop wrote at 64 KiB blocks (the reopened block's partial chunk continued alone, the block filled, two blocks added: real DataNode, real checksums), truncates it inside a block (truncate answers false; the client waits for the real block recovery) and on a boundary (true), and concats two files onto a third; `-cat` and `-stat` read each result back, and the NameNode's audit log has the append, both truncates and the concat |
 | `llm_failure_sends_nothing` | no handler and no backend: `decision=fail_closed_llm_error` and nothing in the audit log |
 
 Mutation-checked: dropping the model's actions in the dispatcher fails
-`hdfs_client_drives_a_real_cluster` (no listing) and `followup_chain_stops_at_the_bound`.
+`hdfs_client_drives_a_real_cluster` (no listing), `followup_chain_stops_at_the_bound` and
+`hdfs_client_appends_truncates_and_concats` (no append result).
 
 ```bash
 ./cargo-isolated.sh test --no-default-features --test client -- client::hdfs:: --test-threads=2
 ```
 
-About 15 s with two threads on an M-series Mac; each test runs its own NameNode and DataNode.
+About 20 s with two threads on an M-series Mac; each test runs its own NameNode and DataNode.

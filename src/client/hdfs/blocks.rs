@@ -199,13 +199,33 @@ async fn read_ack(s: &mut TcpStream, seqno: i64) -> Result<()> {
     ack_ok(&a)
 }
 
-/// Write a whole block through its pipeline; the block as the NameNode should hear of it.
-pub async fn write(
+/// How a block write begins: a new block, or the partial last block an append reopened.
+#[derive(Clone, Copy, Debug)]
+pub enum Stage {
+    Create,
+    /// PIPELINE_SETUP_APPEND: the block holds `base` bytes, and the pipeline runs under the
+    /// generation stamp updateBlockForPipeline gave (`latest`).
+    Append {
+        base: u64,
+        latest: u64,
+    },
+}
+
+/// A block write whose pipeline is set up: the DataNode answered the op, and packets go next.
+pub struct BlockWrite {
+    stream: TcpStream,
+    pub datanode: SocketAddr,
+    offset: u64,
+}
+
+/// Open a block's pipeline at the first DataNode the NameNode named: WRITE_BLOCK, and its
+/// answer. An append's pipeline continues from the bytes the block holds.
+pub async fn open_write(
     namenode: SocketAddr,
     block: &LocatedBlockProto,
     client: &str,
-    data: &[u8],
-) -> Result<(ExtendedBlockProto, SocketAddr)> {
+    stage: Stage,
+) -> Result<BlockWrite> {
     let first = block
         .locs
         .first()
@@ -214,15 +234,25 @@ pub async fn write(
     let mut s = open(addr).await?;
     let disk = StorageTypeProto::Disk as i32;
     let rest = block.locs.len().saturating_sub(1);
+    let (stage_proto, base, latest) = match stage {
+        Stage::Create => (BlockConstructionStage::PipelineSetupCreate, 0, 0),
+        Stage::Append { base, latest } => {
+            (BlockConstructionStage::PipelineSetupAppend, base, latest)
+        }
+    };
     let request = OpWriteBlockProto {
         header: header(&block.b, &block.block_token, client),
         targets: block.locs.iter().skip(1).cloned().collect(),
         source: None,
-        stage: BlockConstructionStage::PipelineSetupCreate as i32,
+        stage: stage_proto as i32,
         pipeline_size: block.locs.len() as u32,
-        min_bytes_rcvd: 0,
-        max_bytes_rcvd: 0,
-        latest_generation_stamp: block.b.generation_stamp,
+        min_bytes_rcvd: base,
+        max_bytes_rcvd: base,
+        latest_generation_stamp: if latest == 0 {
+            block.b.generation_stamp
+        } else {
+            latest
+        },
         requested_checksum: ChecksumProto {
             r#type: Checksum::Crc32c.proto(),
             bytes_per_checksum: transfer::BYTES_PER_CHECKSUM,
@@ -253,44 +283,75 @@ pub async fn write(
         let bad = r.first_bad_link.clone().unwrap_or_default();
         return Err(refused(&r).context(format!("first bad link: {bad:?}")));
     }
-    let bpc = transfer::BYTES_PER_CHECKSUM;
-    let mut unacked: VecDeque<i64> = VecDeque::new();
-    let mut seqno = 0i64;
-    let mut offset = 0u64;
-    for piece in data.chunks(transfer::SEND_PACKET_DATA) {
-        while unacked.len() >= MAX_UNACKED {
-            let next = unacked.pop_front().expect("non-empty");
-            read_ack(&mut s, next).await?;
+    Ok(BlockWrite {
+        stream: s,
+        datanode: addr,
+        offset: base,
+    })
+}
+
+impl BlockWrite {
+    /// Send `data` from where the block stands, then the empty last packet once every data
+    /// packet is acknowledged. Packets carry CRC32C in 512-byte chunks; a block an append
+    /// reopened inside a chunk gets that chunk's rest in a packet of its own, its checksum over
+    /// the new bytes only. The block's length when done.
+    pub async fn finish(mut self, data: &[u8]) -> Result<u64> {
+        let bpc = transfer::BYTES_PER_CHECKSUM;
+        let mut unacked: VecDeque<i64> = VecDeque::new();
+        let mut seqno = 0i64;
+        let start = self.offset;
+        for (offset, len) in
+            transfer::packet_spans(start, data.len() as u64, bpc, transfer::SEND_PACKET_DATA)
+        {
+            while unacked.len() >= MAX_UNACKED {
+                let next = unacked.pop_front().expect("non-empty");
+                read_ack(&mut self.stream, next).await?;
+            }
+            let piece = &data[(offset - start) as usize..(offset - start + len) as usize];
+            self.stream
+                .write_all(&transfer::data_packet(
+                    Checksum::Crc32c,
+                    bpc,
+                    offset,
+                    seqno,
+                    false,
+                    piece,
+                ))
+                .await?;
+            unacked.push_back(seqno);
+            seqno += 1;
+            self.offset = offset + len;
         }
-        s.write_all(&transfer::data_packet(
-            Checksum::Crc32c,
-            bpc,
-            offset,
-            seqno,
-            false,
-            piece,
-        ))
-        .await?;
-        unacked.push_back(seqno);
-        seqno += 1;
-        offset += piece.len() as u64;
+        while let Some(next) = unacked.pop_front() {
+            read_ack(&mut self.stream, next).await?;
+        }
+        self.stream
+            .write_all(&transfer::data_packet(
+                Checksum::Crc32c,
+                bpc,
+                self.offset,
+                seqno,
+                true,
+                &[],
+            ))
+            .await?;
+        read_ack(&mut self.stream, seqno).await?;
+        let _ = self.stream.shutdown().await;
+        Ok(self.offset)
     }
-    while let Some(next) = unacked.pop_front() {
-        read_ack(&mut s, next).await?;
-    }
-    // The block ends with an empty packet once every data packet is acknowledged.
-    s.write_all(&transfer::data_packet(
-        Checksum::Crc32c,
-        bpc,
-        offset,
-        seqno,
-        true,
-        &[],
-    ))
-    .await?;
-    read_ack(&mut s, seqno).await?;
-    let _ = s.shutdown().await;
+}
+
+/// Write a whole new block through its pipeline; the block as the NameNode should hear of it.
+pub async fn write(
+    namenode: SocketAddr,
+    block: &LocatedBlockProto,
+    client: &str,
+    data: &[u8],
+) -> Result<(ExtendedBlockProto, SocketAddr)> {
+    let w = open_write(namenode, block, client, Stage::Create).await?;
+    let addr = w.datanode;
+    let len = w.finish(data).await?;
     let mut b = block.b.clone();
-    b.num_bytes = Some(data.len() as u64);
+    b.num_bytes = Some(len);
     Ok((b, addr))
 }

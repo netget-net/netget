@@ -26,10 +26,6 @@ use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
-/// How long a reused connection may sit between ops.
-pub const OP_IDLE: Duration = Duration::from_secs(60);
-/// How long a write may go without a packet (Hadoop's client sends a heartbeat every 30 s).
-pub const PACKET_IDLE: Duration = Duration::from_secs(120);
 /// How long the client has to send its read status after a block.
 pub const READ_STATUS_DEADLINE: Duration = Duration::from_secs(10);
 
@@ -106,6 +102,21 @@ pub async fn accept_loop(listener: tokio::net::TcpListener, hdfs: Arc<Hdfs>) {
     }
 }
 
+/// One WRITE_BLOCK as its op set it up.
+struct Pipeline<'a> {
+    block: &'a super::proto::hdfs::ExtendedBlockProto,
+    client: &'a str,
+    /// The op's latestGenerationStamp.
+    latest: u64,
+    /// PIPELINE_SETUP_APPEND: the block's committed bytes are continued.
+    append: bool,
+    kind: Checksum,
+    bpc: u32,
+    block_size: u64,
+    /// The block's committed bytes before this write.
+    base: u64,
+}
+
 struct Conn {
     hdfs: Arc<Hdfs>,
     id: ConnectionId,
@@ -166,9 +177,12 @@ impl Conn {
     }
 
     async fn send(&mut self, bytes: &[u8]) -> anyhow::Result<()> {
-        tokio::time::timeout(super::FRAME_DEADLINE, self.stream.write_all(bytes))
-            .await
-            .map_err(|_| anyhow::anyhow!("the client did not take the data in time"))??;
+        tokio::time::timeout(
+            self.hdfs.settings.deadlines.frame,
+            self.stream.write_all(bytes),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("the client did not take the data in time"))??;
         self.sent += bytes.len() as u64;
         Ok(())
     }
@@ -189,18 +203,45 @@ impl Conn {
     }
 
     async fn run(&mut self) -> anyhow::Result<()> {
-        let mut idle = super::HEADER_DEADLINE;
+        let deadlines = self.hdfs.settings.deadlines;
+        let mut idle = deadlines.header;
+        let mut first = true;
         loop {
             let (version, code, body) =
-                match transfer::read_op(&mut self.stream, idle, super::FRAME_DEADLINE).await {
+                match transfer::read_op(&mut self.stream, idle, deadlines.frame).await {
                     Ok(v) => v,
                     Err(ReadError::Closed) => return Ok(()),
+                    Err(ReadError::Idle) => {
+                        let (what, secs) = if first {
+                            ("no first op", deadlines.header.as_secs())
+                        } else {
+                            ("no next op", deadlines.op_idle.as_secs())
+                        };
+                        self.outcome(
+                            "op",
+                            "protocol_refusal",
+                            &format!("{what} within {secs} s; closed"),
+                        );
+                        return Ok(());
+                    }
+                    Err(ReadError::Timeout) => {
+                        self.outcome(
+                            "op",
+                            "protocol_refusal",
+                            &format!(
+                            "an op's header did not arrive within {} s of its first byte; closed",
+                            deadlines.frame.as_secs()
+                        ),
+                        );
+                        return Ok(());
+                    }
                     Err(e) => {
                         self.outcome("op", "protocol_refusal", &format!("{e}; closed"));
                         return Ok(());
                     }
                 };
-            idle = OP_IDLE;
+            idle = deadlines.op_idle;
+            first = false;
             self.received += 3 + body.len() as u64;
             if version != transfer::DATA_TRANSFER_VERSION {
                 self.outcome(
@@ -340,7 +381,7 @@ impl Conn {
             &mut self.stream,
             transfer::MAX_OP_MESSAGE,
             READ_STATUS_DEADLINE,
-            super::FRAME_DEADLINE,
+            self.hdfs.settings.deadlines.frame,
         )
         .await
         {
@@ -443,7 +484,11 @@ impl Conn {
                 )
                 .await;
         };
-        if r.stage != BlockConstructionStage::PipelineSetupCreate as i32 {
+        let append = if r.stage == BlockConstructionStage::PipelineSetupCreate as i32 {
+            false
+        } else if r.stage == BlockConstructionStage::PipelineSetupAppend as i32 {
+            true
+        } else {
             let stage = BlockConstructionStage::try_from(r.stage)
                 .map(|s| s.as_str_name())
                 .unwrap_or("unknown");
@@ -451,10 +496,10 @@ impl Conn {
                 .refuse(
                     "WRITE_BLOCK",
                     Status::ErrorUnsupported,
-                    &format!("stage {stage} is not supported: this DataNode writes new blocks only (no append or pipeline recovery)"),
+                    &format!("stage {stage} is not supported: this DataNode writes new blocks and appends to a file's last block (no pipeline recovery)"),
                 )
                 .await;
-        }
+        };
         if !r.targets.is_empty() {
             return self
                 .refuse(
@@ -487,11 +532,26 @@ impl Conn {
         };
         let b = r.header.base_header.block.clone();
         let client = crate::utils::sanitize::token(&r.header.client_name, 256);
-        let writable = self.hdfs.ns().writable_block(&b, &client);
+        let latest = r.latest_generation_stamp;
+        let writable = self.hdfs.ns().writable_block(&b, &client, latest, append);
         let target = match writable {
             Ok(t) => t,
             Err(why) => return self.refuse("WRITE_BLOCK", Status::ErrorInvalid, &why).await,
         };
+        // An append continues the bytes the block holds; Hadoop's DataNode refuses a replica
+        // whose length is not the one the client names.
+        if append && r.min_bytes_rcvd != target.base {
+            return self
+                .refuse(
+                    "WRITE_BLOCK",
+                    Status::ErrorInvalid,
+                    &format!(
+                        "block {} holds {} bytes, but the append expects {}",
+                        b.block_id, target.base, r.min_bytes_rcvd
+                    ),
+                )
+                .await;
+        }
         self.reply(&BlockOpResponseProto {
             status: Status::Success as i32,
             first_bad_link: Some(String::new()),
@@ -501,22 +561,26 @@ impl Conn {
         let limits = PacketLimits::for_chunks(kind, bpc);
         let mut data: Vec<u8> = Vec::new();
         let mut reserved = 0u64;
+        let pipeline = Pipeline {
+            block: &b,
+            client: &client,
+            latest,
+            append,
+            kind,
+            bpc,
+            block_size: target.block_size,
+            base: target.base,
+        };
         let result = self
-            .receive(
-                &b,
-                &client,
-                kind,
-                bpc,
-                &limits,
-                target.block_size,
-                &mut data,
-                &mut reserved,
-            )
+            .receive(&pipeline, &limits, &mut data, &mut reserved)
             .await;
         match result {
             Ok(true) => {
                 let len = data.len();
-                let received = self.hdfs.ns().block_received(&b, &client, data);
+                let received = self
+                    .hdfs
+                    .ns()
+                    .block_received(&b, &client, latest, append, data);
                 if let Err(why) = received {
                     self.outcome(
                         "WRITE_BLOCK",
@@ -528,8 +592,13 @@ impl Conn {
                         "WRITE_BLOCK",
                         "accepted",
                         &format!(
-                            "block {} received whole: {len} bytes, every chunk's {} verified",
+                            "block {} received whole: {len} bytes{}, every chunk's {} verified",
                             b.block_id,
+                            if append {
+                                format!(" appended after {}", target.base)
+                            } else {
+                                String::new()
+                            },
                             kind.name()
                         ),
                     );
@@ -543,25 +612,23 @@ impl Conn {
         }
     }
 
-    /// Read a block's packets until the last one; `Ok(true)` when it arrived whole.
-    #[allow(clippy::too_many_arguments)]
+    /// Read a block's packets until the last one; `Ok(true)` when it arrived whole. `data`
+    /// holds the block's bytes from `base` (what an append continues; 0 for a new block).
     async fn receive(
         &mut self,
-        b: &super::proto::hdfs::ExtendedBlockProto,
-        client: &str,
-        kind: Checksum,
-        bpc: u32,
+        w: &Pipeline<'_>,
         limits: &PacketLimits,
-        block_size: u64,
         data: &mut Vec<u8>,
         reserved: &mut u64,
     ) -> anyhow::Result<bool> {
+        let (b, kind, bpc, base) = (w.block, w.kind, w.bpc, w.base);
+        let deadlines = self.hdfs.settings.deadlines;
         loop {
             let p = match transfer::read_packet(
                 &mut self.stream,
                 limits,
-                PACKET_IDLE,
-                super::FRAME_DEADLINE,
+                deadlines.packet,
+                deadlines.frame,
             )
             .await
             {
@@ -573,6 +640,18 @@ impl Conn {
                         &format!(
                             "the client closed before block {}'s last packet; dropped",
                             b.block_id
+                        ),
+                    );
+                    return Ok(false);
+                }
+                Err(ReadError::Idle) => {
+                    self.outcome(
+                        "WRITE_BLOCK",
+                        "protocol_refusal",
+                        &format!(
+                            "no packet of block {} within {} s; dropped and closed",
+                            b.block_id,
+                            deadlines.packet.as_secs()
                         ),
                     );
                     return Ok(false);
@@ -603,9 +682,15 @@ impl Conn {
                 return Ok(false);
             }
             let offset = h.offset_in_block as u64;
-            let have = data.len() as u64;
-            // Contiguous, or rewriting the tail of a partial chunk sent before (after hflush).
-            if offset > have || have - offset >= bpc as u64 && offset != have {
+            let have = base + data.len() as u64;
+            // Contiguous, or rewriting the tail of a partial chunk sent before (after hflush),
+            // never the bytes an append continues from; a packet that starts inside a chunk
+            // (an append's first) ends by that chunk's end, its checksum over its own bytes.
+            if offset < base
+                || offset > have
+                || have - offset >= bpc as u64 && offset != have
+                || !transfer::keeps_chunks_aligned(offset, p.data.len(), bpc)
+            {
                 self.outcome(
                     "WRITE_BLOCK",
                     "protocol_refusal",
@@ -618,13 +703,13 @@ impl Conn {
                 return Ok(false);
             }
             let end = offset + p.data.len() as u64;
-            if end > block_size {
+            if end > w.block_size {
                 self.outcome(
                     "WRITE_BLOCK",
                     "protocol_refusal",
                     &format!(
-                        "block {} would grow past its block size {block_size}",
-                        b.block_id
+                        "block {} would grow past its block size {}",
+                        b.block_id, w.block_size
                     ),
                 );
                 self.ack(h.seqno, Status::ErrorInvalid).await?;
@@ -641,10 +726,13 @@ impl Conn {
                 return Ok(false);
             }
             *reserved += grow;
-            data.truncate(offset as usize);
+            data.truncate((offset - base) as usize);
             data.extend_from_slice(&p.data);
             // The block may have been abandoned or its file deleted meanwhile.
-            let still = self.hdfs.ns().writable_block(b, client);
+            let still = self
+                .hdfs
+                .ns()
+                .writable_block(b, w.client, w.latest, w.append);
             if let Err(why) = still {
                 self.outcome(
                     "WRITE_BLOCK",

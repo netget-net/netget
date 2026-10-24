@@ -17,7 +17,7 @@ use super::proto::hdfs::{
 };
 use super::rpc::class;
 use crate::server::described_tree::{self as tree, Changes, Kind, Outcome, Stop, Tree, ROOT};
-use crate::utils::clock::{SystemTime, UNIX_EPOCH};
+use crate::utils::clock::{Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{bail, ensure, Context};
 use serde_json::Value as Json;
 use std::collections::HashMap;
@@ -46,6 +46,8 @@ pub const MAX_PRINCIPAL_BYTES: usize = 256;
 pub const DESCRIBED_GENERATION: u64 = 1000;
 /// The storage id this DataNode reports.
 pub const STORAGE_ID: &str = "DS-netget-0001";
+/// Sources one concat may name.
+pub const MAX_CONCAT_SOURCES: usize = 256;
 
 /// A refusal as a Hadoop client sees it: the exception class and its message.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -197,10 +199,41 @@ struct Meta {
     generation: u64,
 }
 
+/// A file open for writing: created, or opened for append.
 #[derive(Debug)]
 struct OpenFile {
     client: String,
+    /// Opened by `append` (its committed bytes stay readable while it is open).
+    append: bool,
+    /// The file's committed length when it was opened: 0 for a new file. Written bytes land
+    /// after it.
+    start: u64,
+    /// The file's index of `blocks[0]`: an append to a partial last block reopens that block.
+    first: u64,
     blocks: Vec<u64>,
+    /// The generation stamp updateBlockForPipeline last offered, which updatePipeline (and an
+    /// append pipeline's WRITE_BLOCK) may adopt.
+    offered: Option<u64>,
+}
+
+impl OpenFile {
+    /// Bytes of block `index` already committed before this write: the reopened partial block's
+    /// length for an append, 0 for every block allocated since.
+    fn base(&self, index: u64, block_size: u64) -> u64 {
+        self.start
+            .saturating_sub(index.saturating_mul(block_size))
+            .min(block_size)
+    }
+}
+
+/// A truncate that ends inside a block: the file is under recovery until the block recovery a
+/// DataNode would run is done, then cut to `length` and closed.
+#[derive(Clone, Debug)]
+struct Recovery {
+    client: String,
+    length: u64,
+    generation: u64,
+    due: Instant,
 }
 
 /// The block id of block `index` of inode `ino`.
@@ -219,6 +252,8 @@ pub struct WritableBlock {
     pub ino: u64,
     pub index: u64,
     pub block_size: u64,
+    /// Bytes of the block already committed: what an append continues from, 0 for a new block.
+    pub base: u64,
 }
 
 /// A block a DataNode may read: its file, its first byte in the file and its length.
@@ -260,8 +295,47 @@ pub struct RenamePlan {
 
 pub struct CompletePlan {
     pub ino: u64,
+    /// Bytes this write adds.
     pub length: u64,
     pub blocks: usize,
+    /// Where they land in the file: 0 for a new file, its length before an append.
+    pub offset: u64,
+    pub append: bool,
+}
+
+pub struct AppendPlan {
+    pub ino: u64,
+    /// The file's length now.
+    pub length: u64,
+    pub block_size: u64,
+    /// The last block is partial, and the append reopens it.
+    pub partial: bool,
+}
+
+pub enum TruncatePlan {
+    /// The file already has that length.
+    Same,
+    /// It is being truncated to that length already: the answer is false again.
+    Pending,
+    Cut {
+        ino: u64,
+        old: u64,
+        new: u64,
+        block_size: u64,
+        /// The new length is a whole number of blocks: done at once, no recovery.
+        boundary: bool,
+    },
+}
+
+/// A concat the NameNode checked: the target, then each source in order.
+pub struct ConcatPlan {
+    pub target: u64,
+    pub parent: u64,
+    /// (inode, name, path, length) per source.
+    pub sources: Vec<(u64, String, String, u64)>,
+    pub length_before: u64,
+    pub length_after: u64,
+    pub block_size: u64,
 }
 
 pub struct Namespace {
@@ -270,6 +344,8 @@ pub struct Namespace {
     pub pool_id: String,
     meta: HashMap<u64, Meta>,
     open: HashMap<u64, OpenFile>,
+    recovering: HashMap<u64, Recovery>,
+    /// Bytes received per block since it was opened (after its `base`).
     received: HashMap<u64, Vec<u8>>,
     /// Bytes held by received blocks and blocks being received.
     reserved: u64,
@@ -396,6 +472,7 @@ impl Namespace {
             pool_id,
             meta: HashMap::new(),
             open: HashMap::new(),
+            recovering: HashMap::new(),
             received: HashMap::new(),
             reserved: 0,
             next_generation: DESCRIBED_GENERATION + 1,
@@ -438,6 +515,25 @@ impl Namespace {
 
     pub fn open_files(&self) -> usize {
         self.open.len()
+    }
+
+    /// Truncates whose block recovery has not finished.
+    pub fn recovering(&self) -> usize {
+        self.recovering.len()
+    }
+
+    /// The bytes a reader may read: a file under truncate recovery reads up to its new length.
+    fn visible_size(&self, ino: u64) -> u64 {
+        let size = self.tree.size(ino).unwrap_or(0);
+        match self.recovering.get(&ino) {
+            Some(r) => size.min(r.length),
+            None => size,
+        }
+    }
+
+    /// Whether a file is a new one being written, whose blocks are not readable yet.
+    fn being_created(&self, ino: u64) -> bool {
+        self.open.get(&ino).is_some_and(|o| !o.append)
     }
 
     pub fn file_id(ino: u64) -> u64 {
@@ -546,9 +642,9 @@ impl Namespace {
         })
     }
 
-    /// Whether a file is open for writing.
+    /// Whether a file is open: being written, appended to, or under truncate recovery.
     pub fn is_open(&self, ino: u64) -> bool {
-        self.open.contains_key(&ino)
+        self.open.contains_key(&ino) || self.recovering.contains_key(&ino)
     }
 
     /// The blocks of a file covering `[offset, offset + length)`, located at `dn`.
@@ -559,9 +655,8 @@ impl Namespace {
         length: u64,
         dn: &DatanodeInfoProto,
     ) -> LocatedBlocksProto {
-        let size = self.tree.size(ino).unwrap_or(0);
         let m = self.meta(ino);
-        if self.open.contains_key(&ino) {
+        if self.being_created(ino) {
             return LocatedBlocksProto {
                 file_length: 0,
                 blocks: vec![],
@@ -571,6 +666,10 @@ impl Namespace {
                 ..Default::default()
             };
         }
+        // A file open for append or under truncate recovery reads as its committed bytes; the
+        // last block is reported complete, so a reader never asks a DataNode for the length
+        // of a block being written (this DataNode has no ClientDatanodeProtocol to ask).
+        let size = self.visible_size(ino);
         let bs = m.block_size.max(1);
         let count = size.div_ceil(bs);
         let located = |i: u64| self.located_block(ino, i, &m, size, dn);
@@ -586,7 +685,7 @@ impl Namespace {
         LocatedBlocksProto {
             file_length: size,
             blocks,
-            under_construction: false,
+            under_construction: self.is_open(ino),
             last_block: (count > 0).then(|| located(count - 1)),
             is_last_block_complete: true,
             ..Default::default()
@@ -844,6 +943,14 @@ impl Namespace {
                     )
                 }
                 Ok(a) if a.kind == Kind::File => {
+                    if self.recovering.contains_key(&a.ino) {
+                        return thrown(
+                            class::RECOVERY_IN_PROGRESS,
+                            format!(
+                                "Failed to CREATE_FILE {path} for {client} because lease recovery is in progress. Try again later."
+                            ),
+                        );
+                    }
                     if let Some(o) = self.open.get(&a.ino) {
                         if o.client != client || !overwrite {
                             return thrown(
@@ -870,7 +977,8 @@ impl Namespace {
                 Err(e) => return step(Err(e), &path),
             }
         }
-        if self.open.len() >= MAX_OPEN_FILES && replaces.is_none_or(|i| !self.open.contains_key(&i))
+        if self.open.len() + self.recovering.len() >= MAX_OPEN_FILES
+            && replaces.is_none_or(|i| !self.open.contains_key(&i))
         {
             return thrown(
                 class::IO,
@@ -889,6 +997,7 @@ impl Namespace {
     fn forget(&mut self, inos: &[u64]) {
         for ino in inos {
             self.meta.remove(ino);
+            self.recovering.remove(ino);
             if let Some(o) = self.open.remove(ino) {
                 for b in o.blocks {
                     if let Some(d) = self.received.remove(&b) {
@@ -932,7 +1041,11 @@ impl Namespace {
             a.ino,
             OpenFile {
                 client: client.to_string(),
+                append: false,
+                start: 0,
+                first: 0,
                 blocks: vec![],
+                offered: None,
             },
         );
         Ok(a.ino)
@@ -990,6 +1103,8 @@ impl Namespace {
         let o = self.lease(ino, client, path)?;
         match (o.blocks.last(), previous) {
             (None, None) => {}
+            // An append that starts on a block boundary may name the file's last, full block.
+            (None, Some(p)) if o.first > 0 && p.block_id == block_id(ino, o.first - 1) => {}
             (None, Some(p)) => {
                 return thrown(
                     class::IO,
@@ -1007,20 +1122,22 @@ impl Namespace {
                         format!("{path}: the previous block is {last}, not {p_id:?}"),
                     );
                 }
-                let got = self.received.get(last).map(|d| d.len() as u64);
+                let index = o.first + o.blocks.len() as u64 - 1;
+                let base = o.base(index, m.block_size);
+                let got = self.received.get(last).map(|d| base + d.len() as u64);
                 if got != Some(m.block_size) {
                     return thrown(
                         class::IO,
                         format!(
                             "{path}: block {last} is not complete ({} of {} bytes received)",
-                            got.unwrap_or(0),
+                            got.unwrap_or(base),
                             m.block_size
                         ),
                     );
                 }
             }
         }
-        let index = o.blocks.len() as u64;
+        let index = o.first + o.blocks.len() as u64;
         if index + 1 > MAX_BLOCKS_PER_FILE || index * m.block_size >= tree::MAX_FILE_SIZE {
             return thrown(
                 class::QUOTA,
@@ -1035,14 +1152,9 @@ impl Namespace {
         Ok(self.locate(id, m.generation, index * m.block_size, 0, dn))
     }
 
-    /// A block of a file `client` holds open, located again with its generation stamp
-    /// unchanged (updateBlockForPipeline: there is one DataNode and no recovery to re-stamp).
-    pub fn block_for_pipeline(
-        &self,
-        b: &ExtendedBlockProto,
-        client: &str,
-        dn: &DatanodeInfoProto,
-    ) -> Result<LocatedBlockProto, Thrown> {
+    /// The inode and index of a block of a file `client` holds open, checked: this pool, one of
+    /// the file's open blocks, the file's generation stamp.
+    fn pipeline_block(&self, b: &ExtendedBlockProto, client: &str) -> Result<(u64, u64), Thrown> {
         let (ino, index) = split_block_id(b.block_id);
         let path = self.tree.path(ino);
         let o = match self.lease(ino, client, &path) {
@@ -1069,16 +1181,99 @@ impl Namespace {
                 ),
             ));
         }
+        Ok((ino, index))
+    }
+
+    /// The bytes block `index` of an open file holds: what was committed and what arrived.
+    fn open_block_len(&self, ino: u64, index: u64, id: u64) -> u64 {
+        let bs = self.meta(ino).block_size;
+        let base = self.open.get(&ino).map_or(0, |o| o.base(index, bs));
+        base + self.received.get(&id).map_or(0, |d| d.len() as u64)
+    }
+
+    /// updateBlockForPipeline: the block located again with a new generation stamp, which the
+    /// file adopts only when updatePipeline names it (as a NameNode does). Hadoop's client asks
+    /// for one before every append pipeline; colinmarc/hdfs after every block, and ignores it.
+    pub fn block_for_pipeline(
+        &mut self,
+        b: &ExtendedBlockProto,
+        client: &str,
+        dn: &DatanodeInfoProto,
+    ) -> Result<LocatedBlockProto, Thrown> {
+        let (ino, index) = self.pipeline_block(b, client)?;
         let len = b
             .num_bytes
-            .unwrap_or_else(|| self.received.get(&b.block_id).map_or(0, |d| d.len() as u64));
+            .unwrap_or_else(|| self.open_block_len(ino, index, b.block_id));
+        let offered = self.next_generation;
+        self.next_generation += 1;
+        if let Some(o) = self.open.get_mut(&ino) {
+            o.offered = Some(offered);
+        }
+        let bs = self.meta(ino).block_size;
+        Ok(self.locate(b.block_id, offered, index * bs, len, dn))
+    }
+
+    /// getAdditionalDatanode: there is one DataNode and it is in the pipeline already, so the
+    /// block comes back located on it alone, as a one-node NameNode answers (the client then
+    /// finds no new node and goes on, or fails, as its replace-datanode policy says).
+    pub fn block_with_nodes(
+        &self,
+        b: &ExtendedBlockProto,
+        client: &str,
+        dn: &DatanodeInfoProto,
+    ) -> Result<LocatedBlockProto, Thrown> {
+        let (ino, index) = self.pipeline_block(b, client)?;
+        let m = self.meta(ino);
+        let len = self.open_block_len(ino, index, b.block_id);
         Ok(self.locate(b.block_id, m.generation, index * m.block_size, len, dn))
+    }
+
+    /// updatePipeline: the same block on the same node, under the generation stamp
+    /// updateBlockForPipeline offered (or its own, unchanged), which the file adopts.
+    pub fn update_pipeline(
+        &mut self,
+        old: &ExtendedBlockProto,
+        new: &ExtendedBlockProto,
+        client: &str,
+    ) -> Result<(), Thrown> {
+        let (ino, _) = self.pipeline_block(old, client)?;
+        if old.block_id != new.block_id || old.pool_id != new.pool_id {
+            return Err(Thrown::new(
+                class::IO,
+                format!(
+                    "Update block {} to block {}: pipeline recovery onto another block is not supported by this NameNode",
+                    old.block_id, new.block_id
+                ),
+            ));
+        }
+        let mut m = self.meta(ino);
+        if new.generation_stamp == m.generation {
+            return Ok(());
+        }
+        let o = self.open.get_mut(&ino).expect("leased");
+        if o.offered != Some(new.generation_stamp) {
+            return Err(Thrown::new(
+                class::IO,
+                format!(
+                    "Update block {} to generation stamp {}: updateBlockForPipeline did not offer it",
+                    old.block_id, new.generation_stamp
+                ),
+            ));
+        }
+        o.offered = None;
+        m.generation = new.generation_stamp;
+        self.meta.insert(ino, m);
+        Ok(())
     }
 
     /// Give back the last block allocated to an open file.
     pub fn abandon_block(&mut self, ino: u64, path: &str, client: &str, id: u64) -> Step<()> {
-        let last = self.lease(ino, client, path)?.blocks.last().copied();
-        if last == Some(id) {
+        let o = self.lease(ino, client, path)?;
+        let last = o.blocks.last().copied();
+        let index = o.first + o.blocks.len().saturating_sub(1) as u64;
+        // The block an append reopened holds committed bytes; it is not given back.
+        let reopened = o.base(index, self.meta(ino).block_size) > 0;
+        if last == Some(id) && !reopened {
             self.open.get_mut(&ino).expect("leased").blocks.pop();
             if let Some(d) = self.received.remove(&id) {
                 self.reserved = self.reserved.saturating_sub(d.len() as u64);
@@ -1088,7 +1283,8 @@ impl Namespace {
     }
 
     /// Whether `complete` may go ahead: every block received, the last one as long as the
-    /// client says and the others full.
+    /// client says and the others full. A block an append reopened counts its committed bytes,
+    /// and may have received nothing (an append of no bytes).
     pub fn plan_complete(
         &self,
         ino: u64,
@@ -1113,34 +1309,42 @@ impl Namespace {
         }
         let mut length = 0u64;
         for (i, id) in o.blocks.iter().enumerate() {
-            let Some(d) = self.received.get(id) else {
-                return thrown(
-                    class::IO,
-                    format!("{path}: block {id} has not been written to the DataNode"),
-                );
+            let index = o.first + i as u64;
+            let base = o.base(index, m.block_size);
+            let got = match self.received.get(id) {
+                Some(d) => d.len() as u64,
+                None if base > 0 => 0,
+                None => {
+                    return thrown(
+                        class::IO,
+                        format!("{path}: block {id} has not been written to the DataNode"),
+                    )
+                }
             };
+            let held = base + got;
             let is_last = i + 1 == o.blocks.len();
-            if !is_last && d.len() as u64 != m.block_size {
+            if !is_last && held != m.block_size {
                 return thrown(class::IO, format!("{path}: block {id} is short"));
             }
             if is_last {
-                let said = last.and_then(|b| b.num_bytes).unwrap_or(d.len() as u64);
-                if said != d.len() as u64 {
+                let said = last.and_then(|b| b.num_bytes).unwrap_or(held);
+                if said != held {
                     return thrown(
                         class::IO,
                         format!(
-                            "{path}: the client says block {id} holds {said} bytes; the DataNode received {}",
-                            d.len()
+                            "{path}: the client says block {id} holds {said} bytes; the DataNode holds {held}"
                         ),
                     );
                 }
             }
-            length += d.len() as u64;
+            length += got;
         }
         Ok(CompletePlan {
             ino,
             length,
             blocks: o.blocks.len(),
+            offset: o.start,
+            append: o.append,
         })
     }
 
@@ -1161,9 +1365,11 @@ impl Namespace {
         out
     }
 
-    /// Commit the received blocks into the file and close it.
+    /// Commit the received blocks into the file, after what it held when it was opened (0 for
+    /// a new file, its length for an append), and close it.
     pub fn apply_complete(&mut self, ino: u64, path: &str) -> Step<()> {
         let o = self.open.get(&ino).expect("planned");
+        let at = o.start;
         let mut data = Vec::new();
         for id in &o.blocks {
             if let Some(d) = self.received.get(id) {
@@ -1171,7 +1377,7 @@ impl Namespace {
             }
         }
         if !data.is_empty() {
-            match self.tree.check_write(ino, 0, data.len()) {
+            match self.tree.check_write(ino, at, data.len()) {
                 Ok(_) => {}
                 Err(Stop::Errno(libc::ENOSPC)) => {
                     self.discard(ino);
@@ -1189,7 +1395,7 @@ impl Namespace {
                     return step(Err(e), path);
                 }
             }
-            step(self.tree.write(ino, 0, &data), path)?;
+            step(self.tree.write(ino, at, &data), path)?;
         }
         self.discard(ino);
         Ok(())
@@ -1206,10 +1412,420 @@ impl Namespace {
         }
     }
 
-    /// Recover a lease: close the file, discarding what was not completed. True when closed.
-    pub fn recover_lease(&mut self, ino: u64) -> bool {
+    /// Recover a lease: close the file, discarding what was not completed (an appended file
+    /// keeps what it held before). A file under truncate recovery closes only once that
+    /// recovery is done. True when closed.
+    pub fn recover_lease(&mut self, ino: u64, now: Instant) -> bool {
+        if self.recovering.contains_key(&ino) {
+            self.finish_recoveries(now);
+            return !self.recovering.contains_key(&ino);
+        }
         self.discard(ino);
         true
+    }
+
+    /// Why `client` may not open a file that is open already, as Hadoop words it.
+    fn held(&self, ino: u64, op: &str, path: &str, client: &str) -> Option<Thrown> {
+        if self.recovering.contains_key(&ino) {
+            return Some(Thrown::new(
+                class::RECOVERY_IN_PROGRESS,
+                format!(
+                    "Failed to {op} {path} for {client} because lease recovery is in progress. Try again later."
+                ),
+            ));
+        }
+        let o = self.open.get(&ino)?;
+        let why = if o.client == client {
+            format!("{client} is already the current lease holder.")
+        } else {
+            format!("this file lease is currently owned by {}", o.client)
+        };
+        Some(Thrown::new(
+            class::ALREADY_BEING_CREATED,
+            format!("Failed to {op} {path} for {client} because {why}"),
+        ))
+    }
+
+    /// Whether `client` may append to the file at `comps`. A file whose last block is partial
+    /// is reopened at that block; `new_block` asks for a fresh block after it, which would leave
+    /// a partial block in the middle of the file and is refused (every block here but a file's
+    /// last is full: blocks are the content cut at the block size).
+    pub fn plan_append(&self, comps: &[&str], client: &str, new_block: bool) -> Step<AppendPlan> {
+        let path = joined(comps);
+        let Some(ino) = self.find(comps)? else {
+            return thrown(
+                class::FILE_NOT_FOUND,
+                format!("Failed to append to non-existent file {path} for client {client}"),
+            );
+        };
+        match self.tree.kind(ino) {
+            Some(Kind::Dir) => {
+                return thrown(
+                    class::ALREADY_EXISTS,
+                    format!("Cannot append to directory {path}; already exists as a directory."),
+                )
+            }
+            Some(Kind::File) => {}
+            _ => return thrown(class::FILE_NOT_FOUND, format!("Path is not a file: {path}")),
+        }
+        if let Some(t) = self.held(ino, "APPEND_FILE", &path, client) {
+            return Err(Halt::Thrown(t));
+        }
+        if self.open.len() + self.recovering.len() >= MAX_OPEN_FILES {
+            return thrown(
+                class::IO,
+                format!("{MAX_OPEN_FILES} files are already open for writing"),
+            );
+        }
+        let length = self.tree.size(ino).unwrap_or(0);
+        let block_size = self.meta(ino).block_size;
+        let partial = !length.is_multiple_of(block_size);
+        if new_block && partial {
+            return thrown(
+                class::UNSUPPORTED,
+                format!(
+                    "{path} ends in a partial block ({} of {block_size} bytes): appending to a new block would leave a variable-length block in the middle of the file, which this NameNode does not keep (every block but a file's last is full)",
+                    length % block_size
+                ),
+            );
+        }
+        Ok(AppendPlan {
+            ino,
+            length,
+            block_size,
+            partial,
+        })
+    }
+
+    /// Open the file for append: its partial last block, when it has one, is reopened.
+    pub fn apply_append(&mut self, plan: &AppendPlan, client: &str) {
+        let first = plan.length / plan.block_size;
+        self.open.insert(
+            plan.ino,
+            OpenFile {
+                client: client.to_string(),
+                append: true,
+                start: plan.length,
+                first,
+                blocks: if plan.partial {
+                    vec![block_id(plan.ino, first)]
+                } else {
+                    vec![]
+                },
+                offered: None,
+            },
+        );
+    }
+
+    /// The reopened last block of a file opened for append, located with the bytes it holds.
+    pub fn append_block(&self, ino: u64, dn: &DatanodeInfoProto) -> Option<LocatedBlockProto> {
+        let o = self.open.get(&ino).filter(|o| o.append)?;
+        let id = *o.blocks.first()?;
+        let m = self.meta(ino);
+        let base = o.base(o.first, m.block_size);
+        (base > 0).then(|| self.locate(id, m.generation, o.first * m.block_size, base, dn))
+    }
+
+    /// Whether the file at `comps` may be truncated to `new` bytes, and how.
+    pub fn plan_truncate(&self, comps: &[&str], new: u64, client: &str) -> Step<TruncatePlan> {
+        let path = joined(comps);
+        let ino = self.lookup(comps)?;
+        if self.tree.kind(ino) != Some(Kind::File) {
+            return thrown(class::FILE_NOT_FOUND, format!("Path is not a file: {path}"));
+        }
+        if let Some(r) = self.recovering.get(&ino) {
+            if r.length == new {
+                return Ok(TruncatePlan::Pending);
+            }
+            return thrown(
+                class::ALREADY_BEING_CREATED,
+                format!(
+                    "Failed to TRUNCATE_FILE {path} for {client} because {path} is being truncated."
+                ),
+            );
+        }
+        if let Some(t) = self.held(ino, "TRUNCATE_FILE", &path, client) {
+            return Err(Halt::Thrown(t));
+        }
+        let old = self.tree.size(ino).unwrap_or(0);
+        if old == new {
+            return Ok(TruncatePlan::Same);
+        }
+        if new > old {
+            return thrown(
+                class::HADOOP_ILLEGAL_ARGUMENT,
+                format!(
+                    "Cannot truncate to a larger file size. Current size: {old}, truncate size: {new}."
+                ),
+            );
+        }
+        let block_size = self.meta(ino).block_size;
+        let boundary = new.is_multiple_of(block_size);
+        if !boundary && self.open.len() + self.recovering.len() >= MAX_OPEN_FILES {
+            return thrown(
+                class::IO,
+                format!("{MAX_OPEN_FILES} files are already open for writing"),
+            );
+        }
+        Ok(TruncatePlan::Cut {
+            ino,
+            old,
+            new,
+            block_size,
+            boundary,
+        })
+    }
+
+    /// Truncate. On a block boundary the blocks past it go at once (true); inside a block the
+    /// file is under recovery until `due`, then cut and closed (false), as a NameNode reports an
+    /// in-place block recovery.
+    pub fn apply_truncate(
+        &mut self,
+        plan: &TruncatePlan,
+        client: &str,
+        path: &str,
+        due: Instant,
+    ) -> Step<bool> {
+        let TruncatePlan::Cut {
+            ino, new, boundary, ..
+        } = *plan
+        else {
+            return Ok(matches!(plan, TruncatePlan::Same));
+        };
+        if boundary {
+            step(self.tree.truncate(ino, new), path)?;
+            return Ok(true);
+        }
+        step(self.tree.check_truncate(ino, new), path)?;
+        let generation = self.next_generation;
+        self.next_generation += 1;
+        self.recovering.insert(
+            ino,
+            Recovery {
+                client: client.to_string(),
+                length: new,
+                generation,
+                due,
+            },
+        );
+        Ok(false)
+    }
+
+    /// Finish every truncate whose block recovery is due: the file is cut, takes the recovery's
+    /// generation stamp, and closes. The paths and lengths finished.
+    pub fn finish_recoveries(&mut self, now: Instant) -> Vec<(String, u64)> {
+        let due: Vec<u64> = self
+            .recovering
+            .iter()
+            .filter(|(_, r)| r.due <= now)
+            .map(|(ino, _)| *ino)
+            .collect();
+        let mut done = Vec::new();
+        for ino in due {
+            let Some(r) = self.recovering.remove(&ino) else {
+                continue;
+            };
+            if self.tree.kind(ino) != Some(Kind::File) {
+                continue;
+            }
+            // check_truncate held when the truncate was decided, and the file stayed a file.
+            let _ = self.tree.truncate(ino, r.length);
+            let mut m = self.meta(ino);
+            m.generation = r.generation;
+            self.meta.insert(ino, m);
+            done.push((self.tree.path(ino), r.length));
+        }
+        done
+    }
+
+    /// The client a file under truncate recovery is held for.
+    pub fn recovery_holder(&self, ino: u64) -> Option<&str> {
+        self.recovering.get(&ino).map(|r| r.client.as_str())
+    }
+
+    /// Whether the files `srcs` may be concatenated onto `target`, checked as Hadoop's NameNode
+    /// checks a concat (same directory, closed, non-empty, distinct, block size no larger than
+    /// the target's), and then as this NameNode must: blocks here are a file's content cut at
+    /// its block size, so every file joined must have the target's block size, and the target
+    /// and every source but the last must be whole blocks — a partial block in the middle of
+    /// the result is the one thing it cannot represent.
+    pub fn plan_concat(&self, target: &[&str], srcs: &[Vec<&str>]) -> Step<ConcatPlan> {
+        let target_path = joined(target);
+        if srcs.is_empty() {
+            return thrown(class::ILLEGAL_ARGUMENT, "No sources given");
+        }
+        if srcs.len() > MAX_CONCAT_SOURCES {
+            return thrown(
+                class::HADOOP_ILLEGAL_ARGUMENT,
+                format!("concat: at most {MAX_CONCAT_SOURCES} source files at once"),
+            );
+        }
+        let Some((_, target_dirs)) = target.split_last() else {
+            return thrown(class::FILE_NOT_FOUND, "Path is not a file: /");
+        };
+        let t = self.lookup(target)?;
+        if self.tree.kind(t) != Some(Kind::File) {
+            return thrown(
+                class::FILE_NOT_FOUND,
+                format!("Path is not a file: {target_path}"),
+            );
+        }
+        if self.is_open(t) {
+            return thrown(
+                class::HADOOP_ILLEGAL_ARGUMENT,
+                format!("concat: target file {target_path} is under construction"),
+            );
+        }
+        let parent = self.lookup(target_dirs)?;
+        let block_size = self.meta(t).block_size;
+        let mut sources: Vec<(u64, String, String, u64)> = Vec::with_capacity(srcs.len());
+        for src in srcs {
+            let path = joined(src);
+            let ino = self.lookup(src)?;
+            if self.tree.kind(ino) != Some(Kind::File) {
+                return thrown(class::FILE_NOT_FOUND, format!("Path is not a file: {path}"));
+            }
+            if self.tree.parent(ino) != Some(parent) {
+                return thrown(
+                    class::HADOOP_ILLEGAL_ARGUMENT,
+                    format!(
+                        "Source file {path} is not in the same directory with the target {target_path}"
+                    ),
+                );
+            }
+            if ino == t {
+                return thrown(
+                    class::HADOOP_ILLEGAL_ARGUMENT,
+                    format!(
+                        "concat: the src file {path} is the same with the target file {target_path}"
+                    ),
+                );
+            }
+            let len = self.tree.size(ino).unwrap_or(0);
+            if self.is_open(ino) || len == 0 {
+                return thrown(
+                    class::HADOOP_ILLEGAL_ARGUMENT,
+                    format!("concat: source file {path} is invalid or empty or underConstruction"),
+                );
+            }
+            let bs = self.meta(ino).block_size;
+            if bs > block_size {
+                return thrown(
+                    class::HADOOP_ILLEGAL_ARGUMENT,
+                    format!(
+                        "concat: source file {path} has preferred block size {bs} which is greater than the target file's preferred block size {block_size}"
+                    ),
+                );
+            }
+            let name = src.last().map(|n| n.to_string()).unwrap_or_default();
+            sources.push((ino, name, path, len));
+        }
+        let distinct: std::collections::HashSet<u64> = sources.iter().map(|s| s.0).collect();
+        if distinct.len() < sources.len() {
+            return thrown(
+                class::HADOOP_ILLEGAL_ARGUMENT,
+                "concat: at least two of the source files are the same",
+            );
+        }
+        // This NameNode's own limits: one block size, whole blocks up to the last source.
+        let partial = |path: &str, len: u64| {
+            thrown(
+                class::UNSUPPORTED,
+                format!(
+                    "concat: {path} holds {len} bytes, not a whole number of {block_size}-byte blocks; joining it would leave a partial block in the middle of {target_path}, which this NameNode does not keep (every block but a file's last is full)"
+                ),
+            )
+        };
+        for (ino, _, path, _) in &sources {
+            let bs = self.meta(*ino).block_size;
+            if bs != block_size {
+                return thrown(
+                    class::UNSUPPORTED,
+                    format!(
+                        "concat: source file {path} has block size {bs}; this NameNode joins only files of the target's block size {block_size} (its blocks are a file's content cut at one block size)"
+                    ),
+                );
+            }
+        }
+        let length_before = self.tree.size(t).unwrap_or(0);
+        if !length_before.is_multiple_of(block_size) {
+            return partial(&target_path, length_before);
+        }
+        let mut total = length_before;
+        for (i, (_, _, path, len)) in sources.iter().enumerate() {
+            if i + 1 < sources.len() && !len.is_multiple_of(block_size) {
+                return partial(path, *len);
+            }
+            total += len;
+        }
+        if total > tree::MAX_FILE_SIZE || total.div_ceil(block_size) > MAX_BLOCKS_PER_FILE {
+            return thrown(
+                class::QUOTA,
+                format!(
+                    "concat: {target_path} would hold {total} bytes; a file holds at most {MAX_BLOCKS_PER_FILE} blocks and {} bytes",
+                    tree::MAX_FILE_SIZE
+                ),
+            );
+        }
+        Ok(ConcatPlan {
+            target: t,
+            parent,
+            sources,
+            length_before,
+            length_after: total,
+            block_size,
+        })
+    }
+
+    /// Move the sources' bytes onto the end of the target, then remove the sources. Nothing
+    /// changes unless all of it can: the overlay must take the bytes, and every source must
+    /// read whole (a described failing region cannot be moved).
+    pub fn apply_concat(&mut self, plan: &ConcatPlan, target_path: &str) -> Step<()> {
+        let added = plan.length_after - plan.length_before;
+        match self
+            .tree
+            .check_write(plan.target, plan.length_before, added as usize)
+        {
+            Ok(_) => {}
+            Err(Stop::Errno(libc::ENOSPC)) => {
+                return thrown(
+                    class::QUOTA,
+                    format!(
+                        "The DiskSpace quota of {target_path} is exceeded: the overlay holds {} of {} bytes and the concat moves {added} more",
+                        self.tree.overlay_bytes(),
+                        self.tree.max_overlay()
+                    ),
+                )
+            }
+            Err(e) => return step(Err(e), target_path),
+        }
+        let mut bytes = Vec::with_capacity(added as usize);
+        for (ino, _, path, len) in &plan.sources {
+            let mut at = 0u64;
+            while at < *len {
+                let n = (*len - at).min(1 << 20);
+                match self.tree.read(*ino, at, n as u32) {
+                    Ok(d) if d.len() as u64 == n => bytes.extend_from_slice(&d),
+                    _ => {
+                        return thrown(
+                            class::IO,
+                            format!("concat: {path} could not be read at byte {at}"),
+                        )
+                    }
+                }
+                at += n;
+            }
+        }
+        step(
+            self.tree.write(plan.target, plan.length_before, &bytes),
+            target_path,
+        )?;
+        for (ino, name, path, _) in &plan.sources {
+            let parent = self.tree.parent(*ino).unwrap_or(plan.parent);
+            step(self.tree.unlink(parent, name), path)?;
+            self.forget(&[*ino]);
+        }
+        Ok(())
     }
 
     pub fn plan_delete(&self, comps: &[&str], recursive: bool) -> Step<Option<DeletePlan>> {
@@ -1463,10 +2079,17 @@ impl Namespace {
 
     /// Whether a block may be written now: allocated, the last of an open file, held by
     /// `client`, and not received yet.
+    ///
+    /// `append` is the op's stage: PIPELINE_SETUP_APPEND reopens the partial last block an
+    /// append named (and only that), PIPELINE_SETUP_CREATE writes a block allocated since.
+    /// `latest` is the op's latestGenerationStamp: an append pipeline may run under the stamp
+    /// updateBlockForPipeline offered, and keeps running once updatePipeline adopts it.
     pub fn writable_block(
         &self,
         b: &ExtendedBlockProto,
         client: &str,
+        latest: u64,
+        append: bool,
     ) -> Result<WritableBlock, String> {
         if b.pool_id != self.pool_id {
             return Err(format!("block pool {} is not this DataNode's", b.pool_id));
@@ -1494,16 +2117,38 @@ impl Namespace {
             return Err(format!("block {} has already been written", b.block_id));
         }
         let m = self.meta(ino);
-        if b.generation_stamp != m.generation {
+        let base = o.base(index, m.block_size);
+        if append != (base > 0) {
+            return Err(if append {
+                format!(
+                    "block {} is a new block: its stage is PIPELINE_SETUP_CREATE, not PIPELINE_SETUP_APPEND",
+                    b.block_id
+                )
+            } else {
+                format!(
+                    "block {} holds {base} committed bytes: an append reopens it with PIPELINE_SETUP_APPEND",
+                    b.block_id
+                )
+            });
+        }
+        let adopted = latest != 0 && latest == m.generation;
+        if b.generation_stamp != m.generation && !adopted {
             return Err(format!(
                 "block {} has generation stamp {}, not {}",
                 b.block_id, m.generation, b.generation_stamp
+            ));
+        }
+        if append && latest != m.generation && Some(latest) != o.offered {
+            return Err(format!(
+                "block {}: the new generation stamp {latest} was not offered by updateBlockForPipeline",
+                b.block_id
             ));
         }
         Ok(WritableBlock {
             ino,
             index,
             block_size: m.block_size,
+            base,
         })
     }
 
@@ -1525,9 +2170,11 @@ impl Namespace {
         &mut self,
         b: &ExtendedBlockProto,
         client: &str,
+        latest: u64,
+        append: bool,
         data: Vec<u8>,
     ) -> Result<(), String> {
-        if let Err(e) = self.writable_block(b, client) {
+        if let Err(e) = self.writable_block(b, client, latest, append) {
             self.release(data.len() as u64);
             return Err(e);
         }
@@ -1535,7 +2182,9 @@ impl Namespace {
         Ok(())
     }
 
-    /// Whether a block may be read: a complete file's block with the right generation stamp.
+    /// Whether a block may be read: a block of a file not being created, with the right
+    /// generation stamp, as long as the file's visible bytes (a file open for append reads as
+    /// what it held, one under truncate recovery up to its new length).
     pub fn readable_block(&self, b: &ExtendedBlockProto) -> Result<ReadableBlock, String> {
         if b.pool_id != self.pool_id {
             return Err(format!("block pool {} is not this DataNode's", b.pool_id));
@@ -1544,7 +2193,7 @@ impl Namespace {
         if self.tree.kind(ino) != Some(Kind::File) {
             return Err(format!("block {} belongs to no file", b.block_id));
         }
-        if self.open.contains_key(&ino) {
+        if self.being_created(ino) {
             return Err(format!("block {} is being written", b.block_id));
         }
         let m = self.meta(ino);
@@ -1554,7 +2203,7 @@ impl Namespace {
                 b.block_id, m.generation, b.generation_stamp
             ));
         }
-        let size = self.tree.size(ino).unwrap_or(0);
+        let size = self.visible_size(ino);
         let start = index.saturating_mul(m.block_size);
         if start >= size {
             return Err(format!("block {} is past the end of its file", b.block_id));

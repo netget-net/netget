@@ -186,9 +186,12 @@ impl Session {
     }
 
     async fn send(&mut self, bytes: &[u8]) -> anyhow::Result<()> {
-        tokio::time::timeout(super::FRAME_DEADLINE, self.stream.write_all(bytes))
-            .await
-            .map_err(|_| anyhow::anyhow!("the client did not take a response in time"))??;
+        tokio::time::timeout(
+            self.hdfs.settings.deadlines.frame,
+            self.stream.write_all(bytes),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("the client did not take a response in time"))??;
         self.hdfs
             .ctx
             .state
@@ -216,14 +219,18 @@ impl Session {
     }
 
     async fn run(&mut self) -> anyhow::Result<()> {
+        let deadlines = self.hdfs.settings.deadlines;
         let mut h = [0u8; 7];
-        match tokio::time::timeout(super::HEADER_DEADLINE, self.stream.read_exact(&mut h)).await {
+        match tokio::time::timeout(deadlines.header, self.stream.read_exact(&mut h)).await {
             Err(_) => {
                 self.outcome(
                     "connection",
                     "",
                     "protocol_refusal",
-                    "no connection header within 30 s; closed",
+                    &format!(
+                        "no connection header within {} s; closed",
+                        deadlines.header.as_secs()
+                    ),
                 );
                 return Ok(());
             }
@@ -276,8 +283,8 @@ impl Session {
         let frame = match rpc::read_frame(
             &mut self.stream,
             rpc::MAX_REQUEST_FRAME,
-            super::HEADER_DEADLINE,
-            super::FRAME_DEADLINE,
+            deadlines.header,
+            deadlines.frame,
         )
         .await
         {
@@ -340,8 +347,8 @@ impl Session {
             let frame = match rpc::read_frame(
                 &mut self.stream,
                 rpc::MAX_REQUEST_FRAME,
-                super::IDLE_TIMEOUT,
-                super::FRAME_DEADLINE,
+                deadlines.idle,
+                deadlines.frame,
             )
             .await
             {
@@ -488,11 +495,27 @@ impl Session {
                 )
                 .await
             }
+            rpc::FrameError::Idle => self.outcome(
+                "connection",
+                "",
+                "protocol_refusal",
+                &format!(
+                    "no frame began within {} s; closed",
+                    if self.user.is_empty() {
+                        self.hdfs.settings.deadlines.header.as_secs()
+                    } else {
+                        self.hdfs.settings.deadlines.idle.as_secs()
+                    }
+                ),
+            ),
             rpc::FrameError::Timeout => self.outcome(
                 "connection",
                 "",
                 "protocol_refusal",
-                "a frame did not arrive in time; closed",
+                &format!(
+                    "the rest of a frame did not arrive within {} s of its first byte; closed",
+                    self.hdfs.settings.deadlines.frame.as_secs()
+                ),
             ),
             _ => {}
         }
@@ -501,11 +524,12 @@ impl Session {
     /// SASL negotiation that can end only in SIMPLE: NEGOTIATE is answered with the one method
     /// this NameNode has; anything else is refused. `Ok(false)`: refused and closed.
     async fn sasl(&mut self) -> anyhow::Result<bool> {
+        let deadlines = self.hdfs.settings.deadlines;
         let frame = match rpc::read_frame(
             &mut self.stream,
             rpc::MAX_REQUEST_FRAME,
-            super::HEADER_DEADLINE,
-            super::FRAME_DEADLINE,
+            deadlines.header,
+            deadlines.frame,
         )
         .await
         {
@@ -975,12 +999,13 @@ impl Session {
                 let path = joined(&comps);
                 let flag = r.create_flag;
                 if flag & (pb::CreateFlagProto::Append as u32) != 0 {
+                    // Hadoop's create(APPEND) is append's job; its client never sends it.
                     return Err(self.refused(
                         "create",
                         &path,
                         Thrown::new(
                             class::UNSUPPORTED,
-                            "Append is not supported by this NameNode",
+                            "create with the APPEND flag is not supported by this NameNode; call append",
                         ),
                     ));
                 }
@@ -1110,6 +1135,8 @@ impl Session {
                     f.insert("data".into(), json!(data));
                     f.insert("encoding".into(), json!(encoding));
                     f.insert("data_truncated".into(), json!(truncated));
+                    f.insert("offset".into(), json!(plan.offset));
+                    f.insert("append".into(), json!(plan.append));
                     f.insert("client_name".into(), json!(client));
                     if let Err(t) = self
                         .decide("write", &path, &actions::WRITE_EVENT, f, deadline)
@@ -1319,7 +1346,7 @@ impl Session {
                 let ino = self
                     .settle(method, true, read, deadline, |ns| ns.lookup(&comps))
                     .await?;
-                let closed = self.hdfs.ns().recover_lease(ino);
+                let closed = self.hdfs.ns().recover_lease(ino, Instant::now());
                 Ok(pb::RecoverLeaseResponseProto { result: closed }.encode_to_vec())
             }
             "isFileClosed" => {
@@ -1486,10 +1513,9 @@ impl Session {
             .encode_to_vec()),
             "msync" => Ok(pb::MsyncResponseProto {}.encode_to_vec()),
             "updateBlockForPipeline" => {
-                // colinmarc/hdfs calls this after every block it finishes. With one DataNode
-                // and no pipeline recovery there is nothing to re-stamp: the block keeps its
-                // generation stamp, and a recovery that would need a new one is refused at the
-                // DataNode (only PIPELINE_SETUP_CREATE is served).
+                // A new generation stamp, adopted only when updatePipeline names it. Hadoop's
+                // client asks before every append pipeline; colinmarc/hdfs after every block it
+                // finishes, ignoring the answer.
                 let r = dec::<pb::UpdateBlockForPipelineRequestProto>(body, method)?;
                 let client = crate::utils::sanitize::token(&r.client_name, 256);
                 let dn = self.hdfs.datanode_info(self.local);
@@ -1504,32 +1530,187 @@ impl Session {
                 let r = dec::<pb::UpdatePipelineRequestProto>(body, method)?;
                 let client = crate::utils::sanitize::token(&r.client_name, 256);
                 let dn = self.hdfs.datanode_info(self.local);
-                if r.old_block.block_id != r.new_block.block_id
-                    || r.new_nodes
-                        .iter()
-                        .any(|n| n.datanode_uuid != dn.id.datanode_uuid)
+                if r.new_nodes
+                    .iter()
+                    .any(|n| n.datanode_uuid != dn.id.datanode_uuid)
                 {
                     return Err(self.refused(
                         "updatePipeline",
                         "",
                         Thrown::new(
                             class::IO,
-                            "Pipeline recovery is not supported by this NameNode",
+                            "Pipeline recovery onto another DataNode is not supported by this NameNode",
                         ),
                     ));
                 }
+                let _g = self.gate(deadline).await?;
                 self.hdfs
                     .ns()
-                    .block_for_pipeline(&r.old_block, &client, &dn)
+                    .update_pipeline(&r.old_block, &r.new_block, &client)
                     .map_err(|t| self.refused("updatePipeline", "", t))?;
                 Ok(pb::UpdatePipelineResponseProto {}.encode_to_vec())
             }
-            "append" | "truncate" | "concat" | "createSymlink" => Err(Thrown::new(
+            "getAdditionalDatanode" => {
+                let r = dec::<pb::GetAdditionalDatanodeRequestProto>(body, method)?;
+                let client = crate::utils::sanitize::token(&r.client_name, 256);
+                let dn = self.hdfs.datanode_info(self.local);
+                let block = self
+                    .hdfs
+                    .ns()
+                    .block_with_nodes(&r.blk, &client, &dn)
+                    .map_err(|t| self.refused("getAdditionalDatanode", "", t))?;
+                Ok(pb::GetAdditionalDatanodeResponseProto { block }.encode_to_vec())
+            }
+            "append" => self.append(body, deadline).await,
+            "truncate" => self.truncate(body, deadline).await,
+            "concat" => self.concat(body, deadline).await,
+            "createSymlink" => Err(Thrown::new(
                 class::UNSUPPORTED,
                 format!("{method} is not supported by this NameNode"),
             )
             .into()),
             _ => Err(CallError::NoSuchMethod),
         }
+    }
+
+    /// append: Rust refuses what HDFS would (a directory, a file open elsewhere, a new block
+    /// after a partial one), the model decides, and the file opens for append — its partial
+    /// last block reopened and located, or none when the next block starts fresh. The bytes
+    /// are decided again, with what the client wrote, at complete.
+    async fn append(&mut self, body: &[u8], deadline: tokio::time::Instant) -> CallResult {
+        let method = "append";
+        let r = dec::<pb::AppendRequestProto>(body, method)?;
+        let comps = path_of(&r.src)?;
+        let path = joined(&comps);
+        let client = crate::utils::sanitize::token(&r.client_name, 256);
+        let flag = r.flag.unwrap_or(pb::CreateFlagProto::Append as u32);
+        let new_block = flag & (pb::CreateFlagProto::NewBlock as u32) != 0;
+        let _g = self.gate(deadline).await?;
+        let plan = self
+            .settle(
+                method,
+                true,
+                super::MAX_DESCRIBES_PER_CALL,
+                deadline,
+                |ns| ns.plan_append(&comps, &client, new_block),
+            )
+            .await
+            .map_err(|t| self.refused(method, &path, t))?;
+        let mut f = Map::new();
+        f.insert("length".into(), json!(plan.length));
+        f.insert("block_size".into(), json!(plan.block_size));
+        f.insert("last_block_partial".into(), json!(plan.partial));
+        f.insert("new_block".into(), json!(new_block));
+        f.insert("client_name".into(), json!(client));
+        self.decide(method, &path, &actions::APPEND_EVENT, f, deadline)
+            .await?;
+        let dn = self.hdfs.datanode_info(self.local);
+        let (block, stat) = {
+            let mut ns = self.hdfs.ns();
+            ns.apply_append(&plan, &client);
+            (ns.append_block(plan.ino, &dn), ns.status(plan.ino, b""))
+        };
+        Ok(pb::AppendResponseProto { block, stat }.encode_to_vec())
+    }
+
+    /// truncate: true when done at once (a block boundary, or no change); false when the cut
+    /// falls inside a block, which then goes through block recovery and the file stays open
+    /// (isFileClosed false, its old length reported) until that is done, as Hadoop's NameNode
+    /// reports an in-place truncate — what `hdfs dfs -truncate -w` waits for.
+    async fn truncate(&mut self, body: &[u8], deadline: tokio::time::Instant) -> CallResult {
+        let method = "truncate";
+        let r = dec::<pb::TruncateRequestProto>(body, method)?;
+        let comps = path_of(&r.src)?;
+        let path = joined(&comps);
+        let client = crate::utils::sanitize::token(&r.client_name, 256);
+        let _g = self.gate(deadline).await?;
+        let plan = self
+            .settle(
+                method,
+                true,
+                super::MAX_DESCRIBES_PER_CALL,
+                deadline,
+                |ns| ns.plan_truncate(&comps, r.new_length, &client),
+            )
+            .await
+            .map_err(|t| self.refused(method, &path, t))?;
+        if let namespace::TruncatePlan::Cut {
+            old,
+            new,
+            block_size,
+            boundary,
+            ..
+        } = &plan
+        {
+            let mut f = Map::new();
+            f.insert("length".into(), json!(new));
+            f.insert("length_before".into(), json!(old));
+            f.insert("block_size".into(), json!(block_size));
+            f.insert("on_block_boundary".into(), json!(boundary));
+            f.insert("client_name".into(), json!(client));
+            self.decide(method, &path, &actions::TRUNCATE_EVENT, f, deadline)
+                .await?;
+        }
+        let due = Instant::now() + super::TRUNCATE_RECOVERY;
+        let done = applied(self.hdfs.ns().apply_truncate(&plan, &client, &path, due))?;
+        if !done {
+            self.outcome(
+                method,
+                &path,
+                "accepted",
+                "the cut is inside a block: under block recovery; answered false",
+            );
+        }
+        Ok(pb::TruncateResponseProto { result: done }.encode_to_vec())
+    }
+
+    /// concat: Hadoop's own checks and this NameNode's (one block size, whole blocks up to the
+    /// last source) in Rust, then the model, then the sources' bytes move onto the target and
+    /// the sources go.
+    async fn concat(&mut self, body: &[u8], deadline: tokio::time::Instant) -> CallResult {
+        let method = "concat";
+        let r = dec::<pb::ConcatRequestProto>(body, method)?;
+        let target = path_of(&r.trg)?;
+        let path = joined(&target);
+        if r.srcs.len() > namespace::MAX_CONCAT_SOURCES {
+            return Err(self.refused(
+                method,
+                &path,
+                Thrown::new(
+                    class::HADOOP_ILLEGAL_ARGUMENT,
+                    format!(
+                        "concat: at most {} source files at once",
+                        namespace::MAX_CONCAT_SOURCES
+                    ),
+                ),
+            ));
+        }
+        let srcs = r
+            .srcs
+            .iter()
+            .map(|s| path_of(s))
+            .collect::<Result<Vec<_>, _>>()?;
+        let _g = self.gate(deadline).await?;
+        let plan = self
+            .settle(
+                method,
+                true,
+                super::MAX_DESCRIBES_PER_CALL,
+                deadline,
+                |ns| ns.plan_concat(&target, &srcs),
+            )
+            .await
+            .map_err(|t| self.refused(method, &path, t))?;
+        let mut f = Map::new();
+        let sources: Vec<&str> = plan.sources.iter().map(|s| s.2.as_str()).collect();
+        f.insert("sources".into(), json!(sources));
+        f.insert("length_before".into(), json!(plan.length_before));
+        f.insert("length".into(), json!(plan.length_after));
+        f.insert("block_size".into(), json!(plan.block_size));
+        self.decide(method, &path, &actions::CONCAT_EVENT, f, deadline)
+            .await?;
+        let r = self.hdfs.ns().apply_concat(&plan, &path);
+        applied(r).map_err(|t| self.refused(method, &path, t))?;
+        Ok(pb::ConcatResponseProto {}.encode_to_vec())
     }
 }

@@ -9891,6 +9891,10 @@ jobs:
           sed -n 's/^export //p' "$RUNNER_TEMP/hadoop-env" >> "$GITHUB_ENV"
           GOBIN="$RUNNER_TEMP/go-peers" go install github.com/colinmarc/hdfs/v2/cmd/hdfs@v2.4.0
           echo "NETGET_GO_HDFS=$RUNNER_TEMP/go-peers/hdfs" >> "$GITHUB_ENV"
+          # colinmarc/hdfs's hdfs command has no append: its library's Client.Append, through
+          # the driver in tests/server/hdfs/goappend (go.sum pins v2.4.0).
+          (cd tests/server/hdfs/goappend && go build -o "$RUNNER_TEMP/go-peers/netget-hdfs-append" .)
+          echo "NETGET_GO_HDFS_APPEND=$RUNNER_TEMP/go-peers/netget-hdfs-append" >> "$GITHUB_ENV"
           echo 'wireshark-common wireshark-common/install-setuid boolean false' | sudo debconf-set-selections
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tshark
@@ -9899,6 +9903,7 @@ jobs:
         run: |
           set -euo pipefail
           test -x "$NETGET_GO_HDFS"
+          test -x "$NETGET_GO_HDFS_APPEND"
           test -x "$NETGET_HADOOP_HOME/bin/hdfs"
           command -v tshark
           for filter in \

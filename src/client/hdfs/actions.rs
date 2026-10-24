@@ -21,6 +21,9 @@ pub const WRITE: &str = "hdfs_write";
 pub const DELETE: &str = "hdfs_delete";
 pub const RENAME: &str = "hdfs_rename";
 pub const SET_PERMISSION: &str = "hdfs_set_permission";
+pub const APPEND: &str = "hdfs_append";
+pub const TRUNCATE: &str = "hdfs_truncate";
+pub const CONCAT: &str = "hdfs_concat";
 
 /// Bytes one read returns, so a result fits in an event.
 pub const MAX_READ: u64 = 64 * 1024;
@@ -29,6 +32,8 @@ pub const DEFAULT_READ: u64 = 4096;
 pub const MAX_WRITE: usize = 1 << 20;
 /// Entries of a listing page shown in one event.
 pub const MAX_LISTED: usize = 200;
+/// Sources one concat names.
+pub const MAX_CONCAT_SOURCES: usize = 256;
 
 pub fn p(name: &str, type_hint: &str, description: &str, required: bool) -> Parameter {
     Parameter {
@@ -219,6 +224,62 @@ pub fn client_actions() -> Vec<ActionDefinition> {
             json!({"type": SET_PERMISSION, "path": "/user/alice/a.txt", "mode": 416}),
         ),
         action(
+            APPEND,
+            "Add bytes to the end of an existing file (append; a partial last block is reopened: \
+             updateBlockForPipeline, the DataNode pipeline in append mode, updatePipeline; then \
+             addBlock and the pipeline for whole new blocks; complete), at most 1 MiB. Arrives \
+             as hdfs_append_result.",
+            vec![
+                path_param(),
+                p(
+                    "data",
+                    "string",
+                    "The bytes to add: the text itself for utf8, pairs of hex digits for hex",
+                    true,
+                ),
+                p(
+                    "encoding",
+                    "string",
+                    "How data is written: utf8 (the text's bytes; default) or hex (pairs of hex \
+                     digits, for binary)",
+                    false,
+                ),
+            ],
+            json!({"type": APPEND, "path": "/user/alice/log.txt", "data": "one more line\n", "encoding": "utf8"}),
+        ),
+        action(
+            TRUNCATE,
+            "Cut a file to a shorter length (truncate). A cut on a block boundary is done at once; \
+             one inside a block goes through block recovery, which by default is waited for \
+             (isFileClosed polled for up to 60 s). Arrives as hdfs_truncate_result.",
+            vec![
+                path_param(),
+                p("length", "number", "The new length, bytes", true),
+                p(
+                    "wait",
+                    "boolean",
+                    "Wait for block recovery when the cut is inside a block (default true)",
+                    false,
+                ),
+            ],
+            json!({"type": TRUNCATE, "path": "/user/alice/log.txt", "length": 1024}),
+        ),
+        action(
+            CONCAT,
+            "Join files onto the end of a file (concat): the sources, in order, in the same \
+             directory as path; they are removed. Arrives as hdfs_mutation_result.",
+            vec![
+                path_param(),
+                p(
+                    "sources",
+                    "array",
+                    "The files to add, in order (absolute paths, 1 to 256)",
+                    true,
+                ),
+            ],
+            json!({"type": CONCAT, "path": "/user/alice/all.log", "sources": ["/user/alice/part-1.log", "/user/alice/part-2.log"]}),
+        ),
+        action(
             "disconnect",
             "Close the NameNode connection and stop this client.",
             vec![],
@@ -350,21 +411,86 @@ pub static WRITE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     .with_actions(client_actions())
 });
 
+pub static APPEND_RESULT_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    EventType::new(
+        "hdfs_append_result",
+        "Bytes were added to a file: appended through the DataNode pipeline, acknowledged, and \
+         the file completed.",
+        json!({"type": READ, "path": "/user/alice/log.txt"}),
+    )
+    .with_parameters(vec![
+        p("path", "string", "The absolute HDFS path of the file", true),
+        p("bytes", "number", "How many bytes were added", true),
+        p("length_before", "number", "The file's length before", true),
+        p("length", "number", "The file's length after", true),
+        p(
+            "blocks",
+            "number",
+            "How many blocks were written (the reopened last one included)",
+            true,
+        ),
+        p(
+            "datanodes",
+            "array",
+            "The DataNodes each block went to (address:port)",
+            true,
+        ),
+    ])
+    .with_actions(client_actions())
+});
+
+pub static TRUNCATE_RESULT_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    EventType::new(
+        "hdfs_truncate_result",
+        "A truncate the NameNode answered.",
+        json!({"type": STAT, "path": "/user/alice/log.txt"}),
+    )
+    .with_parameters(vec![
+        p("path", "string", "The absolute HDFS path of the file", true),
+        p("length", "number", "The length asked for", true),
+        p(
+            "done",
+            "boolean",
+            "What truncate answered: true when done at once, false when block recovery runs",
+            true,
+        ),
+        p(
+            "closed",
+            "boolean",
+            "Whether the file is closed again (recovery waited for and finished)",
+            true,
+        ),
+        p(
+            "file_length",
+            "number",
+            "The file's length when this was raised",
+            true,
+        ),
+    ])
+    .with_actions(client_actions())
+});
+
 pub static MUTATION_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "hdfs_mutation_result",
-        "A change the NameNode answered: mkdir, delete, rename or set_permission.",
+        "A change the NameNode answered: mkdir, delete, rename, set_permission or concat.",
         json!({"type": STAT, "path": "/user/alice/reports"}),
     )
     .with_parameters(vec![
         p(
             "operation",
             "string",
-            "mkdir, delete, rename or set_permission",
+            "mkdir, delete, rename, set_permission or concat",
             true,
         ),
         p("path", "string", "The absolute HDFS path it is about", true),
         p("destination", "string", "rename: the new path", false),
+        p(
+            "sources",
+            "array",
+            "concat: the files joined onto path, now removed",
+            false,
+        ),
         p(
             "result",
             "boolean",
@@ -511,6 +637,32 @@ pub fn check(v: &Value) -> Result<()> {
             check_path(v, "path")?;
             check_mode(v, true)?;
         }
+        APPEND => {
+            check_path(v, "path")?;
+            write_data(v)?;
+        }
+        TRUNCATE => {
+            check_path(v, "path")?;
+            v["length"]
+                .as_u64()
+                .context("length is a non-negative number of bytes")?;
+            check_bool(v, "wait")?;
+        }
+        CONCAT => {
+            check_path(v, "path")?;
+            let sources = v["sources"]
+                .as_array()
+                .context("sources is an array of paths")?;
+            ensure!(
+                (1..=MAX_CONCAT_SOURCES).contains(&sources.len()),
+                "sources names 1 to {MAX_CONCAT_SOURCES} files"
+            );
+            for s in sources {
+                let p = s.as_str().context("each source is a path")?;
+                crate::server::hdfs::namespace::components(p)
+                    .map_err(|t| anyhow::anyhow!("{}", t.message))?;
+            }
+        }
         other => bail!("Unknown HDFS client action {other:?}"),
     }
     Ok(())
@@ -541,8 +693,8 @@ impl Protocol for HdfsClientProtocol {
         ]
     }
     fn description(&self) -> &'static str {
-        "HDFS client: list, stat, read, write, mkdir, delete, rename and chmod against a \
-         NameNode, reading and writing blocks through its DataNodes"
+        "HDFS client: list, stat, read, write, append, truncate, concat, mkdir, delete, rename \
+         and chmod against a NameNode, reading and writing blocks through its DataNodes"
     }
     fn get_async_actions(&self, _: &AppState) -> Vec<ActionDefinition> {
         client_actions()
@@ -557,6 +709,8 @@ impl Protocol for HdfsClientProtocol {
             STATUS_EVENT.clone(),
             READ_EVENT.clone(),
             WRITE_EVENT.clone(),
+            APPEND_RESULT_EVENT.clone(),
+            TRUNCATE_RESULT_EVENT.clone(),
             MUTATION_EVENT.clone(),
             ERROR_EVENT.clone(),
         ]
@@ -578,10 +732,10 @@ impl Protocol for HdfsClientProtocol {
         ProtocolMetadataV2::builder()
             .state(DevelopmentState::Experimental)
             .privilege_requirement(PrivilegeRequirement::None)
-            .implementation("Hand-written HDFS client over the server's Hadoop IPC and DataTransferProtocol modules (src/server/hdfs/rpc.rs, transfer.rs, Hadoop 3.5.0's .proto files): the hrpc header with SIMPLE authentication and a connection context, ClientNamenodeProtocol calls correlated by call id (getServerDefaults, getListing, getFileInfo, getBlockLocations, mkdirs, create, addBlock, complete, delete, rename2, setPermission), READ_BLOCK with checksum verification and WRITE_BLOCK through the NameNode's pipeline with packet acks")
-            .llm_control("Which paths to list, stat and read (offset, length, encoding), which directories to make, what to write where, and what to delete, rename or chmod")
-            .e2e_testing("tests/client/hdfs: a real single-node HDFS from Apache Hadoop 3.5.0 (hdfs namenode -format, a NameNode and a DataNode on loopback ports), the files the client writes read back with hdfs dfs -cat, what it reads seeded with hdfs dfs -put, and the model's actions asserted on the NameNode's own audit log; in the hdfs pair job")
-            .notes("Experimental: one independent peer (Apache Hadoop 3.5.0's NameNode and DataNode) passes on macOS; in CI it runs only in the hdfs pair job, which had not run when this landed. SIMPLE authentication only (no Kerberos, no SASL, no data transfer encryption or block tokens). Reads move at most 64 KiB and writes at most 1 MiB per action; read data is text only when it is text, hex otherwise; a listing event shows at most 200 entries. No append, no hflush, no pipeline recovery: a DataNode failing mid-write fails the write. A handler chain stops after 16 follow-ups (a whole list, stat, read, write, rename, chmod and delete session is twelve). Response frames are bounded at 16 MiB.")
+            .implementation("Hand-written HDFS client over the server's Hadoop IPC and DataTransferProtocol modules (src/server/hdfs/rpc.rs, transfer.rs, Hadoop 3.5.0's .proto files): the hrpc header with SIMPLE authentication and a connection context, ClientNamenodeProtocol calls correlated by call id (getServerDefaults, getListing, getFileInfo, getBlockLocations, mkdirs, create, addBlock, complete, delete, rename2, setPermission, append, updateBlockForPipeline, updatePipeline, truncate, isFileClosed, concat), READ_BLOCK with checksum verification and WRITE_BLOCK through the NameNode's pipeline with packet acks, in PIPELINE_SETUP_CREATE for a new block and PIPELINE_SETUP_APPEND for a reopened last block (its partial chunk continued in a packet of its own)")
+            .llm_control("Which paths to list, stat and read (offset, length, encoding), which directories to make, what to write or append where, what to truncate to which length (and whether to wait for block recovery), which files to concat onto which, and what to delete, rename or chmod")
+            .e2e_testing("tests/client/hdfs: a real single-node HDFS from Apache Hadoop 3.5.0 (hdfs namenode -format, a NameNode and a DataNode on loopback ports), the files the client writes, appends to, truncates and concatenates read back with hdfs dfs -cat and -stat, what it reads seeded with hdfs dfs -put, and the model's actions asserted on the NameNode's own audit log; in the hdfs pair job")
+            .notes("Experimental: one independent peer (Apache Hadoop 3.5.0's NameNode and DataNode) passes on macOS; in CI it runs only in the hdfs pair job, which had not run when this landed. SIMPLE authentication only (no Kerberos, no SASL, no data transfer encryption or block tokens). Reads move at most 64 KiB and writes at most 1 MiB per action; read data is text only when it is text, hex otherwise; a listing event shows at most 200 entries. An append reopens a partial last block the way Hadoop's client does (updateBlockForPipeline, WRITE_BLOCK in PIPELINE_SETUP_APPEND, updatePipeline, then new blocks); a truncate inside a block waits up to 60 s for block recovery by polling isFileClosed, unless told not to. No hflush, no pipeline recovery: a DataNode failing mid-write fails the write. A handler chain stops after 16 follow-ups (a whole list, stat, read, write, rename, chmod and delete session is twelve). Response frames are bounded at 16 MiB.")
             .history(HistoryMode::Last(SESSION_HISTORY_ENTRIES))
             .batching(BatchingMode::Unsupported)
             .build()

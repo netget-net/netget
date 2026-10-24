@@ -265,6 +265,9 @@ pub fn decode_packet(buf: &[u8], limits: &PacketLimits) -> Result<(Packet, usize
 #[derive(Debug)]
 pub enum ReadError {
     Closed,
+    /// Nothing began before the idle deadline.
+    Idle,
+    /// The first byte arrived and the rest did not arrive in time.
     Timeout,
     Invalid(anyhow::Error),
     Io(std::io::Error),
@@ -274,7 +277,8 @@ impl std::fmt::Display for ReadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ReadError::Closed => write!(f, "the peer closed the connection"),
-            ReadError::Timeout => write!(f, "nothing arrived in time"),
+            ReadError::Idle => write!(f, "nothing began before the idle deadline"),
+            ReadError::Timeout => write!(f, "the rest did not arrive in time"),
             ReadError::Invalid(e) => write!(f, "{e:#}"),
             ReadError::Io(e) => write!(f, "{e}"),
         }
@@ -298,7 +302,7 @@ async fn first_byte<R: AsyncRead + Unpin>(
 ) -> std::result::Result<u8, ReadError> {
     let mut b = [0u8; 1];
     match tokio::time::timeout(idle, r.read(&mut b)).await {
-        Err(_) => Err(ReadError::Timeout),
+        Err(_) => Err(ReadError::Idle),
         Ok(Err(e)) => Err(e.into()),
         Ok(Ok(0)) => Err(ReadError::Closed),
         Ok(Ok(_)) => Ok(b[0]),
@@ -436,6 +440,40 @@ pub fn block_md5(sums: &[u8]) -> [u8; 16] {
     let mut h = Md5::new();
     h.update(sums);
     h.finalize().into()
+}
+
+/// Whether a packet of `len` bytes at `offset` in its block keeps the block's chunks aligned:
+/// one that starts inside a chunk must end at or before that chunk's end, because its
+/// checksums are taken from its own first byte. This is how an append continues a partial
+/// last chunk — that chunk travels alone, its checksum over the new bytes only — and what
+/// Hadoop's DataNode means by "a partial chunk must be sent in an individual packet".
+pub fn keeps_chunks_aligned(offset: u64, len: usize, bpc: u32) -> bool {
+    let into = offset % bpc.max(1) as u64;
+    into == 0 || into + len as u64 <= bpc as u64
+}
+
+/// How a writer cuts `len` bytes starting at `offset` in a block into packets of at most `max`
+/// bytes: when `offset` is inside a chunk the first packet ends at that chunk's end (or at the
+/// end of the data), and every later packet starts on a chunk boundary and carries whole chunks
+/// (the last one excepted). `(offset in block, length)` per packet, in order.
+pub fn packet_spans(offset: u64, len: u64, bpc: u32, max: usize) -> Vec<(u64, u64)> {
+    let bpc = bpc.max(1) as u64;
+    // Whole chunks per packet, at least one.
+    let per = ((max as u64 / bpc).max(1)) * bpc;
+    let mut out = Vec::new();
+    let mut at = offset;
+    let end = offset.saturating_add(len);
+    if !at.is_multiple_of(bpc) && at < end {
+        let n = (bpc - at % bpc).min(end - at);
+        out.push((at, n));
+        at += n;
+    }
+    while at < end {
+        let n = per.min(end - at);
+        out.push((at, n));
+        at += n;
+    }
+    out
 }
 
 /// The chunk size a request asks for, within bounds.
