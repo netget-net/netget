@@ -599,6 +599,9 @@ pub fn wire_for(protocol: &str) -> Wire {
         "icmp" => raw("icmp", "icmp"),
         "igmp" => raw("igmp", "igmp"),
         "ospf" => raw("ip proto 89", "ospf"),
+        // GRE on IP protocol 47. tshark dissects what it carries by protocol type: `eth` for a
+        // gretap payload (0x6558), `ip` for a gre one (0x0800). GRE-in-UDP is vxlan's.
+        "gre" => raw("ip proto 47", "gre"),
         // Same trap as isis: `arp` is an Ethernet-only BPF keyword and is rejected on
         // loopback (DLT_NULL on macOS). Capture on a real interface.
         "arp" => with_note(raw("arp", "arp"), ARP_LOOPBACK_NOTE),

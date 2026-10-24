@@ -97,6 +97,7 @@ export const protocolStacks = [
     ["gopher", "ETH>IP>TCP>GOPHER"],
     ["graphite", "ETH>IP>TCP>Graphite"],
     ["graphql", "ETH>IP>TCP>HTTP>GraphQL"],
+    ["gre", "ETH>IP>GRE"],
     ["grpc", "ETH>IP>TCP>HTTP/2>gRPC"],
     ["grpc", "ETH>IP>TCP>HTTP2>GRPC"],
     ["grpc-web", "ETH>IP>TCP>HTTP>GRPC-WEB"],

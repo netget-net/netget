@@ -244,6 +244,8 @@ pub mod db2;
 pub mod dbus;
 pub mod epp;
 pub mod ethercat;
+#[cfg(unix)]
+pub mod gre;
 pub mod gtp;
 pub mod guacamole;
 pub mod hls;

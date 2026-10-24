@@ -88,6 +88,7 @@ const NO_WELL_KNOWN_PORT: &[(&str, &str)] = &[
     ("lldp", "link layer (EtherType 0x88CC); ports do not exist here"),
     ("ndp", "ICMPv6 message types; NDP has no ports"),
     ("ospf", "IP protocol 89; OSPF has no ports"),
+    ("gre", "IP protocol 47; GRE has no ports"),
     ("rawip", "raw IP with an operator-chosen protocol number; no ports"),
     ("stp", "link layer (802.1D BPDUs over LLC); ports do not exist here"),
     ("vrrp", "IP protocol 112; VRRP has no ports"),

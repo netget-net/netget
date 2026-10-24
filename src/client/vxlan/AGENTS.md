@@ -44,5 +44,5 @@ none) are considered.
 
 ## Not implemented
 
-GRE directly on IP protocol 47 (a raw socket; see the server's AGENTS.md), and GRE-in-UDP
-over IPv6.
+GRE directly on IP protocol 47 (a raw socket: the separate `gre` protocol, `src/client/gre/`),
+and GRE-in-UDP over IPv6.
