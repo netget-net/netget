@@ -5,7 +5,8 @@
 //!
 //! What is checked: the deframer never holds more than one maximal frame, every decoded DATA
 //! frame's EZSP payload is within ASH's bound, no response or callback exceeds what one DATA
-//! frame carries, and nothing panics on any byte sequence. None of these decoders recurses;
+//! frame carries — at version 17 and through the EZSP 8–13 translation (`legacy::handle`,
+//! `legacy::callback`) — and nothing panics on any byte sequence. None of these decoders recurses;
 //! the corpus still carries the shapes that defeat a byte bound (`escape_run`, a megabyte of
 //! escapes without a flag, and `deep_attributes`, a Write Attributes frame of nested-looking
 //! string lengths) so a future recursive decoder meets them on its first run.
@@ -13,7 +14,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use netget::server::zigbee::{ash, device, ezsp, ncp};
+use netget::server::zigbee::{ash, device, ezsp, legacy, ncp};
 use serde_json::json;
 
 fuzz_target!(|data: &[u8]| {
@@ -81,6 +82,17 @@ fn command(ram: &mut ncp::Ram, nv: &mut ncp::Nvram, frame: &[u8]) {
         assert!(h.response.len() <= ash::MAX_DATA);
         for cb in &h.callbacks {
             assert!(cb.params.len() + 5 <= ash::MAX_DATA);
+        }
+        // The same command at the oldest and the last one-byte-status versions, through the
+        // translation onto the v14 set: nothing it builds grows past one DATA frame.
+        for v in [legacy::OLDEST, 13] {
+            let mut old_ram = ram.clone();
+            old_ram.version = old_ram.version.map(|_| v);
+            let h = legacy::handle(v, &mut old_ram, nv, &cmd);
+            assert!(h.response.len() <= ash::MAX_DATA);
+            for cb in h.callbacks {
+                assert!(legacy::callback(v, cb).params.len() + 5 <= ash::MAX_DATA);
+            }
         }
     }
 }

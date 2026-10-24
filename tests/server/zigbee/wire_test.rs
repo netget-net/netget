@@ -485,7 +485,8 @@ async fn startup_parameters_are_bounded() {
         .collect();
     for (params, why) in [
         (json!({"devices": many}), "devices holds at most 32"),
-        (json!({"ezsp_version": 13}), "ezsp_version is 14 to 17"),
+        (json!({"ezsp_version": 7}), "ezsp_version is 8 to 17"),
+        (json!({"ezsp_version": 18}), "ezsp_version is 8 to 17"),
         (json!({"network_key": NETWORK_KEY}), "give network too"),
         (
             json!({"network": {"channel": 27, "pan_id": 1, "extended_pan_id": "0011223344556677"}}),

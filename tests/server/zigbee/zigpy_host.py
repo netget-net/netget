@@ -1,10 +1,12 @@
-"""zigpy with bellows as the Zigbee host on NetGet's co-processor.
+"""zigpy as the Zigbee host on NetGet's co-processor, through bellows (EZSP) or zigpy-znp
+(Z-Stack MT).
 
-Starts a ControllerApplication on socket://127.0.0.1:<port> (forming a network if the NCP
-has none), opens the network, waits for the device with <ieee> to join and be interviewed,
-reads its Basic cluster, switches it on, waits for the attribute report, and reads on_off back
-with the cache bypassed. Each step prints one JSON line; the exit status is 0 only when every
-step held. Run with the bellows venv's python: python zigpy_host.py <port> <db> <ieee>
+Starts a ControllerApplication on socket://127.0.0.1:<port> (forming a network if the
+co-processor has none), opens the network, waits for the device with <ieee> to join and be
+interviewed, reads its Basic cluster, switches it on, waits for the attribute report, and reads
+on_off back with the cache bypassed. Each step prints one JSON line; the exit status is 0 only
+when every step held. Run with the zigbee venv's python:
+python zigpy_host.py <port> <db> <ieee> [bellows|znp]
 """
 import asyncio
 import json
@@ -13,9 +15,12 @@ import sys
 
 import zigpy.config as zc
 import zigpy.types as zt
-from bellows.zigbee.application import ControllerApplication
-
 PORT, DB, IEEE = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+RADIO = sys.argv[4] if len(sys.argv) > 4 else "bellows"
+if RADIO == "znp":
+    from zigpy_znp.zigbee.application import ControllerApplication
+else:
+    from bellows.zigbee.application import ControllerApplication
 logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 
 
@@ -57,7 +62,9 @@ async def main():
     try:
         info = app.state.network_info
         out(step="started", channel=info.channel, pan_id=f"0x{info.pan_id:04x}",
-            coordinator=str(app.state.node_info.ieee), version=app.state.node_info.version)
+            extended_pan_id=str(info.extended_pan_id), network_key=info.network_key.key.serialize().hex(),
+            coordinator=str(app.state.node_info.ieee), version=app.state.node_info.version,
+            model=app.state.node_info.model, manufacturer=app.state.node_info.manufacturer)
         listener = Listener()
         app.add_listener(listener)
         await app.permit(30)
