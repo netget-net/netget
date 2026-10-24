@@ -125,8 +125,9 @@ pub struct Message {
     pub key: Vec<u8>,
     pub closer: Vec<Peer>,
     pub providers: Vec<Peer>,
-    /// Whether a record (PUT_VALUE/GET_VALUE) was present; records are not supported.
-    pub has_record: bool,
+    /// A record (PUT_VALUE, and a GET_VALUE answer): its key and value. The value is checked
+    /// by whoever keeps it (`ipns::verify`), not here.
+    pub record: Option<(Vec<u8>, Vec<u8>)>,
 }
 
 impl Message {
@@ -136,7 +137,7 @@ impl Message {
             key,
             closer: Vec::new(),
             providers: Vec::new(),
-            has_record: false,
+            record: None,
         }
     }
     /// The key as text: a peer id for FIND_NODE, the multihash (base58, the CIDv0 spelling of
@@ -190,7 +191,7 @@ pub fn decode(b: &[u8]) -> Result<Message> {
                 ensure!(k.len() <= 256, "DHT key longer than 256 bytes");
                 m.key = k.to_vec()
             }
-            (3, PbValue::Bytes(_)) => m.has_record = true,
+            (3, PbValue::Bytes(r)) => m.record = Some(super::ipns::decode_dht_record(r)?),
             (8, PbValue::Bytes(p)) => {
                 ensure!(
                     m.closer.len() < MAX_PEERS,
@@ -213,6 +214,92 @@ pub fn decode(b: &[u8]) -> Result<Message> {
     Ok(m)
 }
 
+/// Ask a connected peer's DHT one question on a stream of its own: its answer, checked to be
+/// an answer to the same request.
+pub async fn ask(peer: &super::host::Peer, protocol: &str, req: &Message) -> Result<Message> {
+    tokio::time::timeout(REQUEST_TIMEOUT, async {
+        let Some((mut s, _)) = super::host::open_negotiated(peer, &[protocol]).await? else {
+            bail!("the peer does not serve {protocol}");
+        };
+        s.writer()
+            .send(super::wire::length_prefixed(&encode(req)))?;
+        let reply = super::wire::read_length_prefixed(&mut s, MAX_MESSAGE).await?;
+        s.writer().close();
+        let m = decode(&reply)?;
+        ensure!(
+            m.kind == req.kind,
+            "the peer answered {} to {}",
+            m.kind.name(),
+            req.kind.name()
+        );
+        Ok(m)
+    })
+    .await
+    .context("the DHT request timed out")?
+}
+
+/// The DHT protocol an action names (the public DHT's by default).
+pub fn protocol_of(v: &serde_json::Value) -> Result<&'static str> {
+    match v["protocol"].as_str() {
+        None => Ok(KAD),
+        Some(p) => PROTOCOLS
+            .iter()
+            .find(|x| **x == p)
+            .copied()
+            .with_context(|| format!("protocol must be {KAD} or {LAN_KAD}")),
+    }
+}
+
+/// A DHT question as an action names it: FIND_NODE {peer_id}, GET_PROVIDERS {cid}, or
+/// GET_VALUE {name} (an IPNS name, `12D3KooW…`).
+pub fn request_of(kind: &str, v: &serde_json::Value) -> Result<Message> {
+    match kind {
+        "FIND_NODE" => {
+            let id = v["peer_id"].as_str().context("peer_id is required")?;
+            Ok(Message::request(Kind::FindNode, parse_peer_id(id)?))
+        }
+        "GET_PROVIDERS" => {
+            let cid = ipfs::Cid::parse(v["cid"].as_str().context("cid is required")?)?;
+            Ok(Message::request(Kind::GetProviders, cid.multihash()))
+        }
+        "GET_VALUE" => {
+            let name = v["name"].as_str().context("name is required")?;
+            Ok(Message::request(
+                Kind::GetValue,
+                super::ipns::key_for_name(name)?,
+            ))
+        }
+        other => bail!("request must be FIND_NODE, GET_PROVIDERS or GET_VALUE, not {other:?}"),
+    }
+}
+
+/// An answer as the model sees it; a record is verified first and shown with what it says,
+/// or with why it was refused.
+pub fn answer_json(protocol: &str, req: &Message, m: &Message) -> serde_json::Value {
+    let peers = |l: &[Peer]| l.iter().map(Peer::to_json).collect::<Vec<_>>();
+    let record = match (&m.record, req.kind) {
+        (Some((_, value)), Kind::GetValue) => {
+            match super::ipns::verify(&req.key, value, super::ipns::now_unix_nanos()) {
+                Ok(r) => {
+                    let mut j = r.to_json();
+                    j["valid"] = serde_json::json!(true);
+                    j
+                }
+                Err(e) => serde_json::json!({"valid": false, "error": format!("{e:#}")}),
+            }
+        }
+        _ => serde_json::Value::Null,
+    };
+    serde_json::json!({
+        "protocol": protocol,
+        "request": req.kind.name(),
+        "key": if req.kind == Kind::GetValue { String::from_utf8_lossy(&req.key[..6.min(req.key.len())]).to_string() + &base58(&req.key[6.min(req.key.len())..]) } else { req.key_text() },
+        "closer_peers": peers(&m.closer),
+        "provider_peers": peers(&m.providers),
+        "record": record,
+    })
+}
+
 fn encode_peer(p: &Peer) -> Vec<u8> {
     let mut out = Vec::new();
     pb_bytes(&mut out, 1, &p.id);
@@ -230,6 +317,9 @@ pub fn encode(m: &Message) -> Vec<u8> {
     }
     if !m.key.is_empty() {
         pb_bytes(&mut out, 2, &m.key);
+    }
+    if let Some((k, v)) = &m.record {
+        pb_bytes(&mut out, 3, &super::ipns::encode_dht_record(k, v, None));
     }
     for p in &m.closer {
         pb_bytes(&mut out, 8, &encode_peer(p));

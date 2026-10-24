@@ -1210,6 +1210,216 @@ write("onvif_request", "alternatives_bomb", onvif(
 write("onvif_request", "duration_bomb", onvif(
     '<tev:PullMessages><tev:Timeout>PT' + "9" * 4000 + 'S</tev:Timeout></tev:PullMessages>'))
 
+
+# unixfs_dag: dag-pb / UnixFS blocks, block sets for the walk, and ipfs_add descriptions.
+# The first byte is the mode (0 node, 1 walk, 2 description).
+import hashlib
+import json
+
+
+def uvarint(n):
+    out = b""
+    while True:
+        b = n & 0x7F
+        n >>= 7
+        if n:
+            out += bytes([b | 0x80])
+        else:
+            return out + bytes([b])
+
+
+def pb_bytes(field, value):
+    return uvarint(field << 3 | 2) + uvarint(len(value)) + value
+
+
+def pb_varint(field, value):
+    return uvarint(field << 3) + uvarint(value)
+
+
+def cid_v1(codec, data):
+    return b"\x01" + uvarint(codec) + b"\x12\x20" + hashlib.sha256(data).digest()
+
+
+def unixfs(kind, data=b"", filesize=None, blocksizes=()):
+    out = pb_varint(1, kind)
+    if data:
+        out += pb_bytes(2, data)
+    if filesize is not None:
+        out += pb_varint(3, filesize)
+    for s in blocksizes:
+        out += pb_varint(4, s)
+    return out
+
+
+def pb_node(links, data):
+    out = b""
+    for cid, name, size in links:
+        out += pb_bytes(2, pb_bytes(1, cid) + pb_bytes(2, name) + pb_varint(3, size))
+    return out + pb_bytes(1, data)
+
+
+def block_set(blocks, raw_root=False):
+    out = bytes([1 if raw_root else 0])
+    for b in blocks:
+        out += struct.pack("<I", len(b)) + b
+    return out
+
+
+leaf_a, leaf_b = b"hello ", b"world\n"
+file_node = pb_node([(cid_v1(0x55, leaf_a), b"", 6), (cid_v1(0x55, leaf_b), b"", 6)],
+                    unixfs(2, filesize=12, blocksizes=(6, 6)))
+single = pb_node([], unixfs(2, b"hello from a single block\n", 26))
+dir_node = pb_node([(cid_v1(0x70, file_node), b"hello.txt", 0),
+                    (cid_v1(0x70, single), b"single.txt", 0)], unixfs(1))
+symlink = pb_node([], unixfs(4, b"hello.txt"))
+write("unixfs_dag", "node_file", b"\x00" + file_node)
+write("unixfs_dag", "node_directory", b"\x00" + dir_node)
+write("unixfs_dag", "node_symlink", b"\x00" + symlink)
+write("unixfs_dag", "walk_file", b"\x01" + block_set([file_node, leaf_a, leaf_b]))
+write("unixfs_dag", "walk_directory",
+      b"\x01" + block_set([dir_node, file_node, single, leaf_a, leaf_b]))
+write("unixfs_dag", "walk_raw", b"\x01" + block_set([b"just bytes"], raw_root=True))
+# A chain 200 nodes deep, each linking to the next by its real CID: past MAX_DAG_DEPTH (32),
+# so the walk must refuse it — and do so without recursion.
+chain = [b"bottom"]
+link = cid_v1(0x55, b"bottom")
+for _ in range(200):
+    node = pb_node([(link, b"", 6)], unixfs(2, filesize=6, blocksizes=(6,)))
+    chain.insert(0, node)
+    link = cid_v1(0x70, node)
+write("unixfs_dag", "depth_bomb", b"\x01" + block_set(chain))
+# 3000 links to a node of 3000 links to one leaf: nine million blocks named in two small
+# nodes; the walk stops at MAX_WALK_BLOCKS.
+fan_leaf = b"x"
+inner = pb_node([(cid_v1(0x55, fan_leaf), b"", 1)] * 3000, unixfs(2, filesize=3000))
+outer = pb_node([(cid_v1(0x70, inner), b"", 1)] * 3000, unixfs(2, filesize=9000000))
+write("unixfs_dag", "fan_bomb", b"\x01" + block_set([outer, inner, fan_leaf]))
+write("unixfs_dag", "add_file", b"\x02" + json.dumps(
+    {"text": "hello\n", "chunk_size": 256, "max_links": 3}).encode())
+write("unixfs_dag", "add_tree", b"\x02" + json.dumps({"entries": [
+    {"name": "a.txt", "text": "a"},
+    {"name": "sub", "kind": "dir", "entries": [{"name": "b", "hex": "00ff"}]},
+    {"name": "link", "kind": "symlink", "target": "a.txt"},
+    {"name": "sparse", "size": 4096, "extents": [{"offset": 100, "length": 50, "fill": 7}]},
+], "cid_version": 1}).encode())
+nested = {"name": "d", "kind": "dir", "entries": []}
+for _ in range(100):
+    nested = {"name": "d", "kind": "dir", "entries": [nested]}
+write("unixfs_dag", "depth_bomb_description", b"\x02" + json.dumps({"entries": [nested]}).encode())
+
+
+# ipns_record: DHT messages carrying IPNS records. The records are signed here with RFC 8032
+# Ed25519 (the RFC's own reference arithmetic, section 6), so they verify and the fuzzer
+# starts past the signature, at the record's fields and its CBOR data.
+ED_P = 2 ** 255 - 19
+ED_Q = 2 ** 252 + 27742317777372353535851937790883648493
+ED_D = -121665 * pow(121666, ED_P - 2, ED_P) % ED_P
+
+
+def ed_add(P, Q):
+    A, B = (P[1] - P[0]) * (Q[1] - Q[0]) % ED_P, (P[1] + P[0]) * (Q[1] + Q[0]) % ED_P
+    C, D = 2 * P[3] * Q[3] * ED_D % ED_P, 2 * P[2] * Q[2] % ED_P
+    E, F, G, H = B - A, D - C, D + C, B + A
+    return (E * F, G * H, F * G, E * H)
+
+
+def ed_mul(s, P):
+    Q = (0, 1, 1, 0)
+    while s > 0:
+        if s & 1:
+            Q = ed_add(Q, P)
+        P = ed_add(P, P)
+        s >>= 1
+    return Q
+
+
+def ed_compress(P):
+    zinv = pow(P[2], ED_P - 2, ED_P)
+    x, y = P[0] * zinv % ED_P, P[1] * zinv % ED_P
+    return int.to_bytes(y | ((x & 1) << 255), 32, "little")
+
+
+def ed_base():
+    y = 4 * pow(5, ED_P - 2, ED_P) % ED_P
+    x2 = (y * y - 1) * pow(ED_D * y * y + 1, ED_P - 2, ED_P)
+    x = pow(x2, (ED_P + 3) // 8, ED_P)
+    if (x * x - x2) % ED_P != 0:
+        x = x * pow(2, (ED_P - 1) // 4, ED_P) % ED_P
+    if x & 1:
+        x = ED_P - x
+    return (x, y, 1, x * y % ED_P)
+
+
+ED_G = ed_base()
+
+
+def ed_keys(secret):
+    h = hashlib.sha512(secret).digest()
+    a = int.from_bytes(h[:32], "little")
+    a &= (1 << 254) - 8
+    a |= 1 << 254
+    return a, h[32:], ed_compress(ed_mul(a, ED_G))
+
+
+def ed_sign(secret, msg):
+    a, prefix, A = ed_keys(secret)
+    r = int.from_bytes(hashlib.sha512(prefix + msg).digest(), "little") % ED_Q
+    R = ed_compress(ed_mul(r, ED_G))
+    h = int.from_bytes(hashlib.sha512(R + A + msg).digest(), "little") % ED_Q
+    return R + int.to_bytes((r + h * a) % ED_Q, 32, "little")
+
+
+def cbor_head(major, n):
+    if n < 24:
+        return bytes([major << 5 | n])
+    for info, size in ((24, 1), (25, 2), (26, 4), (27, 8)):
+        if n < 1 << (8 * size):
+            return bytes([major << 5 | info]) + n.to_bytes(size, "big")
+
+
+def ipns_data(value, validity, sequence, ttl):
+    out = cbor_head(5, 5)
+    for key, major, v in (("TTL", 0, ttl), ("Value", 2, value), ("Sequence", 0, sequence),
+                          ("Validity", 2, validity), ("ValidityType", 0, 0)):
+        out += cbor_head(3, len(key)) + key.encode()
+        out += cbor_head(major, v) if major == 0 else cbor_head(2, len(v)) + v
+    return out
+
+
+IPNS_SECRET = b"\x07" * 32
+IPNS_PUB = ed_keys(IPNS_SECRET)[2]
+IPNS_NAME = b"\x00\x24" + b"\x08\x01\x12\x20" + IPNS_PUB
+IPNS_KEY = b"/ipns/" + IPNS_NAME
+
+
+def ipns_record(data, v1=None):
+    sig = ed_sign(IPNS_SECRET, b"ipns-signature:" + data)
+    out = b""
+    if v1:
+        value, validity, sequence, ttl = v1
+        out += pb_bytes(1, value) + pb_bytes(2, b"\x00" * 64) + pb_varint(3, 0)
+        out += pb_bytes(4, validity) + pb_varint(5, sequence) + pb_varint(6, ttl)
+    return out + pb_bytes(8, sig) + pb_bytes(9, data)
+
+
+def put_value(key, record):
+    dht_record = pb_bytes(1, key) + pb_bytes(2, record)
+    return pb_bytes(2, key) + pb_bytes(3, dht_record)
+
+
+VALID = b"2099-01-01T00:00:00.000000000Z"
+data = ipns_data(b"/ipfs/QmUNLLsPACCz1vLxQVkXqqLX5R1X345qqfHbsf67hvA3Nn", VALID, 3, 300 * 10 ** 9)
+write("ipns_record", "put_v2", put_value(IPNS_KEY, ipns_record(data)))
+write("ipns_record", "put_v1_and_v2", put_value(IPNS_KEY, ipns_record(
+    data, (b"/ipfs/QmUNLLsPACCz1vLxQVkXqqLX5R1X345qqfHbsf67hvA3Nn", VALID, 3, 300 * 10 ** 9))))
+write("ipns_record", "get_value_answer", pb_varint(1, 1) + put_value(IPNS_KEY, ipns_record(data)))
+write("ipns_record", "find_node_record_key", pb_varint(1, 4) + pb_bytes(2, IPNS_KEY))
+write("ipns_record", "data_only", data)
+# A thousand nested maps as the record's data, signed, so verification reaches the reader.
+bomb = (cbor_head(5, 1) + cbor_head(3, 1) + b"x") * 1000 + cbor_head(0, 1)
+write("ipns_record", "depth_bomb", put_value(IPNS_KEY, ipns_record(bomb)))
+write("ipns_record", "depth_bomb_data", bomb)
+
 total = sum(len(files) for _, _, files in os.walk(CORPUS))
 print("seeded %d corpus files across %d targets" %
       (total, len(os.listdir(CORPUS))))

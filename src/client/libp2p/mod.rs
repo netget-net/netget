@@ -72,8 +72,11 @@ pub async fn connect(ctx: ConnectContext) -> Result<std::net::SocketAddr> {
         bitswap: ipfs,
         kad: false,
         directory: Default::default(),
+        dag: Default::default(),
+        dht: Default::default(),
     });
     let wants: Arc<std::sync::Mutex<WantSet>> = Default::default();
+    let bitswap_session: Arc<ipfs::Session> = Default::default();
     let conn = host::upgrade_outbound(tcp, &cfg, expected.as_deref()).await?;
     let remote_peer = wire::peer_id_string(&conn.remote_peer);
     let session = yamux::session(conn, true);
@@ -142,6 +145,7 @@ pub async fn connect(ctx: ConnectContext) -> Result<std::net::SocketAddr> {
     let notes_events = event_tx.clone();
     let notes_peer = peer.clone();
     let notes_wants = wants.clone();
+    let notes_session = bitswap_session.clone();
     let notes_log = ctx.status_tx.clone();
     spawn(Box::pin(async move {
         let mut ended_tx = Some(ended_tx);
@@ -153,7 +157,7 @@ pub async fn connect(ctx: ConnectContext) -> Result<std::net::SocketAddr> {
                     data,
                 } if bitswap::is_bitswap(&protocol) => {
                     let log = Log::new(Some(&notes_log));
-                    match ipfs::received(&data, &notes_wants) {
+                    match ipfs::received(&data, &notes_wants, &notes_session) {
                         Ok((events, refused)) => {
                             for why in refused {
                                 log.warn(format!(
@@ -258,6 +262,7 @@ pub async fn connect(ctx: ConnectContext) -> Result<std::net::SocketAddr> {
             &peer,
             &session_spawn,
             &wants,
+            &bitswap_session,
             external,
             internal_rx,
             event_tx,
@@ -265,7 +270,14 @@ pub async fn connect(ctx: ConnectContext) -> Result<std::net::SocketAddr> {
         )
         .await;
         peer.opener.go_away();
-        Log::new(Some(&session_ctx.status_tx)).info(format!("libp2p client ended: {reason}"));
+        let log = Log::new(Some(&session_ctx.status_tx));
+        if ipfs {
+            log.info(format!(
+                "libp2p client operation=bitswap_ledger {}",
+                bitswap_session.summary()
+            ));
+        }
+        log.info(format!("libp2p client ended: {reason}"));
         session_ctx
             .state
             .update_client_status(session_ctx.client_id, ClientStatus::Disconnected)
@@ -287,6 +299,7 @@ async fn run(
     peer: &Arc<Peer>,
     spawn: &Spawn,
     wants: &std::sync::Mutex<WantSet>,
+    bitswap_session: &ipfs::Session,
     mut external: mpsc::Receiver<ClientCommand>,
     mut internal: mpsc::Receiver<(Value, usize)>,
     events: mpsc::Sender<(Event, usize)>,
@@ -380,15 +393,28 @@ async fn run(
                     Err(e) => json!({"operation": operation, "ok": false, "error": format!("{e:#}")}),
                 })),
                 "ipfs_bitswap_want" => {
-                    let detail = ipfs::want(peer, wants, &action).await?;
+                    let detail = ipfs::want(peer, bitswap_session, wants, &action).await?;
                     Log::new(Some(&ctx.status_tx)).info(format!("libp2p client: {detail}"));
                     Ok(None)
                 }
                 "ipfs_bitswap_cancel" => {
-                    ipfs::cancel(peer, wants, &action).await?;
+                    ipfs::cancel(peer, bitswap_session, wants, &action).await?;
                     Ok(None)
                 }
-                "ipfs_kad_find_node" | "ipfs_kad_get_providers" => Ok(Some(match ipfs::kad_ask(peer, &action).await {
+                "ipfs_fetch" => {
+                    let r = ipfs::fetch(peer, bitswap_session, &action).await;
+                    log.info(format!(
+                        "libp2p client operation=ipfs_fetch decision={} cid={} kind={} size={} blocks={} {}",
+                        if r["ok"] == true { "fetched" } else { "failed" },
+                        r["cid"].as_str().unwrap_or_default(),
+                        r["kind"].as_str().unwrap_or("-"),
+                        r["size"],
+                        r["blocks"],
+                        bitswap_session.summary()
+                    ));
+                    Ok(Some(r))
+                }
+                "ipfs_kad_find_node" | "ipfs_kad_get_providers" | "ipfs_kad_get_value" => Ok(Some(match ipfs::kad_ask(peer, &action).await {
                     Ok(mut r) => {
                         r["operation"] = json!(operation);
                         r["ok"] = json!(true);
@@ -416,10 +442,12 @@ async fn run(
                     },
                 );
                 if let Some(data) = data {
-                    if events
-                        .try_send((Event::new(&actions::RESPONSE_EVENT, data), depth))
-                        .is_err()
-                    {
+                    let kind = if operation == "ipfs_fetch" {
+                        &*actions::FETCHED_EVENT
+                    } else {
+                        &*actions::RESPONSE_EVENT
+                    };
+                    if events.try_send((Event::new(kind, data), depth)).is_err() {
                         return "event queue full; consumer stalled".into();
                     }
                 }

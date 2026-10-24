@@ -66,6 +66,24 @@ impl Run {
 }
 
 impl Kubo {
+    /// A fresh repository with no daemon, for commands that need none (`ipfs add
+    /// --only-hash`, `ipfs version`).
+    pub async fn offline() -> Kubo {
+        let dir = tempfile::Builder::new()
+            .prefix("netget-kubo-")
+            .tempdir()
+            .unwrap();
+        let init = run_in(dir.path(), &["init", "--profile=test", "-e"]).await;
+        assert!(init.ok, "ipfs init failed: {}", init.stderr);
+        Kubo {
+            dir,
+            child: None,
+            peer_id: String::new(),
+            swarm_addr: String::new(),
+            log: Default::default(),
+        }
+    }
+
     pub fn path(&self) -> &Path {
         self.dir.path()
     }

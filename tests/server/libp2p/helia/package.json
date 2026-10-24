@@ -1,0 +1,27 @@
+{
+  "name": "netget-helia-peer",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Helia, the second independent IPFS implementation the NetGet libp2p tests run against",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@chainsafe/libp2p-noise": "17.0.0",
+    "@chainsafe/libp2p-yamux": "8.0.1",
+    "@helia/bitswap": "4.0.20",
+    "@helia/libp2p": "2.1.5",
+    "@helia/unixfs": "8.0.9",
+    "@libp2p/identify": "4.1.18",
+    "@libp2p/ping": "3.1.17",
+    "@libp2p/tcp": "11.0.32",
+    "@multiformats/multiaddr": "13.0.3",
+    "blockstore-core": "7.0.1",
+    "helia": "7.1.16",
+    "ipfs-unixfs-importer": "17.1.1",
+    "libp2p": "3.5.1",
+    "multiformats": "14.0.5"
+  }
+}
