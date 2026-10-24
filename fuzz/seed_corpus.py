@@ -1420,6 +1420,55 @@ bomb = (cbor_head(5, 1) + cbor_head(3, 1) + b"x") * 1000 + cbor_head(0, 1)
 write("ipns_record", "depth_bomb", put_value(IPNS_KEY, ipns_record(bomb)))
 write("ipns_record", "depth_bomb_data", bomb)
 
+# --- GRE (RFC 2784/2890): gretap ARP, gre ping, a keepalive, and each optional field ---
+def inet_sum(b):
+    if len(b) % 2:
+        b += b"\x00"
+    s = sum(struct.unpack("!%dH" % (len(b) // 2), b))
+    while s >> 16:
+        s = (s & 0xFFFF) + (s >> 16)
+    return ~s & 0xFFFF
+
+
+def gre(proto, payload, key=None, csum=False, seq=None):
+    flags = (0x80 if csum else 0) | (0x20 if key is not None else 0) | (0x10 if seq is not None else 0)
+    out = bytes([flags, 0]) + struct.pack("!H", proto)
+    if csum:
+        out += b"\x00\x00\x00\x00"
+    if key is not None:
+        out += struct.pack("!I", key)
+    if seq is not None:
+        out += struct.pack("!I", seq)
+    out += payload
+    if csum:
+        out = out[:4] + struct.pack("!H", inet_sum(out)) + out[6:]
+    return out
+
+
+def ipv4(src, dst, proto, payload):
+    h = struct.pack("!BBHHHBBH4s4s", 0x45, 0, 20 + len(payload), 1, 0x4000, 64, proto, 0,
+                    bytes(src), bytes(dst))
+    h = h[:10] + struct.pack("!H", inet_sum(h)) + h[12:]
+    return h + payload
+
+
+arp_request = (b"\xff" * 6 + bytes([2, 0, 0, 0, 0, 1]) + b"\x08\x06"
+               + bytes([0, 1, 8, 0, 6, 4, 0, 1]) + bytes([2, 0, 0, 0, 0, 1]) + bytes([10, 99, 0, 1])
+               + b"\x00" * 6 + bytes([10, 99, 0, 2]))
+echo = bytes([8, 0, 0, 0, 0x12, 0x34, 0, 1]) + b"abc"
+echo = echo[:2] + struct.pack("!H", inet_sum(echo)) + echo[4:]
+ping = ipv4([10, 99, 0, 1], [10, 99, 0, 2], 1, echo)
+write("gre_packet", "gretap_arp_all_fields", gre(0x6558, arp_request, key=42, csum=True, seq=7))
+write("gre_packet", "gretap_arp_bare", gre(0x6558, arp_request))
+write("gre_packet", "gre_ping_keyed", gre(0x0800, ping, key=0xDEADBEEF, seq=0xFFFFFFFF))
+write("gre_packet", "gre_ping_checksum", gre(0x0800, ping, csum=True))
+# A Cisco keepalive as the fuzz target's server (198.18.0.1) receives it from 198.18.0.2.
+write("gre_packet", "keepalive", gre(0x0800, ipv4([198, 18, 0, 1], [198, 18, 0, 2], 47, gre(0, b""))))
+# Flags that announce fields the packet does not carry, and the forbidden ones.
+write("gre_packet", "ends_inside_sequence", gre(0x6558, b"", key=1, seq=2)[:10])
+write("gre_packet", "routing_bit", bytes([0x40, 0, 0x65, 0x58]) + arp_request)
+write("gre_packet", "version_1", bytes([0x30, 1, 0x88, 0x0B, 0, 0, 0, 0, 0, 0, 0, 0]))
+
 total = sum(len(files) for _, _, files in os.walk(CORPUS))
 print("seeded %d corpus files across %d targets" %
       (total, len(os.listdir(CORPUS))))
