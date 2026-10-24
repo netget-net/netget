@@ -5,4 +5,5 @@ mod e2e_test;
 mod llm_failure_test;
 mod pcap_oracle_test;
 mod peer_inject_test;
+mod read_order_test;
 mod real_client_test;
