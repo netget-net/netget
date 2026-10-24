@@ -60,7 +60,10 @@ reply mirrors its own request:
 - key 7 with a checksum and a sequence number gives a gretap ARP reply with key 7, a checksum
   that verifies, and sequence 0;
 - a bare gre ping gives an echo reply with no key, no checksum and no sequence number;
-- key 9 with a sequence number gives a UDP reply with key 9 and sequence 1.
+- key 9 with a sequence number gives a UDP reply with key 9 and sequence 1;
+- a checksum and a sequence number again give an ARP reply numbered 2 whose checksum still
+  verifies. The number is written as the reply leaves, so the checksum has to be redone over
+  it; the first reply's number is 0, the placeholder, and cannot show that.
 
 A Cisco-style keepalive comes back as the bare 4-byte GRE header it carried.
 
@@ -77,7 +80,7 @@ answer, so a check that stops refusing shows up as a reply:
 - a keepalive addressed to someone other than the sender;
 - a keepalive not from NetGet's address.
 
-There must be no reply, and no new event reaches the model. tshark reads NetGet's four packets
+There must be no reply, and no new event reaches the model. tshark reads NetGet's five packets
 clean, with the keys, checksum status, sequence numbers and protocol types scapy saw.
 
 `key_peers_rate_size_and_backend_failure_are_bounded_before_the_model` starts one server after
@@ -102,4 +105,4 @@ Each of these was broken, the named test was seen to fail, and the change was re
 | The peer allowlist removed | The bounds test |
 | The size bound made off by one | The bounds test |
 | Answering with a default ARP reply when the model fails (fail-open) | The bounds test |
-| `stamp_sequence` no longer redoing the checksum | The codec stamping test; the scapy test (`csum_ok` false); both kernel tests (the kernel drops the replies) |
+| `stamp_sequence` no longer redoing the checksum | The codec stamping test; both kernel tests (the kernel drops the replies); the scapy test at its second checksummed reply. With scapy's own checksum assertions relaxed, the same test fails in the pcap oracle instead: tshark reports "Incorrect GRE Checksum" |

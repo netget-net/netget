@@ -149,6 +149,25 @@ async fn scapy_reads_mirrored_headers_keepalives_and_refusals() {
         "{u}"
     );
 
+    // Checksummed and numbered again: the sequence number is written as the reply leaves, so
+    // the checksum has to be redone over it (sequence 2 this time, not the placeholder 0).
+    let r = scapy(
+        &ns,
+        json!([{"proto": TEB, "csum": true, "seq": 1, "inner": arp()}]),
+        2.0,
+    )
+    .await;
+    assert_eq!(r.len(), 1, "{r:?}");
+    assert_eq!(
+        (
+            r[0]["key"].is_null(),
+            r[0]["csum_ok"].as_bool(),
+            r[0]["seq"].as_u64()
+        ),
+        (true, Some(true), Some(2)),
+        "{r:?}"
+    );
+
     // A Cisco keepalive comes back as the bare GRE header it carried, without the model.
     let r = scapy(
         &ns,
@@ -215,14 +234,22 @@ async fn scapy_reads_mirrored_headers_keepalives_and_refusals() {
     let cells = |i: usize| rows.iter().map(|r| r[i].clone()).collect::<Vec<_>>();
     assert_eq!(
         cells(1),
-        ["0x00000007", "", "0x00000009", ""],
+        ["0x00000007", "", "0x00000009", "", ""],
         "keys: {rows:?}"
     );
-    assert_eq!(cells(2), ["1", "", "", ""], "checksum status: {rows:?}");
-    assert_eq!(cells(3), ["0", "", "1", ""], "sequence numbers: {rows:?}");
+    assert_eq!(
+        cells(2),
+        ["1", "", "", "1", ""],
+        "checksum status: {rows:?}"
+    );
+    assert_eq!(
+        cells(3),
+        ["0", "", "1", "2", ""],
+        "sequence numbers: {rows:?}"
+    );
     assert_eq!(
         cells(4),
-        ["0x6558", "0x0800", "0x0800", "0x0000"],
+        ["0x6558", "0x0800", "0x0800", "0x6558", "0x0000"],
         "protocol types: {rows:?}"
     );
 }
