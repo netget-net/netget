@@ -36,12 +36,25 @@ pub const DEFAULT_GROUP: &str = "supergroup";
 /// How long a call waits for a description or decision.
 pub const DEFAULT_DECISION_TIMEOUT: Duration = Duration::from_secs(60);
 pub const MAX_DECISION_TIMEOUT_SECS: u64 = 600;
-/// The connection header (NameNode) or first op (DataNode) must arrive within this long.
+/// The connection header (NameNode) or first op (DataNode) must arrive within this long
+/// (`header_timeout_secs`).
 pub const HEADER_DEADLINE: Duration = Duration::from_secs(30);
-/// The rest of a frame, op or packet once its first byte has arrived.
+/// The rest of a frame, op or packet once its first byte has arrived, and a response the client
+/// must take (`frame_timeout_secs`).
 pub const FRAME_DEADLINE: Duration = Duration::from_secs(60);
-/// A connection with no call or op for this long is closed.
+/// A NameNode connection with no call for this long is closed (`idle_timeout_secs`).
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+/// A DataNode connection kept after an op is closed when no next op begins within this long
+/// (`op_idle_timeout_secs`).
+pub const OP_IDLE: Duration = Duration::from_secs(60);
+/// A write with no packet for this long is dropped (`packet_timeout_secs`); Hadoop's client
+/// sends a heartbeat packet every 30 s.
+pub const PACKET_IDLE: Duration = Duration::from_secs(120);
+/// The range every deadline parameter accepts, seconds.
+pub const MAX_DEADLINE_SECS: u64 = 3600;
+/// How long the in-place block recovery of a truncate that does not end on a block boundary
+/// takes, as a DataNode heartbeat would carry it: until then the file is under recovery.
+pub const TRUNCATE_RECOVERY: Duration = Duration::from_secs(1);
 /// Directories one call may have described on its way (a path's depth and a little more).
 pub const MAX_DESCRIBES_PER_CALL: usize = described_tree::MAX_TREE_DEPTH + 2;
 /// Directories one content summary may have described.
@@ -51,12 +64,40 @@ pub const DATA_PREVIEW: usize = 512;
 /// Users whose admission is remembered.
 pub const MAX_REMEMBERED_USERS: usize = 1024;
 
+/// The connection deadlines, each a startup parameter defaulting to its constant.
+#[derive(Clone, Copy, Debug)]
+pub struct Deadlines {
+    /// The NameNode's connection header and the DataNode's first op.
+    pub header: Duration,
+    /// The rest of a frame, op or packet once begun; a response's write.
+    pub frame: Duration,
+    /// A NameNode connection between calls.
+    pub idle: Duration,
+    /// A DataNode connection between ops.
+    pub op_idle: Duration,
+    /// A write between packets.
+    pub packet: Duration,
+}
+
+impl Default for Deadlines {
+    fn default() -> Self {
+        Self {
+            header: HEADER_DEADLINE,
+            frame: FRAME_DEADLINE,
+            idle: IDLE_TIMEOUT,
+            op_idle: OP_IDLE,
+            packet: PACKET_IDLE,
+        }
+    }
+}
+
 /// What the server was started with.
 #[derive(Clone, Debug)]
 pub struct Settings {
     pub datanode_port: Option<u16>,
     pub read_only: bool,
     pub timeout: Duration,
+    pub deadlines: Deadlines,
     pub namespace: namespace::Settings,
 }
 
@@ -118,6 +159,25 @@ pub fn settings(ctx: &SpawnContext) -> Result<Settings> {
         (1..=MAX_DECISION_TIMEOUT_SECS).contains(&timeout),
         "decision_timeout_secs is 1 to {MAX_DECISION_TIMEOUT_SECS}"
     );
+    let deadline = |key: &str, default: Duration| -> Result<Duration> {
+        let secs = params
+            .map(|p| p.get_optional_u64(key))
+            .transpose()?
+            .flatten()
+            .unwrap_or(default.as_secs());
+        ensure!(
+            (1..=MAX_DEADLINE_SECS).contains(&secs),
+            "{key} is 1 to {MAX_DEADLINE_SECS}"
+        );
+        Ok(Duration::from_secs(secs))
+    };
+    let deadlines = Deadlines {
+        header: deadline("header_timeout_secs", HEADER_DEADLINE)?,
+        frame: deadline("frame_timeout_secs", FRAME_DEADLINE)?,
+        idle: deadline("idle_timeout_secs", IDLE_TIMEOUT)?,
+        op_idle: deadline("op_idle_timeout_secs", OP_IDLE)?,
+        packet: deadline("packet_timeout_secs", PACKET_IDLE)?,
+    };
     let max_overlay = params
         .map(|p| p.get_optional_u64("max_overlay_bytes"))
         .transpose()?
@@ -132,6 +192,7 @@ pub fn settings(ctx: &SpawnContext) -> Result<Settings> {
         datanode_port,
         read_only,
         timeout: Duration::from_secs(timeout),
+        deadlines,
         namespace: namespace::Settings {
             block_size,
             replication,
@@ -163,8 +224,18 @@ pub struct Hdfs {
 }
 
 impl Hdfs {
+    /// The namespace, with every truncate whose block recovery is due finished first.
     pub fn ns(&self) -> std::sync::MutexGuard<'_, Namespace> {
-        self.ns.lock().unwrap_or_else(|e| e.into_inner())
+        let mut ns = self.ns.lock().unwrap_or_else(|e| e.into_inner());
+        if ns.recovering() > 0 {
+            for (path, length) in ns.finish_recoveries(crate::utils::clock::Instant::now()) {
+                Log::new(Some(&self.ctx.status_tx)).info(format!(
+                    "HDFS NameNode truncate path={}: block recovery finished; the file is closed at {length} bytes",
+                    crate::utils::sanitize::token(&path, 512)
+                ));
+            }
+        }
+        ns
     }
 
     pub fn users(&self) -> std::sync::MutexGuard<'_, HashMap<String, Admission>> {

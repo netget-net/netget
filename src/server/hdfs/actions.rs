@@ -305,15 +305,27 @@ pub static WRITE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     change_event(
         "hdfs_write",
         "A client finished writing a file (complete): the DataNode received its blocks and \
-         verified their checksums. Allow it (the bytes become the file's content, in the \
-         overlay) or deny it (the bytes are discarded, the file keeps its earlier content and \
-         the client's complete fails with the exception).",
+         verified their checksums. Allow it (the bytes become the file's content, or are added \
+         to its end for an append, in the overlay) or deny it (the bytes are discarded, the \
+         file keeps its earlier content and the client's complete fails with the exception).",
         vec![
             path(),
             p(
                 "length",
                 "number",
                 "Bytes the client wrote to the file",
+                true,
+            ),
+            p(
+                "offset",
+                "number",
+                "Where they go in the file: 0 for a new file, its length before an append",
+                true,
+            ),
+            p(
+                "append",
+                "boolean",
+                "Whether the bytes are appended to an existing file",
                 true,
             ),
             p(
@@ -343,6 +355,89 @@ pub static WRITE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             p("client_name", "string", "The writing client's name", true),
         ],
         "HDFS write {path} length={length}",
+    )
+});
+
+pub static APPEND_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    change_event(
+        "hdfs_append",
+        "A client opens an existing file to add bytes to its end (append, hdfs dfs \
+         -appendToFile). Allow it (the file opens for this client; what it writes is decided \
+         again by hdfs_write when it completes) or deny it.",
+        vec![
+            path(),
+            p("length", "number", "The file's length now, bytes", true),
+            p("block_size", "number", "The file's block size, bytes", true),
+            p(
+                "last_block_partial",
+                "boolean",
+                "Whether the last block is partial (the append continues it)",
+                true,
+            ),
+            p(
+                "new_block",
+                "boolean",
+                "Whether the client asked for the bytes to start a new block",
+                true,
+            ),
+            p(
+                "client_name",
+                "string",
+                "The writing client's name (its lease holder id)",
+                true,
+            ),
+        ],
+        "HDFS append {path}",
+    )
+});
+
+pub static TRUNCATE_EVENT: LazyLock<EventType> =
+    LazyLock::new(|| {
+        change_event(
+        "hdfs_truncate",
+        "A client cuts a file to a shorter length (truncate, hdfs dfs -truncate). Allow it (the \
+         bytes after length go; a cut inside a block finishes after a short block recovery, \
+         during which the file stays open) or deny it.",
+        vec![
+            path(),
+            p("length", "number", "The new length, bytes", true),
+            p("length_before", "number", "The file's length now, bytes", true),
+            p("block_size", "number", "The file's block size, bytes", true),
+            p(
+                "on_block_boundary",
+                "boolean",
+                "Whether the new length is a whole number of blocks (done at once)",
+                true,
+            ),
+            p("client_name", "string", "The truncating client's name", true),
+        ],
+        "HDFS truncate {path} to {length}",
+    )
+    });
+
+pub static CONCAT_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    change_event(
+        "hdfs_concat",
+        "A client joins files onto the end of path (concat, hdfs dfs -concat): the sources' \
+         blocks move onto path, in order, and the sources are removed. Allow or deny.",
+        vec![
+            path(),
+            p(
+                "sources",
+                "array",
+                "The files whose bytes are added, in order (each is removed)",
+                true,
+            ),
+            p("length_before", "number", "path's length now, bytes", true),
+            p("length", "number", "path's length after, bytes", true),
+            p(
+                "block_size",
+                "number",
+                "The block size they share, bytes",
+                true,
+            ),
+        ],
+        "HDFS concat {path} <- {sources}",
     )
 });
 
@@ -565,6 +660,9 @@ impl Protocol for HdfsProtocol {
             MKDIRS_EVENT.clone(),
             CREATE_EVENT.clone(),
             WRITE_EVENT.clone(),
+            APPEND_EVENT.clone(),
+            TRUNCATE_EVENT.clone(),
+            CONCAT_EVENT.clone(),
             DELETE_EVENT.clone(),
             RENAME_EVENT.clone(),
             SET_PERMISSION_EVENT.clone(),
@@ -633,6 +731,42 @@ impl Protocol for HdfsProtocol {
                 Some(json!(super::DEFAULT_DECISION_TIMEOUT.as_secs())),
             ),
             number_param(
+                "header_timeout_secs",
+                "Seconds a NameNode connection has to send its connection header (and its \
+                 connection context), and a DataNode connection its first op, before it is \
+                 closed (1-3600)",
+                json!(30),
+                Some(json!(super::HEADER_DEADLINE.as_secs())),
+            ),
+            number_param(
+                "frame_timeout_secs",
+                "Seconds the rest of an RPC frame, op or packet has once its first byte arrived, \
+                 and a client has to take a response, before the connection is closed (1-3600)",
+                json!(60),
+                Some(json!(super::FRAME_DEADLINE.as_secs())),
+            ),
+            number_param(
+                "idle_timeout_secs",
+                "Seconds a NameNode connection may go without a call before it is closed \
+                 (1-3600)",
+                json!(300),
+                Some(json!(super::IDLE_TIMEOUT.as_secs())),
+            ),
+            number_param(
+                "op_idle_timeout_secs",
+                "Seconds a DataNode connection kept after an op may wait for the next op before \
+                 it is closed (1-3600)",
+                json!(60),
+                Some(json!(super::OP_IDLE.as_secs())),
+            ),
+            number_param(
+                "packet_timeout_secs",
+                "Seconds a block write may go without a packet before the block is dropped and \
+                 the connection closed (1-3600; Hadoop's client sends a heartbeat every 30)",
+                json!(120),
+                Some(json!(super::PACKET_IDLE.as_secs())),
+            ),
+            number_param(
                 "max_overlay_bytes",
                 "Bytes of accepted writes (whole 4 KiB pages) the namespace holds in memory, \
                  and blocks received but not completed; past it a write fails with \
@@ -648,10 +782,10 @@ impl Protocol for HdfsProtocol {
             .state(DevelopmentState::Experimental)
             .privilege_requirement(PrivilegeRequirement::None)
             .well_known_port(8020)
-            .implementation("Hand-written NameNode and DataNode over Hadoop 3.5.0's own .proto files (proto/hadoop, prost): Hadoop IPC version 9 (hrpc connection header, SIMPLE authentication with or without SASL negotiation, IpcConnectionContextProto, RpcRequestHeaderProto/RequestHeaderProto calls and RpcResponseHeaderProto success, error and fatal responses with Java exception classes) and ClientNamenodeProtocol (getServerDefaults, getFileInfo, getFileLinkInfo, getListing with startAfter pages, getBlockLocations, getLocatedFileInfo, mkdirs, create, addBlock, abandonBlock, complete, delete, rename, rename2, setPermission, setOwner, setTimes, setReplication, renewLease, recoverLease, isFileClosed, fsync, getFsStats, getContentSummary, getQuotaUsage, getPreferredBlockSize, getLinkTarget, checkAccess, getStoragePolicy, getStoragePolicies, getErasureCodingPolicy, getDataEncryptionKey, getDatanodeReport, getEnclosingRoot, getHAServiceState, msync) in rpc.rs and mod.rs; DataTransferProtocol version 28 (READ_BLOCK with chunk-aligned packets and CRC32C, WRITE_BLOCK as a pipeline of one with checksum verification and packet acks, BLOCK_CHECKSUM as MD5 of the chunk CRCs) in transfer.rs and datanode.rs; the namespace is src/server/described_tree.rs (FUSE's) with HDFS's owners, block sizes, leases and staged blocks in namespace.rs")
-            .llm_control("Which effective users may connect (asked once per user); what each directory contains - names, kinds, modes, owners and groups, times, file content as text/hex/extents with failing regions, replication and block size - asked once per directory when a call first looks inside it; and every change - mkdirs, create, the content of a completed write, delete, rename, setPermission, setOwner, setTimes, setReplication - allowed into the in-memory overlay or refused with the Java exception the model names")
-            .e2e_testing("tests/server/hdfs: the Apache Hadoop 3.5.0 hdfs dfs CLI (Java: ls, stat, cat, get, put, mkdir, rm, mv, chmod, du, test, checksum) in hadoop_cli_test.rs and colinmarc/hdfs v2.4.0's Go client (its own RPC and data transfer code: ls, cat, put, mkdir, rm, mv, checksum) in go_client_test.rs, each counting the RPC methods it sent against the ones implemented; a raw client written from the wire format for every bound, call-id correlation, checksum verification and the fail-closed paths, with the pcap oracle (tshark's hdfs and hdfsdata dissectors, which predate Hadoop 2's protocol buffers and read only the framing) in wire_test.rs; in the hdfs pair job")
-            .notes("Experimental: two independent clients (Hadoop 3.5.0's Java hdfs CLI and colinmarc/hdfs v2.4.0 in Go) pass on macOS; in CI they run only in the hdfs pair job, which had not run when this landed. One NameNode, one DataNode, replication reported but never performed. SIMPLE authentication only: Kerberos, delegation tokens, block tokens and data transfer encryption are not built (a SASL client offered anything but SIMPLE is refused). Not built: append, truncate, concat, symlink creation, snapshots, ACLs, extended attributes, quotas, encryption zones, erasure coding, caching, pipeline recovery (updateBlockForPipeline refuses), short-circuit reads. Reads are not permission-checked; every change is the model's decision. A description, decision or model failure past decision_timeout_secs is an IOException (RetriableException when the backend is overloaded); a model refusal is its exception. Written bytes are held per block as they arrive and committed only when complete is allowed. Bounds: RPC frames of 1 MiB, the connection header within 30 s, a frame's rest within 60 s of its first byte, 300 s idle; 1000 entries per listing page; packets of 1 MiB of data and 1 KiB of header, chunks of 16 B to 64 KiB, CRC32C or CRC32; acks written before the next packet is read; 16384 blocks per file and block sizes of 64 KiB to 1 GiB; 256 files open for writing; the overlay (default 64 MiB); 256 connections per listener; three description attempts per directory.")
+            .implementation("Hand-written NameNode and DataNode over Hadoop 3.5.0's own .proto files (proto/hadoop, prost): Hadoop IPC version 9 (hrpc connection header, SIMPLE authentication with or without SASL negotiation, IpcConnectionContextProto, RpcRequestHeaderProto/RequestHeaderProto calls and RpcResponseHeaderProto success, error and fatal responses with Java exception classes) and ClientNamenodeProtocol (getServerDefaults, getFileInfo, getFileLinkInfo, getListing with startAfter pages, getBlockLocations, getLocatedFileInfo, mkdirs, create, addBlock, abandonBlock, complete, delete, rename, rename2, setPermission, setOwner, setTimes, setReplication, renewLease, recoverLease, isFileClosed, fsync, getFsStats, getContentSummary, getQuotaUsage, getPreferredBlockSize, getLinkTarget, checkAccess, getStoragePolicy, getStoragePolicies, getErasureCodingPolicy, getDataEncryptionKey, getDatanodeReport, getEnclosingRoot, getHAServiceState, msync, append, truncate, concat, updateBlockForPipeline, updatePipeline, getAdditionalDatanode) in rpc.rs and namenode.rs; DataTransferProtocol version 28 (READ_BLOCK with chunk-aligned packets and CRC32C, WRITE_BLOCK as a pipeline of one in PIPELINE_SETUP_CREATE or PIPELINE_SETUP_APPEND with checksum verification and packet acks, an append's partial last chunk continued in a packet of its own, BLOCK_CHECKSUM as MD5 of the chunk CRCs) in transfer.rs and datanode.rs; the namespace is src/server/described_tree.rs (FUSE's) with HDFS's owners, block sizes, leases and staged blocks in namespace.rs")
+            .llm_control("Which effective users may connect (asked once per user); what each directory contains - names, kinds, modes, owners and groups, times, file content as text/hex/extents with failing regions, replication and block size - asked once per directory when a call first looks inside it; and every change - mkdirs, create, append, the content of a completed write or append, truncate, concat, delete, rename, setPermission, setOwner, setTimes, setReplication - allowed into the in-memory overlay or refused with the Java exception the model names")
+            .e2e_testing("tests/server/hdfs: the Apache Hadoop 3.5.0 hdfs dfs CLI (Java: ls, stat, cat, get, put, mkdir, rm, mv, chmod, du, test, checksum in hadoop_cli_test.rs; appendToFile with and without -n, truncate with and without -w, concat, cp in hadoop_cli_mutation_test.rs) and colinmarc/hdfs v2.4.0's Go client (its own RPC and data transfer code: ls, cat, put, mkdir, rm, mv, checksum, truncate, and its library's Client.Append through a driver that adds no protocol code) in go_client_test.rs, each counting the RPC methods and DataNode ops it sent against the ones implemented; a raw client written from the wire format for every bound, call-id correlation, checksum verification and the fail-closed paths, with the pcap oracle (tshark's hdfs and hdfsdata dissectors, which predate Hadoop 2's protocol buffers and read only the framing) in wire_test.rs, the append pipeline, truncate recovery and concat's preconditions in mutation_wire_test.rs, and every connection deadline in deadline_test.rs; in the hdfs pair job")
+            .notes("Experimental: two independent clients (Hadoop 3.5.0's Java hdfs CLI and colinmarc/hdfs v2.4.0 in Go) pass on macOS; in CI they run only in the hdfs pair job, which had not run when this landed. One NameNode, one DataNode, replication reported but never performed. SIMPLE authentication only: Kerberos, delegation tokens, block tokens and data transfer encryption are not built (a SASL client offered anything but SIMPLE is refused). append reopens a partial last block (PIPELINE_SETUP_APPEND under the generation stamp updateBlockForPipeline offers and updatePipeline adopts) and its bytes are decided again at complete; append with NEW_BLOCK after a partial block is refused, because blocks here are a file's content cut at its block size and a short block mid-file cannot be represented. truncate on a block boundary is immediate; inside a block it answers false and the file stays under recovery (open, old length reported, readable to the new length) for one second, as a NameNode reports in-place block recovery. concat keeps Hadoop's own checks and adds one block size and whole blocks up to the last source. getAdditionalDatanode answers the one DataNode. Not built: symlink creation, snapshots, ACLs, extended attributes, quotas, encryption zones, erasure coding, caching, pipeline recovery onto another node or block, short-circuit reads. Reads are not permission-checked; every change is the model's decision. A description, decision or model failure past decision_timeout_secs is an IOException (RetriableException when the backend is overloaded); a model refusal is its exception. Written bytes are held per block as they arrive and committed only when complete is allowed. Bounds: RPC frames of 1 MiB, the connection header within header_timeout_secs (30), a frame's rest within frame_timeout_secs (60) of its first byte, idle_timeout_secs (300) between calls, op_idle_timeout_secs (60) between DataNode ops and packet_timeout_secs (120) between a write's packets, each tested with a short value; 1000 entries per listing page; packets of 1 MiB of data and 1 KiB of header, chunks of 16 B to 64 KiB, CRC32C or CRC32; acks written before the next packet is read; 16384 blocks per file and block sizes of 64 KiB to 1 GiB; 256 files open for writing or under truncate recovery; 256 sources per concat; the overlay (default 64 MiB) for written, appended and concatenated bytes; 256 connections per listener; three description attempts per directory.")
             .answers_on_failure()
             .request_only("The NameNode only answers calls and the DataNode only answers ops and the packets of a write: neither sends anything a client did not ask for")
             .max_inbound_bytes(rpc::MAX_REQUEST_FRAME)

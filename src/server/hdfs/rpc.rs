@@ -67,7 +67,9 @@ pub fn parse_connection_header(b: &[u8; 7]) -> Result<ConnectionHeader> {
 pub enum FrameError {
     /// The peer closed the connection before a frame began.
     Closed,
-    /// Nothing arrived before the idle deadline, or the rest of a frame did not arrive in time.
+    /// Nothing arrived before the idle deadline.
+    Idle,
+    /// The first byte of a frame arrived and the rest did not arrive in time.
     Timeout,
     /// The length prefix is larger than the bound; nothing past it was read.
     TooLarge(usize),
@@ -78,7 +80,8 @@ impl std::fmt::Display for FrameError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             FrameError::Closed => write!(f, "the peer closed the connection"),
-            FrameError::Timeout => write!(f, "the frame did not arrive in time"),
+            FrameError::Idle => write!(f, "no frame began before the idle deadline"),
+            FrameError::Timeout => write!(f, "the rest of a frame did not arrive in time"),
             FrameError::TooLarge(n) => write!(f, "a frame of {n} bytes is over the bound"),
             FrameError::Io(e) => write!(f, "{e}"),
         }
@@ -95,7 +98,7 @@ pub async fn read_frame<R: AsyncRead + Unpin>(
 ) -> std::result::Result<Vec<u8>, FrameError> {
     let mut len = [0u8; 4];
     match tokio::time::timeout(idle, r.read(&mut len[..1])).await {
-        Err(_) => return Err(FrameError::Timeout),
+        Err(_) => return Err(FrameError::Idle),
         Ok(Err(e)) => return Err(FrameError::Io(e)),
         Ok(Ok(0)) => return Err(FrameError::Closed),
         Ok(Ok(_)) => {}
@@ -339,6 +342,10 @@ pub mod class {
     pub const NO_SUCH_METHOD: &str = "org.apache.hadoop.ipc.RpcNoSuchMethodException";
     pub const NO_SUCH_PROTOCOL: &str = "org.apache.hadoop.ipc.RpcNoSuchProtocolException";
     pub const RETRIABLE: &str = "org.apache.hadoop.ipc.RetriableException";
+    pub const RECOVERY_IN_PROGRESS: &str =
+        "org.apache.hadoop.hdfs.protocol.RecoveryInProgressException";
+    pub const HADOOP_ILLEGAL_ARGUMENT: &str = "org.apache.hadoop.HadoopIllegalArgumentException";
+    pub const ILLEGAL_ARGUMENT: &str = "java.lang.IllegalArgumentException";
     pub const VERSION_MISMATCH: &str = "org.apache.hadoop.ipc.RPC$VersionMismatch";
     pub const SERVER: &str = "org.apache.hadoop.ipc.RpcServerException";
 }

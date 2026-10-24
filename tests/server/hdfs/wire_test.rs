@@ -16,7 +16,7 @@ use tokio::net::TcpStream;
 
 // ------------------------------------------------------------------ protobuf, by hand
 
-fn varint(mut n: u64) -> Vec<u8> {
+pub(super) fn varint(mut n: u64) -> Vec<u8> {
     let mut out = Vec::new();
     loop {
         let b = (n & 0x7F) as u8;
@@ -29,36 +29,36 @@ fn varint(mut n: u64) -> Vec<u8> {
     }
 }
 
-fn key(field: u32, wire: u32) -> Vec<u8> {
+pub(super) fn key(field: u32, wire: u32) -> Vec<u8> {
     varint((field << 3 | wire) as u64)
 }
 
-fn int(field: u32, n: u64) -> Vec<u8> {
+pub(super) fn int(field: u32, n: u64) -> Vec<u8> {
     [key(field, 0), varint(n)].concat()
 }
 
-fn sint(field: u32, n: i32) -> Vec<u8> {
+pub(super) fn sint(field: u32, n: i32) -> Vec<u8> {
     int(field, ((n << 1) ^ (n >> 31)) as u32 as u64)
 }
 
-fn bytes(field: u32, b: &[u8]) -> Vec<u8> {
+pub(super) fn bytes(field: u32, b: &[u8]) -> Vec<u8> {
     [key(field, 2), varint(b.len() as u64), b.to_vec()].concat()
 }
 
-fn delimited(m: &[u8]) -> Vec<u8> {
+pub(super) fn delimited(m: &[u8]) -> Vec<u8> {
     [varint(m.len() as u64), m.to_vec()].concat()
 }
 
-fn frame(parts: &[Vec<u8>]) -> Vec<u8> {
+pub(super) fn frame(parts: &[Vec<u8>]) -> Vec<u8> {
     let body = parts.concat();
     [(body.len() as u32).to_be_bytes().to_vec(), body].concat()
 }
 
-const CLIENT_ID: [u8; 16] = *b"netget-raw-test!";
+pub(super) const CLIENT_ID: [u8; 16] = *b"netget-raw-test!";
 const CLIENT_PROTOCOL: &str = "org.apache.hadoop.hdfs.protocol.ClientProtocol";
 
 /// RpcRequestHeaderProto: rpcKind PROTOCOL_BUFFER, rpcOp FINAL_PACKET, callId, clientId, retry.
-fn rpc_header(call_id: i32) -> Vec<u8> {
+pub(super) fn rpc_header(call_id: i32) -> Vec<u8> {
     [
         int(1, 2),
         int(2, 0),
@@ -69,7 +69,7 @@ fn rpc_header(call_id: i32) -> Vec<u8> {
     .concat()
 }
 
-fn connection_context(user: &str) -> Vec<u8> {
+pub(super) fn connection_context(user: &str) -> Vec<u8> {
     frame(&[
         delimited(&rpc_header(-3)),
         delimited(
@@ -82,7 +82,7 @@ fn connection_context(user: &str) -> Vec<u8> {
     ])
 }
 
-fn call(call_id: i32, method: &str, request: &[u8]) -> Vec<u8> {
+pub(super) fn call(call_id: i32, method: &str, request: &[u8]) -> Vec<u8> {
     let method_header = [
         bytes(1, method.as_bytes()),
         bytes(2, CLIENT_PROTOCOL.as_bytes()),
@@ -96,45 +96,45 @@ fn call(call_id: i32, method: &str, request: &[u8]) -> Vec<u8> {
     ])
 }
 
-fn src(path: &str) -> Vec<u8> {
+pub(super) fn src(path: &str) -> Vec<u8> {
     bytes(1, path.as_bytes())
 }
 
 // ------------------------------------------------------------------ the raw client
 
 /// One NameNode connection, every byte each way recorded in order.
-struct Raw {
-    s: TcpStream,
-    wire: Vec<(bool, Vec<u8>)>,
+pub(super) struct Raw {
+    pub(super) s: TcpStream,
+    pub(super) wire: Vec<(bool, Vec<u8>)>,
 }
 
 #[derive(Debug)]
-struct Response {
-    header: RpcResponseHeaderProto,
-    body: Vec<u8>,
+pub(super) struct Response {
+    pub(super) header: RpcResponseHeaderProto,
+    pub(super) body: Vec<u8>,
 }
 
 impl Response {
-    fn call_id(&self) -> i32 {
+    pub(super) fn call_id(&self) -> i32 {
         self.header.call_id as i32
     }
-    fn ok(&self) -> bool {
+    pub(super) fn ok(&self) -> bool {
         self.header.status == 0
     }
-    fn class(&self) -> &str {
+    pub(super) fn class(&self) -> &str {
         self.header.exception_class_name.as_deref().unwrap_or("")
     }
-    fn message(&self) -> &str {
+    pub(super) fn message(&self) -> &str {
         self.header.error_msg.as_deref().unwrap_or("")
     }
-    fn decode<M: Message + Default>(&self) -> M {
+    pub(super) fn decode<M: Message + Default>(&self) -> M {
         assert!(self.ok(), "a failed call: {self:?}");
         let (len, n) = read_varint(&self.body);
         M::decode(&self.body[n..n + len as usize]).expect("the response decodes")
     }
 }
 
-fn read_varint(b: &[u8]) -> (u64, usize) {
+pub(super) fn read_varint(b: &[u8]) -> (u64, usize) {
     let mut v = 0u64;
     for (i, x) in b.iter().enumerate().take(10) {
         v |= ((x & 0x7F) as u64) << (7 * i);
@@ -146,27 +146,27 @@ fn read_varint(b: &[u8]) -> (u64, usize) {
 }
 
 impl Raw {
-    async fn open(port: u16) -> Raw {
+    pub(super) async fn open(port: u16) -> Raw {
         let s = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
         s.set_nodelay(true).unwrap();
         Raw { s, wire: vec![] }
     }
 
     /// The connection header (SIMPLE, no SASL) and the connection context for `user`.
-    async fn hello(port: u16, user: &str) -> Raw {
+    pub(super) async fn hello(port: u16, user: &str) -> Raw {
         let mut r = Raw::open(port).await;
         r.send(&[b"hrpc".to_vec(), vec![9, 0, 0], connection_context(user)].concat())
             .await;
         r
     }
 
-    async fn send(&mut self, b: &[u8]) {
+    pub(super) async fn send(&mut self, b: &[u8]) {
         self.s.write_all(b).await.unwrap();
         self.wire.push((true, b.to_vec()));
     }
 
     /// One response frame, or `None` when the server closed the connection.
-    async fn response(&mut self) -> Option<Response> {
+    pub(super) async fn response(&mut self) -> Option<Response> {
         let mut len = [0u8; 4];
         let read = tokio::time::timeout(Duration::from_secs(30), self.s.read_exact(&mut len)).await;
         match read {
@@ -188,7 +188,7 @@ impl Raw {
         })
     }
 
-    async fn call(&mut self, id: i32, method: &str, request: &[u8]) -> Response {
+    pub(super) async fn call(&mut self, id: i32, method: &str, request: &[u8]) -> Response {
         self.send(&call(id, method, request)).await;
         let r = self.response().await.expect("a response");
         assert_eq!(
@@ -200,7 +200,7 @@ impl Raw {
     }
 
     /// Whether the server has closed the connection (end of stream within 10 s).
-    async fn closed(&mut self) -> bool {
+    pub(super) async fn closed(&mut self) -> bool {
         let mut b = [0u8; 1];
         matches!(
             tokio::time::timeout(Duration::from_secs(10), self.s.read(&mut b)).await,
@@ -210,24 +210,24 @@ impl Raw {
 }
 
 /// One DataNode connection.
-struct Data {
-    s: TcpStream,
-    wire: Vec<(bool, Vec<u8>)>,
+pub(super) struct Data {
+    pub(super) s: TcpStream,
+    pub(super) wire: Vec<(bool, Vec<u8>)>,
 }
 
 impl Data {
-    async fn open(port: u16) -> Data {
+    pub(super) async fn open(port: u16) -> Data {
         let s = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
         s.set_nodelay(true).unwrap();
         Data { s, wire: vec![] }
     }
 
-    async fn send(&mut self, b: &[u8]) {
+    pub(super) async fn send(&mut self, b: &[u8]) {
         self.s.write_all(b).await.unwrap();
         self.wire.push((true, b.to_vec()));
     }
 
-    async fn read_n(&mut self, n: usize) -> Vec<u8> {
+    pub(super) async fn read_n(&mut self, n: usize) -> Vec<u8> {
         let mut b = vec![0u8; n];
         tokio::time::timeout(Duration::from_secs(30), self.s.read_exact(&mut b))
             .await
@@ -237,7 +237,7 @@ impl Data {
         b
     }
 
-    async fn delimited<M: Message + Default>(&mut self) -> M {
+    pub(super) async fn delimited<M: Message + Default>(&mut self) -> M {
         let mut raw = Vec::new();
         loop {
             let b = self.read_n(1).await[0];
@@ -252,7 +252,7 @@ impl Data {
     }
 
     /// A packet: (offset in block, seqno, last, checksums, data).
-    async fn packet(&mut self) -> (i64, i64, bool, Vec<u8>, Vec<u8>) {
+    pub(super) async fn packet(&mut self) -> (i64, i64, bool, Vec<u8>, Vec<u8>) {
         let p = self.read_n(6).await;
         let plen = u32::from_be_bytes(p[0..4].try_into().unwrap()) as usize;
         let hlen = u16::from_be_bytes([p[4], p[5]]) as usize;
@@ -269,7 +269,7 @@ impl Data {
         )
     }
 
-    async fn closed(&mut self) -> bool {
+    pub(super) async fn closed(&mut self) -> bool {
         let mut b = [0u8; 1];
         matches!(
             tokio::time::timeout(Duration::from_secs(10), self.s.read(&mut b)).await,
@@ -278,7 +278,7 @@ impl Data {
     }
 }
 
-fn extended(b: &pb::ExtendedBlockProto) -> Vec<u8> {
+pub(super) fn extended(b: &pb::ExtendedBlockProto) -> Vec<u8> {
     [
         bytes(1, b.pool_id.as_bytes()),
         int(2, b.block_id),
@@ -289,7 +289,7 @@ fn extended(b: &pb::ExtendedBlockProto) -> Vec<u8> {
 }
 
 /// ClientOperationHeaderProto { baseHeader { block }, clientName }.
-fn op_header(b: &pb::ExtendedBlockProto, client: &str) -> Vec<u8> {
+pub(super) fn op_header(b: &pb::ExtendedBlockProto, client: &str) -> Vec<u8> {
     [
         bytes(1, &bytes(1, &extended(b))),
         bytes(2, client.as_bytes()),
@@ -297,11 +297,11 @@ fn op_header(b: &pb::ExtendedBlockProto, client: &str) -> Vec<u8> {
     .concat()
 }
 
-fn op(code: u8, message: &[u8]) -> Vec<u8> {
+pub(super) fn op(code: u8, message: &[u8]) -> Vec<u8> {
     [vec![0, 28, code], delimited(message)].concat()
 }
 
-fn read_block_op(b: &pb::ExtendedBlockProto, offset: u64, len: u64) -> Vec<u8> {
+pub(super) fn read_block_op(b: &pb::ExtendedBlockProto, offset: u64, len: u64) -> Vec<u8> {
     op(
         81,
         &[
@@ -314,7 +314,7 @@ fn read_block_op(b: &pb::ExtendedBlockProto, offset: u64, len: u64) -> Vec<u8> {
 }
 
 /// OpWriteBlockProto with stage PIPELINE_SETUP_CREATE and CRC32C in 512-byte chunks.
-fn write_block_op(b: &pb::ExtendedBlockProto, client: &str) -> Vec<u8> {
+pub(super) fn write_block_op(b: &pb::ExtendedBlockProto, client: &str) -> Vec<u8> {
     op(
         80,
         &[
@@ -330,7 +330,7 @@ fn write_block_op(b: &pb::ExtendedBlockProto, client: &str) -> Vec<u8> {
     )
 }
 
-fn packet(offset: i64, seqno: i64, last: bool, data: &[u8], sums: &[u8]) -> Vec<u8> {
+pub(super) fn packet(offset: i64, seqno: i64, last: bool, data: &[u8], sums: &[u8]) -> Vec<u8> {
     let header = [
         key(1, 1),
         offset.to_le_bytes().to_vec(),
@@ -353,14 +353,14 @@ fn packet(offset: i64, seqno: i64, last: bool, data: &[u8], sums: &[u8]) -> Vec<
     .concat()
 }
 
-fn sums_of(data: &[u8]) -> Vec<u8> {
+pub(super) fn sums_of(data: &[u8]) -> Vec<u8> {
     data.chunks(512)
         .flat_map(|c| crc32c(c).to_be_bytes())
         .collect()
 }
 
 /// Read a whole block's packets after the op response; the bytes and the chunk offset.
-async fn read_whole(d: &mut Data) -> Vec<u8> {
+pub(super) async fn read_whole(d: &mut Data) -> Vec<u8> {
     let mut data = Vec::new();
     loop {
         let (offset, _, last, sums, chunk) = d.packet().await;
@@ -717,7 +717,7 @@ else:
   a=[{'type':'hdfs_deny'}]
 print(json.dumps({'actions':a}))"#;
 
-fn create_req(path: &str, client: &str) -> Vec<u8> {
+pub(super) fn create_req(path: &str, client: &str) -> Vec<u8> {
     [
         src(path),
         bytes(2, &int(1, 0o644)),
@@ -731,7 +731,7 @@ fn create_req(path: &str, client: &str) -> Vec<u8> {
 }
 
 /// Write one block of `data` with checksums `sums`: the acks' statuses.
-async fn write_block(
+pub(super) async fn write_block(
     server: &Started,
     block: &pb::LocatedBlockProto,
     client: &str,
