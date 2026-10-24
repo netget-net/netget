@@ -798,20 +798,42 @@ pub fn handle(ram: &mut Ram, flash: &mut Flash, nv: &mut Nvram, frame: &Frame) -
         h.response = Some(Frame::rpc_error(rpc_error::INVALID_SUBSYSTEM, frame));
         return h;
     }
-    if h.name.is_none() {
+    // SYS_RESET_REQ is an AREQ; as an SREQ it is a command the firmware does not have.
+    let areq_only = frame.subsystem == subsystem::SYS && frame.id == cmd::sys::RESET_REQ;
+    if h.name.is_none() || areq_only {
+        h.name = None;
         h.response = Some(Frame::rpc_error(rpc_error::INVALID_COMMAND_ID, frame));
         return h;
     }
     let mut r = Reader::new(&frame.data);
     match answer(ram, flash, nv, frame, &mut r, &mut h) {
         Ok(data) => h.response = Some(Frame::srsp(frame.subsystem, frame.id, data)),
-        Err(Truncated) => {
+        Err(refused) => {
             h.areqs.clear();
             h.effects.clear();
-            h.response = Some(Frame::rpc_error(rpc_error::INVALID_LENGTH, frame));
+            let code = match refused {
+                Refused::Truncated => rpc_error::INVALID_LENGTH,
+                Refused::NotAnSreq => rpc_error::INVALID_COMMAND_ID,
+            };
+            h.response = Some(Frame::rpc_error(code, frame));
         }
     }
     h
+}
+
+/// Why an SREQ was not executed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Refused {
+    /// Its data ended before its fields did.
+    Truncated,
+    /// A name NetGet knows that is not a request a host sends.
+    NotAnSreq,
+}
+
+impl From<Truncated> for Refused {
+    fn from(_: Truncated) -> Self {
+        Refused::Truncated
+    }
 }
 
 fn reset(ram: &mut Ram, flash: &mut Flash, nv: &mut Nvram, h: &mut Handled) {
@@ -879,7 +901,7 @@ fn answer(
     frame: &Frame,
     r: &mut Reader,
     h: &mut Handled,
-) -> Result<Vec<u8>, Truncated> {
+) -> Result<Vec<u8>, Refused> {
     use cmd::*;
     let mut w: Vec<u8> = Vec::new();
     match (frame.subsystem, frame.id) {
@@ -1325,7 +1347,9 @@ fn answer(
                 }
             }
         }
-        _ => unreachable!("named commands are all answered"),
+        // Every named SREQ has an arm above; a name that reaches here is not one a host sends
+        // (found by `zigbee_mt`: SYS_RESET_REQ's id sent as an SREQ).
+        _ => return Err(Refused::NotAnSreq),
     }
     Ok(w)
 }
