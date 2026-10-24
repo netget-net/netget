@@ -556,3 +556,148 @@ async fn llm_failure_sends_nothing() -> E2EResult<()> {
     );
     Ok(())
 }
+
+/// `n` bytes of numbered lines; the same text `MUTATIONS` builds in python.
+fn numbered(n: usize, tag: &str) -> String {
+    let mut s = String::new();
+    let mut i = 0;
+    while s.len() < n {
+        s.push_str(&format!("{tag} line {i:06}\n"));
+        i += 1;
+    }
+    s.truncate(n);
+    s
+}
+
+/// The model for an append, two truncates and a concat, one step per event.
+const MUTATIONS: &str = r#"import json,sys
+i=json.load(sys.stdin); t=i['event_type_id']; e=i['event']
+def numbered(n,tag):
+  s=''; k=0
+  while len(s)<n:
+    s+='%s line %06d\n' % (tag,k); k+=1
+  return s[:n]
+a=[]
+if t=='hdfs_connected':
+  a=[{'type':'hdfs_append','path':'/grow/grow.txt','data':numbered(130000,'more')}]
+elif t=='hdfs_append_result':
+  a=[{'type':'hdfs_truncate','path':'/grow/grow.txt','length':100000}]
+elif t=='hdfs_truncate_result' and e['length']==100000:
+  a=[{'type':'hdfs_truncate','path':'/grow/grow.txt','length':65536}]
+elif t=='hdfs_truncate_result':
+  a=[{'type':'hdfs_concat','path':'/cat/a.txt','sources':['/cat/b.txt','/cat/c.txt']}]
+elif t=='hdfs_mutation_result' and e['operation']=='concat':
+  a=[{'type':'hdfs_stat','path':'/cat/b.txt'}]
+print(json.dumps({'actions':a}))"#;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hdfs_client_appends_truncates_and_concats() -> E2EResult<()> {
+    let cluster = Cluster::start().await?;
+    let seed_dir = cluster.nn.dir().join("seed-mutations");
+    std::fs::create_dir_all(&seed_dir)?;
+    let first = numbered(70000, "first");
+    std::fs::write(seed_dir.join("grow.txt"), &first)?;
+    for (name, text) in [
+        ("a.txt", "alpha\n"),
+        ("b.txt", "bravo\n"),
+        ("c.txt", "charlie\n"),
+    ] {
+        std::fs::write(seed_dir.join(name), text)?;
+    }
+    let seed = seed_dir.to_string_lossy().into_owned();
+    cluster.dfs(&["-mkdir", "-p", "/grow", "/cat"]).await?;
+    // 70000 bytes at 64 KiB: block 1 holds 4464, its last chunk 368 of 512.
+    cluster
+        .dfs(&[
+            "-D",
+            "dfs.blocksize=65536",
+            "-put",
+            &format!("{seed}/grow.txt"),
+            "/grow/",
+        ])
+        .await?;
+    cluster
+        .dfs(&[
+            "-put",
+            &format!("{seed}/a.txt"),
+            &format!("{seed}/b.txt"),
+            &format!("{seed}/c.txt"),
+            "/cat/",
+        ])
+        .await?;
+
+    let user = me();
+    let c = client(cluster.rpc(), &user, chain(MUTATIONS)).await?;
+    let appended = c.wait("hdfs_append_result", 0, &cluster).await;
+    assert_eq!(appended["bytes"], 130000, "{appended}");
+    assert_eq!(appended["length_before"], 70000);
+    assert_eq!(appended["length"], 200000);
+    assert_eq!(
+        appended["blocks"], 3,
+        "the reopened block and two new: {appended}"
+    );
+    let inside = c.wait("hdfs_truncate_result", 0, &cluster).await;
+    assert_eq!(inside["length"], 100000);
+    assert_eq!(
+        inside["done"], false,
+        "a cut inside a block recovers: {inside}"
+    );
+    assert_eq!(
+        inside["closed"], true,
+        "and the client waited for it: {inside}"
+    );
+    assert_eq!(inside["file_length"], 100000);
+    let boundary = c.wait("hdfs_truncate_result", 1, &cluster).await;
+    assert_eq!(boundary["done"], true, "{boundary}");
+    assert_eq!(boundary["file_length"], 65536);
+    let concat = c.wait("hdfs_mutation_result", 0, &cluster).await;
+    assert_eq!(concat["operation"], "concat");
+    assert_eq!(concat["result"], true);
+    assert_eq!(
+        concat["sources"],
+        json!(["/cat/b.txt", "/cat/c.txt"]),
+        "{concat}"
+    );
+    let gone = c.wait("hdfs_file_status", 0, &cluster).await;
+    assert_eq!(
+        gone["exists"], false,
+        "the concat's sources are gone: {gone}"
+    );
+
+    // Read back by Hadoop's own client.
+    let all = format!("{first}{}", numbered(130000, "more"));
+    assert_eq!(
+        cluster.dfs(&["-cat", "/grow/grow.txt"]).await?,
+        all[..65536]
+    );
+    assert_eq!(
+        cluster
+            .dfs(&["-stat", "%b %o", "/grow/grow.txt"])
+            .await?
+            .trim(),
+        "65536 65536"
+    );
+    assert_eq!(
+        cluster.dfs(&["-cat", "/cat/a.txt"]).await?,
+        "alpha\nbravo\ncharlie\n"
+    );
+
+    // Every change the model asked for, as the NameNode recorded it.
+    let audit = cluster.audited(&user);
+    println!("audit: {audit:?}");
+    let count = |cmd: &str, src: &str| {
+        audit
+            .iter()
+            .filter(|(c, s, _)| c == cmd && s == src)
+            .count()
+    };
+    assert_eq!(count("append", "/grow/grow.txt"), 1, "{audit:?}");
+    assert_eq!(count("truncate", "/grow/grow.txt"), 2, "{audit:?}");
+    assert!(
+        audit
+            .iter()
+            .any(|(c, _, d)| c == "concat" && d == "/cat/a.txt"),
+        "{audit:?}"
+    );
+    Ok(())
+}

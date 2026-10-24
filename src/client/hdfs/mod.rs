@@ -13,13 +13,17 @@ use crate::logging::emit::Log;
 use crate::protocol::{ConnectContext, Event, EventType};
 use crate::server::hdfs::proto::hdfs::{
     hdfs_file_status_proto::FileType, AddBlockRequestProto, AddBlockResponseProto,
-    CompleteRequestProto, CompleteResponseProto, CreateFlagProto, CreateRequestProto,
+    AppendRequestProto, AppendResponseProto, CompleteRequestProto, CompleteResponseProto,
+    ConcatRequestProto, ConcatResponseProto, CreateFlagProto, CreateRequestProto,
     CreateResponseProto, DeleteRequestProto, DeleteResponseProto, ExtendedBlockProto,
     FsPermissionProto, GetBlockLocationsRequestProto, GetBlockLocationsResponseProto,
     GetFileInfoRequestProto, GetFileInfoResponseProto, GetListingRequestProto,
     GetListingResponseProto, GetServerDefaultsRequestProto, GetServerDefaultsResponseProto,
-    HdfsFileStatusProto, MkdirsRequestProto, MkdirsResponseProto, Rename2RequestProto,
-    Rename2ResponseProto, SetPermissionRequestProto, SetPermissionResponseProto,
+    HdfsFileStatusProto, IsFileClosedRequestProto, IsFileClosedResponseProto, MkdirsRequestProto,
+    MkdirsResponseProto, Rename2RequestProto, Rename2ResponseProto, SetPermissionRequestProto,
+    SetPermissionResponseProto, TruncateRequestProto, TruncateResponseProto,
+    UpdateBlockForPipelineRequestProto, UpdateBlockForPipelineResponseProto,
+    UpdatePipelineRequestProto, UpdatePipelineResponseProto,
 };
 pub use actions::HdfsClientProtocol;
 use anyhow::{Context, Result};
@@ -35,6 +39,10 @@ pub const DEFAULT_BLOCK_SIZE: u64 = 128 << 20;
 /// Times `complete` is asked before the write is called failed (the NameNode answers false
 /// until every block has reached its minimum replication).
 pub const COMPLETE_ATTEMPTS: usize = 10;
+/// How long a truncate inside a block waits for its block recovery (a NameNode schedules it on
+/// a DataNode heartbeat, every 3 s by default), polling isFileClosed.
+pub const TRUNCATE_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
+pub const TRUNCATE_POLL: std::time::Duration = std::time::Duration::from_millis(500);
 
 async fn resolve(remote: &str) -> Result<SocketAddr> {
     tokio::net::lookup_host(remote)
@@ -353,6 +361,8 @@ impl HdfsClient<'_> {
             actions::STAT => self.stat(&path).await,
             actions::READ => self.read(&path, action).await,
             actions::WRITE => self.write(&path, action).await,
+            actions::APPEND => self.append(&path, action).await,
+            actions::TRUNCATE => self.truncate(&path, action).await,
             _ => self.mutate(kind, &path, action).await,
         };
         match result {
@@ -529,9 +539,58 @@ impl HdfsClient<'_> {
             )
             .await?;
         let file_id = created.fs.as_ref().and_then(|s| s.file_id);
-        let mut previous: Option<ExtendedBlockProto> = None;
         let mut datanodes = Vec::new();
-        let mut written_blocks = 0usize;
+        let last = self
+            .new_blocks(path, &data, block_size, file_id, None, &mut datanodes)
+            .await?;
+        let written_blocks = datanodes.len();
+        self.complete(path, last, file_id).await?;
+        Ok((
+            &actions::WRITE_EVENT,
+            json!({"path": path, "bytes": data.len(), "blocks": written_blocks, "datanodes": datanodes}),
+        ))
+    }
+
+    /// complete, asked again while the NameNode answers false.
+    async fn complete(
+        &mut self,
+        path: &str,
+        last: Option<ExtendedBlockProto>,
+        file_id: Option<u64>,
+    ) -> std::result::Result<(), CallError> {
+        for attempt in 0..COMPLETE_ATTEMPTS {
+            let c: CompleteResponseProto = self
+                .call(
+                    "complete",
+                    &CompleteRequestProto {
+                        src: path.into(),
+                        client_name: self.client_name.clone(),
+                        last: last.clone(),
+                        file_id,
+                    },
+                )
+                .await?;
+            if c.result {
+                return Ok(());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100 << attempt.min(5))).await;
+        }
+        Err(CallError::Transport(anyhow::anyhow!(
+            "the NameNode did not complete {path} after {COMPLETE_ATTEMPTS} attempts"
+        )))
+    }
+
+    /// Whole new blocks for `data` after `previous`: addBlock and the pipeline per block. The
+    /// last block written, and the DataNodes each went to.
+    async fn new_blocks(
+        &mut self,
+        path: &str,
+        data: &[u8],
+        block_size: u64,
+        file_id: Option<u64>,
+        mut previous: Option<ExtendedBlockProto>,
+        datanodes: &mut Vec<String>,
+    ) -> std::result::Result<Option<ExtendedBlockProto>, CallError> {
         for piece in data.chunks(block_size.max(512) as usize) {
             let added: AddBlockResponseProto = self
                 .call(
@@ -552,35 +611,146 @@ impl HdfsClient<'_> {
                 .map_err(CallError::Transport)?;
             datanodes.push(dn.to_string());
             previous = Some(b);
-            written_blocks += 1;
         }
-        let mut done = false;
-        for attempt in 0..COMPLETE_ATTEMPTS {
-            let c: CompleteResponseProto = self
+        Ok(previous)
+    }
+
+    /// append: the file opens for append; a partial last block is continued through an append
+    /// pipeline (a new generation stamp from updateBlockForPipeline, WRITE_BLOCK in
+    /// PIPELINE_SETUP_APPEND, updatePipeline once the DataNode has it — Hadoop's own order),
+    /// filled up to its block size, and the rest goes in whole new blocks; then complete.
+    async fn append(
+        &mut self,
+        path: &str,
+        action: &Value,
+    ) -> std::result::Result<(&'static EventType, Value), CallError> {
+        let data = actions::write_data(action).map_err(CallError::Transport)?;
+        let opened: AppendResponseProto = self
+            .call(
+                "append",
+                &AppendRequestProto {
+                    src: path.into(),
+                    client_name: self.client_name.clone(),
+                    flag: Some(CreateFlagProto::Append as u32),
+                },
+            )
+            .await?;
+        let stat = opened.stat.ok_or_else(|| {
+            CallError::Transport(anyhow::anyhow!("the append answer carries no file status"))
+        })?;
+        let block_size = stat.blocksize.filter(|b| *b > 0).ok_or_else(|| {
+            CallError::Transport(anyhow::anyhow!("the append answer names no block size"))
+        })?;
+        let file_id = stat.file_id;
+        let length_before = stat.length;
+        let mut datanodes = Vec::new();
+        let mut blocks_written = 0usize;
+        let mut previous: Option<ExtendedBlockProto> = None;
+        let mut rest: &[u8] = &data;
+        if let Some(last) = opened.block {
+            let base = last.b.num_bytes.unwrap_or(0);
+            let room = block_size.saturating_sub(base) as usize;
+            let (here, after) = rest.split_at(rest.len().min(room));
+            let fresh: UpdateBlockForPipelineResponseProto = self
                 .call(
-                    "complete",
-                    &CompleteRequestProto {
-                        src: path.into(),
+                    "updateBlockForPipeline",
+                    &UpdateBlockForPipelineRequestProto {
+                        block: last.b.clone(),
                         client_name: self.client_name.clone(),
-                        last: previous.clone(),
-                        file_id,
                     },
                 )
                 .await?;
-            if c.result {
-                done = true;
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(100 << attempt.min(5))).await;
+            let latest = fresh.block.b.generation_stamp;
+            let pipeline = blocks::open_write(
+                self.addr,
+                &last,
+                &self.client_name,
+                blocks::Stage::Append { base, latest },
+            )
+            .await
+            .map_err(CallError::Transport)?;
+            let mut renewed = last.b.clone();
+            renewed.generation_stamp = latest;
+            let _: UpdatePipelineResponseProto = self
+                .call(
+                    "updatePipeline",
+                    &UpdatePipelineRequestProto {
+                        client_name: self.client_name.clone(),
+                        old_block: last.b.clone(),
+                        new_block: renewed.clone(),
+                        new_nodes: last.locs.iter().map(|l| l.id.clone()).collect(),
+                        storage_i_ds: last.storage_i_ds.clone(),
+                    },
+                )
+                .await?;
+            datanodes.push(pipeline.datanode.to_string());
+            let held = pipeline.finish(here).await.map_err(CallError::Transport)?;
+            renewed.num_bytes = Some(held);
+            previous = Some(renewed);
+            blocks_written += 1;
+            rest = after;
         }
-        if !done {
-            return Err(CallError::Transport(anyhow::anyhow!(
-                "the NameNode did not complete {path} after {COMPLETE_ATTEMPTS} attempts"
-            )));
-        }
+        let before = datanodes.len();
+        let last = self
+            .new_blocks(path, rest, block_size, file_id, previous, &mut datanodes)
+            .await?;
+        blocks_written += datanodes.len() - before;
+        self.complete(path, last, file_id).await?;
         Ok((
-            &actions::WRITE_EVENT,
-            json!({"path": path, "bytes": data.len(), "blocks": written_blocks, "datanodes": datanodes}),
+            &actions::APPEND_RESULT_EVENT,
+            json!({
+                "path": path, "bytes": data.len(), "length_before": length_before,
+                "length": length_before + data.len() as u64, "blocks": blocks_written,
+                "datanodes": datanodes,
+            }),
+        ))
+    }
+
+    /// truncate: done at once on a block boundary; inside a block the NameNode answers false
+    /// and recovers the block, and (unless told not to) this waits for the file to close.
+    async fn truncate(
+        &mut self,
+        path: &str,
+        action: &Value,
+    ) -> std::result::Result<(&'static EventType, Value), CallError> {
+        let length = action["length"].as_u64().unwrap_or(0);
+        let wait = action["wait"].as_bool().unwrap_or(true);
+        let r: TruncateResponseProto = self
+            .call(
+                "truncate",
+                &TruncateRequestProto {
+                    src: path.into(),
+                    new_length: length,
+                    client_name: self.client_name.clone(),
+                },
+            )
+            .await?;
+        let mut closed = r.result;
+        if !closed && wait {
+            let deadline = tokio::time::Instant::now() + TRUNCATE_WAIT;
+            while tokio::time::Instant::now() < deadline {
+                tokio::time::sleep(TRUNCATE_POLL).await;
+                let c: IsFileClosedResponseProto = self
+                    .call(
+                        "isFileClosed",
+                        &IsFileClosedRequestProto { src: path.into() },
+                    )
+                    .await?;
+                if c.result {
+                    closed = true;
+                    break;
+                }
+            }
+        }
+        let info: GetFileInfoResponseProto = self
+            .call("getFileInfo", &GetFileInfoRequestProto { src: path.into() })
+            .await?;
+        Ok((
+            &actions::TRUNCATE_RESULT_EVENT,
+            json!({
+                "path": path, "length": length, "done": r.result, "closed": closed,
+                "file_length": info.fs.map(|s| s.length).unwrap_or(0),
+            }),
         ))
     }
 
@@ -632,6 +802,27 @@ impl HdfsClient<'_> {
                             dst: destination.into(),
                             overwrite_dest: action["overwrite"].as_bool().unwrap_or(false),
                             move_to_trash: Some(false),
+                        },
+                    )
+                    .await?;
+                true
+            }
+            actions::CONCAT => {
+                let sources: Vec<String> = action["sources"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|s| s.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                data["sources"] = json!(sources);
+                let _: ConcatResponseProto = self
+                    .call(
+                        "concat",
+                        &ConcatRequestProto {
+                            trg: path.into(),
+                            srcs: sources,
                         },
                     )
                     .await?;
