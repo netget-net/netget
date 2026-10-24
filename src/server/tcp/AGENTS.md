@@ -85,8 +85,9 @@ is what IMPROVEMENTS item 78 asked for. `telnet`, where the server is expected t
 raise its connect event on every connection.
 
 - With `send_first` the connection is registered `Processing`, so bytes that arrive while the
-  connect event is answered queue behind it; `handle_connection_opened` then moves it to `Idle`
-  and hands the queue to `handle_data_with_actions`. One model call at a time per connection.
+  connect event is answered queue behind it; `handle_connection_opened` then takes the queue
+  and answers it (`answer`), or moves the connection to `Idle` if nothing arrived — under one
+  lock. One model call at a time per connection.
 - A peer that disconnects before the connect event is answered abandons the call
   (`decision=peer_left_before_answer`).
 
@@ -191,17 +192,17 @@ Echoing is therefore symmetric: pass the event's `data` **and** its `encoding` s
 
 **Step 4 happens synchronously in the accept loop, before any task is spawned.** It used to be
 the first thing the banner task did, which raced the reader task spawned immediately after it:
-`handle_data_with_actions` returns silently when the connection is not in the map, so a client
+a read was dropped when the connection was not yet in the map, so a client
 that wrote before the server accepted — the normal case, since `connect()` returns as soon as
 the kernel completes the handshake — had its first payload dropped with no response, no error
 and no log line. 8 of 64 clients in a burst lost their request that way. The connect task runs
 for every connection and no longer registers anything, and `tests/connection_map_race_test.rs`
 pins the behaviour. The same shape was fixed in `socket_file` (`1f3945ee`), `tls` and `ssh_agent`.
 
-`handle_data_with_actions` releases the connection lock between its state check and the merge
-step, so a connection can disappear underneath it (write-then-close clients do exactly that).
-Both lookups return early instead of unwrapping; the merge step used to `unwrap()` and panicked
-the task, which is silent — the server keeps reporting `Running`.
+A connection can disappear while it is being answered (write-then-close clients do exactly
+that), so every lookup in `admit_read` and `answer` returns early instead of unwrapping. A merge
+step once `unwrap()`ed the miss and panicked the task, which is silent — the server keeps
+reporting `Running`.
 
 ### Connection Data Structure
 
