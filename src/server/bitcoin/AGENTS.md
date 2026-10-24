@@ -180,6 +180,30 @@ Similar to TCP protocol, uses state machine to prevent concurrent LLM calls:
 
 When in `Processing` state, incoming data is queued. After LLM response, queued data is processed.
 
+The machine is `crate::server::read_queue::ReadQueue`, shared with `tcp`, and the **reader**
+makes every decision on it, in arrival order and under the connection lock (`admit_read`): an
+`Idle` or `Accumulating` connection starts the one answering task (`answer`), which parses
+everything waiting message by message; a `Processing` one queues the read. The answering task
+folds in what arrived during each answer, or goes `Idle` when nothing is left, under one lock;
+an incomplete message is held with `hold_for_more`, which resumes at once if the rest of it is
+already queued.
+
+This server used to spawn a task per read that read the state under one lock and set it under
+another, so two reads could both find the connection `Idle` and be parsed and answered at once —
+a later `pong` ahead of an earlier one, or a message split across two reads parsed as two
+halves, which is a parse error and lost messages. `tests/server/bitcoin/read_order_test.rs`
+(four connections, 300 pings each, every ping written in two halves split inside its header,
+answered by a static `pong` rule) failed in 8 of 200 runs under load, and in none of 200 since.
+
+The connection is registered `Processing`, because `bitcoin_connection_opened` is raised for
+every connection and is answered first: what the peer sends meanwhile — its `version`, at once —
+queues behind that answer, and `handle_connection_opened` hands it over when it is done. The two
+used to run side by side with the connection `Idle`, so a `verack` answering the peer's
+`version` could reach the wire before the `version` the opened answer sent — and a node
+discards whatever a peer sends before its `version`, so that `verack` was lost and the
+handshake could not complete. `read_order_test.rs::bitcoin_messages_wait_behind_the_opened_answer`
+parks the opened answer on a `manual` rule and showed the reply overtaking it every time.
+
 ## Connection bounds
 
 Before September 2026 this server accepted without limit and bounded no read in time, so a peer
@@ -190,7 +214,7 @@ halves; the constants and the reasoning live beside them in `src/server/bitcoin/
 | Bound | Value | Why this number |
 |---|---|---|
 | `FIRST_BYTE_READ_TIMEOUT` | 60s | Bitcoin Core's own `DEFAULT_PEER_CONNECT_TIMEOUT`, after which it disconnects a peer that has not completed the version handshake. This bound is on the first *byte* rather than on the handshake, so it is strictly more permissive than Core's and cannot close a peer Core would keep. |
-| `IDLE_BETWEEN_MESSAGES_TIMEOUT` | 1800s (30 min) | Bitcoin has a keepalive and every node uses it: Core pings on a `PING_INTERVAL` of **2 minutes** and drops a peer silent for `TIMEOUT_INTERVAL`, **20 minutes**. Thirty sits above Core's own inactivity limit — a peer this server closes is one Core would already have dropped — and the margin is there because `handle_data_with_actions` answers on its own task, so a peer waiting on a model round-trip, or on a `manual` rule parked for a human, is silent on this socket for the whole of that work. |
+| `IDLE_BETWEEN_MESSAGES_TIMEOUT` | 1800s (30 min) | Bitcoin has a keepalive and every node uses it: Core pings on a `PING_INTERVAL` of **2 minutes** and drops a peer silent for `TIMEOUT_INTERVAL`, **20 minutes**. Thirty sits above Core's own inactivity limit — a peer this server closes is one Core would already have dropped — and the margin is there because `answer` runs on its own task, so a peer waiting on a model round-trip, or on a `manual` rule parked for a human, is silent on this socket for the whole of that work. |
 | `MAX_CONNECTIONS` | **125** | Bitcoin Core's `-maxconnections` default rather than this project's shared 256: a P2P node's connection count is part of how it behaves, and a Bitcoin server admitting twice what Core does would be conspicuous. It also bounds the total buffering — 125 × `MAX_MESSAGE_BYTES` is 500 MB rather than a gigabyte. Refusal: **nothing**. Bitcoin P2P has no "busy" message (`reject` was removed in Core 0.20 and never applied to a connection), every message this server could send is an assertion about a node that has not handshaked, and Core itself simply drops. The reason lives in the log under `decision=fail_closed_connection_cap`. |
 
 **NetGet's own Bitcoin client is *lazy*, so it is never the silent peer this bound closes:**

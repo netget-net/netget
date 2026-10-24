@@ -18,20 +18,20 @@ use crate::llm::ollama_client::OllamaClient;
 use crate::llm::ActionResult;
 use crate::logging::emit::Log;
 use crate::protocol::Event;
+use crate::server::read_queue::{Admitted, Held, ReadQueue};
 use crate::server::TcpProtocol;
 use crate::state::app_state::AppState;
 use actions::{TCP_CONNECTION_OPENED_EVENT, TCP_DATA_RECEIVED_EVENT};
 
-/// Most bytes that may pile up in one connection's `queued_data` while its LLM call is in
-/// flight.
+/// Most bytes that may pile up in one connection's read queue while its LLM call is in flight.
 ///
-/// An LLM call takes seconds, and every byte the peer sends during it is appended to
-/// `queued_data` with nothing to stop it: a peer that streams for the length of one call can
-/// push NetGet's memory as fast as its link allows, pre-authentication, on the protocol every
-/// other protocol copies. 8 MiB is far more than any request/response exchange this server is
-/// for, and reaching it means the peer is not waiting for answers at all — so the connection is
-/// closed rather than the queue trimmed, which would hand the model a truncated message it had
-/// no way to know was truncated.
+/// An LLM call takes seconds, and every byte the peer sends during it is queued with nothing
+/// else to stop it: a peer that streams for the length of one call can push NetGet's memory
+/// as fast as its link allows, pre-authentication, on the protocol every other protocol copies.
+/// 8 MiB is far more than any request/response exchange this server is for, and reaching it
+/// means the peer is not waiting for answers at all — so the connection is closed rather than
+/// the queue trimmed, which would hand the model a truncated message it had no way to know was
+/// truncated.
 pub const MAX_QUEUED_BYTES: usize = 8 * 1024 * 1024;
 
 /// How long to wait for the first byte from a peer that has only connected.
@@ -122,60 +122,14 @@ where
     }
 }
 
-/// Connection state for LLM processing
-#[derive(Debug, Clone, PartialEq)]
-enum ConnectionState {
-    Idle,
-    Processing,
-    Accumulating,
-}
-
 /// Per-connection data for LLM handling
 struct ConnectionData {
-    state: ConnectionState,
-    queued_data: Vec<u8>,
-    /// Where each read that was queued ended, oldest first, summing to `queued_data.len()`.
-    /// With batching off the next call answers one read rather than the whole queue.
-    queued_chunks: std::collections::VecDeque<usize>,
+    /// The Idle → Processing → Accumulating machine and the reads waiting behind the answer in
+    /// flight. Every decision on it is made under the connection map's lock; see
+    /// [`crate::server::read_queue`].
+    reads: ReadQueue,
     memory: String,
     write_half: Arc<Mutex<tokio::io::WriteHalf<TcpStream>>>,
-}
-
-impl ConnectionData {
-    /// Queue a read that arrived while the model was answering.
-    fn queue(&mut self, data: &[u8]) {
-        if !data.is_empty() {
-            self.queued_data.extend_from_slice(data);
-            self.queued_chunks.push_back(data.len());
-        }
-    }
-
-    /// What the next call answers: the whole queue when batching, else the oldest read.
-    ///
-    /// A byte stream has no message boundaries, so "batching" here is what TCP always did —
-    /// everything that arrived during a call is the next call's payload. With it off, each
-    /// read the socket delivered is answered on its own, in order.
-    fn take_next(&mut self, batching: bool) -> Vec<u8> {
-        if batching || self.queued_chunks.len() <= 1 {
-            self.queued_chunks.clear();
-            return std::mem::take(&mut self.queued_data);
-        }
-        let n = self
-            .queued_chunks
-            .pop_front()
-            .unwrap_or(self.queued_data.len())
-            .min(self.queued_data.len());
-        self.queued_data.drain(..n).collect()
-    }
-
-    /// Replace the queue with one payload that must stay whole — what `wait_for_more` holds.
-    fn hold_as_one(&mut self, data: Vec<u8>) {
-        self.queued_chunks.clear();
-        if !data.is_empty() {
-            self.queued_chunks.push_back(data.len());
-        }
-        self.queued_data = data;
-    }
 }
 
 /// TCP server that listens for incoming connections
@@ -284,13 +238,11 @@ impl TcpServer {
                         connections.lock().await.insert(
                             connection_id,
                             ConnectionData {
-                                state: if send_first {
-                                    ConnectionState::Processing
+                                reads: if send_first {
+                                    ReadQueue::answering()
                                 } else {
-                                    ConnectionState::Idle
+                                    ReadQueue::idle()
                                 },
-                                queued_data: Vec::new(),
-                                queued_chunks: Default::default(),
                                 memory: String::new(),
                                 write_half: write_half_arc.clone(),
                             },
@@ -830,13 +782,9 @@ impl TcpServer {
             let Some(conn) = conns.get_mut(&connection_id) else {
                 return;
             };
-            let queued = conn.take_next(batching);
-            if queued.is_empty() {
-                conn.state = ConnectionState::Idle;
-            }
-            queued
+            conn.reads.next_or_idle(batching)
         };
-        if !queued.is_empty() {
+        if let Some(queued) = queued {
             Self::answer(
                 connection_id,
                 server_id,
@@ -885,17 +833,11 @@ impl TcpServer {
                 );
                 return None;
             };
-            if conn.state != ConnectionState::Processing {
-                // Bytes held for `wait_for_more` are one message with whatever completes it,
-                // so they are always taken whole; otherwise batching decides.
-                let take_all = batching || conn.state == ConnectionState::Accumulating;
-                conn.state = ConnectionState::Processing;
-                conn.queue(data);
-                return Some(Bytes::from(conn.take_next(take_all)));
+            match conn.reads.admit(data, batching) {
+                Admitted::Start(payload) => return Some(Bytes::from(payload)),
+                // An answer is in flight: queued behind it — up to MAX_QUEUED_BYTES.
+                Admitted::Queued(queued_len) => (queued_len, conn.write_half.clone()),
             }
-            // An answer is in flight: queue behind it — up to MAX_QUEUED_BYTES.
-            conn.queue(data);
-            (conn.queued_data.len(), conn.write_half.clone())
         };
 
         let log = Log::new(Some(status_tx));
@@ -1101,22 +1043,19 @@ impl TcpServer {
                     // it into memory first. Now the accumulation the action's name promises
                     // actually happens.
                     if should_wait {
-                        let (queued_len, arrived_during_call, write_half_for_close) = {
+                        // If bytes arrived while the model was thinking, they *are* the "more"
+                        // it asked for. Parking them would wait for a read that may never come —
+                        // the peer has sent its whole message and is waiting for us — so
+                        // `hold_for_more` hands the joined payload straight back, still
+                        // `Processing`, in the same step that would otherwise have parked it.
+                        let (held, write_half_for_close) = {
                             let mut conns = connections.lock().await;
                             let Some(conn) = conns.get_mut(&connection_id) else {
                                 return;
                             };
-                            let arrived_during_call = !conn.queued_data.is_empty();
-                            let mut merged = all_data.to_vec();
-                            merged.append(&mut conn.queued_data);
-                            conn.hold_as_one(merged);
-                            conn.state = ConnectionState::Accumulating;
-                            (
-                                conn.queued_data.len(),
-                                arrived_during_call,
-                                conn.write_half.clone(),
-                            )
+                            (conn.reads.hold_for_more(&all_data), conn.write_half.clone())
                         };
+                        let queued_len = held.len();
 
                         // Same bound as the Processing queue: a model that answers
                         // `wait_for_more` to everything must not be a way to grow memory
@@ -1139,19 +1078,7 @@ impl TcpServer {
                             return;
                         }
 
-                        // If bytes arrived while the model was thinking, they *are* the "more"
-                        // it asked for. Returning here would park them until the next read,
-                        // which may never come — the peer has sent its whole message and is
-                        // waiting for us. Go round again with the joined payload instead.
-                        if arrived_during_call {
-                            let joined = {
-                                let mut conns = connections.lock().await;
-                                let Some(conn) = conns.get_mut(&connection_id) else {
-                                    return;
-                                };
-                                conn.state = ConnectionState::Processing;
-                                conn.take_next(true)
-                            };
+                        if let Held::Resume(joined) = held {
                             log.debug(format!(
                                 "wait_for_more on {connection_id}: {} bytes already waiting, \
                                  continuing",
@@ -1201,15 +1128,11 @@ impl TcpServer {
                         let Some(conn) = conns.get_mut(&connection_id) else {
                             return;
                         };
-                        let queued = conn.take_next(batching);
-                        if queued.is_empty() {
-                            conn.state = ConnectionState::Idle;
-                        }
-                        queued
+                        conn.reads.next_or_idle(batching)
                     };
-                    if queued.is_empty() {
+                    let Some(queued) = queued else {
                         return;
-                    }
+                    };
                     all_data = Bytes::from(queued);
                 }
                 Err(e) => {

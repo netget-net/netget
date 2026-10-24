@@ -47,12 +47,19 @@ later read's task could run first: `tests/server/tcp/read_order_test.rs` measure
 back out of order in 140 of 200 runs. It also left a read queued between "is the queue empty?"
 and "go `Idle`" stranded until the peer sent something else.
 
+The machine itself is `crate::server::read_queue::ReadQueue`, shared with `tls`, `socket_file`
+and `bitcoin`, which had copied the same per-read spawn and the same race. Each of its methods
+is one decision made while the caller holds the connection map's lock: `admit` (the reader),
+`next_or_idle` (the answering task, after each answer), `hold_for_more` (`wait_for_more`).
+`tests/server/tcp/read_queue_test.rs` pins each decision directly.
+
 ### 3. Data Queueing
 
 When data arrives while the LLM is processing:
 
-1. Data is queued in `ConnectionData.queued_data`
-2. After LLM response, queued data is merged and processed
+1. Data is queued in the connection's `ReadQueue` (`ConnectionData.reads`)
+2. After each answer, the next payload is taken — the oldest read with batching off, all of it
+   with batching on — or the connection goes `Idle` when there is none
 3. Loop continues until all queued data is processed
 
 `wait_for_more` puts the payload the model was just shown back at the **head** of that queue, so
@@ -61,7 +68,10 @@ fragment, which made the action's name a lie: a model asked to reassemble a mess
 reads could only do it by copying the first half into its memory. If bytes arrived *during* the
 call that returned `wait_for_more`, they are the "more" it asked for, so the loop goes round
 again immediately rather than parking them until a read that may never come — the peer has
-typically sent its whole message and is waiting on us.
+typically sent its whole message and is waiting on us. `hold_for_more` makes that choice in one
+step and leaves the connection `Processing` when it goes round again: parking the fragment and
+then resuming under a second lock let the reader find the connection `Accumulating` in between
+and start a second answer.
 
 The queue is bounded by `MAX_QUEUED_BYTES` (8 MiB, `src/server/tcp/mod.rs`). Both paths that
 grow it check the bound and close the connection (`decision=queue_overflow`, FIN) rather than
@@ -208,8 +218,7 @@ reporting `Running`.
 
 ```rust
 struct ConnectionData {
-    state: ConnectionState,           // Idle/Processing/Accumulating
-    queued_data: Vec<u8>,              // Data queued while processing
+    reads: ReadQueue,                  // Idle/Processing/Accumulating + queued reads
     memory: String,                    // Per-connection memory (unused currently)
     write_half: Arc<Mutex<WriteHalf>>, // For sending responses
 }

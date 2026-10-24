@@ -1,7 +1,7 @@
 //! Batching on the TLS server: what arrives while the model is answering.
 //!
 //! The decrypted stream has no message boundaries, so the server's queue keeps each read that
-//! arrived during a call and `ConnectionData::take_next` decides what the next call answers —
+//! arrived during a call and `ReadQueue::next_or_idle` decides what the next call answers —
 //! the whole queue with batching on, one read at a time with it off. The same shape as `tcp`'s
 //! `tests/connection_history_test.rs::tcp_batching_joins_or_separates_what_arrived_during_a_call`.
 //!

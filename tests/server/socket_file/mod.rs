@@ -6,4 +6,5 @@
 pub mod batching_test;
 pub mod connection_bounds_test;
 pub mod queue_limit_test;
+pub mod read_order_test;
 pub mod test;

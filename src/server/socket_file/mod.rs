@@ -22,6 +22,7 @@ use crate::llm::ollama_client::OllamaClient;
 use crate::llm::ActionResult;
 use crate::logging::emit::Log;
 use crate::protocol::Event;
+use crate::server::read_queue::{Admitted, Held, ReadQueue};
 use crate::server::SocketFileProtocol;
 use crate::state::app_state::AppState;
 use actions::{SOCKET_FILE_CONNECTION_OPENED_EVENT, SOCKET_FILE_DATA_RECEIVED_EVENT};
@@ -107,59 +108,15 @@ where
     }
 }
 
-/// Connection state for LLM processing
-#[derive(Debug, Clone, PartialEq)]
-enum ConnectionState {
-    Idle,
-    Processing,
-    Accumulating,
-}
-
 /// Per-connection data for LLM handling
 struct ConnectionData {
-    state: ConnectionState,
-    queued_data: Vec<u8>,
-    /// Where each read that was queued ended, oldest first, summing to `queued_data.len()`.
-    /// With batching off the next call answers one read rather than the whole queue.
-    queued_chunks: std::collections::VecDeque<usize>,
+    /// The Idle → Processing → Accumulating machine and the reads waiting behind the answer in
+    /// flight. Every decision on it is made under the connection map's lock; see
+    /// [`crate::server::read_queue`]. A byte stream has no message boundaries, so with batching
+    /// on everything that arrived during a call is the next call's payload; off, each read is
+    /// answered on its own, in order — the `tcp` shape.
+    reads: ReadQueue,
     write_half: Arc<Mutex<tokio::io::WriteHalf<UnixStream>>>,
-}
-
-impl ConnectionData {
-    /// Queue a read that arrived while the model was answering.
-    fn queue(&mut self, data: &[u8]) {
-        if !data.is_empty() {
-            self.queued_data.extend_from_slice(data);
-            self.queued_chunks.push_back(data.len());
-        }
-    }
-
-    /// Replace the queue with one payload that must stay whole — what `wait_for_more` holds.
-    fn hold_as_one(&mut self, data: Vec<u8>) {
-        self.queued_chunks.clear();
-        if !data.is_empty() {
-            self.queued_chunks.push_back(data.len());
-        }
-        self.queued_data = data;
-    }
-
-    /// What the next call answers: the whole queue when batching, else the oldest read.
-    ///
-    /// A byte stream has no message boundaries, so batching is what this server always did —
-    /// everything that arrived during a call is the next call's payload. With it off, each
-    /// read the socket delivered is answered on its own, in order. The same shape as `tcp`.
-    fn take_next(&mut self, batching: bool) -> Vec<u8> {
-        if batching || self.queued_chunks.len() <= 1 {
-            self.queued_chunks.clear();
-            return std::mem::take(&mut self.queued_data);
-        }
-        let n = self
-            .queued_chunks
-            .pop_front()
-            .unwrap_or(self.queued_data.len())
-            .min(self.queued_data.len());
-        self.queued_data.drain(..n).collect()
-    }
 }
 
 /// Describe a file type for the "refusing to unlink" error message.
@@ -345,17 +302,24 @@ impl SocketFileServer {
                         // Register the connection HERE, before either task is spawned.
                         //
                         // This used to be the first thing the banner task did, racing the
-                        // reader task: handle_data_with_actions returns silently when the
-                        // connection is not in the map, so a client that wrote immediately
+                        // reader task: a read is dropped when the connection is not in the
+                        // map, so a client that wrote immediately
                         // after connecting (`printf ping | nc -U ...`) had its first payload
                         // dropped with no response and no log line. Inserting synchronously
                         // in the accept loop closes the window.
+                        //
+                        // A `send_first` server registers it `Processing`: the banner is being
+                        // composed, and anything the peer sends meanwhile queues behind it
+                        // rather than being answered first. The banner task hands the queue
+                        // over when the banner is out. Without `send_first` it starts `Idle`.
                         connections.lock().await.insert(
                             connection_id,
                             ConnectionData {
-                                state: ConnectionState::Idle,
-                                queued_data: Vec::new(),
-                                queued_chunks: Default::default(),
+                                reads: if send_first {
+                                    ReadQueue::answering()
+                                } else {
+                                    ReadQueue::idle()
+                                },
                                 write_half: write_half_arc.clone(),
                             },
                         );
@@ -465,20 +429,6 @@ impl SocketFileServer {
                                             activity_clone.touch();
                                             let data = Bytes::copy_from_slice(&buffer[..n]);
 
-                                            // Feeds the dashboard rail's counters and refreshes
-                                            // `last_activity`; this protocol never called it, so a
-                                            // live connection read 0B/0B in the tree forever.
-                                            app_state_clone
-                                                .update_connection_stats(
-                                                    server_id,
-                                                    connection_id,
-                                                    Some(n as u64),
-                                                    None,
-                                                    Some(1),
-                                                    None,
-                                                )
-                                                .await;
-
                                             // Data summary + full payload are FileOnly: the
                                             // socket_file_data_received event template renders the
                                             // equivalent lines to the TUI, so streaming the payload
@@ -510,7 +460,53 @@ impl SocketFileServer {
                                                 ));
                                             }
 
-                                            // Handle data in separate task
+                                            // Into the connection's state machine here, in the
+                                            // order the reads arrived: either it starts an
+                                            // answer, or it waits behind the one in flight.
+                                            // Deciding that in a task spawned per read let two
+                                            // tasks race for it — a later read could start its
+                                            // answer first, or two reads could both find the
+                                            // connection Idle and be answered at once — and
+                                            // either way replies went out in the wrong order.
+                                            let batching = app_state_clone
+                                                .server_conversation_settings(server_id)
+                                                .await
+                                                .is_some_and(|(_, batching)| batching);
+                                            let start = Self::admit_read(
+                                                connection_id,
+                                                server_id,
+                                                &data,
+                                                batching,
+                                                &app_state_clone,
+                                                &status_tx_clone,
+                                                &connections_clone,
+                                            )
+                                            .await;
+
+                                            // Feeds the dashboard rail's counters and refreshes
+                                            // `last_activity`; this protocol never called it, so a
+                                            // live connection read 0B/0B in the tree forever.
+                                            // Counted once the read is in the state machine, so a
+                                            // count that includes it means it is queued or being
+                                            // answered.
+                                            app_state_clone
+                                                .update_connection_stats(
+                                                    server_id,
+                                                    connection_id,
+                                                    Some(n as u64),
+                                                    None,
+                                                    Some(1),
+                                                    None,
+                                                )
+                                                .await;
+
+                                            let Some(payload) = start else {
+                                                continue;
+                                            };
+
+                                            // The answer runs in its own task so the loop can
+                                            // go back to reading: what arrives meanwhile is
+                                            // queued behind it by `admit_read`.
                                             let llm_clone = llm_client_clone.clone();
                                             let state_clone = app_state_clone.clone();
                                             let status_clone = status_tx_clone.clone();
@@ -526,10 +522,11 @@ impl SocketFileServer {
                                             task_owner
                                                 .spawn_server_task(server_id, async move {
                                                     let _busy = busy;
-                                                    Self::handle_data_with_actions(
+                                                    Self::answer(
                                                         connection_id,
                                                         server_id,
-                                                        data,
+                                                        payload,
+                                                        batching,
                                                         llm_clone,
                                                         state_clone,
                                                         status_clone,
@@ -569,9 +566,11 @@ impl SocketFileServer {
         Ok(socket_path)
     }
 
-    /// Send the greeting banner for a new connection (`send_first` servers only).
+    /// Send the greeting banner for a new connection (`send_first` servers only), then answer
+    /// whatever the peer sent while it was being composed.
     ///
-    /// The connection is already registered by the accept loop by the time this runs.
+    /// The connection is already registered by the accept loop by the time this runs, in
+    /// `Processing`, so reads queue behind the banner rather than being answered ahead of it.
     #[allow(clippy::too_many_arguments)]
     async fn send_banner(
         connection_id: ConnectionId,
@@ -712,6 +711,38 @@ impl SocketFileServer {
                 }
             }
         }
+
+        // Hand over whatever the peer sent while the banner was being composed. The connection
+        // was registered `Processing` for exactly this: those reads queued behind the banner
+        // instead of starting an answer that could reach the peer ahead of it. Taken and left
+        // `Processing` under one lock, or the reader could find the connection `Idle` in
+        // between and start an answer for a later read ahead of these. A connection the banner
+        // closed is gone from the map, and nothing is answered.
+        let batching = app_state
+            .server_conversation_settings(server_id)
+            .await
+            .is_some_and(|(_, batching)| batching);
+        let queued = {
+            let mut conns = connections.lock().await;
+            let Some(conn) = conns.get_mut(&connection_id) else {
+                return;
+            };
+            conn.reads.next_or_idle(batching)
+        };
+        if let Some(queued) = queued {
+            Self::answer(
+                connection_id,
+                server_id,
+                Bytes::from(queued),
+                batching,
+                llm_client,
+                app_state,
+                status_tx,
+                connections,
+                protocol,
+            )
+            .await;
+        }
     }
 
     /// Close a connection whose queue passed [`MAX_QUEUED_BYTES`]: shut the write half so the
@@ -742,11 +773,78 @@ impl SocketFileServer {
         let _ = status_tx.send("__UPDATE_UI__".to_string());
     }
 
-    /// Handle data received on a connection with LLM actions
-    async fn handle_data_with_actions(
+    /// Take one read into the connection's state machine, in the order the reader got it.
+    ///
+    /// Returns the payload of the answer this read starts, or `None` when it waits behind the
+    /// answer already in flight (or the connection has gone, or was closed for queueing too
+    /// much). Called by the reader itself, never from a spawned task: the decision has to be
+    /// made in arrival order and under one lock. When each read's task made it, two reads could
+    /// both find the connection `Idle` and be answered concurrently, and a later read's task
+    /// could run first — its reply then went out ahead of the earlier one's.
+    async fn admit_read(
         connection_id: ConnectionId,
         server_id: crate::state::ServerId,
-        data: Bytes,
+        data: &[u8],
+        batching: bool,
+        app_state: &Arc<AppState>,
+        status_tx: &mpsc::UnboundedSender<String>,
+        connections: &Arc<Mutex<HashMap<ConnectionId, ConnectionData>>>,
+    ) -> Option<Bytes> {
+        let (queued_len, write_half) = {
+            let mut conns = connections.lock().await;
+            let Some(conn) = conns.get_mut(&connection_id) else {
+                // Never silent. A miss here means the connection was torn down after the read
+                // (peer reset, or close_this_connection on the answering task) - legitimate,
+                // but indistinguishable from a registration race, which is exactly what made
+                // the bitcoin accept-order bug so hard to find: the read loop logged "received
+                // N bytes" and then nothing at all.
+                debug!(
+                    "socket-file connection {} is no longer registered; dropping {} received bytes",
+                    connection_id,
+                    data.len()
+                );
+                return None;
+            };
+            match conn.reads.admit(data, batching) {
+                Admitted::Start(payload) => return Some(Bytes::from(payload)),
+                // An answer is in flight: queued behind it — up to MAX_QUEUED_BYTES.
+                Admitted::Queued(queued_len) => (queued_len, conn.write_half.clone()),
+            }
+        };
+        if queued_len > MAX_QUEUED_BYTES {
+            Self::close_for_queue_overflow(
+                connection_id,
+                server_id,
+                queued_len,
+                "while awaiting a response",
+                &write_half,
+                connections,
+                app_state,
+                status_tx,
+            )
+            .await;
+            return None;
+        }
+        Log::new(Some(status_tx)).debug(format!(
+            "Queued {} bytes for socket file connection {} ({} queued)",
+            data.len(),
+            connection_id,
+            queued_len
+        ));
+        None
+    }
+
+    /// Answer `payload` on a connection [`Self::admit_read`] has moved to `Processing`, then
+    /// everything queued behind it, oldest first, until the queue is empty.
+    ///
+    /// One of these runs per connection at a time: only the move into `Processing` starts one,
+    /// and it leaves `Processing` only when it ends.
+    #[allow(clippy::too_many_arguments)]
+    async fn answer(
+        connection_id: ConnectionId,
+        server_id: crate::state::ServerId,
+        payload: Bytes,
+        batching: bool,
         llm_client: OllamaClient,
         app_state: Arc<AppState>,
         status_tx: mpsc::UnboundedSender<String>,
@@ -754,89 +852,7 @@ impl SocketFileServer {
         protocol: Arc<SocketFileProtocol>,
     ) {
         let log = Log::new(Some(&status_tx));
-        // Read per event: batching is hot-changeable.
-        let batching = app_state
-            .server_conversation_settings(server_id)
-            .await
-            .is_some_and(|(_, batching)| batching);
-
-        // Check connection state
-        let current_state = {
-            let conns = connections.lock().await;
-            if let Some(conn_data) = conns.get(&connection_id) {
-                conn_data.state.clone()
-            } else {
-                // Never silent. A miss here means the connection was torn down between the
-                // read and this lookup (peer reset, or close_this_connection on another
-                // task) - legitimate, but indistinguishable from a registration race, which
-                // is exactly what made the bitcoin accept-order bug so hard to find: the
-                // read loop logged "received N bytes" and then nothing at all.
-                debug!(
-                    "socket-file connection {} is no longer registered; dropping {} received bytes",
-                    connection_id,
-                    data.len()
-                );
-                return;
-            }
-        };
-
-        // If processing, queue the data — up to MAX_QUEUED_BYTES.
-        if current_state == ConnectionState::Processing {
-            let (queued_len, write_half) = {
-                let mut conns = connections.lock().await;
-                let Some(conn) = conns.get_mut(&connection_id) else {
-                    return; // Connection closed while we were waiting for the lock
-                };
-                conn.queue(&data);
-                (conn.queued_data.len(), conn.write_half.clone())
-            };
-            if queued_len > MAX_QUEUED_BYTES {
-                Self::close_for_queue_overflow(
-                    connection_id,
-                    server_id,
-                    queued_len,
-                    "while awaiting a response",
-                    &write_half,
-                    &connections,
-                    &app_state,
-                    &status_tx,
-                )
-                .await;
-                return;
-            }
-            log.debug(format!(
-                "Queued {} bytes for socket file connection {} ({} queued)",
-                data.len(),
-                connection_id,
-                queued_len
-            ));
-            return;
-        }
-
-        // Merge any queued data with new data.
-        //
-        // Not `unwrap()`: the map lock was released after the state read above, so the
-        // connection can legitimately be gone by now - the peer reset, or another task ran
-        // `close_this_connection`. `unwrap()` panicked inside a `tokio::spawn`, which swallows
-        // the panic: the bytes vanished, the log said nothing, and the server stayed Running.
-        let mut all_data = {
-            let mut conns = connections.lock().await;
-            let Some(conn_data) = conns.get_mut(&connection_id) else {
-                debug!(
-                    "socket-file connection {} went away before its {} received bytes could be \
-                     processed",
-                    connection_id,
-                    data.len()
-                );
-                return;
-            };
-            // Bytes held for `wait_for_more` are one message with whatever completes it, so
-            // they are always taken whole; otherwise batching decides.
-            let take_all = batching || current_state == ConnectionState::Accumulating;
-            conn_data.state = ConnectionState::Processing;
-            conn_data.queue(&data);
-            Bytes::from(conn_data.take_next(take_all))
-        };
+        let mut all_data = payload;
 
         loop {
             // Get write_half for context
@@ -974,18 +990,18 @@ impl SocketFileServer {
                     // `wait_for_more` means "these bytes are an incomplete message", so they
                     // must be shown again with whatever completes them. The same as `tcp`.
                     if should_wait {
-                        let (queued_len, arrived_during_call) = {
+                        // Bytes that arrived while the model was thinking *are* the "more" it
+                        // asked for, and parking them would wait for a read that may never come.
+                        // So `hold_for_more` hands the joined payload straight back, still
+                        // `Processing`, in the same step that would otherwise have parked it.
+                        let held = {
                             let mut conns = connections.lock().await;
                             let Some(conn) = conns.get_mut(&connection_id) else {
                                 return;
                             };
-                            let arrived_during_call = !conn.queued_data.is_empty();
-                            let mut merged = all_data.to_vec();
-                            merged.append(&mut conn.queued_data);
-                            conn.hold_as_one(merged);
-                            conn.state = ConnectionState::Accumulating;
-                            (conn.queued_data.len(), arrived_during_call)
+                            conn.reads.hold_for_more(&all_data)
                         };
+                        let queued_len = held.len();
 
                         // Same bound as the Processing queue: a model that answers
                         // `wait_for_more` to everything must not be a way to grow memory
@@ -1005,18 +1021,7 @@ impl SocketFileServer {
                             return;
                         }
 
-                        // Bytes that arrived while the model was thinking *are* the "more" it
-                        // asked for; go round again with the joined payload rather than park
-                        // them until a read that may never come.
-                        if arrived_during_call {
-                            let joined = {
-                                let mut conns = connections.lock().await;
-                                let Some(conn) = conns.get_mut(&connection_id) else {
-                                    return;
-                                };
-                                conn.state = ConnectionState::Processing;
-                                conn.take_next(true)
-                            };
+                        if let Held::Resume(joined) = held {
                             log.debug(format!(
                                 "wait_for_more on socket file connection {connection_id}: {} \
                                  bytes already waiting, continuing",
@@ -1054,45 +1059,25 @@ impl SocketFileServer {
                         ));
                     }
 
-                    // Check for queued data
-                    let has_queued = {
-                        let conns = connections.lock().await;
-                        conns
-                            .get(&connection_id)
-                            .map(|c| !c.queued_data.is_empty())
-                            .unwrap_or(false)
-                    };
-
-                    if has_queued {
-                        // Take the queue and make it the next iteration's payload.
-                        // Leaving it in place re-sent the SAME bytes to the model on
-                        // every pass and never emptied the queue: one response per
-                        // iteration, forever, for a single line of input.
-                        let queued = {
-                            let mut conns = connections.lock().await;
-                            match conns.get_mut(&connection_id) {
-                                Some(conn) => conn.take_next(batching),
-                                None => return,
-                            }
-                        };
-                        if queued.is_empty() {
-                            connections
-                                .lock()
-                                .await
-                                .entry(connection_id)
-                                .and_modify(|conn| conn.state = ConnectionState::Idle);
+                    // Take the queue's next payload, or go Idle when it is empty — under one
+                    // lock. Checked and set separately, a read queued in between (the
+                    // connection still `Processing`) was stranded by the move to `Idle` until
+                    // the peer happened to send something else.
+                    //
+                    // Taken, not peeked: leaving it in place re-sent the SAME bytes to the
+                    // model on every pass and never emptied the queue — one response per
+                    // iteration, forever, for a single line of input.
+                    let queued = {
+                        let mut conns = connections.lock().await;
+                        let Some(conn) = conns.get_mut(&connection_id) else {
                             return;
-                        }
-                        all_data = Bytes::from(queued);
-                    } else {
-                        // Go to Idle state
-                        connections
-                            .lock()
-                            .await
-                            .entry(connection_id)
-                            .and_modify(|conn| conn.state = ConnectionState::Idle);
+                        };
+                        conn.reads.next_or_idle(batching)
+                    };
+                    let Some(queued) = queued else {
                         return;
-                    }
+                    };
+                    all_data = Bytes::from(queued);
                 }
                 Err(e) => {
                     let failure = crate::utils::WireFailure::classify(&e);
