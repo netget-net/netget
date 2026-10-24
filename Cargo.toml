@@ -647,6 +647,16 @@ lto = "thin"
 # hostile by design.
 overflow-checks = true
 
+# RSA key generation, optimised even in debug and test builds. ActivityPub makes a 2048-bit key
+# every time it starts, and unoptimised big-integer arithmetic took 1.4 s for it on an idle
+# M-series Mac and past 15 s under load, which `protocol_startup_smoke_test` reports as a hang.
+# Only these two crates are affected; NetGet's own code keeps its debug settings.
+[profile.dev.package.num-bigint-dig]
+opt-level = 3
+
+[profile.dev.package.rsa]
+opt-level = 3
+
 # The browser bundle (crates/netget-web, ./web/build.sh): size over speed. With 68 protocols
 # compiled in, the .wasm is what the visitor downloads, and it is not CPU-bound.
 [profile.web]

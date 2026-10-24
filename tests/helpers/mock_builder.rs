@@ -303,6 +303,7 @@ pub struct MockResponseBuilder {
     min_calls: Option<usize>,
     max_calls: Option<usize>,
     delay: Option<std::time::Duration>,
+    gate: Option<super::mock_config::MockGate>,
 }
 
 impl MockResponseBuilder {
@@ -314,6 +315,7 @@ impl MockResponseBuilder {
             min_calls: None,
             max_calls: None,
             delay: None,
+            gate: None,
         }
     }
 
@@ -323,6 +325,16 @@ impl MockResponseBuilder {
     /// of giving up in the microseconds a mock usually takes.
     pub fn after_delay(mut self, delay: std::time::Duration) -> Self {
         self.delay = Some(delay);
+        self
+    }
+
+    /// Answer only once `gate` is released. The call is recorded before it waits, so the test
+    /// can see the model is mid-answer, act, and then let the answer go.
+    ///
+    /// Use this rather than [`Self::after_delay`] when the test's premise is that something
+    /// happened *during* the call: a delay only makes that likely.
+    pub fn held_until(mut self, gate: &super::mock_config::MockGate) -> Self {
+        self.gate = Some(gate.clone());
         self
     }
 
@@ -366,6 +378,7 @@ impl MockResponseBuilder {
         rule.min_calls = self.min_calls;
         rule.max_calls = self.max_calls;
         rule.delay = self.delay;
+        rule.gate = self.gate;
 
         // Add to parent
         let mut parent = self.rule_builder.parent;

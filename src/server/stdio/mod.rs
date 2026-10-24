@@ -24,7 +24,7 @@ use anyhow::Result;
 use std::io::IsTerminal;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 use tracing::{debug, info};
 
@@ -70,6 +70,63 @@ enum StdinInput {
     Data(Vec<u8>),
     /// Upstream closed the pipe.
     Closed,
+    /// The read failed; the reader has stopped.
+    Failed(String),
+}
+
+/// The receiving end of the process's one stdin reader, once something has started it.
+///
+/// A read of stdin blocks and cannot be cancelled. On tokio's blocking pool (which is where
+/// `tokio::io::stdin()` reads) that is fatal at exit: dropping a runtime waits for every
+/// blocking-pool thread, so once a stdio server had been started on a stdin that stays open
+/// with nothing written — a supervisor's pipe, a CI step's, a test harness's — the process
+/// could no longer end. Stopping the server aborted the task and left its read outstanding;
+/// `tests/protocol_startup_smoke_test.rs` finished its sweep and then never returned.
+///
+/// So stdin is read on a plain OS thread that nothing waits for, and there is one for the
+/// process, started by the first stdio server and kept: a second reader would race the first
+/// for every chunk. A server holds the receiver while it runs and leaves it, and anything
+/// already read, to the next.
+type StdinFeed = Arc<tokio::sync::Mutex<mpsc::Receiver<StdinInput>>>;
+
+static STDIN_FEED: std::sync::Mutex<Option<StdinFeed>> = std::sync::Mutex::new(None);
+
+/// The process's stdin reader, started on first use.
+fn stdin_feed() -> Result<StdinFeed> {
+    let mut slot = STDIN_FEED
+        .lock()
+        .map_err(|_| anyhow::anyhow!("the stdin reader's state was poisoned"))?;
+    if let Some(feed) = slot.as_ref() {
+        return Ok(Arc::clone(feed));
+    }
+    // The bounded channel is the backpressure: once it holds `READ_QUEUE_CHUNKS` chunks the
+    // reader stops reading and the pipe holds the upstream writer back, which is what a slow
+    // filter does to the program feeding it.
+    let (input_tx, input_rx) = mpsc::channel::<StdinInput>(READ_QUEUE_CHUNKS);
+    std::thread::Builder::new()
+        .name("netget-stdin".to_string())
+        .spawn(move || {
+            use std::io::Read;
+            let mut stdin = std::io::stdin();
+            let mut buffer = vec![0u8; 8192];
+            loop {
+                let input = match stdin.read(&mut buffer) {
+                    Ok(0) => StdinInput::Closed,
+                    Ok(n) => StdinInput::Data(buffer[..n].to_vec()),
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(e) => StdinInput::Failed(e.to_string()),
+                };
+                let last = !matches!(input, StdinInput::Data(_));
+                // Fails only once the receiver is gone, which is never while the static holds it.
+                if input_tx.blocking_send(input).is_err() || last {
+                    break;
+                }
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not start the stdin reader thread: {e}"))?;
+    let feed: StdinFeed = Arc::new(tokio::sync::Mutex::new(input_rx));
+    *slot = Some(Arc::clone(&feed));
+    Ok(feed)
 }
 
 /// Register this server's session as the one connection it has, so the core keeps the
@@ -165,35 +222,15 @@ impl StdioServer {
 
         // The reader runs on its own so that input arriving while the model is answering is
         // read as it arrives — each read keeping its own boundary — rather than piling up in the
-        // pipe until the call returns. The bounded channel is the backpressure: once it holds
-        // `READ_QUEUE_CHUNKS` chunks the reader stops reading and the pipe holds the upstream
-        // writer back, which is what a slow filter does to the program feeding it.
-        let (input_tx, mut input_rx) = mpsc::channel::<StdinInput>(READ_QUEUE_CHUNKS);
-        let reader_status = status_tx.clone();
-        let reader = app_state
-            .spawn_server_task(server_id, async move {
-                let mut stdin = tokio::io::stdin();
-                let mut buffer = vec![0u8; 8192];
-                loop {
-                    let input = match stdin.read(&mut buffer).await {
-                        Ok(0) => StdinInput::Closed,
-                        Ok(n) => StdinInput::Data(buffer[..n].to_vec()),
-                        Err(e) => {
-                            Log::new(Some(&reader_status))
-                                .error(format!("stdio stdin read error: {}", e));
-                            break;
-                        }
-                    };
-                    let closed = matches!(input, StdinInput::Closed);
-                    if input_tx.send(input).await.is_err() || closed {
-                        break;
-                    }
-                }
-            })
-            .await;
+        // pipe until the call returns. It is a thread of its own, shared by every stdio server
+        // this process runs; see `STDIN_FEED`.
+        let feed = stdin_feed()?;
 
         let handle = tokio::spawn(async move {
             let _claim = claim; // released on return/abort
+                                // Held for the life of this server. A server that was stopped a moment ago may not
+                                // have dropped it yet; the claim already ensures it is the only one waiting.
+            let mut input_rx = feed.lock_owned().await;
 
             if send_first {
                 let event = Event::new(&STDIO_STARTED_EVENT, serde_json::json!({}));
@@ -217,7 +254,12 @@ impl StdioServer {
                         input_closed = true;
                         break;
                     }
-                    // The reader failed and has said so; there is no EOF to report.
+                    // The read failed: there is no EOF to report.
+                    Some(StdinInput::Failed(e)) => {
+                        Log::new(Some(&status_tx)).error(format!("stdio stdin read error: {e}"));
+                        break;
+                    }
+                    // The reader ended under an earlier stdio server, which was told why.
                     None => break,
                 };
 
@@ -234,6 +276,11 @@ impl StdioServer {
                         Ok(StdinInput::Closed) => {
                             // Answer what was read first; the EOF is its own event after it.
                             input_closed = true;
+                            break;
+                        }
+                        Ok(StdinInput::Failed(e)) => {
+                            Log::new(Some(&status_tx))
+                                .error(format!("stdio stdin read error: {e}"));
                             break;
                         }
                         Err(_) => break,
@@ -307,7 +354,6 @@ impl StdioServer {
                 )
                 .await;
             }
-            reader.abort();
             // The session is over — EOF, a read error or close_stdio — and its history goes
             // with it. (On stop_server the whole server, history included, is removed instead.)
             app_state
