@@ -1,5 +1,6 @@
 // Shared E2E test helpers for NetGet
 
+pub mod arrival;
 pub mod child_guard;
 pub mod client;
 pub mod common;

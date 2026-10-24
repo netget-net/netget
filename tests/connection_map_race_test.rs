@@ -168,8 +168,8 @@ async fn tcp_payload_written_before_accept_is_answered() {
 
 /// A client that writes and immediately closes must not panic a server task.
 ///
-/// `handle_data_with_actions` re-acquires the connection lock after its state check; the reader
-/// task removes the connection on EOF in between, and the merge step used to `unwrap()` the
+/// The reader task removes the connection on EOF while the read before it may still be being
+/// answered, and a merge step that re-acquired the connection lock used to `unwrap()` the
 /// resulting `None`. A panicked socket task is silent — the server keeps reporting `Running`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcp_write_then_immediate_close_does_not_panic_a_task() {

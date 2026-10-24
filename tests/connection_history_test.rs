@@ -20,6 +20,7 @@ mod helpers;
 
 use std::time::Duration;
 
+use helpers::arrival::{wait_until_acknowledged, wait_until_server_received};
 use helpers::mock_builder::MockLlmBuilder;
 use helpers::mock_config::MockGate;
 use helpers::mock_ollama::MockOllamaServer;
@@ -40,63 +41,6 @@ async fn wait_for_port(state: &AppState, id: ServerId) -> u16 {
         tokio::time::sleep(Duration::from_millis(30)).await;
     }
     panic!("server #{} never bound a port", id.as_u32());
-}
-
-/// Wait until the peer has acknowledged every byte written on `stream`.
-///
-/// TCP acknowledges bytes once they are in the receiving socket's buffer, so after this the
-/// server can read them without waiting for anything. A completed write does not promise that:
-/// macOS hands loopback traffic to an input thread, and under load a line written a moment ago
-/// can still be on its way when the server looks — which a test of "what had arrived" would
-/// then misread as the server failing to take it.
-///
-/// Where the platform cannot say (neither Linux nor macOS), this returns at once.
-async fn wait_until_acknowledged(stream: &tokio::net::tcp::OwnedWriteHalf) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    loop {
-        match unacknowledged_bytes(stream) {
-            None | Some(0) => return,
-            Some(n) => assert!(
-                tokio::time::Instant::now() < deadline,
-                "{n} written bytes were never acknowledged by the server"
-            ),
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-}
-
-/// Bytes written on `stream` that the peer has not acknowledged yet, where the OS will say.
-#[cfg(any(target_os = "linux", target_vendor = "apple"))]
-fn unacknowledged_bytes(stream: &tokio::net::tcp::OwnedWriteHalf) -> Option<usize> {
-    use std::os::fd::AsRawFd;
-    let fd = stream.as_ref().as_raw_fd();
-    let mut n: libc::c_int = 0;
-    // Linux: TIOCOUTQ (SIOCOUTQ) on a TCP socket is everything not yet acknowledged, sent or not.
-    #[cfg(target_os = "linux")]
-    // SAFETY: `fd` is a live socket owned by `stream`; `n` is a valid `c_int` to write into.
-    let rc = unsafe { libc::ioctl(fd, libc::TIOCOUTQ, &mut n) };
-    // macOS: SO_NWRITE is the send buffer's byte count, and TCP keeps data there until it is
-    // acknowledged.
-    #[cfg(target_vendor = "apple")]
-    let rc = {
-        let mut len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
-        // SAFETY: as above; `len` holds the size of `n`.
-        unsafe {
-            libc::getsockopt(
-                fd,
-                libc::SOL_SOCKET,
-                libc::SO_NWRITE,
-                (&mut n as *mut libc::c_int).cast(),
-                &mut len,
-            )
-        }
-    };
-    (rc == 0).then_some(n.max(0) as usize)
-}
-
-#[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
-fn unacknowledged_bytes(_stream: &tokio::net::tcp::OwnedWriteHalf) -> Option<usize> {
-    None
 }
 
 /// Read lines until one contains `needle`, or fail after the deadline.
@@ -579,7 +523,7 @@ async fn prompts_for_three_lines(batching: bool, second: &str) -> Vec<(String, s
         .expect("write");
     write_half.write_all(b"third\r\n").await.expect("write");
     write_half.flush().await.expect("flush");
-    wait_until_acknowledged(&write_half).await;
+    wait_until_acknowledged(write_half.as_ref()).await;
     first_answer.release();
     read_until(&mut reader, "got third").await;
 
@@ -689,7 +633,12 @@ async fn a_line_still_in_the_kernel_buffer_joins_the_batch() {
 
 /// TCP: `first`, then two separate writes while the model answers it. Returns the `data` of
 /// every `tcp_data_received` the model was asked about.
+///
+/// As for telnet, the answer to `first` is held on a gate rather than delayed. The two later
+/// writes are two reads by construction: the server counts a read received once it has queued
+/// it behind the call in flight, so `third` is written only after the count includes `second`.
 async fn tcp_payloads_for_three_writes(batching: bool) -> Vec<String> {
+    let first_answer = MockGate::new();
     let mock = MockOllamaServer::start(
         MockLlmBuilder::new()
             .on_event("tcp_data_received")
@@ -697,7 +646,7 @@ async fn tcp_payloads_for_three_writes(batching: bool) -> Vec<String> {
             .respond_with_actions(serde_json::json!([
                 { "type": "send_tcp_data", "data": "ok first\n", "encoding": "utf8" }
             ]))
-            .after_delay(Duration::from_millis(1500))
+            .held_until(&first_answer)
             .expect_calls(1)
             .and()
             .on_event("tcp_data_received")
@@ -735,18 +684,30 @@ async fn tcp_payloads_for_three_writes(batching: bool) -> Vec<String> {
     let mut reader = BufReader::new(read_half);
 
     write_half.write_all(b"first").await.expect("write");
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while mock.call_count().await == 0 {
+    // The call for `first` itself. (Without `send_first` TCP raises no connect event, so it is
+    // also the first call; waiting for it by its data does not depend on that.)
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while !mock.recorded_calls().await.iter().any(|c| {
+        c.context.event_type.as_deref() == Some("tcp_data_received")
+            && c.context.event_data["data"] == "first"
+    }) {
         assert!(
             tokio::time::Instant::now() < deadline,
             "first never reached the model"
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    // Two reads the server sees separately, both during the slow first call.
+    // Two reads the server takes separately, both queued before the first answer exists.
     write_half.write_all(b"second").await.expect("write");
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    wait_until_server_received(&state, id, ("first".len() + "second".len()) as u64).await;
     write_half.write_all(b"third").await.expect("write");
+    wait_until_server_received(
+        &state,
+        id,
+        ("first".len() + "second".len() + "third".len()) as u64,
+    )
+    .await;
+    first_answer.release();
     read_until(&mut reader, "third").await;
 
     let payloads = mock

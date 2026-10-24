@@ -37,7 +37,15 @@ Each connection has three states:
 - **Processing**: LLM is generating a response
 - **Accumulating**: LLM requested `wait_for_more` to accumulate additional data
 
-This prevents concurrent LLM calls for the same connection and ensures ordered processing.
+This prevents concurrent LLM calls for the same connection and ensures ordered processing —
+but only because the **reader** makes every transition into `Processing`, in arrival order and
+under the connection lock (`admit_read`), and the answering task (`answer`) is spawned only by
+that transition. It leaves `Processing` only by taking the next queued payload or going `Idle`
+under one lock. When each read's own spawned task checked the state and set it in two separate
+lock acquisitions, two reads could both find the connection `Idle` and be answered at once, and a
+later read's task could run first: `tests/server/tcp/read_order_test.rs` measured replies coming
+back out of order in 140 of 200 runs. It also left a read queued between "is the queue empty?"
+and "go `Idle`" stranded until the peer sent something else.
 
 ### 3. Data Queueing
 
@@ -77,8 +85,9 @@ is what IMPROVEMENTS item 78 asked for. `telnet`, where the server is expected t
 raise its connect event on every connection.
 
 - With `send_first` the connection is registered `Processing`, so bytes that arrive while the
-  connect event is answered queue behind it; `handle_connection_opened` then moves it to `Idle`
-  and hands the queue to `handle_data_with_actions`. One model call at a time per connection.
+  connect event is answered queue behind it; `handle_connection_opened` then takes the queue
+  and answers it (`answer`), or moves the connection to `Idle` if nothing arrived — under one
+  lock. One model call at a time per connection.
 - A peer that disconnects before the connect event is answered abandons the call
   (`decision=peer_left_before_answer`).
 
@@ -183,17 +192,17 @@ Echoing is therefore symmetric: pass the event's `data` **and** its `encoding` s
 
 **Step 4 happens synchronously in the accept loop, before any task is spawned.** It used to be
 the first thing the banner task did, which raced the reader task spawned immediately after it:
-`handle_data_with_actions` returns silently when the connection is not in the map, so a client
+a read was dropped when the connection was not yet in the map, so a client
 that wrote before the server accepted — the normal case, since `connect()` returns as soon as
 the kernel completes the handshake — had its first payload dropped with no response, no error
 and no log line. 8 of 64 clients in a burst lost their request that way. The connect task runs
 for every connection and no longer registers anything, and `tests/connection_map_race_test.rs`
 pins the behaviour. The same shape was fixed in `socket_file` (`1f3945ee`), `tls` and `ssh_agent`.
 
-`handle_data_with_actions` releases the connection lock between its state check and the merge
-step, so a connection can disappear underneath it (write-then-close clients do exactly that).
-Both lookups return early instead of unwrapping; the merge step used to `unwrap()` and panicked
-the task, which is silent — the server keeps reporting `Running`.
+A connection can disappear while it is being answered (write-then-close clients do exactly
+that), so every lookup in `admit_read` and `answer` returns early instead of unwrapping. A merge
+step once `unwrap()`ed the miss and panicked the task, which is silent — the server keeps
+reporting `Running`.
 
 ### Connection Data Structure
 
@@ -345,7 +354,7 @@ deadline is applied and that work in flight suspends it; the value is argued her
 
 **TCP is the one server here whose read loop does not stop while a request is answered.** Every
 other protocol awaits the model inline, so its `read()` is not even being polled during the
-answer. This one hands each message to a spawned task and goes straight back to `read()`, so the
+answer. This one hands each answer to a spawned task and goes straight back to `read()`, so the
 deadline and the answer are live at the same moment. `read_bounded` therefore consults
 `ConnectionActivity`, which reports a connection with work in flight as not idle at all: the
 per-message handler and the connect-event task each hold a `BusyGuard` for the whole of
