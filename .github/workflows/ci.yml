@@ -1460,7 +1460,9 @@ jobs:
   resource-lifecycles:
     name: CPU resource and lifecycle regressions
     runs-on: ubuntu-22.04
-    timeout-minutes: 30
+    # ~23 minutes with a warm cache on master; a branch's first run starts cold and was
+    # cancelled at 30 while still compiling (integration/onvif, integration/fuzz-crash-fixes).
+    timeout-minutes: 45
     env:
       NETGET_USE_OLLAMA: '0'
       CARGO_PROFILE_TEST_DEBUG: '0'
