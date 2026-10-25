@@ -24,8 +24,8 @@
 //!   UE is back — sends NGAP Paging with the UE's 5G-S-TMSI and its last tracking area.
 
 use super::*;
-use amf::{supi_label, Phase, UeSec};
 use crate::utils::clock::Instant;
+use amf::{supi_label, Phase, UeSec};
 use std::time::Duration;
 
 /// radioNetwork/user-inactivity (TS 38.413 9.3.1.2, index 20 of CauseRadioNetwork's root).
@@ -223,7 +223,9 @@ impl Session {
                 None => Err("no security context".into()),
             }
         } else {
-            Err(format!("security header type {sht}, not integrity protected"))
+            Err(format!(
+                "security header type {sht}, not integrity protected"
+            ))
         };
         let (plain, count) = match verified {
             Ok((p, c, _)) => (p, c),

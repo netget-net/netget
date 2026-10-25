@@ -315,7 +315,9 @@ impl PduAddress {
         let iid = |r: &[u8]| -> Option<[u8; 8]> { r.try_into().ok() };
         match (v.first().map(|t| t & 0x07), v.len()) {
             (Some(1), 5) => Some(PduAddress::V4(Ipv4Addr::new(v[1], v[2], v[3], v[4]))),
-            (Some(2), 9) => Some(PduAddress::V6 { iid: iid(&v[1..9])? }),
+            (Some(2), 9) => Some(PduAddress::V6 {
+                iid: iid(&v[1..9])?,
+            }),
             (Some(3), 13) => Some(PduAddress::V4V6 {
                 iid: iid(&v[1..9])?,
                 v4: Ipv4Addr::new(v[9], v[10], v[11], v[12]),
@@ -395,7 +397,14 @@ const FLOW_MODIFY: u8 = 0b011;
 fn default_rule(op: u8, precedence: u8, qfi: u8) -> Vec<u8> {
     let body: Vec<u8> = if op == RULE_CREATE {
         // DQR, one packet filter: bidirectional (11), id 1, one component "match-all" (0x01).
-        vec![(op << 5) | 0x10 | 0x01, 0x31, 0x01, 0x01, precedence, qfi & 0x3F]
+        vec![
+            (op << 5) | 0x10 | 0x01,
+            0x31,
+            0x01,
+            0x01,
+            precedence,
+            qfi & 0x3F,
+        ]
     } else {
         vec![(op << 5) | 0x10, precedence, qfi & 0x3F]
     };

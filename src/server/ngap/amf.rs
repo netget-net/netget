@@ -837,7 +837,14 @@ impl Session {
         self.ask_pdu_session(amf, ran, psi, &t, &req).await
     }
 
-    pub(super) async fn send_pdu_reject(&mut self, amf: u64, ran: u64, psi: u8, pti: u8, cause: u8) {
+    pub(super) async fn send_pdu_reject(
+        &mut self,
+        amf: u64,
+        ran: u64,
+        psi: u8,
+        pti: u8,
+        cause: u8,
+    ) {
         let sm = sm::establishment_reject(psi, pti, cause);
         self.send_ue_nas(amf, ran, nas::dl_nas_transport_sm(psi, &sm))
             .await;
@@ -1486,12 +1493,14 @@ pub(super) fn session_address(
         Ok(ip)
     };
     let v6 = || -> Result<([u8; 8], [u8; 8]), String> {
-        let prefix = parse_prefix(
-            data["ue_ipv6_prefix"]
-                .as_str()
-                .ok_or("ue_ipv6_prefix is required for an IPv6 session, e.g. 2001:db8:1:2::/64")?,
-        )?;
-        let iid = match data.get("ue_ipv6_interface_identifier").and_then(Value::as_str) {
+        let prefix =
+            parse_prefix(data["ue_ipv6_prefix"].as_str().ok_or(
+                "ue_ipv6_prefix is required for an IPv6 session, e.g. 2001:db8:1:2::/64",
+            )?)?;
+        let iid = match data
+            .get("ue_ipv6_interface_identifier")
+            .and_then(Value::as_str)
+        {
             Some(s) => sm::parse_iid(s)?,
             None => [0, 0, 0, 0, 0, 0, 0, 1],
         };
@@ -1531,9 +1540,7 @@ pub(super) fn parse_prefix(s: &str) -> Result<[u8; 8], String> {
         .map_err(|_| format!("ue_ipv6_prefix {s:?} is not an IPv6 prefix"))?;
     let o = a.octets();
     if o[8..] != [0u8; 8] {
-        return Err(format!(
-            "ue_ipv6_prefix {s:?} has bits set beyond /64"
-        ));
+        return Err(format!("ue_ipv6_prefix {s:?} has bits set beyond /64"));
     }
     if a.is_multicast() || a.is_unspecified() || o[0] == 0xfe && o[1] & 0xc0 == 0x80 {
         return Err(format!(

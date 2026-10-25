@@ -155,7 +155,11 @@ pub(super) fn drain(rx: &mut mpsc::UnboundedReceiver<String>, into: &mut Vec<Str
     }
 }
 
-pub(super) async fn wait_line(rx: &mut mpsc::UnboundedReceiver<String>, seen: &mut Vec<String>, needle: &str) {
+pub(super) async fn wait_line(
+    rx: &mut mpsc::UnboundedReceiver<String>,
+    seen: &mut Vec<String>,
+    needle: &str,
+) {
     let ok = tokio::time::timeout(WIRE, async {
         loop {
             drain(rx, seen);

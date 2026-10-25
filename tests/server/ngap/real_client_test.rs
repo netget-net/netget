@@ -757,8 +757,10 @@ impl Rig {
             _reaper: (!root).then(|| RootReaper(ue_cfg.clone())),
             _dir: dir,
         };
-        rig.wait_ue("registration", 1, |l| l.contains("Initial Registration is successful"))
-            .await;
+        rig.wait_ue("registration", 1, |l| {
+            l.contains("Initial Registration is successful")
+        })
+        .await;
         rig
     }
 
@@ -806,7 +808,9 @@ impl Rig {
     /// The interface of PDU session `psi` once its TUN is up (the `n`th time).
     async fn tun(&self, n: usize) -> (String, String) {
         let line = self
-            .wait_ue("TUN up", n, |l| l.contains("TUN interface[") && l.contains("is up"))
+            .wait_ue("TUN up", n, |l| {
+                l.contains("TUN interface[") && l.contains("is up")
+            })
             .await;
         let inside = line
             .split("TUN interface[")
@@ -839,7 +843,6 @@ impl Rig {
             .unwrap_or_else(|e| self.fail(&format!("injecting {action}: {e}")));
         serde_json::to_value(out).unwrap()
     }
-
 }
 
 async fn ping_count(iface: &str, dst: &str, count: u32) -> Result<String, String> {
@@ -858,8 +861,10 @@ async fn ping_count(iface: &str, dst: &str, count: u32) -> Result<String, String
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ueransim_releases_a_session_goes_idle_and_answers_paging() {
     let rig = Rig::start("001010000000004", 61, "127.0.0.71", "127.0.0.72", json!({})).await;
-    rig.wait_ue("PDU session", 1, |l| l.contains("PDU Session establishment is successful"))
-        .await;
+    rig.wait_ue("PDU session", 1, |l| {
+        l.contains("PDU Session establishment is successful")
+    })
+    .await;
     let (iface, addr) = rig.tun(1).await;
     assert_eq!(addr, "10.61.0.2");
     match ping_count(&iface, "10.61.0.1", 2).await {
@@ -869,8 +874,10 @@ async fn ueransim_releases_a_session_goes_idle_and_answers_paging() {
 
     // UE-requested release, through UERANSIM's own CLI; the model answers it.
     rig.cli("ps-release 1").await;
-    rig.wait_ue("release command", 1, |l| l.contains("PDU Session Release Command received"))
-        .await;
+    rig.wait_ue("release command", 1, |l| {
+        l.contains("PDU Session Release Command received")
+    })
+    .await;
     rig.wait_gnb("resources released", 1, |l| {
         l.contains("PDU session resource(s) released")
     })
@@ -894,17 +901,23 @@ async fn ueransim_releases_a_session_goes_idle_and_answers_paging() {
 
     // A new session, then CM-IDLE: the AMF releases the UE's context.
     rig.cli("ps-establish IPv4 --sst 1 --dnn internet").await;
-    rig.wait_ue("PDU session", 2, |l| l.contains("PDU Session establishment is successful"))
-        .await;
+    rig.wait_ue("PDU session", 2, |l| {
+        l.contains("PDU Session establishment is successful")
+    })
+    .await;
     let (_iface, addr) = rig.tun(2).await;
     assert_eq!(addr, "10.61.0.2", "PSI 1 again");
     let out = rig
-        .inject(json!({"type": "send_ue_context_release_command", "supi": rig.supi,
-                        "cause": "radioNetwork/user-inactivity"}))
+        .inject(
+            json!({"type": "send_ue_context_release_command", "supi": rig.supi,
+                        "cause": "radioNetwork/user-inactivity"}),
+        )
         .await;
     assert!(out.to_string().contains("sent"), "{out}");
-    rig.wait_ue("CM-IDLE", 1, |l| l.contains("UE switches to state [CM-IDLE]"))
-        .await;
+    rig.wait_ue("CM-IDLE", 1, |l| {
+        l.contains("UE switches to state [CM-IDLE]")
+    })
+    .await;
 
     // Paged by the operator: UERANSIM's gNB accepts NetGet's Paging and pages over its radio,
     // and the UE recognises its own 5G-S-TMSI in it (it compares AMF Set ID, AMF Pointer and
@@ -913,7 +926,8 @@ async fn ueransim_releases_a_session_goes_idle_and_answers_paging() {
         .inject(json!({"type": "send_paging", "supi": rig.supi}))
         .await;
     assert!(out.to_string().contains("sent"), "{out}");
-    rig.wait_gnb("paging", 1, |l| l.contains("Paging received")).await;
+    rig.wait_gnb("paging", 1, |l| l.contains("Paging received"))
+        .await;
     rig.wait_ue("paging", 1, |l| l.contains("Responding to received Paging"))
         .await;
     rig.wait_ue("service request", 1, |l| {
@@ -969,19 +983,39 @@ async fn ueransim_releases_a_session_goes_idle_and_answers_paging() {
     ] {
         assert!(
             frames.iter().any(|f| f.src_port != port
-                && f.procedures.iter().zip(&f.pdu_kinds).any(|(c, k)| *c == code && *k == kind)),
+                && f.procedures
+                    .iter()
+                    .zip(&f.pdu_kinds)
+                    .any(|(c, k)| *c == code && *k == kind)),
             "UERANSIM never answered procedure {code}: {frames:#?}"
         );
     }
     // nas-5gs through NEA0: the 5GSM release request, command and complete.
-    let from = |netget: bool| nas.iter().filter(move |f| (f.src_port == port) == netget).collect::<Vec<_>>();
+    let from = |netget: bool| {
+        nas.iter()
+            .filter(move |f| (f.src_port == port) == netget)
+            .collect::<Vec<_>>()
+    };
     let amf_side = from(true);
     let ue_side = from(false);
-    assert!(ue_side.iter().any(|f| f.sm_types.contains(&0xd1)), "no Release Request: {nas:#?}");
-    assert!(amf_side.iter().any(|f| f.sm_types.contains(&0xd3)), "no Release Command: {nas:#?}");
-    assert!(ue_side.iter().any(|f| f.sm_types.contains(&0xd4)), "no Release Complete: {nas:#?}");
+    assert!(
+        ue_side.iter().any(|f| f.sm_types.contains(&0xd1)),
+        "no Release Request: {nas:#?}"
+    );
+    assert!(
+        amf_side.iter().any(|f| f.sm_types.contains(&0xd3)),
+        "no Release Command: {nas:#?}"
+    );
+    assert!(
+        ue_side.iter().any(|f| f.sm_types.contains(&0xd4)),
+        "no Release Complete: {nas:#?}"
+    );
     for f in &nas {
-        assert!(f.experts.iter().all(|s| *s < 0x0060_0000), "tshark flags NAS frame {}: {nas:#?}", f.number);
+        assert!(
+            f.experts.iter().all(|s| *s < 0x0060_0000),
+            "tshark flags NAS frame {}: {nas:#?}",
+            f.number
+        );
     }
 }
 
@@ -993,14 +1027,43 @@ async fn ueransim_releases_a_session_goes_idle_and_answers_paging() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ueransim_registers_under_snow3g_and_under_zuc() {
     for (supi, net, gnb_ip, upf_ip, ia, ea, want) in [
-        ("001010000000005", 62, "127.0.0.73", "127.0.0.74", "nia1", "nea1", "Selected integrity[1] ciphering[1]"),
-        ("001010000000006", 63, "127.0.0.75", "127.0.0.76", "nia3,nia2", "nea3", "Selected integrity[3] ciphering[3]"),
+        (
+            "001010000000005",
+            62,
+            "127.0.0.73",
+            "127.0.0.74",
+            "nia1",
+            "nea1",
+            "Selected integrity[1] ciphering[1]",
+        ),
+        (
+            "001010000000006",
+            63,
+            "127.0.0.75",
+            "127.0.0.76",
+            "nia3,nia2",
+            "nea3",
+            "Selected integrity[3] ciphering[3]",
+        ),
     ] {
-        let rig = Rig::start(supi, net, gnb_ip, upf_ip, json!({"nas_integrity": ia, "nas_ciphering": ea})).await;
-        let line = rig.wait_ue("selected algorithms", 1, |l| l.contains("Selected integrity")).await;
-        assert!(line.contains(want), "{ia}/{ea}: {line}");
-        rig.wait_ue("PDU session", 1, |l| l.contains("PDU Session establishment is successful"))
+        let rig = Rig::start(
+            supi,
+            net,
+            gnb_ip,
+            upf_ip,
+            json!({"nas_integrity": ia, "nas_ciphering": ea}),
+        )
+        .await;
+        let line = rig
+            .wait_ue("selected algorithms", 1, |l| {
+                l.contains("Selected integrity")
+            })
             .await;
+        assert!(line.contains(want), "{ia}/{ea}: {line}");
+        rig.wait_ue("PDU session", 1, |l| {
+            l.contains("PDU Session establishment is successful")
+        })
+        .await;
         let (iface, _) = rig.tun(1).await;
         match ping_count(&iface, &format!("10.{net}.0.1"), 2).await {
             Ok(o) if o.contains("2 received") => {}
@@ -1011,7 +1074,13 @@ async fn ueransim_registers_under_snow3g_and_under_zuc() {
             reg[0]["nas_security"],
             json!({"integrity": format!("NIA{}", &ia[3..4]), "ciphering": format!("NEA{}", &ea[3..4])})
         );
-        let Rig { capture, ue, gnb, port, .. } = rig;
+        let Rig {
+            capture,
+            ue,
+            gnb,
+            port,
+            ..
+        } = rig;
         drop(ue);
         drop(gnb);
         let frames = capture.finish().await;

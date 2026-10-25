@@ -187,7 +187,9 @@ impl Gnb {
     /// The Initial Context Setup answering a verified Service Request: K_gNB, the Service
     /// Accept and the sessions whose user plane comes back. Answered with `dl_teid` for each.
     async fn service_accepted(&mut self, dl_teid: u32) -> (nas::ServiceAccept, Vec<(u8, u32)>) {
-        let p = self.recv("Initial Context Setup Request (Service Accept)").await;
+        let p = self
+            .recv("Initial Context Setup Request (Service Accept)")
+            .await;
         assert_eq!(
             (p.kind, p.procedure_code),
             (PduKind::Initiating, codec::PROC_INITIAL_CONTEXT_SETUP),
@@ -380,12 +382,18 @@ async fn a_session_is_modified_released_idled_and_paged_back() {
     // Session 2, released at the UE's request: the model answers, Rust releases.
     let (teid2, _, _) = gnb.session(2, 3, 1, 0x2222).await;
     ping_until_answered(&gtp, &upf, teid2, [10, 45, 0, 3]).await;
-    gnb.sm_uplink(2, &sm::release_request(2, 4, Some(sm::CAUSE_REGULAR_DEACTIVATION)))
-        .await;
+    gnb.sm_uplink(
+        2,
+        &sm::release_request(2, 4, Some(sm::CAUSE_REGULAR_DEACTIVATION)),
+    )
+    .await;
     let p = gnb.recv("PDU Session Resource Release Command").await;
     assert_eq!(
         (p.kind, p.procedure_code),
-        (PduKind::Initiating, codec::PROC_PDU_SESSION_RESOURCE_RELEASE),
+        (
+            PduKind::Initiating,
+            codec::PROC_PDU_SESSION_RESOURCE_RELEASE
+        ),
         "got {}",
         p.label()
     );
@@ -437,7 +445,11 @@ async fn a_session_is_modified_released_idled_and_paged_back() {
     );
 
     // A Service Request whose MAC does not verify is refused and the real UE is not evicted.
-    let mut forged = gnb.service_request(nas::SERVICE_TYPE_DATA, Some(nas::psi_bits([1])), nas::psi_bits([1]));
+    let mut forged = gnb.service_request(
+        nas::SERVICE_TYPE_DATA,
+        Some(nas::psi_bits([1])),
+        nas::psi_bits([1]),
+    );
     forged[3] ^= 0x01;
     gnb.send_service_request(&forged).await;
     let reject = gnb.dl_nas("Service Reject").await;
@@ -452,10 +464,7 @@ async fn a_session_is_modified_released_idled_and_paged_back() {
         let at = 7 + 4 + 2 + 3;
         stranger[at] ^= 0xFF;
         gnb.send_service_request(&stranger).await;
-        assert_eq!(
-            gnb.dl_nas("Service Reject").await,
-            nas::service_reject(9)
-        );
+        assert_eq!(gnb.dl_nas("Service Reject").await, nas::service_reject(9));
         gnb.complete_release().await;
         wait_line(&mut rx, &mut seen, "decision=service_request_unknown_ue").await;
     }
@@ -469,7 +478,11 @@ async fn a_session_is_modified_released_idled_and_paged_back() {
     gnb.send_service_request(&sr).await;
     let (accept, sessions) = gnb.service_accepted(0x3333).await;
     assert_eq!(accept.pdu_session_status, Some(nas::psi_bits([1])));
-    assert_eq!(sessions, vec![(1, teid1)], "session 1 comes back on its own TEID");
+    assert_eq!(
+        sessions,
+        vec![(1, teid1)],
+        "session 1 comes back on its own TEID"
+    );
     wait_line(&mut rx, &mut seen, "decision=service_accept").await;
     let r = ping_until_answered(&gtp, &upf, teid1, [10, 45, 0, 2]).await;
     assert_eq!(r.header.teid, 0x3333, "the new downlink tunnel");
@@ -640,9 +653,14 @@ print(json.dumps({"actions": a}))"#;
         if let Some(r) = ping(&gtp, &upf, teid, rs.clone()).await {
             break r;
         }
-        assert!(tokio::time::Instant::now() < deadline, "no Router Advertisement");
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no Router Advertisement"
+        );
     };
-    oracle = oracle.to_server(&gpdu(teid, rs.clone())).from_server(&ra.encode());
+    oracle = oracle
+        .to_server(&gpdu(teid, rs.clone()))
+        .from_server(&ra.encode());
     assert_eq!(ra.header.teid, 0x6666);
     let body = &ra.body;
     assert_eq!(body[6], 58);
@@ -651,21 +669,47 @@ print(json.dumps({"actions": a}))"#;
     assert_eq!(&body[24..40], &link_local.octets(), "to the solicitor");
     // Prefix Information: 2001:db8:1:2::/64.
     assert_eq!(&body[40 + 16..40 + 20], &[3, 4, 64, 0xC0]);
-    assert_eq!(&body[40 + 32..40 + 40], &[0x20, 0x01, 0x0d, 0xb8, 0, 1, 0, 2]);
+    assert_eq!(
+        &body[40 + 32..40 + 40],
+        &[0x20, 0x01, 0x0d, 0xb8, 0, 1, 0, 2]
+    );
 
     // Echo to the model's address from the UE's global address.
     let dst: std::net::Ipv6Addr = "2001:db8:1:2::1".parse().unwrap();
-    let echo = icmpv6(&global, &dst, 64, &[128, 0, 0, 0, 0x12, 0x34, 0, 1, b'n', b'g']);
-    let reply = ping(&gtp, &upf, teid, echo.clone()).await.expect("an ICMPv6 echo reply");
-    oracle = oracle.to_server(&gpdu(teid, echo)).from_server(&reply.encode());
+    let echo = icmpv6(
+        &global,
+        &dst,
+        64,
+        &[128, 0, 0, 0, 0x12, 0x34, 0, 1, b'n', b'g'],
+    );
+    let reply = ping(&gtp, &upf, teid, echo.clone())
+        .await
+        .expect("an ICMPv6 echo reply");
+    oracle = oracle
+        .to_server(&gpdu(teid, echo))
+        .from_server(&reply.encode());
     assert_eq!(reply.body[40], 129, "echo reply");
     assert_eq!(&reply.body[8..24], &dst.octets());
     assert_eq!(&reply.body[24..40], &global.octets());
     // Not the model's address, and not the session's prefix: dropped.
     let other: std::net::Ipv6Addr = "2001:db8:1:2::9".parse().unwrap();
-    assert!(ping(&gtp, &upf, teid, icmpv6(&global, &other, 64, &[128, 0, 0, 0, 0, 1, 0, 1])).await.is_none());
+    assert!(ping(
+        &gtp,
+        &upf,
+        teid,
+        icmpv6(&global, &other, 64, &[128, 0, 0, 0, 0, 1, 0, 1])
+    )
+    .await
+    .is_none());
     let foreign: std::net::Ipv6Addr = "2001:db8:9::2".parse().unwrap();
-    assert!(ping(&gtp, &upf, teid, icmpv6(&foreign, &dst, 64, &[128, 0, 0, 0, 0, 1, 0, 2])).await.is_none());
+    assert!(ping(
+        &gtp,
+        &upf,
+        teid,
+        icmpv6(&foreign, &dst, 64, &[128, 0, 0, 0, 0, 1, 0, 2])
+    )
+    .await
+    .is_none());
 
     // tshark reads each G-PDU's inner packet and verifies the checksums NetGet wrote.
     let rows = oracle
@@ -765,7 +809,12 @@ async fn a_ue_without_the_preferred_integrity_algorithm_is_refused() {
         .await;
     let nas_pdu = gnb.dl_nas("Registration Reject").await;
     assert_eq!(nas_pdu, nas::registration_reject(23));
-    wait_line(&mut rx, &mut seen, "decision=ue_security_capabilities_mismatch").await;
+    wait_line(
+        &mut rx,
+        &mut seen,
+        "decision=ue_security_capabilities_mismatch",
+    )
+    .await;
 }
 
 /// The fail-closed answers to the two new decisions. Silent: a release request is released (a

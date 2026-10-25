@@ -625,7 +625,11 @@ async fn open5gs_registers_netgets_ue_and_creates_its_pdu_session() {
     assert_eq!(modified["five_qi"], 9, "{modified}");
     assert_eq!(modified["qfi"], 1, "{modified}");
     assert_eq!(modified["session_ambr_kbps"], Value::Null, "{modified}");
-    assert_eq!(modified["ies"], json!(["qos_flow_descriptions"]), "{modified}");
+    assert_eq!(
+        modified["ies"],
+        json!(["qos_flow_descriptions"]),
+        "{modified}"
+    );
 
     let (frames, nas) = capture.finish_with_nas().await;
     let netget_port = frames

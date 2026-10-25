@@ -142,7 +142,9 @@ impl UserPlane {
             }
         }
         if let Some((prefix, _)) = session.ue_ipv6 {
-            if s.values().any(|x| x.ue_ipv6.map(|(p, _)| p) == Some(prefix)) {
+            if s.values()
+                .any(|x| x.ue_ipv6.map(|(p, _)| p) == Some(prefix))
+            {
                 return Err(format!(
                     "{} is already another session's prefix",
                     prefix_string(&prefix)

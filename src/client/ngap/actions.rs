@@ -204,7 +204,7 @@ pub fn actions() -> Vec<ActionDefinition> {
              Release Command and the Release Command it carries, and raises \
              ngap_pdu_session_released (or its rejected form).",
             vec![
-                p("ran_ue_ngap_id", "number", "The UE", true),
+                p("ran_ue_ngap_id", "number", "The RAN UE NGAP ID of a registered UE with credentials on this gNB, from its events", true),
                 p(
                     "pdu_session_id",
                     "number",
@@ -229,7 +229,7 @@ pub fn actions() -> Vec<ActionDefinition> {
              the Modification Command (Modification Complete), and raises \
              ngap_pdu_session_modified with what the network decided.",
             vec![
-                p("ran_ue_ngap_id", "number", "The UE", true),
+                p("ran_ue_ngap_id", "number", "The RAN UE NGAP ID of a registered UE with credentials on this gNB, from its events", true),
                 p("pdu_session_id", "number", "The session (1-15)", true),
                 p(
                     "five_qi",
@@ -249,7 +249,7 @@ pub fn actions() -> Vec<ActionDefinition> {
              (ngap_ue_context_release with cm_state idle); bring it back with \
              ngap_service_request.",
             vec![
-                p("ran_ue_ngap_id", "number", "The UE", true),
+                p("ran_ue_ngap_id", "number", "The RAN UE NGAP ID of a registered UE with credentials on this gNB, from its events", true),
                 p(
                     "cause",
                     "string",
@@ -416,7 +416,7 @@ pub static PDU_RELEASED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             p("ran_ue_ngap_id", "number", "This gNB's id for the UE", true),
             p("pdu_session_id", "number", "The session (1-15)", true),
             p("result", "string", "released or rejected", true),
-            p("requested_by", "string", "ue or network", true),
+            p("requested_by", "string", "Who asked for the release: \"ue\" (this UE's request, which the model made) or \"network\" (the AMF released it unasked)", true),
             p(
                 "cause",
                 "object",
@@ -461,9 +461,8 @@ pub static PDU_MODIFIED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     )
 });
 
-pub static SERVICE_ACCEPTED_EVENT: LazyLock<EventType> =
-    LazyLock::new(|| {
-        ev(
+pub static SERVICE_ACCEPTED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    ev(
         "ngap_service_accepted",
         "An idle UE is back: the AMF verified its Service Request and answered with an Initial \
          Context Setup and a protected Service Accept. trigger is ue (ngap_service_request) or \
@@ -474,15 +473,15 @@ pub static SERVICE_ACCEPTED_EVENT: LazyLock<EventType> =
          the new ran_ue_ngap_id from now on.",
         vec![
             p("ran_ue_ngap_id", "number", "The UE's new RAN UE NGAP ID", true),
-            p("supi", "string", "imsi-<digits>", true),
+            p("supi", "string", "The subscriber whose UE this is, e.g. imsi-001010000000001", true),
             p("service_type", "string", "data, signalling or mobile_terminated", true),
-            p("trigger", "string", "ue or paging", true),
+            p("trigger", "string", "What brought the UE back: \"ue\" (an ngap_service_request) or \"paging\" (the AMF paged it and Rust answered)", true),
             p("pdu_session_status", "array", "PDU session ids the UE holds", true),
             p("user_plane_sessions", "array", "PDU session ids whose tunnels are set up", true),
             p("k_gnb_verified", "boolean", "Whether the AMF's K_gNB matched this UE's", true),
         ],
     )
-    });
+});
 
 pub static SERVICE_REJECTED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     ev(
@@ -491,14 +490,14 @@ pub static SERVICE_REJECTED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
          still_registered is false for #9/#10: the network no longer knows the UE and it must \
          register again (ngap_initial_ue_message).",
         vec![
-            p("supi", "string", "imsi-<digits>", true),
+            p("supi", "string", "The subscriber whose UE this is, e.g. imsi-001010000000001", true),
             p(
                 "cause",
                 "object",
                 "{\"value\", \"name\"} of the 5GMM cause",
                 true,
             ),
-            p("trigger", "string", "ue or paging", true),
+            p("trigger", "string", "What brought the UE back: \"ue\" (an ngap_service_request) or \"paging\" (the AMF paged it and Rust answered)", true),
             p(
                 "still_registered",
                 "boolean",

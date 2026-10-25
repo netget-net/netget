@@ -389,9 +389,9 @@ impl Core {
         )?;
         let inactivity = match inactivity {
             None | Some(0) => None,
-            Some(s) if s > MAX_UE_INACTIVITY_SECS => anyhow::bail!(
-                "ue_inactivity_timeout_secs {s} is above {MAX_UE_INACTIVITY_SECS}"
-            ),
+            Some(s) if s > MAX_UE_INACTIVITY_SECS => {
+                anyhow::bail!("ue_inactivity_timeout_secs {s} is above {MAX_UE_INACTIVITY_SECS}")
+            }
             Some(s) => Some(std::time::Duration::from_secs(s)),
         };
         let user_plane = match up {
@@ -1319,7 +1319,9 @@ impl Session {
         };
         self.last_refusal = None;
         match self.run_results(result.protocol_results).await {
-            HandlerOutcome::Ran { closed: true, .. } => (Ok(ClientSendOutcome::Disconnected), false),
+            HandlerOutcome::Ran { closed: true, .. } => {
+                (Ok(ClientSendOutcome::Disconnected), false)
+            }
             HandlerOutcome::Ran { sent, .. } => match self.last_refusal.take() {
                 Some(error) if sent.is_empty() => (Ok(ClientSendOutcome::Rejected { error }), true),
                 _ => (
@@ -1329,7 +1331,12 @@ impl Session {
                     true,
                 ),
             },
-            _ => (Ok(ClientSendOutcome::Executed { detail: String::new() }), true),
+            _ => (
+                Ok(ClientSendOutcome::Executed {
+                    detail: String::new(),
+                }),
+                true,
+            ),
         }
     }
 

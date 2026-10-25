@@ -606,7 +606,11 @@ impl Session {
 
     /// Hold a decision for an idle UE and page it; it runs when the UE's Service Request brings
     /// it back.
-    pub(super) async fn queue_for_idle(&mut self, tmsi: u32, action: Value) -> Result<Sent, String> {
+    pub(super) async fn queue_for_idle(
+        &mut self,
+        tmsi: u32,
+        action: Value,
+    ) -> Result<Sent, String> {
         self.core.idle_queue(tmsi, action)?;
         info!("NGAP: a decision for idle UE 5G-TMSI {tmsi:#010x} was {QUEUED_FOR_IDLE}; paging it");
         self.page(tmsi).await

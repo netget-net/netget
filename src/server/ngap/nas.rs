@@ -1719,7 +1719,10 @@ pub fn service_request(r: &ServiceRequest) -> Vec<u8> {
         SERVICE_REQUEST,
         ((r.service_type & 0x0F) << 4) | (r.ngksi & 0x07),
     ];
-    lve(&mut out, &s_tmsi_octets(r.amf_set_id, r.amf_pointer, r.tmsi));
+    lve(
+        &mut out,
+        &s_tmsi_octets(r.amf_set_id, r.amf_pointer, r.tmsi),
+    );
     if let Some(u) = r.uplink_data_status {
         tlv(&mut out, 0x40, &psi_octets(u));
     }

@@ -203,14 +203,15 @@ impl NgapProtocol {
             );
         }
         if wants_v6 || a.get("ue_ipv6_prefix").is_some() {
-            super::amf::parse_prefix(
-                a.get("ue_ipv6_prefix")
-                    .and_then(Value::as_str)
-                    .context("ue_ipv6_prefix is required for an IPv6 session, e.g. 2001:db8:1:2::/64")?,
-            )
+            super::amf::parse_prefix(a.get("ue_ipv6_prefix").and_then(Value::as_str).context(
+                "ue_ipv6_prefix is required for an IPv6 session, e.g. 2001:db8:1:2::/64",
+            )?)
             .map_err(|e| anyhow!(e))?;
         }
-        if let Some(i) = a.get("ue_ipv6_interface_identifier").and_then(Value::as_str) {
+        if let Some(i) = a
+            .get("ue_ipv6_interface_identifier")
+            .and_then(Value::as_str)
+        {
             sm::parse_iid(i).map_err(|e| anyhow!(e))?;
         }
         super::amf::parse_answering_addresses(a).map_err(|e| anyhow!(e))?;
@@ -249,7 +250,9 @@ fn target_ue(a: &Value) -> Result<()> {
             codec::json_u64(a, "amf_ue_ngap_id", codec::MAX_AMF_UE_NGAP_ID)?;
         }
         (None, Some(s)) => {
-            let s = s.as_str().context("supi must be a string, e.g. imsi-001010000000001")?;
+            let s = s
+                .as_str()
+                .context("supi must be a string, e.g. imsi-001010000000001")?;
             super::subscribers::supi_digits(s).map_err(|e| anyhow!(e))?;
         }
         (None, None) => {
@@ -352,9 +355,24 @@ fn pdu_session_release_action() -> ActionDefinition {
                       when it comes back."
             .into(),
         parameters: vec![
-            p("amf_ue_ngap_id", "number", "The UE's AMF UE NGAP ID (a connected UE)", false),
-            p("supi", "string", "Or the subscriber, e.g. imsi-001010000000001 (connected or idle)", false),
-            p("pdu_session_id", "number", "The session to release (1-15)", true),
+            p(
+                "amf_ue_ngap_id",
+                "number",
+                "The UE's AMF UE NGAP ID (a connected UE)",
+                false,
+            ),
+            p(
+                "supi",
+                "string",
+                "Or the subscriber, e.g. imsi-001010000000001 (connected or idle)",
+                false,
+            ),
+            p(
+                "pdu_session_id",
+                "number",
+                "The session to release (1-15)",
+                true,
+            ),
             p(
                 "cause",
                 "string",
@@ -386,7 +404,12 @@ fn pdu_session_release_reject_action() -> ActionDefinition {
         parameters: vec![
             p("amf_ue_ngap_id", "number", "The UE's AMF UE NGAP ID", true),
             p("pdu_session_id", "number", "The session (1-15)", true),
-            p("cause", "string", "5GSM cause, e.g. request_rejected_unspecified", true),
+            p(
+                "cause",
+                "string",
+                "5GSM cause, e.g. request_rejected_unspecified",
+                true,
+            ),
         ],
         example: json!({
             "type": "send_pdu_session_release_reject",
@@ -414,8 +437,18 @@ fn pdu_session_modification_action() -> ActionDefinition {
                       amf_ue_ngap_id, or by supi — an idle UE is paged first."
             .into(),
         parameters: vec![
-            p("amf_ue_ngap_id", "number", "The UE's AMF UE NGAP ID (a connected UE)", false),
-            p("supi", "string", "Or the subscriber (connected or idle)", false),
+            p(
+                "amf_ue_ngap_id",
+                "number",
+                "The UE's AMF UE NGAP ID (a connected UE)",
+                false,
+            ),
+            p(
+                "supi",
+                "string",
+                "Or the subscriber (connected or idle)",
+                false,
+            ),
             p("pdu_session_id", "number", "The session (1-15)", true),
             p(
                 "session_ambr",
@@ -423,7 +456,12 @@ fn pdu_session_modification_action() -> ActionDefinition {
                 "New session AMBR {\"uplink_kbps\", \"downlink_kbps\"}",
                 false,
             ),
-            p("five_qi", "number", "New standardised 5QI of the default flow (1-255)", false),
+            p(
+                "five_qi",
+                "number",
+                "New standardised 5QI of the default flow (1-255)",
+                false,
+            ),
         ],
         example: json!({
             "type": "send_pdu_session_modification",
@@ -435,7 +473,9 @@ fn pdu_session_modification_action() -> ActionDefinition {
         log_template: Some(
             LogTemplate::new()
                 .with_info("-> NGAP PDU session {pdu_session_id} modification")
-                .with_debug("NGAP send_pdu_session_modification {pdu_session_id} {session_ambr} {five_qi}"),
+                .with_debug(
+                    "NGAP send_pdu_session_modification {pdu_session_id} {session_ambr} {five_qi}",
+                ),
         ),
     }
 }
@@ -531,7 +571,9 @@ pub static NGAP_PDU_SESSION_MODIFICATION_EVENT: LazyLock<EventType> = LazyLock::
     .with_log_template(
         LogTemplate::new()
             .with_info("NGAP PDU session {pdu_session_id} modification request ue={amf_ue_ngap_id}")
-            .with_debug("NGAP PDU session modification request {supi} {pdu_session_id} {requested_five_qi}")
+            .with_debug(
+                "NGAP PDU session modification request {supi} {pdu_session_id} {requested_five_qi}",
+            )
             .with_trace("NGAP PDU session modification request: {json_pretty(.)}"),
     )
 });
@@ -1263,13 +1305,12 @@ impl Protocol for NgapProtocol {
             crate::llm::actions::ParameterDefinition {
                 name: "nas_ciphering".into(),
                 type_hint: "string".into(),
-                description:
-                    "NAS ciphering algorithms in order of preference, comma-separated: \
+                description: "NAS ciphering algorithms in order of preference, comma-separated: \
                           \"nea0\" (null ciphering, the protected NAS stays readable on the \
                           wire), \"nea1\" (SNOW 3G), \"nea2\" (AES-CTR), \"nea3\" (ZUC), e.g. \
                           \"nea3,nea2\". The first one the UE supports is selected; NEA0 when it \
                           supports none of them."
-                        .into(),
+                    .into(),
                 required: false,
                 example: json!("nea2"),
                 default: Some(json!(super::DEFAULT_NAS_CIPHERING)),
@@ -1277,13 +1318,12 @@ impl Protocol for NgapProtocol {
             crate::llm::actions::ParameterDefinition {
                 name: "nas_integrity".into(),
                 type_hint: "string".into(),
-                description:
-                    "NAS integrity algorithms in order of preference, comma-separated: \
+                description: "NAS integrity algorithms in order of preference, comma-separated: \
                           \"nia1\" (SNOW 3G), \"nia2\" (AES-CMAC), \"nia3\" (ZUC), e.g. \
                           \"nia3,nia2\". The first one the UE supports is selected; a UE that \
                           supports none of them is refused with 5GMM cause #23. NIA0 is never \
                           offered."
-                        .into(),
+                    .into(),
                 required: false,
                 example: json!("nia2,nia1"),
                 default: Some(json!(super::DEFAULT_NAS_INTEGRITY)),
@@ -1415,9 +1455,7 @@ impl Server for NgapProtocol {
             "send_pdu_session_release" => self.pdu_session_release(&action),
             "send_pdu_session_release_reject" => self.pdu_session_release_reject(&action),
             "send_pdu_session_modification" => self.pdu_session_modification(&action),
-            "send_pdu_session_modification_reject" => {
-                self.pdu_session_modification_reject(&action)
-            }
+            "send_pdu_session_modification_reject" => self.pdu_session_modification_reject(&action),
             "send_paging" => self.paging(&action),
             "wait_for_more" => Ok(ActionResult::WaitForMore),
             // Not offered to the model; the dashboard's "disconnect this peer" injects it.
