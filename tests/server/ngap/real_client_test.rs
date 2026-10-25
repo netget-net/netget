@@ -845,6 +845,21 @@ impl Rig {
     }
 }
 
+/// `cmd args`, as root: directly when the test is root, else through `sudo -n` (passwordless on
+/// a GitHub runner, as for nr-ue itself).
+fn as_root(cmd: &str, args: &[&str]) -> Command {
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    if unsafe { libc::geteuid() } == 0 {
+        let mut c = Command::new(cmd);
+        c.args(args);
+        c
+    } else {
+        let mut c = Command::new("sudo");
+        c.arg("-n").arg(cmd).args(args);
+        c
+    }
+}
+
 async fn ping_count(iface: &str, dst: &str, count: u32) -> Result<String, String> {
     let mut ping = Command::new("ping");
     ping.args(["-I", iface, "-c", &count.to_string(), "-W", "2", dst]);
@@ -905,8 +920,38 @@ async fn ueransim_releases_a_session_goes_idle_and_answers_paging() {
         l.contains("PDU Session establishment is successful")
     })
     .await;
-    let (_iface, addr) = rig.tun(2).await;
+    let (iface, addr) = rig.tun(2).await;
     assert_eq!(addr, "10.61.0.2", "PSI 1 again");
+    // A packet leaving the UE's TUN while it is idle makes nr-ue send its own Service Request
+    // (`IDLE-UPLINK-DATA-PENDING`), and a UE with a procedure in flight ignores paging. On a
+    // GitHub runner something on the host sends on every new interface (the CI run that found
+    // this saw uplink data 11 ms after CM-IDLE). So this test makes that traffic itself, on
+    // purpose and without stopping — a datagram from the UE's address every 2 ms — and takes the
+    // interface down before idling the UE: a down interface carries nothing, whoever sends.
+    // Without the `ip link set down` this test fails at the check below every time (measured in
+    // the Linux container); with it, nothing reaches nr-ue once it is idle.
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stray = {
+        let stop = stop.clone();
+        // A thread of its own, not a task: the runtime's workers are busy with the rig.
+        std::thread::spawn(move || {
+            let Ok(sock) = std::net::UdpSocket::bind("10.61.0.2:0") else {
+                return;
+            };
+            let _ = sock.set_nonblocking(true);
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                // Refused once the interface is down; that is the point.
+                let _ = sock.send_to(b"stray uplink", "10.61.0.9:9");
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        })
+    };
+    match as_root("ip", &["link", "set", "dev", &iface, "down"]).output() {
+        Ok(o) if o.status.success() => {}
+        other => rig.fail(&format!(
+            "taking {iface} down (as root or through sudo -n): {other:?}"
+        )),
+    }
     let out = rig
         .inject(
             json!({"type": "send_ue_context_release_command", "supi": rig.supi,
@@ -918,6 +963,22 @@ async fn ueransim_releases_a_session_goes_idle_and_answers_paging() {
         l.contains("UE switches to state [CM-IDLE]")
     })
     .await;
+    // Idle with nothing in flight: no uplink data reached nr-ue after it went idle, and it has
+    // started no Service Request of its own. Read after the UE's own CM-IDLE line, so anything
+    // the stray sender got through would already show here.
+    let lines = rig.ue.lines();
+    let idle_at = lines
+        .iter()
+        .rposition(|l| l.contains("UE switches to state [CM-IDLE]"))
+        .unwrap_or(0);
+    if let Some(l) = lines[idle_at..]
+        .iter()
+        .find(|l| l.contains("pending[true]") || l.contains("Sending Service Request"))
+    {
+        rig.fail(&format!(
+            "the idle UE started a procedure of its own before it was paged: {l}"
+        ));
+    }
 
     // Paged by the operator: UERANSIM's gNB accepts NetGet's Paging and pages over its radio,
     // and the UE recognises its own 5G-S-TMSI in it (it compares AMF Set ID, AMF Pointer and
@@ -945,6 +1006,8 @@ async fn ueransim_releases_a_session_goes_idle_and_answers_paging() {
         l.contains("AMF selection for UE") && l.contains("failed")
     })
     .await;
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    let _ = stray.join();
 
     // The model was asked five things — the gNB, the subscriber, two sessions, one release.
     for (event, n) in [
