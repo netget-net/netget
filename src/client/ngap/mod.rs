@@ -13,8 +13,11 @@
 //!
 //! Given a subscriber's credentials (`supi`, `subscriber_key`, `subscriber_opc`), the UE whose
 //! SUCI names that subscriber is taken through 5G-AKA, NAS security, registration and PDU session
-//! establishment by Rust ([`ue`]); the model brings it in and asks for sessions.
+//! establishment by Rust ([`ue`]); the model brings it in and asks for sessions. Session release
+//! and modification, CM-IDLE, the Service Request and the answer to paging are in
+//! [`procedures`].
 pub mod actions;
+pub mod procedures;
 pub mod ue;
 
 use crate::client::llm_budget::call_llm_for_client;
@@ -88,6 +91,8 @@ struct Gnb {
     snn: String,
     /// The address this gNB puts in its downlink GTP-U tunnels: its N2 address.
     gtp_address: std::net::IpAddr,
+    /// Registered UEs whose N2 context the AMF released, by SUPI digits; at most [`MAX_UES`].
+    idle: BTreeMap<String, procedures::IdleUe>,
 }
 
 fn startup_u64(ctx: &ConnectContext, key: &str, default: u64, max: u64) -> Result<u64> {
@@ -268,6 +273,7 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
         creds,
         snn,
         gtp_address: local.ip(),
+        idle: BTreeMap::new(),
     };
     let session_ctx = ctx.clone();
     let task = tokio::spawn(async move {
@@ -435,6 +441,10 @@ impl Gnb {
                 codec::uplink_nas_transport(amf, ran, &nas, &self.user_location)?
             }
             actions::PDU_SESSION_REQUEST => self.request_pdu_session(action, depth).await?,
+            actions::PDU_SESSION_RELEASE => self.release_pdu_session(action, depth)?,
+            actions::PDU_SESSION_MODIFICATION => self.modify_pdu_session(action, depth)?,
+            actions::UE_CONTEXT_RELEASE_REQUEST => self.request_context_release(action, depth)?,
+            actions::SERVICE_REQUEST => self.service_request_action(action, depth)?,
             actions::ERROR_INDICATION => {
                 let cause = match action.get("cause").filter(|c| !c.is_null()) {
                     Some(c) => Some(Cause::from_json(c)?),
@@ -522,41 +532,24 @@ impl Gnb {
                 self.on_pdu_session_setup(&pdu, log).await?;
             }
             (PduKind::Initiating, codec::PROC_UE_CONTEXT_RELEASE) => {
-                let mut budget = codec::Budget::default();
-                let ids = pdu
-                    .require(codec::IE_UE_NGAP_IDS)
-                    .and_then(|ie| codec::decode_ue_ngap_ids(ie, &mut budget));
-                let (amf, ran) = match ids {
-                    Ok(v) => v,
-                    Err(e) => {
-                        let ei = codec::error_indication(None, None, Some(&e.cause))?;
-                        return self.send(&ei).await;
-                    }
-                };
-                let ran = ran.or_else(|| {
-                    self.ues
-                        .iter()
-                        .find(|(_, u)| u.amf == Some(amf))
-                        .map(|(r, _)| *r)
-                });
-                let cause = pdu
-                    .ie(codec::IE_CAUSE)
-                    .and_then(|ie| codec::decode_cause(ie).ok())
-                    .map(|c| c.to_json());
-                let mut depth = 0;
-                if let Some(r) = ran {
-                    depth = self.ues.remove(&r).map(|u| u.depth).unwrap_or(0);
-                    let complete = codec::ue_context_release_complete(amf, r)?;
-                    self.send(&complete).await?;
-                }
-                self.emit(
-                    &actions::RELEASE_EVENT,
-                    json!({"amf_ue_ngap_id": amf, "ran_ue_ngap_id": ran, "cause": cause}),
-                    depth,
-                );
+                self.on_context_release(&pdu, log).await?;
+            }
+            (PduKind::Initiating, codec::PROC_PDU_SESSION_RESOURCE_RELEASE) => {
+                self.on_resource_release(&pdu, log).await?;
+            }
+            (PduKind::Initiating, codec::PROC_PDU_SESSION_RESOURCE_MODIFY) => {
+                self.on_resource_modify(&pdu, log).await?;
+            }
+            (PduKind::Initiating, codec::PROC_PAGING) => {
+                self.on_paging(&pdu, log).await?;
             }
             (PduKind::Initiating, codec::PROC_NG_RESET) => {
-                self.ues.clear();
+                // Every UE context on the association is gone; a registered UE stays registered
+                // with the network, idle (TS 38.413 8.7.4).
+                let slots = std::mem::take(&mut self.ues);
+                for (_, slot) in slots {
+                    self.park(slot);
+                }
                 let ack = codec::ng_reset_acknowledge(None)?;
                 self.send(&ack).await?;
                 let data = codec::parse_cause_message(&pdu).unwrap_or(Value::Null);

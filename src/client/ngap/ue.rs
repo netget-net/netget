@@ -70,22 +70,46 @@ impl Credentials {
     }
 }
 
+/// A PDU session the UE holds.
+#[derive(Debug, Clone)]
+pub(super) struct UeSession {
+    pub(super) qfis: Vec<u8>,
+    pub(super) five_qi: Option<u8>,
+}
+
+/// A Service Request in flight: what it asked for and why it was sent.
+#[derive(Debug, Clone)]
+pub(super) struct ServiceAttempt {
+    pub(super) service_type: u8,
+    /// `"ue"` (the model's `ngap_service_request`) or `"paging"` (Rust answering NGAP Paging).
+    pub(super) trigger: &'static str,
+}
+
 /// One UE's security state on this gNB.
 pub struct UeSec {
-    supi: String,
+    pub(super) supi: String,
     /// The Registration Request as first sent, retransmitted inside Security Mode Complete.
     initial_nas: Vec<u8>,
     caps: Vec<u8>,
     k_amf: Option<security::Key256>,
-    ctx: Option<NasContext>,
+    pub(super) ctx: Option<NasContext>,
     active: bool,
-    registered: bool,
-    /// K_gNB from K_AMF and the uplink NAS COUNT of Security Mode Complete (TS 33.501 6.8.1.2,
-    /// Annex A.9), to compare with the one the AMF hands the gNB.
-    k_gnb: Option<security::Key256>,
+    pub(super) registered: bool,
+    /// K_gNB from K_AMF and the uplink NAS COUNT of Security Mode Complete or of a Service
+    /// Request (TS 33.501 6.8.1.2, Annex A.9), to compare with the one the AMF hands the gNB.
+    pub(super) k_gnb: Option<security::Key256>,
     next_pti: u8,
     /// PDU session id → (PTI, the DNN asked for).
     pending: BTreeMap<u8, (u8, Option<String>)>,
+    /// The 5G-S-TMSI from the Registration Accept's 5G-GUTI: (AMF Set ID, AMF Pointer, 5G-TMSI).
+    pub(super) s_tmsi: Option<(u16, u8, u32)>,
+    /// PDU sessions the network accepted and has not released.
+    pub(super) sessions: BTreeMap<u8, UeSession>,
+    /// UE-requested releases in flight: PDU session id → PTI.
+    pub(super) releasing: BTreeMap<u8, u8>,
+    /// UE-requested modifications in flight: PDU session id → (PTI, the 5QI asked for).
+    pub(super) modifying: BTreeMap<u8, (u8, Option<u8>)>,
+    pub(super) service: Option<ServiceAttempt>,
 }
 
 impl UeSec {
@@ -112,7 +136,25 @@ impl UeSec {
             k_gnb: None,
             next_pti: 1,
             pending: BTreeMap::new(),
+            s_tmsi: None,
+            sessions: BTreeMap::new(),
+            releasing: BTreeMap::new(),
+            modifying: BTreeMap::new(),
+            service: None,
         })
+    }
+
+    /// The next procedure transaction identity, 1..=254 (0 is unassigned, 255 reserved).
+    pub(super) fn take_pti(&mut self) -> u8 {
+        let pti = self.next_pti;
+        self.next_pti = if pti >= 254 { 1 } else { pti + 1 };
+        pti
+    }
+
+    /// The selected algorithms, as `ngap_ue_registered` and the service events name them.
+    pub(super) fn nas_security(&self) -> Value {
+        let (ia, ea) = self.ctx.as_ref().map(|c| (c.ia, c.ea)).unwrap_or((0, 0));
+        json!({"integrity": security::integrity_name(ia), "ciphering": security::ciphering_name(ea)})
     }
 
     pub fn is_active(&self) -> bool {
@@ -128,13 +170,27 @@ impl UeSec {
     }
 }
 
+/// `pdu_session_type` of `ngap_pdu_session_request`: ipv4 (default), ipv6 or ipv4v6, as the
+/// 5GSM code (TS 24.501 9.11.4.11).
+pub(super) fn session_type_code(action: &Value) -> Result<u8> {
+    match action.get("pdu_session_type").filter(|v| !v.is_null()) {
+        None => Ok(1),
+        Some(v) => match v.as_str().map(|s| s.trim().to_ascii_lowercase()).as_deref() {
+            Some("ipv4") => Ok(1),
+            Some("ipv6") => Ok(2),
+            Some("ipv4v6") => Ok(3),
+            _ => bail!("pdu_session_type must be \"ipv4\", \"ipv6\" or \"ipv4v6\""),
+        },
+    }
+}
+
 impl Gnb {
-    fn sec(&mut self, ran: u64) -> Option<&mut UeSec> {
+    pub(super) fn sec(&mut self, ran: u64) -> Option<&mut UeSec> {
         self.ues.get_mut(&ran).and_then(|s| s.sec.as_deref_mut())
     }
 
     /// Answer the AMF for a UE in Rust: `nas` (as protected `nas_raw`) for UE `ran`.
-    async fn send_ue_uplink(
+    pub(super) async fn send_ue_uplink(
         &mut self,
         amf: u64,
         ran: u64,
@@ -177,7 +233,11 @@ impl Gnb {
         }
         let plain = if sht == security::SHT_PLAIN {
             let active = self.sec(ran).map(|s| s.active).unwrap_or(false);
-            if active {
+            // TS 24.501 4.4.4.2: a Service Reject is processed without integrity protection —
+            // the network may be unable to verify the Service Request that it answers.
+            let service_reject = raw.get(2) == Some(&nas::SERVICE_REJECT)
+                && self.sec(ran).map(|s| s.service.is_some()).unwrap_or(false);
+            if active && !service_reject {
                 log.warn(format!(
                     "NGAP client UE {ran}: unprotected downlink NAS after security was \
                      established; discarded (decision=nas_unprotected_refused)"
@@ -273,7 +333,18 @@ impl Gnb {
                     return Ok(true);
                 };
                 sec.registered = true;
-                let (ia, ea) = sec.ctx.as_ref().map(|c| (c.ia, c.ea)).unwrap_or((0, 0));
+                // The 5G-S-TMSI a Service Request and a Paging name: the 5G-GUTI's AMF Set ID,
+                // AMF Pointer and 5G-TMSI (TS 23.003 2.10).
+                if let Some(g) = accept.guti.as_ref().filter(|g| g["type"] == "5g_guti") {
+                    if let (Some(set), Some(pointer), Some(tmsi)) = (
+                        g["amf_set_id"].as_u64(),
+                        g["amf_pointer"].as_u64(),
+                        g["tmsi"].as_u64(),
+                    ) {
+                        sec.s_tmsi = Some((set as u16, pointer as u8, tmsi as u32));
+                    }
+                }
+                let nas_security = sec.nas_security();
                 let supi = format!("imsi-{}", sec.supi);
                 log.info(format!(
                     "NGAP client UE {ran} {supi}: registered (decision=ue_registered)"
@@ -287,7 +358,7 @@ impl Gnb {
                         "guti": accept.guti,
                         "allowed_nssai": accept.allowed_nssai.iter().map(nas::Snssai::to_json).collect::<Vec<_>>(),
                         "tai_list": accept.tai_list,
-                        "nas_security": {"integrity": security::integrity_name(ia), "ciphering": security::ciphering_name(ea)},
+                        "nas_security": nas_security,
                         "k_gnb_verified": k_gnb_verified,
                     }),
                     depth,
@@ -303,6 +374,17 @@ impl Gnb {
                 }
                 self.on_session_management(amf, ran, &t.payload, depth, log)
                     .await
+            }
+            nas::SERVICE_ACCEPT
+                if sht != security::SHT_PLAIN
+                    && self.sec(ran).map(|s| s.service.is_some()).unwrap_or(false) =>
+            {
+                self.on_service_accept(amf, ran, &plain, depth, log).await?;
+                Ok(true)
+            }
+            nas::SERVICE_REJECT if self.sec(ran).map(|s| s.service.is_some()).unwrap_or(false) => {
+                self.on_service_reject(amf, ran, &plain, sht, depth, log);
+                Ok(true)
             }
             0x54 => {
                 // Configuration Update Command: acknowledge when it asks (IEI 0xD-, ACK bit).
@@ -373,8 +455,13 @@ impl Gnb {
             return Ok(true);
         }
         let mismatch = smc.replayed_ue_security_capability != sec.caps;
-        let unsupported =
-            !matches!(smc.ia, security::NIA2) || !matches!(smc.ea, security::NEA0 | security::NEA2);
+        // 128-NIA1/2/3 with NEA0/1/2/3. NIA0 is refused: a UE accepts null integrity only for an
+        // emergency session (TS 33.501 5.5.2), which this UE never asks for.
+        let unsupported = !matches!(smc.ia, security::NIA1 | security::NIA2 | security::NIA3)
+            || !matches!(
+                smc.ea,
+                security::NEA0 | security::NEA1 | security::NEA2 | security::NEA3
+            );
         if mismatch || unsupported {
             log.warn(format!(
                 "NGAP client UE {ran}: Security Mode Command refused ({}) \
@@ -426,6 +513,14 @@ impl Gnb {
         let Some(sec) = self.sec(ran) else {
             return Ok(false);
         };
+        if !matches!(
+            mt,
+            sm::PDU_SESSION_ESTABLISHMENT_ACCEPT | sm::PDU_SESSION_ESTABLISHMENT_REJECT
+        ) {
+            return self
+                .on_session_procedure(amf, ran, payload, depth, log)
+                .await;
+        }
         let dnn_asked = sec.pending.remove(&psi).and_then(|(_, d)| d);
         match mt {
             sm::PDU_SESSION_ESTABLISHMENT_ACCEPT => {
@@ -438,16 +533,28 @@ impl Gnb {
                         return Ok(true);
                     }
                 };
+                sec.sessions.insert(
+                    psi,
+                    UeSession {
+                        qfis: a.qfis.clone(),
+                        five_qi: None,
+                    },
+                );
                 let tunnel = self
                     .ues
                     .get(&ran)
                     .and_then(|s| s.sessions.get(&psi))
                     .cloned();
                 let k_gnb_verified = self.ues.get(&ran).and_then(|s| s.k_gnb_verified);
+                let iid = a.ipv6_iid.as_ref().map(sm::iid_string);
                 log.info(format!(
-                    "NGAP client UE {ran}: PDU session {psi} established, UE address {} \
+                    "NGAP client UE {ran}: PDU session {psi} ({}) established, UE address {}{} \
                      (decision=pdu_session_established)",
-                    a.address.map(|x| x.to_string()).unwrap_or_default()
+                    sm::pdu_session_type_name(a.pdu_session_type),
+                    a.address.map(|x| x.to_string()).unwrap_or_default(),
+                    iid.as_deref()
+                        .map(|i| format!(" IPv6 interface identifier {i}"))
+                        .unwrap_or_default()
                 ));
                 self.emit(
                     &actions::PDU_SESSION_EVENT,
@@ -456,7 +563,9 @@ impl Gnb {
                         "ran_ue_ngap_id": ran,
                         "pdu_session_id": psi,
                         "result": "accepted",
+                        "pdu_session_type": sm::pdu_session_type_name(a.pdu_session_type),
                         "ue_ipv4": a.address.map(|x| x.to_string()),
+                        "ue_ipv6_interface_identifier": iid,
                         "dnn": a.dnn.or(dnn_asked),
                         "s_nssai": a.s_nssai.map(|s| s.to_json()),
                         "qfis": a.qfis,
@@ -485,13 +594,7 @@ impl Gnb {
                     depth,
                 );
             }
-            _ => {
-                self.emit(
-                    &actions::DOWNLINK_NAS_EVENT,
-                    json!({"amf_ue_ngap_id": amf, "ran_ue_ngap_id": ran, "nas": sm::decode(payload), "protected": true}),
-                    depth,
-                );
-            }
+            _ => {}
         }
         Ok(true)
     }
@@ -518,15 +621,11 @@ impl Gnb {
             Some(p) if p >= 1 => p as u8,
             Some(_) => bail!("pdu_session_id must be 1..15"),
             None => (1..=15u8)
-                .find(|p| !sec.pending.contains_key(p))
+                .find(|p| !sec.pending.contains_key(p) && !sec.sessions.contains_key(p))
                 .context("no free PDU session id")?,
         };
-        let pti = sec.next_pti;
-        sec.next_pti = if sec.next_pti >= 254 {
-            1
-        } else {
-            sec.next_pti + 1
-        };
+        let session_type = session_type_code(action)?;
+        let pti = sec.take_pti();
         let dnn = action
             .get("dnn")
             .and_then(Value::as_str)
@@ -535,7 +634,7 @@ impl Gnb {
             Some(v) if !v.is_null() => Some(nas::Snssai::from_json(v).map_err(|e| anyhow!(e))?),
             _ => None,
         };
-        let req = sm::establishment_request(psi, pti, 1, 1);
+        let req = sm::establishment_request(psi, pti, session_type, 1);
         let ul = nas::ul_nas_transport_sm(psi, 1, s_nssai.as_ref(), dnn.as_deref(), &req)
             .map_err(|e| anyhow!(e))?;
         sec.pending.insert(psi, (pti, dnn));
