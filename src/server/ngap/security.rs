@@ -11,8 +11,10 @@
 //! two independent implementations the pair tests talk to (UERANSIM's UE verifies every MAC this
 //! module computes and the AUTN; Open5GS's AMF hands the gNB a K_gNB the UE side recomputes).
 //!
-//! SNOW 3G (NIA1/NEA1) and ZUC (NIA3/NEA3) are not implemented: an AMF selects only NIA2 with
-//! NEA0 or NEA2, and a UE that supports neither is refused with 5GMM cause #23.
+//! NIA1/NEA1 (SNOW 3G, [`super::snow3g`]) and NIA3/NEA3 (ZUC, [`super::zuc`]) live in their own
+//! modules, checked against every published SAGE and TS 33.401 test set in
+//! `tests/server/ngap/cipher_vectors_test.rs`; a [`NasContext`] protects and verifies with
+//! whichever algorithms it names. Which ones an AMF selects is its policy, in `amf.rs`.
 
 use aes::cipher::{BlockEncrypt, KeyInit, KeyIvInit, StreamCipher};
 use aes::Aes128;
@@ -389,10 +391,14 @@ pub fn nea2(key: &Key128, count: u32, bearer: u8, direction: u8, data: &mut [u8]
 
 /// NAS integrity algorithms NetGet implements, by their 4-bit codes (TS 24.501 9.11.3.34).
 pub const NIA0: u8 = 0;
+pub const NIA1: u8 = 1;
 pub const NIA2: u8 = 2;
+pub const NIA3: u8 = 3;
 /// NAS ciphering algorithms NetGet implements.
 pub const NEA0: u8 = 0;
+pub const NEA1: u8 = 1;
 pub const NEA2: u8 = 2;
+pub const NEA3: u8 = 3;
 
 pub fn integrity_name(ia: u8) -> &'static str {
     match ia {
@@ -416,14 +422,19 @@ pub fn ciphering_name(ea: u8) -> &'static str {
 
 fn mac(ia: u8, key: &Key128, count: u32, direction: u8, data: &[u8]) -> [u8; 4] {
     match ia {
+        NIA1 => super::snow3g::nia1(key, count, BEARER_3GPP, direction, data),
         NIA2 => nia2(key, count, BEARER_3GPP, direction, data),
+        NIA3 => super::zuc::nia3(key, count, BEARER_3GPP, direction, data),
         _ => [0; 4],
     }
 }
 
 fn cipher(ea: u8, key: &Key128, count: u32, direction: u8, data: &mut [u8]) {
-    if ea == NEA2 {
-        nea2(key, count, BEARER_3GPP, direction, data);
+    match ea {
+        NEA1 => super::snow3g::nea1(key, count, BEARER_3GPP, direction, data),
+        NEA2 => nea2(key, count, BEARER_3GPP, direction, data),
+        NEA3 => super::zuc::nea3(key, count, BEARER_3GPP, direction, data),
+        _ => {}
     }
 }
 
@@ -589,6 +600,13 @@ impl NasContext {
         }
         self.counts.rx_last = Some(count);
         Ok((body, count, sht))
+    }
+
+    /// Cipher or decipher `data` with this context's algorithm at an explicit COUNT and
+    /// direction — the NAS message container of an initial NAS message, which TS 24.501 4.4.6
+    /// ciphers at the COUNT of the integrity-protected message that carries it.
+    pub fn cipher_at(&self, count: u32, direction: u8, data: &mut [u8]) {
+        cipher(self.ea, &self.k_enc, count, direction, data);
     }
 
     /// The uplink NAS COUNT of the latest accepted uplink message (the AMF's view), used for

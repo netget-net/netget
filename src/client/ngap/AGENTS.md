@@ -39,6 +39,51 @@ tests.
   tunnel (this gNB's N2 address, a random TEID) and raises `ngap_pdu_session_established`.
   The model's own uplink NAS for a secured UE is protected for it; a downlink message whose MAC
   or COUNT does not verify is discarded with its `decision=` tag. Keys never reach an event.
+  The Security Mode Command may select 128-NIA1/2/3 with NEA0/1/2/3 (SNOW 3G, AES, ZUC from
+  `security`); NIA0 is refused (#24). `ngap_ue_registered.nas_security` names the pair.
+  `ngap_pdu_session_request` takes `pdu_session_type` (`ipv4` default, `ipv6`, `ipv4v6`) and
+  `ngap_pdu_session_established` reports `ue_ipv4` and/or `ue_ipv6_interface_identifier`
+  (the IID as the low half of an IPv6 address, `::3`; the prefix would come in a Router
+  Advertisement on a user plane this gNB does not run).
+- **The rest of the UE's life** (`procedures.rs`), one event per outcome:
+  - `ngap_pdu_session_release {ran_ue_ngap_id, pdu_session_id, cause?}` → protected 5GSM
+    Release Request (#36 default) in a UL NAS Transport with no request type. The AMF's PDU
+    Session Resource Release Command is answered with a Release Response for the sessions it
+    lists (their tunnels dropped), and the Release Command it carries — or one in a plain
+    Downlink NAS Transport, network-requested with PTI 0 — with Release Complete:
+    `ngap_pdu_session_released {result: released, requested_by: ue|network, cause}`. A Release
+    Reject is the same event with `result: rejected`.
+  - `ngap_pdu_session_modification {ran_ue_ngap_id, pdu_session_id, five_qi?}` → protected
+    Modification Request with a requested QoS flow description (modify, the session's QFI,
+    the 5QI). The PDU Session Resource Modify Request is answered with a Modify Response
+    naming the QFIs of each session this gNB has (unknown sessions fail with
+    `radioNetwork/unknown-PDU-session-ID`), the Modification Command with Modification
+    Complete: `ngap_pdu_session_modified {result: modified, requested_by, requested_five_qi,
+    five_qi, session_ambr_kbps}`; a Modification Reject is `result: rejected` with the cause.
+  - `ngap_ue_context_release_request {ran_ue_ngap_id, cause?}` (default
+    `radioNetwork/user-inactivity`) → UE Context Release Request. When a UE Context Release
+    Command arrives for a registered UE with credentials and a 5G-S-TMSI (from the
+    Registration Accept's 5G-GUTI), its `UeSec` — NAS context, sessions, 5G-S-TMSI, and the
+    depth of the last model turn for it — moves to the idle store keyed by SUPI, and
+    `ngap_ue_context_release` says `cm_state: idle` with `supi` and `pdu_sessions`. NG Reset
+    idles registered UEs the same way.
+  - `ngap_service_request {supi, service_type?, pdu_session_ids?}` (`data` default with every
+    session in the Uplink data status; `signalling`, `mobile_terminated`) → a new RAN UE NGAP
+    ID and an Initial UE Message with the FiveG-S-TMSI IE. The NAS is TS 24.501 4.4.6 as
+    UERANSIM v3.2.7 sends it: the whole Service Request (Uplink data status, PDU session
+    status) ciphered with the current context **at the COUNT of the outer message** in the
+    NAS message container (IEI 0x71); the outer message keeps the cleartext IEs only and goes
+    with security header type 1. K_gNB is derived from that COUNT. The Initial Context Setup
+    that answers it is compared (`k_gnb_verified`), its sessions set up, and the protected
+    Service Accept's PDU session status applied (a session the network no longer has is
+    released locally): `ngap_service_accepted {service_type, trigger: ue|paging,
+    pdu_session_status, user_plane_sessions, released_locally, k_gnb_verified}`. A Service
+    Reject (accepted unprotected while a Service Request is in flight, TS 24.501 4.4.4.2) is
+    `ngap_service_rejected`; #9/#10 drop the UE's registration.
+  - **Paging** is Rust's: an NGAP Paging whose 5G-S-TMSI is an idle UE's, in a tracking area
+    this gNB serves, is answered with that UE's Service Request (mobile terminated) — the
+    outcome is `ngap_service_accepted` with `trigger: paging`. Paging for nobody here is logged
+    (`decision=paging_not_here`) and ignored.
 - **Rust answers without asking**: UE Context Release Command → Release Complete (and
   `ngap_ue_context_release` tells the model), NG Reset → Acknowledge, a PDU that does not decode
   → Error Indication `protocol/transfer-syntax-error` (never shown to the model), an
@@ -51,7 +96,7 @@ tests.
 | NG Setup answer | 15 s (`NG_SETUP_TIMEOUT`) |
 | Idle association | 3600 s |
 | Inbound PDU | 65535 octets; over the lab framing an oversized frame ends the association |
-| UEs | 1024 (`MAX_UES`) |
+| UEs | 1024 (`MAX_UES`) connected, and 1024 idle (a UE that cannot be kept idle is dropped, `decision=idle_store_full`) |
 | Model turns | `MAX_FOLLOWUP_DEPTH` 8, **per UE**: each UE remembers how deep the action that last spoke for it was, and the AMF's next answer about that UE is raised at that depth, so a model and an AMF that keep answering each other stop |
 
 ## Command channel
@@ -64,12 +109,22 @@ and the RAN UE NGAP ID allocator with the model's.
 `tests/client/ngap/`: a whole Open5GS 2.8 core over SCTP (Linux) registers the model's UE after
 5G-AKA — Open5GS's UDM built the AUTN the UE verified, its AUSF checked the UE's RES*, its AMF
 logs `Registration complete` and hands the gNB a K_gNB equal to the UE's own — and its SMF logs
-the PDU session it created with the address it gave. Open5GS's `open5gs-amfd` alone accepts NG
+the PDU session it created with the address it gave. The same core then removes the session
+the model releases, gives an IPv4v6 session (the IID matches the SMF's IPv6 address),
+releases the UE's context on the gNB's request, accepts the model's Service Request with a
+K_gNB equal to the UE's, and answers the UE's modification request — accepted, but with the
+subscribed 5QI 9 rather than the 8 asked for (Open5GS 2.8.0 ignores a requested 5QI). Open5GS's `open5gs-amfd` alone accepts NG
 Setup, asks an unknown 5G-GUTI for its identity and refuses a foreign PLMN. A canned AMF over
 the lab transport covers the follow-up bound, malformed and oversized PDUs, the refused NG
 Setup, and asserts on the wire that the identity the AMF receives is the one the model wrote.
 
-Not implemented: a user plane (the gNB names a downlink tunnel but carries no packets), SUCI
-concealment on the UE side (null scheme only, though `suci.rs` can conceal), NIA1/NIA3/NEA1/NEA3,
-EAP-AKA', handover, paging, service request, UE context modification, PDU session release, RAN
-configuration update, more than one AMF per client.
+NetGet's own AMF over the lab transport (`lifecycle_lab_test`, circular) runs the whole life —
+release, an IPv4v6 session, modification, idle, Service Request, paging — under NIA2/NEA0,
+NIA1/NEA1 and NIA3/NEA3; it is the only place paging is exercised.
+
+Not implemented: a user plane (the gNB names a downlink tunnel but carries no packets, so no
+Router Solicitation and no IPv6 prefix), SUCI concealment on the UE side (null scheme only,
+though `suci.rs` can conceal), EAP-AKA', handover, UE context modification, RAN configuration
+update, requested QoS rules or packet filters in a modification request, emergency and
+high-priority service types, the Service Request timer T3517 and its retries, more than one
+AMF per client.

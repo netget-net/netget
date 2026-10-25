@@ -639,3 +639,451 @@ async fn ueransim_registers_gets_a_pdu_session_and_pings_through_the_tunnel() {
         );
     }
 }
+
+// ============================================================================
+// The rest of the UE's life: release, CM-IDLE, Service Request, paging, SNOW 3G and ZUC
+// ============================================================================
+
+/// The model of the lifecycle tests: admit the gNB, register the subscriber, give each session
+/// 10.<net>.0.<psi+1> with 10.<net>.0.1 answering, and release a session when the UE asks.
+fn lifecycle_policy(supi: &str, net: u8) -> String {
+    format!(
+        r#"import json, sys
+i = json.load(sys.stdin); t = i["event_type_id"]; e = i["event"]
+a = []
+if t == "ngap_ng_setup_request":
+    plmn = e["global_ran_node_id"]["plmn"]
+    a = [{{"type": "send_ng_setup_response", "amf_name": "netget-amf",
+          "served_guami": [{{"plmn": plmn, "amf_region_id": 2, "amf_set_id": 1, "amf_pointer": 0}}],
+          "plmn_support": [{{"plmn": plmn, "slices": [{{"sst": 1}}]}}]}}]
+elif t == "ngap_registration_request" and e["supi"] == "{supi}":
+    a = [{{"type": "send_registration_accept", "amf_ue_ngap_id": e["amf_ue_ngap_id"], "allowed_nssai": [{{"sst": 1}}]}}]
+elif t == "ngap_pdu_session_establishment_request" and e["dnn"] == "internet":
+    a = [{{"type": "send_pdu_session_accept", "amf_ue_ngap_id": e["amf_ue_ngap_id"],
+          "pdu_session_id": e["pdu_session_id"], "ue_ipv4": "10.{net}.0.%d" % (e["pdu_session_id"] + 1),
+          "reachable_addresses": ["10.{net}.0.1"]}}]
+elif t == "ngap_pdu_session_release_request":
+    a = [{{"type": "send_pdu_session_release", "amf_ue_ngap_id": e["amf_ue_ngap_id"],
+          "pdu_session_id": e["pdu_session_id"]}}]
+print(json.dumps({{"actions": a}}))"#
+    )
+}
+
+/// One UERANSIM gNB and UE registered with a secured session through NetGet's AMF.
+struct Rig {
+    state: AppState,
+    id: ServerId,
+    port: u16,
+    supi: String,
+    capture: LiveCapture,
+    gnb: ToolProcess,
+    ue: ToolProcess,
+    _reaper: Option<RootReaper>,
+    _dir: tempfile::TempDir,
+}
+
+impl Rig {
+    /// `addrs`: the gNB's and the user plane's loopback addresses, distinct per test.
+    async fn start(supi: &str, net: u8, gnb_ip: &str, upf_ip: &str, extra: Value) -> Rig {
+        let handlers = vec![json!({"event_pattern": "*", "handler": {"type": "script",
+            "language": "python", "code": lifecycle_policy(&format!("imsi-{supi}"), net)}})];
+        let mut params = json!({
+            "transport": "sctp",
+            "subscribers": [{"supi": format!("imsi-{supi}"),
+                             "subscriber_key": "465B5CE8B199B49FAA5F0A2EE238A6BC",
+                             "subscriber_opc": "E8ED289DEBA952E4283B54E88E6183CA",
+                             "amf_field": "8000"}],
+            "user_plane_address": upf_ip,
+        });
+        for (k, v) in extra.as_object().unwrap() {
+            params[k] = v.clone();
+        }
+        let (state, id, amf) = start_amf_with(handlers, params).await;
+        let port = amf.port();
+        let capture = LiveCapture::start(port).await;
+        let dir = tempfile::tempdir().unwrap();
+        let mut gnb_cmd = ueransim("nr-gnb");
+        gnb_cmd.arg("-c").arg(gnb_config(dir.path(), gnb_ip, amf));
+        let gnb = ToolProcess::spawn(gnb_cmd, "nr-gnb", HINT).unwrap();
+        gnb.wait_for_line("NG Setup success", Duration::from_secs(30), |l| {
+            l.contains("NG Setup procedure is successful")
+        })
+        .await
+        .unwrap();
+        let ue_cfg = ue_config_with(
+            dir.path(),
+            gnb_ip,
+            &format!("imsi-{supi}"),
+            0,
+            "\n  - type: 'IPv4'\n    apn: 'internet'\n    slice:\n      sst: 1",
+        );
+        // nr-ue names its TUN by a prefix and the first free number, and two UEs starting at
+        // once race for the same name (TUNSETIFF: Device or resource busy): each rig has its own
+        // prefix. `-r` keeps nr-ue out of the host's policy routing, which every nr-ue edits
+        // (`ip route add ... table rt_<tun>`) with no lock between processes; the TUN's own
+        // /24 route is all a ping through it needs.
+        {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&ue_cfg)
+                .unwrap();
+            writeln!(f, "tunName: 'ngx{}t'", &supi[supi.len() - 3..]).unwrap();
+        }
+        // SAFETY: geteuid has no preconditions and cannot fail.
+        let root = unsafe { libc::geteuid() } == 0;
+        let ue_cmd = if root {
+            let mut c = ueransim("nr-ue");
+            c.arg("-r").arg("-c").arg(&ue_cfg);
+            c
+        } else {
+            let mut c = ueransim("sudo");
+            c.arg("-n")
+                .arg(ueransim_binary("nr-ue"))
+                .arg("-r")
+                .arg("-c")
+                .arg(&ue_cfg);
+            c
+        };
+        let ue = ToolProcess::spawn(ue_cmd, "nr-ue", HINT).unwrap();
+        let rig = Rig {
+            state,
+            id,
+            port,
+            supi: format!("imsi-{supi}"),
+            capture,
+            gnb,
+            ue,
+            _reaper: (!root).then(|| RootReaper(ue_cfg.clone())),
+            _dir: dir,
+        };
+        rig.wait_ue("registration", 1, |l| {
+            l.contains("Initial Registration is successful")
+        })
+        .await;
+        rig
+    }
+
+    fn fail(&self, what: &str) -> ! {
+        panic!(
+            "{what}\n--- privileges ---\n{}\n--- nr-ue ---\n{}\n--- nr-gnb ---\n{}",
+            privilege_report(),
+            self.ue.lines().join("\n"),
+            self.gnb.lines().join("\n")
+        )
+    }
+
+    /// Wait until `n` of nr-ue's lines satisfy `pred`; the newest one.
+    async fn wait_ue(&self, what: &str, n: usize, pred: impl Fn(&str) -> bool) -> String {
+        self.wait_lines(&self.ue, what, n, pred).await
+    }
+
+    async fn wait_gnb(&self, what: &str, n: usize, pred: impl Fn(&str) -> bool) -> String {
+        self.wait_lines(&self.gnb, what, n, pred).await
+    }
+
+    async fn wait_lines(
+        &self,
+        p: &ToolProcess,
+        what: &str,
+        n: usize,
+        pred: impl Fn(&str) -> bool,
+    ) -> String {
+        let found = tokio::time::timeout(Duration::from_secs(60), async {
+            loop {
+                let hits: Vec<String> = p.lines().into_iter().filter(|l| pred(l)).collect();
+                if hits.len() >= n {
+                    return hits[n - 1].clone();
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await;
+        match found {
+            Ok(l) => l,
+            Err(_) => self.fail(&format!("nothing logged {what} (wanted {n})")),
+        }
+    }
+
+    /// The interface of PDU session `psi` once its TUN is up (the `n`th time).
+    async fn tun(&self, n: usize) -> (String, String) {
+        let line = self
+            .wait_ue("TUN up", n, |l| {
+                l.contains("TUN interface[") && l.contains("is up")
+            })
+            .await;
+        let inside = line
+            .split("TUN interface[")
+            .nth(1)
+            .and_then(|s| s.split(']').next())
+            .unwrap_or_default()
+            .to_string();
+        match inside.split_once(", ") {
+            Some((i, a)) => (i.to_string(), a.to_string()),
+            None => self.fail(&line),
+        }
+    }
+
+    async fn cli(&self, command: &str) -> String {
+        let mut cli = ueransim("nr-cli");
+        cli.args([self.supi.as_str(), "-e", command]);
+        match crate::helpers::real_server::run_tool(cli, "nr-cli", HINT).await {
+            Ok(o) => o,
+            Err(e) => self.fail(&format!("nr-cli {command}: {e}")),
+        }
+    }
+
+    async fn inject(&self, action: Value) -> Value {
+        let server = self.state.get_server(self.id).await.unwrap();
+        let conn = server.connections.keys().next().unwrap().as_u32();
+        let out = self
+            .state
+            .send_to_peer(self.id, conn, action.clone(), Duration::from_secs(10))
+            .await
+            .unwrap_or_else(|e| self.fail(&format!("injecting {action}: {e}")));
+        serde_json::to_value(out).unwrap()
+    }
+}
+
+async fn ping_count(iface: &str, dst: &str, count: u32) -> Result<String, String> {
+    let mut ping = Command::new("ping");
+    ping.args(["-I", iface, "-c", &count.to_string(), "-W", "2", dst]);
+    crate::helpers::real_server::run_tool(ping, "ping", PING_HINT)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// UERANSIM's UE releases its session (the model agrees) and its `uesimtun` goes away; it
+/// establishes another, is released to CM-IDLE by the AMF, and is paged: UERANSIM's gNB takes
+/// NetGet's Paging and the UE answers it with a Service Request that UERANSIM's own gNB then
+/// cannot route (see below). The model is asked about the gNB, the subscriber, two sessions and
+/// one release — nothing about the idle transition or the paging.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ueransim_releases_a_session_goes_idle_and_answers_paging() {
+    let rig = Rig::start("001010000000004", 61, "127.0.0.71", "127.0.0.72", json!({})).await;
+    rig.wait_ue("PDU session", 1, |l| {
+        l.contains("PDU Session establishment is successful")
+    })
+    .await;
+    let (iface, addr) = rig.tun(1).await;
+    assert_eq!(addr, "10.61.0.2");
+    match ping_count(&iface, "10.61.0.1", 2).await {
+        Ok(o) if o.contains("2 received") => {}
+        other => rig.fail(&format!("ping before release: {other:?}")),
+    }
+
+    // UE-requested release, through UERANSIM's own CLI; the model answers it.
+    rig.cli("ps-release 1").await;
+    rig.wait_ue("release command", 1, |l| {
+        l.contains("PDU Session Release Command received")
+    })
+    .await;
+    rig.wait_gnb("resources released", 1, |l| {
+        l.contains("PDU session resource(s) released")
+    })
+    .await;
+    // The TUN interface goes when the session does.
+    let gone = tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let st = Command::new("ip").args(["link", "show", &iface]).output();
+            if matches!(st, Ok(o) if !o.status.success()) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await;
+    if gone.is_err() {
+        rig.fail(&format!("{iface} is still there after the release"));
+    }
+    let list = rig.cli("ps-list").await;
+    assert!(!list.contains("PDU Session1"), "{list}");
+
+    // A new session, then CM-IDLE: the AMF releases the UE's context.
+    rig.cli("ps-establish IPv4 --sst 1 --dnn internet").await;
+    rig.wait_ue("PDU session", 2, |l| {
+        l.contains("PDU Session establishment is successful")
+    })
+    .await;
+    let (_iface, addr) = rig.tun(2).await;
+    assert_eq!(addr, "10.61.0.2", "PSI 1 again");
+    let out = rig
+        .inject(
+            json!({"type": "send_ue_context_release_command", "supi": rig.supi,
+                        "cause": "radioNetwork/user-inactivity"}),
+        )
+        .await;
+    assert!(out.to_string().contains("sent"), "{out}");
+    rig.wait_ue("CM-IDLE", 1, |l| {
+        l.contains("UE switches to state [CM-IDLE]")
+    })
+    .await;
+
+    // Paged by the operator: UERANSIM's gNB accepts NetGet's Paging and pages over its radio,
+    // and the UE recognises its own 5G-S-TMSI in it (it compares AMF Set ID, AMF Pointer and
+    // 5G-TMSI with the 5G-GUTI NetGet assigned) and answers with a Service Request.
+    let out = rig
+        .inject(json!({"type": "send_paging", "supi": rig.supi}))
+        .await;
+    assert!(out.to_string().contains("sent"), "{out}");
+    rig.wait_gnb("paging", 1, |l| l.contains("Paging received"))
+        .await;
+    rig.wait_ue("paging", 1, |l| l.contains("Responding to received Paging"))
+        .await;
+    rig.wait_ue("service request", 1, |l| {
+        l.contains("Sending Service Request due to [IDLE-PAGING]")
+    })
+    .await;
+    // That Service Request never reaches an AMF: UERANSIM v3.2.7's gNB picks the AMF for an
+    // initial NAS message by the slice in a Registration Request's requested NSSAI
+    // (`extractSliceInfoAndModifyPdu` then `selectAmf`), and a Service Request has none, so it
+    // logs this and drops it — whichever core is behind it. NetGet's verification of a Service
+    // Request is therefore shown by `lifecycle_test` (scripted UE) and by NetGet's gNB against
+    // Open5GS's AMF (`tests/client/ngap/`), not here. This assertion pins the reason, so a
+    // UERANSIM that fixes it fails here and the test can be extended.
+    rig.wait_gnb("AMF selection", 1, |l| {
+        l.contains("AMF selection for UE") && l.contains("failed")
+    })
+    .await;
+
+    // The model was asked five things — the gNB, the subscriber, two sessions, one release.
+    for (event, n) in [
+        ("ngap_ng_setup_request", 1),
+        ("ngap_registration_request", 1),
+        ("ngap_pdu_session_establishment_request", 2),
+        ("ngap_pdu_session_release_request", 1),
+        ("ngap_initial_ue_message", 0),
+        ("ngap_uplink_nas_transport", 0),
+    ] {
+        assert_eq!(events(&rig.state, rig.id, event).await.len(), n, "{event}");
+    }
+
+    let Rig {
+        capture,
+        ue,
+        gnb,
+        port,
+        ..
+    } = rig;
+    drop(ue);
+    drop(gnb);
+    let (frames, nas) = capture.finish_with_nas().await;
+    assert_capture(
+        &frames,
+        port,
+        &[
+            (codec::PROC_PDU_SESSION_RESOURCE_RELEASE, 0),
+            (codec::PROC_UE_CONTEXT_RELEASE, 0),
+            (codec::PROC_PAGING, 0),
+        ],
+    );
+    for (code, kind) in [
+        (codec::PROC_PDU_SESSION_RESOURCE_RELEASE, 1u8),
+        (codec::PROC_UE_CONTEXT_RELEASE, 1),
+    ] {
+        assert!(
+            frames.iter().any(|f| f.src_port != port
+                && f.procedures
+                    .iter()
+                    .zip(&f.pdu_kinds)
+                    .any(|(c, k)| *c == code && *k == kind)),
+            "UERANSIM never answered procedure {code}: {frames:#?}"
+        );
+    }
+    // nas-5gs through NEA0: the 5GSM release request, command and complete.
+    let from = |netget: bool| {
+        nas.iter()
+            .filter(move |f| (f.src_port == port) == netget)
+            .collect::<Vec<_>>()
+    };
+    let amf_side = from(true);
+    let ue_side = from(false);
+    assert!(
+        ue_side.iter().any(|f| f.sm_types.contains(&0xd1)),
+        "no Release Request: {nas:#?}"
+    );
+    assert!(
+        amf_side.iter().any(|f| f.sm_types.contains(&0xd3)),
+        "no Release Command: {nas:#?}"
+    );
+    assert!(
+        ue_side.iter().any(|f| f.sm_types.contains(&0xd4)),
+        "no Release Complete: {nas:#?}"
+    );
+    for f in &nas {
+        assert!(
+            f.experts.iter().all(|s| *s < 0x0060_0000),
+            "tshark flags NAS frame {}: {nas:#?}",
+            f.number
+        );
+    }
+}
+
+/// NetGet's AMF selects SNOW 3G (128-NIA1/128-NEA1) and then ZUC (128-NIA3/128-NEA3) by the
+/// operator's preference, and UERANSIM's UE — which implements both independently — verifies
+/// the Security Mode Command's MAC, deciphers the Registration Accept and the session accept,
+/// and pings through the session: every downlink NAS message it acted on was protected with the
+/// selected pair, and every uplink one it sent was checked with it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ueransim_registers_under_snow3g_and_under_zuc() {
+    for (supi, net, gnb_ip, upf_ip, ia, ea, want) in [
+        (
+            "001010000000005",
+            62,
+            "127.0.0.73",
+            "127.0.0.74",
+            "nia1",
+            "nea1",
+            "Selected integrity[1] ciphering[1]",
+        ),
+        (
+            "001010000000006",
+            63,
+            "127.0.0.75",
+            "127.0.0.76",
+            "nia3,nia2",
+            "nea3",
+            "Selected integrity[3] ciphering[3]",
+        ),
+    ] {
+        let rig = Rig::start(
+            supi,
+            net,
+            gnb_ip,
+            upf_ip,
+            json!({"nas_integrity": ia, "nas_ciphering": ea}),
+        )
+        .await;
+        let line = rig
+            .wait_ue("selected algorithms", 1, |l| {
+                l.contains("Selected integrity")
+            })
+            .await;
+        assert!(line.contains(want), "{ia}/{ea}: {line}");
+        rig.wait_ue("PDU session", 1, |l| {
+            l.contains("PDU Session establishment is successful")
+        })
+        .await;
+        let (iface, _) = rig.tun(1).await;
+        match ping_count(&iface, &format!("10.{net}.0.1"), 2).await {
+            Ok(o) if o.contains("2 received") => {}
+            other => rig.fail(&format!("{ia}/{ea} ping: {other:?}")),
+        }
+        let reg = events(&rig.state, rig.id, "ngap_registration_request").await;
+        assert_eq!(
+            reg[0]["nas_security"],
+            json!({"integrity": format!("NIA{}", &ia[3..4]), "ciphering": format!("NEA{}", &ea[3..4])})
+        );
+        let Rig {
+            capture,
+            ue,
+            gnb,
+            port,
+            ..
+        } = rig;
+        drop(ue);
+        drop(gnb);
+        let frames = capture.finish().await;
+        assert_capture(&frames, port, &[(codec::PROC_INITIAL_CONTEXT_SETUP, 0)]);
+    }
+}

@@ -20,6 +20,10 @@ pub const UPLINK_NAS: &str = "ngap_uplink_nas_transport";
 pub const ERROR_INDICATION: &str = "ngap_error_indication";
 pub const NG_SETUP: &str = "ngap_ng_setup";
 pub const PDU_SESSION_REQUEST: &str = "ngap_pdu_session_request";
+pub const PDU_SESSION_RELEASE: &str = "ngap_pdu_session_release";
+pub const PDU_SESSION_MODIFICATION: &str = "ngap_pdu_session_modification";
+pub const UE_CONTEXT_RELEASE_REQUEST: &str = "ngap_ue_context_release_request";
+pub const SERVICE_REQUEST: &str = "ngap_service_request";
 
 /// Defaults for the gNB's NG Setup, used when the startup parameters name none.
 pub const DEFAULT_MCC: &str = "001";
@@ -160,8 +164,9 @@ pub fn actions() -> Vec<ActionDefinition> {
             PDU_SESSION_REQUEST,
             "Ask for a PDU session for a registered UE (one this gNB holds the subscriber's \
              credentials for, after ngap_ue_registered). Rust sends the protected 5GSM PDU \
-             Session Establishment Request (IPv4, SSC mode 1), answers the AMF's PDU Session \
-             Resource Setup with a downlink tunnel, and raises ngap_pdu_session_established.",
+             Session Establishment Request (SSC mode 1, the PDU session type you name), answers \
+             the AMF's PDU Session Resource Setup with a downlink tunnel, and raises \
+             ngap_pdu_session_established.",
             vec![
                 p(
                     "ran_ue_ngap_id",
@@ -182,9 +187,104 @@ pub fn actions() -> Vec<ActionDefinition> {
                     "The slice {\"sst\": 1, \"sd\"?: \"010203\"}; default none (the AMF chooses)",
                     false,
                 ),
+                p(
+                    "pdu_session_type",
+                    "string",
+                    "ipv4 (default), ipv6 or ipv4v6",
+                    false,
+                ),
             ],
             json!({"type": PDU_SESSION_REQUEST, "ran_ue_ngap_id": 1, "pdu_session_id": 1,
-                   "dnn": "internet", "s_nssai": {"sst": 1}}),
+                   "dnn": "internet", "s_nssai": {"sst": 1}, "pdu_session_type": "ipv4"}),
+        ),
+        action(
+            PDU_SESSION_RELEASE,
+            "Release one of a registered UE's PDU sessions (UE-requested): Rust sends the \
+             protected 5GSM PDU Session Release Request, answers the AMF's PDU Session Resource \
+             Release Command and the Release Command it carries, and raises \
+             ngap_pdu_session_released (or its rejected form).",
+            vec![
+                p("ran_ue_ngap_id", "number", "The RAN UE NGAP ID of a registered UE with credentials on this gNB, from its events", true),
+                p(
+                    "pdu_session_id",
+                    "number",
+                    "The session to release (1-15)",
+                    true,
+                ),
+                p(
+                    "cause",
+                    "string",
+                    "5GSM cause, default regular_deactivation",
+                    false,
+                ),
+            ],
+            json!({"type": PDU_SESSION_RELEASE, "ran_ue_ngap_id": 1, "pdu_session_id": 1,
+                   "cause": "regular_deactivation"}),
+        ),
+        action(
+            PDU_SESSION_MODIFICATION,
+            "Ask to modify one of a registered UE's PDU sessions: Rust sends the protected 5GSM \
+             PDU Session Modification Request (a requested QoS flow description for the default \
+             flow carrying five_qi), answers the AMF's PDU Session Resource Modify Request and \
+             the Modification Command (Modification Complete), and raises \
+             ngap_pdu_session_modified with what the network decided.",
+            vec![
+                p("ran_ue_ngap_id", "number", "The RAN UE NGAP ID of a registered UE with credentials on this gNB, from its events", true),
+                p("pdu_session_id", "number", "The session (1-15)", true),
+                p(
+                    "five_qi",
+                    "number",
+                    "The 5QI asked for on the default QoS flow (1-255)",
+                    false,
+                ),
+            ],
+            json!({"type": PDU_SESSION_MODIFICATION, "ran_ue_ngap_id": 1, "pdu_session_id": 1,
+                   "five_qi": 8}),
+        ),
+        action(
+            UE_CONTEXT_RELEASE_REQUEST,
+            "Ask the AMF to release a UE's N2 context (UE Context Release Request), e.g. after \
+             inactivity. When the AMF's Release Command comes, Rust completes it and a registered \
+             UE goes CM-IDLE, keeping its security context and sessions \
+             (ngap_ue_context_release with cm_state idle); bring it back with \
+             ngap_service_request.",
+            vec![
+                p("ran_ue_ngap_id", "number", "The RAN UE NGAP ID of a registered UE with credentials on this gNB, from its events", true),
+                p(
+                    "cause",
+                    "string",
+                    "NGAP cause group/value, default radioNetwork/user-inactivity",
+                    false,
+                ),
+            ],
+            json!({"type": UE_CONTEXT_RELEASE_REQUEST, "ran_ue_ngap_id": 1,
+                   "cause": "radioNetwork/user-inactivity"}),
+        ),
+        action(
+            SERVICE_REQUEST,
+            "Bring an idle UE back (CM-IDLE to CM-CONNECTED): Rust gives it a new RAN UE NGAP \
+             ID and sends an Initial UE Message with its 5G-S-TMSI and an integrity-protected \
+             Service Request, verifies the AMF's K_gNB and Service Accept, sets up the sessions' \
+             tunnels and raises ngap_service_accepted (or ngap_service_rejected). An idle UE the \
+             AMF pages answers by itself; you are told with trigger paging.",
+            vec![
+                p("supi", "string", "The idle subscriber, imsi-<digits>", true),
+                p(
+                    "service_type",
+                    "string",
+                    "data (default), signalling or mobile_terminated",
+                    false,
+                ),
+                p(
+                    "pdu_session_ids",
+                    "array",
+                    "Sessions with uplink data waiting (Uplink data status); default every \
+                     session the UE holds for data, none otherwise",
+                    false,
+                ),
+            ],
+            json!({"type": SERVICE_REQUEST, "supi": "imsi-001010000000001",
+                   "service_type": "data", "pdu_session_ids": [1]}),
         ),
         action(
             NG_SETUP,
@@ -239,10 +339,15 @@ pub static DOWNLINK_NAS_EVENT: LazyLock<EventType> = LazyLock::new(|| {
 pub static RELEASE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     ev(
         "ngap_ue_context_release",
-        "The AMF released a UE (UE Context Release Command). NetGet already answered with UE \
-         Context Release Complete; the UE is gone from this gNB.",
+        "The AMF released a UE's N2 context (UE Context Release Command). NetGet already \
+         answered with UE Context Release Complete. cm_state idle: a registered UE with \
+         credentials is CM-IDLE, keeping its security context and pdu_sessions; bring it back \
+         with ngap_service_request {supi}, and it answers the AMF's paging by itself. \
+         cm_state released: the UE is gone from this gNB.",
         vec![
             p("amf_ue_ngap_id", "number", "The released UE", true),
+            p("cm_state", "string", "idle or released", true),
+            p("supi", "string", "imsi-<digits>, for an idle UE", false),
             p(
                 "cause",
                 "object",
@@ -295,6 +400,109 @@ pub static PDU_SESSION_EVENT: LazyLock<EventType> = LazyLock::new(|| {
                 "string",
                 "The address the network assigned",
                 false,
+            ),
+        ],
+    )
+});
+
+pub static PDU_RELEASED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    ev(
+        "ngap_pdu_session_released",
+        "A PDU session ended: result released (Rust answered the network's Release Command \
+         with Release Complete and dropped the tunnel; requested_by ue when it answered this \
+         UE's request, network otherwise) or rejected (the network refused the UE's release; \
+         the session stays). cause is the 5GSM cause.",
+        vec![
+            p("ran_ue_ngap_id", "number", "This gNB's id for the UE", true),
+            p("pdu_session_id", "number", "The session (1-15)", true),
+            p("result", "string", "released or rejected", true),
+            p("requested_by", "string", "Who asked for the release: \"ue\" (this UE's request, which the model made) or \"network\" (the AMF released it unasked)", true),
+            p(
+                "cause",
+                "object",
+                "{\"value\", \"name\"} of the 5GSM cause",
+                false,
+            ),
+        ],
+    )
+});
+
+pub static PDU_MODIFIED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    ev(
+        "ngap_pdu_session_modified",
+        "The network answered a modification: result modified (Rust answered the \
+         Modification Command with Modification Complete and the AMF's Resource Modify \
+         Request with the session's QoS flows) with the five_qi and session_ambr_kbps the \
+         command carried, if any; or rejected with the 5GSM cause. requested_five_qi is what \
+         the UE asked for.",
+        vec![
+            p("ran_ue_ngap_id", "number", "This gNB's id for the UE", true),
+            p("pdu_session_id", "number", "The session (1-15)", true),
+            p("result", "string", "modified or rejected", true),
+            p(
+                "five_qi",
+                "number",
+                "The default flow's 5QI the command set",
+                false,
+            ),
+            p(
+                "session_ambr_kbps",
+                "object",
+                "{\"uplink\", \"downlink\"} when the command set it",
+                false,
+            ),
+            p(
+                "cause",
+                "object",
+                "{\"value\", \"name\"} of the 5GSM cause",
+                false,
+            ),
+        ],
+    )
+});
+
+pub static SERVICE_ACCEPTED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    ev(
+        "ngap_service_accepted",
+        "An idle UE is back: the AMF verified its Service Request and answered with an Initial \
+         Context Setup and a protected Service Accept. trigger is ue (ngap_service_request) or \
+         paging (Rust answered the AMF's Paging). pdu_session_status is the sessions the UE \
+         still holds (any the network no longer has were released locally, released_locally), \
+         user_plane_sessions those whose tunnels the AMF set up again, k_gnb_verified whether \
+         the AMF's K_gNB equals the one this UE derived from the Service Request's COUNT. Use \
+         the new ran_ue_ngap_id from now on.",
+        vec![
+            p("ran_ue_ngap_id", "number", "The UE's new RAN UE NGAP ID", true),
+            p("supi", "string", "The subscriber whose UE this is, e.g. imsi-001010000000001", true),
+            p("service_type", "string", "data, signalling or mobile_terminated", true),
+            p("trigger", "string", "What brought the UE back: \"ue\" (an ngap_service_request) or \"paging\" (the AMF paged it and Rust answered)", true),
+            p("pdu_session_status", "array", "PDU session ids the UE holds", true),
+            p("user_plane_sessions", "array", "PDU session ids whose tunnels are set up", true),
+            p("k_gnb_verified", "boolean", "Whether the AMF's K_gNB matched this UE's", true),
+        ],
+    )
+});
+
+pub static SERVICE_REJECTED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    ev(
+        "ngap_service_rejected",
+        "The AMF refused an idle UE's Service Request (Service Reject with a 5GMM cause). \
+         still_registered is false for #9/#10: the network no longer knows the UE and it must \
+         register again (ngap_initial_ue_message).",
+        vec![
+            p("supi", "string", "The subscriber whose UE this is, e.g. imsi-001010000000001", true),
+            p(
+                "cause",
+                "object",
+                "{\"value\", \"name\"} of the 5GMM cause",
+                true,
+            ),
+            p("trigger", "string", "What brought the UE back: \"ue\" (an ngap_service_request) or \"paging\" (the AMF paged it and Rust answered)", true),
+            p(
+                "still_registered",
+                "boolean",
+                "Whether the UE stays registered (idle)",
+                true,
             ),
         ],
     )
@@ -358,6 +566,43 @@ pub fn check(v: &Value) -> Result<()> {
             if let Some(d) = v.get("dnn").and_then(Value::as_str) {
                 crate::server::gtp::codec::encode_apn(d).map_err(|e| anyhow!("dnn: {e}"))?;
             }
+            super::ue::session_type_code(v)?;
+        }
+        PDU_SESSION_RELEASE => {
+            codec::json_u64(v, "ran_ue_ngap_id", codec::MAX_RAN_UE_NGAP_ID)?;
+            anyhow::ensure!(
+                codec::json_u64(v, "pdu_session_id", 15)? >= 1,
+                "pdu_session_id must be 1..15"
+            );
+            if let Some(c) = v.get("cause").filter(|c| !c.is_null()) {
+                crate::server::ngap::sm::parse_cause(c).map_err(|e| anyhow!(e))?;
+            }
+        }
+        PDU_SESSION_MODIFICATION => {
+            codec::json_u64(v, "ran_ue_ngap_id", codec::MAX_RAN_UE_NGAP_ID)?;
+            anyhow::ensure!(
+                codec::json_u64(v, "pdu_session_id", 15)? >= 1,
+                "pdu_session_id must be 1..15"
+            );
+            if let Some(q) = codec::json_opt_u64(v, "five_qi", 255)? {
+                anyhow::ensure!(q >= 1, "five_qi must be 1..255");
+            }
+        }
+        UE_CONTEXT_RELEASE_REQUEST => {
+            codec::json_u64(v, "ran_ue_ngap_id", codec::MAX_RAN_UE_NGAP_ID)?;
+            if let Some(c) = v.get("cause").filter(|c| !c.is_null()) {
+                codec::Cause::from_json(c)?;
+            }
+        }
+        SERVICE_REQUEST => {
+            crate::server::ngap::subscribers::supi_digits(
+                v.get("supi")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| anyhow!("supi is required"))?,
+            )
+            .map_err(|e| anyhow!(e))?;
+            super::procedures::service_type_code(v)?;
+            super::procedures::psi_array(v)?;
         }
         other => bail!("Unknown NGAP client action {other:?}"),
     }
@@ -407,6 +652,10 @@ impl Protocol for NgapClientProtocol {
             RELEASE_EVENT.clone(),
             REGISTERED_EVENT.clone(),
             PDU_SESSION_EVENT.clone(),
+            PDU_RELEASED_EVENT.clone(),
+            PDU_MODIFIED_EVENT.clone(),
+            SERVICE_ACCEPTED_EVENT.clone(),
+            SERVICE_REJECTED_EVENT.clone(),
             ERROR_EVENT.clone(),
         ]
     }
@@ -435,10 +684,10 @@ impl Protocol for NgapClientProtocol {
         ProtocolMetadataV2::builder()
             .state(DevelopmentState::Beta)
             .privilege_requirement(PrivilegeRequirement::None)
-            .implementation("The AMF role's APER codec, 5GMM/5GSM and NAS security (src/server/ngap) as a gNB with a UE: SCTP association (PPID 60, stream 0/1) or the labelled lab TCP framing, NG Setup from the startup parameters on connect, RAN UE NGAP ID allocation; for a UE whose SUCI names the configured subscriber, the UE side of 5G-AKA (AUTN verified, RES*, SQN and AUTS), the security mode procedure (NIA2 with NEA0/NEA2, replayed capabilities checked), Registration Complete, the Initial Context Setup answered with K_gNB compared against the UE's own, and PDU Session Establishment with the resource setup answered (a downlink tunnel per session). UE Context Release Complete and NG Reset Acknowledge answered in Rust")
-            .llm_control("Which UEs to bring in and with what Registration Request (SUCI or 5G-GUTI), how a UE without credentials answers identity and authentication requests, and when a registered UE asks for a PDU session (DNN, slice). Keys, MACs, COUNTs and the security procedures are Rust's and never reach the model")
-            .e2e_testing("tests/client/ngap: a whole Open5GS 2.8 core (MongoDB, NRF, AUSF, UDM, UDR, PCF, NSSF, BSF, SMF, UPF, AMF) over real SCTP on Linux registers the model's UE after 5G-AKA, hands the gNB a K_gNB equal to the UE's own, and creates the PDU session the SMF logs; Open5GS's AMF alone identifies a UE and refuses a foreign PLMN; a canned AMF over the lab transport for bounds and follow-up depth; tshark's ngap and nas-5gs dissectors read the captures")
-            .notes("Beta on the client bar: the peer is a whole Open5GS 2.8 core (a third-party server, not a crate NetGet links), the test fails rather than skips without it, the session is real (5G-AKA verified by Open5GS's AUSF, registration, a PDU session the SMF allocates), and the model's Initial UE Message and PDU session request are asserted from Open5GS's own logs. The evidence runs only where SCTP exists (Linux, the ngap pair job). The UE side implements NIA2 with NEA0/NEA2 only, 5G-AKA only, null-scheme SUCI only, one PDU session type (IPv4). The gNB runs no user plane: it answers the resource setup with a downlink tunnel address but carries no packets. Not built: handover, paging, UE context modification, RAN configuration update, service request, more than one AMF per client. Handler chains stop after 8 follow-ups.")
+            .implementation("The AMF role's APER codec, 5GMM/5GSM and NAS security (src/server/ngap) as a gNB with a UE: SCTP association (PPID 60, stream 0/1) or the labelled lab TCP framing, NG Setup from the startup parameters on connect, RAN UE NGAP ID allocation; for a UE whose SUCI names the configured subscriber, the UE side of 5G-AKA (AUTN verified, RES*, SQN and AUTS), the security mode procedure (128-NIA1/2/3 with NEA0/1/2/3, replayed capabilities checked), Registration Complete, the Initial Context Setup answered with K_gNB compared against the UE's own, PDU Session Establishment (IPv4, IPv6, IPv4v6) with the resource setup answered (a downlink tunnel per session), UE- and network-requested PDU session release (Release Complete, PDU Session Resource Release Response) and modification (Modification Complete, PDU Session Resource Modify Response), CM-IDLE (the UE's security context, sessions and 5G-S-TMSI kept per SUPI when the AMF releases its context), the Service Request (FiveG-S-TMSI in the Initial UE Message, integrity protected with the whole request ciphered in a NAS message container at the same COUNT, K_gNB from its COUNT compared, the Service Accept's PDU session status applied) and the answer to NGAP Paging. UE Context Release Complete and NG Reset Acknowledge answered in Rust")
+            .llm_control("Which UEs to bring in and with what Registration Request (SUCI or 5G-GUTI), how a UE without credentials answers identity and authentication requests, when a registered UE asks for a PDU session (DNN, slice, PDU session type), releases or modifies one (5QI), when the gNB asks the AMF to release a UE's context, and when an idle UE comes back with a Service Request (service type, uplink data status). Keys, MACs, COUNTs, the security procedures and the answer to paging are Rust's and never reach the model")
+            .e2e_testing("tests/client/ngap: a whole Open5GS 2.8 core (MongoDB, NRF, AUSF, UDM, UDR, PCF, NSSF, BSF, SMF, UPF, AMF) over real SCTP on Linux registers the model's UE after 5G-AKA, hands the gNB a K_gNB equal to the UE's own, creates the PDU session the SMF logs, releases the session the model releases (AMF N1/N2-RELEASED, SMF Removed Session), gives an IPv4v6 session whose IPv6 address the SMF logs, releases the UE's context on the gNB's request, takes the model's Service Request back with a K_gNB equal to the UE's, and answers its modification request; Open5GS's AMF alone identifies a UE and refuses a foreign PLMN; NetGet's own AMF over the lab transport (circular) for the whole life including paging, under NIA2/NEA0, NIA1/NEA1 and NIA3/NEA3; a canned AMF over the lab transport for bounds and follow-up depth; tshark's ngap and nas-5gs dissectors read the captures")
+            .notes("Beta on the client bar: the peer is a whole Open5GS 2.8 core (a third-party server, not a crate NetGet links), the test fails rather than skips without it, the session is real (5G-AKA verified by Open5GS's AUSF, registration, PDU sessions the SMF allocates and removes, a Service Request Open5GS verifies), and the model's actions are asserted from Open5GS's own logs. The evidence runs only where SCTP exists (Linux, the ngap pair job). Paging is exercised only against NetGet's own AMF (circular). The UE side implements 5G-AKA only and null-scheme SUCI only. The gNB runs no user plane: it answers the resource setup with a downlink tunnel address but carries no packets. Not built: handover, UE context modification, RAN configuration update, Xn, more than one AMF per client, a requested QoS rule (the modification request carries only a QoS flow description). Handler chains stop after 8 follow-ups per UE.")
             .max_inbound_bytes(codec::MAX_PDU_LEN)
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
             .batching(crate::protocol::metadata::BatchingMode::Unsupported)

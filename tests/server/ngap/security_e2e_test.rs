@@ -27,27 +27,27 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::mpsc;
 
-const UNREACHABLE_LLM: &str = "http://127.0.0.1:1";
-const UERANSIM_NG_SETUP: &str = "00150041000004001b00090000f1105000000001005240140880554552414e53494d2d676e622d312d312d310066001000000000010000f110000010080102030015400140";
-const K: &str = "465B5CE8B199B49FAA5F0A2EE238A6BC";
-const OPC: &str = "E8ED289DEBA952E4283B54E88E6183CA";
-const SUPI: &str = "001010000000001";
-const WIRE: Duration = Duration::from_secs(30);
+pub(super) const UNREACHABLE_LLM: &str = "http://127.0.0.1:1";
+pub(super) const UERANSIM_NG_SETUP: &str = "00150041000004001b00090000f1105000000001005240140880554552414e53494d2d676e622d312d312d310066001000000000010000f110000010080102030015400140";
+pub(super) const K: &str = "465B5CE8B199B49FAA5F0A2EE238A6BC";
+pub(super) const OPC: &str = "E8ED289DEBA952E4283B54E88E6183CA";
+pub(super) const SUPI: &str = "001010000000001";
+pub(super) const WIRE: Duration = Duration::from_secs(30);
 
-fn subscribers() -> Value {
+pub(super) fn subscribers() -> Value {
     json!([{"supi": format!("imsi-{SUPI}"), "subscriber_key": K, "subscriber_opc": OPC, "amf_field": "8000"}])
 }
 
-fn uli() -> Value {
+pub(super) fn uli() -> Value {
     json!({"cgi": {"plmn": "001-01", "cell_id": 16}, "tai": {"plmn": "001-01", "tac": 1}})
 }
 
-fn snn() -> String {
+pub(super) fn snn() -> String {
     security::serving_network_name("001", "01")
 }
 
 /// A Registration Request for the subscriber, null-scheme SUCI, 5G-EA0-3 and 5G-IA0-3.
-fn registration_request() -> Vec<u8> {
+pub(super) fn registration_request() -> Vec<u8> {
     nas::encode(
         &json!({"message": "registration_request", "registration_type": "initial",
                 "mobile_identity": {"type": "suci", "plmn": {"mcc": "001", "mnc": "01"},
@@ -58,7 +58,7 @@ fn registration_request() -> Vec<u8> {
 }
 
 /// Admit any gNB, register the subscriber on slice 1, accept its session.
-const POLICY: &str = r#"import json, sys
+pub(super) const POLICY: &str = r#"import json, sys
 i = json.load(sys.stdin); t = i["event_type_id"]; e = i["event"]
 a = []
 if t == "ngap_ng_setup_request":
@@ -74,7 +74,7 @@ elif t == "ngap_pdu_session_establishment_request":
 print(json.dumps({"actions": a}))"#;
 
 /// Admit the gNB; say nothing about anything else.
-const ADMIT_ONLY: &str = r#"import json, sys
+pub(super) const ADMIT_ONLY: &str = r#"import json, sys
 i = json.load(sys.stdin); t = i["event_type_id"]; e = i["event"]
 a = []
 if t == "ngap_ng_setup_request":
@@ -86,7 +86,7 @@ elif t == "ngap_registration_request":
     a = [{"type": "send_registration_accept", "amf_ue_ngap_id": e["amf_ue_ngap_id"], "allowed_nssai": [{"sst": 1}]}]
 print(json.dumps({"actions": a}))"#;
 
-fn script(code: &str) -> Vec<Value> {
+pub(super) fn script(code: &str) -> Vec<Value> {
     vec![
         json!({"event_pattern": "*", "handler": {"type": "script", "language": "python", "code": code}}),
     ]
@@ -94,7 +94,7 @@ fn script(code: &str) -> Vec<Value> {
 
 /// A free UDP port on loopback for the user plane. Probed, so it can race; nothing else in this
 /// suite binds UDP ports by number except the gNB side's 2152.
-fn probe_udp_port() -> u16 {
+pub(super) fn probe_udp_port() -> u16 {
     std::net::UdpSocket::bind("127.0.0.1:0")
         .unwrap()
         .local_addr()
@@ -102,7 +102,7 @@ fn probe_udp_port() -> u16 {
         .port()
 }
 
-async fn start(
+pub(super) async fn start(
     handlers: Option<Vec<Value>>,
     llm: &str,
     extra: Value,
@@ -149,13 +149,17 @@ async fn start(
     (state, id, port, rx)
 }
 
-fn drain(rx: &mut mpsc::UnboundedReceiver<String>, into: &mut Vec<String>) {
+pub(super) fn drain(rx: &mut mpsc::UnboundedReceiver<String>, into: &mut Vec<String>) {
     while let Ok(l) = rx.try_recv() {
         into.push(l);
     }
 }
 
-async fn wait_line(rx: &mut mpsc::UnboundedReceiver<String>, seen: &mut Vec<String>, needle: &str) {
+pub(super) async fn wait_line(
+    rx: &mut mpsc::UnboundedReceiver<String>,
+    seen: &mut Vec<String>,
+    needle: &str,
+) {
     let ok = tokio::time::timeout(WIRE, async {
         loop {
             drain(rx, seen);
@@ -173,7 +177,7 @@ async fn wait_line(rx: &mut mpsc::UnboundedReceiver<String>, seen: &mut Vec<Stri
     );
 }
 
-async fn events(state: &AppState, id: ServerId, event_type: &str) -> Vec<Value> {
+pub(super) async fn events(state: &AppState, id: ServerId, event_type: &str) -> Vec<Value> {
     state
         .list_access_logs_for(Some(AccessLogOwner::Server(id.as_u32())), None)
         .await
@@ -185,17 +189,17 @@ async fn events(state: &AppState, id: ServerId, event_type: &str) -> Vec<Value> 
 }
 
 /// A gNB with one scripted UE, over the lab transport, keeping every PDU for the oracle.
-struct Gnb {
-    stream: TcpStream,
-    log: Vec<(bool, Vec<u8>)>,
-    amf_id: u64,
-    m: Milenage,
-    sqn_ms: u64,
-    ctx: Option<NasContext>,
+pub(super) struct Gnb {
+    pub(super) stream: TcpStream,
+    pub(super) log: Vec<(bool, Vec<u8>)>,
+    pub(super) amf_id: u64,
+    pub(super) m: Milenage,
+    pub(super) sqn_ms: u64,
+    pub(super) ctx: Option<NasContext>,
 }
 
 impl Gnb {
-    async fn connect(port: u16) -> Gnb {
+    pub(super) async fn connect(port: u16) -> Gnb {
         Gnb {
             stream: TcpStream::connect(("127.0.0.1", port)).await.unwrap(),
             log: Vec::new(),
@@ -205,11 +209,11 @@ impl Gnb {
             ctx: None,
         }
     }
-    async fn send(&mut self, pdu: &[u8]) {
+    pub(super) async fn send(&mut self, pdu: &[u8]) {
         self.stream.write_all(&lab_frame(pdu)).await.unwrap();
         self.log.push((false, pdu.to_vec()));
     }
-    async fn recv(&mut self, what: &str) -> codec::Pdu {
+    pub(super) async fn recv(&mut self, what: &str) -> codec::Pdu {
         let bytes = tokio::time::timeout(WIRE, read_lab(&mut self.stream))
             .await
             .unwrap_or_else(|_| panic!("no answer within {WIRE:?}: {what}"))
@@ -219,12 +223,12 @@ impl Gnb {
             .unwrap_or_else(|e| panic!("NetGet sent an undecodable PDU ({what}): {e}"))
     }
     /// Nothing arrives within `d`.
-    async fn silent(&mut self, d: Duration) -> bool {
+    pub(super) async fn silent(&mut self, d: Duration) -> bool {
         tokio::time::timeout(d, read_lab(&mut self.stream))
             .await
             .is_err()
     }
-    async fn setup(&mut self) {
+    pub(super) async fn setup(&mut self) {
         self.send(&unhex(UERANSIM_NG_SETUP)).await;
         let p = self.recv("NG Setup answer").await;
         assert_eq!(
@@ -233,7 +237,7 @@ impl Gnb {
         );
     }
     /// The plain NAS of a Downlink NAS Transport.
-    async fn dl_nas(&mut self, what: &str) -> Vec<u8> {
+    pub(super) async fn dl_nas(&mut self, what: &str) -> Vec<u8> {
         let p = self.recv(what).await;
         assert_eq!(
             p.procedure_code,
@@ -245,11 +249,11 @@ impl Gnb {
         self.amf_id = t.amf_ue_ngap_id;
         t.nas
     }
-    async fn uplink(&mut self, nas_pdu: &[u8]) {
+    pub(super) async fn uplink(&mut self, nas_pdu: &[u8]) {
         let pdu = codec::uplink_nas_transport(self.amf_id, 1, nas_pdu, &uli()).unwrap();
         self.send(&pdu).await;
     }
-    async fn uplink_protected(&mut self, plain: &[u8]) -> Vec<u8> {
+    pub(super) async fn uplink_protected(&mut self, plain: &[u8]) -> Vec<u8> {
         let wire = self
             .ctx
             .as_mut()
@@ -258,13 +262,13 @@ impl Gnb {
         self.uplink(&wire).await;
         wire
     }
-    fn unprotect(&mut self, wire: &[u8]) -> Vec<u8> {
+    pub(super) fn unprotect(&mut self, wire: &[u8]) -> Vec<u8> {
         self.ctx.as_mut().unwrap().unprotect(wire).unwrap().0
     }
 
     /// The UE side of 5G-AKA and the security mode procedure, from Initial UE Message to a
     /// verified Security Mode Command answered. Returns the selected (ia, ea).
-    async fn authenticate(&mut self) -> (u8, u8) {
+    pub(super) async fn authenticate(&mut self) -> (u8, u8) {
         self.send(
             &codec::initial_ue_message(1, &registration_request(), &uli(), "mo-Signalling")
                 .unwrap(),
@@ -319,7 +323,7 @@ impl Gnb {
     }
 
     /// Answer the Initial Context Setup and send Registration Complete. Returns the accept.
-    async fn complete_registration(&mut self) -> nas::ParsedRegistrationAccept {
+    pub(super) async fn complete_registration(&mut self) -> nas::ParsedRegistrationAccept {
         let p = self.recv("Initial Context Setup Request").await;
         assert_eq!(
             (p.kind, p.procedure_code),
@@ -347,7 +351,7 @@ impl Gnb {
     }
 }
 
-fn gpdu(teid: u32, packet: Vec<u8>) -> Vec<u8> {
+pub(super) fn gpdu(teid: u32, packet: Vec<u8>) -> Vec<u8> {
     let mut h = GtpV1Header::new(255, teid);
     // UL PDU SESSION INFORMATION (PDU type 1), QFI 1.
     h.extension_headers.push(ExtensionHeader {
@@ -361,7 +365,7 @@ fn gpdu(teid: u32, packet: Vec<u8>) -> Vec<u8> {
     .encode()
 }
 
-fn echo_request(src: [u8; 4], dst: [u8; 4], seq: u16) -> Vec<u8> {
+pub(super) fn echo_request(src: [u8; 4], dst: [u8; 4], seq: u16) -> Vec<u8> {
     let mut p = vec![0x45, 0, 0, 36, 0, 1, 0x40, 0, 64, 1, 0, 0];
     p.extend_from_slice(&src);
     p.extend_from_slice(&dst);
@@ -470,6 +474,7 @@ async fn a_subscriber_registers_gets_a_session_and_pings() {
     assert_eq!(a.dnn.as_deref(), Some("internet"));
 
     // The gNB's side of the tunnel.
+    let _gtpu = super::support::GTPU_2152.lock().await;
     let gtp = UdpSocket::bind("127.0.0.1:2152")
         .await
         .expect("the lab gNB needs 127.0.0.1:2152 for its downlink tunnel");
