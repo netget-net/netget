@@ -50,11 +50,13 @@ pub mod aper;
 pub mod codec;
 pub mod nas;
 pub mod security;
+pub mod snow3g;
 pub mod sm;
 pub mod subscribers;
 pub mod suci;
 pub mod transport;
 pub mod upf;
+pub mod zuc;
 
 use anyhow::Result;
 use serde_json::{json, Value};
