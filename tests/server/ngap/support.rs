@@ -413,3 +413,10 @@ pub fn assert_capture(frames: &[CapturedFrame], netget_port: u16, netget_sent: &
         );
     }
 }
+
+/// NetGet's user plane sends a session's downlink to UDP port 2152 of the gNB's address, so a lab
+/// gNB on loopback has to own 127.0.0.1:2152 (macOS has no other 127/8 address to spread over).
+/// Every lab test that binds it holds this first, so parallel tests take turns instead of failing
+/// to bind.
+pub static GTPU_2152: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));

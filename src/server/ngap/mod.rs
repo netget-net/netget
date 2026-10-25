@@ -43,15 +43,31 @@
 //! (`ngap_pdu_session_establishment_request`). With `user_plane_address`, an accepted session
 //! gets a GTP-U tunnel on this server ([`upf`]) that answers ICMP echo for the addresses the
 //! model chose. Without credentials the pre-security behaviour above is unchanged.
+//!
+//! The rest of the UE's life is Rust's too, with the model deciding only what is a decision:
+//! PDU session release and modification ([`sessions`]: the model answers the UE's release and
+//! modification requests, and releases or modifies sessions on its own with the same two
+//! actions), and CM-IDLE ([`idle`]: a released registered UE keeps its context and sessions,
+//! comes back with a verified Service Request answered without the model, and is paged when the
+//! model asks for it or addresses a decision to it while it is idle).
+//!
+//! # Injected actions
+//!
+//! The association's peer channel (the dashboard's "message this peer", MCP `send_to_peer`) is
+//! served inside the session task, not beside it, so an injected `send_paging` or
+//! `send_pdu_session_release` runs against the same UE table, keys and COUNTs as the model's
+//! answers.
 
 pub mod actions;
 mod amf;
 pub mod aper;
 pub mod codec;
+mod idle;
 pub mod nas;
 pub mod security;
-pub mod snow3g;
+mod sessions;
 pub mod sm;
+pub mod snow3g;
 pub mod subscribers;
 pub mod suci;
 pub mod transport;
@@ -60,7 +76,7 @@ pub mod zuc;
 
 use anyhow::Result;
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
@@ -73,7 +89,8 @@ use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::server::connection::ConnectionId;
 use crate::state::app_state::AppState;
-use crate::state::ServerId;
+use crate::state::client_handles::{ClientCommand, ClientSendOutcome};
+use crate::state::{AccessLogOwner, ServerId};
 use crate::utils::WireFailure;
 
 use actions::{
@@ -141,9 +158,23 @@ impl NgapServer {
         if !core.credentials_empty() {
             Log::new(Some(&status_tx)).info(format!(
                 "NGAP AMF holds credentials for {} subscriber(s): their UEs are authenticated \
-                 with 5G-AKA and registered under NAS security (NIA2, {})",
+                 with 5G-AKA and registered under NAS security (integrity {}, ciphering {}, in \
+                 order of preference){}",
                 core.subscriber_count(),
-                security::ciphering_name(core.ciphering)
+                core.integrity
+                    .iter()
+                    .map(|a| security::integrity_name(*a))
+                    .collect::<Vec<_>>()
+                    .join(" > "),
+                core.ciphering
+                    .iter()
+                    .map(|a| security::ciphering_name(*a))
+                    .collect::<Vec<_>>()
+                    .join(" > "),
+                match core.inactivity {
+                    Some(d) => format!("; an idle UE is released after {}s", d.as_secs()),
+                    None => String::new(),
+                }
             ));
         }
         if let Some(up) = core.user_plane.clone() {
@@ -277,43 +308,91 @@ async fn register_connection(
 }
 
 /// The NAS ciphering algorithm used when the operator names none: NEA0, so the protected NAS is
-/// readable on the wire (integrity is always NIA2). Open5GS's AMF defaults the same way.
+/// readable on the wire. Open5GS's AMF defaults the same way.
 pub const DEFAULT_NAS_CIPHERING: &str = "nea0";
 
+/// The NAS integrity algorithm used when the operator names none: 128-NIA2 (AES-CMAC).
+pub const DEFAULT_NAS_INTEGRITY: &str = "nia2";
+
+/// The longest `ue_inactivity_timeout_secs` accepted: a day.
+pub const MAX_UE_INACTIVITY_SECS: u64 = 86_400;
+
+/// A comma-separated algorithm preference such as `"nia2,nia1"`, by the names `prefix` takes
+/// (`nia` or `nea`) and their numbers 0-3. NIA0 is refused: integrity protection is never null.
+fn algorithm_preference(raw: &str, prefix: &str, field: &str) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    for item in raw.split(',') {
+        let item = item.trim().to_ascii_lowercase();
+        let n = item
+            .strip_prefix(prefix)
+            .and_then(|d| d.parse::<u8>().ok())
+            .filter(|n| *n <= 3)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{field} {item:?} must name {prefix}0..{prefix}3, comma-separated in order of \
+                     preference, e.g. \"{prefix}2,{prefix}1\""
+                )
+            })?;
+        if prefix == "nia" && n == 0 {
+            anyhow::bail!("{field} cannot include nia0: integrity protection is never null");
+        }
+        if !out.contains(&n) {
+            out.push(n);
+        }
+    }
+    anyhow::ensure!(!out.is_empty(), "{field} names no algorithm");
+    Ok(out)
+}
+
 /// What every association of one AMF shares: the subscriber credentials, whose SQNs advance as
-/// vectors are used, and the user plane.
+/// vectors are used, the user plane, and the UEs that are registered but idle.
 pub(crate) struct Core {
     credentials: std::sync::Mutex<Credentials>,
     user_plane: Option<Arc<UserPlane>>,
-    /// NEA0 or NEA2, the operator's preference. A UE without NEA2 gets NEA0.
-    ciphering: u8,
+    /// NAS integrity algorithms in the operator's order of preference; a UE offering none of
+    /// them is refused with #23.
+    integrity: Vec<u8>,
+    /// NAS ciphering algorithms in the operator's order of preference; a UE offering none of
+    /// them gets NEA0, which every UE supports.
+    ciphering: Vec<u8>,
+    /// How long a registered UE may be silent (no NAS, no user-plane packet) before Rust
+    /// releases it to CM-IDLE. `None`: only the model or the gNB idles a UE.
+    inactivity: Option<std::time::Duration>,
+    /// Registered UEs in CM-IDLE, by 5G-TMSI.
+    idle: std::sync::Mutex<HashMap<u32, idle::IdleUe>>,
 }
 
 impl Core {
     async fn from_params(params: Option<&crate::protocol::StartupParams>) -> Result<Core> {
-        let (subs, keys, ciphering, up) = match params {
+        let (subs, keys, ciphering, integrity, up, inactivity) = match params {
             Some(p) => (
                 p.get_optional_array("subscribers")?.cloned(),
                 p.get_optional_array("suci_keys")?.cloned(),
                 p.get_optional_string("nas_ciphering")?,
+                p.get_optional_string("nas_integrity")?,
                 p.get_optional_string("user_plane_address")?,
+                p.get_optional_u64("ue_inactivity_timeout_secs")?,
             ),
-            None => (None, None, None, None),
+            None => (None, None, None, None, None, None),
         };
         let credentials = Credentials::from_params(subs.as_deref(), keys.as_deref())
             .map_err(|e| anyhow::anyhow!("NGAP startup parameter {e}"))?;
-        let ciphering = match ciphering
-            .as_deref()
-            .unwrap_or(DEFAULT_NAS_CIPHERING)
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "nea0" => security::NEA0,
-            "nea2" => security::NEA2,
-            other => anyhow::bail!(
-                "nas_ciphering {other:?} must be \"nea0\" or \"nea2\" (NEA1 and NEA3 are not \
-                 implemented)"
+        let ciphering = algorithm_preference(
+            ciphering.as_deref().unwrap_or(DEFAULT_NAS_CIPHERING),
+            "nea",
+            "nas_ciphering",
+        )?;
+        let integrity = algorithm_preference(
+            integrity.as_deref().unwrap_or(DEFAULT_NAS_INTEGRITY),
+            "nia",
+            "nas_integrity",
+        )?;
+        let inactivity = match inactivity {
+            None | Some(0) => None,
+            Some(s) if s > MAX_UE_INACTIVITY_SECS => anyhow::bail!(
+                "ue_inactivity_timeout_secs {s} is above {MAX_UE_INACTIVITY_SECS}"
             ),
+            Some(s) => Some(std::time::Duration::from_secs(s)),
         };
         let user_plane = match up {
             None => None,
@@ -341,7 +420,10 @@ impl Core {
         Ok(Core {
             credentials: std::sync::Mutex::new(credentials),
             user_plane,
+            integrity,
             ciphering,
+            inactivity,
+            idle: std::sync::Mutex::new(HashMap::new()),
         })
     }
 
@@ -370,6 +452,8 @@ struct Ue {
     user_location: Value,
     /// Present once Rust took the UE into 5G-AKA; see [`amf`].
     sec: Option<Box<amf::UeSec>>,
+    /// A UE Context Release Command went out for it.
+    releasing: bool,
 }
 
 struct Session {
@@ -391,6 +475,8 @@ struct Session {
     /// back off its own octets: 5G-GUTIs are allocated under it.
     guami: Option<Value>,
     plmn_support: Vec<Value>,
+    /// Why the last stateful decision was refused, for an injected action's reply.
+    last_refusal: Option<String>,
 }
 
 /// One PDU a handler put on the wire, read back off its own octets.
@@ -429,21 +515,40 @@ async fn run_session(
 ) -> Result<()> {
     let mut reader = conn.reader();
     let writer = Arc::new(Mutex::new(conn.writer()));
-    let peer_rx = crate::server::peer_support::register_peer_channel(
+    // Injected actions are served in this task, between messages, so they see the same UE
+    // table and NAS contexts as the model's answers.
+    let mut peer_rx = crate::server::peer_support::register_peer_channel(
         &app_state,
         server_id,
         connection_id.as_u32(),
     )
     .await;
-    crate::server::peer_support::spawn_peer_command_task(
-        peer_rx,
-        protocol.clone(),
-        app_state.clone(),
-        server_id,
-        connection_id.as_u32(),
-        writer.clone(),
-        status_tx.clone(),
-    );
+    // The reader runs on its own so the session can also serve injected actions and its timers
+    // while it waits; a message is never lost to a cancelled read.
+    let (msg_tx, mut msg_rx) = mpsc::channel::<ReadOutcome>(16);
+    let reader_task = tokio::spawn(async move {
+        let mut received_one = false;
+        loop {
+            // The deadline covers the read only; the model round-trip (and a manual rule
+            // parking a decision for a human) happens after a whole message has arrived.
+            let deadline = if received_one {
+                IDLE_BETWEEN_MESSAGES_TIMEOUT
+            } else {
+                FIRST_MESSAGE_READ_TIMEOUT
+            };
+            let item = reader.next(deadline).await;
+            received_one = true;
+            let end = match &item {
+                ReadOutcome::Message(_) => false,
+                // The lab framing cannot skip a declared length safely.
+                ReadOutcome::TooLarge(_) => transport == Transport::Tcp,
+                _ => true,
+            };
+            if msg_tx.send(item).await.is_err() || end {
+                return;
+            }
+        }
+    });
     let mut session = Session {
         connection_id,
         server_id,
@@ -460,65 +565,72 @@ async fn run_session(
         core,
         guami: None,
         plmn_support: Vec::new(),
+        last_refusal: None,
     };
 
-    let mut received_one = false;
+    let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut peer_open = true;
     loop {
-        // The deadline covers the read only; the model round-trip (and a manual rule parking
-        // a decision for a human) happens after a whole message has arrived.
-        let deadline = if received_one {
-            IDLE_BETWEEN_MESSAGES_TIMEOUT
-        } else {
-            FIRST_MESSAGE_READ_TIMEOUT
-        };
-        match reader.next(deadline).await {
-            ReadOutcome::Message(bytes) => {
-                received_one = true;
-                session
-                    .app_state
-                    .update_connection_stats(
-                        server_id,
-                        connection_id,
-                        Some(bytes.len() as u64),
-                        None,
-                        Some(1),
-                        None,
-                    )
-                    .await;
-                if !session.dispatch(&bytes).await {
+        tokio::select! {
+            m = msg_rx.recv() => match m {
+                Some(ReadOutcome::Message(bytes)) => {
+                    session
+                        .app_state
+                        .update_connection_stats(
+                            server_id,
+                            connection_id,
+                            Some(bytes.len() as u64),
+                            None,
+                            Some(1),
+                            None,
+                        )
+                        .await;
+                    if !session.dispatch(&bytes).await {
+                        break;
+                    }
+                }
+                Some(ReadOutcome::TooLarge(n)) => {
+                    Log::new(Some(&session.status_tx)).warn(format!(
+                        "NGAP message of {n} octets from {} exceeds {} (decision=refused_oversize)",
+                        remote_addr,
+                        codec::MAX_PDU_LEN
+                    ));
+                    session
+                        .send_error_indication(
+                            None,
+                            None,
+                            Cause::protocol(codec::PROTOCOL_TRANSFER_SYNTAX_ERROR),
+                        )
+                        .await;
+                    if transport == Transport::Tcp {
+                        break;
+                    }
+                }
+                Some(ReadOutcome::TimedOut) => {
+                    debug!("NGAP association {connection_id} idle past its deadline; closing");
                     break;
                 }
-            }
-            ReadOutcome::TooLarge(n) => {
-                received_one = true;
-                Log::new(Some(&session.status_tx)).warn(format!(
-                    "NGAP message of {n} octets from {} exceeds {} (decision=refused_oversize)",
-                    remote_addr,
-                    codec::MAX_PDU_LEN
-                ));
-                session
-                    .send_error_indication(
-                        None,
-                        None,
-                        Cause::protocol(codec::PROTOCOL_TRANSFER_SYNTAX_ERROR),
-                    )
-                    .await;
-                if transport == Transport::Tcp {
-                    // The lab framing cannot skip a declared length safely.
+                Some(ReadOutcome::Error(e)) => {
+                    debug!("NGAP association {connection_id} read error: {e}");
                     break;
                 }
-            }
-            ReadOutcome::TimedOut => {
-                debug!("NGAP association {connection_id} idle past its deadline; closing");
-                break;
-            }
-            ReadOutcome::Eof => break,
-            ReadOutcome::Error(e) => {
-                debug!("NGAP association {connection_id} read error: {e}");
-                break;
-            }
+                Some(ReadOutcome::Eof) | None => break,
+            },
+            c = peer_rx.recv(), if peer_open => match c {
+                Some(command) => {
+                    if !session.on_injected(command).await {
+                        break;
+                    }
+                }
+                None => peer_open = false,
+            },
+            _ = tick.tick() => session.on_tick().await,
         }
     }
+    reader_task.abort();
+    // Registered UEs outlive the association: they go idle and may come back on another.
+    session.clear_ues(None);
     session.writer.lock().await.close();
     Ok(())
 }
@@ -574,6 +686,12 @@ impl Session {
             }
             (PduKind::Successful, codec::PROC_UE_CONTEXT_RELEASE) => {
                 self.on_release_complete(&pdu).await
+            }
+            (PduKind::Successful, codec::PROC_PDU_SESSION_RESOURCE_RELEASE) => {
+                self.on_release_response(&pdu)
+            }
+            (PduKind::Successful, codec::PROC_PDU_SESSION_RESOURCE_MODIFY) => {
+                self.on_modify_response(&pdu)
             }
             (PduKind::Successful, codec::PROC_NG_RESET) => {
                 let n = self.ues.len();
@@ -757,12 +875,21 @@ impl Session {
                 initial_nas_bytes: ue.nas.clone(),
                 user_location: ue.user_location.clone(),
                 sec: None,
+                releasing: false,
             },
         );
         self.set_connection_state().await;
         // A Registration Request from a subscriber this AMF holds credentials for is
         // authenticated by Rust; the model is asked once the UE has proven who it is.
         if initial_nas == Some(nas::REGISTRATION_REQUEST) && self.try_start_aka(amf_id).await {
+            return true;
+        }
+        // A Service Request is a registered UE coming back from CM-IDLE: Rust verifies it with
+        // the UE's own context and answers it.
+        if initial_nas == Some(nas::SERVICE_REQUEST)
+            && !self.core.credentials_empty()
+            && self.try_service_request(amf_id).await
+        {
             return true;
         }
         let data = json!({
@@ -1040,7 +1167,8 @@ impl Session {
         true
     }
 
-    /// Drop UE contexts — every one, or those `which` selects — and their user-plane sessions.
+    /// Drop UE contexts — every one, or those `which` selects. A registered UE goes idle with
+    /// its NAS context and sessions; any other is dropped with its user-plane sessions.
     fn clear_ues(&mut self, which: Option<&dyn Fn(u64, &Ue) -> bool>) {
         let gone: Vec<u64> = self
             .ues
@@ -1050,7 +1178,7 @@ impl Session {
             .collect();
         for id in gone {
             if let Some(ue) = self.ues.remove(&id) {
-                self.release_user_plane(&ue);
+                self.retire_ue(id, ue);
             }
         }
     }
@@ -1082,10 +1210,16 @@ impl Session {
                 return HandlerOutcome::Failed(failure);
             }
         };
+        self.run_results(result.protocol_results).await
+    }
+
+    /// Carry out the results of a set of actions — the model's, a handler's, or one injected
+    /// through the peer channel.
+    async fn run_results(&mut self, results: Vec<ActionResult>) -> HandlerOutcome {
         let mut sent = Vec::new();
         let mut closed = false;
         let mut pdu_answers = Vec::new();
-        let mut queue: Vec<ActionResult> = result.protocol_results;
+        let mut queue: Vec<ActionResult> = results;
         queue.reverse();
         while let Some(item) = queue.pop() {
             match item {
@@ -1138,6 +1272,78 @@ impl Session {
             sent,
             closed,
             pdu_answers,
+        }
+    }
+
+    /// One action from the peer channel, carried out in this session and answered.
+    async fn on_injected(&mut self, command: ClientCommand) -> bool {
+        let action = command.action.clone();
+        let (outcome, keep) = self.execute_injected(&action).await;
+        let outcome_json = match &outcome {
+            Ok(o) => serde_json::to_value(o).unwrap_or(Value::Null),
+            Err(e) => json!({"error": e.to_string()}),
+        };
+        self.app_state
+            .record_access_log(
+                AccessLogOwner::Server(self.server_id.as_u32()),
+                "NGAP",
+                Some(self.connection_id.as_u32()),
+                "injected_action",
+                action,
+                vec![outcome_json],
+            )
+            .await;
+        let _ = self.status_tx.send("__UPDATE_UI__".to_string());
+        let _ = command.reply_tx.send(outcome);
+        keep
+    }
+
+    /// Run one action as if the model had answered with it. `false` when it closed the
+    /// association.
+    async fn execute_injected(
+        &mut self,
+        action: &Value,
+    ) -> (anyhow::Result<ClientSendOutcome>, bool) {
+        let protocol = self.protocol.clone();
+        let result = match crate::llm::actions::executor::execute_actions(
+            vec![action.clone()],
+            &self.app_state,
+            Some(&*protocol as &dyn crate::llm::actions::protocol_trait::Server),
+            Some(self.server_id),
+            None,
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => return (Err(e), true),
+        };
+        self.last_refusal = None;
+        match self.run_results(result.protocol_results).await {
+            HandlerOutcome::Ran { closed: true, .. } => (Ok(ClientSendOutcome::Disconnected), false),
+            HandlerOutcome::Ran { sent, .. } => match self.last_refusal.take() {
+                Some(error) if sent.is_empty() => (Ok(ClientSendOutcome::Rejected { error }), true),
+                _ => (
+                    Ok(ClientSendOutcome::Executed {
+                        detail: format!("{} NGAP message(s) sent", sent.len()),
+                    }),
+                    true,
+                ),
+            },
+            _ => (Ok(ClientSendOutcome::Executed { detail: String::new() }), true),
+        }
+    }
+
+    /// Run a decision that waited for an idle UE, now that it is back.
+    async fn run_injected(&mut self, action: Value) {
+        let error = match self.execute_injected(&action).await.0 {
+            Err(e) => Some(e.to_string()),
+            Ok(ClientSendOutcome::Rejected { error }) => Some(error),
+            Ok(_) => None,
+        };
+        if let Some(e) = error {
+            Log::new(Some(&self.status_tx)).warn(format!(
+                "NGAP a decision queued for an idle UE could not run: {e}"
+            ));
         }
     }
 

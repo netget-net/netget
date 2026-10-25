@@ -609,12 +609,39 @@ fn decode_inner(b: &[u8], depth: usize) -> Result<Value, String> {
             }
         }
         SERVICE_REQUEST => {
-            let o = c.u8("service type")?;
-            v.insert("service_type".into(), json!(o & 0x0F));
-            v.insert("ngksi".into(), json!((o >> 4) & 0x07));
+            let r = parse_service_request(b)?;
+            v.insert(
+                "service_type".into(),
+                json!(service_type_name(r.service_type)),
+            );
+            v.insert("ngksi".into(), json!(r.ngksi));
             v.insert(
                 "mobile_identity".into(),
-                decode_mobile_identity(c.lve("5G-S-TMSI")?),
+                json!({"type": "5g_s_tmsi", "amf_set_id": r.amf_set_id,
+                       "amf_pointer": r.amf_pointer, "tmsi": r.tmsi}),
+            );
+            v.insert(
+                "uplink_data_status".into(),
+                json!(r.uplink_data_status.map(psi_list)),
+            );
+            v.insert(
+                "pdu_session_status".into(),
+                json!(r.pdu_session_status.map(psi_list)),
+            );
+            v.insert(
+                "nas_message_container_length".into(),
+                json!(r.nas_container.map(|c| c.len())),
+            );
+        }
+        SERVICE_ACCEPT => {
+            let a = parse_service_accept(b)?;
+            v.insert(
+                "pdu_session_status".into(),
+                json!(a.pdu_session_status.map(psi_list)),
+            );
+            v.insert(
+                "pdu_session_reactivation_result".into(),
+                json!(a.reactivation_result.map(psi_list)),
             );
         }
         _ => {
@@ -1580,3 +1607,172 @@ pub fn ngap_security_capabilities(nas_caps: &[u8]) -> [u16; 4] {
     let map = |o: u8| ((o << 1) as u16 & 0x00FE) << 8;
     [map(get(0)), map(get(1)), map(get(2)), map(get(3))]
 }
+
+// ============================================================================
+// Service Request, Service Accept (TS 24.501 8.2.16, 8.2.17, 5.6.1)
+// ============================================================================
+
+/// Service type values (TS 24.501 9.11.3.50).
+pub fn service_type_name(t: u8) -> &'static str {
+    match t {
+        0 => "signalling",
+        1 => "data",
+        2 => "mobile_terminated_services",
+        3 => "emergency_services",
+        4 => "emergency_services_fallback",
+        5 => "high_priority_access",
+        6 => "elevated_signalling",
+        _ => "unused",
+    }
+}
+
+pub const SERVICE_TYPE_SIGNALLING: u8 = 0;
+pub const SERVICE_TYPE_DATA: u8 = 1;
+pub const SERVICE_TYPE_MOBILE_TERMINATED: u8 = 2;
+
+/// The PDU session ids set in a PDU session status / uplink data status bitmap (TS 24.501
+/// 9.11.3.44, 9.11.3.57): bit `n` of the 16-bit value is PSI `n`; PSI 0 is spare.
+pub fn psi_list(bits: u16) -> Vec<u8> {
+    (1..=15u8).filter(|p| bits & (1 << p) != 0).collect()
+}
+
+/// The bitmap of a set of PDU session ids.
+pub fn psi_bits(psis: impl IntoIterator<Item = u8>) -> u16 {
+    psis.into_iter()
+        .filter(|p| (1..=15).contains(p))
+        .fold(0u16, |acc, p| acc | (1 << p))
+}
+
+/// The two value octets of a PSI bitmap: octet 1 holds PSI 7..0, octet 2 PSI 15..8.
+fn psi_octets(bits: u16) -> [u8; 2] {
+    [(bits & 0xFF) as u8, (bits >> 8) as u8]
+}
+
+fn psi_from_octets(v: &[u8]) -> Option<u16> {
+    // The IE may be longer than two octets (spare octets follow); only the first two count.
+    (v.len() >= 2).then(|| u16::from(v[0]) | (u16::from(v[1]) << 8))
+}
+
+/// A 5G-S-TMSI mobile identity (TS 24.501 9.11.3.4, type 4): AMF Set ID, AMF Pointer, 5G-TMSI.
+pub fn s_tmsi_octets(amf_set_id: u16, amf_pointer: u8, tmsi: u32) -> Vec<u8> {
+    let mut out = vec![0xF4];
+    out.push((amf_set_id >> 2) as u8);
+    out.push((((amf_set_id & 0x03) as u8) << 6) | (amf_pointer & 0x3F));
+    out.extend_from_slice(&tmsi.to_be_bytes());
+    out
+}
+
+/// A Service Request as the AMF reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServiceRequest {
+    pub service_type: u8,
+    pub ngksi: u8,
+    pub amf_set_id: u16,
+    pub amf_pointer: u8,
+    pub tmsi: u32,
+    pub uplink_data_status: Option<u16>,
+    pub pdu_session_status: Option<u16>,
+    pub allowed_pdu_session_status: Option<u16>,
+    /// The NAS message container: the whole Service Request, ciphered with the current context
+    /// at the outer message's COUNT, when the UE had non-cleartext IEs to send (TS 24.501 4.4.6).
+    pub nas_container: Option<Vec<u8>>,
+}
+
+/// Service Request (TS 24.501 8.2.16). The ngKSI takes bits 1-4 of the first octet and the
+/// service type bits 5-8 — the half-octet listed first in the message's table takes the low
+/// bits (TS 24.007 11.2.3.1.4), and UERANSIM and Wireshark agree.
+pub fn parse_service_request(b: &[u8]) -> Result<ServiceRequest, String> {
+    let mut c = plain_header(b, SERVICE_REQUEST)?;
+    let o = c.u8("service type and ngKSI")?;
+    let id = c.lve("5G-S-TMSI")?;
+    if id.len() != 7 || id[0] & 0x07 != 4 {
+        return Err("the mobile identity of a Service Request must be a 5G-S-TMSI".into());
+    }
+    let mut r = ServiceRequest {
+        service_type: o >> 4,
+        ngksi: o & 0x07,
+        amf_set_id: (u16::from(id[1]) << 2) | u16::from(id[2] >> 6),
+        amf_pointer: id[2] & 0x3F,
+        tmsi: u32::from_be_bytes([id[3], id[4], id[5], id[6]]),
+        uplink_data_status: None,
+        pdu_session_status: None,
+        allowed_pdu_session_status: None,
+        nas_container: None,
+    };
+    for (iei, val) in optional_ies(&mut c, &[])? {
+        match iei {
+            0x40 => r.uplink_data_status = psi_from_octets(val),
+            0x50 => r.pdu_session_status = psi_from_octets(val),
+            0x25 => r.allowed_pdu_session_status = psi_from_octets(val),
+            0x71 => r.nas_container = Some(val.to_vec()),
+            _ => {}
+        }
+    }
+    Ok(r)
+}
+
+/// Service Request (UE side), plain: the caller protects it.
+pub fn service_request(r: &ServiceRequest) -> Vec<u8> {
+    let mut out = vec![
+        EPD_5GMM,
+        0,
+        SERVICE_REQUEST,
+        ((r.service_type & 0x0F) << 4) | (r.ngksi & 0x07),
+    ];
+    lve(&mut out, &s_tmsi_octets(r.amf_set_id, r.amf_pointer, r.tmsi));
+    if let Some(u) = r.uplink_data_status {
+        tlv(&mut out, 0x40, &psi_octets(u));
+    }
+    if let Some(p) = r.pdu_session_status {
+        tlv(&mut out, 0x50, &psi_octets(p));
+    }
+    if let Some(p) = r.allowed_pdu_session_status {
+        tlv(&mut out, 0x25, &psi_octets(p));
+    }
+    if let Some(c) = &r.nas_container {
+        tlve(&mut out, 0x71, c);
+    }
+    out
+}
+
+/// A Service Accept as the UE reads it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ServiceAccept {
+    pub pdu_session_status: Option<u16>,
+    pub reactivation_result: Option<u16>,
+}
+
+/// Service Accept (TS 24.501 8.2.17): the PDU sessions the network holds active (so the UE
+/// releases locally any it does not) and which user planes it reactivated.
+pub fn service_accept(a: &ServiceAccept) -> Vec<u8> {
+    let mut out = vec![EPD_5GMM, 0, SERVICE_ACCEPT];
+    if let Some(p) = a.pdu_session_status {
+        tlv(&mut out, 0x50, &psi_octets(p));
+    }
+    if let Some(p) = a.reactivation_result {
+        tlv(&mut out, 0x26, &psi_octets(p));
+    }
+    out
+}
+
+pub fn parse_service_accept(b: &[u8]) -> Result<ServiceAccept, String> {
+    let mut c = plain_header(b, SERVICE_ACCEPT)?;
+    let mut a = ServiceAccept::default();
+    for (iei, val) in optional_ies(&mut c, &[])? {
+        match iei {
+            0x50 => a.pdu_session_status = psi_from_octets(val),
+            0x26 => a.reactivation_result = psi_from_octets(val),
+            _ => {}
+        }
+    }
+    Ok(a)
+}
+
+/// Service Reject with a 5GMM cause.
+pub fn service_reject(cause: u8) -> Vec<u8> {
+    vec![EPD_5GMM, 0, SERVICE_REJECT, cause]
+}
+
+/// 5GMM cause #9, UE identity cannot be derived by the network: what an AMF answers a Service
+/// Request from a 5G-S-TMSI it holds no context for.
+pub const CAUSE_UE_IDENTITY_CANNOT_BE_DERIVED: u8 = 9;

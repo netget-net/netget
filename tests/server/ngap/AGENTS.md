@@ -36,6 +36,33 @@ Linux software and macOS has no SCTP.
 - `real_client_test::ueransim_reports_the_models_ng_setup_failure` — the model's
   `misc/unknown-PLMN-or-SNPN` is what `nr-gnb` logs (asn1c calls the Rel-15 value
   `unknown-PLMN`).
+- `real_client_test::ueransim_registers_under_snow3g_and_under_zuc` — two UEs (their own
+  addresses, SUPIs and TUN prefixes) register with AMFs preferring `nia1`/`nea1` and `nia3`/`nea3`;
+  nr-ue logs `Selected integrity[1] ciphering[1]` / `[3] … [3]`, deciphers and verifies
+  everything after the Security Mode Command, gets its session and pings through it.
+- `real_client_test::ueransim_releases_a_session_goes_idle_and_answers_paging` — `nr-cli ...
+  ps-release 1`: the model answers the release request, nr-ue logs `PDU Session Release Command
+  received`, nr-gnb `PDU session resource(s) released`, and the UE's TUN interface disappears;
+  `ps-establish` brings a session back; the AMF's `send_ue_context_release_command {supi}`
+  (injected with `send_to_peer`) puts the UE in `CM-IDLE`; `send_paging` reaches nr-gnb
+  (`Paging received`) and nr-ue answers it (`Responding to received Paging`, `Sending Service
+  Request due to [IDLE-PAGING]`). The Service Request then dies in UERANSIM's own gNB (`AMF
+  selection for UE[..] failed`: v3.2.7 selects an AMF by the requested slice of a Registration
+  Request), which the test asserts so a fixed UERANSIM is noticed. Five model events: NG Setup,
+  registration, two sessions, one release. Each rig runs nr-ue with `-r` (no policy-routing edits,
+  which race between parallel nr-ue processes) and its own `tunName` prefix (TUN names race too).
+- `lifecycle_test` — the AMF over the lab transport with a scripted UE: UE-requested
+  modification (the transfer's AMBR and 5QI, the command's PTI), UE-requested release with the
+  TEID refused from the command on, CM-IDLE, a forged Service Request refused #9 without evicting
+  the idle context, an unknown 5G-TMSI refused #9, a Service Request with its ciphered NAS
+  message container accepted with K_gNB from its COUNT and the session back on its own TEID,
+  network-requested release, a modification addressed by SUPI to an idle UE paging it and
+  running after the Service Request, IPv6 and IPv4v6 sessions (Router Advertisement and ICMPv6
+  echo through the tunnel, read by tshark's gtp/icmpv6 dissectors with `icmpv6.checksum.status`
+  good), the algorithm preference, a UE lacking the preferred integrity algorithm (#23), the
+  inactivity timer, and both fail-closed paths for the new decisions. Mocked model held to
+  seven calls. The lab gNB's downlink tunnel needs 127.0.0.1:2152, so every test that binds it
+  holds `support::GTPU_2152`.
 - `security_test` — Milenage (TS 35.208 set 1), NIA2 and NEA2 (TS 33.401 Annex C), SUCI
   Profiles A and B (TS 33.501 C.4.3/C.4.4) against published vectors; the 5G-AKA round trip and
   the shape of each KDF output; the protected-message rules (header 3 never ciphered, NEA0

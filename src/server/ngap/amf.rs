@@ -2,12 +2,13 @@
 //! the security mode procedure (TS 24.501 5.4.2), registration with an Initial Context Setup
 //! carrying K_gNB (TS 33.501 Annex A.9), PDU session establishment through the NAS transport
 //! (TS 24.501 6.4.1) with a PDU Session Resource Setup and a user-plane tunnel, and UE-originating
-//! deregistration.
+//! deregistration. PDU session release and modification are in [`super::sessions`]; CM-IDLE,
+//! Service Request and paging in [`super::idle`].
 //!
-//! Every NAS message here is Rust's. The model is asked twice per UE — whether to admit the
-//! authenticated subscriber, and what to do with each PDU session request — and its answers are
-//! carried out by [`Session::apply_decision`], which refuses an answer that does not fit the UE's
-//! state. Once a UE's NAS security is active, a plain message from it is discarded, and so is one
+//! Every NAS message here is Rust's. The model is asked once per decision — whether to admit the
+//! authenticated subscriber, what to do with each PDU session request, release request and
+//! modification request — and its answers are carried out by [`Session::apply_decision`], which
+//! refuses an answer that does not fit the UE's state. Once a UE's NAS security is active, a plain message from it is discarded, and so is one
 //! whose MAC does not verify or whose COUNT was already accepted; each is logged with its
 //! `decision=` tag and never reaches the model.
 
@@ -62,38 +63,84 @@ pub(super) struct PendingPdu {
     pti: u8,
     dnn: Option<String>,
     s_nssai: Option<nas::Snssai>,
+    pdu_session_type: Option<u8>,
 }
 
+/// One accepted PDU session, with what it takes to set its user plane up again after the UE was
+/// idle.
 pub(super) struct PduSession {
-    ul_teid: u32,
-    ue_ip: Ipv4Addr,
-    established: bool,
+    pub(super) ul_teid: u32,
+    pub(super) address: sm::PduAddress,
+    pub(super) established: bool,
+    pub(super) s_nssai: nas::Snssai,
+    pub(super) dnn: String,
+    pub(super) five_qi: u8,
+    pub(super) ambr_ul_kbps: u64,
+    pub(super) ambr_dl_kbps: u64,
+    /// A release command was sent; the UE's Release Complete removes the session. Its TEID is
+    /// already gone from the user plane.
+    pub(super) releasing: bool,
+    /// A modification command waiting for the UE's Complete or Command Reject.
+    pub(super) modifying: Option<sm::Modification>,
+}
+
+impl PduSession {
+    /// NGAP's name for the session's type.
+    pub(super) fn ngap_type(&self) -> &'static str {
+        match self.address {
+            sm::PduAddress::V4(_) => "ipv4",
+            sm::PduAddress::V6 { .. } => "ipv6",
+            sm::PduAddress::V4V6 { .. } => "ipv4v6",
+        }
+    }
+}
+
+/// A UE's 5GSM request waiting for the model: a release or a modification.
+pub(super) enum SmAsk {
+    Release,
+    Modification,
+}
+
+pub(super) struct PendingSm {
+    pub(super) pti: u8,
+    pub(super) kind: SmAsk,
 }
 
 /// One UE's security procedure state. Holds K_AMF and the NAS keys inside its [`NasContext`];
 /// none of it is formatted anywhere.
 pub(super) struct UeSec {
-    supi: String,
+    pub(super) supi: String,
     protection_scheme: u8,
     snn: String,
     request: nas::RegistrationRequest,
-    caps: Vec<u8>,
-    phase: Phase,
+    pub(super) caps: Vec<u8>,
+    pub(super) phase: Phase,
     ngksi: u8,
     resyncs: u8,
-    ctx: Option<NasContext>,
+    pub(super) ctx: Option<NasContext>,
     /// True once Security Mode Complete verified: from then on only verified NAS is processed.
-    active: bool,
+    pub(super) active: bool,
     imeisv: Option<Value>,
     /// K_gNB, derived when Security Mode Complete verified, from its uplink NAS COUNT
     /// (TS 33.501 6.8.1.2, Annex A.9).
-    k_gnb: Option<security::Key256>,
-    allowed_nssai: Vec<Value>,
+    pub(super) k_gnb: Option<security::Key256>,
+    pub(super) allowed_nssai: Vec<Value>,
     pending_pdu: BTreeMap<u8, PendingPdu>,
-    sessions: BTreeMap<u8, PduSession>,
+    pub(super) pending_sm: BTreeMap<u8, PendingSm>,
+    pub(super) sessions: BTreeMap<u8, PduSession>,
+    /// The 5G-S-TMSI allocated with the Registration Accept: (AMF Set ID, AMF Pointer, 5G-TMSI).
+    pub(super) s_tmsi: Option<(u16, u8, u32)>,
+    /// The last NAS message from the UE, for the inactivity timer.
+    pub(super) last_activity: crate::utils::clock::Instant,
 }
 
-fn supi_label(supi: &str) -> String {
+impl UeSec {
+    pub(super) fn label(&self) -> String {
+        supi_label(&self.supi)
+    }
+}
+
+pub(super) fn supi_label(supi: &str) -> String {
     format!("imsi-{supi}")
 }
 
@@ -166,13 +213,20 @@ impl Session {
         let Some(ran) = self.ues.get(&amf).map(|u| u.ran_ue_ngap_id) else {
             return true;
         };
-        // 128-5G-IA2 is the integrity algorithm this AMF selects (bit 6 of the second octet).
+        // The integrity algorithm is the first of the operator's preference the UE offers
+        // (TS 24.501 9.11.3.54: bit 8 of the second octet is 5G-IA0, bit 7 5G-IA1, ...).
         let caps = req.ue_security_capability.clone().unwrap_or_default();
-        if caps.get(1).map(|o| o & 0x20 == 0).unwrap_or(true) {
+        if select_algorithm(&self.core.integrity, caps.get(1).copied()).is_none() {
             Log::new(Some(&self.status_tx)).warn(format!(
-                "NGAP UE {amf} {}: does not offer 128-5G-IA2, the only integrity algorithm this \
-                 AMF implements (decision=ue_security_capabilities_mismatch); rejecting #23",
-                supi_label(&supi)
+                "NGAP UE {amf} {}: offers none of this AMF's integrity algorithms ({}) \
+                 (decision=ue_security_capabilities_mismatch); rejecting #23",
+                supi_label(&supi),
+                self.core
+                    .integrity
+                    .iter()
+                    .map(|a| security::integrity_name(*a))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
             self.send_ue_nas(amf, ran, nas::registration_reject(23))
                 .await;
@@ -214,20 +268,23 @@ impl Session {
                 k_gnb: None,
                 allowed_nssai: Vec::new(),
                 pending_pdu: BTreeMap::new(),
+                pending_sm: BTreeMap::new(),
                 sessions: BTreeMap::new(),
+                s_tmsi: None,
+                last_activity: crate::utils::clock::Instant::now(),
             }));
         }
         self.send_ue_nas(amf, ran, auth).await;
         true
     }
 
-    fn sec(&mut self, amf: u64) -> Option<&mut UeSec> {
+    pub(super) fn sec(&mut self, amf: u64) -> Option<&mut UeSec> {
         self.ues.get_mut(&amf).and_then(|u| u.sec.as_deref_mut())
     }
 
     /// Put a 5GMM message on the wire to a UE: protected (header type 2) once its NAS security
     /// is active, plain before.
-    async fn send_ue_nas(&mut self, amf: u64, ran: u64, plain: Vec<u8>) {
+    pub(super) async fn send_ue_nas(&mut self, amf: u64, ran: u64, plain: Vec<u8>) {
         let pdu = match self.sec(amf) {
             Some(sec) if sec.active => match sec.ctx.as_mut() {
                 Some(ctx) => ctx.protect(&plain, security::SHT_INTEGRITY_CIPHERED),
@@ -256,7 +313,7 @@ impl Session {
         .await;
     }
 
-    /// Drop a released UE's user-plane tunnels.
+    /// Drop a released UE's user-plane tunnels: it deregistered, was rejected, or was reset.
     pub(super) fn release_user_plane(&self, ue: &Ue) {
         if let (Some(sec), Some(up)) = (&ue.sec, &self.core.user_plane) {
             for s in sec.sessions.values() {
@@ -348,6 +405,12 @@ impl Session {
             nas::message_name(t).unwrap_or("?"),
             if protected { "verified" } else { "plain" }
         );
+        // What the inactivity timer measures: a verified message from the UE.
+        if protected {
+            if let Some(sec) = self.sec(amf) {
+                sec.last_activity = crate::utils::clock::Instant::now();
+            }
+        }
         match t {
             nas::AUTHENTICATION_RESPONSE => self.on_auth_response(amf, ran, &plain).await,
             nas::AUTHENTICATION_FAILURE => self.on_auth_failure(amf, ran, &plain).await,
@@ -404,7 +467,8 @@ impl Session {
 
     async fn on_auth_response(&mut self, amf: u64, ran: u64, plain: &[u8]) -> bool {
         let res = nas::parse_authentication_response(plain).ok().flatten();
-        let preferred_ciphering = self.core.ciphering;
+        let integrity = self.core.integrity.clone();
+        let ciphering = self.core.ciphering.clone();
         let status_tx = self.status_tx.clone();
         let Some(sec) = self.sec(amf) else {
             return true;
@@ -434,14 +498,10 @@ impl Session {
         }
         let k_seaf = security::k_seaf(&vector.k_ausf, &sec.snn);
         let k_amf = security::k_amf(&k_seaf, &sec.supi, &[0, 0]);
-        let ia = security::NIA2;
-        let ea = if preferred_ciphering == security::NEA2
-            && sec.caps.first().map(|o| o & 0x20 != 0).unwrap_or(false)
-        {
-            security::NEA2
-        } else {
-            security::NEA0
-        };
+        // Checked when 5G-AKA started: the UE offers one of the integrity algorithms.
+        let ia = select_algorithm(&integrity, sec.caps.get(1).copied()).unwrap_or(security::NIA2);
+        // NEA0 is mandatory for every UE, so ciphering always falls back to it.
+        let ea = select_algorithm(&ciphering, sec.caps.first().copied()).unwrap_or(security::NEA0);
         let mut ctx = NasContext::new(sec.ngksi, k_amf, ia, ea, security::DOWNLINK);
         let smc = nas::security_mode_command(ia, ea, sec.ngksi, &sec.caps, true, true);
         let protected = ctx.protect(&smc, security::SHT_INTEGRITY_NEW_CONTEXT);
@@ -715,6 +775,18 @@ impl Session {
         let Some((psi_header, pti, mt)) = sm::header(&t.payload) else {
             return true;
         };
+        match mt {
+            sm::PDU_SESSION_RELEASE_REQUEST
+            | sm::PDU_SESSION_RELEASE_COMPLETE
+            | sm::PDU_SESSION_MODIFICATION_REQUEST
+            | sm::PDU_SESSION_MODIFICATION_COMPLETE
+            | sm::PDU_SESSION_MODIFICATION_COMMAND_REJECT
+            | sm::FIVEGSM_STATUS => {
+                let psi = t.pdu_session_id.unwrap_or(psi_header);
+                return self.on_session_procedure(amf, ran, psi, &t.payload).await;
+            }
+            _ => {}
+        }
         if mt != sm::PDU_SESSION_ESTABLISHMENT_REQUEST {
             Log::new(Some(&self.status_tx)).warn(format!(
                 "NGAP UE {amf}: 5GSM {} is not built here; answering 5GSM Status #97",
@@ -749,6 +821,7 @@ impl Session {
                         pti,
                         dnn: t.dnn.clone(),
                         s_nssai: t.s_nssai,
+                        pdu_session_type: req.pdu_session_type,
                     },
                 );
                 None
@@ -764,7 +837,7 @@ impl Session {
         self.ask_pdu_session(amf, ran, psi, &t, &req).await
     }
 
-    async fn send_pdu_reject(&mut self, amf: u64, ran: u64, psi: u8, pti: u8, cause: u8) {
+    pub(super) async fn send_pdu_reject(&mut self, amf: u64, ran: u64, psi: u8, pti: u8, cause: u8) {
         let sm = sm::establishment_reject(psi, pti, cause);
         self.send_ue_nas(amf, ran, nas::dl_nas_transport_sm(psi, &sm))
             .await;
@@ -840,6 +913,14 @@ impl Session {
             actions::REGISTRATION_ACCEPT => self.do_registration_accept(data).await,
             actions::PDU_SESSION_ACCEPT => self.do_pdu_accept(data, pdu_answers).await,
             actions::PDU_SESSION_REJECT => self.do_pdu_reject(data, pdu_answers).await,
+            actions::PDU_SESSION_RELEASE
+            | actions::PDU_SESSION_RELEASE_REJECT
+            | actions::PDU_SESSION_MODIFICATION
+            | actions::PDU_SESSION_MODIFICATION_REJECT => {
+                self.do_session_decision(name, data, pdu_answers).await
+            }
+            actions::PAGING => self.do_paging(data).await,
+            actions::UE_CONTEXT_RELEASE => self.do_context_release(data).await,
             other => Err(format!("unknown decision {other}")),
         };
         match result {
@@ -848,6 +929,7 @@ impl Session {
                 Log::new(Some(&self.status_tx)).warn(format!(
                     "NGAP {name} refused: {e} (decision=refused_decision)"
                 ));
+                self.last_refusal = Some(e);
                 None
             }
         }
@@ -904,11 +986,16 @@ impl Session {
             Some(_) => return Err("tmsi is 32 bits".into()),
             None => loop {
                 let t: u32 = rand::random();
-                if t != 0 && t != u32::MAX {
+                if t != 0 && t != u32::MAX && !self.core.tmsi_in_use(t) {
                     break t;
                 }
             },
         };
+        if self.core.tmsi_in_use(tmsi) {
+            return Err(format!(
+                "5G-TMSI {tmsi:#010x} is already allocated to an idle UE"
+            ));
+        }
         let guti = nas::guti_octets(
             &plmn,
             guami["amf_region_id"].as_u64().unwrap_or(0) as u8,
@@ -937,6 +1024,11 @@ impl Session {
             .k_gnb
             .ok_or("no K_gNB: Security Mode Complete never verified")?;
         let allowed_json: Vec<Value> = allowed_nssai.iter().map(nas::Snssai::to_json).collect();
+        let s_tmsi = (
+            guami["amf_set_id"].as_u64().unwrap_or(0) as u16,
+            guami["amf_pointer"].as_u64().unwrap_or(0) as u8,
+            tmsi,
+        );
         let ics = codec::initial_context_setup_request(&codec::InitialContext {
             amf_ue_ngap_id: amf,
             ran_ue_ngap_id: ran,
@@ -951,6 +1043,7 @@ impl Session {
         .map_err(|e| e.to_string())?;
         sec.phase = Phase::Accepted;
         sec.allowed_nssai = allowed_json;
+        sec.s_tmsi = Some(s_tmsi);
         let supi = supi_label(&sec.supi);
         Log::new(Some(&self.status_tx)).info(format!(
             "NGAP UE {amf} {supi}: Registration Accept (5G-TMSI {tmsi:08x}) in Initial Context \
@@ -976,24 +1069,7 @@ impl Session {
             .as_u64()
             .filter(|p| (1..=15).contains(p))
             .ok_or("pdu_session_id must be 1..15")? as u8;
-        let ue_ip: Ipv4Addr = data["ue_ipv4"]
-            .as_str()
-            .and_then(|s| s.parse().ok())
-            .ok_or("ue_ipv4 must be an IPv4 address")?;
-        let answers: Vec<Ipv4Addr> = match data.get("reachable_addresses") {
-            Some(Value::Array(l)) => l
-                .iter()
-                .map(|a| a.as_str().and_then(|s| s.parse().ok()))
-                .collect::<Option<_>>()
-                .ok_or("reachable_addresses must be IPv4 addresses")?,
-            _ => Vec::new(),
-        };
-        if answers.len() > upf::MAX_ANSWERING_ADDRESSES {
-            return Err(format!(
-                "at most {} reachable_addresses",
-                upf::MAX_ANSWERING_ADDRESSES
-            ));
-        }
+        let answers = parse_answering_addresses(data)?;
         let five_qi = data
             .get("five_qi")
             .and_then(Value::as_u64)
@@ -1020,6 +1096,16 @@ impl Session {
         if !sec.active || !matches!(sec.phase, Phase::Accepted | Phase::Registered) {
             return Err(format!("UE {amf} is not registered"));
         }
+        let requested_type = sec
+            .pending_pdu
+            .get(&psi)
+            .ok_or(format!(
+                "UE {amf} has no PDU session {psi} waiting for a decision"
+            ))?
+            .pdu_session_type;
+        // The address is checked before the pending request is consumed, so a refused decision
+        // leaves the request for the fail-closed answer.
+        let (address, ipv6_prefix) = session_address(data, requested_type)?;
         let pending = sec.pending_pdu.remove(&psi).ok_or(format!(
             "UE {amf} has no PDU session {psi} waiting for a decision"
         ))?;
@@ -1070,10 +1156,15 @@ impl Session {
         let teid = match up.add(upf::UpSession {
             supi: supi_label(&supi),
             pdu_session_id: psi,
-            ue_ip,
+            ue_ip: address.ipv4(),
+            ue_ipv6: match (ipv6_prefix, address.iid()) {
+                (Some(p), Some(i)) => Some((p, i)),
+                _ => None,
+            },
             qfi: DEFAULT_QFI,
             downlink: None,
             answers: answers.clone(),
+            last_uplink: None,
         }) {
             Ok(t) => t,
             Err(e) => {
@@ -1095,16 +1186,27 @@ impl Session {
                 });
             }
         };
+        let session = PduSession {
+            ul_teid: teid,
+            address,
+            established: false,
+            s_nssai,
+            dnn: dnn.clone(),
+            five_qi: five_qi as u8,
+            ambr_ul_kbps: ambr_ul,
+            ambr_dl_kbps: ambr_dl,
+            releasing: false,
+            modifying: None,
+        };
         let accept = match sm::establishment_accept(&sm::Accept {
             psi,
             pti: pending.pti,
-            pdu_session_type: 1,
             ssc_mode: 1,
             qfi: DEFAULT_QFI,
             five_qi: five_qi as u8,
             ambr_uplink_kbps: ambr_ul,
             ambr_downlink_kbps: ambr_dl,
-            address: ue_ip,
+            address,
             s_nssai,
             dnn: dnn.clone(),
         }) {
@@ -1114,23 +1216,9 @@ impl Session {
                 return Err(e);
             }
         };
-        let transfer = codec::encode_setup_request_transfer(&codec::SetupRequestTransfer {
-            ambr_dl_bps: ambr_dl.saturating_mul(1000).min(codec::MAX_BIT_RATE),
-            ambr_ul_bps: ambr_ul.saturating_mul(1000).min(codec::MAX_BIT_RATE),
-            ul_tunnel: codec::GtpTunnel {
-                address: up.advertised(),
-                teid,
-            },
-            pdu_session_type: "ipv4".into(),
-            qos_flows: vec![codec::QosFlow {
-                qfi: DEFAULT_QFI,
-                five_qi: five_qi as u8,
-                arp_priority: DEFAULT_ARP_PRIORITY,
-            }],
-        })
-        .map_err(|e| {
+        let transfer = setup_transfer(&session, up.advertised()).map_err(|e| {
             up.remove(teid);
-            e.to_string()
+            e
         })?;
         let plain = nas::dl_nas_transport_sm(psi, &accept);
         let ctx = sec.ctx.as_mut().ok_or("no NAS security context")?;
@@ -1150,17 +1238,11 @@ impl Session {
             up.remove(teid);
             e.to_string()
         })?;
-        sec.sessions.insert(
-            psi,
-            PduSession {
-                ul_teid: teid,
-                ue_ip,
-                established: false,
-            },
-        );
+        let shown = address_label(&address, ipv6_prefix.as_ref());
+        sec.sessions.insert(psi, session);
         pdu_answers.push((amf, psi));
         Log::new(Some(&self.status_tx)).info(format!(
-            "NGAP UE {amf} {}: PDU session {psi} accepted ({ue_ip}, dnn {dnn}, uplink TEID \
+            "NGAP UE {amf} {}: PDU session {psi} accepted ({shown}, dnn {dnn}, uplink TEID \
              {teid:#010x} at {})",
             supi_label(&supi),
             up.advertised()
@@ -1215,16 +1297,30 @@ impl Session {
     }
 
     pub(super) async fn on_initial_context_setup_answer(&mut self, pdu: &codec::Pdu) -> bool {
+        if pdu.kind == PduKind::Successful {
+            // The answer may carry the downlink tunnels of sessions set up with the context (a
+            // Service Request reactivating its user plane).
+            match codec::parse_initial_context_setup_response(pdu) {
+                Ok(outcome) => {
+                    info!(
+                        "NGAP UE {}: Initial Context Setup complete",
+                        outcome.amf_ue_ngap_id
+                    );
+                    self.record_setup_outcome(&outcome);
+                }
+                Err(e) => warn!(
+                    "NGAP Initial Context Setup Response from {} does not decode: {e}",
+                    self.remote_addr
+                ),
+            }
+            return true;
+        }
         let amf = pdu
             .ie(codec::IE_AMF_UE_NGAP_ID)
             .and_then(|ie| codec::decode_amf_ue_ngap_id(ie).ok());
         let Some(amf) = amf else {
             return true;
         };
-        if pdu.kind == PduKind::Successful {
-            info!("NGAP UE {amf}: Initial Context Setup complete");
-            return true;
-        }
         let cause = pdu
             .ie(codec::IE_CAUSE)
             .and_then(|ie| codec::decode_cause(ie).ok())
@@ -1239,21 +1335,26 @@ impl Session {
     }
 
     pub(super) async fn on_pdu_session_setup_response(&mut self, pdu: &codec::Pdu) -> bool {
-        let outcome = match codec::parse_pdu_session_resource_setup_response(pdu) {
-            Ok(o) => o,
+        match codec::parse_pdu_session_resource_setup_response(pdu) {
+            Ok(o) => self.record_setup_outcome(&o),
             Err(e) => {
                 Log::new(Some(&self.status_tx)).warn(format!(
                     "NGAP PDU Session Resource Setup Response from {} does not decode: {e}",
                     self.remote_addr
                 ));
-                return true;
             }
-        };
+        }
+        true
+    }
+
+    /// The gNB's downlink tunnels go to the user plane; a session it could not set up is dropped
+    /// with its uplink TEID.
+    fn record_setup_outcome(&mut self, outcome: &codec::SetupOutcome) {
         let amf = outcome.amf_ue_ngap_id;
         let up = self.core.user_plane.clone();
         let status_tx = self.status_tx.clone();
         let Some(sec) = self.sec(amf) else {
-            return true;
+            return;
         };
         let label = supi_label(&sec.supi);
         for (psi, t) in &outcome.established {
@@ -1267,7 +1368,9 @@ impl Session {
             Log::new(Some(&status_tx)).info(format!(
                 "NGAP UE {amf} {label}: PDU session {psi} established, {} reachable through \
                  the gNB at {} TEID {:#010x} (decision=pdu_session_established)",
-                s.ue_ip, t.dl_tunnel.address, t.dl_tunnel.teid
+                address_label(&s.address, None),
+                t.dl_tunnel.address,
+                t.dl_tunnel.teid
             ));
         }
         for (psi, cause) in &outcome.failed {
@@ -1281,7 +1384,6 @@ impl Session {
                 cause.label()
             ));
         }
-        true
     }
 
     pub(super) async fn on_release_request(&mut self, pdu: &codec::Pdu) -> bool {
@@ -1305,8 +1407,177 @@ impl Session {
             "NGAP UE {amf}: the gNB asks for release ({})",
             cause.map(|c| c.label()).unwrap_or_default()
         );
-        // The gNB already knows why; the command carries its cause back (38.413 8.3.2).
-        self.release_ue(amf, cause.unwrap_or(Cause::radio(0))).await;
+        // The gNB already knows why; the command carries its cause back (38.413 8.3.2). This is
+        // not `release_ue`: a registered UE released at the gNB's request goes to CM-IDLE, so its
+        // phase stays as it is.
+        self.send_encoded(
+            "UE Context Release Command",
+            codec::ue_context_release_command(amf, Some(ran), &cause.unwrap_or(Cause::radio(0))),
+        )
+        .await;
+        if let Some(ue) = self.ues.get_mut(&amf) {
+            ue.releasing = true;
+        }
         true
     }
+}
+
+/// The first algorithm of `preference` whose bit is set in the UE's capability octet (bit 8 is
+/// algorithm 0, bit 7 algorithm 1, ...: TS 24.501 9.11.3.54).
+pub(super) fn select_algorithm(preference: &[u8], offered: Option<u8>) -> Option<u8> {
+    let offered = offered?;
+    preference
+        .iter()
+        .copied()
+        .find(|a| *a < 8 && offered & (0x80 >> a) != 0)
+}
+
+/// The model's `reachable_addresses`: IPv4 or IPv6, at most [`upf::MAX_ANSWERING_ADDRESSES`].
+pub(super) fn parse_answering_addresses(data: &Value) -> Result<Vec<std::net::IpAddr>, String> {
+    let answers: Vec<std::net::IpAddr> = match data.get("reachable_addresses") {
+        Some(Value::Array(l)) => l
+            .iter()
+            .map(|a| a.as_str().and_then(|s| s.trim().parse().ok()))
+            .collect::<Option<_>>()
+            .ok_or("reachable_addresses must be IPv4 or IPv6 addresses")?,
+        Some(Value::Null) | None => Vec::new(),
+        Some(_) => return Err("reachable_addresses must be a list".into()),
+    };
+    if answers.len() > upf::MAX_ANSWERING_ADDRESSES {
+        return Err(format!(
+            "at most {} reachable_addresses",
+            upf::MAX_ANSWERING_ADDRESSES
+        ));
+    }
+    Ok(answers)
+}
+
+/// The session's PDU address and IPv6 prefix from the model's decision: `pdu_session_type`
+/// (default: what the UE asked for, else ipv4), `ue_ipv4`, `ue_ipv6_prefix` (a /64) and
+/// `ue_ipv6_interface_identifier` (default `::1`).
+pub(super) fn session_address(
+    data: &Value,
+    requested: Option<u8>,
+) -> Result<(sm::PduAddress, Option<[u8; 8]>), String> {
+    let kind = match data.get("pdu_session_type").and_then(Value::as_str) {
+        Some(t) => match t.trim().to_ascii_lowercase().as_str() {
+            "ipv4" => 1,
+            "ipv6" => 2,
+            "ipv4v6" => 3,
+            other => {
+                return Err(format!(
+                    "pdu_session_type {other:?} must be ipv4, ipv6 or ipv4v6"
+                ))
+            }
+        },
+        None => match requested {
+            Some(t @ 1..=3) => t,
+            _ => 1,
+        },
+    };
+    let v4 = || -> Result<Ipv4Addr, String> {
+        let ip: Ipv4Addr = data["ue_ipv4"]
+            .as_str()
+            .and_then(|s| s.trim().parse().ok())
+            .ok_or("ue_ipv4 must be an IPv4 address")?;
+        if ip.is_unspecified() || ip.is_broadcast() || ip.is_multicast() {
+            return Err(format!("ue_ipv4 {ip} cannot be a UE's address"));
+        }
+        Ok(ip)
+    };
+    let v6 = || -> Result<([u8; 8], [u8; 8]), String> {
+        let prefix = parse_prefix(
+            data["ue_ipv6_prefix"]
+                .as_str()
+                .ok_or("ue_ipv6_prefix is required for an IPv6 session, e.g. 2001:db8:1:2::/64")?,
+        )?;
+        let iid = match data.get("ue_ipv6_interface_identifier").and_then(Value::as_str) {
+            Some(s) => sm::parse_iid(s)?,
+            None => [0, 0, 0, 0, 0, 0, 0, 1],
+        };
+        if iid == [0u8; 8] {
+            return Err("the interface identifier cannot be zero".into());
+        }
+        Ok((prefix, iid))
+    };
+    Ok(match kind {
+        1 => (sm::PduAddress::V4(v4()?), None),
+        2 => {
+            let (p, iid) = v6()?;
+            (sm::PduAddress::V6 { iid }, Some(p))
+        }
+        _ => {
+            let (p, iid) = v6()?;
+            (sm::PduAddress::V4V6 { iid, v4: v4()? }, Some(p))
+        }
+    })
+}
+
+/// A /64 IPv6 prefix, written `2001:db8:1:2::/64` (the length may be omitted).
+pub(super) fn parse_prefix(s: &str) -> Result<[u8; 8], String> {
+    let (addr, len) = match s.trim().split_once('/') {
+        Some((a, l)) => (a, Some(l)),
+        None => (s.trim(), None),
+    };
+    if let Some(l) = len {
+        if l.trim() != "64" {
+            return Err(format!(
+                "ue_ipv6_prefix {s:?}: a PDU session's prefix is a /64 (TS 23.501 5.8.2.2.3)"
+            ));
+        }
+    }
+    let a: std::net::Ipv6Addr = addr
+        .parse()
+        .map_err(|_| format!("ue_ipv6_prefix {s:?} is not an IPv6 prefix"))?;
+    let o = a.octets();
+    if o[8..] != [0u8; 8] {
+        return Err(format!(
+            "ue_ipv6_prefix {s:?} has bits set beyond /64"
+        ));
+    }
+    if a.is_multicast() || a.is_unspecified() || o[0] == 0xfe && o[1] & 0xc0 == 0x80 {
+        return Err(format!(
+            "ue_ipv6_prefix {s:?} cannot be a UE's global prefix"
+        ));
+    }
+    let mut p = [0u8; 8];
+    p.copy_from_slice(&o[..8]);
+    Ok(p)
+}
+
+/// `10.45.0.2`, `2001:db8::/64 iid ::1`, or both.
+pub(super) fn address_label(address: &sm::PduAddress, prefix: Option<&[u8; 8]>) -> String {
+    let v6 = |iid: &[u8; 8]| match prefix {
+        Some(p) => format!("{} iid {}", upf::prefix_string(p), sm::iid_string(iid)),
+        None => format!("iid {}", sm::iid_string(iid)),
+    };
+    match address {
+        sm::PduAddress::V4(a) => a.to_string(),
+        sm::PduAddress::V6 { iid } => v6(iid),
+        sm::PduAddress::V4V6 { iid, v4 } => format!("{v4} and {}", v6(iid)),
+    }
+}
+
+/// The PDU Session Resource Setup Request Transfer for a session on this user plane: its AMBR,
+/// the uplink tunnel, its type and its one QoS flow. Built again, unchanged but for the 5QI a
+/// modification set, when a Service Request reactivates the session.
+pub(super) fn setup_transfer(
+    s: &PduSession,
+    upf_address: std::net::IpAddr,
+) -> Result<Vec<u8>, String> {
+    codec::encode_setup_request_transfer(&codec::SetupRequestTransfer {
+        ambr_dl_bps: s.ambr_dl_kbps.saturating_mul(1000).min(codec::MAX_BIT_RATE),
+        ambr_ul_bps: s.ambr_ul_kbps.saturating_mul(1000).min(codec::MAX_BIT_RATE),
+        ul_tunnel: codec::GtpTunnel {
+            address: upf_address,
+            teid: s.ul_teid,
+        },
+        pdu_session_type: s.ngap_type().into(),
+        qos_flows: vec![codec::QosFlow {
+            qfi: DEFAULT_QFI,
+            five_qi: s.five_qi,
+            arp_priority: DEFAULT_ARP_PRIORITY,
+        }],
+    })
+    .map_err(|e| e.to_string())
 }
