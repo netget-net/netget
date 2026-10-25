@@ -1,5 +1,6 @@
 pub mod codec_test;
 pub mod e2e_test;
+pub mod procedures_codec_test;
 pub mod cipher_vectors_test;
 #[cfg(target_os = "linux")]
 pub mod real_client_test;
