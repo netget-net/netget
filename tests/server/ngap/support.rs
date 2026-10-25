@@ -222,68 +222,36 @@ impl LiveCapture {
         let keep = dir.path().join("ngap.pcapng");
         // `finish` deletes the capture with its directory; keep a copy for the second pass.
         let frames = self.finish_keeping(Some(&keep)).await;
-        let out = std::process::Command::new("tshark")
-            .arg("-r")
-            .arg(&keep)
-            .args([
-                "-n",
-                "-o",
-                "nas-5gs.null_decipher:TRUE",
-                "-Y",
-                "nas-5gs",
-                "-T",
-                "fields",
-                "-E",
-                "separator=/t",
-                "-E",
-                "occurrence=a",
-                "-e",
-                "frame.number",
-                "-e",
-                "sctp.srcport",
-                "-e",
-                "nas-5gs.security_header_type",
-                "-e",
-                "nas-5gs.mm.message_type",
-                "-e",
-                "nas-5gs.sm.message_type",
-                "-e",
-                "_ws.expert.severity",
-            ])
-            .output()
-            .expect("tshark is required: sudo apt-get install tshark");
-        assert!(
-            out.status.success(),
-            "tshark: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        let nums = |s: &str| -> Vec<u64> {
-            s.split(',')
-                .filter_map(|x| {
-                    let x = x.trim();
-                    x.strip_prefix("0x")
-                        .map(|h| u64::from_str_radix(h, 16).ok())
-                        .unwrap_or_else(|| x.parse().ok())
-                })
-                .collect()
-        };
-        let nas = String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .map(|line| {
-                let c: Vec<&str> = line.split('\t').collect();
-                let get = |i: usize| c.get(i).copied().unwrap_or("");
-                NasFrame {
-                    number: get(0).parse().unwrap_or(0),
-                    src_port: get(1).split(',').next().unwrap_or("0").parse().unwrap_or(0),
-                    security_headers: nums(get(2)).into_iter().map(|v| v as u8).collect(),
-                    mm_types: nums(get(3)).into_iter().map(|v| v as u8).collect(),
-                    sm_types: nums(get(4)).into_iter().map(|v| v as u8).collect(),
-                    experts: nums(get(5)).into_iter().map(|v| v as u32).collect(),
-                }
-            })
-            .collect();
+        let nas = nas_frames(&keep, true).expect("tshark reads the capture");
         (frames, nas)
+    }
+
+    /// Wait until the 5G NAS in the capture so far satisfies `pred` — the condition a test means
+    /// when it is about to stop the capture after the last message it cares about was written.
+    /// Returns what was read last, `Err` with it when `secs` pass first.
+    pub async fn wait_for_nas(
+        &self,
+        secs: u64,
+        pred: impl Fn(&[NasFrame]) -> bool,
+    ) -> Result<Vec<NasFrame>, Vec<NasFrame>> {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(secs);
+        let dir = tempfile::tempdir().unwrap();
+        let snap = dir.path().join("snapshot.pcapng");
+        let mut last = Vec::new();
+        loop {
+            if std::fs::copy(&self.path, &snap).is_ok() {
+                if let Some(nas) = nas_frames(&snap, false) {
+                    if pred(&nas) {
+                        return Ok(nas);
+                    }
+                    last = nas;
+                }
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(last);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
     }
 
     /// Stop the capture and dissect every NGAP frame in it.
@@ -354,6 +322,79 @@ impl LiveCapture {
         );
         parse_fields(&String::from_utf8_lossy(&out.stdout))
     }
+}
+
+/// Every 5G NAS message tshark's nas-5gs dissector reads in the capture at `path` (NEA0 read
+/// through). `strict`: a capture that is complete, so any tshark failure is one; otherwise a
+/// file dumpcap is still writing, whose half-written tail is tolerated.
+#[cfg(target_os = "linux")]
+fn nas_frames(path: &std::path::Path, strict: bool) -> Option<Vec<NasFrame>> {
+    let out = std::process::Command::new("tshark")
+        .arg("-r")
+        .arg(path)
+        .args([
+            "-n",
+            "-o",
+            "nas-5gs.null_decipher:TRUE",
+            "-Y",
+            "nas-5gs",
+            "-T",
+            "fields",
+            "-E",
+            "separator=/t",
+            "-E",
+            "occurrence=a",
+            "-e",
+            "frame.number",
+            "-e",
+            "sctp.srcport",
+            "-e",
+            "nas-5gs.security_header_type",
+            "-e",
+            "nas-5gs.mm.message_type",
+            "-e",
+            "nas-5gs.sm.message_type",
+            "-e",
+            "_ws.expert.severity",
+        ])
+        .output()
+        .expect("tshark is required: sudo apt-get install tshark");
+    // While dumpcap is still writing, the last packet may be half there: tshark then prints
+    // every whole packet and exits non-zero ("cut short in the middle of a packet").
+    let err = String::from_utf8_lossy(&out.stderr);
+    if !out.status.success() && (strict || !err.contains("cut short")) {
+        if strict {
+            panic!("tshark: {err}");
+        }
+        return None;
+    }
+    let nums = |s: &str| -> Vec<u64> {
+        s.split(',')
+            .filter_map(|x| {
+                let x = x.trim();
+                x.strip_prefix("0x")
+                    .map(|h| u64::from_str_radix(h, 16).ok())
+                    .unwrap_or_else(|| x.parse().ok())
+            })
+            .collect()
+    };
+    let nas: Vec<NasFrame> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|line| {
+            let c: Vec<&str> = line.split('\t').collect();
+            let get = |i: usize| c.get(i).copied().unwrap_or("");
+            NasFrame {
+                number: get(0).parse().unwrap_or(0),
+                src_port: get(1).split(',').next().unwrap_or("0").parse().unwrap_or(0),
+                security_headers: nums(get(2)).into_iter().map(|v| v as u8).collect(),
+                mm_types: nums(get(3)).into_iter().map(|v| v as u8).collect(),
+                sm_types: nums(get(4)).into_iter().map(|v| v as u8).collect(),
+                experts: nums(get(5)).into_iter().map(|v| v as u32).collect(),
+            }
+        })
+        .collect();
+    Some(nas)
 }
 
 fn parse_fields(text: &str) -> Vec<CapturedFrame> {

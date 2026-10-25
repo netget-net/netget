@@ -452,7 +452,21 @@ async fn open5gs_registers_netgets_ue_and_creates_its_pdu_session() {
     let core = Core5g::start().await;
     let capture = LiveCapture::start(38412).await;
     let state = AppState::new_with_options(false, "http://127.0.0.1:1".into());
-    let (tx, _) = mpsc::unbounded_channel();
+    // NetGet's own status lines, printed (the last of them) when a capture assertion fails.
+    let (tx, mut status_rx) = mpsc::unbounded_channel::<String>();
+    let netget_log = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    {
+        let sink = netget_log.clone();
+        tokio::spawn(async move {
+            while let Some(l) = status_rx.recv().await {
+                sink.lock().unwrap().push(l);
+            }
+        });
+    }
+    let netget_tail = move || {
+        let lines = netget_log.lock().unwrap();
+        lines[lines.len().saturating_sub(40)..].join("\n")
+    };
     let id = ClientForm {
         protocol: "ngap".into(),
         remote_addr: Some(format!("{CORE}.5:38412")),
@@ -631,6 +645,22 @@ async fn open5gs_registers_netgets_ue_and_creates_its_pdu_session() {
         "{modified}"
     );
 
+    // The Modification Complete is the last message NetGet writes. It was handed to the kernel
+    // before the event above was raised, so wait for the condition the assertions below need —
+    // that message in the capture — before stopping it.
+    if let Err(nas) = capture
+        .wait_for_nas(30, |nas| {
+            nas.iter()
+                .any(|f| f.src_port != 38412 && f.sm_types.contains(&0xcc))
+        })
+        .await
+    {
+        panic!(
+            "NetGet's Modification Complete never reached the capture: {nas:#?}\n--- NetGet ---\n{}\n{}",
+            netget_tail(),
+            core.dump()
+        );
+    }
     let (frames, nas) = capture.finish_with_nas().await;
     let netget_port = frames
         .iter()
@@ -705,7 +735,8 @@ async fn open5gs_registers_netgets_ue_and_creates_its_pdu_session() {
         assert!(
             nas.iter()
                 .any(|f| f.src_port == netget_port && f.sm_types.contains(&sm)),
-            "NetGet's 5GSM 0x{sm:02x} not dissected: {nas:#?}"
+            "NetGet's 5GSM 0x{sm:02x} not dissected: {nas:#?}\n--- NetGet ---\n{}",
+            netget_tail()
         );
     }
     assert!(nas
