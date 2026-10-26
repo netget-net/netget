@@ -13,6 +13,8 @@ with every value XML-escaped.
 | `handlers.rs` | every operation, by service, and who answers it (the table at its top) |
 | `wire.rs` | the tree, WS-Security digests, Device/Media ver10 bodies, capabilities, durations |
 | `ptz.rs`, `events.rs`, `media2.rs`, `imaging.rs` | each service's state and bodies |
+| `notify.rs` | Basic Notification: the consumer allowlist and address checks, the delivery task and its bounds |
+| `recording.rs` | Recording, Search and Replay: the model's description, the searches, their bodies |
 | `actions.rs` | the model's actions and events |
 
 ## Services
@@ -20,8 +22,10 @@ with every value XML-escaped.
 Operations are dispatched on the Body element's **namespace and name**, not the URL path, so any
 path works — except a pull-point subscription's, whose path names it. GetCapabilities
 advertises Device, Events, Imaging, Media and PTZ (in the schema's order; Analytics is
-`ActionNotSupported/NoSuchService`); GetServices lists those and Media2 (`wire::SERVICES`), each
-at `/onvif/<service>_service` on the scheme and authority of the request's `Host` header. Any
+`ActionNotSupported/NoSuchService`) and, for `All`, Recording, Search and Replay in its
+`Extension` (they have no category of their own); GetServices lists all of those and Media2
+(`wire::SERVICES`), each at `/onvif/<service>_service` on the scheme and authority of the
+request's `Host` header. Any
 other operation in any namespace is `env:Receiver` / `ter:ActionNotSupported`, HTTP 500.
 
 | Service | Rust answers | The model answers (event → action) |
@@ -30,8 +34,11 @@ other operation in any namespace is `env:Receiver` / `ter:ActionNotSupported`, H
 | Media ver10 | — | GetProfiles, GetVideoSources, GetStreamUri, GetSnapshotUri |
 | Media2 ver20 | GetServiceCapabilities | the **same events** as Media: GetProfiles, GetVideoSourceConfigurations and GetVideoEncoderConfigurations render one `onvif_get_profiles` answer, GetStreamUri/GetSnapshotUri ask the URI events (`service: media2`; a Media2 Protocol is mapped onto ver10's stream and transport, RTSPS and unknown ones are `InvalidArgVal/InvalidStreamSetup`) — so both services describe the same profiles with the same configuration tokens (`vsc_<source>`, `vec_<profile>`, `ptz_config`) |
 | PTZ ver20 | GetServiceCapabilities, GetNodes, GetNode, GetConfigurations, GetConfiguration, GetStatus, GetPresets, SetPreset, RemovePreset, Stop | ContinuousMove, RelativeMove, AbsoluteMove, GotoPreset, GotoHomePosition (`onvif_ptz_move` → `onvif_ptz_position {pan, tilt, zoom}`) |
-| Events ver10 | GetServiceCapabilities, GetEventProperties, PullMessages, Renew, Unsubscribe, SetSynchronizationPoint | CreatePullPointSubscription (`onvif_create_subscription` → `onvif_accept`, optionally with `onvif_raise_event`s) |
+| Events ver10 | GetServiceCapabilities, GetEventProperties, PullMessages, Renew, Unsubscribe, SetSynchronizationPoint; Notify to push consumers | CreatePullPointSubscription and Subscribe (Basic Notification, once the consumer passed the allowlist) — both `onvif_create_subscription` → `onvif_accept`, optionally with `onvif_raise_event`s; Subscribe's event carries the `consumer` |
 | Imaging ver20 | GetServiceCapabilities, GetImagingSettings, GetOptions, GetMoveOptions, GetStatus, Stop | SetImagingSettings (`onvif_set_imaging_settings` → `onvif_accept`), Move (`onvif_imaging_move` → `onvif_focus_position`) |
+| Recording ver10 | GetServiceCapabilities, GetRecordings, GetRecordingConfiguration, GetRecordingJobs | the recordings, once (`onvif_describe_recordings` → `onvif_recordings`); allow/deny on CreateRecording (`onvif_create_recording`) and DeleteRecording (`onvif_delete_recording`) |
+| Search ver10 | GetServiceCapabilities, GetRecordingSummary, GetRecordingInformation, FindRecordings, GetRecordingSearchResults, FindEvents, GetEventSearchResults, GetSearchState, EndSearch | the recordings, once |
+| Replay ver10 | GetServiceCapabilities, GetReplayUri, GetReplayConfiguration | the recordings, once (each carries its replay URI) |
 
 Every model event carries `operation`, `username` (the authenticated user, or null) and
 `remote_addr`, and offers `onvif_fault {subcode, detail?, reason}`, which goes out as
@@ -103,6 +110,108 @@ Like a camera, the device holds state in memory for the life of the server; it i
   MessageLimit is clamped to 1..`MAX_MESSAGE_LIMIT` (100). It does not extend the subscription;
   Renew does (cut to `MAX_TERMINATION`).
 
+- **Recordings** (`recording.rs`). The device records nothing and stores no media. The first
+  Recording, Search or Replay request that needs them asks the model to describe its recordings
+  (`onvif_describe_recordings` → `onvif_recordings`): per recording its token, source (id, name,
+  location, description, address), content, retention, tracks (token, Video/Audio/Metadata, the
+  `from`..`to` range each holds), the events recorded on it (time, track, and a topic, source and
+  data exactly as `onvif_raise_event` takes them) and the RTSP URI a replay is served from; and
+  the recording jobs (token, recording, Active/Idle, priority, source profile). Rust validates it
+  (`archive_from_action`: at most `MAX_RECORDINGS` 32, `MAX_TRACKS` 8 per recording,
+  `MAX_RECORDED_EVENTS` 256 per recording and `MAX_ARCHIVE_EVENTS` 1024 in all, `MAX_JOBS` 16,
+  tokens unique, ranges ordered, times between 1970 and 2100) and keeps it; a description that
+  fails is a fail-closed answer and is asked for again by the next request. Everything after
+  costs no model call: GetRecordings, GetRecordingConfiguration, GetRecordingJobs,
+  GetRecordingSummary (earliest and latest data, count), GetRecordingInformation (a recording's
+  range is its tracks'; its status is Recording with an Active job, Initiated when created and
+  never recorded into, else Stopped), and every search. An unknown token is
+  `InvalidArgVal/NoRecording`.
+- **Searches.** FindRecordings (Scope: IncludedSources by SourceId, IncludedRecordings) and
+  FindEvents (StartPoint, EndPoint — before the start searches backwards, newest first — Scope,
+  a SearchFilter topic expression in any dialect the subscriptions take, IncludeStartState: each
+  property's last value before the start, reported at the start with StartStateEvent true) run
+  to completion at once from the description and their results wait to be paged out. At most
+  `MAX_SEARCHES` (8) live searches (the next is `env:Receiver/ter:Action/ter:ResourceProblem`),
+  each keeping at most `MAX_SEARCH_RESULTS` (256; MaxMatches cuts it further) and handing out at
+  most `MAX_RESULTS_PAGE` (100) per Get*SearchResults whatever MaxResults says (0 is read as 1);
+  SearchState is Searching while results wait and Completed after the last. WaitTime is never
+  waited: everything is ready. KeepAliveTime is cut to 1 s..`MAX_KEEP_ALIVE` (300 s, default
+  60 s), renewed by each request, measured on the device's clock; an expired, ended or unknown
+  token — or one paged by the other kind of request — is `InvalidArgVal/InvalidToken`. EndSearch
+  answers the point the search reached (its EndPoint, or the latest data). A
+  RecordingInformationFilter (XPath) is refused `InvalidArgVal/InvalidFilterFragment` rather than
+  ignored; a MessageContent filter, a scope of more than `MAX_SCOPE_ITEMS` (64) and an
+  unreadable time or duration are `InvalidArgVal` — all before the model is asked.
+- **CreateRecording / DeleteRecording.** Each is the model's allow/deny. CreateRecording's
+  configuration is checked first (strings `MAX_TEXT`, a retention duration up to ten years —
+  `wire::parse_duration_max`); a full device is `env:Receiver/ter:Action/ter:MaxRecordings`
+  without asking. Accepted, the recording gets token `rec_<n>` and an empty Video, Audio and
+  Metadata track (`VIDEO001`, `AUDIO001`, `META001`) and no replay URI — GetReplayUri for it is
+  `env:Receiver/ter:ActionNotSupported` rather than an invented URI. DeleteRecording of an
+  unknown token is `NoRecording` without asking; accepted, the recording and the jobs recording
+  into it are gone. Refused or unanswered, nothing changes.
+- **Replay.** GetReplayUri answers the recording's `replay_uri` for a StreamSetup of
+  RTP-Unicast/RTP-Multicast over RTSP, UDP, TCP or HTTP (anything else is
+  `InvalidStreamSetup`); GetReplayConfiguration a session timeout of
+  `REPLAY_SESSION_TIMEOUT` (60 s; SetReplayConfiguration is not implemented). NetGet's device does
+  not serve the replay itself. NetGet's own `rtsp` server can: start one beside the device and
+  have the model's `replay_uri` name it (`rtsp://<host>:<rtsp port>/replay/<token>`). A client
+  that follows the URI then runs OPTIONS → DESCRIBE → SETUP → PLAY against that server, whose
+  model shapes the SDP and what PLAY streams — synthesized RTP audio (tone, DTMF, silence), not
+  the recording, since nothing was recorded. The two instances share nothing but the URI; no
+  test drives the pair together.
+
+## Basic Notification: the bounds design
+
+Subscribe is the one operation that makes the device open connections to an address a client
+chose, so every part of a delivery is bounded before anything is sent (`notify.rs`):
+
+- **Who may be a consumer.** The ConsumerReference's `Address` (any namespace: use-go/onvif
+  writes it in `wsnt`) must be an `http://` URL, at most `MAX_CONSUMER_URL` (512) bytes, no
+  whitespace or control characters, no userinfo, whose host is an **IP literal** — the device
+  resolves no names for a client, so nothing can be rebound after the check. IPv4-mapped IPv6 is
+  judged as the IPv4 it is. The IP must fall in the startup parameter `notify_consumers`: a list
+  (at most `MAX_ALLOWLIST` 32) of addresses, CIDR blocks and the word `subscriber` (the
+  subscribing client's own address). Its default is **loopback only** (`DEFAULT_CONSUMERS`:
+  `127.0.0.0/8`, `::1/128`). Unspecified, multicast and broadcast addresses are refused whatever
+  the list says. https is refused unless `notify_allow_https` (default `ALLOW_HTTPS`, false).
+  A refusal is `env:Sender/ter:InvalidArgVal` with a `SubscribeCreationFailedFault` detail,
+  logged `decision=notify_consumer_refused reason=…` and recorded as `onvif_notify_refused
+  {consumer, reason, remote_addr}` (`malformed_address`, `not_http`, `https_refused`,
+  `host_not_an_ip_address`, `userinfo`, `not_allowlisted`) — **before the model is asked**, so
+  no model call and no subscription.
+- **How many.** At most `MAX_PUSH_SUBSCRIPTIONS` (8) live push subscriptions, counted apart from
+  pull points (the next is `env:Receiver/ter:Action` + `SubscribeCreationFailedFault`), each
+  living until its termination time exactly as a pull point does (`MAX_TERMINATION` 1 h). A
+  subscription the model refuses or cannot answer is removed again; nothing is ever sent for it.
+- **How much is held.** Each push subscription queues at most `MAX_PUSH_QUEUED` (64)
+  notifications; past it the oldest is dropped, and the delivery task logs how many
+  (`decision=notify_queue_overflow`). A Notify carries at most `MAX_NOTIFY_BATCH` (16) messages.
+- **How much is attempted.** One delivery task per subscription (registered with the server, so
+  stopping the server stops it), one request in flight per subscription: at most 8 at once.
+  Each attempt — connect, send, and reading at most `MAX_ANSWER` (64 KiB) of the answer — is
+  bounded by `notify_timeout_secs` (default `NOTIFY_TIMEOUT` 5 s, 1..=30). A failed attempt (no
+  connection, a timeout, any non-2xx status) is retried at most `notify_retries` times (default
+  `NOTIFY_RETRIES` 2, 0..=5), `RETRY_BACKOFF` × n apart (250 ms, 500 ms, …), and not at all once
+  the subscription is gone. Then the batch is **dropped**: logged `decision=notify_dropped` at
+  ERROR and recorded `onvif_notify_dropped {subscription, consumer, topics, messages, error,
+  attempts}`. A delivered batch is `onvif_notify_delivered {…, status, attempts}`.
+- **Where it goes.** No redirect is followed (a 3xx is a failed attempt: `HTTP 307 (redirects
+  are not followed)`), no proxy is used (one would carry the request somewhere the allowlist
+  never saw), and the request goes only to the IP and port the checked URL names.
+- **What it says.** `wsnt:Notify` with WS-Addressing `Action`
+  (`…/NotificationConsumer/Notify`) and `To` (the consumer); each message carries the
+  subscription's address as its SubscriptionReference and the Events service as its
+  ProducerReference, exactly as a pulled one does. A new push subscription is first sent every
+  remembered property as `Initialized`, and SetSynchronizationPoint at its address resends them.
+- **Its lifetime.** Renew, Unsubscribe and SetSynchronizationPoint work at the subscription's
+  address as for a pull point; PullMessages there is `env:Receiver/ter:ActionNotSupported`. The
+  delivery task ends when the subscription does (Unsubscribe, expiry, the server stopping) and
+  logs `push subscription <id> to <consumer> ended`.
+
+`onvif_raise_event` — the model's, in any answer, or an operator's — puts its notification on
+every live subscription whose filter matches, pull points and push subscriptions alike.
+
 ## Authentication
 
 Startup parameters `username` and `password` (together or neither; with neither, every
@@ -122,8 +231,8 @@ Unknown operations are refused before authentication (`ActionNotSupported` says 
 attacker could use).
 
 Every request is logged to the status stream as `ONVIF connection <id> request
-<service>:<Operation>` (service `device`, `media`, `media2`, `ptz`, `events`, `imaging`, or
-`other` for an unqualified body) — that is where the tests read what each client actually sent.
+<service>:<Operation>` (service `device`, `media`, `media2`, `ptz`, `events`, `imaging`,
+`recording`, `search`, `replay`, or `other` for an unqualified body) — that is where the tests read what each client actually sent.
 
 ## Failure
 
@@ -133,14 +242,20 @@ that fails, answers nothing, or answers with an action for another operation or 
 validation is `env:Receiver` with a `WireFailure` category and no subcode (500, or 503 with
 `Retry-After` when overloaded); nothing of the model's answer is sent and nothing changes — a
 subscription the model did not accept is removed again. Decisions are logged
-`decision=model_answer|model_reject|model_silent|fail_closed_llm_error|fail_closed_invalid_reply|fail_closed_not_authorized|action_not_supported`.
+`decision=model_answer|model_reject|model_silent|fail_closed_llm_error|fail_closed_invalid_reply|fail_closed_not_authorized|action_not_supported|notify_consumer_refused`;
+deliveries `decision=notify_delivered|notify_dropped|notify_queue_overflow`. A recordings
+description the model gets wrong is a fail-closed answer like any other, and nothing is kept.
 
 ## Not implemented
 
-Recording, Replay, Search, Analytics, DeviceIO; WS-BaseNotification Subscribe (Basic
-Notification, the device POSTing Notify to a consumer — onvif-zeep-async can drive it through
-its NotificationManager, but nothing here does, and the device making outbound requests to a
-client-chosen address wants its own bounds); PTZ SetHomePosition, SetConfiguration, preset
+Analytics, DeviceIO, Receiver; recording changes beyond Create/DeleteRecording (CreateTrack,
+DeleteTrack, CreateRecordingJob, DeleteRecordingJob, SetRecordingJobMode,
+SetRecordingConfiguration, GetRecordingJobState, GetRecordingOptions, ExportRecordedData),
+metadata and PTZ-position searches (FindMetadata, FindPTZPosition), RecordingInformationFilter
+(XPath, refused), SetReplayConfiguration, and streaming a replay (the device hands out the
+model's RTSP URI); WS-BaseNotification PauseSubscription/ResumeSubscription, GetCurrentMessage
+and message-content filters, consumers named by host name, and https consumers without
+`notify_allow_https`; PTZ SetHomePosition, SetConfiguration, preset
 tours, GeoMove, auxiliary commands; Imaging presets and the settings listed above; Media2
 Add/RemoveConfiguration, CreateProfile and the audio, metadata, OSD and mask operations;
 Device Set* beyond the six above (SetNTP, SetNetworkInterfaces, users, …); more than one user
@@ -157,11 +272,21 @@ back, setting/going to/removing a preset, a refused move leaving the position, a
 subscription receiving the model's notification and a long poll woken by an event raised while
 it waits. Media2: python onvif2-zeep 0.3.4 (zeep over the ver20 Media WSDL in its own source
 distribution) and Go IOTechSystems/onvif v1.3.0 — onvif-zeep-async and use-go bundle no Media2.
-All fail when absent. `pcap_oracle_test.rs` has tshark read every new service's exchange both
-ways. `fuzz/fuzz_targets/onvif_request.rs` drives the topic-filter, duration, PTZ-vector and
-imaging parsers behind the tree; it has run clean (168,703 executions over 301 seconds on 23
-October 2026, seeded lockfile, current nightly, `-s none` on macOS — and on this machine a
-linker wrapper adding `-Wl,-undefined,dynamic_lookup`, because the `crc-fast` cdylib in the
-lockfile will not link with sanitizer coverage and no sanitizer runtime). Two independent clients per service is the evidence Beta asks
-for; it stays Experimental because no person has reviewed the services beyond it and the pair
-job has not run them in CI.
+Recording, Search and Replay: python onvif-zeep-async 4.3.0 (zeep over the recording, search and
+replay WSDLs it bundles) and Go videonext/onvif (gowsdl-generated from ONVIF's WSDLs, pinned) —
+`profile_g_test.rs`. videonext computes its PasswordDigest over the nonce's base64 text, so the
+device refuses its tokens (`bad_digest`, asserted) and its sequence runs unsigned; two of its
+response types cannot be decoded by the library at all (GetEventSearchResults,
+Replay's capabilities) and are read as they arrived. Basic Notification: onvif-zeep-async's
+NotificationManager and use-go/onvif's `event.Subscribe`, each with its own loopback consumer
+(`notify_test.rs`). All fail when absent. `pcap_oracle_test.rs` has tshark read every new
+service's exchange both ways, and the device's Notify POST. `fuzz/fuzz_targets/onvif_request.rs` drives the topic-filter, duration, PTZ-vector,
+imaging, consumer-address, allowlist, search-scope, time-range and recordings-description
+parsers behind the tree. With those parsers added it has run clean again: 34,294 executions
+over 301 seconds on 25 October 2026 (`cargo fuzz build --dev --sanitizer none`, as `fuzz.yml`
+builds it, with `nightly-2025-12-04`, the lockfile seeded from the root one — a fresh resolve
+pulls a libc the old `nix` 0.8 no longer compiles against — and on macOS
+`-C link-arg=-Wl,-undefined,dynamic_lookup`; a debug build, hence the rate). The earlier run, on
+the older parsers only, was 168,703 executions over 301 seconds on 23 October 2026. Two
+independent clients per service is the evidence Beta asks for; it stays Experimental because no
+person has reviewed the services beyond it and the pair job has not run the newest ones in CI.

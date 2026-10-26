@@ -200,8 +200,8 @@ pub async fn start(
                     let _ = http1::Builder::new()
                         .timer(TokioTimer::new())
                         // A device may shut its side down as soon as the Notify is written
-                        // (onvif_simple_server's daemon does); without half-close the EOF can
-                        // cancel the request before it is read.
+                        // (onvif_simple_server's daemon does); half-close keeps that EOF from
+                        // ending the connection before the request is answered.
                         .half_close(true)
                         .header_read_timeout(HEADER_TIMEOUT)
                         .max_buf_size(64 * 1024)
