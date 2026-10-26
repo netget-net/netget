@@ -240,7 +240,12 @@ pub static RESERVATION_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             "register, unregister, replace, acquire, preempt, preempt_and_abort, release or clear",
             true,
         ),
-        p("nsid", "number", "The namespace", true),
+        p(
+            "nsid",
+            "number",
+            "The namespace ID whose reservations would change",
+            true,
+        ),
         p(
             "type",
             "string",
@@ -252,7 +257,12 @@ pub static RESERVATION_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         ),
         p("host_nqn", "string", "The host asking", true),
         p("host_id", "string", "Its host identifier (a UUID)", true),
-        p("subsystem_nqn", "string", "The subsystem", true),
+        p(
+            "subsystem_nqn",
+            "string",
+            "The NQN of the subsystem the namespace belongs to",
+            true,
+        ),
         p("effect", "string", "What the change does if allowed", true),
         p(
             "host_registered",
