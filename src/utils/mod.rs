@@ -13,6 +13,8 @@ pub mod redis_keys;
 pub mod resp;
 pub mod sanitize;
 pub mod save_load;
+#[cfg(unix)]
+pub mod sctp;
 pub mod shutdown;
 pub mod sql;
 pub mod task_guard;

@@ -716,15 +716,29 @@ fn thread_states() -> String {
                 .and_then(|(_, rest)| rest.split_whitespace().next())
                 .unwrap_or("?")
                 .to_string();
-            let syscall = read("syscall");
-            let syscall = syscall.split_whitespace().next().unwrap_or("?");
+            let syscall_line = read("syscall");
+            let mut fields = syscall_line.split_whitespace();
+            let syscall = fields.next().unwrap_or("?").to_string();
+            // The first argument of read, recvfrom, accept, ioctl… is a descriptor: name what it
+            // is open on, which is what identifies the task a blocked thread belongs to.
+            let fd_target = fields
+                .next()
+                .and_then(|a| u64::from_str_radix(a.trim_start_matches("0x"), 16).ok())
+                .filter(|fd| *fd < 65_536)
+                .and_then(|fd| {
+                    std::fs::read_link(format!("/proc/self/fd/{fd}"))
+                        .ok()
+                        .map(|t| format!(" fd {fd} -> {}", t.display()))
+                })
+                .unwrap_or_default();
             out.push_str(&format!(
-                "  {} {} {} {} | {}\n",
+                "  {} {} {} {} | {}{}\n",
                 task.file_name().to_string_lossy(),
                 read("comm"),
                 state,
                 read("wchan"),
-                syscall
+                syscall,
+                fd_target
             ));
         }
         out
@@ -806,8 +820,65 @@ impl Drop for Watchdog {
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-async fn every_registered_server_protocol_starts_honestly() {
+/// After the sweep, how long the runtime may take to shut down before the stuck threads are
+/// printed, and the longest it is given before the test fails rather than waiting on them.
+///
+/// A protocol that leaves a task on tokio's blocking pool after its server stops (the stdio
+/// server's stdin read was one) makes dropping the runtime wait for that task forever. That
+/// happens after the sweep, where the watchdog above has already stopped, so twice in October
+/// 2026 it showed in CI only as this test "running for over 60 seconds" until the job limit.
+const SHUTDOWN_REPORT_AFTER: Duration = Duration::from_secs(20);
+const SHUTDOWN_LIMIT: Duration = Duration::from_secs(60);
+
+#[test]
+fn every_registered_server_protocol_starts_honestly() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(8)
+        .enable_all()
+        .build()
+        .expect("build the sweep's runtime");
+    runtime.block_on(server_sweep());
+    shut_down_or_name_what_holds_it(runtime);
+}
+
+/// Shut the sweep's runtime down with a bound, printing every thread's state if it is slow.
+fn shut_down_or_name_what_holds_it(runtime: tokio::runtime::Runtime) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let done = Arc::new(AtomicBool::new(false));
+    {
+        let done = Arc::clone(&done);
+        std::thread::Builder::new()
+            .name("smoke-shutdown-watch".to_string())
+            .spawn(move || {
+                let started = Instant::now();
+                while started.elapsed() < SHUTDOWN_REPORT_AFTER {
+                    if done.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                write_uncaptured(&format!(
+                    "\n=== protocol_startup_smoke_test: the sweep finished but its runtime has \
+                     taken over {}s to shut down; a task outlived its server ===\n{}",
+                    SHUTDOWN_REPORT_AFTER.as_secs(),
+                    thread_states()
+                ));
+            })
+            .expect("spawn the shutdown watcher");
+    }
+    let started = Instant::now();
+    runtime.shutdown_timeout(SHUTDOWN_LIMIT);
+    done.store(true, Ordering::SeqCst);
+    let took = started.elapsed();
+    assert!(
+        took < SHUTDOWN_REPORT_AFTER,
+        "the sweep's runtime took {took:.1?} to shut down: a protocol left a task running after \
+         its server stopped (every thread's state, with the file each blocked read is on, was \
+         printed to stderr)"
+    );
+}
+
+async fn server_sweep() {
     let state = Arc::new(AppState::new());
     // Unreachable on purpose: nothing on this machine listens on port 1, so any LLM
     // call fails on connect instead of reaching a model or the network.
