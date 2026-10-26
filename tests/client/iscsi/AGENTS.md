@@ -16,6 +16,12 @@ calls: zero.
 - `a_refused_login_injected_actions_and_the_chain_bound`: 0x0203 reported, the chain stops at
   `MAX_FOLLOWUP_DEPTH`, an operator's injected `iscsi_read` runs on the session.
 - `a_model_that_cannot_answer_sends_nothing`: no handler, unreachable model → no login.
+- `task_management_is_the_models_action_and_its_response_comes_back`: every function the
+  model may send, in order (`support::tmf_steps`, driven by `stepping_policy`, which keeps its
+  place in a file because each event runs the script afresh): ABORT TASK of the last command →
+  task does not exist, the task sets and resets → complete, CLEAR ACA → not supported, the
+  TEST UNIT READY after the LUN reset reports BUS DEVICE RESET FUNCTION OCCURRED once, the cold
+  reset ends the session, and the target's model was asked about exactly the three resets.
 
 ## `real_server_test.rs` — independent targets
 
@@ -35,5 +41,14 @@ calls: zero.
   printed with every failed assertion: tgtd says why it refused a login only there. Its
   `Login request (security negotiation): N` lines name the connection state (`iscsid.h`
   `STATE_*`); a security-stage PDU arriving in state 3 (`STATE_SECURITY_DONE`) is its 0x0200.
+- **Task management against both** (`gotgt_answers_the_models_task_management`,
+  `tgtd_answers_the_models_task_management`, tgtd on its own control port 18): the same
+  `tmf_steps` sequence, asserting each target's own answers as its source has them. gotgt
+  (`pkg/port/iscsit/iscsid.go`): ABORT TASK of a finished command → task does not exist, ABORT
+  TASK SET and LUN RESET → complete (empty cases: nothing is done), CLEAR ACA, CLEAR TASK SET and
+  both target resets → not supported, no unit attention anywhere, the session goes on. tgt
+  (`usr/iscsi/iscsid.c` `iscsi_tm_execute`): the same codes, but its LUN RESET really aborts and
+  sets POWER ON, RESET, OR BUS DEVICE RESET OCCURRED, which the next TEST UNIT READY reports
+  (as the first one after login does).
 
 Both fail, never skip, when their target is missing.

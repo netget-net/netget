@@ -9561,7 +9561,7 @@ jobs:
         with:
           go-version: '1.24'
           cache: false
-      - name: Install open-iscsi, tgt and tshark; build libiscsi 1.20.3; install gotgt; no daemon may hold port 3260
+      - name: Install open-iscsi, tgt, sg3-utils and tshark; build libiscsi 1.20.3; install gotgt; no daemon may hold port 3260
         run: |
           set -euo pipefail
           echo 'wireshark-common wireshark-common/install-setuid boolean false' | sudo debconf-set-selections
@@ -9570,7 +9570,7 @@ jobs:
           echo exit 101 | sudo tee /usr/sbin/policy-rc.d >/dev/null
           sudo chmod +x /usr/sbin/policy-rc.d
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            open-iscsi tgt tshark build-essential autoconf automake libtool libcunit1-dev
+            open-iscsi tgt sg3-utils tshark build-essential autoconf automake libtool libcunit1-dev
           sudo rm -f /usr/sbin/policy-rc.d
           for s in tgt iscsid open-iscsi; do sudo systemctl stop "$s" 2>/dev/null || true; done
           # The kernel initiator: its transport module and iscsid, which iscsiadm talks to.
@@ -9586,14 +9586,14 @@ jobs:
           sh scripts/test-peers/build-libiscsi.sh "$RUNNER_TEMP/libiscsi" | tail -1 >> "$GITHUB_PATH"
           GOBIN="$RUNNER_TEMP/gotgt" go install github.com/gostor/gotgt@v0.2.2
           echo "NETGET_GOTGT=$RUNNER_TEMP/gotgt/gotgt" >> "$GITHUB_ENV"
-          dpkg-query -W open-iscsi tgt tshark
+          dpkg-query -W open-iscsi tgt sg3-utils tshark
           # tgtd, iscsiadm and the block device the kernel makes need root.
           sudo -n true
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
           command -v iscsi-ls iscsi-inq iscsi-readcapacity16 iscsi-md5sum iscsi-test-cu tshark
-          command -v iscsiadm tgtd tgtadm
+          command -v iscsiadm tgtd tgtadm sg_reset
           test -x "$NETGET_GOTGT"
           # cargo builds as the runner user and runs each test binary as root, with the PATH
           # that finds the peers.

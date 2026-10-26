@@ -246,3 +246,14 @@ impl Overlay {
         self.bytes
     }
 }
+
+impl std::fmt::Debug for Overlay {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Overlay({} blocks, {} bytes)",
+            self.blocks.len(),
+            self.bytes
+        )
+    }
+}
