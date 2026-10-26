@@ -1,20 +1,24 @@
-//! ONVIF device (server role): Device, Media, Media2, PTZ, Events (pull point) and Imaging over
-//! SOAP 1.2 on HTTP/1.1.
+//! ONVIF device (server role): Device, Media, Media2, PTZ, Events (pull point and Basic
+//! Notification push), Imaging, Recording, Search and Replay over SOAP 1.2 on HTTP/1.1.
 //!
 //! Rust owns the envelopes, WS-Security, the clock, the service addresses, every fault the
 //! specification defines, and the device's volatile state — its clock settings, configurable
 //! scopes and hostname, PTZ position and presets, imaging settings and focus, event
-//! subscriptions. That state lives in memory for the life of the server, as it does in a camera;
-//! nothing is stored. The model decides what the device says about itself and its media, and
+//! subscriptions, the recordings the model described and the searches over them. That state
+//! lives in memory for the life of the server, as it does in a camera; nothing is stored, and no
+//! media is recorded. A push subscription is the one thing that makes the device connect out,
+//! and `notify.rs` bounds it. The model decides what the device says about itself and its media, and
 //! allows or refuses every change and every move (`handlers.rs` says which operation is which).
 //! Every request is one of:
 //!
 //! - answered by Rust: GetSystemDateAndTime (never authenticated, so a client can learn the
 //!   clock before it signs anything), GetCapabilities, GetServices, the service capabilities,
 //!   PTZ nodes/configurations/status/presets/stop, event properties and pull-point traffic,
-//!   imaging reads;
+//!   imaging reads, every recording read, search and replay URI once the recordings are
+//!   described;
 //! - asked of the model: device information, scopes, interfaces, hostname, profiles, sources,
-//!   URIs, every Set*, every PTZ and focus move, every new subscription;
+//!   URIs, every Set*, every PTZ and focus move, every new subscription, the recordings (once),
+//!   every CreateRecording and DeleteRecording;
 //! - refused: anything else is env:Receiver/ter:ActionNotSupported, a request that fails
 //!   authentication is env:Sender/ter:NotAuthorized, and a model that gives no usable answer is
 //!   env:Receiver with a category.
@@ -23,7 +27,9 @@ pub mod events;
 mod handlers;
 pub mod imaging;
 pub mod media2;
+pub mod notify;
 pub mod ptz;
+pub mod recording;
 pub mod wire;
 
 use crate::llm::action_helper::call_llm;
@@ -132,6 +138,11 @@ pub struct Device {
     ptz: Mutex<ptz::PtzState>,
     imaging: Mutex<imaging::ImagingState>,
     events: events::Broker,
+    /// Basic Notification: who may be a consumer, and the bounds on each delivery.
+    notify: notify::Config,
+    /// The recordings, once the model has described them.
+    archive: Mutex<Option<recording::Archive>>,
+    searches: Mutex<recording::Searches>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -174,9 +185,26 @@ impl Device {
         Ok(self.events.publish(n, now))
     }
 
-    /// Live pull-point subscriptions.
+    /// Live subscriptions, pull point and push alike.
     pub fn subscriptions(&self) -> usize {
         self.events.count()
+    }
+
+    /// Live Basic Notification (push) subscriptions.
+    pub fn push_subscriptions(&self) -> usize {
+        self.events.push_count(self.now())
+    }
+
+    /// Live searches.
+    pub fn searches(&self) -> usize {
+        lock(&self.searches).count(self.now())
+    }
+
+    /// The recordings, if the model has described them.
+    pub fn recording_tokens(&self) -> Option<Vec<String>> {
+        lock(&self.archive)
+            .as_ref()
+            .map(|a| a.recordings.iter().map(|r| r.token.clone()).collect())
     }
 }
 
@@ -217,6 +245,58 @@ pub async fn spawn(ctx: SpawnContext) -> Result<SocketAddr> {
         "max_pull_timeout_secs must be between 1 and {}",
         events::MAX_PULL_TIMEOUT.as_secs()
     );
+    let consumers: Option<Vec<String>> = params
+        .map(|p| p.get_optional_array("notify_consumers"))
+        .transpose()?
+        .flatten()
+        .map(|a| {
+            a.iter()
+                .map(|v| {
+                    v.as_str().map(str::to_string).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "notify_consumers holds addresses, CIDR blocks and {}",
+                            notify::SUBSCRIBER
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>>>()
+        })
+        .transpose()?;
+    let allowlist = match consumers {
+        Some(c) => notify::Allowlist::parse(&c)?,
+        None => notify::Allowlist::default_list(),
+    };
+    let allow_https = params
+        .map(|p| p.get_optional_bool("notify_allow_https"))
+        .transpose()?
+        .flatten()
+        .unwrap_or(notify::ALLOW_HTTPS);
+    let notify_timeout = params
+        .map(|p| p.get_optional_u64("notify_timeout_secs"))
+        .transpose()?
+        .flatten()
+        .unwrap_or(notify::NOTIFY_TIMEOUT.as_secs());
+    anyhow::ensure!(
+        (1..=notify::MAX_NOTIFY_TIMEOUT_SECS).contains(&notify_timeout),
+        "notify_timeout_secs must be between 1 and {}",
+        notify::MAX_NOTIFY_TIMEOUT_SECS
+    );
+    let notify_retries = params
+        .map(|p| p.get_optional_u64("notify_retries"))
+        .transpose()?
+        .flatten()
+        .unwrap_or(notify::NOTIFY_RETRIES);
+    anyhow::ensure!(
+        notify_retries <= notify::MAX_NOTIFY_RETRIES,
+        "notify_retries must be between 0 and {}",
+        notify::MAX_NOTIFY_RETRIES
+    );
+    let notify = notify::Config::new(
+        allowlist,
+        allow_https,
+        Duration::from_secs(notify_timeout),
+        notify_retries,
+    )?;
     let listener = tokio::net::TcpListener::bind(ctx.legacy_listen_addr()).await?;
     let local = listener.local_addr()?;
     Log::new(Some(&ctx.status_tx)).info(format!(
@@ -244,6 +324,9 @@ pub async fn spawn(ctx: SpawnContext) -> Result<SocketAddr> {
         ptz: Mutex::new(ptz::PtzState::default()),
         imaging: Mutex::new(imaging::ImagingState::default()),
         events: events::Broker::default(),
+        notify,
+        archive: Mutex::new(None),
+        searches: Mutex::new(recording::Searches::default()),
     });
     let state = ctx.state.clone();
     let server_id = ctx.server_id;
@@ -554,6 +637,9 @@ fn service_name(ns: &str) -> &'static str {
         wire::TPTZ => "ptz",
         wire::TEV | wire::WSNT => "events",
         wire::TIMG => "imaging",
+        wire::TRC => "recording",
+        wire::TSE => "search",
+        wire::TRP => "replay",
         _ => "other",
     }
 }

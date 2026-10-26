@@ -1,6 +1,7 @@
-//! ONVIF client: SOAP 1.2 requests to a device's Device, Media, Media2, PTZ, Events and Imaging
-//! services, each signed with a WS-Security PasswordDigest UsernameToken whose Created follows
-//! the device's clock.
+//! ONVIF client: SOAP 1.2 requests to a device's Device, Media, Media2, PTZ, Events, Imaging,
+//! Recording, Search and Replay services, each signed with a WS-Security PasswordDigest
+//! UsernameToken whose Created follows the device's clock. A Basic Notification subscription
+//! starts the client's own consumer endpoint (`consumer.rs`), where the device POSTs events.
 //!
 //! `connect` reads the device's clock (unauthenticated, as ONVIF allows), its capabilities
 //! (authenticated: a device that refuses the credentials refuses the connection) and its services
@@ -8,6 +9,7 @@
 //! the session (sends, one request at a time), the dispatcher (model turns), and the connect
 //! handshake that starts them.
 pub mod actions;
+pub mod consumer;
 pub mod ops;
 
 use crate::client::http_fetch::FetchClient;
@@ -42,6 +44,10 @@ struct Conn {
     paths: HashMap<Service, String>,
     /// The path of the pull-point subscription onvif_create_pull_point made, if any.
     subscription: Mutex<Option<String>>,
+    /// The path of the Basic Notification subscription onvif_subscribe made, if any.
+    push_subscription: Mutex<Option<String>>,
+    /// Where the notification consumer binds (startup parameter `notify_bind`).
+    notify_bind: std::net::IpAddr,
     credentials: Option<(String, String)>,
     /// Device clock minus ours.
     offset: chrono::Duration,
@@ -65,6 +71,12 @@ impl Conn {
                 .unwrap_or_else(|e| e.into_inner())
                 .clone()
                 .context("no pull-point subscription: call onvif_create_pull_point first"),
+            Service::PushSubscription => self
+                .push_subscription
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
+                .context("no Basic Notification subscription: call onvif_subscribe first"),
             s => self.paths.get(&s).cloned().with_context(|| {
                 format!(
                     "the device advertises no {} service",
@@ -94,6 +106,10 @@ impl Conn {
         if operation == "PullMessages" {
             // A long poll: the device may hold the request for the whole Timeout.
             request = request.timeout(Duration::from_secs(ops::pull_secs(args)?) + TIMEOUT);
+        }
+        if spec.service == Service::Search && operation.ends_with("SearchResults") {
+            // The device may wait up to WaitTime for results.
+            request = request.timeout(Duration::from_secs(ops::search_wait_secs(args)?) + TIMEOUT);
         }
         let response = request
             .send()
@@ -149,6 +165,9 @@ fn service_of(name: &str) -> Option<Service> {
         "PTZ" | wire::TPTZ => Service::Ptz,
         "Events" | wire::TEV => Service::Events,
         "Imaging" | wire::TIMG => Service::Imaging,
+        "Recording" | wire::TRC => Service::Recording,
+        "Search" | wire::TSE => Service::Search,
+        "Replay" | wire::TRP => Service::Replay,
         _ => return None,
     })
 }
@@ -164,6 +183,7 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
         (None, Some(_)) => bail!("a password needs a username"),
     };
     let device_path = opt("device_path")?.unwrap_or_else(|| wire::DEVICE_PATH.to_string());
+    let notify_bind = consumer::bind_address(opt("notify_bind")?.as_deref())?;
     ensure!(
         device_path.starts_with('/') && !device_path.chars().any(char::is_whitespace),
         "device_path is a path such as /onvif/device_service"
@@ -194,6 +214,8 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
         device_path,
         paths: HashMap::new(),
         subscription: Mutex::new(None),
+        push_subscription: Mutex::new(None),
+        notify_bind,
         credentials,
         offset: chrono::Duration::zero(),
     };
@@ -239,8 +261,18 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
                     continue;
                 };
                 if let (Some(service), Some(path)) = (service_of(ns), wire::xaddr_path(xaddr)) {
-                    if service == Service::Media2 {
-                        services["Media2"] = json!(xaddr);
+                    // GetCapabilities predates these; GetServices is where most devices list them.
+                    let name = match service {
+                        Service::Media2 => Some("Media2"),
+                        Service::Recording => Some("Recording"),
+                        Service::Search => Some("Search"),
+                        Service::Replay => Some("Replay"),
+                        _ => None,
+                    };
+                    if let Some(name) = name {
+                        if services.get(name).is_none() {
+                            services[name] = json!(xaddr);
+                        }
                     }
                     conn.paths.entry(service).or_insert(path);
                 }
@@ -372,6 +404,8 @@ async fn session(
     mut internal: mpsc::Receiver<(Value, u32)>,
     events: mpsc::Sender<(Event, u32)>,
 ) -> Result<()> {
+    // The Basic Notification consumer, started by the first onvif_subscribe.
+    let mut notify_consumer: Option<consumer::Consumer> = None;
     loop {
         let (action, depth, command) = tokio::select! {
             c = external.recv() => match c {
@@ -404,10 +438,27 @@ async fn session(
             continue;
         };
         let operation = spec.operation;
-        // GetSystemDateAndTime is the one operation ONVIF lets a client ask anonymously.
-        let outcome = conn
-            .call(spec, &action, operation != "GetSystemDateAndTime")
-            .await;
+        let mut action = action;
+        let outcome = if operation == "Subscribe" {
+            // The consumer address is always the client's own endpoint.
+            let started = match &notify_consumer {
+                Some(c) => Ok(c.clone()),
+                None => consumer::start(ctx, conn.notify_bind, events.clone())
+                    .await
+                    .inspect(|c| notify_consumer = Some(c.clone())),
+            };
+            match started {
+                Ok(c) => {
+                    action[ops::CONSUMER_KEY] = json!(c.url);
+                    conn.call(spec, &action, true).await
+                }
+                Err(e) => Err(e),
+            }
+        } else {
+            // GetSystemDateAndTime is the one operation ONVIF lets a client ask anonymously.
+            conn.call(spec, &action, operation != "GetSystemDateAndTime")
+                .await
+        };
         let mut data = json!({
             "operation": operation,
             "service": actions::service_name(spec.service),
@@ -416,15 +467,29 @@ async fn session(
         match outcome {
             Ok(Reply::Ok(el)) => {
                 data["ok"] = json!(true);
-                let result = ops::result_json(spec, &el);
-                match operation {
+                let mut result = ops::result_json(spec, &el);
+                match (spec.service, operation) {
                     // The subscription is followed by path on the host the client was given.
-                    "CreatePullPointSubscription" => {
+                    (_, "CreatePullPointSubscription") => {
                         *conn.subscription.lock().unwrap_or_else(|e| e.into_inner()) =
                             result["address"].as_str().and_then(wire::xaddr_path);
                     }
-                    "Unsubscribe" => {
+                    (Service::Subscription, "Unsubscribe") => {
                         *conn.subscription.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                    }
+                    (_, "Subscribe") => {
+                        *conn
+                            .push_subscription
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner()) =
+                            result["address"].as_str().and_then(wire::xaddr_path);
+                        result["consumer"] = action[ops::CONSUMER_KEY].clone();
+                    }
+                    (Service::PushSubscription, "Unsubscribe") => {
+                        *conn
+                            .push_subscription
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner()) = None;
                     }
                     _ => {}
                 }

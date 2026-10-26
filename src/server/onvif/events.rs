@@ -413,7 +413,23 @@ pub struct Subscription {
     queue: VecDeque<Notification>,
     /// Notifications dropped because the queue was full.
     pub dropped: u64,
+    /// Of those, how many the delivery task has already logged (push subscriptions).
+    reported: u64,
     wake: Arc<tokio::sync::Notify>,
+    /// Where a Basic Notification (push) subscription delivers; None for a pull point.
+    pub push: Option<Arc<super::notify::Consumer>>,
+}
+
+impl Subscription {
+    /// How many notifications the queue holds at most: a pull point's waits for its client,
+    /// a push subscription's only for the delivery in flight.
+    fn cap(&self) -> usize {
+        if self.push.is_some() {
+            super::notify::MAX_PUSH_QUEUED
+        } else {
+            MAX_QUEUED
+        }
+    }
 }
 
 #[derive(Default)]
@@ -427,10 +443,21 @@ pub struct Broker {
 pub enum BrokerError {
     TooMany,
     Unknown,
+    /// PullMessages on a subscription that delivers by Notify.
+    Push,
+}
+
+/// What a push subscription's delivery task takes next.
+pub struct PushBatch {
+    pub notifications: Vec<Notification>,
+    pub wake: Arc<tokio::sync::Notify>,
+    pub termination: chrono::DateTime<chrono::Utc>,
+    /// Notifications dropped from the full queue since the last batch.
+    pub dropped: u64,
 }
 
 fn push(sub: &mut Subscription, n: Notification) {
-    if sub.queue.len() >= MAX_QUEUED {
+    if sub.queue.len() >= sub.cap() {
         sub.queue.pop_front();
         sub.dropped += 1;
     }
@@ -461,17 +488,50 @@ impl Broker {
             .collect()
     }
 
-    /// A new subscription with the current value of every property its filter matches.
+    /// A new pull-point subscription with the current value of every property its filter
+    /// matches.
     pub fn create(
         &self,
         filter: Filter,
         termination: chrono::DateTime<chrono::Utc>,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<String, BrokerError> {
+        self.create_with(filter, termination, now, None)
+    }
+
+    /// A new Basic Notification subscription delivering to `consumer`, bounded on its own at
+    /// `notify::MAX_PUSH_SUBSCRIPTIONS`.
+    pub fn create_push(
+        &self,
+        filter: Filter,
+        termination: chrono::DateTime<chrono::Utc>,
+        now: chrono::DateTime<chrono::Utc>,
+        consumer: super::notify::Consumer,
+    ) -> Result<String, BrokerError> {
+        self.create_with(filter, termination, now, Some(Arc::new(consumer)))
+    }
+
+    fn create_with(
+        &self,
+        filter: Filter,
+        termination: chrono::DateTime<chrono::Utc>,
+        now: chrono::DateTime<chrono::Utc>,
+        consumer: Option<Arc<super::notify::Consumer>>,
+    ) -> Result<String, BrokerError> {
         let initial = self.initialized(&filter, now);
         let mut subs = self.subs.lock().unwrap_or_else(|e| e.into_inner());
         Self::sweep(&mut subs, now);
-        if subs.len() >= MAX_SUBSCRIPTIONS {
+        let is_push = consumer.is_some();
+        let same_kind = subs
+            .values()
+            .filter(|s| s.push.is_some() == is_push)
+            .count();
+        let cap = if is_push {
+            super::notify::MAX_PUSH_SUBSCRIPTIONS
+        } else {
+            MAX_SUBSCRIPTIONS
+        };
+        if same_kind >= cap {
             return Err(BrokerError::TooMany);
         }
         let id = format!("{:032x}", rand::random::<u128>());
@@ -480,7 +540,9 @@ impl Broker {
             termination,
             queue: VecDeque::new(),
             dropped: 0,
+            reported: 0,
             wake: Arc::new(tokio::sync::Notify::new()),
+            push: consumer,
         };
         for n in initial {
             push(&mut sub, n);
@@ -582,8 +644,49 @@ impl Broker {
         let mut subs = self.subs.lock().unwrap_or_else(|e| e.into_inner());
         Self::sweep(&mut subs, now);
         let s = subs.get_mut(id).ok_or(BrokerError::Unknown)?;
+        if s.push.is_some() {
+            return Err(BrokerError::Push);
+        }
         let n = limit.min(s.queue.len());
         Ok((s.queue.drain(..n).collect(), s.wake.clone()))
+    }
+
+    /// A push subscription's next batch, at most `limit` notifications; Unknown once it was
+    /// removed or expired, which ends its delivery task.
+    pub fn next_push(
+        &self,
+        id: &str,
+        limit: usize,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<PushBatch, BrokerError> {
+        let mut subs = self.subs.lock().unwrap_or_else(|e| e.into_inner());
+        Self::sweep(&mut subs, now);
+        let s = subs.get_mut(id).ok_or(BrokerError::Unknown)?;
+        let n = limit.min(s.queue.len());
+        let dropped = s.dropped - s.reported;
+        s.reported = s.dropped;
+        Ok(PushBatch {
+            notifications: s.queue.drain(..n).collect(),
+            wake: s.wake.clone(),
+            termination: s.termination,
+            dropped,
+        })
+    }
+
+    /// Whether `id` is a live subscription.
+    pub fn exists(&self, id: &str, now: chrono::DateTime<chrono::Utc>) -> bool {
+        self.termination(id, now).is_ok()
+    }
+
+    /// The consumer a push subscription delivers to, if `id` is a live one.
+    pub fn consumer(
+        &self,
+        id: &str,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Option<Arc<super::notify::Consumer>> {
+        let mut subs = self.subs.lock().unwrap_or_else(|e| e.into_inner());
+        Self::sweep(&mut subs, now);
+        subs.get(id).and_then(|s| s.push.clone())
     }
 
     /// PullMessages: what is waiting, up to `limit`; if nothing is, wait up to `timeout` for
@@ -621,6 +724,13 @@ impl Broker {
 
     pub fn count(&self) -> usize {
         self.subs.lock().unwrap_or_else(|e| e.into_inner()).len()
+    }
+
+    /// Live push (Basic Notification) subscriptions.
+    pub fn push_count(&self, now: chrono::DateTime<chrono::Utc>) -> usize {
+        let mut subs = self.subs.lock().unwrap_or_else(|e| e.into_inner());
+        Self::sweep(&mut subs, now);
+        subs.values().filter(|s| s.push.is_some()).count()
     }
 }
 
@@ -703,11 +813,38 @@ fn simple_items(items: &[(String, String)]) -> String {
 }
 
 pub fn notification_xml(n: &Notification, subscription: &str, producer: &str) -> String {
+    message_holder(
+        "wsnt:NotificationMessage",
+        n,
+        Some(subscription),
+        Some(producer),
+    )
+}
+
+/// A wsnt:NotificationMessageHolderType under `tag`: the subscription and producer references
+/// when given, the topic and the tt:Message. A search result's `tt:Event` carries neither
+/// reference.
+pub fn message_holder(
+    tag: &str,
+    n: &Notification,
+    subscription: Option<&str>,
+    producer: Option<&str>,
+) -> String {
+    let reference = |name: &str, address: Option<&str>| {
+        address
+            .map(|a| {
+                format!(
+                    "<wsnt:{name}><wsa:Address>{}</wsa:Address></wsnt:{name}>",
+                    esc(a)
+                )
+            })
+            .unwrap_or_default()
+    };
     format!(
-        "<wsnt:NotificationMessage><wsnt:SubscriptionReference><wsa:Address>{}</wsa:Address></wsnt:SubscriptionReference><wsnt:Topic Dialect=\"{CONCRETE_SET}\">tns1:{}</wsnt:Topic><wsnt:ProducerReference><wsa:Address>{}</wsa:Address></wsnt:ProducerReference><wsnt:Message><tt:Message UtcTime=\"{}\" PropertyOperation=\"{}\"><tt:Source>{}</tt:Source><tt:Data>{}</tt:Data></tt:Message></wsnt:Message></wsnt:NotificationMessage>",
-        esc(subscription),
+        "<{tag}>{}<wsnt:Topic Dialect=\"{CONCRETE_SET}\">tns1:{}</wsnt:Topic>{}<wsnt:Message><tt:Message UtcTime=\"{}\" PropertyOperation=\"{}\"><tt:Source>{}</tt:Source><tt:Data>{}</tt:Data></tt:Message></wsnt:Message></{tag}>",
+        reference("SubscriptionReference", subscription),
         n.topic.path,
-        esc(producer),
+        reference("ProducerReference", producer),
         wire::format_datetime(n.utc),
         n.operation,
         simple_items(&n.source),
@@ -747,6 +884,7 @@ pub fn renew_response(
 
 pub fn service_capabilities() -> String {
     format!(
-        "<tev:GetServiceCapabilitiesResponse><tev:Capabilities WSSubscriptionPolicySupport=\"false\" WSPullPointSupport=\"true\" WSPausableSubscriptionManagerInterfaceSupport=\"false\" MaxNotificationProducers=\"0\" MaxPullPoints=\"{MAX_SUBSCRIPTIONS}\" PersistentNotificationStorage=\"false\"/></tev:GetServiceCapabilitiesResponse>"
+        "<tev:GetServiceCapabilitiesResponse><tev:Capabilities WSSubscriptionPolicySupport=\"false\" WSPullPointSupport=\"true\" WSPausableSubscriptionManagerInterfaceSupport=\"false\" MaxNotificationProducers=\"{}\" MaxPullPoints=\"{MAX_SUBSCRIPTIONS}\" PersistentNotificationStorage=\"false\"/></tev:GetServiceCapabilitiesResponse>",
+        super::notify::MAX_PUSH_SUBSCRIPTIONS
     )
 }

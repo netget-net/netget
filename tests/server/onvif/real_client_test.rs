@@ -68,6 +68,24 @@ elif t=='onvif_system_reboot':
   a=[{'type':'onvif_accept','message':'Rebooting in 30 seconds'}]
 elif t in ('onvif_set_hostname','onvif_set_system_date_and_time'):
   a=[{'type':'onvif_accept'}]
+elif t=='onvif_describe_recordings':
+  M=lambda at,s,v:{'time':at,'topic':'tns1:VideoSource/MotionAlarm','source':{'Source':s},'data':{'State':v}}
+  a=[{'type':'onvif_recordings','recordings':[
+    {'token':'rec_lobby','source_id':'lobby_cam','name':'Lobby','location':'Ground floor','description':'Lobby camera','content':'Continuous recording of the lobby','retention_secs':604800,
+     'replay_uri':'rtsp://192.0.2.42:554/replay/rec_lobby',
+     'tracks':[{'token':'VIDEO001','type':'Video','description':'Main video','from':'2026-10-24T00:00:00Z','to':'2026-10-25T00:00:00Z'},
+               {'token':'AUDIO001','type':'Audio','description':'Lobby microphone','from':'2026-10-24T00:00:00Z','to':'2026-10-25T00:00:00Z'}],
+     'events':[M('2026-10-24T08:15:00Z','lobby_cam',True),M('2026-10-24T08:16:30Z','lobby_cam',False),
+               {'time':'2026-10-24T12:00:00Z','topic':'tns1:Device/Trigger/DigitalInput','source':{'InputToken':'door_contact'},'data':{'LogicalState':True}},
+               M('2026-10-24T20:45:00Z','lobby_cam',True)]},
+    {'token':'rec_door','source_id':'door_cam','name':'Door','content':'Motion-triggered recording of the door','replay_uri':'rtsp://192.0.2.42:554/replay/rec_door',
+     'tracks':[{'token':'VIDEO001','type':'Video','from':'2026-10-23T00:00:00Z','to':'2026-10-24T06:00:00Z'}],
+     'events':[M('2026-10-23T22:10:00Z','door_cam',True)]}],
+    'jobs':[{'token':'job_lobby','recording_token':'rec_lobby','mode':'Active','priority':1,'source_token':'main'}]}]
+elif t=='onvif_create_recording':
+  a=refuse('OperationProhibited',None,'Not that recording') if 'forbidden' in e['content'] else [{'type':'onvif_accept'}]
+elif t=='onvif_delete_recording':
+  a=refuse('OperationProhibited',None,'The lobby recording is kept') if e['recording_token']=='rec_lobby' else [{'type':'onvif_accept'}]
 print(json.dumps({'actions':a}))"#;
 
 pub fn env(var: &str) -> String {

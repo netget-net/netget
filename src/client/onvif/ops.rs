@@ -1,6 +1,6 @@
-//! The ONVIF client's operations beyond Device and Media ver10: PTZ, Events (pull point),
-//! Media2 and Imaging — what each action sends and how each answer is read back into the JSON
-//! the model sees. Every value the model gives is checked here before it is written, and written
+//! The ONVIF client's operations beyond Device and Media ver10: PTZ, Events (pull point and Basic
+//! Notification), Media2, Imaging, Recording, Search and Replay — what each action sends and how
+//! each answer is read back into the JSON the model sees. Every value the model gives is checked here before it is written, and written
 //! escaped; every answer is read from the bounded tree `wire::tree` built.
 use crate::server::onvif::events::{CONCRETE_SET, MAX_TOPIC_DEPTH};
 use crate::server::onvif::ptz;
@@ -18,7 +18,12 @@ pub enum Service {
     Events,
     /// The pull-point subscription the last onvif_create_pull_point made.
     Subscription,
+    /// The Basic Notification subscription the last onvif_subscribe made.
+    PushSubscription,
     Imaging,
+    Recording,
+    Search,
+    Replay,
 }
 
 pub struct Spec {
@@ -107,6 +112,41 @@ pub const SPECS: &[Spec] = &[
     spec("onvif_imaging_move", Imaging, "Move"),
     spec("onvif_imaging_get_status", Imaging, "GetStatus"),
     spec("onvif_imaging_stop", Imaging, "Stop"),
+    spec("onvif_subscribe", Events, "Subscribe"),
+    spec("onvif_renew_push_subscription", PushSubscription, "Renew"),
+    spec("onvif_unsubscribe_push", PushSubscription, "Unsubscribe"),
+    spec("onvif_get_recordings", Recording, "GetRecordings"),
+    spec(
+        "onvif_get_recording_configuration",
+        Recording,
+        "GetRecordingConfiguration",
+    ),
+    spec("onvif_get_recording_jobs", Recording, "GetRecordingJobs"),
+    spec("onvif_get_recording_summary", Search, "GetRecordingSummary"),
+    spec(
+        "onvif_get_recording_information",
+        Search,
+        "GetRecordingInformation",
+    ),
+    spec("onvif_find_recordings", Search, "FindRecordings"),
+    spec(
+        "onvif_get_recording_search_results",
+        Search,
+        "GetRecordingSearchResults",
+    ),
+    spec("onvif_find_events", Search, "FindEvents"),
+    spec(
+        "onvif_get_event_search_results",
+        Search,
+        "GetEventSearchResults",
+    ),
+    spec("onvif_end_search", Search, "EndSearch"),
+    spec("onvif_get_replay_uri", Replay, "GetReplayUri"),
+    spec(
+        "onvif_get_replay_configuration",
+        Replay,
+        "GetReplayConfiguration",
+    ),
 ];
 
 pub fn spec_of(v: &Value) -> Option<&'static Spec> {
@@ -117,7 +157,10 @@ pub fn spec_of(v: &Value) -> Option<&'static Spec> {
 /// The WS-Addressing Action of an Events operation (their bindings are WS-Addressing ones);
 /// None for the services whose requests carry no addressing headers.
 pub fn action_uri(spec: &Spec) -> Option<&'static str> {
-    if !matches!(spec.service, Service::Events | Service::Subscription) {
+    if !matches!(
+        spec.service,
+        Service::Events | Service::Subscription | Service::PushSubscription
+    ) {
         return None;
     }
     Some(match spec.operation {
@@ -133,6 +176,7 @@ pub fn action_uri(spec: &Spec) -> Option<&'static str> {
         "SetSynchronizationPoint" => {
             "http://www.onvif.org/ver10/events/wsdl/PullPointSubscription/SetSynchronizationPointRequest"
         }
+        "Subscribe" => "http://docs.oasis-open.org/wsn/bw-2/NotificationProducer/SubscribeRequest",
         "Renew" => "http://docs.oasis-open.org/wsn/bw-2/SubscriptionManager/RenewRequest",
         "Unsubscribe" => "http://docs.oasis-open.org/wsn/bw-2/SubscriptionManager/UnsubscribeRequest",
         _ => return None,
@@ -143,6 +187,89 @@ pub fn action_uri(spec: &Spec) -> Option<&'static str> {
 pub const MAX_PULL_SECS: u64 = 60;
 /// The longest subscription lifetime a client asks for, in seconds.
 pub const MAX_TERMINATION_SECS: u64 = 3600;
+/// The longest a Get*SearchResults may ask the device to wait, in seconds.
+pub const MAX_SEARCH_WAIT_SECS: u64 = 60;
+/// The longest keep-alive a search asks for, in seconds.
+pub const MAX_KEEP_ALIVE_SECS: u64 = 600;
+/// Results one search or page asks for at most.
+pub const MAX_RESULTS: u64 = 1000;
+/// The key the session puts the consumer's address under for a Subscribe; the model's own value
+/// is never used.
+pub const CONSUMER_KEY: &str = "consumer_address";
+
+/// A UTC time from the model, written as xsd:dateTime.
+fn when(v: &Value, key: &str, required: bool) -> Result<Option<String>> {
+    match v.get(key) {
+        None | Some(Value::Null) if !required => Ok(None),
+        Some(Value::String(t)) => {
+            let t = wire::parse_datetime(t)
+                .with_context(|| format!("{key} is a UTC time such as 2026-10-24T08:00:00Z"))?;
+            Ok(Some(wire::format_datetime(t)))
+        }
+        _ => bail!("{key} is required: a UTC time such as 2026-10-24T08:00:00Z"),
+    }
+}
+
+/// A topic filter, checked with the device side's own parser.
+fn topic_filter(v: &Value) -> Result<Option<String>> {
+    match v.get("topic_filter").filter(|f| !f.is_null()) {
+        None => Ok(None),
+        Some(f) => {
+            let f = f.as_str().context("topic_filter is a topic expression")?;
+            crate::server::onvif::events::parse_topic_filter(CONCRETE_SET, f)
+                .map_err(|e| anyhow::anyhow!("topic_filter: {}", e.reason()))?;
+            Ok(Some(format!(
+                "<wsnt:TopicExpression Dialect=\"{CONCRETE_SET}\">{}</wsnt:TopicExpression>",
+                esc(f)
+            )))
+        }
+    }
+}
+
+/// A search's Scope: the recordings it names (none is every recording).
+fn scope(v: &Value) -> Result<String> {
+    let mut out = String::from("<tse:Scope>");
+    if let Some(list) = v.get("recording_tokens").filter(|l| !l.is_null()) {
+        let list = list
+            .as_array()
+            .context("recording_tokens is a list of recording tokens")?;
+        ensure!(
+            list.len() <= MAX_ITEMS,
+            "recording_tokens names at most {MAX_ITEMS}"
+        );
+        for t in list {
+            out.push_str(&format!(
+                "<tt:IncludedRecordings>{}</tt:IncludedRecordings>",
+                token(&json!({"t": t}), "t").context("recording_tokens")?
+            ));
+        }
+    }
+    out.push_str("</tse:Scope>");
+    Ok(out)
+}
+
+fn count(v: &Value, key: &str, tag: &str) -> Result<String> {
+    Ok(opt_secs(v, key, MAX_RESULTS)?
+        .map(|n| format!("<tse:{tag}>{n}</tse:{tag}>"))
+        .unwrap_or_default())
+}
+
+/// A Get*SearchResults wait, in seconds.
+pub fn search_wait_secs(v: &Value) -> Result<u64> {
+    match v.get("wait_secs") {
+        None | Some(Value::Null) => Ok(0),
+        Some(x) => {
+            let n = x
+                .as_u64()
+                .context("wait_secs is a whole number of seconds")?;
+            ensure!(
+                n <= MAX_SEARCH_WAIT_SECS,
+                "wait_secs is at most {MAX_SEARCH_WAIT_SECS}"
+            );
+            Ok(n)
+        }
+    }
+}
 
 fn token(v: &Value, key: &str) -> Result<String> {
     let t = v[key]
@@ -347,6 +474,82 @@ pub fn request_body(spec: &Spec, v: &Value) -> Result<String> {
             pull_secs(v)?,
             opt_secs(v, "message_limit", 100)?.unwrap_or(10)
         ),
+        (Events, "Subscribe") => {
+            // The consumer is the client's own endpoint, never an address the model chose.
+            let consumer = v
+                .get(CONSUMER_KEY)
+                .and_then(Value::as_str)
+                .unwrap_or("http://127.0.0.1/");
+            let filter = topic_filter(v)?
+                .map(|t| format!("<wsnt:Filter>{t}</wsnt:Filter>"))
+                .unwrap_or_default();
+            format!(
+                "<wsnt:Subscribe><wsnt:ConsumerReference><wsa:Address>{}</wsa:Address></wsnt:ConsumerReference>{filter}<wsnt:InitialTerminationTime>PT{}S</wsnt:InitialTerminationTime></wsnt:Subscribe>",
+                esc(consumer),
+                opt_secs(v, "termination_secs", MAX_TERMINATION_SECS)?.unwrap_or(60)
+            )
+        }
+        (PushSubscription, "Renew") => format!(
+            "<wsnt:Renew><wsnt:TerminationTime>PT{}S</wsnt:TerminationTime></wsnt:Renew>",
+            opt_secs(v, "termination_secs", MAX_TERMINATION_SECS)?.unwrap_or(60)
+        ),
+        (PushSubscription, "Unsubscribe") => "<wsnt:Unsubscribe/>".into(),
+        (Recording, op @ ("GetRecordings" | "GetRecordingJobs")) => format!("<trc:{op}/>"),
+        (Recording, "GetRecordingConfiguration") => format!(
+            "<trc:GetRecordingConfiguration><trc:RecordingToken>{}</trc:RecordingToken></trc:GetRecordingConfiguration>",
+            token(v, "recording_token")?
+        ),
+        (Search, "GetRecordingSummary") => "<tse:GetRecordingSummary/>".into(),
+        (Search, "GetRecordingInformation") => format!(
+            "<tse:GetRecordingInformation><tse:RecordingToken>{}</tse:RecordingToken></tse:GetRecordingInformation>",
+            token(v, "recording_token")?
+        ),
+        (Search, "FindRecordings") => format!(
+            "<tse:FindRecordings>{}{}<tse:KeepAliveTime>PT{}S</tse:KeepAliveTime></tse:FindRecordings>",
+            scope(v)?,
+            count(v, "max_matches", "MaxMatches")?,
+            opt_secs(v, "keep_alive_secs", MAX_KEEP_ALIVE_SECS)?.unwrap_or(60)
+        ),
+        (Search, "FindEvents") => {
+            let start = when(v, "start", true)?.unwrap_or_default();
+            let end = when(v, "end", false)?
+                .map(|e| format!("<tse:EndPoint>{e}</tse:EndPoint>"))
+                .unwrap_or_default();
+            let start_state = match v.get("include_start_state") {
+                None | Some(Value::Null) => false,
+                Some(Value::Bool(b)) => *b,
+                _ => bail!("include_start_state is true or false"),
+            };
+            format!(
+                "<tse:FindEvents><tse:StartPoint>{start}</tse:StartPoint>{end}{}<tse:SearchFilter>{}</tse:SearchFilter><tse:IncludeStartState>{start_state}</tse:IncludeStartState>{}<tse:KeepAliveTime>PT{}S</tse:KeepAliveTime></tse:FindEvents>",
+                scope(v)?,
+                topic_filter(v)?.unwrap_or_default(),
+                count(v, "max_matches", "MaxMatches")?,
+                opt_secs(v, "keep_alive_secs", MAX_KEEP_ALIVE_SECS)?.unwrap_or(60)
+            )
+        }
+        (Search, op @ ("GetRecordingSearchResults" | "GetEventSearchResults")) => format!(
+            "<tse:{op}><tse:SearchToken>{}</tse:SearchToken>{}<tse:WaitTime>PT{}S</tse:WaitTime></tse:{op}>",
+            token(v, "search_token")?,
+            count(v, "max_results", "MaxResults")?,
+            search_wait_secs(v)?
+        ),
+        (Search, "EndSearch") => format!(
+            "<tse:EndSearch><tse:SearchToken>{}</tse:SearchToken></tse:EndSearch>",
+            token(v, "search_token")?
+        ),
+        (Replay, "GetReplayUri") => {
+            let protocol = match v["protocol"].as_str() {
+                None => "RTSP",
+                Some(p @ ("RTSP" | "UDP" | "TCP" | "HTTP")) => p,
+                Some(_) => bail!("protocol is RTSP, UDP, TCP or HTTP"),
+            };
+            format!(
+                "<trp:GetReplayUri><trp:StreamSetup><tt:Stream>RTP-Unicast</tt:Stream><tt:Transport><tt:Protocol>{protocol}</tt:Protocol></tt:Transport></trp:StreamSetup><trp:RecordingToken>{}</trp:RecordingToken></trp:GetReplayUri>",
+                token(v, "recording_token")?
+            )
+        }
+        (Replay, "GetReplayConfiguration") => "<trp:GetReplayConfiguration/>".into(),
         (Subscription, "Renew") => format!(
             "<wsnt:Renew><wsnt:TerminationTime>PT{}S</wsnt:TerminationTime></wsnt:Renew>",
             opt_secs(v, "termination_secs", MAX_TERMINATION_SECS)?.unwrap_or(60)
@@ -578,10 +781,85 @@ pub fn result_json(spec: &Spec, el: &Element) -> Value {
                 })
             }).collect::<Vec<_>>(),
         }),
-        (Subscription, "Renew") => json!({
+        (Subscription | PushSubscription, "Renew") => json!({
             "termination_time": opt(el, &["TerminationTime"]),
             "current_time": opt(el, &["CurrentTime"]),
         }),
+        (Events, "Subscribe") => json!({
+            "address": address(el.child("SubscriptionReference")),
+            "current_time": opt(el, &["CurrentTime"]),
+            "termination_time": opt(el, &["TerminationTime"]),
+        }),
+        (Recording, "GetRecordings") => {
+            json!({"recordings": el.children_named("RecordingItem").take(MAX_ITEMS).map(|r| {
+            let c = r.child("Configuration");
+            json!({"token": opt(r, &["RecordingToken"]),
+                   "source_id": c.map(|c| opt(c, &["Source", "SourceId"])).unwrap_or(Value::Null),
+                   "name": c.map(|c| opt(c, &["Source", "Name"])).unwrap_or(Value::Null),
+                   "content": c.map(|c| opt(c, &["Content"])).unwrap_or(Value::Null),
+                   "maximum_retention": c.map(|c| opt(c, &["MaximumRetentionTime"])).unwrap_or(Value::Null),
+                   "tracks": r.child("Tracks").map(|t| t.children_named("Track").take(MAX_ITEMS).map(|t| json!({
+                       "token": opt(t, &["TrackToken"]), "type": opt(t, &["Configuration", "TrackType"]),
+                       "description": opt(t, &["Configuration", "Description"])})).collect::<Vec<_>>()).unwrap_or_default()})
+        }).collect::<Vec<_>>()})
+        }
+        (Recording, "GetRecordingConfiguration") => {
+            let c = el.child("RecordingConfiguration");
+            let g = |p: &[&str]| c.map(|c| opt(c, p)).unwrap_or(Value::Null);
+            json!({"source_id": g(&["Source", "SourceId"]), "name": g(&["Source", "Name"]),
+                   "location": g(&["Source", "Location"]), "description": g(&["Source", "Description"]),
+                   "address": g(&["Source", "Address"]), "content": g(&["Content"]),
+                   "maximum_retention": g(&["MaximumRetentionTime"])})
+        }
+        (Recording, "GetRecordingJobs") => {
+            json!({"jobs": el.children_named("JobItem").take(MAX_ITEMS).map(|j| {
+            let c = j.child("JobConfiguration");
+            json!({"token": opt(j, &["JobToken"]),
+                   "recording_token": c.map(|c| opt(c, &["RecordingToken"])).unwrap_or(Value::Null),
+                   "mode": c.map(|c| opt(c, &["Mode"])).unwrap_or(Value::Null),
+                   "priority": c.map(|c| num(c, &["Priority"])).unwrap_or(Value::Null),
+                   "sources": c.map(|c| c.children_named("Source").take(MAX_ITEMS)
+                       .filter_map(|s| s.path(&["SourceToken", "Token"])).collect::<Vec<_>>()).unwrap_or_default()})
+        }).collect::<Vec<_>>()})
+        }
+        (Search, "GetRecordingSummary") => {
+            let s = el.child("Summary");
+            let g = |p: &[&str]| s.map(|s| opt(s, p)).unwrap_or(Value::Null);
+            json!({"data_from": g(&["DataFrom"]), "data_until": g(&["DataUntil"]),
+                   "number_recordings": s.map(|s| num(s, &["NumberRecordings"])).unwrap_or(Value::Null)})
+        }
+        (Search, "GetRecordingInformation") => el
+            .child("RecordingInformation")
+            .map(recording_information)
+            .unwrap_or(Value::Null),
+        (Search, "FindRecordings" | "FindEvents") => {
+            json!({"search_token": opt(el, &["SearchToken"])})
+        }
+        (Search, "GetRecordingSearchResults") => {
+            let l = el.child("ResultList");
+            json!({"search_state": l.map(|l| opt(l, &["SearchState"])).unwrap_or(Value::Null),
+                   "recordings": l.map(|l| l.children_named("RecordingInformation").take(MAX_ITEMS)
+                       .map(recording_information).collect::<Vec<_>>()).unwrap_or_default()})
+        }
+        (Search, "GetEventSearchResults") => {
+            let l = el.child("ResultList");
+            json!({"search_state": l.map(|l| opt(l, &["SearchState"])).unwrap_or(Value::Null),
+                   "results": l.map(|l| l.children_named("Result").take(MAX_ITEMS).map(|r| {
+                       let e = r.child("Event");
+                       let m = e.and_then(|e| e.child("Message")).and_then(|m| m.child("Message"));
+                       json!({"recording_token": opt(r, &["RecordingToken"]), "track_token": opt(r, &["TrackToken"]),
+                              "time": opt(r, &["Time"]), "start_state": opt(r, &["StartStateEvent"]),
+                              "topic": e.map(|e| opt(e, &["Topic"])).unwrap_or(Value::Null),
+                              "property_operation": m.and_then(|m| m.attr("PropertyOperation")),
+                              "source": m.and_then(|m| m.child("Source")).map(items_of).unwrap_or(json!({})),
+                              "data": m.and_then(|m| m.child("Data")).map(items_of).unwrap_or(json!({}))})
+                   }).collect::<Vec<_>>()).unwrap_or_default()})
+        }
+        (Search, "EndSearch") => json!({"endpoint": opt(el, &["Endpoint"])}),
+        (Replay, "GetReplayUri") => json!({"uri": opt(el, &["Uri"])}),
+        (Replay, "GetReplayConfiguration") => {
+            json!({"session_timeout": opt(el, &["Configuration", "SessionTimeout"])})
+        }
         (Imaging, "GetImagingSettings") => {
             let s = el.child("ImagingSettings");
             let g = |p: &[&str]| s.map(|s| opt(s, p)).unwrap_or(Value::Null);
@@ -617,12 +895,28 @@ pub fn result_json(spec: &Spec, el: &Element) -> Value {
     }
 }
 
+/// A RecordingInformation, as the model reads it.
+fn recording_information(r: &Element) -> Value {
+    json!({
+        "token": opt(r, &["RecordingToken"]),
+        "source_id": opt(r, &["Source", "SourceId"]),
+        "name": opt(r, &["Source", "Name"]),
+        "earliest": opt(r, &["EarliestRecording"]),
+        "latest": opt(r, &["LatestRecording"]),
+        "content": opt(r, &["Content"]),
+        "status": opt(r, &["RecordingStatus"]),
+        "tracks": r.children_named("Track").take(MAX_ITEMS).map(|t| json!({
+            "token": opt(t, &["TrackToken"]), "type": opt(t, &["TrackType"]),
+            "data_from": opt(t, &["DataFrom"]), "data_to": opt(t, &["DataTo"])})).collect::<Vec<_>>(),
+    })
+}
+
 /// The arguments the model sent, for the event that reports the answer.
 pub fn request_echo(v: &Value) -> Value {
     let mut out = Map::new();
     if let Some(obj) = v.as_object() {
         for (k, val) in obj.iter().take(16) {
-            if k != "type" && !val.is_null() {
+            if k != "type" && k != CONSUMER_KEY && !val.is_null() {
                 out.insert(k.clone(), val.clone());
             }
         }

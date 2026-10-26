@@ -113,6 +113,40 @@ async fn device() -> Device {
     }
 }
 
+/// An address of this host that is not loopback. onvif_simple_server refuses a Subscribe whose
+/// consumer is on loopback (127.x, localhost, ::1 — its guard against being pointed back at
+/// itself), so the client's notification consumer binds here: `NETGET_ONVIF_NOTIFY_BIND` when
+/// set, else the address this host would send from (a UDP socket "connected" to TEST-NET-1,
+/// which sends nothing). Traffic to it never leaves the host.
+fn host_address() -> String {
+    if let Ok(a) = std::env::var("NETGET_ONVIF_NOTIFY_BIND") {
+        if !a.is_empty() {
+            return a;
+        }
+    }
+    let s = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
+    s.connect("192.0.2.1:9")
+        .expect("this host has no route to pick a non-loopback address from; set NETGET_ONVIF_NOTIFY_BIND to one of its addresses");
+    let ip = s.local_addr().unwrap().ip();
+    assert!(
+        !ip.is_loopback() && !ip.is_unspecified(),
+        "{ip} is not an address onvif_simple_server will deliver to; set NETGET_ONVIF_NOTIFY_BIND"
+    );
+    ip.to_string()
+}
+
+/// The notifications the client handed the model.
+async fn notifications(state: &AppState, id: ClientId) -> Vec<Value> {
+    state
+        .list_access_logs_for(Some(AccessLogOwner::Client(id.as_u32())), None)
+        .await
+        .iter()
+        .map(|e| serde_json::to_value(e).unwrap())
+        .filter(|e| e["event_type"] == "onvif_notification")
+        .map(|e| e["request"].clone())
+        .collect()
+}
+
 async fn client(port: u16, password: &str) -> (AppState, anyhow::Result<ClientId>) {
     let state = AppState::new_with_options(false, "http://127.0.0.1:1".into());
     let (tx, _) = mpsc::unbounded_channel();
@@ -120,7 +154,9 @@ async fn client(port: u16, password: &str) -> (AppState, anyhow::Result<ClientId
         protocol: "onvif".into(),
         remote_addr: Some(format!("127.0.0.1:{port}")),
         instruction: Some("Watch the camera".into()),
-        startup_params: Some(json!({"username": "admin", "password": password})),
+        startup_params: Some(
+            json!({"username": "admin", "password": password, "notify_bind": host_address()}),
+        ),
         event_handlers: Some(vec![
             json!({"event_pattern":"*","handler":{"type":"script","language":"python","code":CHAIN}}),
         ]),
@@ -333,6 +369,109 @@ async fn netget_reads_media2_and_pulls_events_from_onvif_simple_server() {
             .is_some_and(|e| e.contains("no pull-point subscription")),
         "{none}"
     );
+
+    // Basic Notification: the client subscribes its own consumer (on this host's address), the
+    // device's notify daemon POSTs the motion alarm to it, and it reaches the model.
+    device.command("off motion_alarm").await;
+    let bind = host_address();
+    let sub = send(
+        &state,
+        id,
+        json!({"type": "onvif_subscribe", "termination_secs": 120}),
+        &mut device,
+    )
+    .await;
+    assert_eq!(sub["ok"], true, "{sub}\n{}", device.log().await);
+    let consumer = sub["result"]["consumer"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(consumer.starts_with(&format!("http://{bind}:")), "{sub}");
+    assert!(
+        sub["result"]["address"]
+            .as_str()
+            .is_some_and(|a| a.contains("/onvif/events_service?sub=")),
+        "{sub}"
+    );
+    // The CGI's log holds its last request: this Subscribe, the consumer the device accepted.
+    let log = device.log().await;
+    assert!(
+        log.contains(&format!("Subscribe callback URL: {consumer}")),
+        "{log}"
+    );
+    // A new push subscription is first sent every event's current value (Initialized); once
+    // the alarm's has arrived, raising it is a Changed notification of its own.
+    // (The daemon may see the file removed above before or after it syncs, so the alarm is
+    // switched off first if it was synced as on.)
+    let wait_for = |want: &'static str, state_value: Option<&'static str>| {
+        let state = state.clone();
+        async move {
+            tokio::time::timeout(Duration::from_secs(60), async {
+                loop {
+                    let got = notifications(&state, id).await;
+                    if let Some(n) = got.iter().find(|n| {
+                        n["topic"] == "tns1:VideoSource/MotionAlarm"
+                            && n["property_operation"] == want
+                            && state_value.is_none_or(|s| n["data"]["State"] == s)
+                    }) {
+                        return n.clone();
+                    }
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            })
+            .await
+        }
+    };
+    let synced = match wait_for("Initialized", None).await {
+        Ok(n) => n,
+        Err(_) => panic!(
+            "the subscription's Initialized alarm never reached the consumer {consumer}: {:?}\n{}",
+            notifications(&state, id).await,
+            device.log().await
+        ),
+    };
+    if synced["data"]["State"] == "true" {
+        device.command("off motion_alarm").await;
+        if wait_for("Changed", Some("false")).await.is_err() {
+            panic!(
+                "the alarm switching off never reached the consumer: {:?}\n{}",
+                notifications(&state, id).await,
+                device.log().await
+            );
+        }
+    }
+    device.command("on motion_alarm").await;
+    let pushed = wait_for("Changed", Some("true")).await;
+    let pushed = match pushed {
+        Ok(n) => n,
+        Err(_) => panic!(
+            "no motion alarm reached the consumer {consumer}: {:?}\n{}",
+            notifications(&state, id).await,
+            device.log().await
+        ),
+    };
+    assert!(pushed["utc_time"].is_string(), "{pushed}");
+    assert_eq!(pushed["source"]["Source"], "VideoSourceToken", "{pushed}");
+    let renewed = send(
+        &state,
+        id,
+        json!({"type": "onvif_renew_push_subscription", "termination_secs": 300}),
+        &mut device,
+    )
+    .await;
+    assert_eq!(renewed["ok"], true, "{renewed}\n{}", device.log().await);
+    let ended = send(
+        &state,
+        id,
+        json!({"type": "onvif_unsubscribe_push"}),
+        &mut device,
+    )
+    .await;
+    assert_eq!(ended["ok"], true, "{ended}\n{}", device.log().await);
+    // The daemon's log keeps every Notify it sent.
+    let log = device.log().await;
+    assert!(log.contains("Sending Notify message."), "{log}");
+    device.command("off motion_alarm").await;
 
     let sent: Vec<String> = responses(&state, id)
         .await

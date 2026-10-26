@@ -35,6 +35,9 @@ pub const TPTZ: &str = "http://www.onvif.org/ver20/ptz/wsdl";
 pub const TEV: &str = "http://www.onvif.org/ver10/events/wsdl";
 pub const TR2: &str = "http://www.onvif.org/ver20/media/wsdl";
 pub const TIMG: &str = "http://www.onvif.org/ver20/imaging/wsdl";
+pub const TRC: &str = "http://www.onvif.org/ver10/recording/wsdl";
+pub const TSE: &str = "http://www.onvif.org/ver10/search/wsdl";
+pub const TRP: &str = "http://www.onvif.org/ver10/replay/wsdl";
 pub const WSNT: &str = "http://docs.oasis-open.org/wsn/b-2";
 pub const WSA: &str = "http://www.w3.org/2005/08/addressing";
 pub const WSTOP: &str = "http://docs.oasis-open.org/wsn/t-1";
@@ -58,6 +61,9 @@ pub const MEDIA2_PATH: &str = "/onvif/media2_service";
 pub const PTZ_PATH: &str = "/onvif/ptz_service";
 pub const EVENTS_PATH: &str = "/onvif/events_service";
 pub const IMAGING_PATH: &str = "/onvif/imaging_service";
+pub const RECORDING_PATH: &str = "/onvif/recording_service";
+pub const SEARCH_PATH: &str = "/onvif/search_service";
+pub const REPLAY_PATH: &str = "/onvif/replay_service";
 /// A pull-point subscription's address is this prefix and the subscription's id.
 pub const SUBSCRIPTION_PREFIX: &str = "/onvif/events/subscription/";
 /// The longest xsd:duration accepted anywhere (a subscription lifetime, a PTZ timeout).
@@ -356,6 +362,9 @@ pub fn namespaces() -> String {
         ("tptz", TPTZ),
         ("tev", TEV),
         ("timg", TIMG),
+        ("trc", TRC),
+        ("tse", TSE),
+        ("trp", TRP),
         ("tt", TT),
         ("ter", TER),
         ("wsnt", WSNT),
@@ -419,6 +428,12 @@ pub fn fault_with_detail(code: FaultCode, subcodes: &[&str], reason: &str, detai
 /// `MAX_DURATION` is refused. No recursion and no unbounded arithmetic: every component is
 /// checked against the bound before it is added.
 pub fn parse_duration(text: &str) -> Result<std::time::Duration> {
+    parse_duration_max(text, MAX_DURATION)
+}
+
+/// `parse_duration` with its own bound, for the one duration ONVIF lets run past a day: a
+/// recording's MaximumRetentionTime.
+pub fn parse_duration_max(text: &str, max: std::time::Duration) -> Result<std::time::Duration> {
     let t = text.trim();
     ensure!(
         !t.is_empty() && t.len() <= MAX_TIME_TEXT,
@@ -462,9 +477,9 @@ pub fn parse_duration(text: &str) -> Result<std::time::Duration> {
                 ensure!(n.is_finite(), "a duration number is not finite");
                 secs += n * scale;
                 ensure!(
-                    secs <= MAX_DURATION.as_secs_f64(),
+                    secs <= max.as_secs_f64(),
                     "a duration longer than {} seconds",
-                    MAX_DURATION.as_secs()
+                    max.as_secs()
                 );
                 number.clear();
                 components += 1;
@@ -696,8 +711,9 @@ pub fn media_uri(operation: &str, v: &Value) -> String {
 pub const CATEGORIES: &[&str] = &["Device", "Events", "Imaging", "Media", "PTZ"];
 
 /// GetCapabilities for the services NetGet serves whose category is in `wanted`, at `base`
-/// (`http://host:port`).
-pub fn capabilities(base: &str, wanted: &[&str]) -> String {
+/// (`http://host:port`). With `extension`, the Recording, Search and Replay services follow in
+/// the Extension element, where GetCapabilities puts the services it did not have at first.
+pub fn capabilities(base: &str, wanted: &[&str], extension: bool) -> String {
     let base = esc(base);
     let mut out = String::from("<tds:GetCapabilitiesResponse><tds:Capabilities>");
     for category in CATEGORIES.iter().filter(|c| wanted.contains(c)) {
@@ -708,6 +724,12 @@ pub fn capabilities(base: &str, wanted: &[&str]) -> String {
             "Media" => format!("<tt:Media><tt:XAddr>{base}{MEDIA_PATH}</tt:XAddr><tt:StreamingCapabilities><tt:RTPMulticast>false</tt:RTPMulticast><tt:RTP_TCP>true</tt:RTP_TCP><tt:RTP_RTSP_TCP>true</tt:RTP_RTSP_TCP></tt:StreamingCapabilities></tt:Media>"),
             _ => format!("<tt:PTZ><tt:XAddr>{base}{PTZ_PATH}</tt:XAddr></tt:PTZ>"),
         });
+    }
+    if extension {
+        out.push_str(&format!(
+            "<tt:Extension><tt:Recording><tt:XAddr>{base}{RECORDING_PATH}</tt:XAddr><tt:ReceiverSource>false</tt:ReceiverSource><tt:MediaProfileSource>true</tt:MediaProfileSource><tt:DynamicRecordings>true</tt:DynamicRecordings><tt:DynamicTracks>false</tt:DynamicTracks><tt:MaxStringLength>{}</tt:MaxStringLength></tt:Recording><tt:Search><tt:XAddr>{base}{SEARCH_PATH}</tt:XAddr><tt:MetadataSearch>false</tt:MetadataSearch></tt:Search><tt:Replay><tt:XAddr>{base}{REPLAY_PATH}</tt:XAddr></tt:Replay></tt:Extension>",
+            super::actions::MAX_TEXT
+        ));
     }
     out.push_str("</tds:Capabilities></tds:GetCapabilitiesResponse>");
     out
@@ -721,6 +743,9 @@ pub const SERVICES: &[(&str, &str)] = &[
     (TPTZ, PTZ_PATH),
     (TEV, EVENTS_PATH),
     (TIMG, IMAGING_PATH),
+    (TRC, RECORDING_PATH),
+    (TSE, SEARCH_PATH),
+    (TRP, REPLAY_PATH),
 ];
 
 pub fn services(base: &str) -> String {
@@ -928,7 +953,14 @@ pub fn result_json(operation: &str, el: &Element) -> Value {
         "GetCapabilities" => {
             let mut services = Map::new();
             if let Some(c) = el.child("Capabilities") {
-                for cap in &c.children {
+                // The services GetCapabilities gained later (Recording, Search, Replay, …) sit
+                // one level down, in Extension.
+                let extension = c
+                    .child("Extension")
+                    .map(|e| e.children.iter())
+                    .into_iter()
+                    .flatten();
+                for cap in c.children.iter().chain(extension).take(MAX_ITEMS) {
                     if let Some(x) = cap.text_of("XAddr") {
                         services.insert(cap.name.clone(), json!(x));
                     }

@@ -9,6 +9,9 @@
   from the same archive (the wheel's copy is flattened and cannot be loaded): the Media2 client.
 - github.com/IOTechSystems/onvif v1.3.0 (Go, EdgeX's ONVIF library), built from `peer/go-media2`
   against its pinned go.sum: the second Media2 client. Needs go 1.25+.
+- github.com/videonext/onvif at a pinned pseudo-version (Go, generated from ONVIF's WSDLs with
+  gowsdl), built from `peer/go-profile-g` against its pinned go.sum: the second Recording,
+  Search and Replay client.
 - RPOS (BreeeZe/rpos, the Node.js ONVIF camera) at a pinned commit, SHA-256 checked, its
   TypeScript compiled with tsc: the device the client tests talk to. It verifies WS-Security
   PasswordDigest tokens itself.
@@ -24,7 +27,7 @@ URL).
 
 Usage: python3 install_peers.py /absolute/owned/root
 Prints NETGET_ONVIF_PYTHON, NETGET_ONVIF2_WSDL, NETGET_ONVIF_GO_CLIENT, NETGET_ONVIF_GO_MEDIA2,
-NETGET_RPOS and (on Linux) NETGET_ONVIF_SIMPLE_SERVER.
+NETGET_ONVIF_GO_PROFILE_G, NETGET_RPOS and (on Linux) NETGET_ONVIF_SIMPLE_SERVER.
 """
 import hashlib, io, pathlib, shutil, subprocess, sys, tarfile, urllib.request
 
@@ -86,6 +89,8 @@ go_client.parent.mkdir(parents=True, exist_ok=True)
 run("go", "build", "-mod=readonly", "-o", go_client, ".", cwd=here / "peer" / "go")
 go_media2 = root / "bin" / "onvif-go-media2"
 run("go", "build", "-mod=readonly", "-o", go_media2, ".", cwd=here / "peer" / "go-media2")
+go_profile_g = root / "bin" / "onvif-go-profile-g"
+run("go", "build", "-mod=readonly", "-o", go_profile_g, ".", cwd=here / "peer" / "go-profile-g")
 
 rpos = root / f"rpos-{RPOS_COMMIT}"
 if not (rpos / "rpos.js").exists():
@@ -132,4 +137,5 @@ if oss_launcher:
 print("export NETGET_ONVIF2_WSDL=" + str(onvif2 / "wsdl"))
 print("export NETGET_ONVIF_GO_CLIENT=" + str(go_client))
 print("export NETGET_ONVIF_GO_MEDIA2=" + str(go_media2))
+print("export NETGET_ONVIF_GO_PROFILE_G=" + str(go_profile_g))
 print("export NETGET_RPOS=" + str(rpos))

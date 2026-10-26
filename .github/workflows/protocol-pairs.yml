@@ -8161,7 +8161,7 @@ jobs:
 
   onvif:
     if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'onvif')
-    name: ONVIF device and client against onvif-zeep-async, use-go/onvif, onvif2-zeep, IOTechSystems/onvif, RPOS and onvif_simple_server
+    name: ONVIF device and client against onvif-zeep-async, use-go/onvif, onvif2-zeep, IOTechSystems/onvif, videonext/onvif, RPOS and onvif_simple_server
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -8180,7 +8180,8 @@ jobs:
           cache-dependency-path: |
             tests/server/onvif/peer/go/go.sum
             tests/server/onvif/peer/go-media2/go.sum
-      - name: Install onvif-zeep-async 4.3.0, use-go/onvif v0.0.9, onvif2-zeep 0.3.4, IOTechSystems/onvif v1.3.0, RPOS and onvif_simple_server 40fd108
+            tests/server/onvif/peer/go-profile-g/go.sum
+      - name: Install onvif-zeep-async 4.3.0, use-go/onvif v0.0.9, onvif2-zeep 0.3.4, IOTechSystems/onvif v1.3.0, videonext/onvif 56e4dc4, RPOS and onvif_simple_server 40fd108
         run: |
           set -euo pipefail
           sudo apt-get update
@@ -8193,6 +8194,10 @@ jobs:
           sudo install -m 666 /dev/null /var/log/onvif_notify_server.log
           python3 tests/server/onvif/install_peers.py "$RUNNER_TEMP/onvif" | sed 's/^export //' >> "$GITHUB_ENV"
           test -n "$(grep NETGET_ONVIF_SIMPLE_SERVER "$GITHUB_ENV")"
+          test -n "$(grep NETGET_ONVIF_GO_PROFILE_G "$GITHUB_ENV")"
+      # The client's Basic Notification test binds its consumer on the runner's own
+      # non-loopback address (onvif_simple_server refuses loopback consumers); the Notify
+      # never leaves the host.
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
