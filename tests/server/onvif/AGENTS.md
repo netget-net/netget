@@ -67,7 +67,7 @@ the services tests print the operations the client actually sent, read from the 
   two at a time, GetSearchState, EndSearch's endpoint and the ended token `InvalidToken`;
   FindEvents backwards (newest first) and with IncludeStartState (the alarm's value at the start,
   then the door event); the replay capabilities, GetReplayUri, GetReplayConfiguration,
-  `NoRecording`. The model was asked to describe the recordings exactly once. 19 distinct
+  `NoRecording`. The model was asked to describe the recordings exactly once. 20 distinct
   operations.
 - `profile_g_test::videonext_onvif_reads_searches_and_replays_what_the_model_described` — Go
   videonext/onvif (`peer/go-profile-g`): one signed GetRecordings, refused `NotAuthorized` with
