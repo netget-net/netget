@@ -180,6 +180,12 @@ impl CommandWindow {
         lun_of: impl Fn(&Pdu) -> Option<u16>,
     ) -> Vec<(ConnectionId, u32)> {
         let mut removed = Vec::new();
+        if !pdu::sn_le(self.exp_cmd_sn, tmf_cmd_sn)
+            || tmf_cmd_sn.wrapping_sub(self.exp_cmd_sn) > super::COMMAND_WINDOW
+        {
+            // A CmdSN outside the window covers nothing.
+            return removed;
+        }
         self.held.retain(|(c, conn, p)| {
             let hit = pdu::sn_lt(*c, tmf_cmd_sn) && (lun.is_none() || lun_of(p) == lun);
             if hit {
@@ -188,6 +194,7 @@ impl CommandWindow {
             !hit
         });
         if pdu::sn_lt(self.exp_cmd_sn, tmf_cmd_sn)
+            && tmf_cmd_sn.wrapping_sub(self.exp_cmd_sn) <= super::COMMAND_WINDOW
             && self.plugged.len() < super::COMMAND_WINDOW as usize
         {
             self.plugged.push((lun, tmf_cmd_sn));
@@ -198,10 +205,14 @@ impl CommandWindow {
     /// A target reset plugs the CmdSN space up to its own CmdSN (§4.2.3.3 b): everything
     /// below it counts as received, and nothing held below it runs.
     pub fn plug_all(&mut self, tmf_cmd_sn: u32) {
-        self.held.retain(|(c, _, _)| !pdu::sn_lt(*c, tmf_cmd_sn));
-        if pdu::sn_lt(self.exp_cmd_sn, tmf_cmd_sn) {
-            self.exp_cmd_sn = tmf_cmd_sn;
+        // Only a CmdSN inside the window can be plugged up to: an initiator naming one past it
+        // must not move ExpCmdSN wherever it likes.
+        let ahead = tmf_cmd_sn.wrapping_sub(self.exp_cmd_sn);
+        if !pdu::sn_lt(self.exp_cmd_sn, tmf_cmd_sn) || ahead > super::COMMAND_WINDOW {
+            return;
         }
+        self.held.retain(|(c, _, _)| !pdu::sn_lt(*c, tmf_cmd_sn));
+        self.exp_cmd_sn = tmf_cmd_sn;
         self.aborted.clear();
         self.plugged.clear();
     }
