@@ -27,7 +27,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 
 /// Run a peer, calling `on_line` with every line it prints as it prints it; the last line is its
 /// JSON report. Fails with everything it printed when it fails or prints no JSON.
-async fn run_streaming<F>(program: &str, args: &[String], mut on_line: F) -> Value
+pub async fn run_streaming<F>(program: &str, args: &[String], mut on_line: F) -> Value
 where
     F: FnMut(&str) -> futures::future::BoxFuture<'static, ()>,
 {
@@ -71,7 +71,7 @@ where
 }
 
 /// Raise an event on the running device as the model would, through `onvif_raise_event`.
-async fn raise(state: &AppState, id: ServerId, action: Value) -> Value {
+pub async fn raise(state: &AppState, id: ServerId, action: Value) -> Value {
     match OnvifProtocol
         .execute_action_with_state(action, state.clone(), Some(id))
         .await
@@ -82,7 +82,7 @@ async fn raise(state: &AppState, id: ServerId, action: Value) -> Value {
 }
 
 /// Print what a client sent and assert it sent every operation in `must`.
-fn sent(client: &str, log: &StatusLog, must: &[&str]) {
+pub fn sent(client: &str, log: &StatusLog, must: &[&str]) {
     let ops = operations(log);
     println!("{client} sent {} distinct operations:", ops.len());
     for (op, n) in &ops {

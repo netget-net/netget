@@ -160,7 +160,8 @@ async fn unknown_and_malformed_requests_are_faults() {
         sign("<tds:GetUsers/>"),
         wire::request_envelope(None, "<tds:SetUser/>"),
         sign("<tptz:SetHomePosition/>"),
-        sign("<trc:GetRecordings xmlns:trc=\"http://www.onvif.org/ver10/recording/wsdl\"/>"),
+        sign("<trc:CreateTrack xmlns:trc=\"http://www.onvif.org/ver10/recording/wsdl\"/>"),
+        sign("<tse:FindPTZPosition xmlns:tse=\"http://www.onvif.org/ver10/search/wsdl\"/>"),
     ] {
         let (status, text) = post(port, body).await;
         assert_eq!(status, 500, "{text}");
@@ -190,6 +191,10 @@ async fn unknown_and_malformed_requests_are_faults() {
         "/onvif/imaging_service",
         "/onvif/media_service",
         "/onvif/ptz_service",
+        // Recording, Search and Replay, in Extension: they have no category of their own.
+        "/onvif/recording_service",
+        "/onvif/search_service",
+        "/onvif/replay_service",
     ] {
         assert_eq!(
             text.matches(&format!("{path}</tt:XAddr>")).count(),
@@ -197,7 +202,11 @@ async fn unknown_and_malformed_requests_are_faults() {
             "{path}: {text}"
         );
     }
-    assert_eq!(text.matches("<tt:XAddr>").count(), 5, "{text}");
+    assert_eq!(text.matches("<tt:XAddr>").count(), 8, "{text}");
+    assert!(
+        text.contains("</tt:PTZ><tt:Extension><tt:Recording>"),
+        "{text}"
+    );
     assert!(!text.contains("<tt:Analytics>"), "{text}");
     let (status, text) = post(port, sign("<tds:GetServices><tds:IncludeCapability>false</tds:IncludeCapability></tds:GetServices>")).await;
     assert_eq!(status, 200, "{text}");
@@ -219,7 +228,9 @@ async fn unknown_and_malformed_requests_are_faults() {
     .await;
     assert_eq!(status, 200, "{text}");
     assert!(
-        text.contains("/onvif/media_service</tt:XAddr>") && !text.contains("<tt:Device>"),
+        text.contains("/onvif/media_service</tt:XAddr>")
+            && !text.contains("<tt:Device>")
+            && !text.contains("<tt:Extension>"),
         "{text}"
     );
 

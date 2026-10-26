@@ -6,6 +6,8 @@ its SHA-256-checked source distribution), `NETGET_ONVIF2_WSDL` (onvif2-zeep's ve
 that archive — the wheel's copy is flattened and does not load), `NETGET_ONVIF_GO_CLIENT` (built
 from `peer/go`, use-go/onvif v0.0.9, go.sum pinned; x/net and x/sys raised so it links on current
 Go), `NETGET_ONVIF_GO_MEDIA2` (built from `peer/go-media2`, IOTechSystems/onvif v1.3.0, go 1.25),
+`NETGET_ONVIF_GO_PROFILE_G` (built from `peer/go-profile-g`, github.com/videonext/onvif at a pinned
+pseudo-version, go.sum pinned, x/net and x/text held at versions go 1.24 builds),
 `NETGET_RPOS` and, on Linux, `NETGET_ONVIF_SIMPLE_SERVER` (the client tests' devices). The tests
 fail, not skip, without them.
 
@@ -53,10 +55,51 @@ the services tests print the operations the client actually sent, read from the 
   configurations narrowed by profile, `NoProfile` and `InvalidStreamSetup`, and the stream event
   asked in ver10 terms; IOTechSystems/onvif (`peer/go-media2`) reads profiles and encoder
   configurations through its `media2` types, sent to the Media XAddr as that library does.
+- `profile_g_test::onvif_zeep_async_reads_searches_and_replays_what_the_model_described` —
+  `peer/zeep_recording.py`: GetServices names the recording, search and replay XAddrs; the
+  recording capabilities; GetRecordings (sources, contents, retention as zeep's timedelta,
+  tracks), GetRecordingConfiguration, GetRecordingJobs; a CreateRecording the model allows
+  (`rec_1`, three empty tracks, read back) then deletes, its configuration `NoRecording` after;
+  a CreateRecording and a DeleteRecording the model refuses (`OperationProhibited`), nothing
+  changed; GetRecordingSummary, GetRecordingInformation (range from the tracks, status Recording
+  from the job), `NoRecording`; FindRecordings paged one at a time (Searching, then Completed)
+  and ended, one narrowed by IncludedRecordings; FindEvents over a day with a topic filter paged
+  two at a time, GetSearchState, EndSearch's endpoint and the ended token `InvalidToken`;
+  FindEvents backwards (newest first) and with IncludeStartState (the alarm's value at the start,
+  then the door event); the replay capabilities, GetReplayUri, GetReplayConfiguration,
+  `NoRecording`. The model was asked to describe the recordings exactly once. 20 distinct
+  operations.
+- `profile_g_test::videonext_onvif_reads_searches_and_replays_what_the_model_described` — Go
+  videonext/onvif (`peer/go-profile-g`): one signed GetRecordings, refused `NotAuthorized` with
+  the access log saying `bad_digest` (the library digests the nonce's base64 text), then the
+  sequence unsigned through the library's devicemgmt, recording, search and replay ports:
+  GetServices, capabilities, recordings, configuration, jobs, a create and delete, a refused
+  delete, summary, information, FindRecordings paged, FindEvents across both recordings oldest
+  first, GetSearchState, EndSearch and the ended token, replay URI and configuration,
+  `NoRecording`. GetEventSearchResults and Replay's capabilities are read as they arrived (the
+  library cannot decode those two types at all). 18 distinct operations.
+- `notify_test::onvif_zeep_async_notification_manager_receives_the_notify` —
+  `peer/zeep_notify.py` runs its own aiohttp consumer on a loopback port and creates the
+  library's NotificationManager on it (Subscribe), prints that it is subscribed, and the test
+  raises a DigitalInput through `onvif_raise_event`: the manager's own `process()` reads both
+  Notifies — the MotionAlarm the model raised in its answer (topic, source, data, Changed, the
+  subscription's address) and the DigitalInput. Renew, Unsubscribe (the manager's shutdown), a
+  Renew after it refused; Subscribes naming 192.0.2.1 and an https consumer refused
+  `InvalidArgVal`, recorded `not_allowlisted` and `https_refused`, the model asked only about the
+  allowed one; deliveries recorded, none dropped.
+- `notify_test::use_go_onvif_subscribe_receives_the_notify` — the same through use-go's
+  `event.Subscribe` (`peer/go`, mode `notify`, a net/http consumer it binds): every POST carries
+  the Notify Action and `To`, the messages the subscription and producer addresses; Renew and
+  Unsubscribe go out unqualified (`other:Renew`).
 - `pcap_oracle_test` — ten exchanges (CreatePullPointSubscription, PullMessages with a
   notification, Renew, GetEventProperties, ContinuousMove, GetStatus, SetPreset, Media2
   GetProfiles, GetImagingSettings, SetHostname) handed to tshark's HTTP and XML dissectors: no
   Expert Info at Warn, the URI, a 200, and the SOAP body element tshark read in each direction.
+  `tshark_reads_recording_search_replay_subscribe_and_the_devices_notify` does the same for
+  GetRecordings, GetRecordingJobs, GetRecordingInformation, GetEventSearchResults (its
+  `tt:Result` and `tt:Event`), GetReplayUri and Subscribe, then hands tshark the Notify the device
+  POSTed to a consumer the test runs: a POST to the consumer's path whose body is `wsnt:Notify`
+  with the model's notification, answered 200.
 - `wire_test` — raw HTTP: the anonymous clock; each refusal reason (no token, wrong password,
   wrong user, PasswordText, Created an hour either side, unparseable Created, a replayed token)
   and that none reached the model; unknown operations (`ActionNotSupported`, before and after
@@ -65,6 +108,37 @@ the services tests print the operations the client actually sent, read from the 
   SOAP 1.1 (`VersionMismatch`), `MAX_REQUEST` and one byte past it (413), GET (405); a failed
   backend, a wrong action and an invalid URI all failing closed; the digest against
   UsernameToken Profile's own example.
+- `notify_bounds_test` — Basic Notification's bounds over raw HTTP and consumers written in the
+  test (not evidence): nine consumer addresses refused before the model (not allowlisted, https,
+  a host name, userinfo, ftp, 0.0.0.0, IPv4-mapped 192.0.2.1, malformed, empty) and one past
+  `MAX_CONSUMER_URL`, each with its recorded reason and no subscription; loopback (also as
+  `::ffff:127.0.0.1`) allowed by default; `subscriber` admitting the client's own address only;
+  a /32 exact. `MAX_PUSH_SUBSCRIPTIONS` and one more refused, a pull point unaffected,
+  PullMessages on a push subscription `ActionNotSupported`, Unsubscribe ending the delivery task
+  and making room. A consumer that never answers: with `notify_timeout_secs` 1 and
+  `notify_retries` 2, exactly three requests, then `onvif_notify_dropped` with `attempts` 3,
+  between 3.6 s and 15 s after the Subscribe. A 307 is not followed (the redirect's target never
+  contacted) and is dropped after one attempt with `notify_retries` 0. A consumer holding the
+  first Notify while `MAX_PUSH_QUEUED` + 6 events are raised receives exactly the newest
+  `MAX_PUSH_QUEUED`, at most `MAX_NOTIFY_BATCH` per Notify, and the device logs the six dropped.
+  An https consumer with `notify_allow_https`; a model that cannot answer a Subscribe leaves no
+  subscription and contacts nobody.
+- `recording_bounds_test` — Recording, Search and Replay's bounds over raw HTTP (not evidence):
+  with `MAX_ARCHIVE_EVENTS` described events every one matching, a search keeps
+  `MAX_SEARCH_RESULTS` and hands out at most `MAX_RESULTS_PAGE` at a time (Searching, Searching,
+  Completed) whatever MaxResults asks; MaxMatches 3; MaxResults 0 read as 1; a token paged by the
+  other kind of request refused; `MAX_SEARCHES` and one more refused (`ResourceProblem`), room
+  after EndSearch; a KeepAliveTime of an hour cut to `MAX_KEEP_ALIVE` (an accepted
+  SetSystemDateAndTime moves the device clock past it and every search is gone); one of a second
+  gone 1.5 s later; all from one description. Descriptions past `MAX_RECORDINGS`,
+  `MAX_RECORDED_EVENTS` or `MAX_ARCHIVE_EVENTS` fail closed and are asked for again; at the bounds
+  they are served. A model that cannot answer CreateRecording or DeleteRecording changes nothing;
+  an unknown recording and a full device are refused without asking; an accepted create has no
+  replay URI and its GetReplayUri is `ActionNotSupported`. Ten requests the device cannot run
+  (XPath filter, an oversized scope, no or bad StartPoint, a MessageContent filter, a years
+  KeepAliveTime, a bad stream setup, an oversized SourceId, unknown search tokens) refused before
+  the recordings are described. WS-Security on every Recording, Search and Replay operation and
+  on Subscribe.
 - `bounds_test` — the new services' bounds and failure paths over raw HTTP (not evidence):
   `MAX_SUBSCRIPTIONS` and one past it refused, room again after an Unsubscribe; a PullMessages
   Timeout of an hour cut to `max_pull_timeout_secs` (1 s: it waits that long, no less, no more);
@@ -87,5 +161,13 @@ dropping the subscription cap, the PullMessages Timeout cut (the pull then outli
 client's 120 s) or the MessageLimit clamp, and exempting PTZ from authentication. Applying a
 move the model refused fails both `services_test` PTZ checks (zeep's and Go's
 `status_refused`).
+
+Mutation-checked for Basic Notification, Recording, Search and Replay (each change made, the
+suite run, the change reverted): dropping the consumer allowlist check (`notify_bounds_test`'s
+192.0.2.1 and 0.0.0.0 consumers accepted, and both peers' `subscribe_outside_allowlist`), the
+push-subscription cap, the per-attempt timeout (the batch never dropped), the retry bound (no
+drop record), the search result bound and the page bound, exempting the Recording service from
+WS-Security, applying a CreateRecording or DeleteRecording the model did not accept, and dropping
+the queue cap.
 
 No LLM calls.

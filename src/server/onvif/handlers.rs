@@ -6,15 +6,19 @@
 //! | Media (ver10) | — | GetProfiles, GetVideoSources, GetStreamUri, GetSnapshotUri |
 //! | Media2 (ver20) | GetServiceCapabilities | the same events as Media: GetProfiles, GetVideoSourceConfigurations and GetVideoEncoderConfigurations from `onvif_get_profiles`, GetStreamUri and GetSnapshotUri from the URI events |
 //! | PTZ (ver20) | GetServiceCapabilities, GetNodes, GetNode, GetConfigurations, GetConfiguration, GetStatus, GetPresets, SetPreset, RemovePreset, Stop | ContinuousMove, RelativeMove, AbsoluteMove, GotoPreset, GotoHomePosition |
-//! | Events (ver10) | GetServiceCapabilities, GetEventProperties, PullMessages, Renew, Unsubscribe, SetSynchronizationPoint | CreatePullPointSubscription |
+//! | Events (ver10) | GetServiceCapabilities, GetEventProperties, PullMessages, Renew, Unsubscribe, SetSynchronizationPoint; Notify to push consumers | CreatePullPointSubscription, Subscribe (Basic Notification, once the consumer is allowlisted) |
 //! | Imaging (ver20) | GetServiceCapabilities, GetImagingSettings, GetOptions, GetMoveOptions, GetStatus, Stop | SetImagingSettings, Move |
+//! | Recording (ver10) | GetServiceCapabilities, GetRecordings, GetRecordingConfiguration, GetRecordingJobs | the recordings (once), allow/deny on CreateRecording and DeleteRecording |
+//! | Search (ver10) | GetServiceCapabilities, GetRecordingSummary, GetRecordingInformation, FindRecordings, GetRecordingSearchResults, FindEvents, GetEventSearchResults, GetSearchState, EndSearch | the recordings (once) |
+//! | Replay (ver10) | GetServiceCapabilities, GetReplayUri, GetReplayConfiguration | the recordings (once), which carry each replay URI |
 //!
 //! A PTZ or Imaging request naming a profile or video source the device has not described yet
 //! asks the model for its profiles (or sources) once first; after that it costs nothing.
 use super::actions as a;
 use super::wire::{self, esc, FaultCode};
 use super::{
-    events, fault, fault_detail, imaging, invalid, lock, media2, ok, ptz, Call, Resp, MAX_SCOPES,
+    events, fault, fault_detail, imaging, invalid, lock, media2, notify, ok, ptz, recording, Call,
+    Resp, MAX_SCOPES,
 };
 use serde_json::{json, Value};
 
@@ -70,6 +74,28 @@ pub enum Op {
     Renew,
     Unsubscribe,
     SynchronizationPoint,
+    Subscribe,
+    // Recording
+    RecordingCapabilities,
+    Recordings,
+    RecordingConfiguration,
+    RecordingJobs,
+    CreateRecording,
+    DeleteRecording,
+    // Search
+    SearchCapabilities,
+    RecordingSummary,
+    RecordingInformation,
+    FindRecordings,
+    RecordingSearchResults,
+    FindEvents,
+    EventSearchResults,
+    SearchState,
+    EndSearch,
+    // Replay
+    ReplayCapabilities,
+    ReplayUri,
+    ReplayConfiguration,
     // Imaging
     ImagingCapabilities,
     ImagingSettings,
@@ -83,7 +109,7 @@ pub enum Op {
 
 impl Op {
     pub fn of(ns: &str, name: &str) -> Option<Op> {
-        use wire::{TDS, TEV, TIMG, TPTZ, TR2, TRT, WSNT};
+        use wire::{TDS, TEV, TIMG, TPTZ, TR2, TRC, TRP, TRT, TSE, WSNT};
         Some(match (ns, name) {
             (TDS, "GetSystemDateAndTime") => Op::SystemDateAndTime,
             (TDS, "GetCapabilities") => Op::Capabilities,
@@ -128,6 +154,7 @@ impl Op {
             (TEV, "CreatePullPointSubscription") => Op::CreatePullPoint,
             (TEV, "PullMessages") => Op::PullMessages,
             (TEV, "SetSynchronizationPoint") => Op::SynchronizationPoint,
+            (WSNT, "Subscribe") => Op::Subscribe,
             (WSNT, "Renew") => Op::Renew,
             (WSNT, "Unsubscribe") => Op::Unsubscribe,
             // use-go/onvif's event.Renew and event.Unsubscribe carry no XML name, so they go out
@@ -143,6 +170,24 @@ impl Op {
             (TIMG, "Move") => Op::ImagingMove,
             (TIMG, "Stop") => Op::ImagingStop,
             (TIMG, "GetStatus") => Op::ImagingStatus,
+            (TRC, "GetServiceCapabilities") => Op::RecordingCapabilities,
+            (TRC, "GetRecordings") => Op::Recordings,
+            (TRC, "GetRecordingConfiguration") => Op::RecordingConfiguration,
+            (TRC, "GetRecordingJobs") => Op::RecordingJobs,
+            (TRC, "CreateRecording") => Op::CreateRecording,
+            (TRC, "DeleteRecording") => Op::DeleteRecording,
+            (TSE, "GetServiceCapabilities") => Op::SearchCapabilities,
+            (TSE, "GetRecordingSummary") => Op::RecordingSummary,
+            (TSE, "GetRecordingInformation") => Op::RecordingInformation,
+            (TSE, "FindRecordings") => Op::FindRecordings,
+            (TSE, "GetRecordingSearchResults") => Op::RecordingSearchResults,
+            (TSE, "FindEvents") => Op::FindEvents,
+            (TSE, "GetEventSearchResults") => Op::EventSearchResults,
+            (TSE, "GetSearchState") => Op::SearchState,
+            (TSE, "EndSearch") => Op::EndSearch,
+            (TRP, "GetServiceCapabilities") => Op::ReplayCapabilities,
+            (TRP, "GetReplayUri") => Op::ReplayUri,
+            (TRP, "GetReplayConfiguration") => Op::ReplayConfiguration,
             _ => return None,
         })
     }
@@ -316,6 +361,25 @@ pub async fn dispatch(call: &Call<'_>, op: Op) -> Resp {
         Op::PullMessages | Op::Renew | Op::Unsubscribe | Op::SynchronizationPoint => {
             subscription_op(call, op).await.unwrap_or_else(|e| e)
         }
+        Op::Subscribe => subscribe(call).await.unwrap_or_else(|e| e),
+        Op::RecordingCapabilities => ok(&recording::recording_capabilities()),
+        Op::SearchCapabilities => ok(&recording::search_capabilities()),
+        Op::ReplayCapabilities => ok(&recording::replay_capabilities()),
+        Op::ReplayConfiguration => ok(&recording::replay_configuration()),
+        Op::Recordings
+        | Op::RecordingConfiguration
+        | Op::RecordingJobs
+        | Op::CreateRecording
+        | Op::DeleteRecording
+        | Op::RecordingSummary
+        | Op::RecordingInformation
+        | Op::FindRecordings
+        | Op::RecordingSearchResults
+        | Op::FindEvents
+        | Op::EventSearchResults
+        | Op::SearchState
+        | Op::EndSearch
+        | Op::ReplayUri => recording_op(call, op).await.unwrap_or_else(|e| e),
         Op::ImagingCapabilities => ok(&imaging::service_capabilities()),
         Op::ImagingSettings
         | Op::SetImagingSettings
@@ -362,7 +426,9 @@ fn capabilities(call: &Call<'_>) -> Resp {
             .filter(|c| categories.iter().any(|x| x == c))
             .collect()
     };
-    ok(&wire::capabilities(&call.base, &wanted))
+    // Recording, Search and Replay have no category of their own: they come with All.
+    let extension = wanted.len() == wire::CATEGORIES.len();
+    ok(&wire::capabilities(&call.base, &wanted, extension))
 }
 
 // ---- device ---------------------------------------------------------------------------------
@@ -852,7 +918,14 @@ async fn subscription_op(call: &Call<'_>, op: Op) -> Result<Resp, Resp> {
                 .events
                 .pull(&id, timeout, limit, || device.now())
                 .await
-                .map_err(|_| resource_unknown())?;
+                .map_err(|e| match e {
+                    events::BrokerError::Push => fault(
+                        FaultCode::Receiver,
+                        &["ActionNotSupported"],
+                        "This subscription delivers its notifications by Notify",
+                    ),
+                    _ => resource_unknown(),
+                })?;
             let now = device.now();
             let until = device.events.termination(&id, now).unwrap_or(now);
             let producer = format!("{}{}", call.base, wire::EVENTS_PATH);
@@ -974,4 +1047,346 @@ async fn imaging_op(call: &Call<'_>, op: Op) -> Result<Resp, Resp> {
         s.moved(to, kind == "continuous");
     }
     Ok(empty("timg", "Move"))
+}
+
+// ---- Basic Notification ---------------------------------------------------------------------
+
+fn subscribe_failed(code: FaultCode, subcodes: &[&str], reason: &str) -> Resp {
+    fault_detail(
+        code,
+        subcodes,
+        reason,
+        "<wsnt:SubscribeCreationFailedFault/>",
+    )
+}
+
+/// Subscribe: a push subscription to an allowlisted consumer, which the model accepts or refuses.
+/// A consumer the device will not deliver to is refused before the model is asked.
+async fn subscribe(call: &Call<'_>) -> Result<Resp, Resp> {
+    let device = call.device;
+    let address = call
+        .body()
+        .child("ConsumerReference")
+        .and_then(|c| c.child("Address"))
+        .map(|a| a.text.clone())
+        .unwrap_or_default();
+    let consumer = notify::parse_consumer(&address, device.notify.allow_https).and_then(|c| {
+        if device.notify.allowlist.allows(c.addr.ip(), call.peer.ip()) {
+            Ok(c)
+        } else {
+            Err(notify::ConsumerError::NotAllowed)
+        }
+    });
+    let consumer = match consumer {
+        Ok(c) => c,
+        Err(e) => {
+            super::outcome(
+                call.ctx,
+                call.id,
+                call.op(),
+                &format!("notify_consumer_refused reason={}", e.reason()),
+            );
+            call.ctx
+                .state
+                .record_access_log(
+                    crate::state::AccessLogOwner::Server(call.ctx.server_id.as_u32()),
+                    "ONVIF",
+                    Some(call.id.as_u32()),
+                    "onvif_notify_refused",
+                    json!({"consumer": crate::utils::truncate::truncate_for_log(&address, notify::MAX_CONSUMER_URL),
+                           "reason": e.reason(), "remote_addr": call.peer.to_string()}),
+                    vec![],
+                )
+                .await;
+            return Err(subscribe_failed(
+                FaultCode::Sender,
+                &["InvalidArgVal"],
+                "The device does not deliver notifications to that consumer",
+            ));
+        }
+    };
+    let filter = events::filter_of(call.body()).map_err(|e| {
+        fault_detail(
+            FaultCode::Sender,
+            &["InvalidArgVal"],
+            e.reason(),
+            e.detail(),
+        )
+    })?;
+    let now = device.now();
+    let until = termination(
+        call,
+        "InitialTerminationTime",
+        now,
+        "UnacceptableInitialTerminationTimeFault",
+    )?;
+    let filter_json = filter.json();
+    let consumer_url = consumer.url.clone();
+    let id = device
+        .events
+        .create_push(filter, until, now, consumer)
+        .map_err(|_| {
+            subscribe_failed(
+                FaultCode::Receiver,
+                &["Action"],
+                "The device holds no more push subscriptions",
+            )
+        })?;
+    let asked = call
+        .ask(
+            &a::SUBSCRIBE_EVENT,
+            json!({"subscription": id, "filter": filter_json, "consumer": consumer_url,
+                   "termination_time": wire::format_datetime(until)}),
+            a::ACCEPT,
+        )
+        .await;
+    if let Err(r) = asked {
+        device.events.remove(&id);
+        return Err(r);
+    }
+    let address = format!("{}{}{id}", call.base, wire::SUBSCRIPTION_PREFIX);
+    call.ctx
+        .state
+        .spawn_server_task(
+            call.ctx.server_id,
+            notify::deliver(call.ctx.clone(), device.clone(), id, address.clone()),
+        )
+        .await;
+    Ok(ok(&format!(
+        "<wsnt:SubscribeResponse><wsnt:SubscriptionReference><wsa:Address>{}</wsa:Address></wsnt:SubscriptionReference><wsnt:CurrentTime>{}</wsnt:CurrentTime><wsnt:TerminationTime>{}</wsnt:TerminationTime></wsnt:SubscribeResponse>",
+        esc(&address),
+        wire::format_datetime(now),
+        wire::format_datetime(until)
+    )))
+}
+
+// ---- Recording, Search, Replay --------------------------------------------------------------
+
+/// The device's recordings: described by the model the first time any client asks, then
+/// answered from memory.
+async fn archive(call: &Call<'_>) -> Result<recording::Archive, Resp> {
+    if let Some(a) = lock(&call.device.archive).clone() {
+        return Ok(a);
+    }
+    let reply = call
+        .ask(&a::RECORDINGS_EVENT, json!({}), a::RECORDINGS)
+        .await?;
+    let Ok(described) = recording::archive_from_action(&reply) else {
+        // `check` already refused such an answer; never serve one.
+        return Err(super::unavailable(crate::utils::WireFailure::Unavailable));
+    };
+    let mut held = lock(&call.device.archive);
+    Ok(held.get_or_insert(described).clone())
+}
+
+/// env:Sender/ter:InvalidArgVal, with `detail` as the second subcode unless it is that again.
+fn refused(detail: &str, reason: &str) -> Resp {
+    if detail == "InvalidArgVal" {
+        fault(FaultCode::Sender, &["InvalidArgVal"], reason)
+    } else {
+        invalid(detail, reason)
+    }
+}
+
+fn no_recording() -> Resp {
+    invalid("NoRecording", "No such recording")
+}
+
+fn no_search() -> Resp {
+    invalid("InvalidToken", "No such search")
+}
+
+fn too_many_searches() -> Resp {
+    fault(
+        FaultCode::Receiver,
+        &["Action", "ResourceProblem"],
+        "The device runs no more searches",
+    )
+}
+
+async fn recording_op(call: &Call<'_>, op: Op) -> Result<Resp, Resp> {
+    let device = call.device;
+    let b = call.body();
+    let search_token = || b.text_of("SearchToken").unwrap_or_default();
+    // A request that cannot be served is refused before the recordings are described.
+    match op {
+        Op::RecordingSearchResults | Op::EventSearchResults => {
+            let size =
+                recording::page_size(b).map_err(|d| refused(d, "MaxResults is not a number"))?;
+            let (kind, operation) = if op == Op::EventSearchResults {
+                ("events", "GetEventSearchResults")
+            } else {
+                ("recordings", "GetRecordingSearchResults")
+            };
+            let (page, state) = lock(&device.searches)
+                .page(kind, &search_token(), size, device.now())
+                .map_err(|_| no_search())?;
+            return Ok(ok(&recording::results(operation, state, &page)));
+        }
+        Op::SearchState => {
+            let state = lock(&device.searches)
+                .state(&search_token(), device.now())
+                .map_err(|_| no_search())?;
+            return Ok(ok(&format!(
+                "<tse:GetSearchStateResponse><tse:State>{state}</tse:State></tse:GetSearchStateResponse>"
+            )));
+        }
+        Op::EndSearch => {
+            let endpoint = lock(&device.searches)
+                .end(&search_token(), device.now())
+                .map_err(|_| no_search())?;
+            return Ok(ok(&format!(
+                "<tse:EndSearchResponse><tse:Endpoint>{}</tse:Endpoint></tse:EndSearchResponse>",
+                wire::format_datetime(endpoint)
+            )));
+        }
+        _ => {}
+    }
+    match op {
+        Op::Recordings => Ok(ok(&recording::get_recordings(&archive(call).await?))),
+        Op::RecordingJobs => Ok(ok(&recording::get_recording_jobs(&archive(call).await?))),
+        Op::RecordingConfiguration => {
+            let token = b.text_of("RecordingToken").unwrap_or_default();
+            let archive = archive(call).await?;
+            let r = archive.recording(&token).ok_or_else(no_recording)?;
+            Ok(ok(&format!(
+                "<trc:GetRecordingConfigurationResponse>{}</trc:GetRecordingConfigurationResponse>",
+                recording::recording_configuration("trc:RecordingConfiguration", r)
+            )))
+        }
+        Op::RecordingSummary => Ok(ok(&recording::recording_summary(
+            &archive(call).await?,
+            device.now(),
+        ))),
+        Op::RecordingInformation => {
+            let token = b.text_of("RecordingToken").unwrap_or_default();
+            let archive = archive(call).await?;
+            let r = archive.recording(&token).ok_or_else(no_recording)?;
+            Ok(ok(&format!(
+                "<tse:GetRecordingInformationResponse>{}</tse:GetRecordingInformationResponse>",
+                recording::recording_information("tse:RecordingInformation", &archive, r)
+            )))
+        }
+        Op::FindRecordings => {
+            let q = recording::recording_query(b)
+                .map_err(|d| refused(d, "The search is not one the device can run"))?;
+            let archive = archive(call).await?;
+            let results = recording::find_recordings(&archive, &q);
+            let now = device.now();
+            let token = lock(&device.searches)
+                .start("recordings", results, q.keep_alive, now, now)
+                .map_err(|_| too_many_searches())?;
+            Ok(ok(&format!(
+                "<tse:FindRecordingsResponse><tse:SearchToken>{}</tse:SearchToken></tse:FindRecordingsResponse>",
+                esc(&token)
+            )))
+        }
+        Op::FindEvents => {
+            let q = recording::event_query(b)
+                .map_err(|d| refused(d, "The search is not one the device can run"))?;
+            let archive = archive(call).await?;
+            let results = recording::find_events(&archive, &q);
+            let now = device.now();
+            let endpoint = q.end.unwrap_or_else(|| {
+                archive
+                    .recordings
+                    .iter()
+                    .filter_map(recording::Recording::latest)
+                    .max()
+                    .unwrap_or(now)
+            });
+            let token = lock(&device.searches)
+                .start("events", results, q.keep_alive, endpoint, now)
+                .map_err(|_| too_many_searches())?;
+            Ok(ok(&format!(
+                "<tse:FindEventsResponse><tse:SearchToken>{}</tse:SearchToken></tse:FindEventsResponse>",
+                esc(&token)
+            )))
+        }
+        Op::ReplayUri => {
+            let stream = b.path(&["StreamSetup", "Stream"]).unwrap_or_default();
+            let protocol = b
+                .path(&["StreamSetup", "Transport", "Protocol"])
+                .unwrap_or_default();
+            if !matches!(stream.as_str(), "" | "RTP-Unicast" | "RTP-Multicast")
+                || !matches!(protocol.as_str(), "" | "RTSP" | "UDP" | "TCP" | "HTTP")
+            {
+                return Err(invalid(
+                    "InvalidStreamSetup",
+                    "The device has no such stream setup",
+                ));
+            }
+            let token = b.text_of("RecordingToken").unwrap_or_default();
+            let archive = archive(call).await?;
+            let r = archive.recording(&token).ok_or_else(no_recording)?;
+            let uri = r.replay_uri.as_deref().ok_or_else(|| {
+                fault(
+                    FaultCode::Receiver,
+                    &["ActionNotSupported"],
+                    "The device holds no replay of this recording",
+                )
+            })?;
+            Ok(ok(&format!(
+                "<trp:GetReplayUriResponse><trp:Uri>{}</trp:Uri></trp:GetReplayUriResponse>",
+                esc(uri)
+            )))
+        }
+        Op::CreateRecording => {
+            let configuration = recording::configuration_of(b)
+                .map_err(|d| refused(d, "The recording configuration is not valid"))?;
+            let archive = archive(call).await?;
+            let too_many = || {
+                fault(
+                    FaultCode::Receiver,
+                    &["Action", "MaxRecordings"],
+                    "The device holds no more recordings",
+                )
+            };
+            if archive.recordings.len() >= recording::MAX_RECORDINGS {
+                return Err(too_many());
+            }
+            let c = &configuration;
+            call.ask(
+                &a::CREATE_RECORDING_EVENT,
+                json!({"source": {"source_id": c.source.source_id, "name": c.source.name, "location": c.source.location,
+                                  "description": c.source.description, "address": c.source.address},
+                       "content": c.content, "maximum_retention_secs": c.retention.as_secs(),
+                       "recordings": recording::summary_json(&archive)}),
+                a::ACCEPT,
+            )
+            .await?;
+            let now = device.now();
+            let token = lock(&device.archive)
+                .as_mut()
+                .map(|a| a.create(&configuration, now))
+                .unwrap_or(Err(()))
+                .map_err(|_| too_many())?;
+            Ok(ok(&format!(
+                "<trc:CreateRecordingResponse><trc:RecordingToken>{}</trc:RecordingToken></trc:CreateRecordingResponse>",
+                esc(&token)
+            )))
+        }
+        Op::DeleteRecording => {
+            let token = b.text_of("RecordingToken").unwrap_or_default();
+            let archive = archive(call).await?;
+            if archive.recording(&token).is_none() {
+                return Err(no_recording());
+            }
+            call.ask(
+                &a::DELETE_RECORDING_EVENT,
+                json!({"recording_token": token, "recordings": recording::summary_json(&archive)}),
+                a::ACCEPT,
+            )
+            .await?;
+            if let Some(a) = lock(&device.archive).as_mut() {
+                a.delete(&token);
+            }
+            Ok(empty("trc", "DeleteRecording"))
+        }
+        _ => Err(fault(
+            FaultCode::Receiver,
+            &["ActionNotSupported"],
+            "Optional Action Not Implemented",
+        )),
+    }
 }

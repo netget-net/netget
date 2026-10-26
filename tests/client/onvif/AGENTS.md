@@ -40,18 +40,34 @@ device's own log or record on failure.
   motion alarm and injects PullMessages through the command channel until it comes back as
   `{topic: tns1:VideoSource/MotionAlarm, property_operation: Changed, data: {State: "true"}}`;
   Renew, SetSynchronizationPoint (its properties resent `Initialized`) and Unsubscribe follow,
-  then a pull with no subscription is the client's own error. With the wrong password
+  then a pull with no subscription is the client's own error. Then Basic Notification: the
+  client's `onvif_subscribe` starts its consumer on `notify_bind`, an address of this host that
+  is not loopback (`NETGET_ONVIF_NOTIFY_BIND`, or the address the host would send from), because
+  onvif_simple_server refuses loopback consumers; the device's CGI log names the consumer it
+  accepted, its notify daemon sends the subscription's Initialized values, and once the alarm's
+  has arrived switching it on is a Changed `{State: "true"}` `onvif_notification`; renew and
+  unsubscribe follow, and the daemon's log shows each Notify it sent. With the wrong password
   onvif_simple_server still answers GetCapabilities (ONVIF's pre-authentication class), so the
   client connects, and every request after is refused `NotAuthorized` — its log says
   `Authentication error`. The test prints what the chain and the injections sent.
-- `bounds_test` — a canned device written in the test (not evidence): a reply nested past
+- `bounds_test` — a canned device written in the test (not evidence): a Subscribe names the
+  client's own consumer (loopback, `/netget/onvif/notify/<32 hex>`, the model's topic filter); a
+  Notify posted there with other prefixes becomes one `onvif_notification` the model answers by
+  reading the recordings; a wrong path (404), GET (405), a body past `MAX_REQUEST` (413), a
+  non-Notify, malformed XML and a depth bomb (400) reach nobody; `MAX_CONNECTIONS` held open and
+  the next answered 503; renew and unsubscribe at the subscription's path, then no subscription.
+  Recording, Search and Replay against canned answers: GetRecordings, GetRecordingSummary,
+  FindEvents carrying the model's start, end, recordings, topic filter, MaxMatches and
+  KeepAliveTime, its results read, EndSearch, GetReplayUri, the three services found in
+  GetCapabilities' Extension and reached by path. And, as before: a reply nested past
   `MAX_DEPTH` and one past `MAX_RESPONSE` refuse the connection, exactly `MAX_RESPONSE` does
   not; a chain that never stops stops at `MAX_FOLLOWUP_DEPTH`; every signed request (the
   connect handshake's GetCapabilities and GetServices included) carries the device's clock (two
   hours ahead here) and verifies; the media service is reached by path on the given host
   though the capabilities named another.
 
-Mutation-checked: dropping the model's actions fails `real_server_test` and the chain test;
-removing the depth bound, the reply depth check or the reply size limits fails `bounds_test`.
+Mutation-checked: dropping the model's actions fails `real_server_test`, the chain test and the
+notification test (the Subscribe the model asks for is never sent, so no notification
+arrives); removing the depth bound, the reply depth check or the reply size limits fails `bounds_test`.
 
 No LLM calls.
