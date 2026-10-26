@@ -9,7 +9,7 @@ use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::logging::emit::Log;
 use crate::protocol::{ConnectContext, Event, EventType};
 use crate::server::iscsi::chap::Credential;
-use crate::server::iscsi::pdu::login_status;
+use crate::server::iscsi::pdu::{login_status, tmf};
 use crate::server::iscsi::text::DigestPreference;
 use crate::server::scsi_common::{self as scsi, status};
 use crate::state::client_handles::{ClientCommand, ClientSendOutcome};
@@ -369,6 +369,10 @@ impl Initiator<'_> {
                 (&actions::TARGETS_EVENT, data)
             }
             actions::LOGIN => (&actions::LOGIN_RESULT_EVENT, self.login(action).await),
+            actions::TASK_MANAGEMENT => (
+                &actions::TASK_MANAGEMENT_RESULT_EVENT,
+                self.task_management(action).await,
+            ),
             actions::LOGOUT => {
                 let Some(mut s) = self.session.take() else {
                     return (
@@ -397,6 +401,50 @@ impl Initiator<'_> {
                 (&actions::COMMAND_RESULT_EVENT, data)
             }
         }
+    }
+
+    /// A task management function on the session. A cold reset ends the session (the target
+    /// closes every connection, RFC 7143 §11.5.1), as does a transport failure.
+    async fn task_management(&mut self, action: &Value) -> Value {
+        let name = action["function"].as_str().unwrap_or_default();
+        let function = tmf::by_name(name).unwrap_or(tmf::ABORT_TASK);
+        let lun = actions::lun_of(action).unwrap_or(0);
+        let mut data = json!({"function": name, "lun": lun});
+        let Some(s) = self.session.as_mut() else {
+            data["error"] = json!("not logged in: run iscsi_login first");
+            return data;
+        };
+        let referenced = if function == tmf::ABORT_TASK {
+            match action["referenced_task_tag"].as_u64() {
+                // A tag the model names: its CmdSN is unknown, so the current one stands in
+                // (the target then answers "task does not exist" unless the task is there).
+                Some(t) => Some((t as u32, s.last_task.map_or(0, |(_, c)| c))),
+                None => s.last_task,
+            }
+        } else {
+            None
+        };
+        if let Some((itt, _)) = referenced {
+            data["referenced_task_tag"] = json!(itt);
+        }
+        match s.task_management(function, lun, referenced).await {
+            Ok(code) => {
+                data["response"] = json!(tmf::response_name(code));
+                data["response_code"] = json!(code);
+                if function == tmf::TARGET_COLD_RESET && code == tmf::FUNCTION_COMPLETE {
+                    self.session = None;
+                    self.block_sizes.clear();
+                    data["session_ended"] = json!(true);
+                }
+            }
+            Err(e) => {
+                self.session = None;
+                self.block_sizes.clear();
+                data["error"] = json!(format!("{e:#}"));
+                data["session_ended"] = json!(true);
+            }
+        }
+        data
     }
 
     async fn discover(&mut self) -> Result<Vec<(String, Vec<String>)>> {
