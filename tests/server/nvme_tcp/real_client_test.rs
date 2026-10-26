@@ -486,6 +486,10 @@ print(json.dumps({'actions':a}))"#;
                 "nqn.2026-10.net.netget:nothing",
                 "-q",
                 KERNEL_HOST,
+                // The same host ID as the other test's: the kernel refuses one host NQN under
+                // two host IDs, before the target hears anything, when the two run at once.
+                "-I",
+                KERNEL_HOSTID,
             ],
         )
         .await;
