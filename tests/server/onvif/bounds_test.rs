@@ -22,7 +22,7 @@ fn http() -> reqwest::Client {
         .unwrap()
 }
 
-async fn post(port: u16, path: &str, envelope: String) -> (u16, String) {
+pub async fn post(port: u16, path: &str, envelope: String) -> (u16, String) {
     let r = http()
         .post(format!("http://127.0.0.1:{port}{path}"))
         .header("Content-Type", "application/soap+xml; charset=utf-8")
@@ -34,11 +34,11 @@ async fn post(port: u16, path: &str, envelope: String) -> (u16, String) {
 }
 
 /// An unsigned request (the device under test is open unless the test configured credentials).
-async fn call(port: u16, path: &str, body: &str) -> (u16, String) {
+pub async fn call(port: u16, path: &str, body: &str) -> (u16, String) {
     post(port, path, wire::request_envelope(None, body)).await
 }
 
-fn subcodes(body: &str) -> Vec<String> {
+pub fn subcodes(body: &str) -> Vec<String> {
     body.split("<env:Value>ter:")
         .skip(1)
         .filter_map(|s| s.split('<').next())
@@ -56,7 +56,7 @@ async fn subscribe(port: u16, termination: &str) -> (u16, String) {
 }
 
 /// The path of the subscription a CreatePullPointSubscriptionResponse names.
-fn address(body: &str) -> String {
+pub fn address(body: &str) -> String {
     let start = body
         .find(wire::SUBSCRIPTION_PREFIX)
         .unwrap_or_else(|| panic!("no subscription address in {body}"));
@@ -85,7 +85,7 @@ async fn raise(state: &AppState, id: ServerId, input: &str) {
         .unwrap();
 }
 
-async fn device(state: &AppState, id: ServerId) -> std::sync::Arc<Device> {
+pub async fn device(state: &AppState, id: ServerId) -> std::sync::Arc<Device> {
     state.server_handle::<Device>(id).await.unwrap()
 }
 
@@ -276,7 +276,7 @@ async fn presets_are_bounded_in_count_and_name() {
 
 /// A model that describes the camera (profiles, sources, hostname, scopes) and nothing else:
 /// every other event goes to the unreachable model.
-fn describing_only() -> Option<Vec<Value>> {
+pub fn describing_only() -> Option<Vec<Value>> {
     let policy = super::real_client_test::POLICY;
     Some(
         [

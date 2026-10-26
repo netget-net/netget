@@ -184,3 +184,177 @@ async fn tshark_reads_every_new_service_both_ways() {
         }
     }
 }
+
+/// The bytes of one HTTP request a consumer read, and the bytes it answered with.
+async fn one_notify(listener: tokio::net::TcpListener) -> (Vec<u8>, Vec<u8>) {
+    let (mut s, _) = tokio::time::timeout(Duration::from_secs(30), listener.accept())
+        .await
+        .expect("the device never POSTed the Notify")
+        .unwrap();
+    let mut request = Vec::new();
+    let mut chunk = [0u8; 16384];
+    loop {
+        let n = tokio::time::timeout(Duration::from_secs(30), s.read(&mut chunk))
+            .await
+            .expect("the Notify did not finish")
+            .unwrap();
+        assert!(n > 0, "the device closed mid-request");
+        request.extend_from_slice(&chunk[..n]);
+        let text = String::from_utf8_lossy(&request).to_string();
+        if let Some((head, body)) = text.split_once("\r\n\r\n") {
+            let len = head
+                .lines()
+                .find_map(|l| {
+                    l.to_ascii_lowercase()
+                        .strip_prefix("content-length:")
+                        .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                })
+                .unwrap_or(0);
+            if body.len() >= len {
+                break;
+            }
+        }
+    }
+    let response = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec();
+    s.write_all(&response).await.unwrap();
+    (request, response)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tshark_reads_recording_search_replay_subscribe_and_the_devices_notify() {
+    let (_state, _id, port) = start(policy(), json!({})).await;
+    let consumer = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let consumer_url = format!(
+        "http://127.0.0.1:{}/pcap-consumer",
+        consumer.local_addr().unwrap().port()
+    );
+    let notify = tokio::spawn(one_notify(consumer));
+    let search = {
+        let (_, answer) = exchange(
+            port,
+            wire::SEARCH_PATH,
+            "<tse:FindEvents><tse:StartPoint>2026-10-24T00:00:00Z</tse:StartPoint><tse:Scope/><tse:SearchFilter/><tse:IncludeStartState>false</tse:IncludeStartState><tse:KeepAliveTime>PT60S</tse:KeepAliveTime></tse:FindEvents>",
+        )
+        .await;
+        let text = String::from_utf8_lossy(&answer).to_string();
+        text.split("<tse:SearchToken>")
+            .nth(1)
+            .and_then(|s| s.split('<').next())
+            .unwrap_or_else(|| panic!("{text}"))
+            .to_string()
+    };
+    let cases: Vec<(&str, String, &str, &str)> = vec![
+        (
+            wire::RECORDING_PATH,
+            "<trc:GetRecordings/>".into(),
+            "<trc:GetRecordings/>",
+            "<trc:GetRecordingsResponse>",
+        ),
+        (
+            wire::RECORDING_PATH,
+            "<trc:GetRecordingJobs/>".into(),
+            "<trc:GetRecordingJobs/>",
+            "<trc:GetRecordingJobsResponse>",
+        ),
+        (
+            wire::SEARCH_PATH,
+            "<tse:GetRecordingInformation><tse:RecordingToken>rec_lobby</tse:RecordingToken></tse:GetRecordingInformation>".into(),
+            "<tse:GetRecordingInformation>",
+            "<tse:GetRecordingInformationResponse>",
+        ),
+        (
+            wire::SEARCH_PATH,
+            format!("<tse:GetEventSearchResults><tse:SearchToken>{search}</tse:SearchToken><tse:MaxResults>2</tse:MaxResults></tse:GetEventSearchResults>"),
+            "<tse:GetEventSearchResults>",
+            "<tse:GetEventSearchResultsResponse>",
+        ),
+        (
+            wire::REPLAY_PATH,
+            "<trp:GetReplayUri><trp:StreamSetup><tt:Stream>RTP-Unicast</tt:Stream><tt:Transport><tt:Protocol>RTSP</tt:Protocol></tt:Transport></trp:StreamSetup><trp:RecordingToken>rec_lobby</trp:RecordingToken></trp:GetReplayUri>".into(),
+            "<trp:GetReplayUri>",
+            "<trp:GetReplayUriResponse>",
+        ),
+        (
+            wire::EVENTS_PATH,
+            format!("<wsnt:Subscribe><wsnt:ConsumerReference><wsa:Address>{consumer_url}</wsa:Address></wsnt:ConsumerReference><wsnt:InitialTerminationTime>PT60S</wsnt:InitialTerminationTime></wsnt:Subscribe>"),
+            "<wsnt:Subscribe>",
+            "<wsnt:SubscribeResponse>",
+        ),
+    ];
+    for (path, body, request_tag, response_tag) in cases {
+        let (request, response) = exchange(port, path, &body).await;
+        let text = String::from_utf8_lossy(&response);
+        assert!(text.starts_with("HTTP/1.1 200"), "{request_tag}: {text}");
+        let oracle = || {
+            PcapOracle::tcp("onvif")
+                .to_server(&request)
+                .from_server(&response)
+        };
+        oracle().assert_clean();
+        let rows = oracle()
+            .fields(&["http.request.uri", "http.response.code", "xml.tag"])
+            .unwrap();
+        assert_eq!(
+            body_tags(&rows),
+            vec![request_tag.to_string(), response_tag.to_string()],
+            "tshark read {rows:?}"
+        );
+        if request_tag == "<tse:GetEventSearchResults>" {
+            let tags = rows
+                .iter()
+                .filter_map(|r| r.get(2))
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(",");
+            assert!(
+                tags.contains("<tt:Result>") && tags.contains("<tt:Event>"),
+                "{tags}"
+            );
+        }
+    }
+
+    // The Notify the device POSTed to the consumer (the model's answer to the Subscribe raised a
+    // motion alarm), as tshark reads it: a POST to the consumer's path carrying wsnt:Notify.
+    let (request, response) = notify.await.unwrap();
+    let oracle = || {
+        PcapOracle::tcp("onvif")
+            .to_server(&request)
+            .from_server(&response)
+    };
+    oracle().assert_clean();
+    let rows = oracle()
+        .fields(&[
+            "http.request.method",
+            "http.request.uri",
+            "http.response.code",
+            "xml.tag",
+        ])
+        .unwrap();
+    assert!(
+        rows.iter().any(|r| r.first().is_some_and(|m| m == "POST")
+            && r.get(1).is_some_and(|u| u == "/pcap-consumer")),
+        "{rows:?}"
+    );
+    let tags = rows
+        .iter()
+        .filter_map(|r| r.get(3))
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(",");
+    let body = tags
+        .split(',')
+        .skip_while(|t| !t.contains(":Body>"))
+        .nth(1)
+        .unwrap_or_default()
+        .to_string();
+    assert_eq!(body, "<wsnt:Notify>", "{tags}");
+    assert!(tags.contains("<wsnt:NotificationMessage>"), "{tags}");
+    assert!(
+        tags.contains("<tt:SimpleItem Name=\"State\" Value=\"true\"/>"),
+        "{tags}"
+    );
+    assert!(
+        rows.iter().any(|r| r.get(2).is_some_and(|c| c == "200")),
+        "{rows:?}"
+    );
+}
