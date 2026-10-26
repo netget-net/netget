@@ -12,8 +12,22 @@ and raises `nvme_tcp_connected`. The model then chooses:
 | `nvme_tcp_discover` | a queue to the discovery NQN: ICReq, Connect, CAP/VS, CC.EN, CSTS.RDY, Identify, Get Log Page 70h (header, the whole log in pieces of at most 64 KiB and MDTS, the header again to check the generation), CC.SHN, close | `nvme_tcp_discovery_log` (entries: subsystem NQN, transport, address family, address, port, subsystem type, port ID, controller ID, admin queue size, TREQ) |
 | `nvme_tcp_connect` | an admin queue (Connect with KATO, enable, Identify, Number of Queues = 1) and one I/O queue (Connect with the CNTLID, in-capsule data per IOCCSZ), then the active namespace list | `nvme_tcp_connect_result` (the Connect status by name and the field it names when refused; the controller's model, serial, firmware, version, MDTS, MAXCMD, NN and the namespaces when not) |
 | `nvme_tcp_identify_controller`, `nvme_tcp_identify_namespace` (with its identification descriptors), `nvme_tcp_list_namespaces`, `nvme_tcp_read`, `nvme_tcp_write`, `nvme_tcp_write_zeroes`, `nvme_tcp_flush`, `nvme_tcp_get_log_page` (smart, error, firmware_slot, changed_namespaces) | one command | `nvme_tcp_command_result` (the NVMe status by name and the decoded answer) |
+| `nvme_tcp_compare` (data like a write), `nvme_tcp_verify` (≤ 65536 blocks), `nvme_tcp_copy` (format 0, 1–128 ranges of ≤ 65536 blocks to `destination_lba`) | one I/O command | `nvme_tcp_command_result` (`matches` for a compare; COMPARE FAILURE, COMMAND SIZE LIMIT EXCEEDED, INVALID COMMAND OPCODE by name) |
+| `nvme_tcp_reservation_register` (register / unregister / replace, `current_key`, `new_key`, `ignore_existing_key`), `nvme_tcp_reservation_acquire` (acquire / preempt / preempt_and_abort, `reservation_type`, `current_key`, `preempt_key`), `nvme_tcp_reservation_release` (release / clear), `nvme_tcp_reservation_report` | one I/O command (the report extended, 4 KiB) | `nvme_tcp_command_result` (the status; the report's generation, type, registrants with key, host ID and who holds it) |
 | `nvme_tcp_disconnect` | CC.SHN normal, CSTS.SHST complete (5 s), close both queues | `nvme_tcp_disconnected` |
 | `disconnect` | the same, then stop | — |
+
+**DH-HMAC-CHAP.** With `dhchap_secret` (and `dhchap_ctrl_secret` to make the controller prove
+itself too), a Connect whose completion sets AUTHREQ.ATR — the admin queue's, or an I/O queue's
+when a target asks it there — is followed by the exchange before anything else: AUTH_Negotiate
+offering SHA-256/384/512 and NULL plus ffdhe2048–8192, the challenge answered with R1 (and the
+host's DH value), and with a controller secret C2/S2 sent and the controller's R2 checked in
+constant time before Success2; a missing or wrong R2 is AUTH_Failure2. The connect result names
+the hash, group and direction; a refusal is `connected: false` with `AUTHENTICATION FAILED: …`
+saying who refused what. ATR with no secret, or ASCR (secure channel concatenation, which needs
+TLS), is refused the same way. The secrets are startup parameters `src/utils/redact.rs` masks,
+parsed (`DHHC-1`, CRC-32 checked) before anything connects, and never in an event; a controller
+secret without a host secret refuses to start.
 
 One controller at a time; a second `nvme_tcp_connect` is refused until `nvme_tcp_disconnect`.
 Keep Alive goes out on the admin queue every third of KATO (`keep_alive_ms`, default 30 s),
@@ -48,5 +62,12 @@ back, health log, flush and disconnect session is nine.
 **Evidence.** `tests/client/nvme_tcp`: NetGet's own target (regression, not evidence), the
 Linux kernel target (`nvmet` + `nvmet-tcp` configured through configfs, a file-backed namespace
 read back from the file, as root) and SPDK v26.09's `nvmf_tgt` (configured through `rpc.py`, an
-AIO bdev over a file, without hugepages), both in the `nvme-tcp` pair job. Experimental: both
-pass on a Linux 7.2 aarch64 kernel, and the pair job had not run in CI when this landed.
+AIO bdev over a file, without hugepages), both in the `nvme-tcp` pair job. DH-HMAC-CHAP passes
+against both — nvmet configured with sha256/null, sha512/ffdhe4096 and sha384/ffdhe8192, SPDK
+choosing sha512/ffdhe8192, both ways — and each refuses a wrong host secret while the host
+refuses each when given a controller secret it does not hold. Reservations pass against both
+(nvmet's `resv_enable`, Linux 6.13+). Compare and Copy pass against `nvmf_tgt` (within its own
+Copy limits: one source range, 263 blocks, which `nvme_tcp_identify_namespace` now reports);
+nvmet implements neither, nor Verify, and neither does `nvmf_tgt` Verify — the host reports
+their INVALID COMMAND OPCODE, so Verify's only target is NetGet's own. Experimental: all of it
+passes on a Linux 7.2 aarch64 kernel, and the pair job had not run in CI when this landed.

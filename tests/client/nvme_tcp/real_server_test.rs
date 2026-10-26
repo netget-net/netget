@@ -73,6 +73,12 @@ mod kernel_target {
     impl Nvmet {
         /// `files`: (NSID, backing file contents).
         fn new(tag: &str, files: &[(u32, Vec<u8>)], allow: &[&str]) -> Self {
+            Self::build(tag, files, allow, false)
+        }
+
+        /// As [`Nvmet::new`], with persistent reservations enabled on every namespace
+        /// (`resv_enable`, which nvmet takes only before a namespace is enabled).
+        fn build(tag: &str, files: &[(u32, Vec<u8>)], allow: &[&str], resv: bool) -> Self {
             let dir = tempfile::tempdir().unwrap();
             let base = PathBuf::from(CONFIGFS);
             let nqn = format!("nqn.2026-10.org.linux:nvmet-{tag}-{}", std::process::id());
@@ -107,6 +113,9 @@ mod kernel_target {
                 let ns = subsys.join("namespaces").join(nsid.to_string());
                 std::fs::create_dir(&ns).unwrap();
                 write(&ns.join("device_path"), &file.display().to_string());
+                if resv {
+                    write(&ns.join("resv_enable"), "1");
+                }
                 write(&ns.join("enable"), "1");
                 me.ns.push(ns);
                 me.backing.push(file);
@@ -133,6 +142,276 @@ mod kernel_target {
             me.tcp_port = tcp_port;
             me
         }
+    }
+
+    impl Nvmet {
+        /// DH-HMAC-CHAP for an allowed host: its secret, the controller's (bidirectional), and
+        /// the hash and DH group nvmet challenges with.
+        fn dhchap(&self, host: &str, key: &str, ctrl_key: Option<&str>, hash: &str, group: &str) {
+            let h = PathBuf::from(CONFIGFS).join("hosts").join(host);
+            write(&h.join("dhchap_key"), key);
+            if let Some(c) = ctrl_key {
+                write(&h.join("dhchap_ctrl_key"), c);
+            }
+            write(&h.join("dhchap_hash"), hash);
+            write(&h.join("dhchap_dhgroup"), group);
+        }
+    }
+
+    /// A secret from nvme-cli's `gen-dhchap-key`, the tool an administrator configures nvmet
+    /// with: `-m` the transformation hash, `-l` the key length, `-n` the NQN.
+    fn gen_key(hmac: u8, len: u32, nqn: &str) -> String {
+        let nvme = ["/usr/sbin/nvme", "/usr/bin/nvme", "/sbin/nvme"]
+            .into_iter()
+            .find(|p| Path::new(p).exists())
+            .expect(
+                "nvme (nvme-cli) is not installed; it generates the DH-HMAC-CHAP secrets nvmet \
+                 is configured with: apt-get install nvme-cli",
+            );
+        let out = std::process::Command::new(nvme)
+            .args([
+                "gen-dhchap-key",
+                "-m",
+                &hmac.to_string(),
+                "-l",
+                &len.to_string(),
+                "-n",
+                nqn,
+            ])
+            .output()
+            .unwrap();
+        let key = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        assert!(key.starts_with("DHHC-1:"), "nvme gen-dhchap-key: {key}");
+        key
+    }
+
+    fn mark(tag: &str) -> String {
+        let marker = format!("netget-nvme-client-test {tag} {}", std::process::id());
+        let _ = std::fs::write("/dev/kmsg", format!("{marker}\n"));
+        marker
+    }
+
+    fn since(marker: &str) -> String {
+        let all = std::process::Command::new("dmesg")
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default();
+        all.rfind(marker)
+            .map_or(String::new(), |at| all[at..].to_string())
+    }
+
+    const CONNECT_ONLY: &str = r#"import json,sys
+i=json.load(sys.stdin)
+print(json.dumps({'actions':[{'type':'nvme_tcp_connect'}] if i['event_type_id']=='nvme_tcp_connected' else []}))"#;
+
+    async fn send(
+        state: &netget::state::app_state::AppState,
+        id: netget::state::ClientId,
+        action: serde_json::Value,
+    ) -> serde_json::Value {
+        match state
+            .send_to_client(id, action.clone(), Duration::from_secs(30))
+            .await
+            .unwrap()
+        {
+            netget::state::client_handles::ClientSendOutcome::Executed { detail } => {
+                let r: serde_json::Value = serde_json::from_str(&detail).unwrap();
+                println!("{} -> {}", action["type"], r);
+                r
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_host_authenticates_to_the_kernel_target() {
+        require_root();
+        require_nvmet();
+        for (i, (hash, group, bidirectional)) in [
+            ("sha256", "null", false),
+            ("sha512", "ffdhe4096", true),
+            ("sha384", "ffdhe8192", true),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let tag = format!("auth{i}");
+            let host = host(&tag);
+            let t = Nvmet::new(&tag, &[(1, disk("authenticated by nvmet"))], &[&host]);
+            let key = gen_key(1, 32, &host);
+            let ctrl_key = gen_key(2, 48, &t.nqn);
+            t.dhchap(
+                &host,
+                &key,
+                bidirectional.then_some(ctrl_key.as_str()),
+                &format!("hmac({hash})"),
+                group,
+            );
+            let mut params =
+                json!({"host_nqn": host, "subsystem_nqn": t.nqn, "dhchap_secret": key});
+            if bidirectional {
+                params["dhchap_ctrl_secret"] = json!(ctrl_key);
+            }
+            let (state, id) = client(
+                format!("127.0.0.1:{}", t.tcp_port),
+                params,
+                chain(&connect_first_policy()),
+            )
+            .await
+            .unwrap();
+            let c = wait_event(&state, id, "nvme_tcp_connect_result", 0).await;
+            assert_eq!(c["connected"], true, "{c}\n{}", diagnostics(&t));
+            assert_eq!(
+                c["authentication"],
+                json!({"protocol": "DH-HMAC-CHAP", "hash": hash, "dh_group": group, "bidirectional": bidirectional}),
+                "nvmet chose what it was configured with"
+            );
+            // Authenticated: nvmet runs the session, and the write lands in its backing file.
+            let r = results(&state, id, 6).await;
+            assert_eq!(r[1]["data"], "authenticated by nvmet", "{}", r[1]);
+            let block = r[0]["namespace"]["block_size"].as_u64().unwrap() as usize;
+            wait_for_write(&t.backing[0], block).await;
+            wait_event(&state, id, "nvme_tcp_disconnected", 0).await;
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_kernel_target_refuses_a_wrong_secret_and_the_host_refuses_a_wrong_controller() {
+        require_root();
+        require_nvmet();
+        let host = host("wrongkey");
+        let t = Nvmet::new("wrongkey", &[(1, disk("never read"))], &[&host]);
+        let key = gen_key(1, 32, &host);
+        let ctrl_key = gen_key(0, 32, &t.nqn);
+        t.dhchap(&host, &key, Some(&ctrl_key), "hmac(sha256)", "ffdhe2048");
+        for (i, (params, expect, kernel)) in [
+            (
+                json!({"dhchap_secret": gen_key(1, 32, &host)}),
+                "refused this host's response",
+                "host response mismatch",
+            ),
+            (
+                json!({"dhchap_secret": key, "dhchap_ctrl_secret": gen_key(0, 32, &t.nqn)}),
+                "controller authentication failed",
+                // nvmet takes the host's AUTH_Failure2 as a fatal controller error.
+                "fatal error occurred",
+            ),
+            (json!({}), "no dhchap_secret", ""),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut p = params.clone();
+            p["host_nqn"] = json!(host);
+            p["subsystem_nqn"] = json!(t.nqn);
+            let marker = mark(&format!("wrongkey-case-{i}"));
+            let (state, id) = client(format!("127.0.0.1:{}", t.tcp_port), p, chain(CONNECT_ONLY))
+                .await
+                .unwrap();
+            let c = wait_event(&state, id, "nvme_tcp_connect_result", 0).await;
+            let log = since(&marker);
+            println!("{expect}: {c}\nkernel:\n{log}");
+            assert_eq!(c["connected"], false, "{c}");
+            assert!(
+                c["status"].as_str().is_some_and(|s| s.contains(expect)),
+                "{c}\n{}",
+                diagnostics(&t)
+            );
+            assert!(log.contains(kernel), "nvmet logged {kernel:?}:\n{log}");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_host_reserves_on_the_kernel_target_which_has_no_compare_verify_or_copy() {
+        require_root();
+        require_nvmet();
+        let host = host("resv");
+        let t = Nvmet::build("resv", &[(1, disk("reserved by netget"))], &[&host], true);
+        let (state, id) = client(
+            format!("127.0.0.1:{}", t.tcp_port),
+            json!({"host_nqn": host, "subsystem_nqn": t.nqn}),
+            chain(CONNECT_ONLY),
+        )
+        .await
+        .unwrap();
+        let c = wait_event(&state, id, "nvme_tcp_connect_result", 0).await;
+        assert_eq!(c["connected"], true, "{c}\n{}", diagnostics(&t));
+        let r = send(
+            &state,
+            id,
+            json!({"type": "nvme_tcp_reservation_register", "nsid": 1, "new_key": 161}),
+        )
+        .await;
+        assert_eq!(r["status"], "SUCCESS", "{r}\n{}", diagnostics(&t));
+        let r = send(
+            &state,
+            id,
+            json!({"type": "nvme_tcp_reservation_acquire", "nsid": 1,
+            "reservation_type": "write_exclusive", "current_key": 162}),
+        )
+        .await;
+        assert_eq!(r["status"], "RESERVATION CONFLICT", "the wrong key: {r}");
+        let r = send(
+            &state,
+            id,
+            json!({"type": "nvme_tcp_reservation_acquire", "nsid": 1,
+            "reservation_type": "write_exclusive", "current_key": 161}),
+        )
+        .await;
+        assert_eq!(r["status"], "SUCCESS", "{r}");
+        let r = send(
+            &state,
+            id,
+            json!({"type": "nvme_tcp_reservation_report", "nsid": 1}),
+        )
+        .await;
+        assert_eq!(r["status"], "SUCCESS", "{r}");
+        assert_eq!(r["reservation"]["type"], "write_exclusive", "{r}");
+        assert_eq!(r["reservation"]["registrants"], 1);
+        assert_eq!(r["reservation"]["entries"][0]["key"], 161);
+        assert_eq!(r["reservation"]["entries"][0]["holds_reservation"], true);
+        let r = send(
+            &state,
+            id,
+            json!({"type": "nvme_tcp_reservation_register", "nsid": 1,
+            "action": "replace", "current_key": 161, "new_key": 177}),
+        )
+        .await;
+        assert_eq!(r["status"], "SUCCESS", "{r}");
+        let r = send(
+            &state,
+            id,
+            json!({"type": "nvme_tcp_reservation_release", "nsid": 1,
+            "reservation_type": "write_exclusive", "current_key": 177}),
+        )
+        .await;
+        assert_eq!(r["status"], "SUCCESS", "{r}");
+        let r = send(
+            &state,
+            id,
+            json!({"type": "nvme_tcp_reservation_release", "nsid": 1,
+            "action": "clear", "current_key": 177}),
+        )
+        .await;
+        assert_eq!(r["status"], "SUCCESS", "{r}");
+        let r = send(
+            &state,
+            id,
+            json!({"type": "nvme_tcp_reservation_report", "nsid": 1}),
+        )
+        .await;
+        assert_eq!(r["reservation"]["registrants"], 0, "{r}");
+        // nvmet's file and block backends implement neither Compare, Verify nor Copy: the host
+        // reports the target's refusal by name rather than inventing an answer.
+        for a in [
+            json!({"type": "nvme_tcp_compare", "nsid": 1, "lba": 0, "data": "reserved by netget"}),
+            json!({"type": "nvme_tcp_verify", "nsid": 1, "lba": 0, "blocks": 8}),
+            json!({"type": "nvme_tcp_copy", "nsid": 1, "destination_lba": 100, "ranges": [{"lba": 0, "blocks": 1}]}),
+        ] {
+            let r = send(&state, id, a).await;
+            assert_eq!(r["status"], "INVALID COMMAND OPCODE", "{r}");
+        }
+        let _ = send(&state, id, json!({"type": "nvme_tcp_disconnect"})).await;
     }
 
     impl Drop for Nvmet {

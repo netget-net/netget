@@ -58,6 +58,44 @@ pub struct Started {
     pub state: AppState,
     pub id: ServerId,
     pub port: u16,
+    /// Every status line the target wrote, kept for [`Started::logs`].
+    status: std::sync::Arc<std::sync::Mutex<(mpsc::UnboundedReceiver<String>, Vec<String>)>>,
+}
+
+impl Started {
+    /// The target's status lines so far (its `decision=` lines among them).
+    pub fn logs(&self) -> Vec<String> {
+        let mut s = self.status.lock().unwrap();
+        while let Ok(line) = s.0.try_recv() {
+            s.1.push(line);
+        }
+        s.1.clone()
+    }
+
+    /// The `operation=commands` lines: what each queue received, by command name.
+    pub fn commands(&self) -> Vec<String> {
+        self.logs()
+            .into_iter()
+            .filter(|l| l.contains("operation=commands"))
+            .collect()
+    }
+
+    /// [`commands`](Self::commands), once the admin queue's own line is in. Each queue writes its
+    /// line as it closes, and after a disconnect the admin queue (queue 0, where the
+    /// authentication exchange is counted) can close after the I/O queues: on a CI runner the
+    /// test read the lines first and saw only queues 1 to 4.
+    pub async fn commands_once_admin_closed(&self) -> Vec<String> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let lines = self.commands();
+            if lines.iter().any(|l| l.contains("queue 0 of controller"))
+                || std::time::Instant::now() > deadline
+            {
+                return lines;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
 }
 
 /// Start the NVMe/TCP target on loopback with an unreachable model, so only `handlers` answer.
@@ -75,7 +113,7 @@ pub async fn start_on(
     state
         .set_llm_client(netget::llm::OllamaClient::new("http://127.0.0.1:1"))
         .await;
-    let (tx, _) = mpsc::unbounded_channel();
+    let (tx, rx) = mpsc::unbounded_channel();
     let id = ServerForm {
         protocol: "nvme_tcp".into(),
         port: Some(port),
@@ -103,7 +141,12 @@ pub async fn start_on(
     })
     .await
     .expect("server started");
-    Started { state, id, port }
+    Started {
+        state,
+        id,
+        port,
+        status: std::sync::Arc::new(std::sync::Mutex::new((rx, Vec::new()))),
+    }
 }
 
 /// What the model was shown, per event type, oldest first.
@@ -603,6 +646,35 @@ impl Raw {
             .await
     }
 
+    /// An admin session (ICReq, Connect, CC.EN) as another host; the CNTLID.
+    pub async fn admin_session_as(
+        &mut self,
+        subnqn: &str,
+        hostnqn: &str,
+        hostid: &[u8; 16],
+    ) -> u16 {
+        self.icreq(0, 0).await;
+        let c = self
+            .connect_queue(0, 31, 0, 0, &connect_data(hostid, 0xFFFF, subnqn, hostnqn))
+            .await;
+        assert!(c.ok(), "admin Connect: {c:?}");
+        self.enable().await;
+        (c.dw0 & 0xFFFF) as u16
+    }
+
+    /// ICReq and an I/O queue Connect as another host.
+    pub async fn io_session_as(
+        &mut self,
+        cntlid: u16,
+        subnqn: &str,
+        hostnqn: &str,
+        hostid: &[u8; 16],
+    ) -> Cqe {
+        self.icreq(0, 0).await;
+        self.connect_queue(1, 31, 0, 0, &connect_data(hostid, cntlid, subnqn, hostnqn))
+            .await
+    }
+
     pub async fn identify(&mut self, cns: u8, nsid: u32) -> (Vec<u8>, Cqe) {
         let sqe = Sqe::new(0x06, nsid).cdw(10, cns as u32).transport(4096);
         self.cmd(&sqe, &[]).await
@@ -717,6 +789,231 @@ impl Raw {
             };
         }
         o
+    }
+}
+
+// --------------------------------------------------------- DH-HMAC-CHAP (raw)
+//
+// Written from the NVMe Base specification's DH-HMAC-CHAP section for these tests: the HMAC
+// comes straight from the `hmac`/`sha2` crates, the CRC-32 is computed bit by bit, the DH group
+// prime is copied from RFC 7919 here, and nothing is taken from `netget::server::nvme_tcp::auth`.
+
+/// AUTH-ID values and failure explanations.
+pub const NEGOTIATE: u8 = 0x00;
+pub const CHALLENGE: u8 = 0x01;
+pub const REPLY: u8 = 0x02;
+pub const SUCCESS1: u8 = 0x03;
+pub const SUCCESS2: u8 = 0x04;
+pub const FAILURE2: u8 = 0xF0;
+pub const FAILURE1: u8 = 0xF1;
+pub const AUTH_FAILED: u8 = 0x01;
+pub const HASH_UNUSABLE: u8 = 0x04;
+pub const DHGROUP_UNUSABLE: u8 = 0x05;
+pub const INCORRECT_PAYLOAD: u8 = 0x06;
+pub const INCORRECT_MESSAGE: u8 = 0x07;
+pub const AUTHENTICATION_REQUIRED: (u8, u8) = (1, 0x91);
+pub const RESERVATION_CONFLICT: (u8, u8) = (0, 0x83);
+pub const HOST_ID_INCONSISTENT: (u8, u8) = (0, 0x18);
+pub const COMPARE_FAILURE: (u8, u8) = (2, 0x85);
+pub const SIZE_LIMIT: (u8, u8) = (1, 0x83);
+
+/// RFC 7919 ffdhe2048, generator 2.
+pub const FFDHE2048_P: &str = "FFFFFFFFFFFFFFFFADF85458A2BB4A9AAFDC5620273D3CF1D8B9C583CE2D3695A9E13641146433FBCC939DCE249B3EF97D2FE363630C75D8F681B202AEC4617AD3DF1ED5D5FD65612433F51F5F066ED0856365553DED1AF3B557135E7F57C935984F0C70E0E68B77E2A689DAF3EFE8721DF158A136ADE73530ACCA4F483A797ABC0AB182B324FB61D108A94BB2C8E3FBB96ADAB760D7F4681D4F42A3DE394DF4AE56EDE76372BB190B07A7C8EE0A6D709E02FCE1CDF7E2ECC03404CD28342F619172FE9CE98583FF8E4F1232EEF28183C3FE3B1B4C6FAD733BB5FCBC2EC22005C58EF1837D1683B2C6F34A26C1B2EFFA886B423861285C97FFFFFFFFFFFFFFFF";
+
+/// CRC-32 (IEEE, reflected 0xEDB88320), bit by bit.
+pub fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for b in bytes {
+        crc ^= *b as u32;
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    !crc
+}
+
+/// A `DHHC-1:<hh>:<base64 of key ‖ CRC-32 LE>:` secret.
+pub fn dhhc1(key: &[u8], transform: u8) -> String {
+    use base64::Engine;
+    let mut raw = key.to_vec();
+    raw.extend(crc32(key).to_le_bytes());
+    format!(
+        "DHHC-1:{transform:02}:{}:",
+        base64::engine::general_purpose::STANDARD.encode(raw)
+    )
+}
+
+/// The digest length of hash 1 (SHA-256), 2 (SHA-384) or 3 (SHA-512).
+pub fn hash_len(id: u8) -> usize {
+    match id {
+        1 => 32,
+        2 => 48,
+        _ => 64,
+    }
+}
+
+pub fn digest(id: u8, data: &[u8]) -> Vec<u8> {
+    use sha2::Digest;
+    match id {
+        1 => sha2::Sha256::digest(data).to_vec(),
+        2 => sha2::Sha384::digest(data).to_vec(),
+        _ => sha2::Sha512::digest(data).to_vec(),
+    }
+}
+
+pub fn hmac(id: u8, key: &[u8], parts: &[&[u8]]) -> Vec<u8> {
+    use hmac::{Hmac, Mac};
+    macro_rules! run {
+        ($h:ty) => {{
+            let mut m = <Hmac<$h> as Mac>::new_from_slice(key).unwrap();
+            for p in parts {
+                m.update(p);
+            }
+            m.finalize().into_bytes().to_vec()
+        }};
+    }
+    match id {
+        1 => run!(sha2::Sha256),
+        2 => run!(sha2::Sha384),
+        _ => run!(sha2::Sha512),
+    }
+}
+
+/// A secret's key transformed for use: HMAC(key, NQN ‖ "NVMe-over-Fabrics") with the secret's
+/// own hash, or the key itself for hash 0.
+pub fn transform(key: &[u8], transform: u8, nqn: &str) -> Vec<u8> {
+    if transform == 0 {
+        key.to_vec()
+    } else {
+        hmac(transform, key, &[nqn.as_bytes(), b"NVMe-over-Fabrics"])
+    }
+}
+
+/// HMAC(K, C ‖ S ‖ T_ID ‖ SC_C ‖ label ‖ first NQN ‖ 00h ‖ second NQN), C augmented with the
+/// session key when one is given.
+#[allow(clippy::too_many_arguments)]
+pub fn chap_response(
+    hash: u8,
+    key: &[u8],
+    challenge: &[u8],
+    session: Option<&[u8]>,
+    seq: u32,
+    tid: u16,
+    label: &[u8],
+    first: &str,
+    second: &str,
+) -> Vec<u8> {
+    let c = match session {
+        Some(sk) => hmac(hash, sk, &[challenge]),
+        None => challenge.to_vec(),
+    };
+    hmac(
+        hash,
+        key,
+        &[
+            &c,
+            &seq.to_le_bytes(),
+            &tid.to_le_bytes(),
+            &[0],
+            label,
+            first.as_bytes(),
+            &[0],
+            second.as_bytes(),
+        ],
+    )
+}
+
+/// AUTH_Negotiate: one DH-HMAC-CHAP descriptor offering `hashes` and `groups`.
+pub fn negotiate(tid: u16, hashes: &[u8], groups: &[u8]) -> Vec<u8> {
+    let mut b = vec![0u8; 72];
+    b[1] = NEGOTIATE;
+    b[4..6].copy_from_slice(&tid.to_le_bytes());
+    b[7] = 1; // NAPD
+    b[8] = 1; // AUTHID: DH-HMAC-CHAP
+    b[10] = hashes.len() as u8;
+    b[11] = groups.len() as u8;
+    b[12..12 + hashes.len()].copy_from_slice(hashes);
+    b[42..42 + groups.len()].copy_from_slice(groups);
+    b
+}
+
+/// DH-HMAC-CHAP_Reply.
+pub fn reply(tid: u16, rval: &[u8], c2: Option<&[u8]>, s2: u32, dhv: &[u8]) -> Vec<u8> {
+    let hl = rval.len();
+    let mut b = vec![0u8; 16 + 2 * hl + dhv.len()];
+    b[0] = 1;
+    b[1] = REPLY;
+    b[4..6].copy_from_slice(&tid.to_le_bytes());
+    b[6] = hl as u8;
+    b[8] = c2.is_some() as u8;
+    b[10..12].copy_from_slice(&(dhv.len() as u16).to_le_bytes());
+    b[12..16].copy_from_slice(&s2.to_le_bytes());
+    b[16..16 + hl].copy_from_slice(rval);
+    if let Some(c) = c2 {
+        b[16 + hl..16 + 2 * hl].copy_from_slice(c);
+    }
+    b[16 + 2 * hl..].copy_from_slice(dhv);
+    b
+}
+
+/// An Authentication Send (0x05) or Receive (0x06): SECP E9h, SPSP0/1 01h, TL/AL.
+pub fn auth_sqe(fctype: u8, len: u32) -> Sqe {
+    let mut s = Sqe::fabrics(fctype).u32_at(44, len);
+    s.0[41] = 1;
+    s.0[42] = 1;
+    s.0[43] = 0xE9;
+    s
+}
+
+impl Raw {
+    /// Authentication Send with the message in the capsule.
+    pub async fn auth_send(&mut self, msg: &[u8]) -> Cqe {
+        let sqe = auth_sqe(0x05, msg.len() as u32).in_capsule(msg.len() as u32);
+        self.cmd(&sqe, msg).await.1
+    }
+
+    /// Authentication Receive of `al` bytes.
+    pub async fn auth_receive(&mut self, al: u32) -> (Vec<u8>, Cqe) {
+        let sqe = auth_sqe(0x06, al).transport(al);
+        self.cmd(&sqe, &[]).await
+    }
+
+    /// An Authentication Receive expected to be refused: its status.
+    pub async fn auth_receive_sc(&mut self, al: u32) -> (u8, u8) {
+        let (d, c) = self.auth_receive(al).await;
+        assert!(d.is_empty(), "a refused receive returns no data");
+        c.sc()
+    }
+}
+
+/// A field tshark reads, across every packet, as one list.
+pub fn tshark_values(raw: &Raw, field: &str) -> Vec<String> {
+    raw.oracle()
+        .fields(&[field])
+        .unwrap_or_else(|e| panic!("tshark field {field}: {e}"))
+        .into_iter()
+        .flat_map(|r| {
+            r.into_iter()
+                .flat_map(|c| {
+                    c.split(',')
+                        .map(|v| v.trim().to_string())
+                        .collect::<Vec<_>>()
+                })
+                .filter(|c| !c.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// A number as tshark prints it: decimal, or hex with 0x.
+pub fn number(v: &str) -> Option<u64> {
+    match v.strip_prefix("0x") {
+        Some(h) => u64::from_str_radix(h, 16).ok(),
+        None => v.parse().ok(),
     }
 }
 

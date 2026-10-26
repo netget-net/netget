@@ -9568,6 +9568,7 @@ dependencies = [
  "nfs3_types",
  "nfsserve",
  "nix 0.29.0",
+ "num-bigint 0.4.6",
  "nusb 0.1.14",
  "oauth2",
  "ollama-rs",

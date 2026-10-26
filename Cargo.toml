@@ -385,6 +385,7 @@ naive-cityhash = { version = "0.2" }  # CityHash128 v1.0.2, the ClickHouse frame
 opentelemetry-proto = { package = "netget-opentelemetry-proto", version = "0.29.0", default-features = false, features = ["gen-tonic-messages", "trace", "metrics", "logs", "gen-tonic"] }
 ed25519-dalek = { version = "2.1" }  # Ed25519 signatures for relay identity
 rsa = { version = "0.9", features = ["sha2"] }  # ActivityPub: HTTP signatures (rsa-sha256)
+num-bigint = { version = "0.4" }  # NVMe/TCP DH-HMAC-CHAP: the RFC 7919 ffdhe group exponentiations
 md4 = { version = "0.10" }  # MD4: rsync protocol 29 file and block checksums, and its daemon auth response
 ctr = { version = "0.9" }  # CTR mode for AES
 hkdf = { version = "0.12" }  # HKDF for key derivation in ntor
@@ -655,6 +656,11 @@ overflow-checks = true
 opt-level = 3
 
 [profile.dev.package.rsa]
+opt-level = 3
+
+# NVMe/TCP DH-HMAC-CHAP: an ffdhe8192 exponentiation, unoptimised, takes seconds, and the
+# Linux host gives the whole exchange a timeout of its own.
+[profile.dev.package.num-bigint]
 opt-level = 3
 
 # The browser bundle (crates/netget-web, ./web/build.sh): size over speed. With 68 protocols
