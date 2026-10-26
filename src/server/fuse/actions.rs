@@ -1,9 +1,10 @@
 //! What the model decides for a FUSE mount: what each directory contains (asked once, the first
 //! time something looks inside it) and whether each change a local process asks for may happen.
 //! Reads, lookups, listings, getattr and readlink are answered from the description at no model
-//! cost; every create, write, truncate, attribute change, mkdir, unlink, rmdir, rename and
-//! symlink is one decision, accepted into the mount's in-memory overlay or refused with the
-//! errno the model names.
+//! cost; every create, write, truncate, fallocate, attribute change, mkdir, unlink, rmdir,
+//! rename (exchange included), link, symlink and extended-attribute set or removal is one
+//! decision, accepted into the mount's in-memory overlay or refused with the errno the model
+//! names.
 use crate::llm::actions::{
     protocol_trait::{ActionResult, Protocol, Server},
     ActionDefinition, Parameter, ParameterDefinition, StartupExamples,
@@ -57,7 +58,10 @@ pub fn directory_action() -> ActionDefinition {
          (UTF-8), hex, or extents over its size like a described disk ({offset, text} | \
          {offset, hex} | {offset, length, fill: 0-255}; bytes no extent covers read as \
          zeroes); errors are byte ranges whose reads fail with an errno. A subdirectory may \
-         carry its own entries (described now) or none (asked about when first opened).",
+         carry its own entries (described now) or none (asked about when first opened). A \
+         hardlink entry is another name for a file: its target is the file's absolute path in \
+         the mount, described in this answer or before it. Any entry may carry xattrs, and a \
+         top-level xattrs gives the described directory its own.",
         vec![p(
             "entries",
             "array",
@@ -65,9 +69,12 @@ pub fn directory_action() -> ActionDefinition {
              is 0755), uid, gid, mtime/atime/ctime (Unix seconds); file: text | hex | \
              extents with size, size (default: the text's length), errors ([{offset, length, \
              error: EIO|EACCES|...}]); dir: entries (optional, nested the same way); symlink: \
-             target}], at most 4096 per directory and 16384 per answer, names 1-255 bytes \
+             target; hardlink: target, the absolute path of a file (name, kind and target \
+             only); any but hardlink: xattrs ([{name: user.*|trusted.*|security.*, text | \
+             hex}])}], at most 4096 per directory and 16384 per answer, names 1-255 bytes \
              without '/', 64 directories deep, 16 MiB of text and hex over the whole mount, \
-             files up to 1 GiB",
+             files up to 1 GiB, 1024 names per file, 128 xattrs per node with names of 255 \
+             bytes and values of 64 KiB, 16 MiB of xattrs over the whole mount",
             true,
         )],
         json!({"type": DIRECTORY, "entries": [
@@ -76,7 +83,10 @@ pub fn directory_action() -> ActionDefinition {
              "extents": [{"offset": 0, "hex": "deadbeef"}, {"offset": 4096, "length": 4096, "fill": 255}]},
             {"name": "docs", "kind": "dir", "entries": [{"name": "a.md", "kind": "file", "text": "# A\n"}]},
             {"name": "src", "kind": "dir"},
-            {"name": "latest", "kind": "symlink", "target": "README.txt"}
+            {"name": "latest", "kind": "symlink", "target": "README.txt"},
+            {"name": "README.copy", "kind": "hardlink", "target": "/README.txt"},
+            {"name": "tagged.txt", "kind": "file", "text": "x",
+             "xattrs": [{"name": "user.mime_type", "text": "text/plain"}]}
         ]}),
     )
 }
@@ -306,12 +316,141 @@ pub static MKDIR_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     )
 });
 
-pub static UNLINK_EVENT: LazyLock<EventType> = LazyLock::new(|| {
-    change_event(
+pub static UNLINK_EVENT: LazyLock<EventType> =
+    LazyLock::new(|| {
+        change_event(
         "fuse_unlink",
-        "A process removes a file or symlink. Allow or deny.",
-        vec![path(), p("kind", "string", "file or symlink", true)],
+        "A process removes a name of a file or symlink. Allow or deny. A file with other names \
+         (hard links) keeps them and its content.",
+        vec![
+            path(),
+            p("kind", "string", "file, symlink, fifo, socket, char or block", true),
+            p(
+                "links",
+                "number",
+                "How many names the file has now, this one included",
+                true,
+            ),
+        ],
         "FUSE unlink {path}",
+    )
+    });
+
+pub static LINK_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    change_event(
+        "fuse_link",
+        "A process gives an existing file another name (a hard link, ln without -s): both \
+         names are then one file, its content and attributes shared. Allow or deny.",
+        vec![
+            path(),
+            p(
+                "existing_path",
+                "string",
+                "A name the file already has",
+                true,
+            ),
+            p(
+                "kind",
+                "string",
+                "file, symlink, fifo, socket, char or block",
+                true,
+            ),
+            p(
+                "links",
+                "number",
+                "How many names the file has before this one",
+                true,
+            ),
+        ],
+        "FUSE link {path} -> {existing_path}",
+    )
+});
+
+pub static SETXATTR_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    change_event(
+        "fuse_setxattr",
+        "A process sets an extended attribute (setfattr, setxattr). Allow it (the value is kept \
+         and read back) or deny it.",
+        vec![
+            path(),
+            p(
+                "name",
+                "string",
+                "The attribute's name, namespace included (user.*, trusted.*, security.*)",
+                true,
+            ),
+            p(
+                "value",
+                "string",
+                "The value's first bytes, in the encoding named beside it",
+                true,
+            ),
+            p(
+                "encoding",
+                "string",
+                "utf8 when the value is text, hex otherwise",
+                true,
+            ),
+            p(
+                "value_truncated",
+                "boolean",
+                "Whether value shows only the first bytes",
+                true,
+            ),
+            p("length", "number", "The value's length in bytes", true),
+            p(
+                "mode",
+                "string",
+                "create (XATTR_CREATE), replace (XATTR_REPLACE) or create_or_replace",
+                true,
+            ),
+            p(
+                "replaces",
+                "boolean",
+                "Whether the attribute exists already",
+                true,
+            ),
+        ],
+        "FUSE setxattr {path} {name}",
+    )
+});
+
+pub static REMOVEXATTR_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    change_event(
+        "fuse_removexattr",
+        "A process removes an extended attribute (setfattr -x, removexattr). Allow or deny.",
+        vec![path(), p("name", "string", "The attribute's name", true)],
+        "FUSE removexattr {path} {name}",
+    )
+});
+
+pub static FALLOCATE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    change_event(
+        "fuse_fallocate",
+        "A process allocates or zeroes part of a file (fallocate, posix_fallocate). allocate \
+         reserves the range (and grows the file unless keep_size); punch_hole makes the range \
+         read as zeroes; zero_range zeroes and reserves it (and grows the file unless \
+         keep_size). Allow or deny.",
+        vec![
+            path(),
+            p("offset", "number", "Byte offset of the range", true),
+            p("length", "number", "Bytes in the range", true),
+            p(
+                "operation",
+                "string",
+                "allocate, punch_hole or zero_range",
+                true,
+            ),
+            p(
+                "keep_size",
+                "boolean",
+                "Whether the file's size stays as it is",
+                true,
+            ),
+            p("mode", "number", "The fallocate(2) mode bits", true),
+            p("size_before", "number", "The file's size before", true),
+        ],
+        "FUSE fallocate {path} {operation} offset={offset} length={length}",
     )
 });
 
@@ -327,7 +466,8 @@ pub static RMDIR_EVENT: LazyLock<EventType> = LazyLock::new(|| {
 pub static RENAME_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     change_event(
         "fuse_rename",
-        "A process moves or renames an entry; if new_path exists it is replaced. Allow or deny.",
+        "A process moves or renames an entry; if new_path exists it is replaced, or with \
+         exchange the two swap places. Allow or deny.",
         vec![
             path(),
             p("new_path", "string", "The path it moves to", true),
@@ -336,6 +476,13 @@ pub static RENAME_EVENT: LazyLock<EventType> = LazyLock::new(|| {
                 "replaces",
                 "boolean",
                 "Whether something at new_path is replaced",
+                true,
+            ),
+            p(
+                "exchange",
+                "boolean",
+                "RENAME_EXCHANGE: path and new_path both exist and swap places; nothing is \
+                 replaced",
                 true,
             ),
         ],
@@ -427,6 +574,10 @@ impl Protocol for FuseProtocol {
             RMDIR_EVENT.clone(),
             RENAME_EVENT.clone(),
             SYMLINK_EVENT.clone(),
+            LINK_EVENT.clone(),
+            SETXATTR_EVENT.clone(),
+            REMOVEXATTR_EVENT.clone(),
+            FALLOCATE_EVENT.clone(),
         ]
     }
     fn get_startup_parameters(&self) -> Vec<ParameterDefinition> {
@@ -498,9 +649,9 @@ impl Protocol for FuseProtocol {
             .state(DevelopmentState::Experimental)
             .privilege_requirement(PrivilegeRequirement::None)
             .implementation("Linux FUSE through the fuser crate (0.18, MIT, no libfuse: /dev/fuse is mounted by the setuid fusermount3 helper with auto_unmount, and fuser speaks the kernel protocol); a lazily described file tree with an in-memory overlay (src/server/described_tree.rs, content through src/server/described_disk.rs); one worker per mount asks the model one decision at a time under a deadline")
-            .llm_control("What each directory contains (names, kinds, modes, owners, times, file content as text/hex/extents with failing regions, symlink targets), asked once per directory when something first looks inside it; and every change a process asks for - create, write, truncate, chmod/chown/utimes, mkdir, unlink, rmdir, rename, symlink - allowed into the overlay or refused with an errno")
-            .e2e_testing("tests/server/fuse: ordinary tools on the mount (ls, stat, cat, dd at offsets, find, sha256sum against the described bytes, cp in and out, mv, rm, mkdir/rmdir, ln -s/readlink, chmod, truncate) and Python's os.walk/os.stat/open as separate processes, with the model calls each operation caused; deadline, model failure, depth, overlay and refused-write bounds; stop and a killed daemon unmount; pjdfstest (the C suite) on the mount, 198 of 238 files passing in full, the rest on hard links, device nodes in a user namespace and the 1 GiB file bound; Linux only, in the fuse pair job. There is no wire: the kernel's FUSE driver is the peer, so no pcap oracle applies")
-            .notes("Experimental: the peer is the Linux kernel's FUSE driver driven by coreutils, findutils, Python and pjdfstest, measured on a Linux 7.2 aarch64 kernel; in CI only the fuse pair job runs it, which had not run when this landed. Linux only (no macFUSE or FUSE-T: NetGet links neither). FIFOs, sockets and device nodes are names only (the kernel serves their I/O; the mount is nodev). Not implemented: hard links (EPERM), extended attributes (none listed; setting one is ENOTSUP), file locks beyond the kernel's own, fallocate. A description, decision or model failure past decision_timeout_secs is EIO; a model refusal is its errno. Bounds: 65536 entries, 4096 per directory, names of 255 bytes, 64 directories deep, files up to 1 GiB, 16 MiB of described text and hex, the overlay (default 64 MiB), 128 KiB per write request, 64 requests waiting for the model, three description attempts per directory.")
+            .llm_control("What each directory contains (names, kinds, modes, owners, times, file content as text/hex/extents with failing regions, symlink targets, hard links naming a file by path, extended attributes on any node), asked once per directory when something first looks inside it; and every change a process asks for - create, write, truncate, fallocate (allocate, punch hole, zero range), chmod/chown/utimes, mkdir, unlink, rmdir, rename and RENAME_EXCHANGE, link, symlink, setxattr, removexattr - allowed into the overlay or refused with an errno")
+            .e2e_testing("tests/server/fuse: ordinary tools on the mount (ls, stat, cat, dd at offsets, find and find -samefile, sha256sum against the described bytes, cp in and out, mv, rm, mkdir/rmdir, ln and ln -s/readlink, chmod, truncate, setfattr/getfattr, fallocate) and Python's os.walk/os.stat/open/os.setxattr/os.posix_fallocate plus libc getxattr and renameat2 through ctypes, as separate processes, with the model calls each operation caused; deadline, model failure (every decision fails closed), depth, overlay (writes and fallocate), link, xattr and refused-change bounds; stop and a killed daemon unmount; pjdfstest (the C suite) on the mount, 235 of 238 files passing in full as real root and 203 where device nodes are refused, the rest on the 1 GiB file bound and pjdfstest's own TODO cases; Linux only, in the fuse pair job. There is no wire: the kernel's FUSE driver is the peer, so no pcap oracle applies")
+            .notes("Experimental: the peer is the Linux kernel's FUSE driver driven by coreutils, findutils, attr, util-linux, Python and pjdfstest, measured on a Linux 7.2 aarch64 kernel unprivileged (fuse3 3.14 and 3.18), as root in a user namespace and as real root; in CI only the fuse pair job runs it. Linux only (no macFUSE or FUSE-T: NetGet links neither). FIFOs, sockets and device nodes are names only (the kernel serves their I/O; the mount is nodev). Hard links share one inode (content, attributes, xattrs) and count nlink; extended attributes are user.*, trusted.* and security.* (the kernel decides who may set the last two). Not implemented: RENAME_WHITEOUT (EINVAL), POSIX ACLs, fallocate's collapse/insert/unshare ranges (EOPNOTSUPP), file locks beyond the kernel's own, copy_file_range and SEEK_DATA/SEEK_HOLE (the kernel falls back). A description, decision or model failure past decision_timeout_secs is EIO; a model refusal is its errno. Bounds: 65536 entries, 4096 per directory, names of 255 bytes, 64 directories deep, files up to 1 GiB, 16 MiB of described text and hex, the overlay (default 64 MiB, fallocate included), 128 KiB per write request, 64 requests waiting for the model, three description attempts per directory, 1024 names per file and 65536 hard links, xattr names of 255 bytes, values of 64 KiB, 128 per node and 16 MiB in all.")
             .answers_on_failure()
             .request_only("The kernel asks and the daemon answers: a FUSE daemon sends nothing that is not the reply to a kernel request, and this one sends no notifications")
             .max_inbound_bytes(super::MAX_WRITE_BYTES as usize)

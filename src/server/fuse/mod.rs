@@ -16,7 +16,9 @@ use crate::llm::actions::protocol_trait::ActionResult;
 use crate::logging::emit::Log;
 use crate::protocol::{Event, EventType, SpawnContext};
 use crate::server::connection::ConnectionId;
-use crate::server::described_tree::{self as tree, Attr, Changes, Kind, Stop, Tree};
+use crate::server::described_tree::{
+    self as tree, Allocation, Attr, Changes, Kind, Stop, Tree, XattrMode,
+};
 use crate::state::server::{ConnectionState, ConnectionStatus, ProtocolConnectionInfo};
 use crate::utils::sanitize;
 use crate::utils::wire_failure::WireFailure;
@@ -475,6 +477,33 @@ enum Job {
         new_parent: u64,
         new_name: String,
         no_replace: bool,
+        exchange: bool,
+        reply: ReplyEmpty,
+    },
+    Link {
+        ino: u64,
+        new_parent: u64,
+        new_name: String,
+        reply: ReplyEntry,
+    },
+    Setxattr {
+        ino: u64,
+        name: String,
+        value: Vec<u8>,
+        mode: XattrMode,
+        reply: ReplyEmpty,
+    },
+    Removexattr {
+        ino: u64,
+        name: String,
+        reply: ReplyEmpty,
+    },
+    Fallocate {
+        ino: u64,
+        offset: u64,
+        length: u64,
+        how: Allocation,
+        mode: i32,
         reply: ReplyEmpty,
     },
     Write {
@@ -503,6 +532,10 @@ impl Job {
             Job::Unlink { .. } => "unlink",
             Job::Rmdir { .. } => "rmdir",
             Job::Rename { .. } => "rename",
+            Job::Link { .. } => "link",
+            Job::Setxattr { .. } => "setxattr",
+            Job::Removexattr { .. } => "removexattr",
+            Job::Fallocate { .. } => "fallocate",
             Job::Write { .. } => "write",
             Job::Setattr { size: Some(_), .. } => "truncate",
             Job::Setattr { .. } => "setattr",
@@ -516,12 +549,16 @@ impl Job {
             Job::Lookup { reply, .. }
             | Job::Mknod { reply, .. }
             | Job::Mkdir { reply, .. }
-            | Job::Symlink { reply, .. } => reply.error(e),
+            | Job::Symlink { reply, .. }
+            | Job::Link { reply, .. } => reply.error(e),
             Job::Readdir { reply, .. } => reply.error(e),
             Job::Create { reply, .. } => reply.error(e),
-            Job::Unlink { reply, .. } | Job::Rmdir { reply, .. } | Job::Rename { reply, .. } => {
-                reply.error(e)
-            }
+            Job::Unlink { reply, .. }
+            | Job::Rmdir { reply, .. }
+            | Job::Rename { reply, .. }
+            | Job::Setxattr { reply, .. }
+            | Job::Removexattr { reply, .. }
+            | Job::Fallocate { reply, .. } => reply.error(e),
             Job::Write { reply, .. } => reply.error(e),
             Job::Setattr { reply, .. } => reply.error(e),
         }
@@ -878,7 +915,19 @@ impl Filesystem for FuseFs {
         if self.read_only {
             return reply.error(self.refuse_read_only("rename"));
         }
-        if flags.intersects(RenameFlags::RENAME_EXCHANGE | RenameFlags::RENAME_WHITEOUT) {
+        let exchange = flags.contains(RenameFlags::RENAME_EXCHANGE);
+        let no_replace = flags.contains(RenameFlags::RENAME_NOREPLACE);
+        // A whiteout is overlayfs's marker for a deleted lower entry, which this tree has no
+        // notion of; EXCHANGE with NOREPLACE contradicts itself. Both are EINVAL, as from a
+        // filesystem that does not support them, and the model is not asked.
+        let known = RenameFlags::RENAME_EXCHANGE | RenameFlags::RENAME_NOREPLACE;
+        if !(flags - known).is_empty() || (exchange && no_replace) {
+            Log::new(Some(&self.status_tx)).info(format!(
+                "FUSE {} operation=rename decision=protocol_refusal flags {:#x} (whiteout, or \
+                 exchange with noreplace) answered EINVAL",
+                self.mount_label,
+                flags.bits()
+            ));
             return reply.error(Errno::EINVAL);
         }
         let (Some(name), Some(new_name)) = (name_of(name), name_of(newname)) else {
@@ -891,7 +940,8 @@ impl Filesystem for FuseFs {
                 name,
                 new_parent: newparent.0,
                 new_name,
-                no_replace: flags.contains(RenameFlags::RENAME_NOREPLACE),
+                no_replace,
+                exchange,
                 reply,
             },
         );
@@ -899,14 +949,30 @@ impl Filesystem for FuseFs {
 
     fn link(
         &self,
-        _req: &Request,
-        _ino: INodeNo,
-        _newparent: INodeNo,
-        _newname: &OsStr,
+        req: &Request,
+        ino: INodeNo,
+        newparent: INodeNo,
+        newname: &OsStr,
         reply: ReplyEntry,
     ) {
-        // Hard links: not implemented (every node has one parent and one name).
-        reply.error(Errno::EPERM);
+        if self.read_only {
+            return reply.error(self.refuse_read_only("link"));
+        }
+        if newname.len() > tree::MAX_NAME_BYTES {
+            return reply.error(Errno::ENAMETOOLONG);
+        }
+        let Some(new_name) = name_of(newname) else {
+            return reply.error(Errno::EINVAL);
+        };
+        self.enqueue(
+            req,
+            Job::Link {
+                ino: ino.0,
+                new_parent: newparent.0,
+                new_name,
+                reply,
+            },
+        );
     }
 
     fn open(&self, _req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
@@ -1052,38 +1118,114 @@ impl Filesystem for FuseFs {
 
     fn setxattr(
         &self,
-        _req: &Request,
-        _ino: INodeNo,
-        _name: &OsStr,
-        _value: &[u8],
-        _flags: i32,
-        _position: u32,
+        req: &Request,
+        ino: INodeNo,
+        name: &OsStr,
+        value: &[u8],
+        flags: i32,
+        position: u32,
         reply: ReplyEmpty,
     ) {
-        reply.error(Errno::from_i32(libc::ENOTSUP));
+        if self.read_only {
+            return reply.error(self.refuse_read_only("setxattr"));
+        }
+        let mode = match flags {
+            0 => XattrMode::Either,
+            libc::XATTR_CREATE => XattrMode::Create,
+            libc::XATTR_REPLACE => XattrMode::Replace,
+            _ => return reply.error(Errno::EINVAL),
+        };
+        // `position` is macOS's resource-fork offset; Linux always sends 0.
+        if position != 0 {
+            return reply.error(Errno::EINVAL);
+        }
+        let Some(name) = name_of(name) else {
+            return reply.error(Errno::EOPNOTSUPP);
+        };
+        self.enqueue(
+            req,
+            Job::Setxattr {
+                ino: ino.0,
+                name,
+                value: value.to_vec(),
+                mode,
+                reply,
+            },
+        );
     }
 
-    fn getxattr(
-        &self,
-        _req: &Request,
-        _ino: INodeNo,
-        _name: &OsStr,
-        _size: u32,
-        reply: ReplyXattr,
-    ) {
-        reply.error(Errno::from_i32(libc::ENODATA));
-    }
-
-    fn listxattr(&self, _req: &Request, _ino: INodeNo, size: u32, reply: ReplyXattr) {
-        if size == 0 {
-            reply.size(0);
-        } else {
-            reply.data(&[]);
+    /// Answered from the tree at no model cost. A size of 0 asks for the value's length; a
+    /// buffer too small for it is ERANGE; a name the node does not have is ENODATA.
+    fn getxattr(&self, _req: &Request, ino: INodeNo, name: &OsStr, size: u32, reply: ReplyXattr) {
+        let Some(name) = name_of(name) else {
+            return reply.error(Errno::EOPNOTSUPP);
+        };
+        let t = lock(&self.tree);
+        match t.getxattr(ino.0, &name) {
+            Ok(v) => xattr_reply(v, size, reply),
+            Err(Stop::Errno(c)) => reply.error(Errno::from_i32(c)),
+            Err(Stop::Describe(_)) => reply.error(Errno::EIO),
         }
     }
 
-    fn removexattr(&self, _req: &Request, _ino: INodeNo, _name: &OsStr, reply: ReplyEmpty) {
-        reply.error(Errno::from_i32(libc::ENODATA));
+    fn listxattr(&self, _req: &Request, ino: INodeNo, size: u32, reply: ReplyXattr) {
+        let list = lock(&self.tree).listxattr(ino.0);
+        match list {
+            Ok(v) => xattr_reply(&v, size, reply),
+            Err(Stop::Errno(c)) => reply.error(Errno::from_i32(c)),
+            Err(Stop::Describe(_)) => reply.error(Errno::EIO),
+        }
+    }
+
+    fn removexattr(&self, req: &Request, ino: INodeNo, name: &OsStr, reply: ReplyEmpty) {
+        if self.read_only {
+            return reply.error(self.refuse_read_only("removexattr"));
+        }
+        let Some(name) = name_of(name) else {
+            return reply.error(Errno::EOPNOTSUPP);
+        };
+        self.enqueue(
+            req,
+            Job::Removexattr {
+                ino: ino.0,
+                name,
+                reply,
+            },
+        );
+    }
+
+    fn fallocate(
+        &self,
+        req: &Request,
+        ino: INodeNo,
+        _fh: FileHandle,
+        offset: u64,
+        length: u64,
+        mode: i32,
+        reply: ReplyEmpty,
+    ) {
+        if self.read_only {
+            return reply.error(self.refuse_read_only("fallocate"));
+        }
+        let Some(how) = Allocation::from_mode(mode) else {
+            Log::new(Some(&self.status_tx)).info(format!(
+                "FUSE {} operation=fallocate decision=protocol_refusal mode {mode:#x} is not \
+                 implemented; answered EOPNOTSUPP",
+                self.mount_label
+            ));
+            return reply.error(Errno::EOPNOTSUPP);
+        };
+        self.enqueue(
+            req,
+            Job::Fallocate {
+                ino: ino.0,
+                offset,
+                length,
+                how,
+                mode,
+                reply,
+            },
+        );
     }
 
     fn create(
@@ -1112,6 +1254,18 @@ impl Filesystem for FuseFs {
                 reply,
             },
         );
+    }
+}
+
+/// An extended attribute's value or the name list: its length when `size` is 0, ERANGE when it
+/// does not fit in `size`.
+fn xattr_reply(v: &[u8], size: u32, reply: ReplyXattr) {
+    if size == 0 {
+        reply.size(v.len() as u32);
+    } else if v.len() > size as usize {
+        reply.error(Errno::ERANGE);
+    } else {
+        reply.data(v);
     }
 }
 
@@ -1551,11 +1705,51 @@ impl Worker {
                 new_parent,
                 new_name,
                 no_replace,
+                exchange,
                 reply,
             } => match self
                 .rename(
-                    parent, &name, new_parent, &new_name, no_replace, who, deadline,
+                    parent, &name, new_parent, &new_name, no_replace, exchange, who, deadline,
                 )
+                .await
+            {
+                Ok(()) => reply.ok(),
+                Err(c) => reply.error(Errno::from_i32(c)),
+            },
+            Job::Link {
+                ino,
+                new_parent,
+                new_name,
+                reply,
+            } => match self.link(ino, new_parent, &new_name, who, deadline).await {
+                Ok(a) => reply.entry(&TTL, &file_attr(&a), Generation(0)),
+                Err(c) => reply.error(Errno::from_i32(c)),
+            },
+            Job::Setxattr {
+                ino,
+                name,
+                value,
+                mode,
+                reply,
+            } => match self.setxattr(ino, &name, &value, mode, who, deadline).await {
+                Ok(()) => reply.ok(),
+                Err(c) => reply.error(Errno::from_i32(c)),
+            },
+            Job::Removexattr { ino, name, reply } => {
+                match self.removexattr(ino, &name, who, deadline).await {
+                    Ok(()) => reply.ok(),
+                    Err(c) => reply.error(Errno::from_i32(c)),
+                }
+            }
+            Job::Fallocate {
+                ino,
+                offset,
+                length,
+                how,
+                mode,
+                reply,
+            } => match self
+                .fallocate(ino, offset, length, how, mode, who, deadline)
                 .await
             {
                 Ok(()) => reply.ok(),
@@ -1708,8 +1902,15 @@ impl Worker {
         let event_type: &'static EventType = if dir {
             &actions::RMDIR_EVENT
         } else {
-            let kind = lock(&self.tree).kind(ino).unwrap_or(Kind::File);
+            let (kind, links) = {
+                let t = lock(&self.tree);
+                (
+                    t.kind(ino).unwrap_or(Kind::File),
+                    t.attr(ino).map_or(1, |a| a.nlink),
+                )
+            };
             fields.insert("kind".into(), json!(kind.name()));
+            fields.insert("links".into(), json!(links));
             &actions::UNLINK_EVENT
         };
         self.decide(op, &path, event_type, fields, who, deadline)
@@ -1733,6 +1934,7 @@ impl Worker {
         new_parent: u64,
         new_name: &str,
         no_replace: bool,
+        exchange: bool,
         who: Who,
         deadline: tokio::time::Instant,
     ) -> std::result::Result<(), i32> {
@@ -1745,11 +1947,17 @@ impl Worker {
         };
         let replaces = match self
             .settle("rename", Some(name), who, deadline, |t| {
-                t.check_rename(parent, name, new_parent, new_name, no_replace)
+                if exchange {
+                    t.check_exchange(parent, name, new_parent, new_name)
+                        .map(|_| false)
+                } else {
+                    t.check_rename(parent, name, new_parent, new_name, no_replace)
+                        .map(|r| r.is_some())
+                }
             })
             .await
         {
-            Ok(r) => r.is_some(),
+            Ok(r) => r,
             Err(c) => return Err(self.refused("rename", &path, c)),
         };
         let kind = {
@@ -1762,6 +1970,7 @@ impl Worker {
         fields.insert("new_path".into(), json!(new_path));
         fields.insert("kind".into(), json!(kind));
         fields.insert("replaces".into(), json!(replaces));
+        fields.insert("exchange".into(), json!(exchange));
         self.decide(
             "rename",
             &path,
@@ -1771,8 +1980,167 @@ impl Worker {
             deadline,
         )
         .await?;
-        let r = lock(&self.tree).rename(parent, name, new_parent, new_name, no_replace);
+        let r = {
+            let mut t = lock(&self.tree);
+            if exchange {
+                t.exchange(parent, name, new_parent, new_name)
+            } else {
+                t.rename(parent, name, new_parent, new_name, no_replace)
+            }
+        };
         self.applied("rename", &path, r)
+    }
+
+    async fn link(
+        &self,
+        ino: u64,
+        new_parent: u64,
+        new_name: &str,
+        who: Who,
+        deadline: tokio::time::Instant,
+    ) -> std::result::Result<Attr, i32> {
+        let path = lock(&self.tree).child_path(new_parent, new_name);
+        if let Err(c) = self
+            .settle("link", Some(new_name), who, deadline, |t| {
+                t.check_link(ino, new_parent, new_name)
+            })
+            .await
+        {
+            return Err(self.refused("link", &path, c));
+        }
+        let (existing, kind, links) = {
+            let t = lock(&self.tree);
+            let a = t.attr(ino);
+            (
+                t.path(ino),
+                a.as_ref().map_or(Kind::File, |a| a.kind),
+                a.map_or(0, |a| a.nlink),
+            )
+        };
+        let mut fields = serde_json::Map::new();
+        fields.insert("existing_path".into(), json!(existing));
+        fields.insert("kind".into(), json!(kind.name()));
+        fields.insert("links".into(), json!(links));
+        self.decide("link", &path, &actions::LINK_EVENT, fields, who, deadline)
+            .await?;
+        let r = lock(&self.tree).link(ino, new_parent, new_name);
+        self.applied("link", &path, r)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn setxattr(
+        &self,
+        ino: u64,
+        name: &str,
+        value: &[u8],
+        mode: XattrMode,
+        who: Who,
+        deadline: tokio::time::Instant,
+    ) -> std::result::Result<(), i32> {
+        let (path, check) = {
+            let t = lock(&self.tree);
+            (t.path(ino), t.check_setxattr(ino, name, value.len(), mode))
+        };
+        let replaces = match check {
+            Ok(r) => r,
+            Err(Stop::Errno(c)) => return Err(self.refused("setxattr", &path, c)),
+            Err(Stop::Describe(_)) => return Err(self.refused("setxattr", &path, libc::EIO)),
+        };
+        let (shown, encoding, truncated) = preview(value);
+        let mut fields = serde_json::Map::new();
+        fields.insert("name".into(), json!(name));
+        fields.insert("value".into(), json!(shown));
+        fields.insert("encoding".into(), json!(encoding));
+        fields.insert("value_truncated".into(), json!(truncated));
+        fields.insert("length".into(), json!(value.len()));
+        fields.insert("mode".into(), json!(mode.name()));
+        fields.insert("replaces".into(), json!(replaces));
+        self.decide(
+            "setxattr",
+            &path,
+            &actions::SETXATTR_EVENT,
+            fields,
+            who,
+            deadline,
+        )
+        .await?;
+        let r = lock(&self.tree).setxattr(ino, name, value, mode);
+        self.applied("setxattr", &path, r)
+    }
+
+    async fn removexattr(
+        &self,
+        ino: u64,
+        name: &str,
+        who: Who,
+        deadline: tokio::time::Instant,
+    ) -> std::result::Result<(), i32> {
+        let (path, check) = {
+            let t = lock(&self.tree);
+            (t.path(ino), t.check_removexattr(ino, name))
+        };
+        match check {
+            Ok(()) => {}
+            Err(Stop::Errno(c)) => return Err(self.refused("removexattr", &path, c)),
+            Err(Stop::Describe(_)) => return Err(self.refused("removexattr", &path, libc::EIO)),
+        }
+        let mut fields = serde_json::Map::new();
+        fields.insert("name".into(), json!(name));
+        self.decide(
+            "removexattr",
+            &path,
+            &actions::REMOVEXATTR_EVENT,
+            fields,
+            who,
+            deadline,
+        )
+        .await?;
+        let r = lock(&self.tree).removexattr(ino, name);
+        self.applied("removexattr", &path, r)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn fallocate(
+        &self,
+        ino: u64,
+        offset: u64,
+        length: u64,
+        how: Allocation,
+        mode: i32,
+        who: Who,
+        deadline: tokio::time::Instant,
+    ) -> std::result::Result<(), i32> {
+        let (path, size_before, check) = {
+            let t = lock(&self.tree);
+            (
+                t.path(ino),
+                t.size(ino).unwrap_or(0),
+                t.check_fallocate(ino, offset, length, how),
+            )
+        };
+        match check {
+            Ok(_) => {}
+            Err(Stop::Errno(c)) => return Err(self.refused("fallocate", &path, c)),
+            Err(Stop::Describe(_)) => return Err(self.refused("fallocate", &path, libc::EIO)),
+        }
+        let mut fields = serde_json::Map::new();
+        fields.insert("offset".into(), json!(offset));
+        fields.insert("length".into(), json!(length));
+        fields.insert("operation".into(), json!(how.name()));
+        fields.insert("keep_size".into(), json!(how.keep_size()));
+        fields.insert("mode".into(), json!(mode));
+        fields.insert("size_before".into(), json!(size_before));
+        self.decide(
+            "fallocate",
+            &path,
+            &actions::FALLOCATE_EVENT,
+            fields,
+            who,
+            deadline,
+        )
+        .await?;
+        let r = lock(&self.tree).fallocate(ino, offset, length, how);
+        self.applied("fallocate", &path, r)
     }
 
     async fn write(
