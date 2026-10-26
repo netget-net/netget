@@ -75,8 +75,11 @@ fn peer_payload(p: &pdu::Pdu) {
                     &mut target,
                     k,
                     v,
-                    text::DigestPreference::Either,
-                    true,
+                    &text::TargetOffer {
+                        max_connections: 8,
+                        error_recovery_level: 2,
+                        ..Default::default()
+                    },
                 );
                 let _ = text::apply_as_initiator(&mut initiator, k, v);
                 if let Some(b) = chap::decode_binary(v) {

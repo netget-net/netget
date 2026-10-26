@@ -68,7 +68,162 @@ pub mod reject {
     pub const SNACK_REJECT: u8 = 0x03;
     pub const PROTOCOL_ERROR: u8 = 0x04;
     pub const COMMAND_NOT_SUPPORTED: u8 = 0x05;
+    pub const TASK_IN_PROGRESS: u8 = 0x07;
+    pub const INVALID_DATA_ACK: u8 = 0x08;
     pub const INVALID_PDU_FIELD: u8 = 0x09;
+}
+
+/// Task management functions (RFC 7143 §11.5.1; 9-12 from RFC 7144) and responses (§11.6.1).
+pub mod tmf {
+    pub const ABORT_TASK: u8 = 1;
+    pub const ABORT_TASK_SET: u8 = 2;
+    pub const CLEAR_ACA: u8 = 3;
+    pub const CLEAR_TASK_SET: u8 = 4;
+    pub const LOGICAL_UNIT_RESET: u8 = 5;
+    pub const TARGET_WARM_RESET: u8 = 6;
+    pub const TARGET_COLD_RESET: u8 = 7;
+    pub const TASK_REASSIGN: u8 = 8;
+    pub const QUERY_TASK: u8 = 9;
+    pub const QUERY_ASYNC_EVENT: u8 = 12;
+
+    pub const FUNCTION_COMPLETE: u8 = 0;
+    pub const TASK_DOES_NOT_EXIST: u8 = 1;
+    pub const LUN_DOES_NOT_EXIST: u8 = 2;
+    pub const TASK_STILL_ALLEGIANT: u8 = 3;
+    pub const REASSIGNMENT_NOT_SUPPORTED: u8 = 4;
+    pub const NOT_SUPPORTED: u8 = 5;
+    pub const AUTHORIZATION_FAILED: u8 = 6;
+    pub const REJECTED: u8 = 255;
+
+    /// The function's name in events and logs.
+    pub fn name(f: u8) -> &'static str {
+        match f {
+            ABORT_TASK => "abort_task",
+            ABORT_TASK_SET => "abort_task_set",
+            CLEAR_ACA => "clear_aca",
+            CLEAR_TASK_SET => "clear_task_set",
+            LOGICAL_UNIT_RESET => "logical_unit_reset",
+            TARGET_WARM_RESET => "target_warm_reset",
+            TARGET_COLD_RESET => "target_cold_reset",
+            TASK_REASSIGN => "task_reassign",
+            QUERY_TASK => "query_task",
+            10 => "query_task_set",
+            11 => "i_t_nexus_reset",
+            QUERY_ASYNC_EVENT => "query_async_event",
+            _ => "unassigned",
+        }
+    }
+
+    /// A function by its name, for the initiator's actions.
+    pub fn by_name(name: &str) -> Option<u8> {
+        (1..=12).find(|f| self::name(*f) == name)
+    }
+
+    pub fn response_name(r: u8) -> &'static str {
+        match r {
+            FUNCTION_COMPLETE => "function_complete",
+            TASK_DOES_NOT_EXIST => "task_does_not_exist",
+            LUN_DOES_NOT_EXIST => "lun_does_not_exist",
+            TASK_STILL_ALLEGIANT => "task_still_allegiant",
+            REASSIGNMENT_NOT_SUPPORTED => "task_allegiance_reassignment_not_supported",
+            NOT_SUPPORTED => "function_not_supported",
+            AUTHORIZATION_FAILED => "function_authorization_failed",
+            REJECTED => "function_rejected",
+            _ => "unknown_response",
+        }
+    }
+}
+
+/// SNACK types (RFC 7143 §11.16.1).
+pub mod snack {
+    pub const DATA_R2T: u8 = 0;
+    pub const STATUS: u8 = 1;
+    pub const DATA_ACK: u8 = 2;
+    pub const R_DATA: u8 = 3;
+}
+
+/// Logout reasons (§11.14.1) and responses (§11.15.1).
+pub mod logout {
+    pub const CLOSE_SESSION: u8 = 0;
+    pub const CLOSE_CONNECTION: u8 = 1;
+    pub const REMOVE_FOR_RECOVERY: u8 = 2;
+
+    pub const CLOSED: u8 = 0;
+    pub const CID_NOT_FOUND: u8 = 1;
+    pub const RECOVERY_NOT_SUPPORTED: u8 = 2;
+    pub const CLEANUP_FAILED: u8 = 3;
+}
+
+/// A Task Management Function Request's fields (RFC 7143 §11.5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TmfRequest {
+    pub function: u8,
+    pub lun: [u8; 8],
+    pub itt: u32,
+    pub referenced: u32,
+    pub cmd_sn: u32,
+    pub ref_cmd_sn: u32,
+    pub exp_data_sn: u32,
+    pub immediate: bool,
+}
+
+impl TmfRequest {
+    pub fn decode(p: &Pdu) -> Self {
+        Self {
+            function: p.flags() & 0x7F,
+            lun: p.lun(),
+            itt: p.itt(),
+            referenced: p.u32_at(20),
+            cmd_sn: p.u32_at(24),
+            ref_cmd_sn: p.u32_at(32),
+            exp_data_sn: p.u32_at(36),
+            immediate: p.immediate(),
+        }
+    }
+}
+
+/// A SNACK Request's fields (RFC 7143 §11.16).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SnackRequest {
+    pub kind: u8,
+    pub lun: [u8; 8],
+    pub itt: u32,
+    /// The Target Transfer Tag (DataACK) or SNACK Tag (R-Data SNACK).
+    pub tag: u32,
+    pub beg_run: u32,
+    pub run_length: u32,
+}
+
+impl SnackRequest {
+    pub fn decode(p: &Pdu) -> Self {
+        Self {
+            kind: p.flags() & 0x0F,
+            lun: p.lun(),
+            itt: p.itt(),
+            tag: p.u32_at(20),
+            beg_run: p.u32_at(40),
+            run_length: p.u32_at(44),
+        }
+    }
+
+    /// The sequence numbers a run asks for, of the `sent` numbered PDUs (0..sent) the first
+    /// `acked` of which the initiator has already acknowledged: `Err` when it names one that was
+    /// never sent or is acknowledged (RFC 7143 §11.16: a Protocol Error Reject). BegRun 0 with
+    /// RunLength 0 means every unacknowledged one; RunLength 0 alone, all from BegRun.
+    pub fn run(&self, sent: u32, acked: u32) -> Result<std::ops::Range<u32>, ()> {
+        if self.beg_run == 0 && self.run_length == 0 {
+            return Ok(acked.min(sent)..sent);
+        }
+        let end = if self.run_length == 0 {
+            sent
+        } else {
+            self.beg_run.checked_add(self.run_length).ok_or(())?
+        };
+        if self.beg_run < acked || end > sent || self.beg_run >= end {
+            return Err(());
+        }
+        Ok(self.beg_run..end)
+    }
 }
 
 /// Login status class and detail (RFC 7143 §11.13.5), as the 16-bit pair.
@@ -80,6 +235,7 @@ pub mod login_status {
     pub const NOT_FOUND: u16 = 0x0203;
     pub const TARGET_REMOVED: u16 = 0x0204;
     pub const UNSUPPORTED_VERSION: u16 = 0x0205;
+    pub const TOO_MANY_CONNECTIONS: u16 = 0x0206;
     pub const MISSING_PARAMETER: u16 = 0x0207;
     pub const SESSION_TYPE_NOT_SUPPORTED: u16 = 0x0209;
     pub const SESSION_DOES_NOT_EXIST: u16 = 0x020A;
@@ -99,7 +255,7 @@ pub mod login_status {
             NOT_FOUND => "target not found",
             TARGET_REMOVED => "target removed",
             UNSUPPORTED_VERSION => "unsupported version",
-            0x0206 => "too many connections",
+            TOO_MANY_CONNECTIONS => "too many connections",
             MISSING_PARAMETER => "missing parameter",
             0x0208 => "cannot include in session",
             SESSION_TYPE_NOT_SUPPORTED => "session type not supported",
@@ -324,6 +480,101 @@ pub async fn read_pdu<R: AsyncRead + Unpin>(
     tokio::time::timeout(deadline, rest)
         .await
         .map_err(|_| ReadError::Stalled)?
+}
+
+/// The bytes a whole PDU occupies on the wire, from its header and the digests in use.
+pub fn frame_length(bhs: &[u8; BHS_LEN], digests: Digests) -> usize {
+    let (ahs, dsl) = Pdu::declared_lengths(bhs);
+    let mut n = BHS_LEN + ahs + if digests.header { 4 } else { 0 };
+    if dsl > 0 {
+        n += padded(dsl) + if digests.data { 4 } else { 0 };
+    }
+    n
+}
+
+/// Reads whole PDUs off a stream, keeping what has arrived between calls, so that
+/// [`PduReader::next`] can be dropped part-way (in a `select!`) without losing bytes: it only
+/// ever waits in `read`, which takes nothing from the stream unless it completes. Holds at most
+/// one PDU's bytes, bounded by the data segment limit before anything past the header is read.
+pub struct PduReader {
+    buf: Vec<u8>,
+    /// When the PDU now arriving began, for the deadline on its rest.
+    started: Option<tokio::time::Instant>,
+}
+
+impl Default for PduReader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PduReader {
+    pub fn new() -> Self {
+        Self {
+            buf: Vec::new(),
+            started: None,
+        }
+    }
+
+    /// The next PDU: the same checks and errors as [`read_pdu`]. Waiting for a PDU's first
+    /// byte has no deadline; its rest must arrive within `deadline` of that byte.
+    pub async fn next<R: AsyncRead + Unpin>(
+        &mut self,
+        r: &mut R,
+        digests: Digests,
+        max_data: usize,
+        deadline: Duration,
+    ) -> Result<Pdu, ReadError> {
+        loop {
+            let mut need = BHS_LEN;
+            if self.buf.len() >= BHS_LEN {
+                let bhs: [u8; BHS_LEN] = self.buf[..BHS_LEN].try_into().expect("48 bytes");
+                let (_, dsl) = Pdu::declared_lengths(&bhs);
+                if dsl > max_data {
+                    self.buf.clear();
+                    self.started = None;
+                    return Err(ReadError::Oversize {
+                        declared: dsl,
+                        limit: max_data,
+                    });
+                }
+                need = frame_length(&bhs, digests);
+                if self.buf.len() >= need {
+                    let result = decode(&self.buf[..need], digests, max_data);
+                    self.buf.drain(..need);
+                    self.started = if self.buf.is_empty() {
+                        None
+                    } else {
+                        Some(tokio::time::Instant::now())
+                    };
+                    return match result {
+                        Ok(Some((p, _))) => Ok(p),
+                        Ok(None) => Err(ReadError::Stalled),
+                        Err(e) => Err(e),
+                    };
+                }
+            }
+            let mut chunk = vec![0u8; (need - self.buf.len()).min(64 * 1024)];
+            let n = match self.started {
+                None => r.read(&mut chunk).await.map_err(ReadError::Io)?,
+                Some(at) => tokio::time::timeout_at(at + deadline, r.read(&mut chunk))
+                    .await
+                    .map_err(|_| ReadError::Stalled)?
+                    .map_err(ReadError::Io)?,
+            };
+            if n == 0 {
+                return Err(if self.buf.is_empty() {
+                    ReadError::Closed
+                } else {
+                    ReadError::Io(std::io::ErrorKind::UnexpectedEof.into())
+                });
+            }
+            if self.started.is_none() {
+                self.started = Some(tokio::time::Instant::now());
+            }
+            self.buf.extend_from_slice(&chunk[..n]);
+        }
+    }
 }
 
 /// One PDU from the front of a buffer, with the same checks [`read_pdu`] makes: the data

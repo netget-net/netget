@@ -25,6 +25,16 @@ pub const POLICY: &str = r#"import json,sys
 i=json.load(sys.stdin); t=i['event_type_id']; e=i['event']
 if t=='iscsi_discovery':
   a=[{'type':'iscsi_send_targets','targets':[{'name':'iqn.2026-10.net.netget:disk0'},{'name':'iqn.2026-10.net.netget:backup','addresses':['192.0.2.7:3260']}]}]
+elif t=='iscsi_task_management':
+  n=e['initiator_name']
+  if n.endswith(':refuses-resets'):
+    a=[{'type':'iscsi_refuse_reset','response':'unauthorized'}]
+  elif n.endswith(':silent-resets'):
+    a=[]
+  elif n.endswith(':invalid-resets'):
+    a=[{'type':'iscsi_refuse_reset','response':'maybe'}]
+  else:
+    a=[{'type':'iscsi_allow_reset'}]
 elif e['initiator_name'].endswith(':denied'):
   a=[{'type':'iscsi_reject_login','reason':'unauthorized'}]
 elif e['target_name']=='iqn.2026-10.net.netget:disk0':
@@ -214,6 +224,12 @@ pub struct Raw {
     pub cmd_sn: u32,
     pub exp_stat_sn: u32,
     pub itt: u32,
+    /// The initiator port and connection a login names: InitiatorName, ISID (offset 8), TSIH
+    /// (14: 0 for a new session, the session's to add a connection to it) and CID (20).
+    pub initiator: String,
+    pub isid: [u8; 6],
+    pub tsih: u16,
+    pub cid: u16,
 }
 
 pub const ISID: [u8; 6] = [0x80, 0x12, 0x34, 0x56, 0x78, 0x9a];
@@ -231,7 +247,24 @@ impl Raw {
             cmd_sn: 1,
             exp_stat_sn: 0,
             itt: 0x100,
+            initiator: INITIATOR.into(),
+            isid: ISID,
+            tsih: 0,
+            cid: 0,
         }
+    }
+
+    /// Another connection of `session`'s session (same initiator port and TSIH), with `cid`.
+    /// CmdSN carries on from the session's; StatSN is this connection's own.
+    pub async fn join(port: u16, session: &Raw, cid: u16) -> Raw {
+        let mut r = Raw::connect(port).await;
+        r.initiator = session.initiator.clone();
+        r.isid = session.isid;
+        r.tsih = session.tsih;
+        r.cid = cid;
+        r.cmd_sn = session.cmd_sn;
+        r.itt = session.itt + 0x1000 * cid as u32;
+        r
     }
 
     pub fn next_itt(&mut self) -> u32 {
@@ -356,8 +389,10 @@ impl Raw {
         if let Some(nsg) = transit {
             b[1] |= 0x80 | nsg;
         }
-        b[8..14].copy_from_slice(&ISID);
+        b[8..14].copy_from_slice(&self.isid);
+        b[14..16].copy_from_slice(&self.tsih.to_be_bytes());
         b[16..20].copy_from_slice(&0x0000_0001u32.to_be_bytes());
+        b[20..22].copy_from_slice(&self.cid.to_be_bytes());
         b[24..28].copy_from_slice(&self.cmd_sn.to_be_bytes());
         b[28..32].copy_from_slice(&self.exp_stat_sn.to_be_bytes());
         b
@@ -386,8 +421,9 @@ impl Raw {
     /// A complete login without authentication: security (AuthMethod=None) then operational
     /// with `ops`, to full feature phase. Returns the final response.
     pub async fn login(&mut self, kind: &str, target: Option<&str>, ops: &[(&str, &str)]) -> Got {
+        let initiator = self.initiator.clone();
         let mut first: Vec<(&str, &str)> =
-            vec![("InitiatorName", INITIATOR), ("SessionType", kind)];
+            vec![("InitiatorName", &initiator), ("SessionType", kind)];
         if let Some(t) = target {
             first.push(("TargetName", t));
         }
@@ -405,6 +441,7 @@ impl Raw {
         let t = r.text();
         self.header_digest = key(&t, "HeaderDigest") == Some("CRC32C");
         self.data_digest = key(&t, "DataDigest") == Some("CRC32C");
+        self.tsih = u16::from_be_bytes([r.bhs[14], r.bhs[15]]);
         r
     }
 
@@ -454,6 +491,101 @@ impl Raw {
         let (b, _) = self.scsi_bhs(0x80, lun, 0, &[0u8; 6]);
         self.send(b, &[]).await;
         self.recv().await
+    }
+
+    /// An immediate Task Management Function Request (RFC 7143 §11.5): function, LUN,
+    /// Referenced Task Tag (0xffffffff when none), RefCmdSN and ExpDataSN. Returns its ITT.
+    pub async fn send_tmf(
+        &mut self,
+        function: u8,
+        lun: u8,
+        referenced: u32,
+        ref_cmd_sn: u32,
+        exp_data_sn: u32,
+    ) -> u32 {
+        let itt = self.next_itt();
+        let mut b = [0u8; 48];
+        b[0] = 0x42; // I + Task Management Function Request
+        b[1] = 0x80 | function;
+        b[9] = lun;
+        b[16..20].copy_from_slice(&itt.to_be_bytes());
+        b[20..24].copy_from_slice(&referenced.to_be_bytes());
+        b[24..28].copy_from_slice(&self.cmd_sn.to_be_bytes());
+        b[28..32].copy_from_slice(&self.exp_stat_sn.to_be_bytes());
+        b[32..36].copy_from_slice(&ref_cmd_sn.to_be_bytes());
+        b[36..40].copy_from_slice(&exp_data_sn.to_be_bytes());
+        self.send(b, &[]).await;
+        itt
+    }
+
+    /// A task management function and its response code.
+    pub async fn tmf(&mut self, function: u8, lun: u8) -> u8 {
+        let itt = self
+            .send_tmf(function, lun, 0xffff_ffff, self.cmd_sn, 0)
+            .await;
+        let g = self.recv().await;
+        assert_eq!((g.opcode(), g.itt()), (0x22, itt), "a TMF Response: {g:?}");
+        g.bhs[2]
+    }
+
+    /// A SNACK Request (RFC 7143 §11.16): type, ITT, Target Transfer Tag or SNACK Tag,
+    /// BegRun, RunLength. `exp_stat_sn` is what it acknowledges.
+    pub async fn send_snack(
+        &mut self,
+        kind: u8,
+        lun: u8,
+        itt: u32,
+        tag: u32,
+        beg_run: u32,
+        run_length: u32,
+        exp_stat_sn: u32,
+    ) {
+        let mut b = [0u8; 48];
+        b[0] = 0x10;
+        b[1] = 0x80 | kind;
+        b[9] = lun;
+        b[16..20].copy_from_slice(&itt.to_be_bytes());
+        b[20..24].copy_from_slice(&tag.to_be_bytes());
+        b[28..32].copy_from_slice(&exp_stat_sn.to_be_bytes());
+        b[40..44].copy_from_slice(&beg_run.to_be_bytes());
+        b[44..48].copy_from_slice(&run_length.to_be_bytes());
+        self.send(b, &[]).await;
+    }
+
+    /// A Logout Request with a reason (0 session, 1 connection, 2 recovery) for a CID.
+    pub async fn logout_cid(&mut self, reason: u8, cid: u16) -> Got {
+        let mut b = [0u8; 48];
+        b[0] = 0x46;
+        b[1] = 0x80 | reason;
+        let itt = self.next_itt();
+        b[16..20].copy_from_slice(&itt.to_be_bytes());
+        b[20..22].copy_from_slice(&cid.to_be_bytes());
+        b[24..28].copy_from_slice(&self.cmd_sn.to_be_bytes());
+        b[28..32].copy_from_slice(&self.exp_stat_sn.to_be_bytes());
+        self.send(b, &[]).await;
+        let g = self.recv().await;
+        assert_eq!(g.opcode(), 0x26, "a Logout Response: {g:?}");
+        g
+    }
+
+    /// A Data-Out PDU: ITT, TTT, DataSN, buffer offset, F bit.
+    pub fn data_out_bhs(
+        &self,
+        itt: u32,
+        ttt: u32,
+        data_sn: u32,
+        offset: u32,
+        last: bool,
+    ) -> [u8; 48] {
+        let mut d = [0u8; 48];
+        d[0] = 0x05;
+        d[1] = if last { 0x80 } else { 0 };
+        d[16..20].copy_from_slice(&itt.to_be_bytes());
+        d[20..24].copy_from_slice(&ttt.to_be_bytes());
+        d[28..32].copy_from_slice(&self.exp_stat_sn.to_be_bytes());
+        d[36..40].copy_from_slice(&data_sn.to_be_bytes());
+        d[40..44].copy_from_slice(&offset.to_be_bytes());
+        d
     }
 
     /// A Logout Request (close the session) and its response.

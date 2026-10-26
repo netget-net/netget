@@ -46,6 +46,8 @@ pub const REAL_POLICY: &str = r#"import json,sys
 i=json.load(sys.stdin); t=i['event_type_id']; e=i['event']
 if t=='iscsi_discovery':
   a=[{'type':'iscsi_send_targets','targets':[{'name':'iqn.2026-10.net.netget:disk0'},{'name':'iqn.2026-10.net.netget:testcu'}]}]
+elif t=='iscsi_task_management':
+  a=[{'type':'iscsi_allow_reset'}]
 elif e['target_name']=='iqn.2026-10.net.netget:disk0':
   a=[{'type':'iscsi_accept_login','luns':[
     {'lun':0,'size':1048576,'writable':True,'product':'BOOT-DISK','serial':'SER0001',
@@ -248,7 +250,24 @@ pub const TEST_CU_SUBSET: &[&str] = &[
 
 /// Run one iscsi-test-cu selection; (passed, failed, the output).
 async fn test_cu(bin: &PathBuf, url: &str, test: &str) -> (u32, u32, String) {
-    let out = run(bin, &["-d", "-n", "-t", test, url]).await;
+    test_cu_paths(bin, &[url], test).await
+}
+
+/// iscsi-test-cu over one or more paths (a second URL is a second I_T nexus, logged in as the
+/// second initiator name, for the MultipathIO suite).
+async fn test_cu_paths(bin: &PathBuf, urls: &[&str], test: &str) -> (u32, u32, String) {
+    let mut args = vec![
+        "-d",
+        "-n",
+        "-i",
+        "iqn.2026-10.org.example:testcu-path0",
+        "-I",
+        "iqn.2026-10.org.example:testcu-path1",
+        "-t",
+        test,
+    ];
+    args.extend(urls);
+    let out = run(bin, &args).await;
     let o = format!("{}{}", text(&out.stdout), text(&out.stderr));
     // CUnit's run summary: "tests  <total> <ran> <passed> <failed> <inactive>".
     let row = o
@@ -280,6 +299,72 @@ async fn iscsi_test_cu_passes_the_implemented_subset() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
     assert!(total > 50, "the subset ran {total} tests");
+}
+
+/// The iscsi-test-cu tests that drive task management, each with how many paths (I_T nexuses)
+/// it needs. `SCSI.MultipathIO.Reset` resets the LUN on each path in turn and requires a unit
+/// attention on every path afterwards, which is the per-nexus unit attention of SAM-5 §6.3.3.
+pub const TEST_CU_TMF: &[(&str, usize)] = &[
+    ("iSCSI.iSCSITMF.AbortTaskSimpleAsync", 1),
+    ("iSCSI.iSCSITMF.LUNResetSimpleAsync", 1),
+    ("iSCSI.iSCSITMF.LogoutDuringIOAsync", 1),
+    ("SCSI.MultipathIO.Reset", 2),
+];
+
+/// The one assertion of the two async TMF tests that is about libiscsi rather than the target:
+/// `iscsi_out_queue_length(…) == 1` right after queuing the WRITE, before anything is serviced.
+/// Homebrew's build has already sent it by then ("dispatching out queue… dispatched" with no
+/// service call), so the queue is empty; every assertion about what the target answered
+/// passes. A failure is accepted only when it is that assertion and nothing else.
+fn only_libiscsi_queue_assert(out: &str) -> bool {
+    let failures: Vec<&str> = out
+        .lines()
+        .map(str::trim)
+        .filter(|l| {
+            l.split_once(". ")
+                .is_some_and(|(n, rest)| n.parse::<u32>().is_ok() && rest.contains(".c:"))
+        })
+        .collect();
+    !failures.is_empty()
+        && failures
+            .iter()
+            .all(|l| l.contains("CU_ASSERT_EQUAL(iscsi_out_queue_length(sd->iscsi_ctx),1)"))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn iscsi_test_cu_task_management_and_unit_attentions() {
+    let bin = require_tool("iscsi-test-cu", LIBISCSI);
+    let srv = start(policy(REAL_POLICY), None).await;
+    let url = format!("iscsi://127.0.0.1:{}/{TESTCU}/0", srv.port);
+    let mut failures = Vec::new();
+    for (test, paths) in TEST_CU_TMF {
+        let urls: Vec<&str> = std::iter::repeat_n(url.as_str(), *paths).collect();
+        let (passed, failed, out) = test_cu_paths(&bin, &urls, test).await;
+        let host_side = failed == 1 && passed == 0 && only_libiscsi_queue_assert(&out);
+        println!(
+            "iscsi-test-cu {test} over {paths} path(s): {passed} passed, {failed} failed{}",
+            if host_side {
+                " (only libiscsi's own out-queue assertion; every assertion about the target passed)"
+            } else {
+                ""
+            }
+        );
+        if !host_side && (failed > 0 || passed == 0) {
+            failures.push(format!("{test}: {passed} passed, {failed} failed\n{out}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+    // Every reset was the model's to allow, and named its LUN.
+    let asked = events(&srv.state, srv.id, "iscsi_task_management").await;
+    let resets = asked
+        .iter()
+        .filter(|e| e["function"] == "logical_unit_reset" && e["lun"] == 0)
+        .count();
+    // LUNResetSimpleAsync resets once, MultipathIO.Reset once per path.
+    assert!(
+        resets >= 3,
+        "the model decided {resets} LUN resets: {asked:?}"
+    );
 }
 
 #[cfg(target_os = "linux")]
