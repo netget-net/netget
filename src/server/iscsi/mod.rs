@@ -1,13 +1,28 @@
 //! iSCSI target (RFC 7143). Rust owns the wire — PDU framing and digests, login and text-key
-//! negotiation, CHAP, sequence numbers, R2T and Data-In/Out, task management and the SCSI
-//! block commands; the model decides which targets discovery reveals, who may log in, and what
-//! each LUN contains. Every SCSI command is served from the model's description without
-//! another model call.
+//! negotiation, CHAP, sequence numbers, R2T and Data-In/Out, sessions of several connections,
+//! task management, error recovery and the SCSI block commands; the model decides which
+//! targets discovery reveals, who may log in, what each LUN contains, and whether a reset may
+//! go ahead. Every SCSI command is served from the model's description without another model
+//! call.
+//!
+//! | File | What it does |
+//! |---|---|
+//! | `mod.rs` | configuration, the accept loop, a connection's state, login |
+//! | `session.rs` | what a session's connections share: the CmdSN window, tasks, unit attentions |
+//! | `ffp.rs` | the full feature phase loop, CmdSN admission, text, NOP, logout |
+//! | `scsi.rs` | SCSI commands, Data-In, writes and their data |
+//! | `tmf.rs` | task management, the model's reset decisions, task reassignment |
+//! | `recovery.rs` | SNACK, DataACK and retransmission (error recovery levels 1 and 2) |
 pub mod actions;
 pub mod chap;
+mod ffp;
 pub mod lun;
 pub mod pdu;
+mod recovery;
+mod scsi;
+pub mod session;
 pub mod text;
+mod tmf;
 
 use crate::llm::action_helper::call_llm;
 use crate::llm::actions::protocol_trait::ActionResult;
@@ -15,22 +30,28 @@ use crate::logging::emit::Log;
 use crate::protocol::{Event, SpawnContext};
 use crate::server::accept_bounded::{accept_bounded, ConnectionLimiter, DEFAULT_MAX_CONNECTIONS};
 use crate::server::connection::ConnectionId;
-use crate::server::scsi_common::{self as scsi, opcode, status, Sense};
+use crate::server::scsi_common::Sense;
 use crate::state::server::{ConnectionState, ConnectionStatus, ProtocolConnectionInfo};
 use crate::utils::clock::Instant;
 use crate::utils::wire_failure::WireFailure;
 use anyhow::{bail, Context, Result};
 use chap::Credential;
-use lun::{Lun, Overlay, TargetDescription};
-use pdu::{login_status, op, reject, stage, Digests, Pdu, ReadError, RESERVED_TAG};
+use lun::TargetDescription;
+use pdu::{login_status, op, stage, Digests, Pdu, PduReader, ReadError};
 use serde_json::json;
-use std::collections::HashMap;
+use session::{
+    lock, lock_registry, CommandWindow, ConnSlot, Gone, Life, Nexus, Registry, RegistryCell,
+    Session, SessionCell,
+};
+use std::collections::VecDeque;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use text::{DigestPreference, Params};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use text::{DigestPreference, Params, TargetOffer};
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
+use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 
 /// The whole login, from the first byte to full feature phase.
 pub const LOGIN_DEADLINE: Duration = Duration::from_secs(60);
@@ -49,12 +70,24 @@ pub const MAX_LOGIN_PDUS: usize = 64;
 pub const DEFAULT_INITIAL_R2T: bool = true;
 /// The default for the `digests` startup parameter.
 pub const DEFAULT_DIGESTS: &str = "either";
+/// MaxConnections this target offers unless `max_connections` says otherwise. The result
+/// function is the minimum, so an initiator that offers 1 (libiscsi, open-iscsi) gets 1.
+pub const DEFAULT_MAX_CONNECTIONS_PER_SESSION: u32 = 4;
+/// The ErrorRecoveryLevel this target offers unless `error_recovery_level` says otherwise
+/// (minimum function: an initiator offering 0 gets 0).
+pub const DEFAULT_ERROR_RECOVERY_LEVEL: u32 = 2;
 /// A CHAP secret's length bounds (RFC 7143 §12.1.3 requires at least 12 bytes for CHAP over
 /// an unprotected link; the 255-byte ceiling is ours).
 pub const MIN_SECRET: usize = 12;
 pub const MAX_SECRET: usize = 255;
 /// The target portal group every portal of this server belongs to.
 pub const PORTAL_GROUP_TAG: u16 = 1;
+/// How often retained sessions and tasks are checked for the end of their retention.
+pub const JANITOR_TICK: Duration = Duration::from_secs(1);
+/// Status PDUs one connection keeps for Status SNACK (error recovery level >= 1) until the
+/// initiator acknowledges them, by count and by bytes.
+pub const MAX_STATUS_RING: usize = 256;
+pub const MAX_STATUS_RING_BYTES: usize = 4 * 1024 * 1024;
 
 /// What the operator configured.
 #[derive(Debug)]
@@ -64,6 +97,8 @@ pub struct Config {
     pub digests: Option<DigestPreference>,
     /// This target's InitialR2T: whether non-immediate write data waits for an R2T.
     pub initial_r2t: bool,
+    pub max_connections: u32,
+    pub error_recovery_level: u32,
 }
 
 impl Default for Config {
@@ -73,6 +108,8 @@ impl Default for Config {
             target_credential: None,
             digests: None,
             initial_r2t: DEFAULT_INITIAL_R2T,
+            max_connections: DEFAULT_MAX_CONNECTIONS_PER_SESSION,
+            error_recovery_level: DEFAULT_ERROR_RECOVERY_LEVEL,
         }
     }
 }
@@ -83,6 +120,14 @@ impl Config {
     }
     fn chap_required(&self) -> bool {
         !self.accounts.is_empty()
+    }
+    fn offer(&self) -> TargetOffer {
+        TargetOffer {
+            digests: self.digests(),
+            initial_r2t: self.initial_r2t,
+            max_connections: self.max_connections,
+            error_recovery_level: self.error_recovery_level,
+        }
     }
 }
 
@@ -135,6 +180,18 @@ pub fn parse_config(ctx: &SpawnContext) -> Result<Config> {
         config.digests =
             Some(DigestPreference::parse(&d).context("digests is either, crc32c or none")?);
     }
+    if let Some(n) = params.get_optional_u64("max_connections")? {
+        anyhow::ensure!(
+            (1..=session::MAX_CONNECTIONS_PER_SESSION as u64).contains(&n),
+            "max_connections is 1 to {}",
+            session::MAX_CONNECTIONS_PER_SESSION
+        );
+        config.max_connections = n as u32;
+    }
+    if let Some(n) = params.get_optional_u64("error_recovery_level")? {
+        anyhow::ensure!(n <= 2, "error_recovery_level is 0, 1 or 2");
+        config.error_recovery_level = n as u32;
+    }
     Ok(config)
 }
 
@@ -145,9 +202,21 @@ pub async fn spawn(ctx: SpawnContext) -> Result<SocketAddr> {
     Log::new(Some(&ctx.status_tx)).info(format!("iSCSI target on {local}"));
     let shared = Arc::new(ctx.clone());
     let server_id = ctx.server_id;
+    let registry: RegistryCell = Arc::new(Mutex::new(Registry::new()));
+    // Retained sessions and tasks end when their retention does, whether or not anything
+    // else happens on the server.
+    let janitor = registry.clone();
+    ctx.state
+        .spawn_server_task(server_id, async move {
+            let mut tick = tokio::time::interval(JANITOR_TICK);
+            loop {
+                tick.tick().await;
+                lock_registry(&janitor).purge(Instant::now());
+            }
+        })
+        .await;
     let accept = tokio::spawn(async move {
         let limiter = ConnectionLimiter::new(DEFAULT_MAX_CONNECTIONS);
-        let mut next_tsih: u16 = 1;
         loop {
             let (stream, peer, permit) =
                 match accept_bounded(&listener, &limiter, b"", "iSCSI", Some(&shared.status_tx))
@@ -179,15 +248,14 @@ pub async fn spawn(ctx: SpawnContext) -> Result<SocketAddr> {
                     },
                 )
                 .await;
-            let tsih = next_tsih;
-            next_tsih = next_tsih.checked_add(1).unwrap_or(1);
             let child = shared.clone();
             let config = config.clone();
+            let registry = registry.clone();
             shared
                 .state
                 .spawn_server_task(server_id, async move {
                     let _permit = permit;
-                    let mut c = Conn::new(&child, config, id, peer, local, stream, tsih);
+                    let mut c = Conn::new(&child, config, registry, id, peer, local, stream);
                     if let Err(e) = c.run().await {
                         Log::new(Some(&child.status_tx))
                             .debug(format!("iSCSI connection {id}: {e:#}"));
@@ -240,21 +308,6 @@ enum Auth {
     Done(Option<String>),
 }
 
-/// A write waiting for its data.
-struct PendingWrite {
-    lun: u16,
-    lba: u64,
-    expected: usize,
-    buf: Vec<u8>,
-    /// Unsolicited data still allowed to arrive (TTT 0xffffffff), and the DataSN expected.
-    unsolicited_open: bool,
-    unsolicited_limit: usize,
-    unsolicited_data_sn: u32,
-    /// The R2T outstanding: its TTT, where it ends, and the DataSN expected next.
-    r2t: Option<(u32, usize, u32)>,
-    r2t_sn: u32,
-}
-
 /// A SendTargets answer too long for one PDU, waiting for the initiator to ask for the rest.
 struct TextContinuation {
     itt: u32,
@@ -277,70 +330,117 @@ fn fail(status: u16, decision: &'static str, detail: impl Into<String>) -> Login
     }
 }
 
+/// A status PDU sent and not yet acknowledged, for Status SNACK.
+struct Sent {
+    stat_sn: u32,
+    pdu: Pdu,
+    resent: u32,
+}
+
+/// One TCP connection: login, then its part of a session.
 struct Conn<'a> {
     ctx: &'a SpawnContext,
     config: Arc<Config>,
+    registry: RegistryCell,
     id: ConnectionId,
     peer: SocketAddr,
     local: SocketAddr,
     stream: TcpStream,
+    reader: PduReader,
+    /// This connection's ISID, TSIH and CID as its login named them.
+    isid: [u8; 6],
     tsih: u16,
+    cid: u16,
+    /// A login naming a TSIH this target does not know is served as a new session under it.
+    requested_tsih: Option<u16>,
+    /// The negotiated parameters (the session's for the leading-only keys).
     params: Params,
     digests: Digests,
     stat_sn: u32,
-    exp_cmd_sn: u32,
+    /// The initiator's ExpStatSN: every status before it is acknowledged.
+    exp_stat_sn: u32,
     session_type: SessionType,
     initiator_name: String,
     target_name: String,
     authenticated: Option<String>,
+    /// The model's description, between the leading login's decision and the session.
     target: Option<Arc<TargetDescription>>,
-    overlay: Overlay,
-    pending: HashMap<u32, PendingWrite>,
-    next_ttt: u32,
+    /// The session this connection belongs to (normal sessions, after login).
+    session: Option<SessionCell>,
+    /// The session a login with its TSIH is adding this connection to.
+    joining: Option<SessionCell>,
+    /// A discovery session's own command window (it has no shared session).
+    window: CommandWindow,
+    wake: Arc<Notify>,
+    close: CancellationToken,
     text_in: Option<(u32, Vec<u8>)>,
     text_out: Option<TextContinuation>,
     discovered: Option<Vec<(String, Vec<String>)>>,
-    /// CmdSNs an ABORT TASK named before the command arrived; dropped when they do.
-    aborted_before_arrival: Vec<u32>,
-    /// A Logout Response has been sent: the initiator closes next.
+    /// A Logout Response for this connection has been sent: the initiator closes next.
     logged_out: bool,
+    /// A protocol violation ends this connection once what it owes is sent.
+    hang_up: bool,
+    /// A discovery session's Target Transfer Tags (a normal session's come from the session).
+    local_ttt: u32,
+    /// Status PDUs kept for Status SNACK (error recovery level >= 1).
+    ring: VecDeque<Sent>,
+    ring_bytes: usize,
 }
 
 impl<'a> Conn<'a> {
     fn new(
         ctx: &'a SpawnContext,
         config: Arc<Config>,
+        registry: RegistryCell,
         id: ConnectionId,
         peer: SocketAddr,
         local: SocketAddr,
         stream: TcpStream,
-        tsih: u16,
     ) -> Self {
         Self {
             ctx,
             config,
+            registry,
             id,
             peer,
             local,
             stream,
-            tsih,
+            reader: PduReader::new(),
+            isid: [0; 6],
+            tsih: 0,
+            cid: 0,
+            requested_tsih: None,
             params: Params::default(),
             digests: Digests::default(),
             stat_sn: 0,
-            exp_cmd_sn: 0,
+            exp_stat_sn: 0,
             session_type: SessionType::Normal,
             initiator_name: String::new(),
             target_name: String::new(),
             authenticated: None,
             target: None,
-            overlay: Overlay::default(),
-            pending: HashMap::new(),
-            next_ttt: 1,
+            session: None,
+            joining: None,
+            window: CommandWindow::default(),
+            wake: Arc::new(Notify::new()),
+            close: CancellationToken::new(),
             text_in: None,
             text_out: None,
             discovered: None,
-            aborted_before_arrival: Vec::new(),
             logged_out: false,
+            hang_up: false,
+            local_ttt: 1,
+            ring: VecDeque::new(),
+            ring_bytes: 0,
+        }
+    }
+
+    /// The session's error recovery level (discovery sessions run at 0).
+    fn erl(&self) -> u32 {
+        if self.session.is_some() {
+            self.params.error_recovery_level
+        } else {
+            0
         }
     }
 
@@ -361,6 +461,13 @@ impl<'a> Conn<'a> {
         Ok(())
     }
 
+    async fn send_all(&mut self, out: Vec<Pdu>) -> Result<()> {
+        for p in &out {
+            self.send(p).await?;
+        }
+        Ok(())
+    }
+
     async fn received(&self, p: &Pdu) {
         self.ctx
             .state
@@ -375,18 +482,78 @@ impl<'a> Conn<'a> {
             .await;
     }
 
-    /// MaxCmdSN: the window shrinks by the writes still waiting for data.
-    fn max_cmd_sn(&self) -> u32 {
-        let open = COMMAND_WINDOW.saturating_sub(self.pending.len() as u32);
-        self.exp_cmd_sn.wrapping_add(open).wrapping_sub(1)
+    /// ExpCmdSN and MaxCmdSN as they stand: the session's, or a discovery session's own.
+    fn numbers(&self, s: Option<&Session>) -> (u32, u32) {
+        match s {
+            Some(s) => (s.window.exp_cmd_sn, s.max_cmd_sn()),
+            None => (
+                self.window.exp_cmd_sn,
+                self.window
+                    .exp_cmd_sn
+                    .wrapping_add(COMMAND_WINDOW)
+                    .wrapping_sub(1),
+            ),
+        }
     }
 
-    /// Fill StatSN (consuming one), ExpCmdSN and MaxCmdSN at their usual offsets.
-    fn status_fields(&mut self, p: &mut Pdu) {
+    /// Fill StatSN (consuming one), ExpCmdSN and MaxCmdSN at their usual offsets, and keep the
+    /// PDU for Status SNACK at error recovery level >= 1.
+    fn stamp(&mut self, p: &mut Pdu, s: Option<&Session>) {
+        let (exp, max) = self.numbers(s);
         p.set_u32(24, self.stat_sn);
+        p.set_u32(28, exp);
+        p.set_u32(32, max);
+        if self.erl() >= 1 {
+            self.keep_status(self.stat_sn, p.clone());
+        }
         self.stat_sn = self.stat_sn.wrapping_add(1);
-        p.set_u32(28, self.exp_cmd_sn);
-        p.set_u32(32, self.max_cmd_sn());
+    }
+
+    /// ExpCmdSN and MaxCmdSN only (R2T, non-final Data-In, retransmissions).
+    fn window_fields(&self, p: &mut Pdu, s: Option<&Session>) {
+        let (exp, max) = self.numbers(s);
+        p.set_u32(28, exp);
+        p.set_u32(32, max);
+    }
+
+    fn keep_status(&mut self, stat_sn: u32, p: Pdu) {
+        let size = pdu::BHS_LEN + p.data.len();
+        self.ring.push_back(Sent {
+            stat_sn,
+            pdu: p,
+            resent: 0,
+        });
+        self.ring_bytes += size;
+        while self.ring.len() > MAX_STATUS_RING || self.ring_bytes > MAX_STATUS_RING_BYTES {
+            match self.ring.pop_front() {
+                Some(old) => self.ring_bytes -= pdu::BHS_LEN + old.pdu.data.len(),
+                None => break,
+            }
+        }
+    }
+
+    /// The initiator's ExpStatSN, carried by every PDU it sends: statuses before it need not
+    /// be kept. A value past what was sent is ignored.
+    fn acknowledge(&mut self, exp_stat_sn: u32) {
+        if !pdu::sn_le(exp_stat_sn, self.stat_sn) || exp_stat_sn == self.exp_stat_sn {
+            return;
+        }
+        if pdu::sn_lt(self.exp_stat_sn, exp_stat_sn) {
+            self.exp_stat_sn = exp_stat_sn;
+        }
+        while let Some(front) = self.ring.front() {
+            if pdu::sn_lt(front.stat_sn, exp_stat_sn) {
+                let old = self.ring.pop_front().expect("front");
+                self.ring_bytes -= pdu::BHS_LEN + old.pdu.data.len();
+            } else {
+                break;
+            }
+        }
+        if self.erl() >= 1 {
+            if let Some(s) = self.session.clone() {
+                lock(&s).acknowledge(self.id, exp_stat_sn);
+            }
+        }
     }
 
     async fn run(&mut self) -> Result<()> {
@@ -405,11 +572,52 @@ impl<'a> Conn<'a> {
                 return Ok(());
             }
         }
-        self.full_feature().await
+        let result = self.full_feature().await;
+        // However the connection ended, the session learns of it (unless a logout, a reset
+        // or a reinstatement already took it out).
+        self.leave(Gone::Failed(Instant::now()));
+        result
+    }
+
+    /// Take this connection out of its session, if it is still in it: at error recovery level
+    /// 2 a failed connection's tasks wait for recovery; otherwise they end, and the other
+    /// connections owe the initiator a unit attention for them (RFC 7143 §11.14.5). A session
+    /// left with nothing ends.
+    fn leave(&mut self, how: Gone) {
+        let Some(cell) = self.session.clone() else {
+            return;
+        };
+        let (idle, tsih) = {
+            let mut s = lock(&cell);
+            if s.conn(self.id).is_some_and(|c| c.life == Life::Live) {
+                let others = s.live_connections() > 1;
+                let luns = s.connection_gone(self.id, how);
+                if others {
+                    for l in luns {
+                        s.unit_attention(l, Sense::COMMANDS_CLEARED_BY_ISCSI_EVENT);
+                    }
+                }
+                for c in s.conns.iter().filter(|c| c.life == Life::Live) {
+                    c.wake.notify_one();
+                }
+            }
+            let idle = s.ended || s.idle();
+            if idle {
+                s.ended = true;
+            }
+            (idle, s.tsih)
+        };
+        if idle {
+            let mut r = lock_registry(&self.registry);
+            if r.get(tsih).is_some_and(|cur| Arc::ptr_eq(&cur, &cell)) {
+                r.remove(tsih);
+            }
+        }
     }
 
     // ----------------------------------------------------------------- login
 
+    #[allow(clippy::too_many_arguments)]
     async fn login_response(
         &mut self,
         req: &Pdu,
@@ -432,7 +640,17 @@ impl<'a> Conn<'a> {
             r.set_u16(14, self.tsih);
         }
         r.set_itt(req.itt());
-        self.status_fields(&mut r);
+        r.set_u32(24, self.stat_sn);
+        self.stat_sn = self.stat_sn.wrapping_add(1);
+        let (exp, max) = match self.session.as_ref().or(self.joining.as_ref()) {
+            Some(cell) => {
+                let s = lock(cell);
+                (s.window.exp_cmd_sn, s.max_cmd_sn())
+            }
+            None => self.numbers(None),
+        };
+        r.set_u32(28, exp);
+        r.set_u32(32, max);
         r.bhs[36] = (status >> 8) as u8;
         r.bhs[37] = status as u8;
         r.data = text::encode(pairs);
@@ -463,13 +681,15 @@ impl<'a> Conn<'a> {
         let mut sent_tpgt = false;
         let mut decided = false;
         for _ in 0..MAX_LOGIN_PDUS {
-            let req = match pdu::read_pdu(
-                &mut self.stream,
-                Digests::default(),
-                pdu::DEFAULT_MAX_RECV_DATA_SEGMENT,
-                PDU_DEADLINE,
-            )
-            .await
+            let req = match self
+                .reader
+                .next(
+                    &mut self.stream,
+                    Digests::default(),
+                    pdu::DEFAULT_MAX_RECV_DATA_SEGMENT,
+                    PDU_DEADLINE,
+                )
+                .await
             {
                 Ok(p) => p,
                 Err(ReadError::Closed) => return Ok(false),
@@ -519,7 +739,10 @@ impl<'a> Conn<'a> {
                 // Versions: we speak version 0 (RFC 7143 keeps it).
                 let (vmax, vmin) = (req.bhs[2], req.bhs[3]);
                 self.stat_sn = req.u32_at(28);
-                self.exp_cmd_sn = req.u32_at(24);
+                self.exp_stat_sn = self.stat_sn;
+                self.window = CommandWindow::new(req.u32_at(24));
+                self.isid = req.bhs[8..14].try_into().expect("6 bytes");
+                self.cid = req.u16_at(20);
                 if vmin > 0 || vmax < vmin {
                     let f = fail(
                         login_status::UNSUPPORTED_VERSION,
@@ -529,12 +752,26 @@ impl<'a> Conn<'a> {
                     self.refuse_login(&req, req_csg, f).await?;
                     return Ok(false);
                 }
-                if req.u16_at(14) != 0 {
-                    // A login naming a session's TSIH reinstates it. At error recovery level 0
-                    // nothing of the old connection survives (its writes went with it), so it
-                    // starts afresh under the TSIH the initiator asked for, as an initiator
-                    // that reconnects after a dropped connection expects.
-                    self.tsih = req.u16_at(14);
+                let tsih = req.u16_at(14);
+                if tsih != 0 {
+                    // A TSIH names the session this connection joins (another connection of
+                    // it, or a reinstatement of one). A TSIH this target does not know is
+                    // served as a new session under it, as an initiator reconnecting after a
+                    // dropped single-connection session expects.
+                    let found = lock_registry(&self.registry).get(tsih);
+                    match found {
+                        Some(s) if !lock(&s).ended => {
+                            self.params = lock(&s).params.clone();
+                            self.params.our_max_recv_data_segment =
+                                pdu::DEFAULT_MAX_RECV_DATA_SEGMENT as u32;
+                            self.params.peer_max_recv_data_segment =
+                                pdu::DEFAULT_MAX_RECV_DATA_SEGMENT as u32;
+                            self.params.header_digest = false;
+                            self.params.data_digest = false;
+                            self.joining = Some(s);
+                        }
+                        _ => self.requested_tsih = Some(tsih),
+                    }
                 }
                 csg = req_csg;
                 if csg == stage::FULL_FEATURE {
@@ -583,7 +820,7 @@ impl<'a> Conn<'a> {
                     return Ok(false);
                 }
             };
-            match self
+            let step = self
                 .login_step(
                     csg,
                     transit,
@@ -594,8 +831,16 @@ impl<'a> Conn<'a> {
                     &mut sent_tpgt,
                     &mut decided,
                 )
-                .await
-            {
+                .await;
+            let step = match step {
+                Ok((reply, Some(stage::FULL_FEATURE))) => {
+                    // The session exists (or this connection joins it) before the final
+                    // response, which carries its TSIH.
+                    self.establish().map(|_| (reply, Some(stage::FULL_FEATURE)))
+                }
+                other => other,
+            };
+            match step {
                 Ok((reply, next)) => {
                     let done = next == Some(stage::FULL_FEATURE);
                     match next {
@@ -620,13 +865,17 @@ impl<'a> Conn<'a> {
                             "login",
                             "logged_in",
                             &format!(
-                                "{} session for {} (header digest {}, data digest {}, MaxRecvDataSegmentLength {}/{})",
+                                "{} session {} connection {} for {} (header digest {}, data digest {}, MaxRecvDataSegmentLength {}/{}, ErrorRecoveryLevel {}, MaxConnections {})",
                                 if self.session_type == SessionType::Discovery { "discovery" } else { "normal" },
+                                self.tsih,
+                                self.cid,
                                 self.initiator_name,
                                 self.params.header_digest,
                                 self.params.data_digest,
                                 self.params.our_max_recv_data_segment,
-                                self.params.peer_max_recv_data_segment
+                                self.params.peer_max_recv_data_segment,
+                                self.erl(),
+                                self.params.max_connections,
                             ),
                         );
                         return Ok(true);
@@ -683,7 +932,7 @@ impl<'a> Conn<'a> {
         decided: &mut bool,
     ) -> Result<(Vec<(String, String)>, Option<u8>), LoginFailure> {
         let mut reply: Vec<(String, String)> = Vec::new();
-        let digests = self.config.digests();
+        let offer = self.config.offer();
         // Declarative keys first, wherever they appear.
         if let Some(name) = text::get(pairs, "InitiatorName") {
             if !actions::valid_name(name) {
@@ -732,6 +981,13 @@ impl<'a> Conn<'a> {
                 "a normal session without TargetName",
             ));
         }
+        if self.joining.is_some() && self.session_type == SessionType::Discovery {
+            return Err(fail(
+                login_status::SESSION_DOES_NOT_EXIST,
+                "protocol_refusal",
+                "a discovery login naming a normal session's TSIH",
+            ));
+        }
         if self.session_type == SessionType::Normal && !*sent_tpgt {
             reply.push(("TargetPortalGroupTag".into(), PORTAL_GROUP_TAG.to_string()));
             *sent_tpgt = true;
@@ -771,13 +1027,22 @@ impl<'a> Conn<'a> {
             match k.as_str() {
                 "InitiatorName" | "SessionType" | "TargetName" | "InitiatorAlias"
                 | "AuthMethod" | "CHAP_A" | "CHAP_N" | "CHAP_R" | "CHAP_I" | "CHAP_C" => {}
-                _ => match text::negotiate_as_target(
-                    &mut self.params,
-                    k,
-                    v,
-                    digests,
-                    self.config.initial_r2t,
-                ) {
+                // A connection joining a session answers the session-wide keys with what
+                // the leading login settled (RFC 7143 §13: "LO").
+                key if self.joining.is_some() && text::LEADING_ONLY.contains(&key) => {
+                    if let Some(v) = text::session_value(&self.params, key) {
+                        reply.push((k.clone(), v));
+                    }
+                }
+                // Discovery sessions run at error recovery level 0 (§7.4.1) with one
+                // connection.
+                "ErrorRecoveryLevel" if self.session_type == SessionType::Discovery => {
+                    reply.push((k.clone(), "0".into()));
+                }
+                "MaxConnections" if self.session_type == SessionType::Discovery => {
+                    reply.push((k.clone(), "Irrelevant".into()));
+                }
+                _ => match text::negotiate_as_target(&mut self.params, k, v, &offer) {
                     Some(answer) => {
                         if k == "MaxRecvDataSegmentLength" {
                             *declared_mrdsl = true;
@@ -815,9 +1080,15 @@ impl<'a> Conn<'a> {
         }
         if self.session_type == SessionType::Normal && !*decided {
             *decided = true;
-            match self.ask_login().await {
-                Ok(t) => self.target = Some(t),
-                Err(f) => return Err(f),
+            if self.joining.is_some() {
+                // Another connection of a session the model already admitted: Rust checks it
+                // belongs, and the model is not asked again.
+                self.check_join()?;
+            } else {
+                match self.ask_login().await {
+                    Ok(t) => self.target = Some(t),
+                    Err(f) => return Err(f),
+                }
             }
         }
         if nsg == stage::FULL_FEATURE {
@@ -827,6 +1098,197 @@ impl<'a> Conn<'a> {
             }
         }
         Ok((reply, Some(nsg)))
+    }
+
+    /// A login adding a connection to an existing session: same initiator port and target,
+    /// the same CHAP identity, and within the session's MaxConnections (a reinstatement of one
+    /// of its CIDs replaces that connection rather than adding one).
+    fn check_join(&mut self) -> Result<(), LoginFailure> {
+        let Some(cell) = self.joining.clone() else {
+            return Ok(());
+        };
+        let s = lock(&cell);
+        if s.ended
+            || s.nexus.initiator != self.initiator_name
+            || s.nexus.isid != self.isid
+            || s.nexus.target != self.target_name
+        {
+            return Err(fail(
+                login_status::SESSION_DOES_NOT_EXIST,
+                "protocol_refusal",
+                "a TSIH that names another initiator's or another target's session",
+            ));
+        }
+        if self.config.chap_required() && s.authenticated != self.authenticated {
+            return Err(fail(
+                login_status::AUTHORIZATION_FAILURE,
+                "auth_failure",
+                "a connection authenticated as another CHAP user than its session",
+            ));
+        }
+        let reinstating = s
+            .conns
+            .iter()
+            .any(|c| c.cid == self.cid && c.life == Life::Live);
+        let live = s.live_connections();
+        if !reinstating && live as u32 >= s.params.max_connections {
+            return Err(fail(
+                login_status::TOO_MANY_CONNECTIONS,
+                "protocol_refusal",
+                format!(
+                    "session {} already has {live} of MaxConnections {}",
+                    s.tsih, s.params.max_connections
+                ),
+            ));
+        }
+        self.target = Some(s.target.clone());
+        Ok(())
+    }
+
+    /// Bring the session up as the login completes: a new one (replacing any session of the
+    /// same I_T nexus — session reinstatement, RFC 7143 §6.3.5), or this connection added to
+    /// the session it named (replacing a connection of the same CID — connection
+    /// reinstatement, §6.3.4).
+    fn establish(&mut self) -> Result<(), LoginFailure> {
+        let now = Instant::now();
+        if self.session_type == SessionType::Discovery {
+            self.tsih = lock_registry(&self.registry)
+                .allocate_tsih()
+                .ok_or_else(|| {
+                    fail(
+                        login_status::OUT_OF_RESOURCES,
+                        "protocol_refusal",
+                        "no TSIH left",
+                    )
+                })?;
+            return Ok(());
+        }
+        let slot = ConnSlot {
+            cid: self.cid,
+            id: self.id,
+            wake: self.wake.clone(),
+            close: self.close.clone(),
+            life: Life::Live,
+        };
+        if let Some(cell) = self.joining.take() {
+            let mut s = lock(&cell);
+            if s.ended {
+                return Err(fail(
+                    login_status::SESSION_DOES_NOT_EXIST,
+                    "protocol_refusal",
+                    "the session ended during the login",
+                ));
+            }
+            // Connection reinstatement: the old connection of this CID is logged out
+            // implicitly — for recovery at error recovery level 2, closed below it.
+            if let Some(old) = s
+                .conns
+                .iter()
+                .find(|c| c.cid == self.cid && c.life == Life::Live)
+                .map(|c| (c.id, c.close.clone()))
+            {
+                old.1.cancel();
+                let how = if s.erl() >= 2 {
+                    Gone::Recovering(now)
+                } else {
+                    Gone::Closed
+                };
+                let luns = s.connection_gone(old.0, how);
+                for l in luns {
+                    s.unit_attention(l, Sense::COMMANDS_CLEARED_BY_ISCSI_EVENT);
+                }
+                outcome(
+                    self.ctx,
+                    self.id,
+                    "login",
+                    "reinstated",
+                    &format!("connection {} of session {} replaced", self.cid, s.tsih),
+                );
+            }
+            s.conns.push(slot);
+            self.tsih = s.tsih;
+            // The leading-only keys stay the session's whatever this login said.
+            let own = self.params.clone();
+            self.params = Params {
+                header_digest: own.header_digest,
+                data_digest: own.data_digest,
+                peer_max_recv_data_segment: own.peer_max_recv_data_segment,
+                our_max_recv_data_segment: own.our_max_recv_data_segment,
+                ..s.params.clone()
+            };
+            drop(s);
+            self.session = Some(cell);
+            return Ok(());
+        }
+        let Some(target) = self.target.clone() else {
+            return Err(fail(
+                login_status::TARGET_ERROR,
+                "fail_closed_invalid_reply",
+                "no target description",
+            ));
+        };
+        let nexus = Nexus {
+            initiator: self.initiator_name.clone(),
+            isid: self.isid,
+            target: self.target_name.clone(),
+        };
+        let mut reg = lock_registry(&self.registry);
+        reg.purge(now);
+        // Session reinstatement: the nexus's old session ends, its tasks with it.
+        if let Some(old) = reg.by_nexus(&nexus) {
+            let tsih = {
+                let mut o = lock(&old);
+                o.ended = true;
+                for c in &o.conns {
+                    c.close.cancel();
+                }
+                o.tsih
+            };
+            reg.remove(tsih);
+            outcome(
+                self.ctx,
+                self.id,
+                "login",
+                "reinstated",
+                &format!("session {tsih} of {} replaced", nexus.initiator),
+            );
+        }
+        if reg.len() >= session::MAX_SESSIONS {
+            return Err(fail(
+                login_status::OUT_OF_RESOURCES,
+                "protocol_refusal",
+                format!("{} sessions already", session::MAX_SESSIONS),
+            ));
+        }
+        let tsih = match self.requested_tsih.filter(|t| reg.get(*t).is_none()) {
+            Some(t) => t,
+            None => reg.allocate_tsih().ok_or_else(|| {
+                fail(
+                    login_status::OUT_OF_RESOURCES,
+                    "protocol_refusal",
+                    "no TSIH left",
+                )
+            })?,
+        };
+        let owed = reg.take_owed(&nexus);
+        let mut s = Session::new(
+            tsih,
+            nexus,
+            self.authenticated.clone(),
+            target,
+            self.params.clone(),
+            self.window.exp_cmd_sn,
+        );
+        for sense in owed {
+            s.unit_attention_all(sense);
+        }
+        s.conns.push(slot);
+        let cell: SessionCell = Arc::new(Mutex::new(s));
+        reg.insert(tsih, cell.clone());
+        drop(reg);
+        self.tsih = tsih;
+        self.session = Some(cell);
+        Ok(())
     }
 
     fn security_keys(
@@ -1024,1080 +1486,4 @@ impl<'a> Conn<'a> {
         }
         Ok(answers.remove(0))
     }
-
-    // ----------------------------------------------------------- full feature
-
-    async fn full_feature(&mut self) -> Result<()> {
-        loop {
-            let req = match pdu::read_pdu(
-                &mut self.stream,
-                self.digests,
-                self.params.our_max_recv_data_segment as usize,
-                PDU_DEADLINE,
-            )
-            .await
-            {
-                Ok(p) => p,
-                Err(ReadError::Closed) => return Ok(()),
-                Err(ReadError::Oversize { declared, limit }) => {
-                    outcome(
-                        self.ctx,
-                        self.id,
-                        "pdu",
-                        "protocol_refusal",
-                        &format!("a data segment of {declared} bytes over MaxRecvDataSegmentLength {limit}"),
-                    );
-                    let _ = self.stream.shutdown().await;
-                    return Ok(());
-                }
-                Err(ReadError::DataDigest(p)) => {
-                    // The PDU was read whole, so the stream is in step: reject it alone.
-                    outcome(
-                        self.ctx,
-                        self.id,
-                        "pdu",
-                        "protocol_refusal",
-                        "data digest mismatch",
-                    );
-                    self.reject(&p, reject::DATA_DIGEST_ERROR).await?;
-                    continue;
-                }
-                Err(ReadError::HeaderDigest) => {
-                    outcome(
-                        self.ctx,
-                        self.id,
-                        "pdu",
-                        "protocol_refusal",
-                        "header digest mismatch; the stream cannot be trusted",
-                    );
-                    let _ = self.stream.shutdown().await;
-                    return Ok(());
-                }
-                Err(e) => bail!("{e}"),
-            };
-            self.received(&req).await;
-            if !self.dispatch(req).await? {
-                if self.logged_out {
-                    // The initiator closes after reading the Logout Response (RFC 7143
-                    // §11.15); closing first races it, and libiscsi reads the hang-up as a
-                    // dropped connection and logs in again. Wait for its close, bounded.
-                    let mut sink = [0u8; 512];
-                    let _ = tokio::time::timeout(LOGOUT_LINGER, async {
-                        while matches!(self.stream.read(&mut sink).await, Ok(n) if n > 0) {}
-                    })
-                    .await;
-                }
-                let _ = self.stream.shutdown().await;
-                return Ok(());
-            }
-        }
-    }
-
-    /// Whether a command-bearing PDU is in sequence. A non-immediate command must carry
-    /// ExpCmdSN; anything else is outside the window and silently dropped (RFC 7143 §4.2.2.1).
-    fn admit(&mut self, req: &Pdu) -> bool {
-        let cmd_sn = req.u32_at(24);
-        if req.immediate() {
-            return true;
-        }
-        if cmd_sn == self.exp_cmd_sn {
-            self.exp_cmd_sn = self.exp_cmd_sn.wrapping_add(1);
-            if let Some(i) = self
-                .aborted_before_arrival
-                .iter()
-                .position(|c| *c == cmd_sn)
-            {
-                self.aborted_before_arrival.swap_remove(i);
-                outcome(
-                    self.ctx,
-                    self.id,
-                    "sequence",
-                    "aborted",
-                    &format!("CmdSN {cmd_sn} was aborted before it arrived: dropped"),
-                );
-                return false;
-            }
-            return true;
-        }
-        outcome(
-            self.ctx,
-            self.id,
-            "sequence",
-            "protocol_refusal",
-            &format!(
-                "{} with CmdSN {cmd_sn} while ExpCmdSN is {}: dropped",
-                op::name(req.opcode()),
-                self.exp_cmd_sn
-            ),
-        );
-        false
-    }
-
-    /// Returns false to end the connection.
-    async fn dispatch(&mut self, req: Pdu) -> Result<bool> {
-        match req.opcode() {
-            op::NOP_OUT => {
-                if req.itt() == RESERVED_TAG {
-                    // A ping answer or a bare ExpStatSN update: nothing to say.
-                    return Ok(true);
-                }
-                if !self.admit(&req) {
-                    return Ok(true);
-                }
-                let mut r = Pdu::new(op::NOP_IN);
-                r.set_flags(0x80);
-                r.set_lun(req.lun());
-                r.set_itt(req.itt());
-                r.set_u32(20, RESERVED_TAG);
-                self.status_fields(&mut r);
-                r.data = req.data;
-                self.send(&r).await?;
-                Ok(true)
-            }
-            op::SCSI_COMMAND => {
-                if self.session_type == SessionType::Discovery {
-                    self.reject(&req, reject::COMMAND_NOT_SUPPORTED).await?;
-                    return Ok(true);
-                }
-                if !self.admit(&req) {
-                    return Ok(true);
-                }
-                self.scsi_command(req).await
-            }
-            op::DATA_OUT => self.data_out(req).await,
-            op::TASK_MGMT_REQUEST => {
-                if !self.admit(&req) {
-                    return Ok(true);
-                }
-                self.task_management(req).await
-            }
-            op::TEXT_REQUEST => {
-                if !self.admit(&req) {
-                    return Ok(true);
-                }
-                self.text_request(req).await
-            }
-            op::LOGOUT_REQUEST => {
-                if !self.admit(&req) {
-                    return Ok(true);
-                }
-                let reason = req.flags() & 0x7F;
-                let mut r = Pdu::new(op::LOGOUT_RESPONSE);
-                r.set_flags(0x80);
-                // Close the session or this connection (its only one) succeeds; removing a
-                // connection for recovery is not supported at error recovery level 0.
-                r.bhs[2] = if reason == 2 { 2 } else { 0 };
-                r.set_itt(req.itt());
-                self.status_fields(&mut r);
-                r.set_u16(40, self.params.default_time2wait as u16);
-                r.set_u16(42, self.params.default_time2retain as u16);
-                self.send(&r).await?;
-                outcome(
-                    self.ctx,
-                    self.id,
-                    "logout",
-                    "logged_out",
-                    &format!("reason {reason}"),
-                );
-                self.logged_out = reason != 2;
-                Ok(reason == 2)
-            }
-            op::SNACK_REQUEST => {
-                // Error recovery level 0 has no SNACK.
-                self.reject(&req, reject::PROTOCOL_ERROR).await?;
-                Ok(true)
-            }
-            other => {
-                outcome(
-                    self.ctx,
-                    self.id,
-                    "pdu",
-                    "protocol_refusal",
-                    &format!("opcode 0x{other:02x} ({})", op::name(other)),
-                );
-                self.reject(&req, reject::COMMAND_NOT_SUPPORTED).await?;
-                Ok(true)
-            }
-        }
-    }
-
-    async fn reject(&mut self, req: &Pdu, reason: u8) -> Result<()> {
-        let mut r = Pdu::new(op::REJECT);
-        r.set_flags(0x80);
-        r.bhs[2] = reason;
-        r.set_itt(RESERVED_TAG);
-        self.status_fields(&mut r);
-        r.data = req.bhs.to_vec();
-        self.send(&r).await
-    }
-
-    // ------------------------------------------------------------ SCSI
-
-    /// SCSI Response: status, sense, residual and how many Data-In PDUs went before it.
-    async fn respond(
-        &mut self,
-        itt: u32,
-        st: u8,
-        sense: Option<Sense>,
-        residual: (u8, u32),
-        exp_data_sn: u32,
-    ) -> Result<()> {
-        let mut r = Pdu::new(op::SCSI_RESPONSE);
-        r.set_flags(0x80 | residual.0);
-        r.bhs[2] = 0; // command completed at target
-        r.bhs[3] = st;
-        r.set_itt(itt);
-        self.status_fields(&mut r);
-        r.set_u32(36, exp_data_sn);
-        r.set_u32(44, residual.1);
-        if let Some(s) = sense {
-            let fixed = s.fixed();
-            r.data = (fixed.len() as u16).to_be_bytes().to_vec();
-            r.data.extend(fixed);
-        }
-        self.send(&r).await
-    }
-
-    async fn check_condition(&mut self, itt: u32, sense: Sense, edtl: u32) -> Result<bool> {
-        // Nothing moved, so all of the expected transfer is residual.
-        let residual = if edtl > 0 { (0x02, edtl) } else { (0, 0) };
-        self.respond(itt, status::CHECK_CONDITION, Some(sense), residual, 0)
-            .await?;
-        Ok(true)
-    }
-
-    /// Send `data` as Data-In for a command that expected `edtl` bytes, collapsing GOOD status
-    /// into the last PDU.
-    async fn data_in(&mut self, itt: u32, lun: [u8; 8], data: &[u8], edtl: u32) -> Result<()> {
-        let edtl = edtl as usize;
-        let send_len = data.len().min(edtl);
-        let residual = if data.len() > edtl {
-            (0x04u8, (data.len() - edtl) as u32)
-        } else if data.len() < edtl {
-            (0x02u8, (edtl - data.len()) as u32)
-        } else {
-            (0, 0)
-        };
-        if send_len == 0 {
-            return self.respond(itt, status::GOOD, None, residual, 0).await;
-        }
-        let max_pdu = (self.params.peer_max_recv_data_segment as usize).max(512);
-        let burst = (self.params.max_burst as usize).max(max_pdu);
-        let mut offset = 0usize;
-        let mut data_sn = 0u32;
-        while offset < send_len {
-            let burst_end = ((offset / burst) + 1) * burst;
-            let end = (offset + max_pdu).min(send_len).min(burst_end);
-            let last = end == send_len;
-            let mut r = Pdu::new(op::DATA_IN);
-            let mut flags = 0u8;
-            if last || end == burst_end {
-                flags |= 0x80;
-            }
-            r.set_lun(lun);
-            r.set_itt(itt);
-            r.set_u32(20, RESERVED_TAG);
-            if last {
-                flags |= 0x01 | residual.0;
-                r.bhs[3] = status::GOOD;
-                self.status_fields(&mut r);
-                r.set_u32(44, residual.1);
-            } else {
-                r.set_u32(28, self.exp_cmd_sn);
-                r.set_u32(32, self.max_cmd_sn());
-            }
-            r.set_flags(flags);
-            r.set_u32(36, data_sn);
-            r.set_u32(40, offset as u32);
-            r.data = data[offset..end].to_vec();
-            self.send(&r).await?;
-            data_sn += 1;
-            offset = end;
-        }
-        Ok(())
-    }
-
-    async fn scsi_command(&mut self, req: Pdu) -> Result<bool> {
-        let itt = req.itt();
-        let edtl = req.u32_at(20);
-        let lun_field = req.lun();
-        let cdb: [u8; 16] = req.bhs[32..48].try_into()?;
-        let op_code = cdb[0];
-        if !req.ahs.is_empty() {
-            // An extended CDB (AHS type 1) or bidirectional read length: neither is supported.
-            return self
-                .check_condition(itt, Sense::INVALID_FIELD_IN_CDB, edtl)
-                .await;
-        }
-        let Some(target) = self.target.clone() else {
-            return self
-                .check_condition(itt, Sense::LUN_NOT_SUPPORTED, edtl)
-                .await;
-        };
-        let lun_number = scsi::lun_from_field(&lun_field);
-        let lun = lun_number.and_then(|n| target.lun(n)).cloned();
-        if op_code == opcode::REPORT_LUNS {
-            let alloc = u32::from_be_bytes(cdb[6..10].try_into()?);
-            if alloc < 16 {
-                return self
-                    .check_condition(itt, Sense::INVALID_FIELD_IN_CDB, edtl)
-                    .await;
-            }
-            let numbers: Vec<u16> = target.luns.iter().map(|l| l.number).collect();
-            let mut d = scsi::report_luns(&numbers);
-            d.truncate(alloc as usize);
-            self.data_in(itt, lun_field, &d, edtl).await?;
-            return Ok(true);
-        }
-        if op_code == opcode::INQUIRY && lun.is_none() {
-            // INQUIRY answers for any LUN: qualifier 3 says nothing is there.
-            let alloc = u16::from_be_bytes([cdb[3], cdb[4]]) as usize;
-            let mut d = scsi::absent_lun_inquiry();
-            d.truncate(alloc);
-            self.data_in(itt, lun_field, &d, edtl).await?;
-            return Ok(true);
-        }
-        if op_code == opcode::REQUEST_SENSE && lun.is_none() {
-            let alloc = cdb[4] as usize;
-            let mut d = Sense::LUN_NOT_SUPPORTED.fixed().to_vec();
-            d.truncate(alloc);
-            self.data_in(itt, lun_field, &d, edtl).await?;
-            return Ok(true);
-        }
-        let Some(lun) = lun else {
-            return self
-                .check_condition(itt, Sense::LUN_NOT_SUPPORTED, edtl)
-                .await;
-        };
-        match op_code {
-            opcode::TEST_UNIT_READY
-            | opcode::START_STOP_UNIT
-            | opcode::PREVENT_ALLOW_MEDIUM_REMOVAL => {
-                let residual = if edtl > 0 { (0x02, edtl) } else { (0, 0) };
-                self.respond(itt, status::GOOD, None, residual, 0).await?;
-            }
-            opcode::REQUEST_SENSE => {
-                let alloc = cdb[4] as usize;
-                let mut d = Sense::NO_SENSE.fixed().to_vec();
-                d.truncate(alloc);
-                self.data_in(itt, lun_field, &d, edtl).await?;
-            }
-            opcode::INQUIRY => match self.inquiry(&lun, &cdb) {
-                Ok(d) => self.data_in(itt, lun_field, &d, edtl).await?,
-                Err(s) => return self.check_condition(itt, s, edtl).await,
-            },
-            opcode::READ_CAPACITY_10 => {
-                let d = scsi::read_capacity_10(lun.last_lba(), lun.block_size);
-                self.data_in(itt, lun_field, &d, edtl).await?;
-            }
-            opcode::SERVICE_ACTION_IN_16 if cdb[1] & 0x1F == scsi::SA_READ_CAPACITY_16 => {
-                let alloc = u32::from_be_bytes(cdb[10..14].try_into()?) as usize;
-                let mut d = scsi::read_capacity_16(lun.last_lba(), lun.block_size).to_vec();
-                d.truncate(alloc);
-                self.data_in(itt, lun_field, &d, edtl).await?;
-            }
-            opcode::MODE_SENSE_6 | opcode::MODE_SENSE_10 => match mode_sense(&lun, &cdb) {
-                Ok(d) => self.data_in(itt, lun_field, &d, edtl).await?,
-                Err(s) => return self.check_condition(itt, s, edtl).await,
-            },
-            opcode::SYNCHRONIZE_CACHE_10 | opcode::SYNCHRONIZE_CACHE_16 => {
-                let (lba, blocks) = if op_code == opcode::SYNCHRONIZE_CACHE_10 {
-                    (
-                        u32::from_be_bytes(cdb[2..6].try_into()?) as u64,
-                        u16::from_be_bytes([cdb[7], cdb[8]]) as u64,
-                    )
-                } else {
-                    (
-                        u64::from_be_bytes(cdb[2..10].try_into()?),
-                        u32::from_be_bytes(cdb[10..14].try_into()?) as u64,
-                    )
-                };
-                // Zero blocks means "to the end of the medium".
-                if !lun.in_range(lba, blocks.max(if lba < lun.blocks { 0 } else { 1 })) {
-                    return self
-                        .check_condition(itt, Sense::LBA_OUT_OF_RANGE, edtl)
-                        .await;
-                }
-                let residual = if edtl > 0 { (0x02, edtl) } else { (0, 0) };
-                self.respond(itt, status::GOOD, None, residual, 0).await?;
-            }
-            _ => match scsi::decode_read_write(&cdb) {
-                Some(rw) if rw.write => return self.write(req, &lun, rw).await,
-                Some(rw) => {
-                    if rw.protect != 0 {
-                        return self
-                            .check_condition(itt, Sense::INVALID_FIELD_IN_CDB, edtl)
-                            .await;
-                    }
-                    if !lun.in_range(rw.lba, rw.blocks as u64) {
-                        return self
-                            .check_condition(itt, Sense::LBA_OUT_OF_RANGE, edtl)
-                            .await;
-                    }
-                    let bytes = rw.blocks as u64 * lun.block_size as u64;
-                    if bytes > MAX_COMMAND_BYTES {
-                        return self
-                            .check_condition(itt, Sense::INVALID_FIELD_IN_CDB, edtl)
-                            .await;
-                    }
-                    if let Some(s) = lun.failure(rw.lba, rw.blocks as u64, false) {
-                        return self.check_condition(itt, s, edtl).await;
-                    }
-                    let d = lun.read(rw.lba, rw.blocks as u64, &self.overlay);
-                    self.data_in(itt, lun_field, &d, edtl).await?;
-                }
-                None => return self.check_condition(itt, Sense::INVALID_OPCODE, edtl).await,
-            },
-        }
-        Ok(true)
-    }
-
-    fn inquiry(&self, lun: &Lun, cdb: &[u8; 16]) -> Result<Vec<u8>, Sense> {
-        let alloc = u16::from_be_bytes([cdb[3], cdb[4]]) as usize;
-        let evpd = cdb[1] & 0x01 != 0;
-        let page = cdb[2];
-        let mut d = if !evpd {
-            if page != 0 {
-                return Err(Sense::INVALID_FIELD_IN_CDB);
-            }
-            scsi::standard_inquiry(
-                &lun.identity,
-                false,
-                0x06, // SPC-4
-                true,
-                &[
-                    scsi::VERSION_SAM5,
-                    scsi::VERSION_ISCSI,
-                    scsi::VERSION_SPC4,
-                    scsi::VERSION_SBC3,
-                ],
-            )
-        } else {
-            match page {
-                0x00 => scsi::vpd_supported_pages(&[0x00, 0x80, 0x83, 0xB0, 0xB1]),
-                0xB0 => {
-                    let max = (MAX_COMMAND_BYTES / lun.block_size as u64) as u32;
-                    let optimal = (self.params.max_burst / lun.block_size).max(1);
-                    scsi::vpd_block_limits(max, optimal)
-                }
-                0xB1 => scsi::vpd_block_device_characteristics(),
-                0x80 => scsi::vpd_serial(&lun.serial),
-                0x83 => scsi::vpd_device_identification(&[
-                    scsi::Designator::Naa6(scsi::naa6_from(&format!(
-                        "{}/{}/{}",
-                        self.target_name, lun.number, lun.serial
-                    ))),
-                    scsi::Designator::T10 {
-                        vendor: lun.identity.vendor.clone(),
-                        id: lun.serial.clone(),
-                    },
-                    scsi::Designator::IscsiTargetName(self.target_name.clone()),
-                ]),
-                _ => return Err(Sense::INVALID_FIELD_IN_CDB),
-            }
-        };
-        d.truncate(alloc);
-        Ok(d)
-    }
-
-    async fn write(&mut self, req: Pdu, lun: &Lun, rw: scsi::ReadWrite) -> Result<bool> {
-        let itt = req.itt();
-        let edtl = req.u32_at(20);
-        if rw.protect != 0 {
-            return self
-                .check_condition(itt, Sense::INVALID_FIELD_IN_CDB, edtl)
-                .await;
-        }
-        if !lun.in_range(rw.lba, rw.blocks as u64) {
-            return self
-                .check_condition(itt, Sense::LBA_OUT_OF_RANGE, edtl)
-                .await;
-        }
-        let expected = rw.blocks as u64 * lun.block_size as u64;
-        if expected > MAX_COMMAND_BYTES {
-            return self
-                .check_condition(itt, Sense::INVALID_FIELD_IN_CDB, edtl)
-                .await;
-        }
-        if !lun.writable {
-            return self
-                .check_condition(itt, Sense::WRITE_PROTECTED, edtl)
-                .await;
-        }
-        if expected == 0 {
-            let residual = if edtl > 0 { (0x02, edtl) } else { (0, 0) };
-            self.respond(itt, status::GOOD, None, residual, 0).await?;
-            return Ok(true);
-        }
-        if edtl as u64 != expected {
-            // The command and its iSCSI transfer length disagree about how much data comes;
-            // refuse rather than write a guess, as LIO does (INVALID FIELD IN INFORMATION
-            // UNIT), naming the difference as the residual. Any data the initiator still sends
-            // for the task is discarded as belonging to no task.
-            let residual = if (edtl as u64) < expected {
-                (0x04, (expected - edtl as u64) as u32)
-            } else {
-                (0x02, (edtl as u64 - expected) as u32)
-            };
-            self.respond(
-                itt,
-                status::CHECK_CONDITION,
-                Some(Sense::INVALID_FIELD_IN_IU),
-                residual,
-                0,
-            )
-            .await?;
-            return Ok(true);
-        }
-        let expected = expected as usize;
-        let first_burst = (self.params.first_burst as usize).min(expected);
-        if !req.data.is_empty() && (!self.params.immediate_data || req.data.len() > first_burst) {
-            outcome(
-                self.ctx,
-                self.id,
-                "write",
-                "protocol_refusal",
-                &format!(
-                    "{} bytes of immediate data (ImmediateData {}, FirstBurstLength {})",
-                    req.data.len(),
-                    self.params.immediate_data,
-                    self.params.first_burst
-                ),
-            );
-            self.reject(&req, reject::PROTOCOL_ERROR).await?;
-            return Ok(false);
-        }
-        let unsolicited_open = !self.params.initial_r2t && !req.final_bit();
-        let mut w = PendingWrite {
-            lun: lun.number,
-            lba: rw.lba,
-            expected,
-            buf: Vec::with_capacity(expected),
-            unsolicited_open,
-            unsolicited_limit: if self.params.initial_r2t {
-                req.data.len()
-            } else {
-                first_burst
-            },
-            unsolicited_data_sn: 0,
-            r2t: None,
-            r2t_sn: 0,
-        };
-        w.buf.extend(&req.data);
-        self.pending.insert(itt, w);
-        self.advance_write(itt).await
-    }
-
-    /// After data arrives: finish the write, or solicit the next burst.
-    async fn advance_write(&mut self, itt: u32) -> Result<bool> {
-        let Some(w) = self.pending.get_mut(&itt) else {
-            return Ok(true);
-        };
-        if w.buf.len() == w.expected {
-            let w = self.pending.remove(&itt).expect("pending write");
-            return self.finish_write(itt, w).await;
-        }
-        if w.unsolicited_open || w.r2t.is_some() {
-            return Ok(true);
-        }
-        let offset = w.buf.len();
-        let len = (w.expected - offset).min(self.params.max_burst as usize);
-        let ttt = self.next_ttt;
-        self.next_ttt = self.next_ttt.wrapping_add(1).max(1);
-        if self.next_ttt == RESERVED_TAG {
-            self.next_ttt = 1;
-        }
-        w.r2t = Some((ttt, offset + len, 0));
-        let r2t_sn = w.r2t_sn;
-        w.r2t_sn += 1;
-        let lun = scsi::lun_field(w.lun);
-        let mut r = Pdu::new(op::R2T);
-        r.set_flags(0x80);
-        r.set_lun(lun);
-        r.set_itt(itt);
-        r.set_u32(20, ttt);
-        // R2T carries StatSN without consuming one.
-        r.set_u32(24, self.stat_sn);
-        r.set_u32(28, self.exp_cmd_sn);
-        r.set_u32(32, self.max_cmd_sn());
-        r.set_u32(36, r2t_sn);
-        r.set_u32(40, offset as u32);
-        r.set_u32(44, len as u32);
-        self.send(&r).await?;
-        Ok(true)
-    }
-
-    async fn data_out(&mut self, req: Pdu) -> Result<bool> {
-        let itt = req.itt();
-        let ttt = req.u32_at(20);
-        let data_sn = req.u32_at(36);
-        let offset = req.u32_at(40) as usize;
-        let Some(w) = self.pending.get_mut(&itt) else {
-            // Data for a task already answered (refused before its data) or aborted.
-            return Ok(true);
-        };
-        let unexpected = Sense::UNEXPECTED_UNSOLICITED_DATA;
-        let phase = Sense::DATA_PHASE_ERROR;
-        let violation = if ttt == RESERVED_TAG {
-            if !w.unsolicited_open {
-                Some((
-                    "unsolicited data after the unsolicited burst ended",
-                    unexpected,
-                ))
-            } else if data_sn != w.unsolicited_data_sn {
-                Some(("DataSN out of order", phase))
-            } else if offset != w.buf.len() || offset + req.data.len() > w.unsolicited_limit {
-                Some((
-                    "unsolicited data beyond FirstBurstLength or out of order",
-                    unexpected,
-                ))
-            } else {
-                None
-            }
-        } else {
-            match w.r2t {
-                Some((t, end, sn)) if t == ttt => {
-                    if data_sn != sn {
-                        Some(("DataSN out of order", phase))
-                    } else if offset != w.buf.len() || offset + req.data.len() > end {
-                        Some(("data outside the R2T it answers", phase))
-                    } else {
-                        None
-                    }
-                }
-                _ => Some(("a Target Transfer Tag this target did not issue", phase)),
-            }
-        };
-        if let Some((why, sense)) = violation {
-            outcome(
-                self.ctx,
-                self.id,
-                "data_out",
-                "protocol_refusal",
-                &format!("{why} (ITT 0x{itt:08x}, DataSN {data_sn}, offset {offset})"),
-            );
-            // The PDU itself was read whole, so the connection is still in step: end only its
-            // task, with CHECK CONDITION and nothing written, and keep the session. Any later
-            // Data-Out for the task is discarded as belonging to no task.
-            //
-            // Both louder answers broke libiscsi's iSCSIDataSnInvalid on Linux. Closing the
-            // connection (which error recovery level 0 allows) made it reconnect with its next
-            // WRITE queued ahead of its Login, then send a WRITE on a fresh connection with no
-            // Login at all and wait forever. A Reject for the Data-Out made it reset the
-            // connection itself, with the same result. The task's own SCSI Response is what
-            // it handles: the WRITE fails and the session goes on.
-            self.pending.remove(&itt);
-            self.respond(itt, status::CHECK_CONDITION, Some(sense), (0, 0), 0)
-                .await?;
-            return Ok(true);
-        }
-        w.buf.extend(&req.data);
-        if ttt == RESERVED_TAG {
-            w.unsolicited_data_sn += 1;
-            if req.final_bit() {
-                w.unsolicited_open = false;
-            }
-        } else if let Some((t, end, sn)) = w.r2t {
-            if req.final_bit() || w.buf.len() >= end {
-                w.r2t = None;
-            } else {
-                w.r2t = Some((t, end, sn + 1));
-            }
-        }
-        self.advance_write(itt).await
-    }
-
-    async fn finish_write(&mut self, itt: u32, w: PendingWrite) -> Result<bool> {
-        let Some(target) = self.target.clone() else {
-            return Ok(true);
-        };
-        let Some(lun) = target.lun(w.lun) else {
-            return self.check_condition(itt, Sense::LUN_NOT_SUPPORTED, 0).await;
-        };
-        let blocks = (w.expected / lun.block_size as usize) as u64;
-        if let Some(s) = lun.failure(w.lba, blocks, true) {
-            self.respond(itt, status::CHECK_CONDITION, Some(s), (0, 0), 0)
-                .await?;
-            return Ok(true);
-        }
-        match self.overlay.write(lun, w.lba, &w.buf) {
-            Ok(()) => self.respond(itt, status::GOOD, None, (0, 0), 0).await?,
-            Err(s) => {
-                outcome(
-                    self.ctx,
-                    self.id,
-                    "write",
-                    "protocol_refusal",
-                    &format!(
-                        "the session's write overlay is full ({} bytes)",
-                        self.overlay.bytes()
-                    ),
-                );
-                self.respond(itt, status::CHECK_CONDITION, Some(s), (0, 0), 0)
-                    .await?
-            }
-        }
-        Ok(true)
-    }
-
-    async fn task_management(&mut self, req: Pdu) -> Result<bool> {
-        let function = req.flags() & 0x7F;
-        let referenced = req.u32_at(20);
-        let ref_cmd_sn = req.u32_at(32);
-        let cmd_sn = req.u32_at(24);
-        let lun = scsi::lun_from_field(&req.lun());
-        let mut close = false;
-        let response: u8 = match function {
-            // ABORT TASK
-            1 => {
-                if self.pending.remove(&referenced).is_some() {
-                    0
-                } else if pdu::sn_lt(ref_cmd_sn, cmd_sn) && pdu::sn_le(self.exp_cmd_sn, ref_cmd_sn)
-                {
-                    // Not received yet but inside the window: RFC 7143 §11.5.1 has the target
-                    // take it as received and aborted, so it is dropped if it turns up.
-                    if self.aborted_before_arrival.len() < COMMAND_WINDOW as usize {
-                        self.aborted_before_arrival.push(ref_cmd_sn);
-                    }
-                    0
-                } else {
-                    // Received and already answered, or never in the window.
-                    1
-                }
-            }
-            // ABORT TASK SET, CLEAR TASK SET, LUN RESET
-            2 | 4 | 5 => {
-                match lun.and_then(|n| self.target.as_ref()?.lun(n).map(|_| n)) {
-                    Some(n) => {
-                        self.pending.retain(|_, w| w.lun != n);
-                        0
-                    }
-                    None => 2, // LUN does not exist
-                }
-            }
-            // TARGET WARM RESET, TARGET COLD RESET
-            6 | 7 => {
-                self.pending.clear();
-                close = function == 7;
-                0
-            }
-            // CLEAR ACA (no ACA), TASK REASSIGN (error recovery level 0)
-            3 => 5,
-            8 => 4,
-            _ => 255,
-        };
-        let mut r = Pdu::new(op::TASK_MGMT_RESPONSE);
-        r.set_flags(0x80);
-        r.bhs[2] = response;
-        r.set_itt(req.itt());
-        self.status_fields(&mut r);
-        self.send(&r).await?;
-        outcome(
-            self.ctx,
-            self.id,
-            "task_management",
-            "answered",
-            &format!("function {function} -> response {response}"),
-        );
-        Ok(!close)
-    }
-
-    // ------------------------------------------------------------ text
-
-    async fn text_request(&mut self, req: Pdu) -> Result<bool> {
-        let itt = req.itt();
-        let ttt = req.u32_at(20);
-        let cont = req.flags() & 0x40 != 0;
-        // The initiator asking for the rest of a long answer.
-        if ttt != RESERVED_TAG {
-            match self.text_out.take() {
-                Some(c) if c.itt == itt && c.ttt == ttt => {
-                    self.send_text(itt, c.rest).await?;
-                }
-                _ => self.reject(&req, reject::INVALID_PDU_FIELD).await?,
-            }
-            return Ok(true);
-        }
-        self.text_out = None;
-        let mut acc = match self.text_in.take() {
-            Some((i, buf)) if i == itt => buf,
-            _ => Vec::new(),
-        };
-        if acc.len() + req.data.len() > text::MAX_TEXT {
-            outcome(
-                self.ctx,
-                self.id,
-                "text",
-                "protocol_refusal",
-                "more than 64 KiB of text",
-            );
-            self.reject(&req, reject::PROTOCOL_ERROR).await?;
-            return Ok(true);
-        }
-        acc.extend(&req.data);
-        if cont {
-            self.text_in = Some((itt, acc));
-            let mut r = Pdu::new(op::TEXT_RESPONSE);
-            r.set_itt(itt);
-            let t = self.issue_ttt();
-            r.set_u32(20, t);
-            self.status_fields(&mut r);
-            self.send(&r).await?;
-            return Ok(true);
-        }
-        let pairs = match text::parse(&acc) {
-            Ok(p) => p,
-            Err(e) => {
-                outcome(
-                    self.ctx,
-                    self.id,
-                    "text",
-                    "protocol_refusal",
-                    &e.to_string(),
-                );
-                self.reject(&req, reject::PROTOCOL_ERROR).await?;
-                return Ok(true);
-            }
-        };
-        // Full feature phase text is SendTargets and nothing else here: its value is All, empty
-        // (this session's target) or a target name. Anything else is refused with Reject, as
-        // LIO does, rather than answered with an empty list the initiator would read as "no
-        // targets" (keys are case-sensitive, so sENDtARGETS is not SendTargets either).
-        let valid = !pairs.is_empty()
-            && pairs.iter().all(|(k, v)| {
-                k == "SendTargets" && (v == "All" || v.is_empty() || actions::valid_name(v))
-            });
-        if !valid {
-            outcome(
-                self.ctx,
-                self.id,
-                "text",
-                "protocol_refusal",
-                "a text request that is not SendTargets=All, a target name or empty",
-            );
-            self.reject(&req, reject::PROTOCOL_ERROR).await?;
-            return Ok(true);
-        }
-        let mut answer: Vec<(String, String)> = Vec::new();
-        for (_, v) in &pairs {
-            answer.extend(self.send_targets(v).await);
-        }
-        self.send_text(itt, text::encode(&answer)).await?;
-        Ok(true)
-    }
-
-    fn issue_ttt(&mut self) -> u32 {
-        let t = self.next_ttt;
-        self.next_ttt = self.next_ttt.wrapping_add(1);
-        if self.next_ttt == RESERVED_TAG || self.next_ttt == 0 {
-            self.next_ttt = 1;
-        }
-        t
-    }
-
-    /// Send a text answer, in as many PDUs as the initiator's MaxRecvDataSegmentLength needs:
-    /// the first part now, the rest when it asks.
-    async fn send_text(&mut self, itt: u32, mut body: Vec<u8>) -> Result<()> {
-        let max = (self.params.peer_max_recv_data_segment as usize).max(512);
-        let mut r = Pdu::new(op::TEXT_RESPONSE);
-        r.set_itt(itt);
-        if body.len() > max {
-            // Split on a key boundary where one fits, so no key straddles two PDUs.
-            let cut = body[..max]
-                .iter()
-                .rposition(|b| *b == 0)
-                .map(|i| i + 1)
-                .unwrap_or(max);
-            let rest = body.split_off(cut);
-            let ttt = self.issue_ttt();
-            r.set_flags(0x40);
-            r.set_u32(20, ttt);
-            self.text_out = Some(TextContinuation { itt, ttt, rest });
-        } else {
-            r.set_flags(0x80);
-            r.set_u32(20, RESERVED_TAG);
-        }
-        self.status_fields(&mut r);
-        r.data = body;
-        self.send(&r).await
-    }
-
-    /// The answer to SendTargets: the model's list for All in a discovery session, this
-    /// session's own target otherwise.
-    async fn send_targets(&mut self, value: &str) -> Vec<(String, String)> {
-        let portal = format!(
-            "{}:{},{}",
-            match self.local.ip() {
-                std::net::IpAddr::V6(v6) => format!("[{v6}]"),
-                ip => ip.to_string(),
-            },
-            self.local.port(),
-            PORTAL_GROUP_TAG
-        );
-        let targets: Vec<(String, Vec<String>)> = match (self.session_type, value) {
-            (SessionType::Discovery, "All") => self.discover().await,
-            // In a normal session the initiator already has its target: All and the empty
-            // value both name it alone.
-            (SessionType::Normal, "" | "All") => vec![(self.target_name.clone(), vec![])],
-            (SessionType::Normal, name) if name == self.target_name => {
-                vec![(self.target_name.clone(), vec![])]
-            }
-            (SessionType::Discovery, name) if !name.is_empty() => self
-                .discover()
-                .await
-                .into_iter()
-                .filter(|(n, _)| n == name)
-                .collect(),
-            _ => vec![],
-        };
-        let mut out = Vec::new();
-        for (name, addresses) in targets {
-            out.push(("TargetName".to_string(), name));
-            if addresses.is_empty() {
-                out.push(("TargetAddress".to_string(), portal.clone()));
-            }
-            for a in addresses {
-                out.push((
-                    "TargetAddress".to_string(),
-                    format!("{a},{PORTAL_GROUP_TAG}"),
-                ));
-            }
-        }
-        out
-    }
-
-    /// The model's SendTargets list, asked once per connection. A failure lists nothing.
-    async fn discover(&mut self) -> Vec<(String, Vec<String>)> {
-        if let Some(d) = &self.discovered {
-            return d.clone();
-        }
-        let event = Event::new(
-            &actions::DISCOVERY_EVENT,
-            json!({
-                "initiator_name": self.initiator_name,
-                "initiator_address": self.peer.to_string(),
-                "authenticated_user": self.authenticated,
-            }),
-        );
-        let targets = match self.ask(&event).await {
-            Ok(a) if a["type"] == actions::SEND_TARGETS => match actions::targets_of(&a) {
-                Ok(t) => {
-                    outcome(
-                        self.ctx,
-                        self.id,
-                        "discovery",
-                        "model_answer",
-                        &format!("{} target(s)", t.len()),
-                    );
-                    t
-                }
-                Err(e) => {
-                    outcome(
-                        self.ctx,
-                        self.id,
-                        "discovery",
-                        "fail_closed_invalid_reply",
-                        &format!("{e:#}"),
-                    );
-                    vec![]
-                }
-            },
-            Ok(_) => {
-                outcome(
-                    self.ctx,
-                    self.id,
-                    "discovery",
-                    "fail_closed_invalid_reply",
-                    "not a target list",
-                );
-                vec![]
-            }
-            Err(f) => {
-                outcome(
-                    self.ctx,
-                    self.id,
-                    "discovery",
-                    f.decision,
-                    "no targets listed",
-                );
-                vec![]
-            }
-        };
-        self.discovered = Some(targets.clone());
-        targets
-    }
-}
-
-/// MODE SENSE(6) or (10): a block descriptor unless DBD, and the caching (0x08) and control
-/// (0x0A) pages. Write protection shows in the device-specific parameter.
-fn mode_sense(lun: &Lun, cdb: &[u8; 16]) -> Result<Vec<u8>, Sense> {
-    let ten = cdb[0] == opcode::MODE_SENSE_10;
-    let dbd = cdb[1] & 0x08 != 0;
-    let pc = cdb[2] >> 6;
-    let page = cdb[2] & 0x3F;
-    let subpage = cdb[3];
-    if pc == 3 {
-        return Err(Sense::SAVING_NOT_SUPPORTED);
-    }
-    if subpage != 0 && subpage != 0xFF {
-        return Err(Sense::INVALID_FIELD_IN_CDB);
-    }
-    let changeable = pc == 1;
-    let caching = {
-        let mut p = vec![0u8; 20];
-        p[0] = 0x08;
-        p[1] = 0x12;
-        p
-    };
-    let control = {
-        let mut p = vec![0u8; 12];
-        p[0] = 0x0A;
-        p[1] = 0x0A;
-        if !changeable {
-            // D_SENSE 0 (fixed-format sense), QErr 0; busy timeout unlimited.
-            p[8] = 0xFF;
-            p[9] = 0xFF;
-        }
-        p
-    };
-    let mut pages = Vec::new();
-    match page {
-        0x08 => pages.extend(&caching),
-        0x0A => pages.extend(&control),
-        0x3F => {
-            pages.extend(&caching);
-            pages.extend(&control);
-        }
-        _ => return Err(Sense::INVALID_FIELD_IN_CDB),
-    }
-    let mut block = Vec::new();
-    if !dbd {
-        // A count past 24 bits reads as 0xFFFFFF, sending the host to READ CAPACITY.
-        let blocks = lun.blocks.min(0x00FF_FFFF) as u32;
-        block.push(0); // density
-        block.extend(&blocks.to_be_bytes()[1..]);
-        block.push(0);
-        block.extend(&lun.block_size.to_be_bytes()[1..]);
-    }
-    // WP for a read-only LUN; DPOFUA, since DPO and FUA are honoured trivially (nothing is
-    // cached, so every write is already where a later read finds it).
-    let wp = if lun.writable { 0x10 } else { 0x90 };
-    let mut d = Vec::new();
-    if ten {
-        let len = (6 + block.len() + pages.len()) as u16;
-        d.extend(len.to_be_bytes());
-        d.extend([0x00, wp, 0x00, 0x00]);
-        d.extend((block.len() as u16).to_be_bytes());
-        d.extend(&block);
-        d.extend(&pages);
-        let alloc = u16::from_be_bytes([cdb[7], cdb[8]]) as usize;
-        d.truncate(alloc);
-    } else {
-        let len = (3 + block.len() + pages.len()).min(255) as u8;
-        d.extend([len, 0x00, wp, block.len() as u8]);
-        d.extend(&block);
-        d.extend(&pages);
-        d.truncate(cdb[4] as usize);
-    }
-    Ok(d)
 }

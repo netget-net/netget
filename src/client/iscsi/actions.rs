@@ -20,7 +20,20 @@ pub const READ_CAPACITY: &str = "iscsi_read_capacity";
 pub const READ: &str = "iscsi_read";
 pub const WRITE: &str = "iscsi_write";
 pub const TEST_UNIT_READY: &str = "iscsi_test_unit_ready";
+pub const TASK_MANAGEMENT: &str = "iscsi_task_management";
 pub const LOGOUT: &str = "iscsi_logout";
+
+/// The task management functions the model may send (RFC 7143 §11.5.1). TASK REASSIGN is
+/// connection recovery, which this initiator does not do.
+pub const TMF_FUNCTIONS: &[&str] = &[
+    "abort_task",
+    "abort_task_set",
+    "clear_aca",
+    "clear_task_set",
+    "logical_unit_reset",
+    "target_warm_reset",
+    "target_cold_reset",
+];
 
 /// Bytes one read or write action moves, so a result fits in an event.
 pub const MAX_TRANSFER: usize = 8192;
@@ -143,6 +156,33 @@ pub fn client_actions() -> Vec<ActionDefinition> {
             "Ask whether a LUN is ready (TEST UNIT READY).",
             vec![lun_param()],
             json!({"type": TEST_UNIT_READY, "lun": 0}),
+        ),
+        action(
+            TASK_MANAGEMENT,
+            "Send a task management function to the logged-in target and get its response: \
+             abort_task (the last command, or referenced_task_tag), abort_task_set, \
+             clear_task_set, clear_aca or logical_unit_reset for a LUN, target_warm_reset or \
+             target_cold_reset (a cold reset ends the session). A reset makes the target \
+             report a unit attention on the next command. The answer arrives as \
+             iscsi_task_management_result.",
+            vec![
+                p(
+                    "function",
+                    "string",
+                    "abort_task, abort_task_set, clear_aca, clear_task_set, \
+                     logical_unit_reset, target_warm_reset or target_cold_reset",
+                    true,
+                ),
+                lun_param(),
+                p(
+                    "referenced_task_tag",
+                    "number",
+                    "For abort_task: the Initiator Task Tag to abort (default: the last command \
+                     sent)",
+                    false,
+                ),
+            ],
+            json!({"type": TASK_MANAGEMENT, "function": "logical_unit_reset", "lun": 0}),
         ),
         action(
             LOGOUT,
@@ -323,6 +363,45 @@ pub static COMMAND_RESULT_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     .with_actions(client_actions())
 });
 
+pub static TASK_MANAGEMENT_RESULT_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    EventType::new(
+        "iscsi_task_management_result",
+        "The target answered a task management function.",
+        json!({"type": TEST_UNIT_READY, "lun": 0}),
+    )
+    .with_parameters(vec![
+        p("function", "string", "The function sent", true),
+        p("lun", "number", "The LUN it named", false),
+        p(
+            "referenced_task_tag",
+            "number",
+            "abort_task: the Initiator Task Tag it named",
+            false,
+        ),
+        p(
+            "response",
+            "string",
+            "function_complete, task_does_not_exist, lun_does_not_exist, \
+             function_not_supported, function_authorization_failed, function_rejected, …",
+            false,
+        ),
+        p(
+            "response_code",
+            "number",
+            "The response as the target sent it",
+            false,
+        ),
+        p(
+            "session_ended",
+            "boolean",
+            "A cold reset (or a failure) ended the session; log in again to go on",
+            false,
+        ),
+        p("error", "string", "Why no response came", false),
+    ])
+    .with_actions(client_actions())
+});
+
 pub static LOGGED_OUT_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "iscsi_logged_out",
@@ -397,6 +476,22 @@ pub fn check(v: &Value) -> Result<()> {
         READ_CAPACITY | TEST_UNIT_READY => {
             lun_of(v)?;
         }
+        TASK_MANAGEMENT => {
+            lun_of(v)?;
+            let f = v["function"].as_str().unwrap_or_default();
+            ensure!(
+                TMF_FUNCTIONS.contains(&f),
+                "function is one of {}",
+                TMF_FUNCTIONS.join(", ")
+            );
+            match &v["referenced_task_tag"] {
+                Value::Null => {}
+                t => ensure!(
+                    t.as_u64().is_some_and(|t| t < u32::MAX as u64),
+                    "referenced_task_tag is a task tag (0 to 4294967294)"
+                ),
+            }
+        }
         READ => {
             lun_of(v)?;
             v["lba"].as_u64().context("lba is a number")?;
@@ -469,6 +564,7 @@ impl Protocol for IscsiClientProtocol {
             TARGETS_EVENT.clone(),
             LOGIN_RESULT_EVENT.clone(),
             COMMAND_RESULT_EVENT.clone(),
+            TASK_MANAGEMENT_RESULT_EVENT.clone(),
             LOGGED_OUT_EVENT.clone(),
         ]
     }
@@ -525,10 +621,10 @@ impl Protocol for IscsiClientProtocol {
         ProtocolMetadataV2::builder()
             .state(DevelopmentState::Experimental)
             .privilege_requirement(PrivilegeRequirement::None)
-            .implementation("Hand-written iSCSI initiator (src/client/iscsi/initiator.rs) over the target's PDU, text and CHAP modules: login through the security and operational stages, CHAP MD5 with optional mutual CHAP, discovery with SendTargets and text continuation, CRC32C digests when negotiated, SCSI commands with Data-In checked for DataSN and offset order, immediate, unsolicited and R2T-solicited Data-Out within the target's MaxRecvDataSegmentLength, NOP-In pings answered, logout. CDBs and answers through src/server/scsi_common.rs")
-            .llm_control("When to discover, which target to log in to, and which SCSI commands to run on which LUNs, with what data")
-            .e2e_testing("tests/client/iscsi: NetGet's own target for the login, CHAP, discovery and command shapes and the fail-closed paths; gotgt (an independent Go target) on macOS and Linux, and tgtd (Linux SCSI target framework, as root in CI) in real_server_test.rs, each read back from the backing file the target serves")
-            .notes("Experimental: two independent targets (gotgt and tgtd), and the tgtd half runs only as root in the pair job, which had not run in CI when this landed. Error recovery level 0, one connection per session. A read or write moves at most 8 KiB; read data is shown as text only when it is text, hex otherwise. A handler chain stops after 16 follow-ups (a whole discover, log in, inspect, read, write, read back and log out session is nine). CHAP secrets come from the startup parameters and never reach the model.")
+            .implementation("Hand-written iSCSI initiator (src/client/iscsi/initiator.rs) over the target's PDU, text and CHAP modules: login through the security and operational stages, CHAP MD5 with optional mutual CHAP, discovery with SendTargets and text continuation, CRC32C digests when negotiated, SCSI commands with Data-In checked for DataSN and offset order, immediate, unsolicited and R2T-solicited Data-Out within the target's MaxRecvDataSegmentLength, NOP-In pings answered, task management functions (ABORT TASK of the last command or a named tag, ABORT/CLEAR TASK SET, CLEAR ACA, LOGICAL UNIT RESET, TARGET WARM/COLD RESET; a cold reset ends the session), logout. CDBs and answers through src/server/scsi_common.rs")
+            .llm_control("When to discover, which target to log in to, and which SCSI commands to run on which LUNs, with what data, and which task management functions to send")
+            .e2e_testing("tests/client/iscsi: NetGet's own target for the login, CHAP, discovery and command shapes and the fail-closed paths; gotgt (an independent Go target) on macOS and Linux, and tgtd (Linux SCSI target framework, as root in CI) in real_server_test.rs, each read back from the backing file the target serves; every task management function against NetGet's own target, gotgt and tgtd, with the responses each gives and the unit attentions tgt reports")
+            .notes("Experimental: two independent targets (gotgt and tgtd), and the tgtd half runs only as root in the pair job, which had not run in CI when this landed. Error recovery level 0 and one connection per session: neither independent target implements SNACK, connection recovery or multiple connections (tgt advertises ErrorRecoveryLevel=2 when configured and implements none of it; gotgt answers TSIH 0), so the initiator offers ErrorRecoveryLevel=0 and MaxConnections=1. TASK REASSIGN is not offered to the model. A read or write moves at most 8 KiB; read data is shown as text only when it is text, hex otherwise. A handler chain stops after 16 follow-ups (a whole discover, log in, inspect, read, write, read back and log out session is nine). CHAP secrets come from the startup parameters and never reach the model.")
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
             .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()

@@ -86,19 +86,22 @@ async fn wait_for_write(path: &std::path::Path) -> Vec<u8> {
 
 const GOTGT_TARGET: &str = "iqn.2026-10.org.gostor:netget-disk";
 
-#[tokio::test]
-async fn gotgt_serves_the_models_session_from_its_backing_file() {
+/// gotgt serving a 4 MiB backing file as LUN 0 of [`GOTGT_TARGET`], from a test-owned `HOME`
+/// (its config.json lives there): (the daemon, its port, the backing file).
+async fn start_gotgt(
+    home: &std::path::Path,
+    marker: &str,
+) -> (tokio::process::Child, u16, PathBuf) {
     let gotgt = find_binary(
         "gotgt",
         "NETGET_GOTGT",
         "go install github.com/gostor/gotgt@v0.2.2 (then NETGET_GOTGT=$(go env GOPATH)/bin/gotgt)",
     );
-    let home = tempfile::tempdir().unwrap();
-    let disk = backing_file(home.path(), "hello from gotgt");
+    let disk = backing_file(home, marker);
     let (port, control) = (free_port(), free_port());
-    std::fs::create_dir_all(home.path().join(".gotgt")).unwrap();
+    std::fs::create_dir_all(home.join(".gotgt")).unwrap();
     std::fs::write(
-        home.path().join(".gotgt/config.json"),
+        home.join(".gotgt/config.json"),
         json!({
             "storages": [{"deviceID": 1000, "path": format!("file:{}", disk.display()),
                           "online": true, "thinProvisioning": false, "blockShift": 9}],
@@ -108,7 +111,7 @@ async fn gotgt_serves_the_models_session_from_its_backing_file() {
         .to_string(),
     )
     .unwrap();
-    let _daemon = tokio::process::Command::new(&gotgt)
+    let daemon = tokio::process::Command::new(&gotgt)
         .args([
             "daemon",
             "--port",
@@ -116,14 +119,57 @@ async fn gotgt_serves_the_models_session_from_its_backing_file() {
             "--host",
             &format!("tcp://127.0.0.1:{control}"),
         ])
-        .env("HOME", home.path())
+        .env("HOME", home)
         .stdout(std::process::Stdio::null())
-        .stderr(std::fs::File::create(home.path().join("gotgt.log")).unwrap())
+        .stderr(std::fs::File::create(home.join("gotgt.log")).unwrap())
         .kill_on_drop(true)
         .spawn()
         .unwrap();
     wait_for_port(port).await;
+    (daemon, port, disk)
+}
 
+#[tokio::test]
+async fn gotgt_answers_the_models_task_management() {
+    let home = tempfile::tempdir().unwrap();
+    let (_daemon, port, _disk) = start_gotgt(home.path(), "hello from gotgt").await;
+    let (state, id) = client(
+        format!("127.0.0.1:{port}"),
+        json!({"initiator_name": "iqn.2026-10.net.netget:gotgt-tmf", "target_name": GOTGT_TARGET}),
+        chain(&stepping_policy(&home.path().join("step"), &tmf_steps(0))),
+    )
+    .await
+    .unwrap();
+    let log = || std::fs::read_to_string(home.path().join("gotgt.log")).unwrap_or_default();
+    let r = tmf_results(&state, id, 7).await;
+    // gotgt 0.2.2 (pkg/port/iscsit/iscsid.go): ABORT TASK looks only at tasks still waiting,
+    // ABORT TASK SET and LOGICAL UNIT RESET are empty cases answered "function complete",
+    // everything else is "not supported", and the session goes on after both target resets.
+    let want = [
+        ("abort_task", "task_does_not_exist"),
+        ("abort_task_set", "function_complete"),
+        ("clear_aca", "function_not_supported"),
+        ("clear_task_set", "function_not_supported"),
+        ("logical_unit_reset", "function_complete"),
+        ("target_warm_reset", "function_not_supported"),
+        ("target_cold_reset", "function_not_supported"),
+    ];
+    let got: Vec<(&str, &str)> = r.iter().map(|(f, s)| (f.as_str(), s.as_str())).collect();
+    assert_eq!(got, want, "{}", log());
+    // gotgt establishes no unit attention, after login or after its LUN reset.
+    let c = results(&state, id, 4).await;
+    assert!(c.iter().all(|r| r["status"] == "GOOD"), "{c:?}\n{}", log());
+    let out = wait_event(&state, id, "iscsi_logged_out", 0).await;
+    assert_eq!(
+        out["reason"], "logged out",
+        "the session outlived both target resets"
+    );
+}
+
+#[tokio::test]
+async fn gotgt_serves_the_models_session_from_its_backing_file() {
+    let home = tempfile::tempdir().unwrap();
+    let (_daemon, port, disk) = start_gotgt(home.path(), "hello from gotgt").await;
     // gotgt 0.2.2 has no discovery session: a login without a TargetName is closed unanswered
     // ("No target found with name()"), so this session logs straight in to the target.
     let (state, id) = client(
@@ -182,6 +228,102 @@ mod tgtd {
             "tgtadm {args:?}: {}",
             String::from_utf8_lossy(&out.stderr)
         );
+    }
+
+    #[tokio::test]
+    async fn tgtd_answers_the_models_task_management() {
+        require_root();
+        let tgtd = find_binary("tgtd", "NETGET_TGTD", "apt-get install tgt");
+        let dir = tempfile::tempdir().unwrap();
+        let disk = backing_file(dir.path(), "hello from tgt");
+        let port = free_port();
+        // Its own control port: the other tgtd test may be running at the same time.
+        let control: u16 = 18;
+        let log_path = dir.path().join("tgtd.log");
+        let log = std::fs::File::create(&log_path).unwrap();
+        let tgtd_log = || {
+            format!(
+                "\n--- tgtd -d 1 ---\n{}",
+                std::fs::read_to_string(&log_path).unwrap_or_default()
+            )
+        };
+        let _daemon = tokio::process::Command::new(&tgtd)
+            .args([
+                "-f",
+                "-d",
+                "1",
+                "-C",
+                &control.to_string(),
+                "--iscsi",
+                &format!("portal=127.0.0.1:{port}"),
+            ])
+            .stdout(log.try_clone().unwrap())
+            .stderr(log)
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        wait_for_port(port).await;
+        for args in [
+            vec![
+                "--lld", "iscsi", "--op", "new", "--mode", "target", "--tid", "1", "-T", TARGET,
+            ],
+            vec![
+                "--lld",
+                "iscsi",
+                "--op",
+                "new",
+                "--mode",
+                "logicalunit",
+                "--tid",
+                "1",
+                "--lun",
+                "1",
+                "-b",
+                disk.to_str().unwrap(),
+            ],
+            vec![
+                "--lld", "iscsi", "--op", "bind", "--mode", "target", "--tid", "1", "-I", "ALL",
+            ],
+        ] {
+            tgtadm(control, &args).await;
+        }
+        let (state, id) = client(
+            format!("127.0.0.1:{port}"),
+            json!({"initiator_name": "iqn.2026-10.net.netget:tgt-tmf", "target_name": TARGET}),
+            chain(&stepping_policy(&dir.path().join("step"), &tmf_steps(1))),
+        )
+        .await
+        .unwrap();
+        let r = tmf_results(&state, id, 7).await;
+        // tgt 1.0.85 (usr/iscsi/iscsid.c iscsi_tm_execute): ABORT TASK, ABORT TASK SET and LUN
+        // RESET reach the target; CLEAR ACA, CLEAR TASK SET and both target resets are "not
+        // supported", and the session goes on.
+        let want = [
+            ("abort_task", "task_does_not_exist"),
+            ("abort_task_set", "function_complete"),
+            ("clear_aca", "function_not_supported"),
+            ("clear_task_set", "function_not_supported"),
+            ("logical_unit_reset", "function_complete"),
+            ("target_warm_reset", "function_not_supported"),
+            ("target_cold_reset", "function_not_supported"),
+        ];
+        let got: Vec<(&str, &str)> = r.iter().map(|(f, s)| (f.as_str(), s.as_str())).collect();
+        assert_eq!(got, want, "{}", tgtd_log());
+        // tgt sets POWER ON, RESET, OR BUS DEVICE RESET OCCURRED on a new nexus and again on
+        // its LUN reset: the first TEST UNIT READY after each reports it, the next is GOOD.
+        let c = results(&state, id, 4).await;
+        let ua = |r: &serde_json::Value| {
+            r["sense"]
+                .as_str()
+                .is_some_and(|s| s.contains("POWER ON, RESET, OR BUS DEVICE RESET OCCURRED"))
+        };
+        assert!(ua(&c[0]) && ua(&c[2]), "{c:?}{}", tgtd_log());
+        assert_eq!(
+            (&c[1]["status"], &c[3]["status"]),
+            (&json!("GOOD"), &json!("GOOD"))
+        );
+        let out = wait_event(&state, id, "iscsi_logged_out", 0).await;
+        assert_eq!(out["reason"], "logged out", "{}", tgtd_log());
     }
 
     #[tokio::test]
