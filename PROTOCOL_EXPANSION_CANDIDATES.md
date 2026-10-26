@@ -61,9 +61,18 @@ What is left from this document, with the reason each is still open:
     focus moves, and SetSystemDateAndTime/Scopes/Hostname/SystemReboot as model decisions.
     Server peers: onvif-zeep-async and use-go/onvif for PTZ, Events, Imaging and Set\*;
     onvif2-zeep and IOTechSystems/onvif for Media2. Client peers: RPOS (PTZ, Imaging) and
-    onvif_simple_server (Media2, Events). Still not built: Recording, Replay and Search,
-    Basic Notification (device-initiated callbacks), PTZ home-position setting and tours,
-    Imaging exposure/white-balance/WDR/backlight, Media2 configuration changes.
+    onvif_simple_server (Media2, Events). **Basic Notification, Recording, Search and Replay
+    landed 26 October 2026** in both roles: the device POSTs `wsnt:Notify` to subscribers
+    under a written bounds design (http to IP literals only, an allowlist defaulting to
+    loopback, 8 subscriptions, 64 queued each, a per-attempt timeout and bounded retries, no
+    redirects); the model describes recordings, tracks, events and replay URIs once and Rust
+    answers every Recording/Search/Replay read; Create/DeleteRecording are model decisions.
+    Peers: onvif-zeep-async (20 Profile G operations, NotificationManager), videonext/onvif
+    (18), use-go/onvif (Subscribe), and NetGet's client subscribing to onvif_simple_server.
+    Still not built: client Recording/Search/Replay against a real device (no open
+    implementation exists), recording tracks and jobs changed by clients, XPath filters,
+    actually streaming a replay, PTZ home-position setting and tours, Imaging exposure/
+    white-balance/WDR/backlight, Media2 configuration changes.
   - ~~**Stratum V2**~~: landed 14 October 2026 as the `stratum-v2` pair (Mining Protocol,
     standard and extended channels, Noise NX with the SV2 certificate), hand-rolled from
     sv2-spec so that SRI's `mining_device` and `pool_sv2` (over Bitcoin Core regtest) are
@@ -176,7 +185,7 @@ says. Strike an item when it lands.
 6b. ~~The same race in tls, socket_file, bitcoin.~~ Landed 24 October 2026: TCP's read decisions are a shared `ReadQueue` (`src/server/read_queue.rs`) used by tcp, tls, socket_file and bitcoin; modbus had a variant (appends in per-read tasks) fixed in place; ssh_agent, quic, websocket, webrtc and the USB devices were checked and are not affected. Under load before: tls 192/200 runs reordered, socket_file 100/200, bitcoin 8/200, modbus 200/200; after, 200/200 pass each. Found on the way and fixed: TLS replies losing their tail in rustls's buffer, and the socket_file banner and bitcoin `version` racing the first answer. Still open: bitcoin's queue behind an in-flight answer is unbounded.
 6c. ~~M3UA's SCTP transport does not set `SCTP_NODELAY`.~~ Landed 25 October 2026: `utils::sctp::set_nodelay` is shared by ngap and m3ua (and m3ua's lab TCP transport sets TCP_NODELAY). The startup sweep's runtime shutdown is now bounded and prints every thread's state with each blocked read's file, so the intermittent post-sweep hang (2 CI shards, 2 of ~30 local runs with stdin an open pipe) will name its protocol the next time it happens; the cause is not yet known.
 7. ~~NGAP: PDU session release and modification, Service Request, paging, IPv6 sessions, NIA1/NEA1 and NIA3/NEA3.~~ Landed 25 October 2026.
-8. ONVIF: Recording, Replay, Search; Basic Notification.
+8. ~~ONVIF: Recording, Replay, Search; Basic Notification.~~ Landed 26 October 2026.
 9. NVMe/TCP: DH-HMAC-CHAP, TLS, reservations, Compare/Verify/Copy.
 10. iSCSI: error recovery levels 1 and 2, multiple connections per session, the remaining task management functions.
 11. FUSE: hard links, extended attributes, fallocate. macOS needs macFUSE or FUSE-T installed, which waits on the maintainer.
