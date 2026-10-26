@@ -110,10 +110,17 @@ What is left from this document, with the reason each is still open:
     are redacted startup parameters the model never sees. A real UERANSIM UE registers, gets
     a PDU session and pings through the tunnel; NetGet's gNB/UE registers with a full
     Open5GS 2.8 core (NRF, AUSF, UDM, UDR, PCF, SMF, UPF, AMF, MongoDB) and gets a PDU
-    session, with Open5GS's K_gNB matching NetGet's. The gNB client is Beta. Still not
-    built: NIA1/NEA1 and NIA3/NEA3, EAP-AKA', handover, paging, Service Request under
-    security, PDU session release and modification, IPv6 sessions, multiple QoS flows,
-    routed user plane (N6), and a gNB user plane.
+    session, with Open5GS's K_gNB matching NetGet's. The gNB client is Beta. **PDU session
+    release and modification, CM-IDLE with Service Request and paging, IPv6/IPv4v6
+    sessions, and NIA1/NEA1 (SNOW 3G) and NIA3/NEA3 (ZUC) landed 25 October 2026** in both
+    roles: UERANSIM registers and pings under SNOW 3G and under ZUC, releases a session,
+    goes idle and answers paging; NetGet's gNB releases sessions, returns from idle with a
+    Service Request whose K_gNB matches Open5GS's, and gets an IPv4v6 session. Every NGAP
+    SCTP association now sets `SCTP_NODELAY` (Open5GS's delayed acknowledgements held
+    NetGet's back-to-back messages for ~200 ms). UERANSIM cannot drive Service Request
+    (its gNB drops them), modification or IPv6, so those rest on Open5GS and the lab
+    tests. Still not built: EAP-AKA', handover, UE Context Modification, more than one
+    QoS flow per session, routing beyond echo and Router Advertisement, a gNB user plane.
   - ~~**Redis cluster and pub/sub depth**~~: landed 15 October 2026 on the `redis` server
     and client — pub/sub (channels, patterns, shard channels, RESP2 subscribed mode and RESP3
     pushes, model-initiated publish, bounded fan-out with a slow-subscriber limit) and cluster
@@ -167,7 +174,8 @@ says. Strike an item when it lands.
 6. ~~The flaky telnet batching test and the startup-sweep hang.~~ Landed 24 October 2026: the telnet test's premise was wrong (it took the connect event's model call for the slow call) and is now deterministic, with a new test that a line still in the kernel buffer joins the batch; the sweep names a stuck protocol, aborts hung starts and has an overall deadline; two real defects found on the way, the stdio server holding the process open on an open stdin pipe and ActivityPub's unoptimised RSA keygen timing out under load, are fixed. What hung the 24 October run is not established.
 6a. ~~RCON/PTY batching premise; TCP read ordering.~~ Landed 24 October 2026: the TCP server answered one connection's reads out of order (140 of 200 runs under load; two locks raced and a read could be stranded in the queue) and now admits each read in arrival order (`admit_read`, `answer`); the RCON, PTY and TCP batching tests hold their first answer on a gate instead of a delay.
 6b. ~~The same race in tls, socket_file, bitcoin.~~ Landed 24 October 2026: TCP's read decisions are a shared `ReadQueue` (`src/server/read_queue.rs`) used by tcp, tls, socket_file and bitcoin; modbus had a variant (appends in per-read tasks) fixed in place; ssh_agent, quic, websocket, webrtc and the USB devices were checked and are not affected. Under load before: tls 192/200 runs reordered, socket_file 100/200, bitcoin 8/200, modbus 200/200; after, 200/200 pass each. Found on the way and fixed: TLS replies losing their tail in rustls's buffer, and the socket_file banner and bitcoin `version` racing the first answer. Still open: bitcoin's queue behind an in-flight answer is unbounded.
-7. NGAP: PDU session release and modification, Service Request, paging, IPv6 sessions, NIA1/NEA1 and NIA3/NEA3.
+6c. M3UA's SCTP transport (`src/server/m3ua/transport.rs`) does not set `SCTP_NODELAY`, which held NGAP's back-to-back messages ~200 ms behind a peer's delayed acknowledgement.
+7. ~~NGAP: PDU session release and modification, Service Request, paging, IPv6 sessions, NIA1/NEA1 and NIA3/NEA3.~~ Landed 25 October 2026.
 8. ONVIF: Recording, Replay, Search; Basic Notification.
 9. NVMe/TCP: DH-HMAC-CHAP, TLS, reservations, Compare/Verify/Copy.
 10. iSCSI: error recovery levels 1 and 2, multiple connections per session, the remaining task management functions.
