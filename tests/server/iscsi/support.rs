@@ -33,6 +33,8 @@ elif t=='iscsi_task_management':
     a=[]
   elif n.endswith(':invalid-resets'):
     a=[{'type':'iscsi_refuse_reset','response':'maybe'}]
+  elif n.endswith(':wrong-resets'):
+    a=[{'type':'iscsi_send_targets','targets':[]}]
   else:
     a=[{'type':'iscsi_allow_reset'}]
 elif e['initiator_name'].endswith(':denied'):

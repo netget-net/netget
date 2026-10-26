@@ -101,6 +101,8 @@ async fn resets_are_the_models_decision_and_leave_a_unit_attention_on_every_nexu
         ("x:refuses-resets", 3u8, 6u8),
         ("x:silent-resets", 4, 255),
         ("x:invalid-resets", 5, 255),
+        // A valid action, but not a decision about the reset.
+        ("x:wrong-resets", 6, 255),
     ] {
         let mut c = session(srv.port, who, tail, &[]).await;
         assert_eq!(c.tmf(5, 0).await, response, "{who}");
@@ -316,6 +318,31 @@ async fn a_session_of_two_connections_runs_commands_in_cmdsn_order_across_them()
         "and reads the WRITE's data"
     );
     assert_eq!(g.u32(28), n + 2, "ExpCmdSN is the session's");
+    // Three commands become runnable at once: N+1 on B (a WRITE of block 801) and N+2 on A (a
+    // READ of it) are held, then N on A fills the gap. A runs N, but its own N+2 waits for B's
+    // N+1 although both are already in order: only the front of the queue runs.
+    let n = n + 2;
+    b.cmd_sn = n + 1;
+    let (wr, witt) = b.scsi_bhs(0xA0, 0, 512, &write10(801, 1));
+    b.send(wr, &[0x58; 512]).await;
+    a.cmd_sn = n + 2;
+    let (rd, ritt) = a.scsi_bhs(0xC0, 0, 512, &read10(801, 1));
+    a.send(rd, &[]).await;
+    assert!(a.recv_within(Duration::from_millis(300)).await.is_none());
+    a.cmd_sn = n;
+    let (tu, titt) = a.scsi_bhs(0x80, 0, 0, &[0u8; 6]);
+    a.send(tu, &[]).await;
+    let g = a.recv().await;
+    assert_eq!((g.opcode(), g.itt(), g.status()), (0x21, titt, 0));
+    let g = a.recv().await;
+    assert_eq!((g.opcode(), g.itt()), (0x25, ritt));
+    assert!(
+        g.data.iter().all(|x| *x == 0x58),
+        "N+2 ran after the other connection's N+1"
+    );
+    let g = b.recv().await;
+    assert_eq!((g.opcode(), g.itt(), g.status()), (0x21, witt, 0));
+    let n = n + 1;
     a.cmd_sn = n + 2;
     b.cmd_sn = n + 2;
     // A command beyond the window on either connection is dropped, not held.
