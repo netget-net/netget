@@ -86,6 +86,152 @@ print(json.dumps({'actions':a}))"#;
             .collect()
     }
 
+    const SECURE: &str = "nqn.2026-10.net.netget:spdk-secure";
+
+    /// The model for SPDK's authenticated runs: SECURE requires DH-HMAC-CHAP.
+    const SPDK_AUTH_POLICY: &str = r#"import json,sys
+i=json.load(sys.stdin); t=i['event_type_id']; e=i['event']
+if t=='nvme_tcp_connect' and e['subsystem_nqn']=='nqn.2026-10.net.netget:spdk-secure':
+  a=[{'type':'nvme_tcp_accept_connect','require_authentication':True,'namespaces':[
+    {'nsid':1,'size':4194304,'writable':True,'extents':[{'offset':0,'text':'authenticated by spdk'}]}]}]
+else:
+  a=[{'type':'nvme_tcp_reject_connect','reason':'not_found'}]
+print(json.dumps({'actions':a}))"#;
+
+    /// A DH-HMAC-CHAP secret from nvme-cli's `gen-dhchap-key`, in a file only its owner may
+    /// read (SPDK's file keyring refuses any other): (path, the secret).
+    fn key_file(dir: &Path, name: &str, hmac: u8, len: u32, nqn: &str) -> (String, String) {
+        use std::os::unix::fs::PermissionsExt;
+        let nvme = ["/usr/sbin/nvme", "/usr/bin/nvme", "/sbin/nvme"]
+            .into_iter()
+            .find(|p| Path::new(p).exists())
+            .expect(
+                "nvme (nvme-cli) is not installed; it generates the secrets SPDK is given: \
+                 apt-get install nvme-cli",
+            );
+        let out = std::process::Command::new(nvme)
+            .args([
+                "gen-dhchap-key",
+                "-m",
+                &hmac.to_string(),
+                "-l",
+                &len.to_string(),
+                "-n",
+                nqn,
+            ])
+            .output()
+            .unwrap();
+        let key = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        assert!(key.starts_with("DHHC-1:"), "nvme gen-dhchap-key: {key}");
+        let path = dir.join(name);
+        std::fs::write(&path, &key).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        (path.display().to_string(), key)
+    }
+
+    /// spdk_nvme_perf authenticates (`--dhchap-key`, and `--dhchap-ctrlr-key` to make NetGet
+    /// prove itself) before its load runs; a key NetGet does not hold is refused.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn spdk_perf_authenticates_to_netget_one_way_and_both_ways() {
+        let _ = tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .with_env_filter("netget=info")
+            .try_init();
+        let perf = spdk_bin("spdk_nvme_perf");
+        let dir = tempfile::tempdir().unwrap();
+        let (host_path, host_key) = key_file(dir.path(), "host.key", 1, 32, SPDK_HOST);
+        let (ctrl_path, ctrl_key) = key_file(dir.path(), "ctrl.key", 3, 64, SECURE);
+        let (wrong_path, _) = key_file(dir.path(), "wrong.key", 1, 32, SPDK_HOST);
+        let srv = start_on(
+            "127.0.0.1",
+            0,
+            policy(SPDK_AUTH_POLICY),
+            Some(serde_json::json!({
+                "dhchap_secret": host_key,
+                "dhchap_ctrl_secret": ctrl_key,
+                "dhchap_hashes": "sha512,sha256",
+                "dhchap_dhgroups": "ffdhe3072,null",
+            })),
+        )
+        .await;
+        for (keys, ok, expect) in [
+            (vec!["--dhchap-key", host_path.as_str()], true, "checks out"),
+            (
+                vec![
+                    "--dhchap-key",
+                    host_path.as_str(),
+                    "--dhchap-ctrlr-key",
+                    ctrl_path.as_str(),
+                ],
+                true,
+                "authenticated both ways",
+            ),
+            (
+                vec!["--dhchap-key", wrong_path.as_str()],
+                false,
+                "does not match the configured secret",
+            ),
+        ] {
+            let mut args = vec![
+                "--no-huge".to_string(),
+                "-s".into(),
+                "512".into(),
+                "-r".into(),
+                format!("{} ns:1", trid(srv.port, SECURE)),
+                "-q".into(),
+                "4".into(),
+                "-o".into(),
+                "4096".into(),
+                "-w".into(),
+                "randread".into(),
+                "-t".into(),
+                "1".into(),
+            ];
+            args.extend(keys.iter().map(|s| s.to_string()));
+            let a: Vec<&str> = args.iter().map(String::as_str).collect();
+            let out = run(&perf, &a).await;
+            let o = text(&out);
+            println!("spdk_nvme_perf {keys:?}:\n{o}");
+            assert_eq!(out.status.success(), ok, "{o}\n{:#?}", srv.logs());
+            if ok {
+                assert!(o.contains("Total"), "{o}");
+            }
+            assert!(
+                srv.logs()
+                    .iter()
+                    .any(|l| l.contains("operation=authenticate") && l.contains(expect)),
+                "NetGet logged {expect:?}: {:#?}",
+                srv.logs()
+            );
+        }
+        for line in srv.commands() {
+            println!("SPDK sent: {line}");
+        }
+        let admin: Vec<String> = srv
+            .commands()
+            .into_iter()
+            .filter(|l| l.contains("queue 0 of"))
+            .collect();
+        assert!(
+            admin
+                .iter()
+                .filter(|l| l.contains("Authentication Send x3"))
+                .count()
+                == 1
+                && admin.iter().any(|l| l.contains("Authentication Send x2")),
+            "SPDK's one-way exchange is two sends, its two-way three: {admin:#?}"
+        );
+        let secrets = [host_key, ctrl_key];
+        for l in srv.logs() {
+            for s in &secrets {
+                assert!(
+                    !l.contains(s.split(':').nth(2).unwrap()),
+                    "a secret in the log: {l}"
+                );
+            }
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn spdk_identifies_reads_and_loads_the_described_namespaces() {
         // The target's own decisions on stderr, so a failure here shows both sides.

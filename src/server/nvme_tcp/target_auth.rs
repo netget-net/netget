@@ -73,15 +73,21 @@ impl Conn<'_> {
         if secp != auth::SECP || spsp0 != auth::SPSP0 || spsp1 != auth::SPSP1 {
             return Ok(err(Status::INVALID_FIELD));
         }
-        if matches!(self.auth, AuthState::None) {
+        if self.target.config.auth.is_none() {
             outcome(
                 self.ctx,
                 self.id,
                 "authenticate",
                 "protocol_refusal",
-                "Authentication Send/Receive on a queue that was not asked to authenticate",
+                "Authentication Send/Receive, and no DH-HMAC-CHAP secret is configured",
             );
             return Ok(err(Status::COMMAND_SEQUENCE_ERROR));
+        }
+        if matches!(self.auth, AuthState::None) {
+            // Not asked, but a host may prove itself on any queue: SPDK authenticates every
+            // I/O queue whenever it holds a key, and nvmet answers it. The exchange is the
+            // same; it gates nothing on a queue that was not asked.
+            self.auth = AuthState::Negotiate;
         }
         let len = len as usize;
         if sqe.fctype() == fctype::AUTH_SEND {

@@ -767,6 +767,17 @@ impl Host<'_> {
                         "nguid": hex::encode(info.nguid),
                         "eui64": hex::encode(info.eui64),
                         "descriptors": descriptors,
+                        // What Copy may ask (MSRC is 0's based; 0 for MSSRL or MCL: not
+                        // reported) and which reservation types RESCAP names.
+                        "copy_limits": {
+                            "max_source_ranges": info.msrc as u32 + 1,
+                            "max_range_blocks": info.mssrl,
+                            "max_copy_blocks": info.mcl,
+                        },
+                        "reservation_types": (1..=6u8)
+                            .filter(|t| info.rescap & (1 << t) != 0)
+                            .map(crate::server::nvme_tcp::resv::rtype::name)
+                            .collect::<Vec<_>>(),
                     });
                 }
             }

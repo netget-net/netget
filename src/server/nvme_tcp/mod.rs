@@ -2149,17 +2149,11 @@ impl<'a> Conn<'a> {
                     Done::Close
                 }
                 fctype::CONNECT => err(Status::COMMAND_SEQUENCE_ERROR),
+                // I/O queues join a controller whose admin queue authenticated, and are never
+                // asked to (AUTHREQ is clear in their Connect), as nvmet does; a host may
+                // still prove itself on one (SPDK does), and the exchange runs.
                 fctype::AUTH_SEND | fctype::AUTH_RECEIVE => {
-                    // I/O queues join a controller whose admin queue authenticated; they are
-                    // never asked to (AUTHREQ is clear in their Connect), as nvmet does.
-                    outcome(
-                        self.ctx,
-                        self.id,
-                        "authenticate",
-                        "protocol_refusal",
-                        "authentication on an I/O queue, which was not asked to authenticate",
-                    );
-                    err(Status::COMMAND_SEQUENCE_ERROR)
+                    return self.auth_command(sqe, data).await;
                 }
                 _ => err(Status::INVALID_OPCODE),
             });

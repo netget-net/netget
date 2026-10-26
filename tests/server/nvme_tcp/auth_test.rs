@@ -136,13 +136,23 @@ async fn exchange(
     offer_hashes: &[u8],
     key: &[u8],
 ) -> (Challenge, Vec<u8>) {
+    exchange_for(raw, tid, offer_hashes, key, SECURE).await
+}
+
+async fn exchange_for(
+    raw: &mut Raw,
+    tid: u16,
+    offer_hashes: &[u8],
+    key: &[u8],
+    subnqn: &str,
+) -> (Challenge, Vec<u8>) {
     let c = raw.auth_send(&negotiate(tid, offer_hashes, &[0])).await;
     assert!(c.ok(), "Authentication Send (negotiate): {c:?}");
     let (b, c) = raw.auth_receive(4096).await;
     assert!(c.ok(), "Authentication Receive (challenge): {c:?}");
     assert_eq!(b.len(), 4096, "the receive returns AL bytes");
     let ch = challenge(&b);
-    let r1 = host_response(&ch, key, None, SECURE);
+    let r1 = host_response(&ch, key, None, subnqn);
     let c = raw.auth_send(&reply(tid, &r1, None, 0, &[])).await;
     assert!(c.ok(), "Authentication Send (reply): {c:?}");
     let (b, c) = raw.auth_receive(4096).await;
@@ -173,16 +183,14 @@ async fn a_host_that_does_not_authenticate_gets_nothing() {
     assert_eq!(failure(&b, 0), INCORRECT_MESSAGE);
     assert_eq!(raw.prop_get(0x00, true).await.sc(), AUTHENTICATION_REQUIRED);
 
-    // A subsystem the model does not protect: no ATR, and no authentication to run.
+    // A subsystem the model does not protect: no ATR and nothing gated; a host may still prove
+    // itself (SPDK does, on every queue), and the exchange runs.
     let mut open = Raw::connect(srv.port).await;
     let c = connect(&mut open, OPEN).await;
     assert!(c.ok() && c.dw0 & (1 << 17) == 0, "{c:?}");
-    assert_eq!(
-        open.auth_send(&negotiate(1, &[1], &[0])).await.sc(),
-        SEQUENCE_ERROR,
-        "authentication on a queue that was not asked to authenticate"
-    );
     open.enable().await;
+    let (_, s1) = exchange_for(&mut open, 1, &[1], &HOST_KEY, OPEN).await;
+    assert_eq!((s1[0], s1[1]), (1, SUCCESS1), "{:02x?}", &s1[..16]);
 
     let events = events(&srv.state, srv.id, "nvme_tcp_connect").await;
     assert_eq!(events.len(), 2);
@@ -233,6 +241,9 @@ async fn unidirectional_authentication_with_each_hash_and_the_null_group() {
         let mut io = Raw::connect(srv.port).await;
         let c = io.io_session(1, cntlid, SECURE).await;
         assert!(c.ok() && c.dw0 & (1 << 17) == 0, "{c:?}");
+        // A host may prove itself on an I/O queue too (SPDK does); it gates nothing there.
+        let (_, s) = exchange(&mut io, tid + 0x100, &[hash], &HOST_KEY).await;
+        assert_eq!((s[0], s[1]), (1, SUCCESS1), "{:02x?}", &s[..16]);
         let (d, c) = io.read(1, 0, 1, 512).await;
         assert!(c.ok());
         assert_eq!(&d[..7], b"secured");
@@ -501,6 +512,13 @@ async fn the_model_cannot_require_what_is_not_configured() {
     );
     let e = events(&srv.state, srv.id, "nvme_tcp_connect").await;
     assert_eq!(e[0]["authentication_available"], false);
+    // With no secret there is nothing to authenticate against, on any queue.
+    let mut open = Raw::connect(srv.port).await;
+    assert!(connect(&mut open, OPEN).await.ok());
+    assert_eq!(
+        open.auth_send(&negotiate(1, &[1], &[0])).await.sc(),
+        SEQUENCE_ERROR
+    );
 
     // Secrets that do not parse, or a controller secret alone, refuse to start the target, and
     // the error does not repeat the secret.
