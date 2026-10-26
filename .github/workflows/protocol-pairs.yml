@@ -9767,7 +9767,7 @@ jobs:
 
   fuse:
     if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'fuse')
-    name: FUSE local filesystem against the Linux kernel's FUSE driver, coreutils, Python and pjdfstest
+    name: FUSE local filesystem against the Linux kernel's FUSE driver, coreutils, attr, util-linux, Python and pjdfstest
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -9786,7 +9786,7 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            fuse3 build-essential autoconf automake perl python3 openssl
+            fuse3 attr util-linux build-essential autoconf automake perl python3 openssl
           # fuse is in the base modules. Only reach for linux-modules-extra when modprobe
           # fails: a freshly booted runner kernel can be ahead of the archive, and then that
           # package does not exist.
@@ -9813,7 +9813,7 @@ jobs:
       - name: Tools, bounds and fail-closed paths unprivileged, then everything and pjdfstest as root
         run: |
           set -euo pipefail
-          command -v fusermount3 prove python3
+          command -v fusermount3 prove python3 setfattr getfattr fallocate
           test -x "$NETGET_PJDFSTEST/pjdfstest"
           for filter in \
             fuse::; do

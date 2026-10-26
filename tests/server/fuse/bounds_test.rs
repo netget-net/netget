@@ -177,6 +177,113 @@ async fn the_overlay_cap_is_enospc_and_removal_frees_it() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fallocate_past_the_overlay_cap_is_enospc_and_changes_nothing() {
+    let m = mount(
+        Some(vec![
+            describe_root(json!([
+                {"name": "disk.img", "kind": "file", "size": 4194304,
+                 "extents": [{"offset": 0, "length": 4194304, "fill": 7}]}
+            ])),
+            allow_everything(),
+        ]),
+        json!({"max_overlay_bytes": 1048576}),
+    )
+    .await;
+    let _diag = OnFailure(&m);
+    // 2 MiB does not fit in 1 MiB: refused before the model is asked, nothing allocated.
+    m.fails(
+        r#"touch "$M/f" && fallocate -l 2097152 "$M/f""#,
+        "No space left on device",
+    )
+    .await;
+    assert_eq!(m.text(r#"stat -c '%s %b' "$M/f""#).await, "0 0");
+    assert_eq!(m.text(r#"stat -f -c '%f' "$M""#).await, "256");
+    // A punched hole over described bytes needs pages to hide them: 2 MiB of them is refused,
+    // and the bytes are as described.
+    m.fails(
+        r#"fallocate -p -o 0 -l 2097152 "$M/disk.img""#,
+        "No space left on device",
+    )
+    .await;
+    assert_eq!(
+        m.ok(r#"head -c 4 "$M/disk.img""#).await,
+        [7, 7, 7, 7],
+        "a refused punch zeroes nothing"
+    );
+    assert_eq!(m.events("fuse_fallocate").await.len(), 0);
+    // Exactly the cap fits, and then a write needing a new page does not.
+    m.ok(r#"fallocate -l 1048576 "$M/f""#).await;
+    assert_eq!(m.text(r#"stat -f -c '%f' "$M""#).await, "0");
+    m.fails(
+        r#"printf z | dd of="$M/disk.img" bs=1 conv=notrunc status=none"#,
+        "No space left on device",
+    )
+    .await;
+    // Writing inside the reserved range still works: that is what allocation is for.
+    m.ok(r#"printf z | dd of="$M/f" bs=1 seek=1048575 conv=notrunc status=none"#)
+        .await;
+    m.ok(r#"rm "$M/f""#).await;
+    assert_eq!(m.text(r#"stat -f -c '%f' "$M""#).await, "256");
+    m.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn every_new_decision_fails_closed_without_a_model() {
+    // Descriptions come from a static handler; every change goes to the model, whose endpoint
+    // refuses connections.
+    let m = mount(
+        Some(vec![describe_root(json!([
+            {"name": "f", "kind": "file", "text": "keep",
+             "xattrs": [{"name": "user.k", "text": "v"}]},
+            {"name": "g", "kind": "file", "text": "other"}
+        ]))]),
+        json!({"decision_timeout_secs": 30}),
+    )
+    .await;
+    let _diag = OnFailure(&m);
+    m.fails(r#"ln "$M/f" "$M/f2""#, "Input/output error").await;
+    m.fails(r#"stat "$M/f2""#, "No such file").await;
+    assert_eq!(m.text(r#"stat -c '%h' "$M/f""#).await, "1");
+    m.fails(r#"setfattr -n user.new -v 1 "$M/f""#, "Input/output error")
+        .await;
+    m.fails(
+        r#"getfattr --absolute-names -n user.new "$M/f""#,
+        "No such attribute",
+    )
+    .await;
+    m.fails(r#"setfattr -x user.k "$M/f""#, "Input/output error")
+        .await;
+    assert_eq!(
+        m.text(r#"getfattr --absolute-names -n user.k --only-values "$M/f""#)
+            .await,
+        "v"
+    );
+    m.fails(r#"fallocate -l 8192 "$M/f""#, "Input/output error")
+        .await;
+    assert_eq!(m.text(r#"stat -c '%s' "$M/f""#).await, "4");
+    m.fails(r#"fallocate -p -o 0 -l 2 "$M/f""#, "Input/output error")
+        .await;
+    assert_eq!(m.ok(r#"cat "$M/f""#).await, b"keep");
+    let swap = m
+        .sh(r#"python3 -c 'import ctypes,os,sys; l=ctypes.CDLL(None,use_errno=True); r=l.renameat2(-100,(sys.argv[1]+"/f").encode(),-100,(sys.argv[1]+"/g").encode(),2); print(r, os.strerror(ctypes.get_errno()))' "$M""#)
+        .await;
+    assert_eq!(
+        String::from_utf8_lossy(&swap.stdout).trim(),
+        "-1 Input/output error"
+    );
+    assert_eq!(m.ok(r#"cat "$M/f""#).await, b"keep");
+    let log = m.log.lock().unwrap().join("\n");
+    for op in ["link", "setxattr", "removexattr", "fallocate", "rename"] {
+        assert!(
+            log.lines().any(|l| l.contains(&format!("operation={op} "))
+                && l.contains("decision=fail_closed_llm_error")),
+            "{op} failed closed and said so: {log}"
+        );
+    }
+    m.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_read_only_mount_refuses_changes_without_asking() {
     let m = mount(
         Some(vec![describe_root(json!([

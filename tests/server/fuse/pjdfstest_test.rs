@@ -5,11 +5,13 @@
 //! switches to other uids reach the filesystem. The model is a static handler that allows every
 //! change, so this measures the filesystem semantics NetGet implements, not a policy.
 //!
-//! Every test file is run and the whole table printed. [`MUST_PASS`] is the subset the
-//! implemented operations pass in full, and a regression in any of them fails the test. The
-//! rest fail for reasons `src/server/fuse/AGENTS.md` lists: hard links are not implemented,
-//! files are bounded at 1 GiB, and a kernel that refuses device nodes (any user namespace)
-//! fails every case that makes one.
+//! Every test file is run and the whole table printed. [`MUST_PASS`] is the subset that passes
+//! in full wherever this runs as root, and [`MUST_PASS_WITH_DEVICE_NODES`] what passes on top of
+//! it where the kernel lets root make device nodes (probed, not assumed); a regression in any
+//! file of the floor that applies fails the test. The rest fail for reasons
+//! `src/server/fuse/AGENTS.md` lists: files are bounded at 1 GiB, pjdfstest's own TODO cases,
+//! and a kernel that refuses device nodes (any user namespace) fails every case that makes one.
+//! The C suite has no extended-attribute tests; `links_xattrs_test.rs` covers those.
 //!
 //! Each file runs under its own two-minute deadline, so one that hangs is named rather than
 //! taking the run with it. pjdfstest names its files with `openssl md5`; without openssl its
@@ -19,11 +21,11 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-/// Test files that pass in full: 198 of 238, measured on Linux 7.2 (aarch64) as root in a
-/// rootless container (where the kernel refuses block and character device nodes to everyone,
-/// so the device-node cases fail there for a reason that is not this server's). Kept as the
-/// floor; the files not listed fail on hard links (not implemented), device nodes (above), a
-/// 2 GiB pwrite (files are bounded at 1 GiB) and one POSIX TODO.
+/// Test files that pass in full wherever the suite runs as root: 203 of 238, measured on
+/// Linux 7.2 (aarch64) as root in a rootless container, where the kernel refuses block and
+/// character device nodes to everyone, so the device-node cases fail there for a reason that is
+/// not this server's. Kept as the floor. [`MUST_PASS_WITH_DEVICE_NODES`] is what a root that
+/// may make device nodes (CI's sudo; a rootful container) passes on top of it.
 const MUST_PASS: &[&str] = &[
     "chflags/00.t",
     "chflags/01.t",
@@ -79,9 +81,14 @@ const MUST_PASS: &[&str] = &[
     "granular/04.t",
     "granular/05.t",
     "granular/06.t",
+    "link/02.t",
+    "link/03.t",
     "link/04.t",
     "link/05.t",
+    "link/06.t",
+    "link/07.t",
     "link/08.t",
+    "link/09.t",
     "link/11.t",
     "link/12.t",
     "link/13.t",
@@ -224,6 +231,58 @@ const MUST_PASS: &[&str] = &[
     "utimensat/08.t",
     "utimensat/09.t",
 ];
+
+/// The 32 more files that pass in full where the kernel lets root make block and character
+/// device nodes: 235 of 238 in all, measured on Linux 7.2 (aarch64) as root in a rootful
+/// container. The three left fail on a 2 GiB pwrite (files are bounded at 1 GiB) and on
+/// pjdfstest's own TODO cases (`chown/00.t`, `unlink/08.t`), which the tally counts as failures.
+const MUST_PASS_WITH_DEVICE_NODES: &[&str] = &[
+    "chmod/00.t",
+    "chmod/01.t",
+    "chmod/11.t",
+    "chown/01.t",
+    "chown/07.t",
+    "link/00.t",
+    "link/01.t",
+    "link/10.t",
+    "mkdir/01.t",
+    "mkdir/10.t",
+    "mkfifo/01.t",
+    "mkfifo/09.t",
+    "mknod/01.t",
+    "mknod/02.t",
+    "mknod/03.t",
+    "mknod/08.t",
+    "mknod/11.t",
+    "open/01.t",
+    "open/22.t",
+    "rename/00.t",
+    "rename/09.t",
+    "rename/10.t",
+    "rename/12.t",
+    "rename/13.t",
+    "rename/14.t",
+    "rename/20.t",
+    "rename/23.t",
+    "rmdir/06.t",
+    "symlink/08.t",
+    "unlink/00.t",
+    "unlink/11.t",
+    "utimensat/00.t",
+];
+
+/// Whether the kernel lets this process make a block device node, tried on an ordinary
+/// directory outside the mount: root in the initial user namespace may; root in a rootless
+/// container may not, whatever the filesystem.
+fn can_make_device_nodes(scratch: &std::path::Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let p = scratch.join("device-probe");
+    let c = std::ffi::CString::new(p.as_os_str().as_bytes()).unwrap();
+    // SAFETY: a valid NUL-terminated path; mknod has no other preconditions.
+    let made = unsafe { libc::mknod(c.as_ptr(), libc::S_IFBLK | 0o600, libc::makedev(1, 2)) } == 0;
+    let _ = std::fs::remove_file(&p);
+    made
+}
 
 fn pjdfstest_dir() -> PathBuf {
     let dir = std::env::var_os("NETGET_PJDFSTEST")
@@ -388,8 +447,31 @@ async fn pjdfstest_passes_on_the_mount() {
         .map(|(f, _)| f)
         .collect();
     println!("passing files: {passing:?}");
-    let regressed: Vec<&&str> = MUST_PASS
+    let devices = can_make_device_nodes(m.dir.path());
+    println!(
+        "pjdfstest: device nodes {} here, so the floor is {} files",
+        if devices {
+            "can be made"
+        } else {
+            "cannot be made"
+        },
+        MUST_PASS.len()
+            + if devices {
+                MUST_PASS_WITH_DEVICE_NODES.len()
+            } else {
+                0
+            }
+    );
+    let floor: Vec<&&str> = MUST_PASS
         .iter()
+        .chain(if devices {
+            MUST_PASS_WITH_DEVICE_NODES.iter()
+        } else {
+            [].iter()
+        })
+        .collect();
+    let regressed: Vec<&&str> = floor
+        .into_iter()
         .filter(|f| !table.get(**f).is_some_and(|(ok, bad)| *bad == 0 && *ok > 0))
         .collect();
     assert!(

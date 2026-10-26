@@ -33,6 +33,56 @@ frees); create, rmdir, unlink and rename following POSIX (EEXIST, ENAMETOOLONG, 
 ENOTDIR, EISDIR, EINVAL into its own subtree, RENAME_NOREPLACE, replacing); an unlinked file
 readable until its last release with no links left; FIFOs and device nodes; setattr changing only what it names; errno names round trip.
 
+## `tree_links_test.rs` — hard links, xattrs, fallocate and exchange, on every Unix
+
+The same tree without a kernel. Hard links: one inode under several names, a write through one
+read through another, `nlink` across link, rename (one name moves, the count stays; a rename onto
+another name of the same inode does nothing), unlink (the first name gives way to the next; the
+inode goes with its last name), a rename replacing one name, the open-but-unlinked case with
+every name gone (readable, `nlink` 0, no link back to it, gone at the last release); EPERM for a
+directory, EEXIST, ENAMETOOLONG, ENOTDIR, symlinks and FIFOs linkable; `MAX_LINKS` (EMLINK) and
+`MAX_HARD_LINKS` (ENOSPC); described hard links before and after their target, nested, and from
+a later lazy description; broken ones refused whole (missing, undescribed, a directory, another
+hard link, relative, `..`, extra keys, no target, 1025 names); `remove_subtree` keeping a file
+linked from outside it. Exchange: file and directory, across directories, ENOENT, EINVAL into
+its own subtree, two names of one inode, hard-linked names following the swap. Xattrs: described
+on files, directories, symlinks and the root (top-level `xattrs`), shared by hard links;
+XATTR_CREATE/XATTR_REPLACE; names (255 bytes, ERANGE past it, EOPNOTSUPP outside the three
+namespaces, EINVAL empty); values (64 KiB, E2BIG past it); 128 per node (ENOSPC, replacing still
+fine); the 16 MiB tree budget for sets and descriptions; removal and unlink freeing bytes;
+broken descriptions refused whole. fallocate: the mode bits, allocate with and without
+KEEP_SIZE (pages reserved, `st_blocks`, writes into them free), punch over described bytes
+(zeroes, size kept, costs pages), over a failing region, past the end, over written pages (whole
+pages given back), zero range with and without KEEP_SIZE, EFBIG, EINVAL, EISDIR, and the overlay
+cap refusing each mode with nothing changed. And HDFS, which shares the tree: its own
+description check refuses hard links and xattrs that the tree alone would take.
+
+## `links_xattrs_test.rs` — ln, setfattr, fallocate and renameat2 through the kernel
+
+One mount, the policy in `POLICY`. Hard links: a described hard link (`stat` shows one inode, two
+links), `ln` (one `fuse_link` with `existing_path` and `links`), `find -samefile` listing all
+three names, a write through one name read through the others, `mv` and `rm` of one name keeping
+the inode and counting down, a refused `ln` (EPERM) adding nothing, `ln` of a directory and onto
+an existing name refused by the kernel without a model call, and Python opening a file, removing
+every name and reading it through the open descriptor with `st_nlink` 0. Xattrs: `getfattr -d
+-e hex` of described attributes on a file, its hard link and the root (no model call to read);
+`setfattr` set, replace (`replaces`), refused (EACCES) and removed (allowed, refused, and absent
+without asking); `user.*` on a symlink refused by the kernel; Python's `os.setxattr` with
+XATTR_CREATE (EEXIST the second time) and XATTR_REPLACE (ENODATA when missing) answered by the
+tree without a model call, a 64 KiB value and a 255-byte name accepted, 64 KiB + 1 (E2BIG) and
+256 bytes (ERANGE) refused by the kernel, a foreign namespace EOPNOTSUPP, libc `getxattr` and
+`listxattr` through ctypes with a short buffer (ERANGE), a size query and a missing name
+(ENODATA), and the 129th attribute on one file ENOSPC; `trusted.*` and `security.*` set where
+the kernel lets this process (real root; root of the namespace owning the mount) and refused by
+the kernel without a model call where it does not. fallocate: `fallocate` mode 0, `-n`, `-p`
+over described bytes and `-z` with and without `-n` (the bytes compared, one `fuse_fallocate`
+each with its operation, offset, length and keep_size), `-c` and `-i` EOPNOTSUPP, a refused one
+(ENOSPC) allocating nothing, and Python's `os.posix_fallocate`. Exchange: Python `renameat2`
+through ctypes swapping two files and a file with a directory, ENOENT, EEXIST with NOREPLACE,
+a refused exchange (EACCES) changing nothing, RENAME_WHITEOUT (EINVAL from the tree, without asking the model)
+and EXCHANGE|NOREPLACE (EINVAL from the kernel), one `fuse_rename` with `exchange` for
+each that reached the tree.
+
 ## `tools_test.rs` — ordinary tools and Python
 
 One mount, the policy in `POLICY`: `ls -la` (one description, for `/`), `stat` (size, mode,
@@ -58,6 +108,8 @@ unchanged; `rm`; and stop unmounting.
 | `an_endless_tree_stops_at_the_depth_bound` | a static handler describing every directory with another inside: `find` finds 64 files and an EIO, nothing deeper than depth 64 is asked about, at most three attempts at the 65th |
 | `too_many_entries_in_one_answer_are_refused_whole` | a 4097-entry answer is EIO, nothing from it visible |
 | `the_overlay_cap_is_enospc_and_removal_frees_it` | `max_overlay_bytes` 1 MiB: `dd` of 2 MiB stops at exactly 1 MiB with ENOSPC, `stat -f` free blocks 0, one more byte refused, `rm` frees all 256 blocks, a new 512 KiB write succeeds |
+| `fallocate_past_the_overlay_cap_is_enospc_and_changes_nothing` | `max_overlay_bytes` 1 MiB: `fallocate` of 2 MiB and a 2 MiB punch over described bytes are ENOSPC with no model call, the size, blocks and bytes unchanged; exactly 1 MiB fits, after which a write needing a new page is ENOSPC and a write inside the reserved range is not; `rm` frees it |
+| `every_new_decision_fails_closed_without_a_model` | no handler for changes and no backend: `ln`, `setfattr`, `setfattr -x`, `fallocate` (allocate and punch) and a `renameat2` exchange are each EIO with nothing changed and `decision=fail_closed_llm_error` logged for each |
 | `a_read_only_mount_refuses_changes_without_asking` | `read_only`: `cat` works; `touch`, `rm`, `mkdir` and a write are EROFS with no model call |
 | `stop_unmounts_even_while_the_mount_is_busy` | a shell whose working directory is in the mount; stop unmounts (lazily) and the mount point is an empty directory again, its parent lists at once; a mount point the server created is removed |
 | `a_killed_daemon_leaves_no_mount_behind` | `netget --server fuse` in a child process, SIGKILLed once mounted (death-tied through `child_guard` until then): the watchdog removes the mount within 20 s, `ls` of the parent answers at once, the mount point is an empty directory. On failure it prints the mount table, every fusermount3 and watchdog process, fusermount3's version, the dmesg tail and any AppArmor/FUSE journal lines, then lazily unmounts what was left |
@@ -67,9 +119,12 @@ unchanged; `rm`; and stop unmounting.
 pjdfstest's C suite (pinned commit, `scripts/test-peers/build-pjdfstest.sh`), every test file run
 with `prove -v` under its own two-minute deadline from inside a mount with `allow_other` and a
 static allow-everything handler, as root. It prints the whole table with each failing file's first
-`not ok` lines, and fails if a file hangs or any file in `MUST_PASS` stops passing in full —
-198 of 238, measured in a rootless container on Linux 7.2; see `src/server/fuse/AGENTS.md` for
-what the other 40 fail on. It needs perl and openssl (`openssl md5` names its files).
+`not ok` lines, and fails if a file hangs or any file of the floor that applies stops passing in
+full: `MUST_PASS` (203 of 238, measured as root in a rootless container on Linux 7.2, where the
+kernel refuses device nodes) everywhere, plus `MUST_PASS_WITH_DEVICE_NODES` (32 more: 235 of 238,
+measured as real root in a rootful container) where a probe `mknod` of a block device outside the
+mount succeeds, as it does under CI's sudo. See `src/server/fuse/AGENTS.md` for what the last
+three fail on. It needs perl and openssl (`openssl md5` names its files).
 
 ## Mutation-checked
 

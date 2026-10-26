@@ -423,11 +423,26 @@ pub fn check_hdfs_fields(answer: &Json, default_block_size: u64) -> anyhow::Resu
     let Some(top) = answer.get("entries").and_then(Json::as_array) else {
         bail!("entries is an array");
     };
+    // The tree can hold hard links and extended attributes (FUSE serves them); HDFS has no hard
+    // links, and its xattr calls are not built, so a description naming either is refused
+    // rather than accepted and silently not served.
+    ensure!(
+        answer.get("xattrs").is_none(),
+        "HDFS serves no extended attributes: describe none"
+    );
     let mut work = vec![top];
     let mut seen = 0usize;
     while let Some(entries) = work.pop() {
         for e in entries {
             seen += 1;
+            ensure!(
+                e.get("kind").and_then(Json::as_str) != Some("hardlink"),
+                "HDFS has no hard links: describe a file instead"
+            );
+            ensure!(
+                e.get("xattrs").is_none(),
+                "HDFS serves no extended attributes: describe none"
+            );
             ensure!(
                 seen <= tree::MAX_ENTRIES_PER_ANSWER,
                 "one answer describes at most {} entries",

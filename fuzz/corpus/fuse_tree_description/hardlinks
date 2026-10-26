@@ -1,0 +1,1 @@
+{"entries": [{"name": "early", "kind": "hardlink", "target": "/docs/a.md"}, {"name": "docs", "kind": "dir", "entries": [{"name": "a.md", "kind": "file", "text": "# A\n"}, {"name": "b.md", "kind": "hardlink", "target": "/docs/a.md"}]}, {"name": "s", "kind": "symlink", "target": "docs"}, {"name": "s2", "kind": "hardlink", "target": "/s"}]}
