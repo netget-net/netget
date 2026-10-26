@@ -58,6 +58,27 @@ pub struct Started {
     pub state: AppState,
     pub id: ServerId,
     pub port: u16,
+    /// Every status line the target wrote, kept for [`Started::logs`].
+    status: std::sync::Arc<std::sync::Mutex<(mpsc::UnboundedReceiver<String>, Vec<String>)>>,
+}
+
+impl Started {
+    /// The target's status lines so far (its `decision=` lines among them).
+    pub fn logs(&self) -> Vec<String> {
+        let mut s = self.status.lock().unwrap();
+        while let Ok(line) = s.0.try_recv() {
+            s.1.push(line);
+        }
+        s.1.clone()
+    }
+
+    /// The `operation=commands` lines: what each queue received, by command name.
+    pub fn commands(&self) -> Vec<String> {
+        self.logs()
+            .into_iter()
+            .filter(|l| l.contains("operation=commands"))
+            .collect()
+    }
 }
 
 /// Start the NVMe/TCP target on loopback with an unreachable model, so only `handlers` answer.
@@ -75,7 +96,7 @@ pub async fn start_on(
     state
         .set_llm_client(netget::llm::OllamaClient::new("http://127.0.0.1:1"))
         .await;
-    let (tx, _) = mpsc::unbounded_channel();
+    let (tx, rx) = mpsc::unbounded_channel();
     let id = ServerForm {
         protocol: "nvme_tcp".into(),
         port: Some(port),
@@ -103,7 +124,12 @@ pub async fn start_on(
     })
     .await
     .expect("server started");
-    Started { state, id, port }
+    Started {
+        state,
+        id,
+        port,
+        status: std::sync::Arc::new(std::sync::Mutex::new((rx, Vec::new()))),
+    }
 }
 
 /// What the model was shown, per event type, oldest first.

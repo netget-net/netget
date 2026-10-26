@@ -4,6 +4,7 @@
 //! discovery log, and an orderly shutdown (CC.SHN, then close). No model here: `super` decides
 //! what to run and reports what came back. The PDU and NVMe code is the target's
 //! (`src/server/nvme_tcp/pdu.rs`, `src/server/nvme_tcp/nvme.rs`).
+use crate::server::nvme_tcp::auth::{self, DhGroup, DhKey, Hash, Message, Role};
 use crate::server::nvme_tcp::nvme::{
     self, admin, cns, fctype, feature, prop, sgl, ControllerInfo, Cqe, DiscoveryEntry,
     NamespaceInfo, Sqe, Status,
@@ -44,7 +45,29 @@ pub struct HostConfig {
     /// Ask for header and data digests, and require the target to enable them.
     pub digests: bool,
     pub kato_ms: u32,
+    /// DH-HMAC-CHAP secrets, used when a Connect completes with AUTHREQ.ATR.
+    pub dhchap: Option<std::sync::Arc<Dhchap>>,
 }
+
+/// The host's DH-HMAC-CHAP secrets: its own, and the controller's when the host also wants
+/// the controller to prove itself (bidirectional). `Debug` never shows them.
+#[derive(Clone, Debug)]
+pub struct Dhchap {
+    pub secret: auth::Secret,
+    pub ctrl_secret: Option<auth::Secret>,
+}
+
+/// How an authentication went.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Authenticated {
+    pub hash: auth::Hash,
+    pub group: auth::DhGroup,
+    pub bidirectional: bool,
+}
+
+/// The most bytes an Authentication Receive asks for (what the Linux host asks: enough for an
+/// ffdhe8192 challenge).
+pub const AUTH_RECEIVE_LEN: usize = 4096;
 
 /// One queue: a TCP connection past ICReq/ICResp.
 pub struct QueueConn {
@@ -406,6 +429,246 @@ impl QueueConn {
         let c = self.exec(Sqe::new(admin::KEEP_ALIVE, 0), None, 0).await?;
         Ok(c.status())
     }
+
+    /// Authentication Send of one message.
+    async fn auth_send(&mut self, m: &Message) -> Result<()> {
+        let data = m.encode();
+        let mut sqe = Sqe::new(admin::FABRICS, 0);
+        sqe.0[4] = fctype::AUTH_SEND;
+        auth::set_command_fields(&mut sqe, data.len() as u32);
+        let c = self.exec(sqe, Some(&data), 0).await?;
+        ensure!(
+            c.status().is_success(),
+            "Authentication Send ({}): {}",
+            m.name(),
+            c.status().describe()
+        );
+        Ok(())
+    }
+
+    /// Authentication Receive: the message the target owes.
+    async fn auth_receive(&mut self) -> Result<Message> {
+        let mut sqe = Sqe::new(admin::FABRICS, 0);
+        sqe.0[4] = fctype::AUTH_RECEIVE;
+        auth::set_command_fields(&mut sqe, AUTH_RECEIVE_LEN as u32);
+        let c = self.exec(sqe, None, AUTH_RECEIVE_LEN).await?;
+        ensure!(
+            c.status().is_success(),
+            "Authentication Receive: {}",
+            c.status().describe()
+        );
+        Message::decode(&c.data).map_err(|r| {
+            anyhow::anyhow!(
+                "the target's authentication message does not decode ({})",
+                auth::reason::name(r)
+            )
+        })
+    }
+
+    /// Tell the target this host gives up (AUTH_Failure2), then fail with `why`.
+    async fn auth_refuse(&mut self, tid: u16, explanation: u8, why: String) -> anyhow::Error {
+        let _ = self
+            .auth_send(&Message::Failure(auth::Failure {
+                second: true,
+                tid,
+                rescode: auth::RESCODE_FAILED,
+                explanation,
+            }))
+            .await;
+        anyhow::anyhow!("{why}")
+    }
+
+    /// DH-HMAC-CHAP on this queue, after a Connect whose completion set AUTHREQ.ATR: offer
+    /// every hash and group, answer the challenge, and — with a controller secret — check the
+    /// controller's answer to this host's own challenge before saying Success2.
+    pub async fn authenticate(
+        &mut self,
+        config: &HostConfig,
+        subnqn: &str,
+        tid: u16,
+    ) -> Result<Authenticated> {
+        let Some(d) = config.dhchap.as_ref() else {
+            bail!(
+                "the target requires in-band authentication (AUTHREQ.ATR) and this host has no \
+                 dhchap_secret"
+            );
+        };
+        self.auth_send(&Message::Negotiate(auth::Negotiate {
+            tid,
+            sc_c: 0,
+            napd: 1,
+            authid: auth::AUTHID_DHCHAP,
+            hashes: Hash::ALL.iter().map(|h| h.id()).collect(),
+            groups: DhGroup::ALL.iter().map(|g| g.id()).collect(),
+            halen: Hash::ALL.len() as u8,
+            dhlen: DhGroup::ALL.len() as u8,
+        }))
+        .await?;
+        let c = match self.auth_receive().await? {
+            Message::Challenge(c) => c,
+            Message::Failure(f) if !f.second => bail!(
+                "the target refused the negotiation: {}",
+                auth::reason::name(f.explanation)
+            ),
+            m => bail!("{} where the challenge was due", m.name()),
+        };
+        if c.tid != tid {
+            return Err(self
+                .auth_refuse(
+                    tid,
+                    auth::reason::INCORRECT_MESSAGE,
+                    format!("a challenge for transaction {} in {tid}", c.tid),
+                )
+                .await);
+        }
+        let Some(hash) = Hash::from_id(c.hash_id).filter(|h| h.len() == c.hl as usize) else {
+            return Err(self
+                .auth_refuse(
+                    tid,
+                    auth::reason::HASH_UNUSABLE,
+                    format!("the challenge names hash {} with HL {}", c.hash_id, c.hl),
+                )
+                .await);
+        };
+        let Some(group) = DhGroup::from_id(c.dhgid) else {
+            return Err(self
+                .auth_refuse(
+                    tid,
+                    auth::reason::DHGROUP_UNUSABLE,
+                    format!("the challenge names DH group {}", c.dhgid),
+                )
+                .await);
+        };
+        let key = DhKey::generate(group);
+        let session = match &key {
+            None if c.dhv.is_empty() => None,
+            Some(k) => match k.session_key(hash, &c.dhv) {
+                Ok(s) => Some(s),
+                Err(r) => {
+                    return Err(self
+                        .auth_refuse(
+                            tid,
+                            r,
+                            format!("the controller's {} value is not usable", group.name()),
+                        )
+                        .await)
+                }
+            },
+            None => {
+                return Err(self
+                    .auth_refuse(
+                        tid,
+                        auth::reason::INCORRECT_PAYLOAD,
+                        "a DH value under the NULL group".into(),
+                    )
+                    .await)
+            }
+        };
+        let input = |key: &[u8], challenge: &[u8], seqnum: u32| -> Vec<u8> {
+            auth::response(
+                Role::Host,
+                &auth::ResponseInput {
+                    hash,
+                    key,
+                    challenge,
+                    session_key: session.as_deref(),
+                    seqnum,
+                    tid,
+                    sc_c: 0,
+                    host_nqn: &config.hostnqn,
+                    subsystem_nqn: subnqn,
+                },
+            )
+        };
+        let r1 = input(&d.secret.transformed(&config.hostnqn), &c.cval, c.seqnum);
+        let bidirectional = d.ctrl_secret.is_some();
+        let c2 = auth::random(hash.len());
+        let s2 = auth::seqnum();
+        self.auth_send(&Message::Reply(auth::Reply {
+            tid,
+            hl: hash.len() as u8,
+            cvalid: bidirectional,
+            seqnum: s2,
+            rval: r1,
+            cval: if bidirectional {
+                c2.clone()
+            } else {
+                vec![0; hash.len()]
+            },
+            dhv: key
+                .as_ref()
+                .map(|k| k.public().to_vec())
+                .unwrap_or_default(),
+        }))
+        .await?;
+        let s1 = match self.auth_receive().await? {
+            Message::Success1(s) => s,
+            Message::Failure(f) if !f.second => bail!(
+                "the target refused this host's response: {}",
+                auth::reason::name(f.explanation)
+            ),
+            m => bail!("{} where Success1 was due", m.name()),
+        };
+        if s1.tid != tid || s1.hl as usize != hash.len() {
+            return Err(self
+                .auth_refuse(
+                    tid,
+                    auth::reason::INCORRECT_PAYLOAD,
+                    "a Success1 that does not match the transaction".into(),
+                )
+                .await);
+        }
+        if let Some(ctrl) = d.ctrl_secret.as_ref() {
+            let expected = auth::response(
+                Role::Controller,
+                &auth::ResponseInput {
+                    hash,
+                    key: &ctrl.transformed(subnqn),
+                    challenge: &c2,
+                    session_key: session.as_deref(),
+                    seqnum: s2,
+                    tid,
+                    sc_c: 0,
+                    host_nqn: &config.hostnqn,
+                    subsystem_nqn: subnqn,
+                },
+            );
+            if !s1.rvalid || !auth::ct_eq(&s1.rval, &expected) {
+                return Err(self
+                    .auth_refuse(
+                        tid,
+                        auth::reason::FAILED,
+                        "controller authentication failed: its response does not match \
+                         dhchap_ctrl_secret"
+                            .into(),
+                    )
+                    .await);
+            }
+            self.auth_send(&Message::Success2 { tid }).await?;
+        }
+        Ok(Authenticated {
+            hash,
+            group,
+            bidirectional,
+        })
+    }
+}
+
+/// A Reservation Report as the model reads it.
+pub fn reservation_json(r: &crate::server::nvme_tcp::resv::Report) -> serde_json::Value {
+    use crate::server::nvme_tcp::resv::rtype;
+    serde_json::json!({
+        "generation": r.generation,
+        "type": rtype::name(r.rtype),
+        "registrants": r.registered,
+        "persist_through_power_loss": r.ptpls,
+        "entries": r.entries.iter().map(|(cntlid, holds, key, hostid)| serde_json::json!({
+            "controller_id": cntlid,
+            "holds_reservation": holds,
+            "key": key,
+            "host_id": nvme::uuid_text(hostid),
+        })).collect::<Vec<_>>(),
+    })
 }
 
 /// The admin queue's bring-up after Connect: CAP and VS, CC.EN, CSTS.RDY, Identify

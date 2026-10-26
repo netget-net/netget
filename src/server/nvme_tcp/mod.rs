@@ -635,6 +635,9 @@ struct Conn<'a> {
     authenticated: bool,
     auth_by: Option<Instant>,
     auth_attempts: u8,
+    /// Commands this queue received, by name (at most a few dozen names exist), logged when
+    /// the queue ends.
+    received: std::collections::BTreeMap<String, u64>,
 }
 
 impl<'a> Conn<'a> {
@@ -666,6 +669,7 @@ impl<'a> Conn<'a> {
             authenticated: false,
             auth_by: None,
             auth_attempts: 0,
+            received: std::collections::BTreeMap::new(),
         }
     }
 
@@ -948,6 +952,29 @@ impl<'a> Conn<'a> {
 
     /// The connection is over: an admin queue takes its controller with it.
     fn finish(&mut self) {
+        if !self.received.is_empty() {
+            let list: Vec<String> = self
+                .received
+                .iter()
+                .map(|(name, n)| format!("{name} x{n}"))
+                .collect();
+            outcome(
+                self.ctx,
+                self.id,
+                "commands",
+                "protocol_accept",
+                &format!(
+                    "{} received: {}",
+                    self.queue
+                        .as_ref()
+                        .map_or("an unconnected queue".to_string(), |q| format!(
+                            "queue {} of controller {}",
+                            q.qid, q.ctrl.cntlid
+                        )),
+                    list.join(", ")
+                ),
+            );
+        }
         let Some(q) = self.queue.take() else {
             return;
         };
@@ -1047,6 +1074,11 @@ impl<'a> Conn<'a> {
     async fn capsule(&mut self, p: Pdu) -> Result<bool> {
         let sqe = Sqe(p.header[8..72].try_into().expect("64 bytes"));
         let cid = sqe.cid();
+        let admin_queue = self.queue.as_ref().is_none_or(|q| q.qid == 0);
+        *self
+            .received
+            .entry(nvme::command_name(admin_queue, &sqe))
+            .or_default() += 1;
         let data = p.data;
         // The command takes a submission queue slot.
         let size = self.queue.as_ref().map_or(u16::MAX, |q| q.sqsize);

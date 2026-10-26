@@ -357,6 +357,55 @@ impl Sqe {
     }
 }
 
+/// A command's name as the specification gives it, on an admin queue (`admin`) or an I/O queue.
+pub fn command_name(admin_queue: bool, sqe: &Sqe) -> String {
+    let op = sqe.opcode();
+    let name = if op == admin::FABRICS {
+        match sqe.fctype() {
+            fctype::PROPERTY_SET => "Property Set",
+            fctype::CONNECT => "Connect",
+            fctype::PROPERTY_GET => "Property Get",
+            fctype::AUTH_SEND => "Authentication Send",
+            fctype::AUTH_RECEIVE => "Authentication Receive",
+            fctype::DISCONNECT => "Disconnect",
+            _ => "",
+        }
+    } else if admin_queue {
+        match op {
+            admin::GET_LOG_PAGE => "Get Log Page",
+            admin::IDENTIFY => "Identify",
+            admin::ABORT => "Abort",
+            admin::SET_FEATURES => "Set Features",
+            admin::GET_FEATURES => "Get Features",
+            admin::ASYNC_EVENT_REQUEST => "Asynchronous Event Request",
+            admin::KEEP_ALIVE => "Keep Alive",
+            _ => "",
+        }
+    } else {
+        match op {
+            io::FLUSH => "Flush",
+            io::WRITE => "Write",
+            io::READ => "Read",
+            io::COMPARE => "Compare",
+            io::WRITE_ZEROES => "Write Zeroes",
+            io::DATASET_MANAGEMENT => "Dataset Management",
+            io::VERIFY => "Verify",
+            io::RESV_REGISTER => "Reservation Register",
+            io::RESV_REPORT => "Reservation Report",
+            io::RESV_ACQUIRE => "Reservation Acquire",
+            io::RESV_RELEASE => "Reservation Release",
+            io::COPY => "Copy",
+            _ => "",
+        }
+    };
+    match (name, op) {
+        ("", admin::FABRICS) => format!("Fabrics {:#04x}", sqe.fctype()),
+        ("", _) if admin_queue => format!("admin opcode {op:#04x}"),
+        ("", _) => format!("I/O opcode {op:#04x}"),
+        (n, _) => n.to_string(),
+    }
+}
+
 /// A 16-byte completion queue entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Cqe {

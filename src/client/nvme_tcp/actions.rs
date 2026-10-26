@@ -25,11 +25,24 @@ pub const WRITE_ZEROES: &str = "nvme_tcp_write_zeroes";
 pub const FLUSH: &str = "nvme_tcp_flush";
 pub const GET_LOG_PAGE: &str = "nvme_tcp_get_log_page";
 pub const DISCONNECT: &str = "nvme_tcp_disconnect";
+pub const COMPARE: &str = "nvme_tcp_compare";
+pub const VERIFY: &str = "nvme_tcp_verify";
+pub const COPY: &str = "nvme_tcp_copy";
+pub const RESERVATION_REGISTER: &str = "nvme_tcp_reservation_register";
+pub const RESERVATION_ACQUIRE: &str = "nvme_tcp_reservation_acquire";
+pub const RESERVATION_RELEASE: &str = "nvme_tcp_reservation_release";
+pub const RESERVATION_REPORT: &str = "nvme_tcp_reservation_report";
 
 /// Bytes one read or write action moves, so a result fits in an event.
 pub const MAX_TRANSFER: usize = 8192;
 /// Blocks one Write Zeroes may cover (its NLB field is 16 bits).
 pub const MAX_ZERO_BLOCKS: u64 = 65536;
+/// Blocks one Verify or one Copy source range may cover (their NLB fields are 16 bits).
+pub const MAX_RANGE_BLOCKS: u64 = 65536;
+/// Source ranges one Copy may name.
+pub const MAX_COPY_RANGES: usize = 128;
+/// Bytes a Reservation Report asks for: the header and 63 registrants.
+pub const REPORT_LEN: usize = 4096;
 
 fn action(
     name: &str,
@@ -167,6 +180,142 @@ pub fn client_actions() -> Vec<ActionDefinition> {
             json!({"type": GET_LOG_PAGE, "page": "smart"}),
         ),
         action(
+            COMPARE,
+            "Compare data with blocks of a namespace (at most 8 KiB, zero-padded to whole \
+             blocks): status SUCCESS when they match, COMPARE FAILURE when they differ.",
+            vec![
+                nsid_param(),
+                p("lba", "number", "The first logical block to compare", true),
+                p(
+                    "data",
+                    "string",
+                    "The bytes expected there: the text itself for utf8, pairs of hex digits \
+                     for hex",
+                    true,
+                ),
+                p("encoding", "string", "utf8 (default) or hex", false),
+            ],
+            json!({"type": COMPARE, "nsid": 1, "lba": 0, "data": "hello from netget"}),
+        ),
+        action(
+            VERIFY,
+            "Ask the controller to check that blocks are readable (Verify); no data moves.",
+            vec![
+                nsid_param(),
+                p("lba", "number", "The first logical block", true),
+                p(
+                    "blocks",
+                    "number",
+                    "How many blocks (default 1, at most 65536)",
+                    false,
+                ),
+            ],
+            json!({"type": VERIFY, "nsid": 1, "lba": 0, "blocks": 8}),
+        ),
+        action(
+            COPY,
+            "Copy blocks within a namespace (Copy, descriptor format 0): the source ranges, in \
+             order, to consecutive blocks from destination_lba.",
+            vec![
+                nsid_param(),
+                p("destination_lba", "number", "The first block written", true),
+                p(
+                    "ranges",
+                    "array",
+                    "[{lba, blocks}]: 1 to 128 source ranges of 1 to 65536 blocks",
+                    true,
+                ),
+            ],
+            json!({"type": COPY, "nsid": 1, "destination_lba": 200, "ranges": [{"lba": 0, "blocks": 1}, {"lba": 8, "blocks": 1}]}),
+        ),
+        action(
+            RESERVATION_REGISTER,
+            "Register this host's reservation key with a namespace, unregister it, or replace \
+             it (Reservation Register).",
+            vec![
+                nsid_param(),
+                p(
+                    "action",
+                    "string",
+                    "register (default), unregister or replace",
+                    false,
+                ),
+                p(
+                    "current_key",
+                    "number",
+                    "unregister and replace: the key registered now",
+                    false,
+                ),
+                p(
+                    "new_key",
+                    "number",
+                    "register and replace: the key to register",
+                    false,
+                ),
+                p(
+                    "ignore_existing_key",
+                    "boolean",
+                    "Do not check current_key (IEKEY)",
+                    false,
+                ),
+            ],
+            json!({"type": RESERVATION_REGISTER, "nsid": 1, "action": "register", "new_key": 161}),
+        ),
+        action(
+            RESERVATION_ACQUIRE,
+            "Take a reservation on a namespace, or preempt another host's (Reservation \
+             Acquire).",
+            vec![
+                nsid_param(),
+                p(
+                    "action",
+                    "string",
+                    "acquire (default), preempt or preempt_and_abort",
+                    false,
+                ),
+                p(
+                    "reservation_type",
+                    "string",
+                    "write_exclusive, exclusive_access, write_exclusive_registrants_only, \
+                     exclusive_access_registrants_only, write_exclusive_all_registrants or \
+                     exclusive_access_all_registrants",
+                    true,
+                ),
+                p("current_key", "number", "This host's registered key", true),
+                p(
+                    "preempt_key",
+                    "number",
+                    "preempt: the key whose registrations (and reservation) are taken",
+                    false,
+                ),
+            ],
+            json!({"type": RESERVATION_ACQUIRE, "nsid": 1, "action": "acquire", "reservation_type": "write_exclusive", "current_key": 161}),
+        ),
+        action(
+            RESERVATION_RELEASE,
+            "Release this host's reservation, or clear the namespace's reservation and every \
+             registration (Reservation Release).",
+            vec![
+                nsid_param(),
+                p("action", "string", "release (default) or clear", false),
+                p(
+                    "reservation_type",
+                    "string",
+                    "release: the type of the reservation held",
+                    false,
+                ),
+                p("current_key", "number", "This host's registered key", true),
+            ],
+            json!({"type": RESERVATION_RELEASE, "nsid": 1, "action": "release", "reservation_type": "write_exclusive", "current_key": 161}),
+        ),
+        action(
+            RESERVATION_REPORT,
+            "Read a namespace's reservation status (Reservation Report, extended): the \
+             reservation type, the registered hosts, their keys and who holds it.",
+            vec![nsid_param()],
+            json!({"type": RESERVATION_REPORT, "nsid": 1}),
+        ),
+        action(
             DISCONNECT,
             "Shut the controller down (CC.SHN) and close its queues; the client stays and may \
              connect again.",
@@ -272,6 +421,12 @@ pub static CONNECT_RESULT_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             false,
         ),
         p("namespaces", "array", "The active namespace IDs", false),
+        p(
+            "authentication",
+            "object",
+            "When the target required DH-HMAC-CHAP: {protocol, hash, dh_group, bidirectional}",
+            false,
+        ),
         p("error", "string", "Why the connect could not run", false),
     ])
     .with_actions(client_actions())
@@ -288,7 +443,8 @@ pub static COMMAND_RESULT_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             "operation",
             "string",
             "identify_controller, identify_namespace, list_namespaces, read, write, \
-             write_zeroes, flush or get_log_page",
+             write_zeroes, flush, get_log_page, compare, verify, copy, reservation_register, \
+             reservation_acquire, reservation_release or reservation_report",
             true,
         ),
         p("nsid", "number", "The namespace the command went to", false),
@@ -339,6 +495,19 @@ pub static COMMAND_RESULT_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             false,
         ),
         p("bytes", "number", "read or write: bytes moved", false),
+        p(
+            "matches",
+            "boolean",
+            "compare: whether the data matched",
+            false,
+        ),
+        p(
+            "reservation",
+            "object",
+            "reservation_report: {generation, type, registrants, entries: [{host_id, key, \
+             holds_reservation, controller_id}]}",
+            false,
+        ),
         p("error", "string", "Why the command could not run", false),
     ])
     .with_actions(client_actions())
@@ -447,9 +616,120 @@ pub fn check(v: &Value) -> Result<()> {
             ),
             "page is smart, error, firmware_slot or changed_namespaces"
         ),
+        COMPARE => {
+            nsid_of(v)?;
+            v["lba"].as_u64().context("lba is a number")?;
+            write_data(v)?;
+        }
+        VERIFY => {
+            nsid_of(v)?;
+            v["lba"].as_u64().context("lba is a number")?;
+            match &v["blocks"] {
+                Value::Null => {}
+                b => ensure!(
+                    b.as_u64()
+                        .is_some_and(|b| (1..=MAX_RANGE_BLOCKS).contains(&b)),
+                    "blocks is 1 to {MAX_RANGE_BLOCKS}"
+                ),
+            }
+        }
+        COPY => {
+            nsid_of(v)?;
+            v["destination_lba"]
+                .as_u64()
+                .context("destination_lba is a number")?;
+            copy_ranges_of(v)?;
+        }
+        RESERVATION_REGISTER | RESERVATION_ACQUIRE | RESERVATION_RELEASE => {
+            nsid_of(v)?;
+            reservation_command(v["type"].as_str().unwrap_or_default(), v)?;
+        }
+        RESERVATION_REPORT => {
+            nsid_of(v)?;
+        }
         other => bail!("Unknown NVMe/TCP client action {other:?}"),
     }
     Ok(())
+}
+
+/// A Copy action's source ranges: (LBA, blocks).
+pub fn copy_ranges_of(v: &Value) -> Result<Vec<(u64, u32)>> {
+    let list = v["ranges"]
+        .as_array()
+        .context("ranges is an array of {lba, blocks}")?;
+    ensure!(
+        (1..=MAX_COPY_RANGES).contains(&list.len()),
+        "ranges holds 1 to {MAX_COPY_RANGES} source ranges"
+    );
+    list.iter()
+        .map(|r| {
+            let lba = r["lba"].as_u64().context("each range has an lba")?;
+            let blocks = match &r["blocks"] {
+                Value::Null => 1,
+                b => b.as_u64().context("blocks is a number")?,
+            };
+            ensure!(
+                (1..=MAX_RANGE_BLOCKS).contains(&blocks),
+                "each range is 1 to {MAX_RANGE_BLOCKS} blocks"
+            );
+            Ok((lba, blocks as u32))
+        })
+        .collect()
+}
+
+fn key(v: &Value, name: &str) -> Result<u64> {
+    match &v[name] {
+        Value::Null => Ok(0),
+        k => k.as_u64().with_context(|| format!("{name} is a number")),
+    }
+}
+
+/// A reservation action as its command: (opcode, CDW10, data).
+pub fn reservation_command(kind: &str, v: &Value) -> Result<(u8, u32, Vec<u8>)> {
+    use crate::server::nvme_tcp::nvme::io;
+    use crate::server::nvme_tcp::resv::rtype;
+    let action = v["action"].as_str();
+    let rtype_of = |required: bool| -> Result<u32> {
+        match v["reservation_type"].as_str() {
+            Some(t) => rtype::parse(t)
+                .map(u32::from)
+                .with_context(|| format!("reservation_type is one of {}", rtype::NAMES.join(", "))),
+            None if required => bail!("reservation_type is required"),
+            None => Ok(0),
+        }
+    };
+    let mut data = key(v, "current_key")?.to_le_bytes().to_vec();
+    Ok(match kind {
+        RESERVATION_REGISTER => {
+            let rrega = match action {
+                None | Some("register") => 0,
+                Some("unregister") => 1,
+                Some("replace") => 2,
+                Some(a) => bail!("action is register, unregister or replace, not {a:?}"),
+            };
+            let iekey = v["ignore_existing_key"].as_bool().unwrap_or(false) as u32;
+            data.extend(key(v, "new_key")?.to_le_bytes());
+            (io::RESV_REGISTER, rrega | iekey << 3, data)
+        }
+        RESERVATION_ACQUIRE => {
+            let racqa = match action {
+                None | Some("acquire") => 0,
+                Some("preempt") => 1,
+                Some("preempt_and_abort") => 2,
+                Some(a) => bail!("action is acquire, preempt or preempt_and_abort, not {a:?}"),
+            };
+            data.extend(key(v, "preempt_key")?.to_le_bytes());
+            (io::RESV_ACQUIRE, racqa | rtype_of(true)? << 8, data)
+        }
+        _ => {
+            let (rrela, t) = match action {
+                None | Some("release") => (0, rtype_of(true)?),
+                Some("clear") => (1, rtype_of(false)?),
+                Some(a) => bail!("action is release or clear, not {a:?}"),
+            };
+            (io::RESV_RELEASE, rrela | t << 8, data)
+        }
+    })
 }
 
 fn string_param(name: &str, description: &str, example: Value) -> ParameterDefinition {
@@ -538,6 +818,18 @@ impl Protocol for NvmeTcpClientProtocol {
                 example: json!("crc32c"),
                 default: Some(json!(super::DEFAULT_DIGESTS)),
             },
+            string_param(
+                "dhchap_secret",
+                "This host's DH-HMAC-CHAP secret (DHHC-1:<hh>:<base64>:, as nvme gen-dhchap-key \
+                 prints it), answered when a target's Connect requires authentication",
+                json!("DHHC-1:00:<base64 of a 32, 48 or 64 byte key and its CRC-32>:"),
+            ),
+            string_param(
+                "dhchap_ctrl_secret",
+                "The controller's DH-HMAC-CHAP secret: with it the host also makes the \
+                 controller prove itself (bidirectional) and refuses one that cannot",
+                json!("DHHC-1:00:<base64 of a 32, 48 or 64 byte key and its CRC-32>:"),
+            ),
             ParameterDefinition {
                 name: "keep_alive_ms".into(),
                 type_hint: "number".into(),

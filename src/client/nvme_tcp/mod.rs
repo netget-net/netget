@@ -8,6 +8,7 @@ use crate::client::llm_budget::call_llm_for_client;
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::logging::emit::Log;
 use crate::protocol::{ConnectContext, Event, EventType};
+use crate::server::nvme_tcp::auth;
 use crate::server::nvme_tcp::nvme::{self, cns, ControllerInfo, Smart};
 pub use actions::NvmeTcpClientProtocol;
 use anyhow::{bail, Context, Result};
@@ -81,11 +82,31 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
             v as u32
         }
     };
+    let secret = |name: &str| -> Result<Option<auth::Secret>> {
+        match get(name)? {
+            None => Ok(None),
+            Some(s) => auth::Secret::parse(&s)
+                .map(Some)
+                .map_err(|e| anyhow::anyhow!("{name}: {e}")),
+        }
+    };
+    let dhchap = match (secret("dhchap_secret")?, secret("dhchap_ctrl_secret")?) {
+        (Some(secret), ctrl_secret) => Some(std::sync::Arc::new(host::Dhchap {
+            secret,
+            ctrl_secret,
+        })),
+        (None, Some(_)) => bail!(
+            "dhchap_ctrl_secret needs dhchap_secret: a controller is asked to prove itself only \
+             by a host that proves itself"
+        ),
+        (None, None) => None,
+    };
     let config = HostConfig {
         hostnqn: hostnqn.clone(),
         hostid,
         digests,
         kato_ms,
+        dhchap,
     };
     let addr = resolve(&ctx.remote_addr).await?;
 
@@ -116,6 +137,7 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
             config,
             default_subsystem: subnqn,
             session: None,
+            next_tid: 0,
         };
         let result = h.run(external, internal_rx, event_tx).await;
         if let Some(mut s) = h.session.take() {
@@ -209,6 +231,8 @@ struct Session {
     /// Block sizes learned from Identify Namespace.
     block_sizes: HashMap<u32, u32>,
     next_keep_alive: tokio::time::Instant,
+    /// How the admin queue authenticated, when the target asked it to.
+    authenticated: Option<host::Authenticated>,
 }
 
 struct Host<'a> {
@@ -217,6 +241,8 @@ struct Host<'a> {
     config: HostConfig,
     default_subsystem: Option<String>,
     session: Option<Session>,
+    /// The next DH-HMAC-CHAP transaction identifier.
+    next_tid: u16,
 }
 
 /// What happens to an idle session: a queue ended (and why), or Keep Alive is due.
@@ -496,6 +522,12 @@ impl Host<'_> {
                         "max_h2c_data": s.io.maxh2cdata,
                         "in_capsule_data": s.io.in_capsule,
                     },
+                    "authentication": s.authenticated.as_ref().map(|a| json!({
+                        "protocol": "DH-HMAC-CHAP",
+                        "hash": a.hash.name(),
+                        "dh_group": a.group.name(),
+                        "bidirectional": a.bidirectional,
+                    })),
                     "namespaces": [],
                 });
                 let mut data = data;
@@ -538,6 +570,10 @@ impl Host<'_> {
             return Ok(Err(host::connect_refusal(&c.cqe)));
         }
         let cntlid = (c.cqe.dw0 & 0xFFFF) as u16;
+        let authenticated = match self.authenticate(&mut admin, c.cqe.dw0, subnqn).await {
+            Ok(a) => a,
+            Err(refusal) => return Ok(Err(refusal)),
+        };
         let (cap, vs, info) = host::enable(&mut admin, cntlid).await?;
         anyhow::ensure!(
             info.cntrltype != 2,
@@ -568,6 +604,12 @@ impl Host<'_> {
                 host::connect_refusal(&c.cqe)
             )));
         }
+        // nvmet authenticates the admin queue only; a target that asks it of I/O queues too
+        // gets it there as well.
+        if let Err(refusal) = self.authenticate(&mut io, c.cqe.dw0, subnqn).await {
+            let _ = host::shutdown(&mut admin).await;
+            return Ok(Err(format!("the I/O queue: {refusal}")));
+        }
         let max_transfer = host::max_transfer(cap, info.mdts);
         Ok(Ok(Session {
             subnqn: subnqn.to_string(),
@@ -579,7 +621,50 @@ impl Host<'_> {
             io_queues,
             block_sizes: HashMap::new(),
             next_keep_alive: tokio::time::Instant::now() + keep_alive_interval(self.config.kato_ms),
+            authenticated,
         }))
+    }
+
+    /// Authenticate a queue whose Connect completion (`dw0`) asks for it. `Ok(None)`: it was
+    /// not asked; `Err`: why it failed, as the result reports it.
+    async fn authenticate(
+        &mut self,
+        q: &mut QueueConn,
+        dw0: u32,
+        subnqn: &str,
+    ) -> std::result::Result<Option<host::Authenticated>, String> {
+        if dw0 & auth::CONNECT_ASCR != 0 {
+            return Err(
+                "the target requires secure channel concatenation (AUTHREQ.ASCR), which needs \
+                 TLS; this host has none"
+                    .into(),
+            );
+        }
+        if dw0 & auth::CONNECT_ATR == 0 {
+            return Ok(None);
+        }
+        let tid = self.next_tid;
+        self.next_tid = self.next_tid.wrapping_add(1);
+        let log = Log::new(Some(&self.ctx.status_tx));
+        match q.authenticate(&self.config, subnqn, tid).await {
+            Ok(a) => {
+                log.info(format!(
+                    "NVMe/TCP client: queue {} authenticated to {subnqn} ({}, {}{})",
+                    q.qid,
+                    a.hash.name(),
+                    a.group.name(),
+                    if a.bidirectional { ", both ways" } else { "" }
+                ));
+                Ok(Some(a))
+            }
+            Err(e) => {
+                log.warn(format!(
+                    "NVMe/TCP client: queue {} failed authentication to {subnqn}: {e:#}",
+                    q.qid
+                ));
+                Err(format!("AUTHENTICATION FAILED: {e:#}"))
+            }
+        }
     }
 
     fn session(&mut self) -> Result<&mut Session> {
@@ -782,6 +867,99 @@ impl Host<'_> {
                 data["status"] = json!(c.status().describe());
                 if c.status().is_success() {
                     data["log"] = log_json(page, &c.data);
+                }
+            }
+            actions::COMPARE => {
+                let nsid = actions::nsid_of(action)?;
+                let bs = self.block_size(nsid).await? as usize;
+                let lba = action["lba"].as_u64().unwrap_or(0);
+                let mut bytes = actions::write_data(action)?;
+                bytes.resize(bytes.len().div_ceil(bs) * bs, 0);
+                anyhow::ensure!(
+                    bytes.len() <= actions::MAX_TRANSFER,
+                    "the padded data is more than {} bytes",
+                    actions::MAX_TRANSFER
+                );
+                let blocks = (bytes.len() / bs) as u32;
+                data["nsid"] = json!(nsid);
+                data["lba"] = json!(lba);
+                data["blocks"] = json!(blocks);
+                let sqe = host::rw_sqe(nvme::io::COMPARE, nsid, lba, blocks);
+                let s = self.session()?;
+                let r = s.io.exec(sqe, Some(&bytes), 0).await;
+                let c = self.ended(r)?;
+                data["status"] = json!(c.status().describe_io());
+                data["matches"] = json!(c.status().is_success());
+            }
+            actions::VERIFY => {
+                let nsid = actions::nsid_of(action)?;
+                let lba = action["lba"].as_u64().unwrap_or(0);
+                let blocks = action["blocks"].as_u64().unwrap_or(1);
+                data["nsid"] = json!(nsid);
+                data["lba"] = json!(lba);
+                data["blocks"] = json!(blocks);
+                let sqe = host::rw_sqe(nvme::io::VERIFY, nsid, lba, blocks as u32);
+                let s = self.session()?;
+                let r = s.io.exec(sqe, None, 0).await;
+                let c = self.ended(r)?;
+                data["status"] = json!(c.status().describe_io());
+            }
+            actions::COPY => {
+                let nsid = actions::nsid_of(action)?;
+                let destination = action["destination_lba"]
+                    .as_u64()
+                    .context("destination_lba is a number")?;
+                let ranges = actions::copy_ranges_of(action)?;
+                data["nsid"] = json!(nsid);
+                data["destination_lba"] = json!(destination);
+                data["ranges"] = json!(ranges.len());
+                let mut descriptors = Vec::new();
+                for (lba, blocks) in &ranges {
+                    descriptors.extend(nvme::copy_range(*lba, *blocks));
+                }
+                let mut sqe = nvme::Sqe::new(nvme::io::COPY, 0);
+                sqe.set_nsid(nsid);
+                sqe.set_u64(40, destination);
+                sqe.set_cdw(12, (ranges.len() - 1) as u32);
+                let s = self.session()?;
+                let r = s.io.exec(sqe, Some(&descriptors), 0).await;
+                let c = self.ended(r)?;
+                data["status"] = json!(c.status().describe_io());
+            }
+            actions::RESERVATION_REGISTER
+            | actions::RESERVATION_ACQUIRE
+            | actions::RESERVATION_RELEASE => {
+                let nsid = actions::nsid_of(action)?;
+                let (opcode, cdw10, payload) = actions::reservation_command(kind, action)?;
+                data["nsid"] = json!(nsid);
+                data["action"] = action["action"].clone();
+                if !action["reservation_type"].is_null() {
+                    data["reservation_type"] = action["reservation_type"].clone();
+                }
+                let mut sqe = nvme::Sqe::new(opcode, 0);
+                sqe.set_nsid(nsid);
+                sqe.set_cdw(10, cdw10);
+                let s = self.session()?;
+                let r = s.io.exec(sqe, Some(&payload), 0).await;
+                let c = self.ended(r)?;
+                data["status"] = json!(c.status().describe_io());
+            }
+            actions::RESERVATION_REPORT => {
+                let nsid = actions::nsid_of(action)?;
+                data["nsid"] = json!(nsid);
+                let len = actions::REPORT_LEN;
+                let mut sqe = nvme::Sqe::new(nvme::io::RESV_REPORT, 0);
+                sqe.set_nsid(nsid);
+                sqe.set_cdw(10, (len / 4 - 1) as u32);
+                sqe.set_cdw(11, 1); // the extended data structure: 128-bit host identifiers
+                let s = self.session()?;
+                let r = s.io.exec(sqe, None, len).await;
+                let c = self.ended(r)?;
+                data["status"] = json!(c.status().describe_io());
+                if c.status().is_success() {
+                    let report = crate::server::nvme_tcp::resv::Report::decode(&c.data)
+                        .context("a short reservation report")?;
+                    data["reservation"] = host::reservation_json(&report);
                 }
             }
             other => bail!("unknown operation {other}"),
