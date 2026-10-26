@@ -497,6 +497,38 @@ async fn authentication_commands_are_checked_and_bounded() {
     assert_eq!(ch.tid, 1);
 }
 
+/// The secrets' parameter names are ones `src/utils/redact.rs` masks wherever startup
+/// parameters are echoed, on both roles, and so is a secret written into an action.
+#[test]
+fn the_secret_parameters_are_redacted_where_parameters_are_shown() {
+    use netget::utils::redact::{is_sensitive_key, redact_sensitive, REDACTED};
+    for role in [
+        netget::protocol::server_registry::registry()
+            .resolve("nvme_tcp")
+            .expect("the target is registered")
+            .get_startup_parameters(),
+        netget::protocol::client_registry::CLIENT_REGISTRY
+            .resolve("nvme_tcp")
+            .expect("the host is registered")
+            .get_startup_parameters(),
+    ] {
+        let secrets: Vec<String> = role
+            .iter()
+            .map(|p| p.name.clone())
+            .filter(|n| n.starts_with("dhchap_") && n.ends_with("secret"))
+            .collect();
+        assert_eq!(secrets.len(), 2, "{secrets:?}");
+        for name in secrets {
+            assert!(is_sensitive_key(&name), "{name} is masked");
+        }
+    }
+    let shown = redact_sensitive(&json!({"dhchap_secret": dhhc1(&HOST_KEY, 1),
+        "dhchap_ctrl_secret": dhhc1(&CTRL_KEY, 0), "dhchap_hashes": "sha256"}));
+    assert_eq!(shown["dhchap_secret"], REDACTED);
+    assert_eq!(shown["dhchap_ctrl_secret"], REDACTED);
+    assert_eq!(shown["dhchap_hashes"], "sha256");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_model_cannot_require_what_is_not_configured() {
     // No secret: the event says so, and an answer requiring authentication fails closed.
