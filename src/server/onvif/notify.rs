@@ -224,7 +224,8 @@ pub fn parse_consumer(text: &str, allow_https: bool) -> Result<Consumer, Consume
     let text = text.trim();
     if text.is_empty()
         || text.len() > MAX_CONSUMER_URL
-        || text.chars().any(|c| c.is_whitespace() || c.is_control())
+        || text.chars().any(char::is_whitespace)
+        || crate::utils::sanitize::has_controls(text)
     {
         return Err(ConsumerError::Malformed);
     }
