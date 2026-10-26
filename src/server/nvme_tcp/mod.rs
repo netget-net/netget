@@ -12,9 +12,14 @@
 //! timeout passes with no command, the controller and every I/O queue of it go, with the
 //! writes it held.
 pub mod actions;
+pub mod auth;
+pub mod ffdhe;
 pub mod ns;
 pub mod nvme;
 pub mod pdu;
+pub mod resv;
+mod target_auth;
+mod target_io;
 
 use crate::llm::action_helper::call_llm;
 use crate::llm::actions::protocol_trait::ActionResult;
@@ -81,6 +86,17 @@ pub const DEFAULT_DIGESTS: &str = "either";
 pub const KAS: u16 = 10;
 /// The port group every portal of this target belongs to.
 pub const PORT_ID: u16 = 1;
+/// A queue the model required to authenticate must finish within this long of its Connect.
+pub const AUTH_DEADLINE: Duration = Duration::from_secs(30);
+/// AUTH_Negotiate messages one queue may send (each challenge costs a Diffie-Hellman
+/// exponentiation); past this, negotiations fail without one.
+pub const MAX_AUTH_ATTEMPTS: u8 = 4;
+/// The DH-HMAC-CHAP hashes and groups this target prefers, in order, when the startup
+/// parameters name none: the first the host offers is used.
+pub const DEFAULT_DHCHAP_HASHES: &str = "sha256,sha384,sha512";
+pub const DEFAULT_DHCHAP_DHGROUPS: &str = "ffdhe2048,ffdhe3072,ffdhe4096,ffdhe6144,ffdhe8192,null";
+/// Namespaces (of live subsystems) holding a reservation table at once.
+pub const MAX_RESERVATION_TABLES: usize = 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DigestPolicy {
@@ -103,16 +119,30 @@ impl DigestPolicy {
     }
 }
 
+/// DH-HMAC-CHAP as the operator configured it: the secrets never leave this struct (its
+/// `Debug` redacts them), and the model only ever learns that authentication is available.
+#[derive(Debug, Clone)]
+pub struct AuthConfig {
+    /// The host secret every host the model requires to authenticate must prove.
+    pub host_secret: auth::Secret,
+    /// The controller secret, for a host that asks the controller to prove itself.
+    pub ctrl_secret: Option<auth::Secret>,
+    pub hashes: Vec<auth::Hash>,
+    pub groups: Vec<auth::DhGroup>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub digests: DigestPolicy,
     /// The NVMe/TCP port discovery entries point at when the model names no address.
     pub io_port: u16,
+    pub auth: Option<Arc<AuthConfig>>,
 }
 
 pub fn parse_config(ctx: &SpawnContext) -> Result<(Config, Option<u16>)> {
     let mut digests = DigestPolicy::Either;
     let mut discovery_port = None;
+    let mut auth = None;
     if let Some(params) = ctx.startup_params.as_ref() {
         if let Some(d) = params.get_optional_string("digests")? {
             digests = DigestPolicy::parse(&d).context("digests is either, crc32c or none")?;
@@ -121,11 +151,47 @@ pub fn parse_config(ctx: &SpawnContext) -> Result<(Config, Option<u16>)> {
             discovery_port =
                 Some(u16::try_from(p).context("discovery_port is a port number (0-65535)")?);
         }
+        let secret = |name: &str| -> Result<Option<auth::Secret>> {
+            match params.get_optional_string(name)? {
+                None => Ok(None),
+                Some(s) => auth::Secret::parse(&s)
+                    .map(Some)
+                    .map_err(|e| anyhow::anyhow!("{name}: {e}")),
+            }
+        };
+        let host_secret = secret("dhchap_secret")?;
+        let ctrl_secret = secret("dhchap_ctrl_secret")?;
+        let hashes = params
+            .get_optional_string("dhchap_hashes")?
+            .unwrap_or_else(|| DEFAULT_DHCHAP_HASHES.into());
+        let hashes = auth::parse_list(&hashes, auth::Hash::parse)
+            .context("dhchap_hashes is a list of sha256, sha384 and sha512")?;
+        let groups = params
+            .get_optional_string("dhchap_dhgroups")?
+            .unwrap_or_else(|| DEFAULT_DHCHAP_DHGROUPS.into());
+        let groups = auth::parse_list(&groups, auth::DhGroup::parse).context(
+            "dhchap_dhgroups is a list of null, ffdhe2048, ffdhe3072, ffdhe4096, ffdhe6144 and \
+             ffdhe8192",
+        )?;
+        auth = match (host_secret, ctrl_secret) {
+            (Some(host_secret), ctrl_secret) => Some(Arc::new(AuthConfig {
+                host_secret,
+                ctrl_secret,
+                hashes,
+                groups,
+            })),
+            (None, Some(_)) => anyhow::bail!(
+                "dhchap_ctrl_secret needs dhchap_secret: the controller proves itself only to a \
+                 host that has proved itself"
+            ),
+            (None, None) => None,
+        };
     }
     Ok((
         Config {
             digests,
             io_port: 0,
+            auth,
         },
         discovery_port,
     ))
@@ -135,6 +201,9 @@ pub fn parse_config(ctx: &SpawnContext) -> Result<(Config, Option<u16>)> {
 pub struct Target {
     pub config: Config,
     controllers: Mutex<Controllers>,
+    /// Reservation tables by (subsystem NQN, NSID), shared by every controller of the
+    /// subsystem and dropped with the last of them.
+    reservations: Mutex<HashMap<(String, u32), resv::Table>>,
 }
 
 #[derive(Default)]
@@ -178,6 +247,8 @@ pub struct Controller {
     pub hostnqn: String,
     pub hostid: [u8; 16],
     pub desc: Option<Arc<SubsystemDescription>>,
+    /// The model required this host to authenticate before it may use the controller.
+    pub auth_required: bool,
     state: Mutex<CtrlState>,
     overlay: Mutex<Overlay>,
     epoch: watch::Sender<u64>,
@@ -217,6 +288,7 @@ impl Target {
                 map: HashMap::new(),
                 next: 1,
             }),
+            reservations: Mutex::new(HashMap::new()),
         }
     }
 
@@ -248,6 +320,7 @@ impl Target {
             subnqn: subnqn.to_string(),
             hostnqn: hostnqn.to_string(),
             hostid: req.hostid,
+            auth_required: desc.as_ref().is_some_and(|d| d.require_authentication),
             desc,
             state: Mutex::new(CtrlState {
                 cc: 0,
@@ -276,8 +349,22 @@ impl Target {
 
     /// End a controller: forget it and tell its I/O queues to close.
     fn destroy(&self, ctrl: &Controller) {
-        self.controllers().map.remove(&ctrl.cntlid);
+        let last = {
+            let mut c = self.controllers();
+            c.map.remove(&ctrl.cntlid);
+            !c.map.values().any(|o| o.subnqn == ctrl.subnqn)
+        };
+        if last {
+            // No association with the subsystem remains: its reservations go with it, as a
+            // target that persists nothing through a power loss would lose them.
+            self.reservations()
+                .retain(|(nqn, _), _| *nqn != ctrl.subnqn);
+        }
         let _ = ctrl.epoch.send(DEAD);
+    }
+
+    fn reservations(&self) -> std::sync::MutexGuard<'_, HashMap<(String, u32), resv::Table>> {
+        self.reservations.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn controller_count(&self) -> usize {
@@ -426,6 +513,10 @@ enum PendingKind {
     Connect,
     Write,
     DatasetManagement,
+    AuthSend,
+    Compare,
+    Copy,
+    Reservation,
 }
 
 /// A command waiting for its data from the host.
@@ -538,6 +629,12 @@ struct Conn<'a> {
     aers: Vec<u16>,
     next_ttag: u16,
     epoch_rx: Option<watch::Receiver<u64>>,
+    /// DH-HMAC-CHAP on this queue: where the exchange stands, whether it succeeded, by when
+    /// it must, and how many negotiations it has started.
+    auth: target_auth::AuthState,
+    authenticated: bool,
+    auth_by: Option<Instant>,
+    auth_attempts: u8,
 }
 
 impl<'a> Conn<'a> {
@@ -565,6 +662,10 @@ impl<'a> Conn<'a> {
             aers: Vec::new(),
             next_ttag: 0,
             epoch_rx: None,
+            auth: target_auth::AuthState::None,
+            authenticated: false,
+            auth_by: None,
+            auth_attempts: 0,
         }
     }
 
@@ -737,7 +838,10 @@ impl<'a> Conn<'a> {
         loop {
             let deadline = match &self.queue {
                 None => Some(connect_by),
-                Some(q) if q.qid == 0 => q.ctrl.keep_alive_deadline(),
+                Some(q) if q.qid == 0 => match (q.ctrl.keep_alive_deadline(), self.auth_by) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (a, b) => a.or(b),
+                },
                 Some(_) => None,
             };
             let (admin, epoch) = self
@@ -760,6 +864,11 @@ impl<'a> Conn<'a> {
                     match &self.queue {
                         None => {
                             outcome(self.ctx, self.id, "connect", "protocol_refusal", "no Connect within 30 s of the ICResp");
+                            return Ok(());
+                        }
+                        Some(_) if self.auth_by.is_some_and(|d| d <= Instant::now()) => {
+                            outcome(self.ctx, self.id, "authenticate", "protocol_refusal",
+                                &format!("the host did not authenticate within {} s of its Connect", AUTH_DEADLINE.as_secs()));
                             return Ok(());
                         }
                         Some(q) => {
@@ -1168,6 +1277,10 @@ impl<'a> Conn<'a> {
                 PendingKind::Connect => self.connect(&w.sqe, &w.buf).await?,
                 PendingKind::Write => self.write_now(&w.sqe, &w.buf),
                 PendingKind::DatasetManagement => self.dsm_now(&w.sqe, &w.buf),
+                PendingKind::AuthSend => self.auth_send(&w.sqe, &w.buf),
+                PendingKind::Compare => self.compare_now(&w.sqe, &w.buf),
+                PendingKind::Copy => self.copy_now(&w.sqe, &w.buf),
+                PendingKind::Reservation => self.reservation_change(&w.sqe, &w.buf).await?,
             },
         };
         let go_on = self.finish_command(cid, done).await?;
@@ -1296,8 +1409,20 @@ impl<'a> Conn<'a> {
                     req.kato_ms
                 ),
             );
+            let auth_required = ctrl.auth_required;
             self.attach(ctrl, 0, req.sqsize, sqflow_disabled);
             let cntlid = self.queue.as_ref().map_or(0, |q| q.ctrl.cntlid);
+            if auth_required {
+                // AUTHREQ.ATR: nothing but Authentication Send/Receive runs on this queue until
+                // the host proves it holds the secret.
+                self.auth = target_auth::AuthState::Negotiate;
+                self.auth_by = Some(Instant::now() + AUTH_DEADLINE);
+                return Ok(Done::Status(
+                    Status::SUCCESS,
+                    cntlid as u32 | auth::CONNECT_ATR,
+                    0,
+                ));
+            }
             return Ok(Done::Status(Status::SUCCESS, cntlid as u32, 0));
         }
         // An I/O queue joins an existing controller of the same host and subsystem.
@@ -1393,6 +1518,7 @@ impl<'a> Conn<'a> {
                 "subsystem_nqn": subnqn,
                 "host_address": self.peer.to_string(),
                 "keep_alive_ms": req.kato_ms,
+                "authentication_available": self.target.config.auth.is_some(),
             }),
         );
         let refused = |this: &Self, decision: &str, detail: String, done: Done| {
@@ -1414,6 +1540,16 @@ impl<'a> Conn<'a> {
         match answer["type"].as_str() {
             Some(actions::ACCEPT_CONNECT) => {
                 match SubsystemDescription::from_action(&answer, subnqn) {
+                    Ok(d) if d.require_authentication && self.target.config.auth.is_none() => {
+                        Err(refused(
+                            self,
+                            "fail_closed_invalid_reply",
+                            "the model requires authentication, but no dhchap_secret is \
+                             configured to check it against"
+                                .into(),
+                            err(Status::INTERNAL_ERROR),
+                        ))
+                    }
                     Ok(d) => {
                         outcome(
                             self.ctx,
@@ -1421,10 +1557,15 @@ impl<'a> Conn<'a> {
                             "connect",
                             "model_answer",
                             &format!(
-                                "{} admitted to {} with {} namespace(s)",
+                                "{} admitted to {} with {} namespace(s){}",
                                 shown(hostnqn),
                                 shown(subnqn),
-                                d.namespaces.len()
+                                d.namespaces.len(),
+                                if d.require_authentication {
+                                    ", once it authenticates (DH-HMAC-CHAP)"
+                                } else {
+                                    ""
+                                }
                             ),
                         );
                         Ok(Arc::new(d))
@@ -1527,6 +1668,27 @@ impl<'a> Conn<'a> {
     async fn admin_command(&mut self, sqe: &Sqe, data: Vec<u8>) -> Result<Done> {
         let ctrl = self.queue.as_ref().expect("connected").ctrl.clone();
         let op = sqe.opcode();
+        if op == admin::FABRICS && matches!(sqe.fctype(), fctype::AUTH_SEND | fctype::AUTH_RECEIVE)
+        {
+            return self.auth_command(sqe, data).await;
+        }
+        if ctrl.auth_required && !self.authenticated {
+            outcome(
+                self.ctx,
+                self.id,
+                "command",
+                "protocol_refusal",
+                &format!(
+                    "{} before the host authenticated",
+                    if op == admin::FABRICS {
+                        format!("Fabrics command {:#04x}", sqe.fctype())
+                    } else {
+                        format!("admin opcode {op:#04x}")
+                    }
+                ),
+            );
+            return Ok(err(Status::AUTHENTICATION_REQUIRED));
+        }
         if op == admin::FABRICS {
             return Ok(match sqe.fctype() {
                 fctype::PROPERTY_GET => self.property_get(&ctrl, sqe),
@@ -1955,6 +2117,18 @@ impl<'a> Conn<'a> {
                     Done::Close
                 }
                 fctype::CONNECT => err(Status::COMMAND_SEQUENCE_ERROR),
+                fctype::AUTH_SEND | fctype::AUTH_RECEIVE => {
+                    // I/O queues join a controller whose admin queue authenticated; they are
+                    // never asked to (AUTHREQ is clear in their Connect), as nvmet does.
+                    outcome(
+                        self.ctx,
+                        self.id,
+                        "authenticate",
+                        "protocol_refusal",
+                        "authentication on an I/O queue, which was not asked to authenticate",
+                    );
+                    err(Status::COMMAND_SEQUENCE_ERROR)
+                }
                 _ => err(Status::INVALID_OPCODE),
             });
         }
@@ -1968,22 +2142,60 @@ impl<'a> Conn<'a> {
             return Ok(err(Status::INVALID_OPCODE));
         };
         let nsid = sqe.nsid();
+        if sqe.fuse() != 0 {
+            // Fused operations (Compare and Write) are not supported: ONCS bit 0 of FUSES clear.
+            return Ok(err(Status::INVALID_FIELD));
+        }
         if op == io::FLUSH {
-            return Ok(if nsid == 0xFFFF_FFFF || desc.namespace(nsid).is_some() {
-                ok()
-            } else {
-                err(Status::INVALID_NAMESPACE)
+            if nsid == 0xFFFF_FFFF {
+                return Ok(ok());
+            }
+            if desc.namespace(nsid).is_none() {
+                return Ok(err(Status::INVALID_NAMESPACE));
+            }
+            return Ok(match self.reservation_denies(&ctrl, nsid, true) {
+                Some(s) => err(s),
+                None => ok(),
             });
         }
         if !matches!(
             op,
-            io::READ | io::WRITE | io::WRITE_ZEROES | io::DATASET_MANAGEMENT
+            io::READ
+                | io::WRITE
+                | io::WRITE_ZEROES
+                | io::DATASET_MANAGEMENT
+                | io::COMPARE
+                | io::VERIFY
+                | io::COPY
+                | io::RESV_REGISTER
+                | io::RESV_REPORT
+                | io::RESV_ACQUIRE
+                | io::RESV_RELEASE
         ) {
             return Ok(err(Status::INVALID_OPCODE));
         }
         let Some(ns) = desc.namespace(nsid) else {
             return Ok(err(Status::INVALID_NAMESPACE));
         };
+        if matches!(
+            op,
+            io::RESV_REGISTER | io::RESV_REPORT | io::RESV_ACQUIRE | io::RESV_RELEASE
+        ) {
+            return self.reservation(sqe, data).await;
+        }
+        let write = matches!(
+            op,
+            io::WRITE | io::WRITE_ZEROES | io::DATASET_MANAGEMENT | io::COPY
+        );
+        if let Some(s) = self.reservation_denies(&ctrl, nsid, write) {
+            return Ok(err(s));
+        }
+        if op == io::COPY {
+            return self.copy(sqe, data, ns).await;
+        }
+        if op == io::VERIFY {
+            return Ok(self.verify(&ctrl, sqe, &data, ns));
+        }
         if op == io::DATASET_MANAGEMENT {
             let need = ((sqe.cdw(10) & 0xFF) as usize + 1) * 16;
             return Ok(match incoming(sqe, data, need) {
@@ -2037,6 +2249,22 @@ impl<'a> Conn<'a> {
                     Ok(Incoming::InCapsule(d)) => Ok(self.write_now(sqe, &d)),
                     Ok(Incoming::Solicited) => {
                         self.solicit(sqe.clone(), PendingKind::Write, len).await
+                    }
+                    Err(s) => Ok(err(s)),
+                }
+            }
+            io::COMPARE => {
+                if len > MAX_TRANSFER {
+                    return Ok(err(Status::INVALID_FIELD));
+                }
+                if let Some(s) = ns.failure(slba, blocks, false) {
+                    ctrl.state().stats.media_errors += 1;
+                    return Ok(err(s));
+                }
+                match incoming(sqe, data, len) {
+                    Ok(Incoming::InCapsule(d)) => Ok(self.compare_now(sqe, &d)),
+                    Ok(Incoming::Solicited) => {
+                        self.solicit(sqe.clone(), PendingKind::Compare, len).await
                     }
                     Err(s) => Ok(err(s)),
                 }
@@ -2205,8 +2433,9 @@ pub fn identify_controller(ctrl: &Controller) -> Vec<u8> {
     b[514..516].copy_from_slice(&(MQES + 1).to_le_bytes()); // MAXCMD
     b[516..520].copy_from_slice(&nn.to_le_bytes());
     if !ctrl.discovery {
-        b[520..522].copy_from_slice(&0x000Cu16.to_le_bytes()); // ONCS: DSM, Write Zeroes
+        b[520..522].copy_from_slice(&nvme::ONCS.to_le_bytes());
         b[525] = 0x01; // VWC: present
+        b[534..536].copy_from_slice(&1u16.to_le_bytes()); // OCFS: Copy descriptor format 0
     }
     // SGLS: SGLs supported, and the Data Block descriptor's address is an offset (in-capsule).
     b[536..540].copy_from_slice(&(1u32 | 1 << 20).to_le_bytes());

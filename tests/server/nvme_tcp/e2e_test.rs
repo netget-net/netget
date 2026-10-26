@@ -5,33 +5,6 @@ use super::support::*;
 use serde_json::json;
 use std::time::Duration;
 
-/// A field tshark reads, across every packet, as one list.
-fn tshark_values(raw: &Raw, field: &str) -> Vec<String> {
-    raw.oracle()
-        .fields(&[field])
-        .unwrap_or_else(|e| panic!("tshark field {field}: {e}"))
-        .into_iter()
-        .flat_map(|r| {
-            r.into_iter()
-                .flat_map(|c| {
-                    c.split(',')
-                        .map(|v| v.trim().to_string())
-                        .collect::<Vec<_>>()
-                })
-                .filter(|c| !c.is_empty())
-                .collect::<Vec<_>>()
-        })
-        .collect()
-}
-
-/// A number as tshark prints it: decimal, or hex with 0x.
-fn number(v: &str) -> Option<u64> {
-    match v.strip_prefix("0x") {
-        Some(h) => u64::from_str_radix(h, 16).ok(),
-        None => v.parse().ok(),
-    }
-}
-
 #[tokio::test]
 async fn discovery_log_lists_the_models_subsystems_and_tshark_reads_it() {
     let srv = start(policy(POLICY), None).await;

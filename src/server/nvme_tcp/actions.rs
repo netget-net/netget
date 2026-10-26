@@ -17,6 +17,8 @@ use std::sync::LazyLock;
 pub const ACCEPT_CONNECT: &str = "nvme_tcp_accept_connect";
 pub const REJECT_CONNECT: &str = "nvme_tcp_reject_connect";
 pub const DISCOVERY_ENTRIES: &str = "nvme_tcp_discovery_entries";
+pub const ALLOW_RESERVATION: &str = "nvme_tcp_allow_reservation";
+pub const REFUSE_RESERVATION: &str = "nvme_tcp_refuse_reservation";
 
 /// Entries one discovery log may list.
 pub const MAX_DISCOVERY_ENTRIES: usize = 256;
@@ -85,6 +87,14 @@ pub fn accept_connect_action() -> ActionDefinition {
                 "firmware",
                 "string",
                 "The firmware revision (≤8 ASCII characters)",
+                false,
+            ),
+            p(
+                "require_authentication",
+                "boolean",
+                "true: the host must prove it holds the configured DH-HMAC-CHAP secret before \
+                 anything else (only when the event says authentication_available); default \
+                 false",
                 false,
             ),
         ],
@@ -161,6 +171,13 @@ pub static CONNECT_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             "The keep-alive timeout the host asked for (KATO, milliseconds; 0 is none)",
             true,
         ),
+        p(
+            "authentication_available",
+            "boolean",
+            "Whether a DH-HMAC-CHAP secret is configured, so require_authentication can be \
+             answered",
+            true,
+        ),
     ])
     .with_actions(vec![accept_connect_action(), reject_connect_action()])
     .with_log_template(
@@ -187,6 +204,82 @@ pub static DISCOVERY_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     ])
     .with_actions(vec![discovery_entries_action()])
     .with_log_template(LogTemplate::new().with_info("NVMe/TCP discovery from {host_nqn}"))
+});
+
+pub fn allow_reservation_action() -> ActionDefinition {
+    action(
+        ALLOW_RESERVATION,
+        "Let the reservation change happen as the event's effect describes it.",
+        vec![],
+        json!({"type": ALLOW_RESERVATION}),
+    )
+}
+
+pub fn refuse_reservation_action() -> ActionDefinition {
+    action(
+        REFUSE_RESERVATION,
+        "Refuse the reservation change: the host gets RESERVATION CONFLICT and nothing changes.",
+        vec![],
+        json!({"type": REFUSE_RESERVATION}),
+    )
+}
+
+pub static RESERVATION_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    EventType::new(
+        "nvme_tcp_reservation",
+        "A host asks to change a namespace's persistent reservations (Reservation Register, \
+         Acquire or Release). NetGet has checked the request against the registrations and \
+         worked out its effect; answer nvme_tcp_allow_reservation to apply it or \
+         nvme_tcp_refuse_reservation to refuse it.",
+        allow_reservation_action().example,
+    )
+    .with_parameters(vec![
+        p(
+            "operation",
+            "string",
+            "register, unregister, replace, acquire, preempt, preempt_and_abort, release or clear",
+            true,
+        ),
+        p("nsid", "number", "The namespace", true),
+        p(
+            "type",
+            "string",
+            "acquire, preempt and release: the reservation type (write_exclusive, \
+             exclusive_access, write_exclusive_registrants_only, \
+             exclusive_access_registrants_only, write_exclusive_all_registrants, \
+             exclusive_access_all_registrants)",
+            false,
+        ),
+        p("host_nqn", "string", "The host asking", true),
+        p("host_id", "string", "Its host identifier (a UUID)", true),
+        p("subsystem_nqn", "string", "The subsystem", true),
+        p("effect", "string", "What the change does if allowed", true),
+        p(
+            "host_registered",
+            "boolean",
+            "Whether the host is registered now",
+            true,
+        ),
+        p(
+            "registrants",
+            "number",
+            "How many hosts are registered now",
+            true,
+        ),
+        p(
+            "holder",
+            "object",
+            "The reservation now: {host_id, type}, or null when there is none",
+            false,
+        ),
+    ])
+    .with_actions(vec![
+        allow_reservation_action(),
+        refuse_reservation_action(),
+    ])
+    .with_log_template(
+        LogTemplate::new().with_info("NVMe/TCP reservation {operation} on {nsid} by {host_nqn}"),
+    )
 });
 
 /// The subsystems of an `nvme_tcp_discovery_entries` action: (NQN, address).
@@ -231,6 +324,7 @@ pub fn check(v: &Value) -> Result<()> {
         DISCOVERY_ENTRIES => {
             entries_of(v)?;
         }
+        ALLOW_RESERVATION | REFUSE_RESERVATION => {}
         other => bail!("Unknown NVMe/TCP target action {other:?}"),
     }
     Ok(())
@@ -276,10 +370,16 @@ impl Protocol for NvmeTcpProtocol {
             accept_connect_action(),
             reject_connect_action(),
             discovery_entries_action(),
+            allow_reservation_action(),
+            refuse_reservation_action(),
         ]
     }
     fn get_event_types(&self) -> Vec<EventType> {
-        vec![CONNECT_EVENT.clone(), DISCOVERY_EVENT.clone()]
+        vec![
+            CONNECT_EVENT.clone(),
+            DISCOVERY_EVENT.clone(),
+            RESERVATION_EVENT.clone(),
+        ]
     }
     fn get_startup_parameters(&self) -> Vec<ParameterDefinition> {
         vec![
@@ -303,6 +403,49 @@ impl Protocol for NvmeTcpProtocol {
                 required: false,
                 example: json!(8009),
                 default: None,
+            },
+            ParameterDefinition {
+                name: "dhchap_secret".into(),
+                type_hint: "string".into(),
+                description: "The DH-HMAC-CHAP host secret (DHHC-1:<hh>:<base64>:, as nvme \
+                              gen-dhchap-key prints it) a host the model requires to \
+                              authenticate must prove; without it no host can be required to"
+                    .into(),
+                required: false,
+                example: json!("DHHC-1:00:<base64 of a 32, 48 or 64 byte key and its CRC-32>:"),
+                default: None,
+            },
+            ParameterDefinition {
+                name: "dhchap_ctrl_secret".into(),
+                type_hint: "string".into(),
+                description: "The DH-HMAC-CHAP controller secret this target proves itself \
+                              with when a host asks for bidirectional authentication; without \
+                              it such a host is refused"
+                    .into(),
+                required: false,
+                example: json!("DHHC-1:00:<base64 of a 32, 48 or 64 byte key and its CRC-32>:"),
+                default: None,
+            },
+            ParameterDefinition {
+                name: "dhchap_hashes".into(),
+                type_hint: "string".into(),
+                description: "DH-HMAC-CHAP hash functions in preference order (sha256, sha384, \
+                              sha512): the first the host offers is used"
+                    .into(),
+                required: false,
+                example: json!("sha512,sha256"),
+                default: Some(json!(super::DEFAULT_DHCHAP_HASHES)),
+            },
+            ParameterDefinition {
+                name: "dhchap_dhgroups".into(),
+                type_hint: "string".into(),
+                description: "DH-HMAC-CHAP Diffie-Hellman groups in preference order (null, \
+                              ffdhe2048, ffdhe3072, ffdhe4096, ffdhe6144, ffdhe8192): the \
+                              first the host offers is used"
+                    .into(),
+                required: false,
+                example: json!("ffdhe2048,null"),
+                default: Some(json!(super::DEFAULT_DHCHAP_DHGROUPS)),
             },
         ]
     }
@@ -333,11 +476,12 @@ impl Protocol for NvmeTcpProtocol {
         let mut static_example = llm.clone();
         static_example["event_handlers"] = json!([
             {"event_pattern": "nvme_tcp_connect", "handler": {"type": "static", "actions": [accept]}},
-            {"event_pattern": "nvme_tcp_discovery", "handler": {"type": "static", "actions": [{"type": DISCOVERY_ENTRIES, "subsystems": [{"nqn": "nqn.2026-10.net.netget:disk0"}]}]}}
+            {"event_pattern": "nvme_tcp_discovery", "handler": {"type": "static", "actions": [{"type": DISCOVERY_ENTRIES, "subsystems": [{"nqn": "nqn.2026-10.net.netget:disk0"}]}]}},
+            {"event_pattern": "nvme_tcp_reservation", "handler": {"type": "static", "actions": [{"type": ALLOW_RESERVATION}]}}
         ]);
         let mut scripted = llm.clone();
         scripted["event_handlers"] = json!([{"event_pattern": "*", "handler": {"type": "script", "language": "python",
-            "code": "import json,sys\ni=json.load(sys.stdin)\ne=i['event']\nif i['event_type_id']=='nvme_tcp_discovery':\n  a={'type':'nvme_tcp_discovery_entries','subsystems':[{'nqn':'nqn.2026-10.net.netget:disk0'}]}\nelif e['subsystem_nqn']=='nqn.2026-10.net.netget:disk0':\n  a={'type':'nvme_tcp_accept_connect','namespaces':[{'nsid':1,'size':1048576,'extents':[{'offset':0,'text':'hello'}]}]}\nelse:\n  a={'type':'nvme_tcp_reject_connect','reason':'not_found'}\nprint(json.dumps({'actions':[a]}))"}}]);
+            "code": "import json,sys\ni=json.load(sys.stdin)\ne=i['event']\nif i['event_type_id']=='nvme_tcp_discovery':\n  a={'type':'nvme_tcp_discovery_entries','subsystems':[{'nqn':'nqn.2026-10.net.netget:disk0'}]}\nelif i['event_type_id']=='nvme_tcp_reservation':\n  a={'type':'nvme_tcp_allow_reservation'}\nelif e['subsystem_nqn']=='nqn.2026-10.net.netget:disk0':\n  a={'type':'nvme_tcp_accept_connect','namespaces':[{'nsid':1,'size':1048576,'extents':[{'offset':0,'text':'hello'}]}]}\nelse:\n  a={'type':'nvme_tcp_reject_connect','reason':'not_found'}\nprint(json.dumps({'actions':[a]}))"}}]);
         StartupExamples::new(llm, scripted, static_example)
     }
     fn group_name(&self) -> &'static str {
