@@ -124,35 +124,6 @@ fn sctp_socket(addr: &SocketAddr, role: &str) -> Result<socket2::Socket> {
         .map_err(|e| no_sctp(role, e))
 }
 
-/// `SCTP_NODELAY` (the option number of linux/sctp.h): send each message at once. Other
-/// systems' SCTP stacks number the option differently, and none of them is one this code is run
-/// on, so they are left at their default; a failure is logged, never fatal.
-#[cfg(target_os = "linux")]
-fn set_sctp_nodelay(stream: &TcpStream) {
-    use std::os::fd::AsRawFd;
-    const SCTP_NODELAY: libc::c_int = 3;
-    let on: libc::c_int = 1;
-    // SAFETY: a valid descriptor, a pointer to a live c_int and its size.
-    let r = unsafe {
-        libc::setsockopt(
-            stream.as_raw_fd(),
-            IPPROTO_SCTP,
-            SCTP_NODELAY,
-            &on as *const libc::c_int as *const libc::c_void,
-            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-        )
-    };
-    if r != 0 {
-        tracing::debug!(
-            "NGAP could not set SCTP_NODELAY: {}",
-            std::io::Error::last_os_error()
-        );
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn set_sctp_nodelay(_stream: &TcpStream) {}
-
 /// Bind the AMF's listening socket.
 ///
 /// Public because the SCTP refusal is a feature with its own test: on a host without SCTP this
@@ -213,7 +184,7 @@ pub struct Conn {
 impl Conn {
     pub fn new(stream: TcpStream, transport: Transport) -> Self {
         if transport == Transport::Sctp {
-            set_sctp_nodelay(&stream);
+            crate::utils::sctp::set_nodelay(&stream, "NGAP");
         }
         Conn {
             stream: Arc::new(stream),
