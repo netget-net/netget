@@ -79,6 +79,23 @@ impl Started {
             .filter(|l| l.contains("operation=commands"))
             .collect()
     }
+
+    /// [`commands`](Self::commands), once the admin queue's own line is in. Each queue writes its
+    /// line as it closes, and after a disconnect the admin queue (queue 0, where the
+    /// authentication exchange is counted) can close after the I/O queues: on a CI runner the
+    /// test read the lines first and saw only queues 1 to 4.
+    pub async fn commands_once_admin_closed(&self) -> Vec<String> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let lines = self.commands();
+            if lines.iter().any(|l| l.contains("queue 0 of controller"))
+                || std::time::Instant::now() > deadline
+            {
+                return lines;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
 }
 
 /// Start the NVMe/TCP target on loopback with an unreachable model, so only `handlers` answer.

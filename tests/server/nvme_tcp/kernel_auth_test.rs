@@ -245,7 +245,7 @@ print(json.dumps({'actions':a}))"#;
             );
             disconnect(&nvme, &nqn).await;
             print_commands(&srv, &format!("{hash}/{group}"));
-            let all = srv.commands().join("\n");
+            let all = srv.commands_once_admin_closed().await.join("\n");
             assert!(
                 all.contains("Authentication Send x2") && all.contains("Authentication Receive x2"),
                 "the kernel's unidirectional exchange is two sends and two receives: {all}"
@@ -314,7 +314,7 @@ print(json.dumps({'actions':a}))"#;
         );
         disconnect(&nvme, &nqn).await;
         print_commands(&srv, "bidirectional");
-        let all = srv.commands().join("\n");
+        let all = srv.commands_once_admin_closed().await.join("\n");
         assert!(
             all.contains("Authentication Send x3"),
             "negotiate, reply and success2: {all}"
