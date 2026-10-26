@@ -467,8 +467,8 @@ pub struct Scope {
 
 impl Scope {
     pub fn includes(&self, r: &Recording) -> bool {
-        (self.sources.is_empty() || self.sources.iter().any(|s| *s == r.source.source_id))
-            && (self.recordings.is_empty() || self.recordings.iter().any(|t| *t == r.token))
+        (self.sources.is_empty() || self.sources.contains(&r.source.source_id))
+            && (self.recordings.is_empty() || self.recordings.contains(&r.token))
     }
 }
 
