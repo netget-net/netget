@@ -8,7 +8,7 @@
 //! Linux, as root, with the `nvme-tcp` module loaded: the `nvme-tcp` pair job runs this binary
 //! through sudo. The test fails, never skips, when nvme-cli, root or the module is missing.
 #[cfg(target_os = "linux")]
-mod kernel_host {
+pub mod kernel_host {
     use super::super::support::*;
     use std::path::{Path, PathBuf};
     use std::process::Output;
@@ -29,10 +29,10 @@ else:
   a=[{'type':'nvme_tcp_reject_connect','reason':'not_found'}]
 print(json.dumps({'actions':a}))"#;
 
-    const KERNEL_HOST: &str = "nqn.2026-10.net.netget:kernel-host";
-    const KERNEL_HOSTID: &str = "4e0c7b55-2d71-4f3a-9a64-6f2b1c0d8e93";
+    pub const KERNEL_HOST: &str = "nqn.2026-10.net.netget:kernel-host";
+    pub const KERNEL_HOSTID: &str = "4e0c7b55-2d71-4f3a-9a64-6f2b1c0d8e93";
 
-    fn require_root() {
+    pub fn require_root() {
         assert!(
             unsafe { libc::geteuid() } == 0, // SAFETY: geteuid has no preconditions.
             "the kernel host needs root (nvme connect writes /dev/nvme-fabrics and the kernel \
@@ -41,7 +41,7 @@ print(json.dumps({'actions':a}))"#;
     }
 
     /// nvme-cli on PATH or in /usr/sbin, or a failure that says how to install it.
-    fn nvme_cli() -> PathBuf {
+    pub fn nvme_cli() -> PathBuf {
         let mut dirs: Vec<PathBuf> =
             std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect();
         dirs.extend(["/usr/sbin".into(), "/sbin".into(), "/usr/bin".into()]);
@@ -58,7 +58,7 @@ print(json.dumps({'actions':a}))"#;
         );
     }
 
-    fn require_module() {
+    pub fn require_module() {
         assert!(
             Path::new("/dev/nvme-fabrics").exists() && Path::new("/sys/module/nvme_tcp").exists(),
             "the nvme-tcp kernel module is not loaded (no /dev/nvme-fabrics or \
@@ -67,7 +67,7 @@ print(json.dumps({'actions':a}))"#;
         );
     }
 
-    async fn run(bin: &Path, args: &[&str]) -> Output {
+    pub async fn run(bin: &Path, args: &[&str]) -> Output {
         tokio::time::timeout(
             Duration::from_secs(120),
             tokio::process::Command::new(bin)
@@ -80,11 +80,11 @@ print(json.dumps({'actions':a}))"#;
         .unwrap_or_else(|e| panic!("running {}: {e}", bin.display()))
     }
 
-    fn text(b: &[u8]) -> String {
+    pub fn text(b: &[u8]) -> String {
         String::from_utf8_lossy(b).into_owned()
     }
 
-    fn read_trim(p: &Path) -> String {
+    pub fn read_trim(p: &Path) -> String {
         std::fs::read_to_string(p)
             .unwrap_or_default()
             .trim()
@@ -92,7 +92,7 @@ print(json.dumps({'actions':a}))"#;
     }
 
     /// The kernel's subsystem directory for an NQN, from sysfs.
-    fn subsystem_dir(nqn: &str) -> Option<PathBuf> {
+    pub fn subsystem_dir(nqn: &str) -> Option<PathBuf> {
         std::fs::read_dir("/sys/class/nvme-subsystem")
             .ok()?
             .flatten()
@@ -100,7 +100,7 @@ print(json.dumps({'actions':a}))"#;
             .find(|p| read_trim(&p.join("subsysnqn")) == nqn)
     }
 
-    fn is_ns_name(name: &str) -> bool {
+    pub fn is_ns_name(name: &str) -> bool {
         // nvme<N>n<M>, not a per-path nvme<N>c<C>n<M>.
         let Some(rest) = name.strip_prefix("nvme") else {
             return false;
@@ -113,14 +113,14 @@ print(json.dumps({'actions':a}))"#;
             && b.bytes().all(|c| c.is_ascii_digit())
     }
 
-    fn is_ctrl_name(name: &str) -> bool {
+    pub fn is_ctrl_name(name: &str) -> bool {
         name.strip_prefix("nvme")
             .is_some_and(|r| !r.is_empty() && r.bytes().all(|c| c.is_ascii_digit()))
     }
 
     /// The controllers of a subsystem and its namespace block devices by NSID. Never a guessed
     /// /dev/nvme0n1: the runner may have NVMe disks of its own.
-    fn devices(nqn: &str) -> (Vec<String>, Vec<(u32, String)>) {
+    pub fn devices(nqn: &str) -> (Vec<String>, Vec<(u32, String)>) {
         let Some(dir) = subsystem_dir(nqn) else {
             return (vec![], vec![]);
         };
@@ -156,7 +156,7 @@ print(json.dumps({'actions':a}))"#;
     }
 
     /// What the kernel and nvme-cli say about the association, for a failure message.
-    async fn diagnostics(nvme: &Path) -> String {
+    pub async fn diagnostics(nvme: &Path) -> String {
         let list = run(nvme, &["list", "-v"]).await;
         let subsys = run(nvme, &["list-subsys"]).await;
         let mut sysfs = String::new();
@@ -200,7 +200,7 @@ print(json.dumps({'actions':a}))"#;
     }
 
     /// Read `len` bytes at `offset` of a block device with O_DIRECT, once it opens and reads.
-    fn read_direct(path: &Path, offset: u64, len: usize) -> std::io::Result<Vec<u8>> {
+    pub fn read_direct(path: &Path, offset: u64, len: usize) -> std::io::Result<Vec<u8>> {
         use std::os::unix::fs::{FileExt, OpenOptionsExt};
         let f = std::fs::OpenOptions::new()
             .read(true)
@@ -211,7 +211,7 @@ print(json.dumps({'actions':a}))"#;
         Ok(buf.as_mut().to_vec())
     }
 
-    fn write_direct(path: &Path, offset: u64, data: &[u8]) -> std::io::Result<()> {
+    pub fn write_direct(path: &Path, offset: u64, data: &[u8]) -> std::io::Result<()> {
         use std::os::unix::fs::{FileExt, OpenOptionsExt};
         let f = std::fs::OpenOptions::new()
             .write(true)
@@ -244,7 +244,7 @@ print(json.dumps({'actions':a}))"#;
     /// Run a blocking block-device operation off the runtime the target runs on, retrying
     /// until it succeeds (the kernel can create the node before it has finished probing the
     /// disk) for up to 30 s.
-    async fn until_ok<T: Send + 'static>(
+    pub async fn until_ok<T: Send + 'static>(
         what: &str,
         f: impl Fn() -> std::io::Result<T> + Send + Sync + Clone + 'static,
     ) -> Result<T, String> {
@@ -265,7 +265,7 @@ print(json.dumps({'actions':a}))"#;
         Err(last)
     }
 
-    async fn settle() {
+    pub async fn settle() {
         if let Some(u) = ["/usr/bin/udevadm", "/bin/udevadm", "/sbin/udevadm"]
             .iter()
             .find(|p| Path::new(p).exists())
@@ -275,7 +275,7 @@ print(json.dumps({'actions':a}))"#;
     }
 
     /// Disconnects the subsystem when the test ends, however it ends.
-    struct Disconnect(PathBuf);
+    pub struct Disconnect(PathBuf);
     impl Drop for Disconnect {
         fn drop(&mut self) {
             let _ = std::process::Command::new(&self.0)
@@ -288,7 +288,7 @@ print(json.dumps({'actions':a}))"#;
     // kernel's commands runs on this runtime, so a blocking read on its only worker would never
     // return.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn the_linux_kernel_host_discovers_connects_and_reads_the_described_namespaces() {
+    pub async fn the_linux_kernel_host_discovers_connects_and_reads_the_described_namespaces() {
         require_root();
         let nvme = nvme_cli();
         require_module();
@@ -466,7 +466,7 @@ print(json.dumps({'actions':a}))"#;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn the_linux_kernel_host_is_refused_what_the_model_refuses() {
+    pub async fn the_linux_kernel_host_is_refused_what_the_model_refuses() {
         require_root();
         let nvme = nvme_cli();
         require_module();
@@ -486,6 +486,10 @@ print(json.dumps({'actions':a}))"#;
                 "nqn.2026-10.net.netget:nothing",
                 "-q",
                 KERNEL_HOST,
+                // The same host ID as the other test's: the kernel refuses one host NQN under
+                // two host IDs, before the target hears anything, when the two run at once.
+                "-I",
+                KERNEL_HOSTID,
             ],
         )
         .await;

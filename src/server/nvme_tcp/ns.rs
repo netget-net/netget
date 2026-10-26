@@ -25,6 +25,10 @@ pub const MAX_NSID: u32 = 1024;
 pub const MAX_NAMESPACE_BYTES: u64 = 64 << 40;
 /// Bytes one controller may hold in its write overlay.
 pub const MAX_OVERLAY_BYTES: usize = 64 * 1024 * 1024;
+/// The most one Copy moves, and the source ranges it may name (Identify Namespace MCL and
+/// MSRC).
+pub const MAX_COPY_BYTES: usize = 4 * 1024 * 1024;
+pub const MAX_COPY_RANGES: usize = 128;
 /// What one block the overlay records as zeroes (Write Zeroes, deallocate) is charged.
 const ZERO_BLOCK_COST: usize = 32;
 
@@ -60,6 +64,9 @@ pub struct SubsystemDescription {
     pub serial: String,
     pub firmware: String,
     pub namespaces: Vec<Namespace>,
+    /// The host must prove itself with DH-HMAC-CHAP before anything else (the model's
+    /// `require_authentication`).
+    pub require_authentication: bool,
 }
 
 fn text_field(v: &Json, key: &str, max: usize) -> Result<Option<String>> {
@@ -200,6 +207,12 @@ impl SubsystemDescription {
             serial,
             firmware: text_field(v, "firmware", 8)?.unwrap_or_else(|| "1.0".into()),
             namespaces: out,
+            require_authentication: match v.get("require_authentication") {
+                None | Some(Json::Null) => false,
+                Some(b) => b
+                    .as_bool()
+                    .context("require_authentication is true or false")?,
+            },
         })
     }
 
@@ -258,6 +271,12 @@ impl Namespace {
         out
     }
 
+    /// Copy limits in blocks: MSSRL (one source range) and MCL (the whole Copy).
+    pub fn copy_limits(&self) -> (u16, u32) {
+        let mcl = (MAX_COPY_BYTES / self.block_size as usize) as u32;
+        (mcl.min(u16::MAX as u32) as u16, mcl)
+    }
+
     /// LBA format 0, the one this namespace uses: LBADS = log2(block size).
     pub fn lbads(&self) -> u8 {
         self.block_size.trailing_zeros() as u8
@@ -275,6 +294,11 @@ impl Namespace {
                    // DLFEAT 0: what a deallocated block reads as is not reported, because Dataset
                    // Management's deallocate is taken as the hint it is and changes nothing.
         b[33] = 0;
+        b[31] = super::resv::RESCAP;
+        let (mssrl, mcl) = self.copy_limits();
+        b[74..76].copy_from_slice(&mssrl.to_le_bytes()); // MSSRL
+        b[76..80].copy_from_slice(&mcl.to_le_bytes()); // MCL
+        b[80] = (MAX_COPY_RANGES - 1) as u8; // MSRC, 0's based
         b[99] = if self.writable { 0 } else { 1 }; // NSATTR: write protected
         b[104..120].copy_from_slice(&self.nguid);
         b[120..128].copy_from_slice(&self.eui64);

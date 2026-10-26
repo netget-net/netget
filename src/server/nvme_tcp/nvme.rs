@@ -35,8 +35,43 @@ pub mod io {
     pub const FLUSH: u8 = 0x00;
     pub const WRITE: u8 = 0x01;
     pub const READ: u8 = 0x02;
+    pub const COMPARE: u8 = 0x05;
     pub const WRITE_ZEROES: u8 = 0x08;
     pub const DATASET_MANAGEMENT: u8 = 0x09;
+    pub const VERIFY: u8 = 0x0C;
+    pub const RESV_REGISTER: u8 = 0x0D;
+    pub const RESV_REPORT: u8 = 0x0E;
+    pub const RESV_ACQUIRE: u8 = 0x11;
+    pub const RESV_RELEASE: u8 = 0x15;
+    pub const COPY: u8 = 0x19;
+}
+
+/// Identify Controller ONCS bits this target sets: Compare, Dataset Management, Write Zeroes,
+/// Reservations, Verify and Copy.
+pub const ONCS: u16 = 1 | 1 << 2 | 1 << 3 | 1 << 5 | 1 << 7 | 1 << 8;
+
+/// One Copy source range (descriptor format 0, 32 bytes): (starting LBA, blocks).
+pub const COPY_RANGE_LEN: usize = 32;
+
+/// The source ranges of a Copy's data (format 0): SLBA at byte 8, NLB (0's based) at 16.
+pub fn copy_ranges(data: &[u8]) -> Vec<(u64, u64)> {
+    data.chunks_exact(COPY_RANGE_LEN)
+        .take(256)
+        .map(|r| {
+            (
+                u64::from_le_bytes(r[8..16].try_into().expect("8 bytes")),
+                u16::from_le_bytes([r[16], r[17]]) as u64 + 1,
+            )
+        })
+        .collect()
+}
+
+/// A Copy's format 0 source range descriptor.
+pub fn copy_range(slba: u64, blocks: u32) -> [u8; COPY_RANGE_LEN] {
+    let mut r = [0u8; COPY_RANGE_LEN];
+    r[8..16].copy_from_slice(&slba.to_le_bytes());
+    r[16..18].copy_from_slice(&((blocks.max(1) - 1) as u16).to_le_bytes());
+    r
 }
 
 /// Fabrics command types (FCTYPE, byte 4 of a Fabrics command).
@@ -148,8 +183,14 @@ impl Status {
     pub const SGL_TYPE_INVALID: Status = Status::generic(0x11);
     pub const NAMESPACE_WRITE_PROTECTED: Status = Status::generic(0x20);
     pub const TRANSIENT_TRANSPORT_ERROR: Status = Status::generic(0x22).retry();
+    pub const HOST_ID_INCONSISTENT: Status = Status::generic(0x18);
     pub const LBA_OUT_OF_RANGE: Status = Status::generic(0x80);
     pub const CAPACITY_EXCEEDED: Status = Status::generic(0x81);
+    pub const RESERVATION_CONFLICT: Status = Status::generic(0x83);
+    /// An I/O command's command-specific 83h (Copy past MSSRL, MCL or MSRC).
+    pub const COMMAND_SIZE_LIMIT_EXCEEDED: Status = Status::specific(0x83);
+    pub const AUTHENTICATION_REQUIRED: Status = Status::specific(0x91);
+    pub const COMPARE_FAILURE: Status = Status::media(0x85);
     pub const INVALID_QUEUE_IDENTIFIER: Status = Status::specific(0x01);
     pub const AER_LIMIT_EXCEEDED: Status = Status::specific(0x05);
     pub const INVALID_LOG_PAGE: Status = Status::specific(0x09);
@@ -191,10 +232,12 @@ impl Status {
             (0, 0x0F) => "DATA SGL LENGTH INVALID",
             (0, 0x11) => "SGL DESCRIPTOR TYPE INVALID",
             (0, 0x20) => "NAMESPACE IS WRITE PROTECTED",
+            (0, 0x18) => "HOST IDENTIFIER INCONSISTENT FORMAT",
             (0, 0x22) => "TRANSIENT TRANSPORT ERROR",
             (0, 0x80) => "LBA OUT OF RANGE",
             (0, 0x81) => "CAPACITY EXCEEDED",
             (0, 0x82) => "NAMESPACE NOT READY",
+            (0, 0x83) => "RESERVATION CONFLICT",
             (1, 0x01) => "INVALID QUEUE IDENTIFIER",
             (1, 0x02) => "INVALID QUEUE SIZE",
             (1, 0x05) => "ASYNCHRONOUS EVENT REQUEST LIMIT EXCEEDED",
@@ -208,6 +251,7 @@ impl Status {
             (1, 0x91) => "AUTHENTICATION REQUIRED",
             (2, 0x80) => "WRITE FAULT",
             (2, 0x81) => "UNRECOVERED READ ERROR",
+            (2, 0x85) => "COMPARE FAILURE",
             (2, 0x86) => "ACCESS DENIED",
             _ => "",
         };
@@ -215,6 +259,18 @@ impl Status {
             format!("STATUS TYPE {:#x} CODE {:#04x}", self.sct, self.sc)
         } else {
             name.to_string()
+        }
+    }
+
+    /// The status of an NVM command set I/O command: its command-specific codes 80h to 83h
+    /// mean what the I/O command set says, not what they mean for a Fabrics Connect.
+    pub fn describe_io(self) -> String {
+        match (self.sct, self.sc) {
+            (1, 0x80) => "CONFLICTING ATTRIBUTES".into(),
+            (1, 0x81) => "INVALID PROTECTION INFORMATION".into(),
+            (1, 0x82) => "ATTEMPTED WRITE TO READ ONLY RANGE".into(),
+            (1, 0x83) => "COMMAND SIZE LIMIT EXCEEDED".into(),
+            _ => self.describe(),
         }
     }
 }
@@ -298,6 +354,55 @@ impl Sqe {
     /// Starting LBA and block count (NLB + 1) of a Read, Write or Write Zeroes.
     pub fn lba_range(&self) -> (u64, u64) {
         (self.u64(40), (self.cdw(12) & 0xFFFF) as u64 + 1)
+    }
+}
+
+/// A command's name as the specification gives it, on an admin queue (`admin`) or an I/O queue.
+pub fn command_name(admin_queue: bool, sqe: &Sqe) -> String {
+    let op = sqe.opcode();
+    let name = if op == admin::FABRICS {
+        match sqe.fctype() {
+            fctype::PROPERTY_SET => "Property Set",
+            fctype::CONNECT => "Connect",
+            fctype::PROPERTY_GET => "Property Get",
+            fctype::AUTH_SEND => "Authentication Send",
+            fctype::AUTH_RECEIVE => "Authentication Receive",
+            fctype::DISCONNECT => "Disconnect",
+            _ => "",
+        }
+    } else if admin_queue {
+        match op {
+            admin::GET_LOG_PAGE => "Get Log Page",
+            admin::IDENTIFY => "Identify",
+            admin::ABORT => "Abort",
+            admin::SET_FEATURES => "Set Features",
+            admin::GET_FEATURES => "Get Features",
+            admin::ASYNC_EVENT_REQUEST => "Asynchronous Event Request",
+            admin::KEEP_ALIVE => "Keep Alive",
+            _ => "",
+        }
+    } else {
+        match op {
+            io::FLUSH => "Flush",
+            io::WRITE => "Write",
+            io::READ => "Read",
+            io::COMPARE => "Compare",
+            io::WRITE_ZEROES => "Write Zeroes",
+            io::DATASET_MANAGEMENT => "Dataset Management",
+            io::VERIFY => "Verify",
+            io::RESV_REGISTER => "Reservation Register",
+            io::RESV_REPORT => "Reservation Report",
+            io::RESV_ACQUIRE => "Reservation Acquire",
+            io::RESV_RELEASE => "Reservation Release",
+            io::COPY => "Copy",
+            _ => "",
+        }
+    };
+    match (name, op) {
+        ("", admin::FABRICS) => format!("Fabrics {:#04x}", sqe.fctype()),
+        ("", _) if admin_queue => format!("admin opcode {op:#04x}"),
+        ("", _) => format!("I/O opcode {op:#04x}"),
+        (n, _) => n.to_string(),
     }
 }
 
@@ -613,6 +718,8 @@ pub struct ControllerInfo {
     pub icdoff: u16,
     pub aerl: u8,
     pub lpa: u8,
+    /// OCFS: the Copy descriptor formats supported (bit 0: format 0).
+    pub ocfs: u16,
 }
 
 impl ControllerInfo {
@@ -641,6 +748,7 @@ impl ControllerInfo {
             ioccsz: u32_at(1792),
             iorcsz: u32_at(1796),
             icdoff: u16_at(1800),
+            ocfs: u16_at(534),
         })
     }
     pub fn controller_type(&self) -> &'static str {
@@ -664,6 +772,13 @@ pub struct NamespaceInfo {
     pub shared: bool,
     pub nguid: [u8; 16],
     pub eui64: [u8; 8],
+    /// RESCAP: the reservation types supported.
+    pub rescap: u8,
+    /// Copy limits: MSSRL (blocks per source range), MCL (blocks per Copy), MSRC (ranges,
+    /// 0's based).
+    pub mssrl: u16,
+    pub mcl: u32,
+    pub msrc: u8,
 }
 
 impl NamespaceInfo {
@@ -687,6 +802,10 @@ impl NamespaceInfo {
             shared: b[30] & 1 != 0,
             nguid: b[104..120].try_into().expect("16 bytes"),
             eui64: b[120..128].try_into().expect("8 bytes"),
+            rescap: b[31],
+            mssrl: u16::from_le_bytes([b[74], b[75]]),
+            mcl: u32::from_le_bytes(b[76..80].try_into().expect("4 bytes")),
+            msrc: b[80],
         })
     }
 }
