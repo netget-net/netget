@@ -699,3 +699,23 @@ fn fallocate_past_the_overlay_cap_is_enospc_and_changes_nothing() {
     t.unlink(ROOT, "f").unwrap();
     assert_eq!(t.overlay_bytes(), 0);
 }
+
+// ------------------------------------------------------------------ HDFS shares the tree
+
+#[test]
+fn hdfs_descriptions_refuse_hard_links_and_xattrs() {
+    use netget::server::hdfs::namespace::check_description as hdfs_check;
+    let plain = json!({"entries": [{"name": "f", "kind": "file", "text": "x"}]});
+    assert_eq!(hdfs_check(&plain).unwrap(), 1);
+    for answer in [
+        json!({"entries": [{"name": "f", "kind": "file"},
+                           {"name": "l", "kind": "hardlink", "target": "/f"}]}),
+        json!({"entries": [{"name": "d", "kind": "dir", "entries": [
+            {"name": "f", "kind": "file", "xattrs": [{"name": "user.a", "text": "x"}]}]}]}),
+        json!({"xattrs": [{"name": "user.a"}], "entries": []}),
+    ] {
+        assert!(hdfs_check(&answer).is_err(), "HDFS refuses {answer}");
+        // The tree itself would take it: the refusal is HDFS's.
+        assert!(check_description(&answer).is_ok(), "{answer}");
+    }
+}

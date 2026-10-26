@@ -54,7 +54,8 @@ broken descriptions refused whole. fallocate: the mode bits, allocate with and w
 KEEP_SIZE (pages reserved, `st_blocks`, writes into them free), punch over described bytes
 (zeroes, size kept, costs pages), over a failing region, past the end, over written pages (whole
 pages given back), zero range with and without KEEP_SIZE, EFBIG, EINVAL, EISDIR, and the overlay
-cap refusing each mode with nothing changed.
+cap refusing each mode with nothing changed. And HDFS, which shares the tree: its own
+description check refuses hard links and xattrs that the tree alone would take.
 
 ## `links_xattrs_test.rs` — ln, setfattr, fallocate and renameat2 through the kernel
 
