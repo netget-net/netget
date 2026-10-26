@@ -78,10 +78,30 @@ a disk: `text` (UTF-8), `hex`, or `extents` (`{offset, text}`, `{offset, hex}`, 
 fill}`) over a `size`, with uncovered bytes reading as zeroes, and `errors` — byte ranges whose
 reads fail with an errno the model names. The key names the encoding; nothing is base64.
 
+**Hard links in a description** are entries of `kind: "hardlink"` whose `target` is the absolute
+path, from the mount's root, of a file (or symlink, FIFO, ...) described in the same answer or
+in an earlier one: `{"name": "README.copy", "kind": "hardlink", "target": "/README.txt"}`. The
+two names are then one inode — one content, one mode, one set of xattrs, `nlink` 2. A hard link
+carries nothing but `name`, `kind` and `target` (everything else belongs to the inode, so a
+`mode` or `text` on one is refused rather than silently ignored); it may not name a directory,
+another hard-link entry, or a path into a directory nobody has described yet (resolving it must
+never ask for a description). A path was chosen over an inode label because it is what the
+model already uses for everything, and because it lets a lazily described directory link to a
+file described long before. HDFS shares the tree and has no hard links, so its own description
+check refuses `hardlink` entries (and `xattrs`), keeping its namespace exactly as it was.
+
+**Extended attributes** ride on any entry (not a hard link) as `xattrs: [{name, text | hex}]`,
+and a description's top-level `xattrs` are the described directory's own — the only way to give
+the root any. Names are in `user.`, `trusted.` or `security.`; a value with neither key is empty.
+
 **Every change is one decision**: `fuse_create` (open with O_CREAT; mknod, mkfifo and bind,
 with `kind` saying file, fifo, socket, char or block),
 `fuse_write`, `fuse_truncate` (a setattr with a size), `fuse_setattr` (chmod, chown, utimes),
-`fuse_mkdir`, `fuse_unlink`, `fuse_rmdir`, `fuse_rename`, `fuse_symlink`. Each is answered
+`fuse_mkdir`, `fuse_unlink` (with `links`, the names the file has), `fuse_rmdir`,
+`fuse_rename` (with `exchange` for RENAME_EXCHANGE), `fuse_symlink`, `fuse_link` (with
+`existing_path` and `links`), `fuse_setxattr` (name, value previewed like a write's, `mode`
+create / replace / create_or_replace, `replaces`), `fuse_removexattr`, `fuse_fallocate`
+(`operation` allocate / punch_hole / zero_range, `keep_size`, offset, length). Each is answered
 `fuse_allow` (applied to the overlay; the process gets success) or `fuse_deny` with an errno
 (EACCES, EPERM, EROFS, ENOSPC, EDQUOT, …; the process gets it and nothing changes). Rust checks
 first what the kernel and POSIX would refuse anyway — EEXIST, ENOENT, ENOTEMPTY, EISDIR,
@@ -90,6 +110,35 @@ and the model is not asked about those (`decision=protocol_refusal`). A write ev
 offset, length, size before, and the first 512 bytes as text when they are text and as hex
 otherwise (`encoding` says which, `data_truncated` whether there is more). Every event carries
 the requesting pid, uid, gid and process name (`/proc/<pid>/comm`).
+
+**What the kernel decides before the tree does.** `link` of a directory, `user.*` on a symlink
+or special file, `trusted.*` without CAP_SYS_ADMIN in the initial user namespace, `security.*`
+without it in the namespace that owns the mount, values over 64 KiB (E2BIG) and names over 255
+bytes (ERANGE), COLLAPSE_RANGE and INSERT_RANGE, and a rename
+that asks for both EXCHANGE and NOREPLACE never reach the daemon (measured, see the tests).
+What does reach it and is refused by the tree without asking: XATTR_CREATE on an existing
+name (EEXIST), XATTR_REPLACE or removal of a missing one (ENODATA), a namespace other than the
+three (EOPNOTSUPP), a 129th attribute or the 16 MiB budget (ENOSPC), a 1025th name (EMLINK),
+a fallocate mode other than the four (EOPNOTSUPP), one past the overlay cap (ENOSPC) or the file
+bound (EFBIG), RENAME_WHITEOUT (EINVAL; the kernel has let any process ask since Linux 5.8). `getxattr` and `listxattr` are answered
+from the tree on fuser's thread at no model cost: a size of 0 gets the length, a buffer too
+small gets ERANGE, a missing name ENODATA.
+
+**Hard links in the overlay.** A node keeps its first name (`parent`, `name`, which every event
+path uses) and its further names (`links`). Unlinking or renaming any one name moves only that
+record; unlinking the first promotes the next. `nlink` is the number of names. The inode goes
+with its last name — unless it is open, in which case it lives nameless with `nlink` 0 until the
+last release, as before. A rename onto another name of the same inode does nothing (POSIX);
+exchanging two names of one inode does nothing either.
+
+**fallocate in the overlay.** Mode 0 and KEEP_SIZE reserve the range as overlay pages (a page
+holding what the file shows there), so a later write into it costs nothing and cannot fail for
+space; without KEEP_SIZE the file grows to cover it, and `st_blocks` counts reserved pages past
+the end. PUNCH_HOLE|KEEP_SIZE makes the range read as zeroes: a whole page with nothing described
+beneath gives its overlay page back, any other page in the range needs one (zeroed where the
+range covers it) to hide the described bytes, so punching a described file costs overlay.
+ZERO_RANGE (with or without KEEP_SIZE) zeroes and reserves. Every mode counts its new pages
+against `max_overlay_bytes` first and is ENOSPC, changing nothing, if they do not fit.
 
 Writes are decided per kernel write request, which is up to 128 KiB (`max_write`): `cp` of a
 300 KiB file is one create and three writes. With a static or script handler that costs no
@@ -139,8 +188,11 @@ the model sees the recent descriptions and decisions on this mount when it decid
 without `/` or NUL; 64 directories deep (`MAX_TREE_DEPTH`, enforced by the description walk —
 iterative, so a nested answer cannot recurse — by mkdir and by rename); files up to 1 GiB; 16
 MiB of described text and hex over the whole mount; symlink targets of 4095 bytes; the overlay;
-128 KiB per write request; 64 waiting requests; three description attempts per directory. A
-description that breaks any of them is refused whole before anything is committed.
+128 KiB per write request; 64 waiting requests; three description attempts per directory; 1024
+names per file (`MAX_LINKS`, EMLINK) and 65 536 hard links over the tree (`MAX_HARD_LINKS`,
+ENOSPC); extended-attribute names of 255 bytes, values of 64 KiB, 128 per node and 16 MiB of
+names and values over the tree (`MAX_XATTR_BYTES`, ENOSPC). A description that breaks any of
+them is refused whole before anything is committed.
 
 ## Stopping
 
@@ -171,32 +223,41 @@ mount), so a device node made here cannot be opened through it.
 
 ## Not implemented
 
-Hard links (EPERM: every node has one parent and one name, which is what makes a path in an
-event unambiguous), extended attributes (none are listed; setting one is ENOTSUP), byte-range locks beyond
-the kernel's local ones, fallocate, `RENAME_EXCHANGE` and `RENAME_WHITEOUT` (EINVAL), and
-notifications to the kernel (nothing is ever invalidated from this side, because nothing changes
-without a request). macOS and every other platform (see above).
+`RENAME_WHITEOUT` (EINVAL: it is overlayfs's marker for a deleted lower entry, which this tree
+has no notion of), POSIX ACLs (`system.posix_acl_*` is EOPNOTSUPP; the mount does not ask the
+kernel for ACL support), fallocate's COLLAPSE_RANGE, INSERT_RANGE and UNSHARE_RANGE
+(EOPNOTSUPP; the kernel's FUSE driver does not send the first two at all), byte-range locks
+beyond the kernel's local ones, copy_file_range and lseek SEEK_DATA/SEEK_HOLE (the kernel falls
+back to reads and writes), and notifications to the kernel (nothing is ever invalidated from this
+side, because nothing changes without a request). macOS and every other platform (see above).
 
 ## Evidence, and why there is no pcap oracle
 
-pjdfstest, as root on Linux 7.2 (aarch64) in a rootless container: **198 of its 238 test files
-pass in full, 6854 subtests ok and 1944 not ok.** Every remaining failure is one of four things:
-hard links (`link/*`, and the `rename`/`unlink` cases that count links), block and character
-device nodes (the kernel refuses `mknod` of a device to root in a user namespace, so every case
-that makes one fails there, and its follow-on assertions with it; a real root, as in CI, can),
-`open/25.t`'s 2 GiB `pwrite` (files are bounded at 1 GiB), and `unlink/08.t`'s POSIX TODO. Two
-defects it found are fixed: a lookup of a name longer than 255 bytes answered ENOENT instead of
-ENAMETOOLONG, and a file unlinked while open still reported one link.
-
+pjdfstest on Linux 7.2 (aarch64), measured twice because the result depends on whether the
+kernel lets root make device nodes. **As real root (a rootful container, as CI's sudo is): 235 of
+its 238 test files pass in full, 8786 subtests ok and 12 not ok.** The three left are
+`open/25.t`'s 2 GiB `pwrite` (files are bounded at 1 GiB) and pjdfstest's own `# TODO` cases in
+`chown/00.t` and `unlink/08.t`, which the tally counts as failures. **As root in a rootless
+container: 203 pass in full**; the 32 more are every file that makes a block or character
+device, which the kernel refuses to root in a user namespace (and every follow-on assertion
+with it). The test holds both floors and probes which applies. Hard links were worth five files
+there (`link/02`, `03`, `06`, `07`, `09`) and the rest of `link/`, `rename/` and `unlink/` once
+devices can be made. The C suite has no extended-attribute tests. Two defects it found earlier
+are fixed: a lookup of a name longer than 255 bytes answered ENOENT instead of ENAMETOOLONG,
+and a file unlinked while open still reported one link.
 
 There is no wire: the kernel's FUSE driver talks to the daemon over `/dev/fuse`, so no dissector
 exists to read it and none is invented. The independent peer is the kernel itself, driven by
-coreutils, findutils, Python and pjdfstest — NetGet's own code is nowhere on the reading side.
-`tests/server/fuse/AGENTS.md` lists what each test pins. The description parser has a fuzz
-target, `fuzz/fuzz_targets/fuse_tree_description.rs`, with a depth-bomb corpus.
+coreutils, findutils, attr, util-linux, Python (`os` and libc through `ctypes`) and pjdfstest —
+NetGet's own code is nowhere on the reading side. `tests/server/fuse/AGENTS.md` lists what each
+test pins. The description parser has a fuzz target, `fuzz/fuzz_targets/fuse_tree_description.rs`,
+with depth-bomb, hard-link-bomb and xattr-bomb corpus entries; it also checks that every
+non-directory's link count equals the names it is listed under and that unlinking one name of a
+file with several keeps the inode.
 
 ## Maturity
 
-Experimental. The kernel peer is measured on Linux 7.2 (aarch64) in the podman VM, unprivileged
-through fusermount3 and as root; in CI the peers run only in the `fuse` pair job, which had not
-run when this landed, so the rating waits for it.
+Experimental. The kernel peer is measured on Linux 7.2 (aarch64): unprivileged through
+fusermount3 in the podman VM (Fedora, fuse3 3.18) and in a rootful Ubuntu 24.04 container (fuse3
+3.14), as root in a rootless container and as real root. In CI the peers run only in the `fuse`
+pair job, so the rating waits for that job's verdict on its kernel.
