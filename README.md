@@ -9,7 +9,7 @@
                           ↓       ↓
 Client ── HTTP, TCP, IP, … ── NetGet ──┬── LLM
                                      ├── Script
-                                     └── Manual
+                                     └── Human
 ```
 
 ## Run

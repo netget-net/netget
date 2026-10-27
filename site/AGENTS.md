@@ -6,7 +6,7 @@ is created on load, and only if nothing else on the page has focus; after that f
 the visitor: connection, incoming requests, and sending a composer reply must not focus a terminal.
 
 The landing page shows a left-to-right network diagram: Client → NetGet → LLM / Script /
-Manual. HTML and CSS keep the diagram visible without JavaScript and preserve the direction
+Human. HTML and CSS keep the diagram visible without JavaScript and preserve the direction
 on narrow screens. NetGet is centered in the diagram; the client connection shows `HTTP / DNS / TCP ...`, wrapping within the client connection on narrow screens. CLI and MCP each have their own arrow
 down into NetGet. The Client label has a monitor icon above it; response drivers are plain text. Equal outer grid columns
 center the hub; the 132px driver column has 44px rows, and its connector centers are
