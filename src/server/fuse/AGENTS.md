@@ -9,6 +9,7 @@ editor, Python) are what drive it. There is no network, no port and no NetGet cl
 |---|---|
 | `mod.rs` | settings, the mount guard, the `fuser::Filesystem` that answers from the tree on fuser's thread, the bounded queue and the one worker per mount that asks the model under a deadline |
 | `linux.rs` | the Linux backend: the fusermount3 mount (socket pair, `_FUSE_COMMFD`, SCM_RIGHTS), its unmount and the watchdog |
+| `appledouble.rs` | macOS: AppleDouble `._name` sidecars, accepted and their bytes discarded, with stable attributes and bounds; pure, and unit-tested without a mount |
 | `macos.rs` | the macOS backend: FUSE-T's go-nfsv4 started by NetGet, the request/reply relay, the unmount and the watchdog |
 | `actions.rs` | events, actions, startup parameters, metadata |
 | `src/server/described_tree.rs` | the model-described tree and the overlay: description parsing (iterative, every bound), reads, every mutation as a pure function; compiled on every Unix so its tests and fuzz target run off Linux |
@@ -52,10 +53,12 @@ libraries (its forks of go-fuse, jacobsa/fuse and bazil.org/fuse) do: two socket
 in a session of its own with `_FUSE_COMMFD` (requests), `_FUSE_MONFD` (control) and
 `_FUSE_COMMVERS=2`, `mount` written on the control socket, then FUSE_INIT on the stream, the NFS
 mount, and a 32-bit status back on the control socket. `spawn()` returns only after that status
-says 0 and the mount table lists `fuse-t:/netget` on the mount point. Options: `--noappledouble`,
-`--dontbrowse` (no Finder or Spotlight walking it), `--rwsize=131072` (one NFS read or write is at
+says 0 and the mount table lists `fuse-t:/netget` on the mount point. Options: `--dontbrowse`
+(no Finder or Spotlight walking it), `--rwsize=131072` (one NFS read or write is at
 most one FUSE request of `max_write`), `-r` for `read_only`; **never `--namedattr`** (see the risk
-below).
+below), and not `--noappledouble` (FUSE-T then refuses `._` creates itself with EPERM, which
+copyfile treats as a failure: every `cp` of a file carrying macOS's provenance attribute exited 1,
+measured on FUSE-T 1.2.9).
 
 Why not FUSE-T's libfuse3 through `dlopen` (route b) or for the mount only: its Darwin mount code
 keeps the helper's pid and control socket in process-wide statics, so a second mount in one
@@ -106,11 +109,21 @@ the cask too.
 - `cp` copies metadata with `copyfile`, so each copy is a create, the writes, and several
   setattr decisions (mode and times).
 - Events carry `pid` 0 and an empty `process`: NFS carries the caller's uid and gid, no pid.
-- **No extended attributes.** Without named attributes the NFS client has nowhere to put them but
-  AppleDouble `._name` files, which `--noappledouble` refuses and `FuseFs` refuses too (create,
-  mknod, mkdir, symlink, link and rename to a `._` name are EPERM, `decision=protocol_refusal`,
-  unasked), so `xattr -w` fails with EPERM or ENOTSUP and nothing reaches the model. macOS also
-  stamps quarantine/provenance attributes on files by itself; those fail the same way, silently.
+- **Extended attributes are accepted and discarded.** Without named attributes the NFS client
+  keeps them — Finder tags, quarantine, the provenance attribute copyfile copies with every
+  file — in AppleDouble `._name` files. `FuseFs` takes each `._` regular file as a **sidecar**
+  (`appledouble.rs`), outside the described tree and without asking the model (logged
+  `decision=protocol_accept appledouble`): its writes succeed and their bytes are thrown away,
+  only its length is kept (the highest byte written; it shrinks only on an explicit truncate),
+  and reads return zeroes up to it. It is found by name, never listed by readdir (nor is any
+  described `._` name), removed by unlink, and renamed only to another `._` name (a rename
+  between a `._` name and any other is EPERM). A `._` directory, symlink, hard link, FIFO or
+  device is refused ENOTSUP. Its attributes are stable: one inode, never reused, from a range of
+  its own; mode 0644 and the creator's uid and gid; times fixed at creation and only moved
+  forward by a write or a size change; a setattr of anything but the size changes nothing.
+  Bounds: 4096 sidecars per mount (ENOSPC) and 16 MiB each (EFBIG); memory is O(count) and
+  sidecars do not count against the overlay. So macOS metadata on this volume is accepted and
+  discarded: `xattr -l` shows nothing that was written.
 - No RENAME_EXCHANGE, no fallocate, no `renamex_np` swap or exclusive rename: NFS has none of them,
   so they never reach the daemon (`rename_mode` refuses any rename flag EINVAL on macOS).
 - Byte-range locks are the NFS client's and go-nfsv4's business; fuser answers no lock request.
@@ -126,7 +139,8 @@ churn** (a fileid changing under a path, size or mtime flapping or going backwar
 on every GETATTR). It happened here: the development Mac panicked 9 s after a build that passed
 `--namedattr`, in an `xattr` process run against the mount. So:
 
-- `--namedattr` is never passed; extended attributes are unsupported on macOS (above).
+- `--namedattr` is never passed; extended attributes go to discarded sidecars (above), whose
+  attributes do not flap.
 - Served attributes are stable, on both platforms: an inode number is assigned once and kept
   for the node's life (a rename moves the name, not the inode; nothing is reused); nothing is
   computed at getattr time — a description without `mtime` gets the mount's birth time once, when
@@ -350,8 +364,8 @@ kernel for ACL support), fallocate's COLLAPSE_RANGE, INSERT_RANGE and UNSHARE_RA
 (EOPNOTSUPP; the kernel's FUSE driver does not send the first two at all), byte-range locks
 beyond the kernel's local ones, copy_file_range and lseek SEEK_DATA/SEEK_HOLE (the kernel falls
 back to reads and writes), and notifications to the kernel (nothing is ever invalidated from this
-side, because nothing changes without a request). On macOS, additionally: extended attributes,
-RENAME_EXCHANGE and fallocate (see above). Windows and every other platform.
+side, because nothing changes without a request). On macOS, additionally: keeping extended
+attributes (they are accepted and discarded), RENAME_EXCHANGE and fallocate (see above). Windows and every other platform.
 
 ## Evidence, and why there is no pcap oracle
 

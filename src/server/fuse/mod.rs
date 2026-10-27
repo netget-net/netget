@@ -13,6 +13,7 @@
 //! task, which asks one decision at a time under a deadline and replies to the kernel itself. A request still waiting when the deadline passes is answered EIO, so a
 //! process doing I/O on the mount never blocks for longer than `decision_timeout_secs`.
 pub mod actions;
+pub mod appledouble;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
@@ -52,6 +53,27 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use tokio::sync::mpsc;
+
+/// Whether AppleDouble sidecars (`._x`) are accepted and discarded (`appledouble.rs`): macOS
+/// only, where a FUSE-T mount has no named attributes and macOS keeps extended attributes in
+/// those files. On Linux a `._x` name is an ordinary name in the tree.
+const SIDECARS: bool = cfg!(target_os = "macos");
+
+fn sidecar_name(name: &OsStr) -> bool {
+    SIDECARS && appledouble::is_appledouble(name.as_encoded_bytes())
+}
+
+fn sidecar_ino(ino: u64) -> bool {
+    SIDECARS && appledouble::Sidecars::owns(ino)
+}
+
+/// The errno an AppleDouble (`._x`) name gets on macOS where it is not a regular file (mkdir,
+/// symlink, link, a FIFO or device): `ENOTSUP`. Regular `._x` files are sidecars and are
+/// accepted. Never reached on Linux.
+#[cfg(target_os = "macos")]
+const APPLEDOUBLE_ERRNO: i32 = libc::ENOTSUP;
+#[cfg(not(target_os = "macos"))]
+const APPLEDOUBLE_ERRNO: i32 = libc::EPERM;
 
 /// How long a process waits for the model before its system call fails with EIO.
 pub const DEFAULT_DECISION_TIMEOUT: Duration = Duration::from_secs(60);
@@ -424,6 +446,8 @@ struct FuseFs {
     read_only: bool,
     status_tx: tokio::sync::mpsc::UnboundedSender<String>,
     mount_label: String,
+    /// macOS: the AppleDouble sidecars, kept apart from the tree and never shown to the model.
+    sidecars: Mutex<appledouble::Sidecars>,
 }
 
 fn lock(t: &Mutex<Tree>) -> std::sync::MutexGuard<'_, Tree> {
@@ -461,24 +485,59 @@ impl FuseFs {
         }
     }
 
-    /// macOS only: whether `name` is an AppleDouble sidecar (`._x`), refused EPERM without
-    /// asking. Without named attributes (which FUSE-T is never given, see `macos.rs`) the NFS
-    /// client keeps extended attributes in such files; refusing them makes extended attributes
-    /// unsupported on macOS, as FUSE-T's `--noappledouble` intends, instead of a create and
-    /// writes for the model to decide about every time macOS stamps a file. Never on Linux.
+    /// macOS only: whether `name` is an AppleDouble name (`._x`) for something other than a
+    /// regular file — a directory, symlink or hard link — refused [`APPLEDOUBLE_ERRNO`] without
+    /// asking. A regular `._x` file is a sidecar, accepted and discarded (`appledouble.rs`).
+    /// Never on Linux.
     fn apple_double(&self, op: &str, name: &OsStr) -> bool {
-        #[cfg(target_os = "macos")]
-        if name.as_encoded_bytes().starts_with(b"._") {
-            Log::new(Some(&self.status_tx)).info(format!(
-                "FUSE {} operation={op} decision=protocol_refusal {} is an AppleDouble name \
-                 (extended attributes are not supported on macOS); answered EPERM",
-                self.mount_label,
-                sanitize::token(&name.to_string_lossy(), 255)
-            ));
-            return true;
+        if !sidecar_name(name) {
+            return false;
         }
-        let _ = (op, name);
-        false
+        Log::new(Some(&self.status_tx)).info(format!(
+            "FUSE {} operation={op} decision=protocol_refusal {} is an AppleDouble name, which \
+             only a regular file (a sidecar) may have; answered {}",
+            self.mount_label,
+            sanitize::token(&name.to_string_lossy(), 255),
+            tree::errno_name(APPLEDOUBLE_ERRNO)
+        ));
+        true
+    }
+
+    fn sidecars(&self) -> std::sync::MutexGuard<'_, appledouble::Sidecars> {
+        self.sidecars.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Create (or find) the sidecar `name` in `parent` for the caller, without asking the
+    /// model: macOS metadata on this volume is accepted and discarded.
+    fn accept_sidecar(
+        &self,
+        req: &Request,
+        op: &str,
+        parent: u64,
+        name: &OsStr,
+    ) -> Result<Attr, i32> {
+        let name = name.to_string_lossy();
+        let made = self
+            .sidecars()
+            .create(parent, &name, req.uid(), req.gid(), SystemTime::now());
+        match &made {
+            Ok(a) => Log::new(Some(&self.status_tx)).debug(format!(
+                "FUSE {} operation={op} decision=protocol_accept appledouble {} (inode {}); its \
+                 bytes are discarded",
+                self.mount_label,
+                sanitize::token(&name, 255),
+                a.ino
+            )),
+            Err(c) => Log::new(Some(&self.status_tx)).info(format!(
+                "FUSE {} operation={op} decision=protocol_refusal appledouble {}: {} sidecars \
+                 already; answered {}",
+                self.mount_label,
+                sanitize::token(&name, 255),
+                appledouble::MAX_SIDECARS,
+                tree::errno_name(*c)
+            )),
+        }
+        made
     }
 
     fn refuse_read_only(&self, op: &str) -> Errno {
@@ -528,6 +587,13 @@ impl Filesystem for FuseFs {
         if name.len() > tree::MAX_NAME_BYTES {
             return reply.error(Errno::ENAMETOOLONG);
         }
+        if sidecar_name(name) {
+            let found = self.sidecars().lookup(parent.0, &name.to_string_lossy());
+            return match found {
+                Some(a) => reply.entry(&TTL, &file_attr(&a), Generation(0)),
+                None => reply.error(Errno::ENOENT),
+            };
+        }
         let Some(name) = name_of(name) else {
             return reply.error(Errno::ENOENT);
         };
@@ -547,6 +613,13 @@ impl Filesystem for FuseFs {
     }
 
     fn getattr(&self, _req: &Request, ino: INodeNo, _fh: Option<FileHandle>, reply: ReplyAttr) {
+        if sidecar_ino(ino.0) {
+            let a = self.sidecars().attr(ino.0);
+            return match a {
+                Some(a) => reply.attr(&TTL, &file_attr(&a)),
+                None => reply.error(Errno::ENOENT),
+            };
+        }
         match lock(&self.tree).attr(ino.0) {
             Some(a) => reply.attr(&TTL, &file_attr(&a)),
             None => reply.error(Errno::ENOENT),
@@ -571,6 +644,17 @@ impl Filesystem for FuseFs {
         _flags: Option<fuser::BsdFileFlags>,
         reply: ReplyAttr,
     ) {
+        if sidecar_ino(ino.0) {
+            // Only a size changes a sidecar; mode, owner and times stay as they are.
+            if size.is_some() && self.read_only {
+                return reply.error(self.refuse_read_only("setattr"));
+            }
+            let a = self.sidecars().setattr(ino.0, size, SystemTime::now());
+            return match a {
+                Ok(a) => reply.attr(&TTL, &file_attr(&a)),
+                Err(c) => reply.error(Errno::from_i32(c)),
+            };
+        }
         let when = |t: TimeOrNow| match t {
             TimeOrNow::SpecificTime(t) => t,
             TimeOrNow::Now => SystemTime::now(),
@@ -635,8 +719,15 @@ impl Filesystem for FuseFs {
         if self.read_only {
             return reply.error(self.refuse_read_only("create"));
         }
-        if self.apple_double("create", name) {
-            return reply.error(Errno::EPERM);
+        if sidecar_name(name) {
+            if kind != Kind::File {
+                self.apple_double("create", name);
+                return reply.error(Errno::from_i32(APPLEDOUBLE_ERRNO));
+            }
+            return match self.accept_sidecar(req, "create", parent.0, name) {
+                Ok(a) => reply.entry(&TTL, &file_attr(&a), Generation(0)),
+                Err(c) => reply.error(Errno::from_i32(c)),
+            };
         }
         let Some(name) = name_of(name) else {
             return reply.error(Errno::EINVAL);
@@ -667,7 +758,7 @@ impl Filesystem for FuseFs {
             return reply.error(self.refuse_read_only("mkdir"));
         }
         if self.apple_double("mkdir", name) {
-            return reply.error(Errno::EPERM);
+            return reply.error(Errno::from_i32(APPLEDOUBLE_ERRNO));
         }
         let Some(name) = name_of(name) else {
             return reply.error(Errno::EINVAL);
@@ -686,6 +777,13 @@ impl Filesystem for FuseFs {
     fn unlink(&self, req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
         if self.read_only {
             return reply.error(self.refuse_read_only("unlink"));
+        }
+        if sidecar_name(name) {
+            let gone = self.sidecars().unlink(parent.0, &name.to_string_lossy());
+            return match gone {
+                Ok(()) => reply.ok(),
+                Err(c) => reply.error(Errno::from_i32(c)),
+            };
         }
         let Some(name) = name_of(name) else {
             return reply.error(Errno::ENOENT);
@@ -729,7 +827,7 @@ impl Filesystem for FuseFs {
             return reply.error(self.refuse_read_only("symlink"));
         }
         if self.apple_double("symlink", link_name) {
-            return reply.error(Errno::EPERM);
+            return reply.error(Errno::from_i32(APPLEDOUBLE_ERRNO));
         }
         let (Some(name), Some(target)) = (name_of(link_name), target.to_str()) else {
             return reply.error(Errno::EINVAL);
@@ -758,8 +856,31 @@ impl Filesystem for FuseFs {
         if self.read_only {
             return reply.error(self.refuse_read_only("rename"));
         }
-        if self.apple_double("rename", newname) {
-            return reply.error(Errno::EPERM);
+        match (sidecar_name(name), sidecar_name(newname)) {
+            (false, false) => {}
+            (true, true) => {
+                let moved = self.sidecars().rename(
+                    parent.0,
+                    &name.to_string_lossy(),
+                    newparent.0,
+                    &newname.to_string_lossy(),
+                    SystemTime::now(),
+                );
+                return match moved {
+                    Ok(()) => reply.ok(),
+                    Err(c) => reply.error(Errno::from_i32(c)),
+                };
+            }
+            // A sidecar becoming an ordinary file, or the reverse, would move a name between
+            // the discarded side and the tree the model decides about.
+            _ => {
+                Log::new(Some(&self.status_tx)).info(format!(
+                    "FUSE {} operation=rename decision=protocol_refusal between an AppleDouble \
+                     name and another; answered EPERM",
+                    self.mount_label
+                ));
+                return reply.error(Errno::EPERM);
+            }
         }
         let Some((exchange, no_replace)) = rename_mode(flags) else {
             Log::new(Some(&self.status_tx)).info(format!(
@@ -799,6 +920,9 @@ impl Filesystem for FuseFs {
             return reply.error(self.refuse_read_only("link"));
         }
         if self.apple_double("link", newname) {
+            return reply.error(Errno::from_i32(APPLEDOUBLE_ERRNO));
+        }
+        if sidecar_ino(ino.0) {
             return reply.error(Errno::EPERM);
         }
         if newname.len() > tree::MAX_NAME_BYTES {
@@ -819,6 +943,14 @@ impl Filesystem for FuseFs {
     }
 
     fn open(&self, _req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
+        if sidecar_ino(ino.0) {
+            let live = self.sidecars().attr(ino.0).is_some();
+            return if live {
+                reply.opened(FileHandle(0), FopenFlags::empty())
+            } else {
+                reply.error(Errno::ENOENT)
+            };
+        }
         let mut t = lock(&self.tree);
         match t.kind(ino.0) {
             None => return reply.error(Errno::ENOENT),
@@ -844,6 +976,13 @@ impl Filesystem for FuseFs {
         _lock_owner: Option<LockOwner>,
         reply: ReplyData,
     ) {
+        if sidecar_ino(ino.0) {
+            let zeroes = self.sidecars().read(ino.0, offset, size);
+            return match zeroes {
+                Ok(z) => reply.data(&z),
+                Err(c) => reply.error(Errno::from_i32(c)),
+            };
+        }
         match lock(&self.tree).read(ino.0, offset, size) {
             Ok(bytes) => reply.data(&bytes),
             Err(Stop::Errno(c)) => reply.error(Errno::from_i32(c)),
@@ -865,6 +1004,15 @@ impl Filesystem for FuseFs {
     ) {
         if self.read_only {
             return reply.error(self.refuse_read_only("write"));
+        }
+        if sidecar_ino(ino.0) {
+            let written =
+                self.sidecars()
+                    .write(ino.0, offset, data.len() as u32, SystemTime::now());
+            return match written {
+                Ok(n) => reply.written(n),
+                Err(c) => reply.error(Errno::from_i32(c)),
+            };
         }
         self.enqueue(
             req,
@@ -1000,6 +1148,9 @@ impl Filesystem for FuseFs {
     /// Answered from the tree at no model cost. A size of 0 asks for the value's length; a
     /// buffer too small for it is ERANGE; a name the node does not have is ENODATA.
     fn getxattr(&self, _req: &Request, ino: INodeNo, name: &OsStr, size: u32, reply: ReplyXattr) {
+        if sidecar_ino(ino.0) {
+            return reply.error(Errno::from_i32(xattr_errno(libc::ENODATA)));
+        }
         let Some(name) = name_of(name) else {
             return reply.error(Errno::EOPNOTSUPP);
         };
@@ -1012,6 +1163,9 @@ impl Filesystem for FuseFs {
     }
 
     fn listxattr(&self, _req: &Request, ino: INodeNo, size: u32, reply: ReplyXattr) {
+        if sidecar_ino(ino.0) {
+            return xattr_reply(&[], size, reply);
+        }
         let list = lock(&self.tree).listxattr(ino.0);
         match list {
             Ok(v) => xattr_reply(&v, size, reply),
@@ -1050,6 +1204,9 @@ impl Filesystem for FuseFs {
         if self.read_only {
             return reply.error(self.refuse_read_only("fallocate"));
         }
+        if sidecar_ino(ino.0) {
+            return reply.error(Errno::EOPNOTSUPP);
+        }
         let Some(how) = Allocation::from_mode(mode) else {
             Log::new(Some(&self.status_tx)).info(format!(
                 "FUSE {} operation=fallocate decision=protocol_refusal mode {mode:#x} is not \
@@ -1084,8 +1241,17 @@ impl Filesystem for FuseFs {
         if self.read_only {
             return reply.error(self.refuse_read_only("create"));
         }
-        if self.apple_double("create", name) {
-            return reply.error(Errno::EPERM);
+        if sidecar_name(name) {
+            return match self.accept_sidecar(req, "create", parent.0, name) {
+                Ok(a) => reply.created(
+                    &TTL,
+                    &file_attr(&a),
+                    Generation(0),
+                    FileHandle(0),
+                    FopenFlags::empty(),
+                ),
+                Err(c) => reply.error(Errno::from_i32(c)),
+            };
         }
         let Some(name) = name_of(name) else {
             return reply.error(Errno::EINVAL);
@@ -1138,7 +1304,12 @@ fn fill(
         (parent.max(1), Kind::Dir, "..".to_string()),
     ]
     .into_iter()
-    .chain(entries);
+    // macOS: sidecars and any described `._` name are never listed (`appledouble.rs`).
+    .chain(
+        entries
+            .into_iter()
+            .filter(|(_, _, n)| !(SIDECARS && appledouble::is_appledouble(n.as_bytes()))),
+    );
     for (i, (child, kind, name)) in all.enumerate().skip(offset as usize) {
         if reply.add(INodeNo(child), (i + 1) as u64, file_type(kind), &name) {
             break;
@@ -2155,6 +2326,7 @@ pub async fn spawn(ctx: SpawnContext) -> Result<SocketAddr> {
         read_only: s.read_only,
         status_tx: ctx.status_tx.clone(),
         mount_label: label.clone(),
+        sidecars: Mutex::new(appledouble::Sidecars::new()),
     };
     let mount = backend::start(
         &mount_point,

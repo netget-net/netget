@@ -6,6 +6,9 @@
 pub mod tree_links_test;
 pub mod tree_test;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub mod appledouble_test;
+
 #[cfg(target_os = "linux")]
 pub mod bounds_test;
 #[cfg(target_os = "linux")]

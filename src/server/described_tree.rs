@@ -601,7 +601,7 @@ fn file_content(e: &Json) -> Result<(u64, Vec<Extent>, Vec<ErrorRegion>, usize)>
 /// never go backwards, and every approved change moves them. An NFS client (FUSE-T on macOS)
 /// invalidates its caches on what it sees change; a time that regresses across a change is the
 /// attribute churn that provokes a known panic in Apple's NFS client (FB23527406).
-fn advance(t: &mut SystemTime, now: SystemTime) {
+pub(crate) fn advance(t: &mut SystemTime, now: SystemTime) {
     *t = if now > *t {
         now
     } else {

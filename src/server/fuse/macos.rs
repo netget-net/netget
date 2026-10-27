@@ -614,13 +614,15 @@ fn mount(mount_point: &Path, read_only: bool, allow_other: bool, fs: FuseFs) -> 
     // in Apple's NFS client, which is what makes its `nfs_vinvalbuf2: ubc_msync failed!, error
     // 22` panic likely (FUSE-T issue #109, Apple FB23527406). It panicked the development Mac
     // within seconds. Without it the NFS client has no xattrs to offer and falls back to
-    // AppleDouble `._name` files, which --noappledouble refuses (and `FuseFs` refuses any that
-    // get through), so extended attributes are simply unsupported on macOS.
+    // AppleDouble `._name` files. Those reach `FuseFs`, which accepts each as a sidecar and
+    // discards its bytes without asking the model (`appledouble.rs`): macOS metadata on this
+    // volume is accepted and thrown away. Not --noappledouble: FUSE-T then refuses those creates
+    // itself with EPERM, and copyfile (`cp`, Finder) treats that as a failure, so every `cp` of a
+    // file carrying macOS's provenance attribute exited 1 (measured on FUSE-T 1.2.9).
     // --dontbrowse: not a Finder volume, so Finder and Spotlight do not walk it. --rwsize: one
     // NFS read or write is at most one FUSE request of `max_write`.
     cmd.arg("--volname")
         .arg(VOLUME_NAME)
-        .arg("--noappledouble")
         .arg("--dontbrowse")
         .arg(format!("--rwsize={MAX_WRITE_BYTES}"));
     if read_only {

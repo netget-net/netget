@@ -150,9 +150,21 @@ The Linux tools test's policy and tree, on three mounts of their own:
   `chmod`; `truncate` shrinking and growing; refused writes (`dd` gets EACCES or ENOSPC — at
   `close`, when the client writes back — and each was one decision; what `cat` shows afterwards is
   printed, not asserted, because it is the NFS client's cache); `rm`; no directory described twice.
-- `xattr_is_refused_without_asking_on_macos` — `xattr -w` fails cleanly (EPERM or ENOTSUP), with
-  no setxattr decision and no create (an AppleDouble `._` file) reaching the model. It expects only
-  the refusal: FUSE-T is never given `--namedattr`.
+- `xattr_metadata_is_accepted_and_discarded_without_asking_on_macos` — `xattr -w`: the NFS client
+  writes the attribute into an AppleDouble sidecar, which is accepted and discarded. Whether
+  `xattr` reports success, and what `xattr -l` shows afterwards, is printed, not asserted;
+  asserted are that no event but the root's description reached the model, that `ls -la` lists
+  no `._` name, and that the mount stays up and readable. FUSE-T is never given `--namedattr`.
+- `sidecars_are_never_listed_and_leave_their_file_alone_on_macos` — `._README.txt` written
+  directly, several times: `README.txt`'s `stat -f '%i %z %m %c %l %Lp'` is unchanged by it; the
+  sidecar is found by name with size 4096 (the highest byte written), mode 0644 and zeroes for
+  content; its attributes stand still a second later; neither `ls -la` nor `find -name '._*'`
+  lists it; `rm` removes it; `mkdir ._dir` is refused; nothing but descriptions reached the model.
+
+`appledouble_test.rs` (no mount, any platform the FUSE server builds on) pins the sidecar store
+itself: stable attributes, length only ever the highest byte written, times only forward, zeroes
+for reads, EFBIG at 16 MiB, ENOSPC at the 4097th, inodes never reused, rename moving the inode
+and replacing a sidecar at the destination, setattr changing only the size.
 
 Each ends by stopping and checking the mount is gone.
 
@@ -252,9 +264,10 @@ FUSE_NFSSRV_PATH=/nonexistent/go-nfsv4 cargo test --no-default-features --test s
 run server::fuse::macos_tools_test::bsd_tools_read_the_description_on_macos
 run server::fuse::macos_bounds_test::a_read_only_mount_refuses_changes_without_asking_on_macos
 run server::fuse::macos_bounds_test::an_unreachable_model_is_eio_promptly_on_macos
-# 2. Writes (the xattr test expects only a refusal).
+# 2. Writes, then the AppleDouble sidecars (no model event may occur in either sidecar test).
 run server::fuse::macos_tools_test::bsd_tools_change_the_overlay_through_decisions_on_macos
-run server::fuse::macos_tools_test::xattr_is_refused_without_asking_on_macos
+run server::fuse::macos_tools_test::sidecars_are_never_listed_and_leave_their_file_alone_on_macos
+run server::fuse::macos_tools_test::xattr_metadata_is_accepted_and_discarded_without_asking_on_macos
 run server::fuse::macos_bounds_test::a_slow_model_is_eio_at_the_deadline_on_macos
 # 3. Stopping and dying.
 run server::fuse::macos_bounds_test::stop_unmounts_even_while_the_mount_is_busy_on_macos

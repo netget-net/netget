@@ -8,13 +8,15 @@
 //! NFS client can panic the host under attribute churn (FUSE-T issue #109, Apple FB23527406). No
 //! CI job runs them; they are run by hand, one at a time, in the order `tests/server/fuse/AGENTS.md`
 //! gives. Each test makes its own mount and depends on no other: the reads, the writes and the
-//! extended-attribute refusal are separate so the read-only checks can run alone.
+//! AppleDouble sidecar tests are separate so the read-only checks can run alone.
 //!
 //! Where NFS makes macOS differ from Linux, the test says so where it asserts it: a read is an
 //! NFS READ of up to 128 KiB, so a file with a failing region fails to read wherever that chunk
 //! covers it; a write is decided when the client writes back, so a refusal reaches the process
 //! at `close` (or `fsync`); NFS carries no pid, so events say `pid` 0 and no process name; and
-//! there are no extended attributes (FUSE-T is not given `--namedattr`, see `macos.rs`).
+//! extended attributes land in AppleDouble `._` sidecars, which this volume accepts and discards
+//! without asking the model (FUSE-T is not given `--namedattr`; see `macos.rs` and
+//! `appledouble.rs`).
 use super::support::*;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -176,13 +178,31 @@ async fn bsd_tools_read_the_description_on_macos() {
             "find lists {rel}: {listed}"
         );
     }
+    // NetGet refuses /locked with EACCES, but FUSE-T's NFS server does not relay a readdir
+    // error (its log says "readdir: 0 error 13") and the NFS client shows the directory as
+    // empty, so find prints no error here as it does on Linux. What is asserted is the part
+    // NetGet owns: the refusal was decided and logged, and nothing under /locked was listed.
     assert!(
-        String::from_utf8_lossy(&find.stderr).contains("Permission denied"),
-        "find reports the refused directory: {:?}",
+        !listed.contains("/mnt/locked/"),
+        "nothing inside the refused directory is listed: {listed}"
+    );
+    let log = m.log.lock().unwrap().join("\n");
+    assert!(
+        log.contains("operation=describe path=/locked decision=model_reject"),
+        "the refusal of /locked was decided and logged: {:?}",
         String::from_utf8_lossy(&find.stderr)
     );
-    m.fails(r#"ls "$M/locked""#, "Permission denied").await;
-    m.fails(r#"ls "$M/locked""#, "Permission denied").await;
+    // ls of the refused directory: an error, or (as FUSE-T relays it) an empty listing, but
+    // never an entry; asked twice, because a refusal is remembered and must stay refused.
+    for _ in 0..2 {
+        let ls = m.sh(r#"ls "$M/locked""#).await;
+        assert!(
+            !ls.status.success() || ls.stdout.is_empty(),
+            "the refused directory shows nothing: {:?} {:?}",
+            String::from_utf8_lossy(&ls.stdout),
+            String::from_utf8_lossy(&ls.stderr)
+        );
+    }
     let mut described = m.paths("fuse_describe_directory").await;
     described.sort();
     assert_eq!(
@@ -408,26 +428,111 @@ async fn bsd_tools_change_the_overlay_through_decisions_on_macos() {
     );
 }
 
-/// No extended attributes on macOS: `xattr` is refused cleanly and nothing reaches the model.
-/// FUSE-T is never given `--namedattr` (see `src/server/fuse/macos.rs`), so the NFS client can only
-/// try an AppleDouble `._` file, which FUSE-T's `--noappledouble` and `FuseFs` both refuse. This
-/// test expects only that refusal.
+/// What the model must never see on macOS: the event types it was asked about, minus the
+/// directory descriptions every mount starts with.
+async fn model_events_beyond_descriptions(m: &Mounted) -> Vec<String> {
+    m.census()
+        .await
+        .into_keys()
+        .filter(|k| k != "fuse_describe_directory")
+        .collect()
+}
+
+/// `xattr -w` on macOS: FUSE-T is never given `--namedattr` (see `src/server/fuse/macos.rs`), so
+/// the NFS client writes the attribute into an AppleDouble `._` sidecar, which this volume
+/// accepts and discards (`src/server/fuse/appledouble.rs`). Whether `xattr` itself then reports
+/// success depends on how macOS treats a sidecar that reads back as zeroes, so that is printed,
+/// not asserted. Asserted: the model was asked nothing, no `._` name is listed, and the mount
+/// stays up and readable.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn xattr_is_refused_without_asking_on_macos() {
+async fn xattr_metadata_is_accepted_and_discarded_without_asking_on_macos() {
     let m = mount(policy(POLICY), json!({"decision_timeout_secs": 30})).await;
     let _diag = OnFailure(&m);
     m.ok(r#"ls "$M""#).await;
     let set = m.sh(r#"xattr -w user.color blue "$M/README.txt""#).await;
-    let said = String::from_utf8_lossy(&set.stderr).to_string();
-    assert!(
-        !set.status.success()
-            && (said.contains("Operation not permitted") || said.contains("not supported")),
-        "xattr -w fails cleanly: {said:?}"
+    let shown = m.sh(r#"xattr -l "$M/README.txt""#).await;
+    println!(
+        "macOS xattr -w: status {}, stderr {:?}; xattr -l then: status {}, stdout {:?}, stderr {:?}",
+        set.status,
+        String::from_utf8_lossy(&set.stderr),
+        shown.status,
+        String::from_utf8_lossy(&shown.stdout),
+        String::from_utf8_lossy(&shown.stderr)
     );
-    let census = m.census().await;
     assert!(
-        !census.contains_key("fuse_setxattr") && !census.contains_key("fuse_create"),
-        "no xattr decision and no AppleDouble file reached the model: {census:?}"
+        model_events_beyond_descriptions(&m).await.is_empty(),
+        "no xattr or sidecar event reached the model: {:?}",
+        m.census().await
+    );
+    let ls = m.text(r#"ls -la "$M""#).await;
+    assert!(!ls.contains("._"), "no AppleDouble name is listed: {ls}");
+    assert!(mounted_at(&m.path), "the mount stays up");
+    assert_eq!(m.ok(r#"cat "$M/README.txt""#).await, b"hello from netget\n");
+    m.stop().await;
+    assert!(
+        eventually(20, || !mounted_at(&m.path)).await,
+        "stop unmounts"
+    );
+}
+
+/// A sidecar written directly: created and written without a model event, never listed,
+/// found by name with stable attributes, and its file's own attributes untouched by it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sidecars_are_never_listed_and_leave_their_file_alone_on_macos() {
+    let m = mount(policy(POLICY), json!({"decision_timeout_secs": 30})).await;
+    let _diag = OnFailure(&m);
+    let file_attrs = r#"stat -f '%i %z %m %c %l %Lp' "$M/README.txt""#;
+    m.ok(r#"ls "$M""#).await;
+    let before = m.text(file_attrs).await;
+    // Several writes into the sidecar, as macOS makes them.
+    m.ok(r#"head -c 4096 /dev/urandom > "$M/._README.txt""#)
+        .await;
+    m.ok(
+        r#"head -c 100 /dev/urandom | dd of="$M/._README.txt" bs=100 seek=1 conv=notrunc 2>/dev/null"#,
+    )
+    .await;
+    assert_eq!(
+        m.text(file_attrs).await,
+        before,
+        "the file's own attributes are untouched by its sidecar"
+    );
+    // Found by name, its bytes discarded (zeroes), its length the highest byte written.
+    assert_eq!(
+        m.text(r#"stat -f '%z %Lp' "$M/._README.txt""#).await,
+        "4096 644"
+    );
+    assert_eq!(
+        m.ok(r#"head -c 16 "$M/._README.txt""#).await,
+        vec![0u8; 16],
+        "a sidecar's bytes are discarded"
+    );
+    // Its attributes stand still while nothing writes it.
+    let side = r#"stat -f '%i %z %m %c' "$M/._README.txt""#;
+    let first = m.text(side).await;
+    m.ok("sleep 1").await;
+    assert_eq!(
+        m.text(side).await,
+        first,
+        "a sidecar's attributes do not flap"
+    );
+    // Never listed, by ls or find.
+    let ls = m.text(r#"ls -la "$M""#).await;
+    assert!(!ls.contains("._"), "ls -la lists no sidecar: {ls}");
+    let find = m.text(r#"find "$M" -name '._*'"#).await;
+    assert!(find.is_empty(), "find lists no sidecar: {find}");
+    // Removed like a file; mkdir of an AppleDouble name stays refused.
+    m.ok(r#"rm "$M/._README.txt""#).await;
+    m.fails(r#"stat "$M/._README.txt""#, "No such file").await;
+    let mkdir = m.sh(r#"mkdir "$M/._dir""#).await;
+    assert!(
+        !mkdir.status.success(),
+        "mkdir of an AppleDouble name is refused"
+    );
+    assert_eq!(m.text(file_attrs).await, before);
+    assert!(
+        model_events_beyond_descriptions(&m).await.is_empty(),
+        "nothing about sidecars reached the model: {:?}",
+        m.census().await
     );
     m.stop().await;
     assert!(
