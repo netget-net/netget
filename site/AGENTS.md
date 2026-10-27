@@ -9,7 +9,7 @@ The landing page shows a left-to-right network diagram: Client → NetGet → LL
 Manual. HTML and CSS keep the diagram visible without JavaScript and preserve the direction
 on narrow screens. NetGet is centered in the diagram; the client connection shows HTTP,
 TCP, IP and an ellipsis on a single unwrapped line. CLI and MCP each have their own arrow
-down into NetGet. Client and response drivers are plain text. Equal outer grid columns
+down into NetGet. The Client label has a monitor icon above it; response drivers are plain text. Equal outer grid columns
 center the hub; the 132px driver column has 44px rows, and its connector centers are
 22px, 66px and 110px. Keep the middle connection a single straight line.
 The generated `js/protocol-stacks.js` still comes from both
