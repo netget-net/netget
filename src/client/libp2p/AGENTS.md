@@ -30,8 +30,8 @@ The connection ending ends the session.
 - `libp2p_close_stream{stream_id}`
 - `libp2p_ping`: answered with `rtt_ms`.
 - `libp2p_identify`
-- `ipfs_bitswap_want`, `ipfs_bitswap_cancel`, `ipfs_kad_find_node`, `ipfs_kad_get_providers`
-  (below)
+- `ipfs_fetch`, `ipfs_bitswap_want`, `ipfs_bitswap_cancel`, `ipfs_kad_find_node`,
+  `ipfs_kad_get_providers`, `ipfs_kad_get_value` (below)
 - `disconnect`
 
 Messages on any stream, opened by either side, arrive as `libp2p_message`. When the remote
@@ -63,8 +63,22 @@ is where blocks arrive. It does not advertise the DHT: this client answers no DH
 - `data` is the block for raw and the UnixFS data for dag-pb, cut at `MAX_SHOWN_BLOCK`
   (64 KiB) with `truncated` set; the block was verified whole. A chunked file or a directory
   is walked by wanting the `links`.
-- `ipfs_kad_find_node{peer_id, protocol?}` and `ipfs_kad_get_providers{cid, protocol?}` ask
-  the remote's DHT one question on a stream of their own (20 s) and raise `libp2p_response`
-  with `closer_peers` and `provider_peers`. `protocol` is `/ipfs/kad/1.0.0` (default) or
+- `ipfs_fetch{cid, max_bytes?, timeout_secs?}`: Rust walks the whole DAG under the root
+  (`unixfs::Walk`, see the server's AGENTS.md): want-blocks with `sendDontHave`, at most 32
+  in flight, re-sent every 5 s while unanswered (rebroadcast), a CANCEL for whatever is left
+  when the walk ends. A block reaches the walk only under a want whose digest its bytes have
+  (the router in `ipfs::Session` takes it out of the message before the model's own wants
+  see it). Bounds: 8192 blocks, 32 levels, 1 GiB of file bytes, `max_bytes` shown (default
+  64 KiB, at most 1 MiB), `timeout_secs` (default 120, at most 600). One fetch at a time per
+  connection; the session waits for it. The outcome is `ipfs_fetched {cid, ok, kind: file |
+  directory | symlink, size, data, encoding, truncated, sha256, entries: [{name, cid, tsize,
+  kind, size}], target, blocks, depth}`, or `ok: false` with `error` (DONT_HAVE for a needed
+  block ends it at once). The fetch is logged with the connection's Bitswap counts, and the
+  totals as `operation=bitswap_ledger` when the client ends.
+- `ipfs_kad_find_node{peer_id, protocol?}`, `ipfs_kad_get_providers{cid, protocol?}` and
+  `ipfs_kad_get_value{name, protocol?}` ask the remote's DHT one question on a stream of its
+  own (20 s) and raise `libp2p_response` with `closer_peers`, `provider_peers` and, for
+  GET_VALUE, the IPNS `record` verified by the server's `ipns::verify` (`valid` false, with
+  why, when it does not verify). `protocol` is `/ipfs/kad/1.0.0` (default) or
   `/ipfs/lan/kad/1.0.0`. Kubo with no public peers keeps its own provider records in its LAN
   DHT, so on a private network ask the LAN protocol.

@@ -108,7 +108,7 @@ impl Protocol for TcpProtocol {
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
             // Bytes arriving during a call are the next call's payload, whole (batching on) or
-            // one read at a time (off) — `ConnectionData::take_next`.
+            // one read at a time (off) — `ReadQueue::next_or_idle`.
             .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }
@@ -402,7 +402,7 @@ fn wait_for_more_action() -> ActionDefinition {
         name: "wait_for_more".to_string(),
         // This text has been wrong in both directions. It first promised an accumulation the
         // server did not perform, then conceded that the fragment was dropped. The server now
-        // keeps it: WaitForMore pushes the payload back to the head of `queued_data`, so the
+        // keeps it: WaitForMore pushes the payload back to the head of the read queue, so the
         // next event carries this fragment joined to whatever arrived after it. QUIC's action
         // of the same name still drops it — the two raw-stream protocols have drifted and
         // `src/server/quic` needs the same repair.

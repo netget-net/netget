@@ -1,0 +1,1 @@
+{"entries":[{"name":"disk.img","kind":"file","size":12288,"extents":[{"offset":0,"hex":"deadbeef"},{"offset":4096,"length":4096,"fill":171},{"offset":10000,"text":"tail"}],"errors":[{"offset":8192,"length":512,"error":"EIO"}]}]}

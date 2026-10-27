@@ -1460,7 +1460,9 @@ jobs:
   resource-lifecycles:
     name: CPU resource and lifecycle regressions
     runs-on: ubuntu-22.04
-    timeout-minutes: 30
+    # ~23 minutes with a warm cache on master; a branch's first run starts cold and was
+    # cancelled at 30 while still compiling (integration/onvif, integration/fuzz-crash-fixes).
+    timeout-minutes: 45
     env:
       NETGET_USE_OLLAMA: '0'
       CARGO_PROFILE_TEST_DEBUG: '0'
@@ -1588,7 +1590,9 @@ jobs:
   windows-resource-checks:
     name: Windows CPU resource and configuration checks
     runs-on: windows-2022
-    timeout-minutes: 30
+    # 13 to 29 minutes over October 2026's runs, so 30 was cut off at the cache save
+    # (integration/hdfs-2) with the checks themselves already passed.
+    timeout-minutes: 45
     env:
       CARGO_BUILD_JOBS: 2
       CARGO_PROFILE_DEV_DEBUG: 0

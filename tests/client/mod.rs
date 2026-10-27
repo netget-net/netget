@@ -221,7 +221,10 @@ pub mod bmp;
 
 pub mod mqtt_sn;
 
+#[cfg(unix)]
+pub mod hdfs;
 pub mod nbd;
+pub mod nvme_tcp;
 
 pub mod managesieve;
 
@@ -241,6 +244,8 @@ pub mod db2;
 pub mod dbus;
 pub mod epp;
 pub mod ethercat;
+#[cfg(unix)]
+pub mod gre;
 pub mod gtp;
 pub mod guacamole;
 pub mod hls;

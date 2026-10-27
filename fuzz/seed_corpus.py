@@ -985,6 +985,490 @@ write("ntlmssp_token", "kerberos_only", der(0x60, SPNEGO_OID + der(0xa0, der(0x3
 write("ntlmssp_token", "der_depth_bomb",
       b"\x30\x80" * 20000 + NTLM_NEGOTIATE + b"\x00\x00" * 8000)
 
+# ---------------------------------------------------------------------------------- hdfs_wire
+# Hadoop IPC frame bodies (what follows the four-byte length) and DataTransferProtocol packets,
+# encoded here field by field from the .proto files in proto/hadoop rather than by NetGet.
+
+def pb_varint(n):
+    out = bytearray()
+    while True:
+        b = n & 0x7F
+        n >>= 7
+        if n:
+            out.append(b | 0x80)
+        else:
+            out.append(b)
+            return bytes(out)
+
+
+def pb_key(num, wire):
+    return pb_varint(num << 3 | wire)
+
+
+def pb_ld(num, payload):
+    return pb_key(num, 2) + pb_varint(len(payload)) + payload
+
+
+def pb_int(num, n):
+    return pb_key(num, 0) + pb_varint(n)
+
+
+def pb_sint(num, n):
+    return pb_int(num, (n << 1) ^ (n >> 31))
+
+
+def pb_delimited(msg):
+    return pb_varint(len(msg)) + msg
+
+
+CLIENT_ID = bytes(range(16))
+
+
+def rpc_header(call_id):
+    return pb_int(1, 2) + pb_int(2, 0) + pb_sint(3, call_id) + pb_ld(4, CLIENT_ID) + pb_sint(5, 0)
+
+
+def rpc_call(call_id, method, body):
+    method_header = (pb_ld(1, method.encode()) +
+                     pb_ld(2, b"org.apache.hadoop.hdfs.protocol.ClientProtocol") + pb_int(3, 1))
+    return (pb_delimited(rpc_header(call_id)) + pb_delimited(method_header) +
+            pb_delimited(body))
+
+
+def packet(offset, seqno, last, data, sums):
+    header = (pb_key(1, 1) + struct.pack("<q", offset) + pb_key(2, 1) + struct.pack("<q", seqno) +
+              pb_int(3, 1 if last else 0) + pb_key(4, 5) + struct.pack("<i", len(data)))
+    return struct.pack(">IH", 4 + len(sums) + len(data), len(header)) + header + sums + data
+
+
+def crc32c_py(data):
+    crc = 0xFFFFFFFF
+    for b in data:
+        crc ^= b
+        for _ in range(8):
+            crc = (crc >> 1) ^ 0x82F63B78 if crc & 1 else crc >> 1
+    return crc ^ 0xFFFFFFFF
+
+
+def chunk_sums(data):
+    return b"".join(struct.pack(">I", crc32c_py(data[i:i + 512])) for i in range(0, len(data), 512))
+
+
+write("hdfs_wire", "connection_context",
+      pb_delimited(rpc_header(-3)) +
+      pb_delimited(pb_ld(2, pb_ld(1, b"alice")) +
+                   pb_ld(3, b"org.apache.hadoop.hdfs.protocol.ClientProtocol")))
+write("hdfs_wire", "sasl_negotiate", pb_delimited(rpc_header(-33)) + pb_delimited(pb_int(2, 1)))
+write("hdfs_wire", "get_file_info", rpc_call(0, "getFileInfo", pb_ld(1, b"/user/alice")))
+write("hdfs_wire", "get_listing",
+      rpc_call(1, "getListing", pb_ld(1, b"/") + pb_ld(2, b"") + pb_int(3, 0)))
+write("hdfs_wire", "create",
+      rpc_call(2, "create", pb_ld(1, b"/tmp/a") + pb_ld(2, pb_int(1, 0o644)) +
+               pb_ld(3, b"DFSClient_1") + pb_int(4, 1) + pb_int(5, 1) + pb_int(6, 1) +
+               pb_int(7, 134217728)))
+write("hdfs_wire", "response_success",
+      pb_delimited(pb_int(1, 0) + pb_int(2, 0) + pb_int(3, 9)) +
+      pb_delimited(pb_ld(1, pb_ld(1, b""))))
+write("hdfs_wire", "response_error",
+      pb_delimited(pb_int(1, 7) + pb_int(2, 1) + pb_ld(4, b"java.io.FileNotFoundException") +
+                   pb_ld(5, b"File does not exist: /x") + pb_int(6, 1)))
+DATA = b"hello from netget\n" * 40
+write("hdfs_wire", "packet", packet(0, 0, False, DATA, chunk_sums(DATA)))
+write("hdfs_wire", "packet_train",
+      b"".join(packet(i * 512, i, False, b"x" * 512, chunk_sums(b"x" * 512)) for i in range(64)) +
+      packet(64 * 512, 64, True, b"", b""))
+write("hdfs_wire", "packet_bad_checksum", packet(0, 0, False, DATA, b"\x00" * len(chunk_sums(DATA))))
+write("hdfs_wire", "oversize_plen", struct.pack(">IH", 0xFFFFFFF0, 25) + b"\x00" * 25)
+write("hdfs_wire", "acks_and_responses",
+      pb_delimited(pb_int(1, 0)) + pb_delimited(pb_key(1, 0) + pb_varint(2) + pb_int(2, 0)) +
+      pb_delimited(pb_int(1, 6)))
+# The depth bomb. None of Hadoop's messages nests itself, but prost skips an unknown group by
+# recursing into it, one level per start-group key: 10 000 of them (field 15, wire type 3) in
+# a create request's body. prost stops at 100 levels; a decoder without that counter would
+# overflow the stack.
+write("hdfs_wire", "depth_bomb",
+      rpc_call(3, "create", pb_ld(1, b"/tmp/a") + pb_key(15, 3) * 10000 + pb_key(15, 4) * 10000))
+
+# ---------------------------------------------------------------------------- zigbee_ash_ezsp
+# ASH as a Zigbee host writes it (UG101): CRC-CCITT over control+data, the data field of a
+# DATA frame XORed with the LFSR sequence (seed 0x42, feedback 0xB8), reserved bytes escaped.
+ASH_RESERVED = {0x7E, 0x7D, 0x11, 0x13, 0x18, 0x1A}
+
+
+def ash_crc(b):
+    c = 0xFFFF
+    for x in b:
+        c ^= x << 8
+        for _ in range(8):
+            c = ((c << 1) ^ 0x1021) & 0xFFFF if c & 0x8000 else (c << 1) & 0xFFFF
+    return c
+
+
+def ash_stuff(b):
+    out = bytearray()
+    for x in b:
+        out += bytes([0x7D, x ^ 0x20]) if x in ASH_RESERVED else bytes([x])
+    return bytes(out) + b"\x7e"
+
+
+def ash_frame(body):
+    return ash_stuff(body + struct.pack(">H", ash_crc(body)))
+
+
+def ash_data(frm, ack, ezsp):
+    r, data = 0x42, bytearray()
+    for x in ezsp:
+        data.append(x ^ r)
+        r = (r >> 1) ^ 0xB8 if r & 1 else r >> 1
+    return ash_frame(bytes([(frm << 4) | ack]) + bytes(data))
+
+
+def ezsp_ext(seq, frame_id, params=b""):
+    return bytes([seq, 0x00, 0x01]) + struct.pack("<H", frame_id) + params
+
+
+RST = b"\x1a" + ash_frame(b"\xc0")
+write("zigbee_ash_ezsp", "rst_version", RST + ash_data(0, 0, b"\x00\x00\x00\x04") +
+      ash_data(1, 1, ezsp_ext(1, 0x0000, b"\x11")) + ash_frame(b"\x82"))
+write("zigbee_ash_ezsp", "startup",
+      RST + ash_data(0, 0, ezsp_ext(0, 0x0000, b"\x11")) +
+      ash_data(1, 0, ezsp_ext(1, 0x0052, b"\x01")) +
+      ash_data(2, 0, ezsp_ext(2, 0x0002, b"\x01\x04\x01\x00\x04\x00\x01\x00\x06\x00")) +
+      ash_data(3, 0, ezsp_ext(3, 0x0017, b"\x00\x00")))
+SEC = struct.pack("<H", 0x0B04) + b"ZigBeeAlliance09" + bytes(range(16)) + b"\x00" + b"\xff" * 8
+FORM = b"\xdd" * 8 + struct.pack("<HBBBHBI", 0x1A62, 8, 15, 0, 0, 0, 1 << 15)
+write("zigbee_ash_ezsp", "form_permit",
+      RST + ash_data(0, 0, ezsp_ext(0, 0x0000, b"\x11")) +
+      ash_data(1, 0, ezsp_ext(1, 0x0068, SEC)) + ash_data(2, 0, ezsp_ext(2, 0x001E, FORM)) +
+      ash_data(3, 0, ezsp_ext(3, 0x0022, b"\x1e")))
+APS = struct.pack("<HHBBHHB", 0x0104, 0x0006, 1, 1, 0x0140, 0, 0)
+write("zigbee_ash_ezsp", "send_unicast_on",
+      RST + ash_data(0, 0, ezsp_ext(0, 0x0000, b"\x11")) +
+      ash_data(1, 0, ezsp_ext(1, 0x0034, b"\x00" + struct.pack("<H", 0x1234) + APS +
+                                  struct.pack("<H", 7) + b"\x03\x01\x2a\x01")))
+write("zigbee_ash_ezsp", "zcl_write_attributes",
+      b"\x00\x00\x09\x00\x00\x02\x00\x00\x10\x01\x00\x40\x42\x05hello")
+write("zigbee_ash_ezsp", "zcl_configure_reporting",
+      b"\x00\x00\x09\x00\x00\x06\x00\x00\x00\x10\x00\x00\x2c\x01\x00\x00\x00\x20\x01\x00\x10\x00\x05")
+write("zigbee_ash_ezsp", "zdo_match_desc", b"\x06\x00\x01\x34\x12\x04\x01\x02\x06\x00\x08\x00\x01\x19\x00")
+write("zigbee_ash_ezsp", "max_frame", RST + ash_data(0, 0, ezsp_ext(0, 0x0005) + b"\x00" * 215))
+write("zigbee_ash_ezsp", "bad_crc", RST + ash_data(0, 0, b"\x00\x00\x00\x04")[:-2] + b"\x00\x7e")
+# The shapes a byte bound alone does not stop: a long run of escapes with no flag, and a write
+# whose string lengths claim more than the frame holds, repeated. Nothing here recurses; these
+# are for the day something does.
+write("zigbee_ash_ezsp", "escape_run", RST + b"\x7d\x5e" * 50000)
+write("zigbee_ash_ezsp", "deep_attributes",
+      b"\x00\x00\x09\x00\x00\x02" + b"\x00\x00\x42\xff" * 2000)
+
+# --- onvif_request: SOAP 1.2 requests to the ONVIF device's PTZ, Events and Imaging services --
+ONVIF_NS = ('xmlns:s="http://www.w3.org/2003/05/soap-envelope" '
+            'xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl" '
+            'xmlns:tev="http://www.onvif.org/ver10/events/wsdl" '
+            'xmlns:timg="http://www.onvif.org/ver20/imaging/wsdl" '
+            'xmlns:wsnt="http://docs.oasis-open.org/wsn/b-2" '
+            'xmlns:tt="http://www.onvif.org/ver10/schema"')
+
+
+def onvif(body):
+    return ('<?xml version="1.0" encoding="UTF-8"?><s:Envelope %s><s:Body>%s</s:Body></s:Envelope>'
+            % (ONVIF_NS, body)).encode()
+
+
+write("onvif_request", "create_pull_point", onvif(
+    '<tev:CreatePullPointSubscription><tev:Filter><wsnt:TopicExpression '
+    'Dialect="http://www.onvif.org/ver10/tev/topicExpression/ConcreteSet">'
+    'tns1:RuleEngine//.|tns1:VideoSource/MotionAlarm</wsnt:TopicExpression></tev:Filter>'
+    '<tev:InitialTerminationTime>PT1H</tev:InitialTerminationTime></tev:CreatePullPointSubscription>'))
+write("onvif_request", "pull_messages", onvif(
+    '<tev:PullMessages><tev:Timeout>PT1M30.5S</tev:Timeout><tev:MessageLimit>10</tev:MessageLimit>'
+    '</tev:PullMessages>'))
+write("onvif_request", "renew_absolute", onvif(
+    '<wsnt:Renew><wsnt:TerminationTime>2026-10-23T10:00:00Z</wsnt:TerminationTime></wsnt:Renew>'))
+write("onvif_request", "continuous_move", onvif(
+    '<tptz:ContinuousMove><tptz:ProfileToken>main</tptz:ProfileToken><tptz:Velocity>'
+    '<tt:PanTilt x="0.5" y="-0.25" space="http://www.onvif.org/ver10/tptz/PanTiltSpaces/VelocityGenericSpace"/>'
+    '<tt:Zoom x="0.1"/></tptz:Velocity><tptz:Timeout>PT5S</tptz:Timeout></tptz:ContinuousMove>'))
+write("onvif_request", "absolute_move", onvif(
+    '<tptz:AbsoluteMove><tptz:ProfileToken>main</tptz:ProfileToken><tptz:Position>'
+    '<tt:PanTilt x="-1" y="1"/><tt:Zoom x="0.5"/></tptz:Position><tptz:Speed><tt:PanTilt x="1" y="1"/>'
+    '</tptz:Speed></tptz:AbsoluteMove>'))
+write("onvif_request", "set_imaging_settings", onvif(
+    '<timg:SetImagingSettings><timg:VideoSourceToken>cam</timg:VideoSourceToken><timg:ImagingSettings>'
+    '<tt:Brightness>70</tt:Brightness><tt:Focus><tt:AutoFocusMode>MANUAL</tt:AutoFocusMode></tt:Focus>'
+    '<tt:IrCutFilter>AUTO</tt:IrCutFilter></timg:ImagingSettings></timg:SetImagingSettings>'))
+write("onvif_request", "focus_move", onvif(
+    '<timg:Move><timg:VideoSourceToken>cam</timg:VideoSourceToken><timg:Focus><tt:Relative>'
+    '<tt:Distance>-0.25</tt:Distance></tt:Relative></timg:Focus></timg:Move>'))
+# Elements nested far past wire::MAX_DEPTH inside a real Body; a topic filter of 20,000
+# alternatives (past MAX_TOPIC_ALTERNATIVES and MAX_TOPIC_EXPRESSION); a duration whose number
+# is 4,000 digits.
+write("onvif_request", "depth_bomb", onvif("<a>" * 20000 + "</a>" * 20000))
+write("onvif_request", "alternatives_bomb", onvif(
+    '<tev:CreatePullPointSubscription><tev:Filter><wsnt:TopicExpression Dialect="">'
+    + "|".join(["tns1:VideoSource/MotionAlarm"] * 20000)
+    + '</wsnt:TopicExpression></tev:Filter></tev:CreatePullPointSubscription>'))
+write("onvif_request", "duration_bomb", onvif(
+    '<tev:PullMessages><tev:Timeout>PT' + "9" * 4000 + 'S</tev:Timeout></tev:PullMessages>'))
+
+
+# unixfs_dag: dag-pb / UnixFS blocks, block sets for the walk, and ipfs_add descriptions.
+# The first byte is the mode (0 node, 1 walk, 2 description).
+import hashlib
+import json
+
+
+def uvarint(n):
+    out = b""
+    while True:
+        b = n & 0x7F
+        n >>= 7
+        if n:
+            out += bytes([b | 0x80])
+        else:
+            return out + bytes([b])
+
+
+def pb_bytes(field, value):
+    return uvarint(field << 3 | 2) + uvarint(len(value)) + value
+
+
+def pb_varint(field, value):
+    return uvarint(field << 3) + uvarint(value)
+
+
+def cid_v1(codec, data):
+    return b"\x01" + uvarint(codec) + b"\x12\x20" + hashlib.sha256(data).digest()
+
+
+def unixfs(kind, data=b"", filesize=None, blocksizes=()):
+    out = pb_varint(1, kind)
+    if data:
+        out += pb_bytes(2, data)
+    if filesize is not None:
+        out += pb_varint(3, filesize)
+    for s in blocksizes:
+        out += pb_varint(4, s)
+    return out
+
+
+def pb_node(links, data):
+    out = b""
+    for cid, name, size in links:
+        out += pb_bytes(2, pb_bytes(1, cid) + pb_bytes(2, name) + pb_varint(3, size))
+    return out + pb_bytes(1, data)
+
+
+def block_set(blocks, raw_root=False):
+    out = bytes([1 if raw_root else 0])
+    for b in blocks:
+        out += struct.pack("<I", len(b)) + b
+    return out
+
+
+leaf_a, leaf_b = b"hello ", b"world\n"
+file_node = pb_node([(cid_v1(0x55, leaf_a), b"", 6), (cid_v1(0x55, leaf_b), b"", 6)],
+                    unixfs(2, filesize=12, blocksizes=(6, 6)))
+single = pb_node([], unixfs(2, b"hello from a single block\n", 26))
+dir_node = pb_node([(cid_v1(0x70, file_node), b"hello.txt", 0),
+                    (cid_v1(0x70, single), b"single.txt", 0)], unixfs(1))
+symlink = pb_node([], unixfs(4, b"hello.txt"))
+write("unixfs_dag", "node_file", b"\x00" + file_node)
+write("unixfs_dag", "node_directory", b"\x00" + dir_node)
+write("unixfs_dag", "node_symlink", b"\x00" + symlink)
+write("unixfs_dag", "walk_file", b"\x01" + block_set([file_node, leaf_a, leaf_b]))
+write("unixfs_dag", "walk_directory",
+      b"\x01" + block_set([dir_node, file_node, single, leaf_a, leaf_b]))
+write("unixfs_dag", "walk_raw", b"\x01" + block_set([b"just bytes"], raw_root=True))
+# A chain 200 nodes deep, each linking to the next by its real CID: past MAX_DAG_DEPTH (32),
+# so the walk must refuse it — and do so without recursion.
+chain = [b"bottom"]
+link = cid_v1(0x55, b"bottom")
+for _ in range(200):
+    node = pb_node([(link, b"", 6)], unixfs(2, filesize=6, blocksizes=(6,)))
+    chain.insert(0, node)
+    link = cid_v1(0x70, node)
+write("unixfs_dag", "depth_bomb", b"\x01" + block_set(chain))
+# 3000 links to a node of 3000 links to one leaf: nine million blocks named in two small
+# nodes; the walk stops at MAX_WALK_BLOCKS.
+fan_leaf = b"x"
+inner = pb_node([(cid_v1(0x55, fan_leaf), b"", 1)] * 3000, unixfs(2, filesize=3000))
+outer = pb_node([(cid_v1(0x70, inner), b"", 1)] * 3000, unixfs(2, filesize=9000000))
+write("unixfs_dag", "fan_bomb", b"\x01" + block_set([outer, inner, fan_leaf]))
+write("unixfs_dag", "add_file", b"\x02" + json.dumps(
+    {"text": "hello\n", "chunk_size": 256, "max_links": 3}).encode())
+write("unixfs_dag", "add_tree", b"\x02" + json.dumps({"entries": [
+    {"name": "a.txt", "text": "a"},
+    {"name": "sub", "kind": "dir", "entries": [{"name": "b", "hex": "00ff"}]},
+    {"name": "link", "kind": "symlink", "target": "a.txt"},
+    {"name": "sparse", "size": 4096, "extents": [{"offset": 100, "length": 50, "fill": 7}]},
+], "cid_version": 1}).encode())
+nested = {"name": "d", "kind": "dir", "entries": []}
+for _ in range(100):
+    nested = {"name": "d", "kind": "dir", "entries": [nested]}
+write("unixfs_dag", "depth_bomb_description", b"\x02" + json.dumps({"entries": [nested]}).encode())
+
+
+# ipns_record: DHT messages carrying IPNS records. The records are signed here with RFC 8032
+# Ed25519 (the RFC's own reference arithmetic, section 6), so they verify and the fuzzer
+# starts past the signature, at the record's fields and its CBOR data.
+ED_P = 2 ** 255 - 19
+ED_Q = 2 ** 252 + 27742317777372353535851937790883648493
+ED_D = -121665 * pow(121666, ED_P - 2, ED_P) % ED_P
+
+
+def ed_add(P, Q):
+    A, B = (P[1] - P[0]) * (Q[1] - Q[0]) % ED_P, (P[1] + P[0]) * (Q[1] + Q[0]) % ED_P
+    C, D = 2 * P[3] * Q[3] * ED_D % ED_P, 2 * P[2] * Q[2] % ED_P
+    E, F, G, H = B - A, D - C, D + C, B + A
+    return (E * F, G * H, F * G, E * H)
+
+
+def ed_mul(s, P):
+    Q = (0, 1, 1, 0)
+    while s > 0:
+        if s & 1:
+            Q = ed_add(Q, P)
+        P = ed_add(P, P)
+        s >>= 1
+    return Q
+
+
+def ed_compress(P):
+    zinv = pow(P[2], ED_P - 2, ED_P)
+    x, y = P[0] * zinv % ED_P, P[1] * zinv % ED_P
+    return int.to_bytes(y | ((x & 1) << 255), 32, "little")
+
+
+def ed_base():
+    y = 4 * pow(5, ED_P - 2, ED_P) % ED_P
+    x2 = (y * y - 1) * pow(ED_D * y * y + 1, ED_P - 2, ED_P)
+    x = pow(x2, (ED_P + 3) // 8, ED_P)
+    if (x * x - x2) % ED_P != 0:
+        x = x * pow(2, (ED_P - 1) // 4, ED_P) % ED_P
+    if x & 1:
+        x = ED_P - x
+    return (x, y, 1, x * y % ED_P)
+
+
+ED_G = ed_base()
+
+
+def ed_keys(secret):
+    h = hashlib.sha512(secret).digest()
+    a = int.from_bytes(h[:32], "little")
+    a &= (1 << 254) - 8
+    a |= 1 << 254
+    return a, h[32:], ed_compress(ed_mul(a, ED_G))
+
+
+def ed_sign(secret, msg):
+    a, prefix, A = ed_keys(secret)
+    r = int.from_bytes(hashlib.sha512(prefix + msg).digest(), "little") % ED_Q
+    R = ed_compress(ed_mul(r, ED_G))
+    h = int.from_bytes(hashlib.sha512(R + A + msg).digest(), "little") % ED_Q
+    return R + int.to_bytes((r + h * a) % ED_Q, 32, "little")
+
+
+def cbor_head(major, n):
+    if n < 24:
+        return bytes([major << 5 | n])
+    for info, size in ((24, 1), (25, 2), (26, 4), (27, 8)):
+        if n < 1 << (8 * size):
+            return bytes([major << 5 | info]) + n.to_bytes(size, "big")
+
+
+def ipns_data(value, validity, sequence, ttl):
+    out = cbor_head(5, 5)
+    for key, major, v in (("TTL", 0, ttl), ("Value", 2, value), ("Sequence", 0, sequence),
+                          ("Validity", 2, validity), ("ValidityType", 0, 0)):
+        out += cbor_head(3, len(key)) + key.encode()
+        out += cbor_head(major, v) if major == 0 else cbor_head(2, len(v)) + v
+    return out
+
+
+IPNS_SECRET = b"\x07" * 32
+IPNS_PUB = ed_keys(IPNS_SECRET)[2]
+IPNS_NAME = b"\x00\x24" + b"\x08\x01\x12\x20" + IPNS_PUB
+IPNS_KEY = b"/ipns/" + IPNS_NAME
+
+
+def ipns_record(data, v1=None):
+    sig = ed_sign(IPNS_SECRET, b"ipns-signature:" + data)
+    out = b""
+    if v1:
+        value, validity, sequence, ttl = v1
+        out += pb_bytes(1, value) + pb_bytes(2, b"\x00" * 64) + pb_varint(3, 0)
+        out += pb_bytes(4, validity) + pb_varint(5, sequence) + pb_varint(6, ttl)
+    return out + pb_bytes(8, sig) + pb_bytes(9, data)
+
+
+def put_value(key, record):
+    dht_record = pb_bytes(1, key) + pb_bytes(2, record)
+    return pb_bytes(2, key) + pb_bytes(3, dht_record)
+
+
+VALID = b"2099-01-01T00:00:00.000000000Z"
+data = ipns_data(b"/ipfs/QmUNLLsPACCz1vLxQVkXqqLX5R1X345qqfHbsf67hvA3Nn", VALID, 3, 300 * 10 ** 9)
+write("ipns_record", "put_v2", put_value(IPNS_KEY, ipns_record(data)))
+write("ipns_record", "put_v1_and_v2", put_value(IPNS_KEY, ipns_record(
+    data, (b"/ipfs/QmUNLLsPACCz1vLxQVkXqqLX5R1X345qqfHbsf67hvA3Nn", VALID, 3, 300 * 10 ** 9))))
+write("ipns_record", "get_value_answer", pb_varint(1, 1) + put_value(IPNS_KEY, ipns_record(data)))
+write("ipns_record", "find_node_record_key", pb_varint(1, 4) + pb_bytes(2, IPNS_KEY))
+write("ipns_record", "data_only", data)
+# A thousand nested maps as the record's data, signed, so verification reaches the reader.
+bomb = (cbor_head(5, 1) + cbor_head(3, 1) + b"x") * 1000 + cbor_head(0, 1)
+write("ipns_record", "depth_bomb", put_value(IPNS_KEY, ipns_record(bomb)))
+write("ipns_record", "depth_bomb_data", bomb)
+
+# --- GRE (RFC 2784/2890): gretap ARP, gre ping, a keepalive, and each optional field ---
+def inet_sum(b):
+    if len(b) % 2:
+        b += b"\x00"
+    s = sum(struct.unpack("!%dH" % (len(b) // 2), b))
+    while s >> 16:
+        s = (s & 0xFFFF) + (s >> 16)
+    return ~s & 0xFFFF
+
+
+def gre(proto, payload, key=None, csum=False, seq=None):
+    flags = (0x80 if csum else 0) | (0x20 if key is not None else 0) | (0x10 if seq is not None else 0)
+    out = bytes([flags, 0]) + struct.pack("!H", proto)
+    if csum:
+        out += b"\x00\x00\x00\x00"
+    if key is not None:
+        out += struct.pack("!I", key)
+    if seq is not None:
+        out += struct.pack("!I", seq)
+    out += payload
+    if csum:
+        out = out[:4] + struct.pack("!H", inet_sum(out)) + out[6:]
+    return out
+
+
+def ipv4(src, dst, proto, payload):
+    h = struct.pack("!BBHHHBBH4s4s", 0x45, 0, 20 + len(payload), 1, 0x4000, 64, proto, 0,
+                    bytes(src), bytes(dst))
+    h = h[:10] + struct.pack("!H", inet_sum(h)) + h[12:]
+    return h + payload
+
+
+arp_request = (b"\xff" * 6 + bytes([2, 0, 0, 0, 0, 1]) + b"\x08\x06"
+               + bytes([0, 1, 8, 0, 6, 4, 0, 1]) + bytes([2, 0, 0, 0, 0, 1]) + bytes([10, 99, 0, 1])
+               + b"\x00" * 6 + bytes([10, 99, 0, 2]))
+echo = bytes([8, 0, 0, 0, 0x12, 0x34, 0, 1]) + b"abc"
+echo = echo[:2] + struct.pack("!H", inet_sum(echo)) + echo[4:]
+ping = ipv4([10, 99, 0, 1], [10, 99, 0, 2], 1, echo)
+write("gre_packet", "gretap_arp_all_fields", gre(0x6558, arp_request, key=42, csum=True, seq=7))
+write("gre_packet", "gretap_arp_bare", gre(0x6558, arp_request))
+write("gre_packet", "gre_ping_keyed", gre(0x0800, ping, key=0xDEADBEEF, seq=0xFFFFFFFF))
+write("gre_packet", "gre_ping_checksum", gre(0x0800, ping, csum=True))
+# A Cisco keepalive as the fuzz target's server (198.18.0.1) receives it from 198.18.0.2.
+write("gre_packet", "keepalive", gre(0x0800, ipv4([198, 18, 0, 1], [198, 18, 0, 2], 47, gre(0, b""))))
+# Flags that announce fields the packet does not carry, and the forbidden ones.
+write("gre_packet", "ends_inside_sequence", gre(0x6558, b"", key=1, seq=2)[:10])
+write("gre_packet", "routing_bit", bytes([0x40, 0, 0x65, 0x58]) + arp_request)
+write("gre_packet", "version_1", bytes([0x30, 1, 0x88, 0x0B, 0, 0, 0, 0, 0, 0, 0, 0]))
+
 total = sum(len(files) for _, _, files in os.walk(CORPUS))
 print("seeded %d corpus files across %d targets" %
       (total, len(os.listdir(CORPUS))))

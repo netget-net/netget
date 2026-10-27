@@ -82,6 +82,9 @@ const DOCUMENTED_SILENT: &[&str] = &[
     "gelf",
     // One-way Carbon metrics have no application acknowledgement or negative reply.
     "graphite",
+    // A GRE host that does not exist is silence, as for vxlan: every ARP, echo or UDP reply asserts
+    // that a host is there, and GRE has no error message of its own.
+    "gre",
     "hsrp",
     "icmp",
     "igmp",

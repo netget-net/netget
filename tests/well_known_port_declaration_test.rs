@@ -88,6 +88,7 @@ const NO_WELL_KNOWN_PORT: &[(&str, &str)] = &[
     ("lldp", "link layer (EtherType 0x88CC); ports do not exist here"),
     ("ndp", "ICMPv6 message types; NDP has no ports"),
     ("ospf", "IP protocol 89; OSPF has no ports"),
+    ("gre", "IP protocol 47; GRE has no ports"),
     ("rawip", "raw IP with an operator-chosen protocol number; no ports"),
     ("stp", "link layer (802.1D BPDUs over LLC); ports do not exist here"),
     ("vrrp", "IP protocol 112; VRRP has no ports"),
@@ -102,6 +103,11 @@ const NO_WELL_KNOWN_PORT: &[(&str, &str)] = &[
     ("socket_file", "a Unix domain socket path, not a port"),
     ("ssh_agent", "a Unix domain socket path (SSH_AUTH_SOCK), not a port"),
     ("stdio", "the process's own stdin and stdout; nothing to bind"),
+    (
+        "fuse",
+        "a local filesystem mount: the kernel's FUSE driver over /dev/fuse at a mount_point, no \
+         socket and no port",
+    ),
     ("nfc", "a PC/SC reader device; no network port"),
     ("bluetooth_ble", "a Bluetooth LE radio; GATT has no IP port"),
     ("bluetooth_ble_battery", "a Bluetooth LE GATT profile; no IP port"),

@@ -41,30 +41,95 @@ What is left from this document, with the reason each is still open:
 - **Partial slices of shipped items:**
   - ~~**GRE**~~: landed 14 October 2026 as the `vxlan` feature's `gretap` encapsulation
     (Ethernet over GRE in UDP, RFC 8086, port 4754), tested against the Linux kernel's
-    gretap-over-fou driver. GRE directly on IP protocol 47 is still not built: it needs a
-    raw socket, and privilege is declared per protocol.
+    gretap-over-fou driver. **GRE directly on IP protocol 47 landed 24 October 2026** as its
+    own `gre` protocol (server and client, Unix, `RawSockets`, so vxlan stays unprivileged),
+    sharing vxlan's GRE codec (`src/utils/gre.rs`): gretap (0x6558) and L3 gre (0x0800)
+    payloads, key/checksum/sequence copied per RFC 2784/2890, Cisco keepalives reflected,
+    a peer allowlist, key filter, size and rate bounds. Tested against the Linux kernel's
+    `ip_gre` (gre and gretap links in a namespace: ping, ARP, UDP both ways) and scapy as a
+    second implementation, with tshark 4.2.2 reading both directions. Not built: IPv6,
+    PPTP's enhanced GRE, WCCP/ERSPAN, inner fragmentation; macOS has never run it as root.
   - ~~**ONVIF**~~: landed 14 October 2026 as the `onvif` pair — device service
     (GetSystemDateAndTime, GetDeviceInformation, GetCapabilities, GetServices, GetScopes,
     GetNetworkInterfaces) and media ver10 (GetProfiles, GetVideoSources, GetStreamUri,
     GetSnapshotUri) with WS-Security UsernameToken digest, against onvif-zeep-async and
-    use-go/onvif (server) and RPOS (client). Media2, PTZ, Imaging, Events, Recording and
-    the Set* operations are not built.
+    use-go/onvif (server) and RPOS (client). **PTZ, Events, Media2, Imaging and the Device
+    Set\* operations landed 23 October 2026** in both roles: PTZ moves and presets (the model
+    decides each move; status and presets answered from device state), pull-point Events
+    (bounded subscriptions and queues, long-polled PullMessages, model-raised `tns1:`
+    notifications), Media2 from the same description as Media ver10, Imaging settings and
+    focus moves, and SetSystemDateAndTime/Scopes/Hostname/SystemReboot as model decisions.
+    Server peers: onvif-zeep-async and use-go/onvif for PTZ, Events, Imaging and Set\*;
+    onvif2-zeep and IOTechSystems/onvif for Media2. Client peers: RPOS (PTZ, Imaging) and
+    onvif_simple_server (Media2, Events). **Basic Notification, Recording, Search and Replay
+    landed 26 October 2026** in both roles: the device POSTs `wsnt:Notify` to subscribers
+    under a written bounds design (http to IP literals only, an allowlist defaulting to
+    loopback, 8 subscriptions, 64 queued each, a per-attempt timeout and bounded retries, no
+    redirects); the model describes recordings, tracks, events and replay URIs once and Rust
+    answers every Recording/Search/Replay read; Create/DeleteRecording are model decisions.
+    Peers: onvif-zeep-async (20 Profile G operations, NotificationManager), videonext/onvif
+    (18), use-go/onvif (Subscribe), and NetGet's client subscribing to onvif_simple_server.
+    Still not built: client Recording/Search/Replay against a real device (no open
+    implementation exists), recording tracks and jobs changed by clients, XPath filters,
+    actually streaming a replay, PTZ home-position setting and tours, Imaging exposure/
+    white-balance/WDR/backlight, Media2 configuration changes.
   - ~~**Stratum V2**~~: landed 14 October 2026 as the `stratum-v2` pair (Mining Protocol,
     standard and extended channels, Noise NX with the SV2 certificate), hand-rolled from
     sv2-spec so that SRI's `mining_device` and `pool_sv2` (over Bitcoin Core regtest) are
-    independent peers. The Job Declaration and Template Distribution protocols are not built.
+    independent peers. **The Template Distribution and Job Declaration protocols landed 23
+    October 2026**, as `role` startup parameters on the same protocol: a Template Provider
+    (the model writes each template; Rust builds the merkle path, witness commitment and
+    BIP 34 height and verifies SubmitSolution against the target) tested by SRI's pool and
+    mining_device with Bitcoin Core's `submitblock` accepting the assembled block; a Job
+    Declarator Server (the model allocates tokens and accepts or refuses declared jobs;
+    bounded token table and mempool) tested by SRI's jd_client; a Job Declarator Client
+    against SRI's JDS, which validates with Bitcoin Core's `checkBlock`; and a Template
+    Distribution client against sv2-tp 1.1.2, Bitcoin Core's tip becoming NetGet's block.
+    **Work selection landed 23 October 2026**: a `pool_and_job_declarator` role takes
+    SetCustomMiningJob against its own JDS's tokens, checked byte for byte against the
+    declaration (and against a node's tip and nbits when `bitcoin_rpc_url` is set), and every
+    server role relays the blocks it verifies with `submitblock`. SRI's jd_client, with sv2-tp
+    and SRI's mining_device, drives a block end to end through NetGet's pool and JDS, and
+    Bitcoin Core's chain holds it. Still not built: sigop checks (no UTXO set), chain checks
+    without a configured node, a NetGet JDC that opens a mining channel for its own jobs.
   - ~~**IPFS above libp2p**~~: landed 14 October 2026 on the `libp2p` feature behind an
     `ipfs` startup parameter — Bitswap 1.0–1.2, CIDv0/v1 with `raw` and `dag-pb`, single-block
     UnixFS files, and the Kademlia DHT (FIND_NODE answered in Rust, GET_PROVIDERS and
     ADD_PROVIDER by the model) — with Kubo 0.43.1 fetching from NetGet and serving to it.
-    Serving multi-block DAGs, Bitswap sessions, IPNS/DHT records and a second independent
-    IPFS implementation are not done.
+    **Multi-block files, directories, remembered wants, whole-DAG fetch and IPNS landed 23
+    October 2026**: the model describes files and trees (`described_disk` vocabulary) and
+    Rust chunks them as Kubo does, with every root CID equal to `ipfs add --only-hash` (85
+    roots across seven profiles) and to Helia's importer 17.1.1 (38 roots three ways); the
+    client fetches whole DAGs from Kubo with every block's hash checked; per-peer wantlists
+    are remembered and answered when content arrives; IPNS records (Ed25519 signatureV2,
+    sequence, validity) and provider records are kept in Rust. Helia 7.1.16 is the second
+    independent implementation. Still not built: HAMT-sharded directories, rabin/buzhash
+    chunkers and the trickle layout, multi-peer sessions, a full Kademlia node of the
+    host's own, signed peer records.
   - ~~**NGAP/N2**~~: landed 15 October 2026 as the `ngap` pair (AMF and gNB over real
     SCTP, PPID 60, with a labelled lab-TCP transport for hosts without SCTP): NG Setup,
     Initial UE Message, Downlink/Uplink NAS Transport, and pre-security 5GMM, hand-written
     APER checked by tshark's `ngap` dissector, against UERANSIM's nr-gnb/nr-ue and Open5GS's
-    AMF. NAS security (5G-AKA, Security Mode), PDU sessions, handover and paging are not
-    built, so a real UE cannot complete registration.
+    AMF. **NAS security and PDU sessions landed 23 October 2026** in both roles: 5G-AKA
+    (Milenage, RES*/XRES*, the TS 33.501 key hierarchy, SQN resynchronisation), SUCI null
+    scheme and ECIES Profiles A and B, Security Mode with NIA2/NEA2/NEA0, NAS COUNT and
+    replay checks, Registration Accept with the model's allowed NSSAI, PDU Session
+    Establishment with the model deciding admission, DNN, S-NSSAI and the UE's address, and
+    a GTP-U endpoint answering ICMP echo for the addresses the model chose. Subscriber keys
+    are redacted startup parameters the model never sees. A real UERANSIM UE registers, gets
+    a PDU session and pings through the tunnel; NetGet's gNB/UE registers with a full
+    Open5GS 2.8 core (NRF, AUSF, UDM, UDR, PCF, SMF, UPF, AMF, MongoDB) and gets a PDU
+    session, with Open5GS's K_gNB matching NetGet's. The gNB client is Beta. **PDU session
+    release and modification, CM-IDLE with Service Request and paging, IPv6/IPv4v6
+    sessions, and NIA1/NEA1 (SNOW 3G) and NIA3/NEA3 (ZUC) landed 25 October 2026** in both
+    roles: UERANSIM registers and pings under SNOW 3G and under ZUC, releases a session,
+    goes idle and answers paging; NetGet's gNB releases sessions, returns from idle with a
+    Service Request whose K_gNB matches Open5GS's, and gets an IPv4v6 session. Every NGAP
+    SCTP association now sets `SCTP_NODELAY` (Open5GS's delayed acknowledgements held
+    NetGet's back-to-back messages for ~200 ms). UERANSIM cannot drive Service Request
+    (its gNB drops them), modification or IPv6, so those rest on Open5GS and the lab
+    tests. Still not built: EAP-AKA', handover, UE Context Modification, more than one
+    QoS flow per session, routing beyond echo and Router Advertisement, a gNB user plane.
   - ~~**Redis cluster and pub/sub depth**~~: landed 15 October 2026 on the `redis` server
     and client — pub/sub (channels, patterns, shard channels, RESP2 subscribed mode and RESP3
     pushes, model-initiated publish, bounded fan-out with a slow-subscriber limit) and cluster
@@ -96,12 +161,38 @@ What is left from this document, with the reason each is still open:
   ~~gtp~~ landed 15 October 2026 (S5/S11 GTPv2 and Gn GTPv1, control and user plane),
   against wmnsk/go-gtp and osmo-ggsn with the kernel tun, under tshark's `gtpv2`/`gtp`
   dissectors.
-- **Tier C**: all deferred, unchanged, for the reasons in the table below. This includes
-  the LoRaWAN Semtech UDP packet-forwarder slice, which could be promoted if IoT is
-  wanted.
+- **Tier C**: every row has landed except **PCoIP**, which has no published wire
+  specification and no open implementation to test against (see its row). Each landed row
+  says what of its protocol is not built.
+- **Storage additions**: iSCSI, NVMe over TCP, FUSE and HDFS have all landed (see that
+  section).
 - **Maturity**: almost everything above landed at `Experimental` or `Beta`. The client
   promotions that came with it are Kafka, DNS and RDP (Beta). None of these items has
   been taken through the six Stable conditions in `AGENTS.md`.
+
+### Follow-up queue (approved 23 October 2026)
+
+Taken one at a time, each covering what its protocol's own "not built" or "not tested" list
+says. Strike an item when it lands.
+
+1. ~~Stratum V2: SetCustomMiningJob in NetGet's pool, so SRI's jd_client drives PushSolution end to end.~~ Landed 23 October 2026.
+2. ~~IPFS: multi-block DAGs and Bitswap sessions.~~ Landed 23 October 2026.
+3. ~~GRE directly on IP protocol 47.~~ Landed 24 October 2026.
+4. ~~Zigbee: TI Z-Stack MT dialect; EZSP 13 and older.~~ Landed 24 October 2026.
+5. ~~HDFS: append, truncate, concat; tests for the fixed deadlines.~~ Landed 24 October 2026.
+6. ~~The flaky telnet batching test and the startup-sweep hang.~~ Landed 24 October 2026: the telnet test's premise was wrong (it took the connect event's model call for the slow call) and is now deterministic, with a new test that a line still in the kernel buffer joins the batch; the sweep names a stuck protocol, aborts hung starts and has an overall deadline; two real defects found on the way, the stdio server holding the process open on an open stdin pipe and ActivityPub's unoptimised RSA keygen timing out under load, are fixed. What hung the 24 October run is not established.
+6a. ~~RCON/PTY batching premise; TCP read ordering.~~ Landed 24 October 2026: the TCP server answered one connection's reads out of order (140 of 200 runs under load; two locks raced and a read could be stranded in the queue) and now admits each read in arrival order (`admit_read`, `answer`); the RCON, PTY and TCP batching tests hold their first answer on a gate instead of a delay.
+6b. ~~The same race in tls, socket_file, bitcoin.~~ Landed 24 October 2026: TCP's read decisions are a shared `ReadQueue` (`src/server/read_queue.rs`) used by tcp, tls, socket_file and bitcoin; modbus had a variant (appends in per-read tasks) fixed in place; ssh_agent, quic, websocket, webrtc and the USB devices were checked and are not affected. Under load before: tls 192/200 runs reordered, socket_file 100/200, bitcoin 8/200, modbus 200/200; after, 200/200 pass each. Found on the way and fixed: TLS replies losing their tail in rustls's buffer, and the socket_file banner and bitcoin `version` racing the first answer. Still open: bitcoin's queue behind an in-flight answer is unbounded.
+6c. ~~M3UA's SCTP transport does not set `SCTP_NODELAY`.~~ Landed 25 October 2026: `utils::sctp::set_nodelay` is shared by ngap and m3ua (and m3ua's lab TCP transport sets TCP_NODELAY). The startup sweep's runtime shutdown is now bounded and prints every thread's state with each blocked read's file, so the intermittent post-sweep hang (2 CI shards, 2 of ~30 local runs with stdin an open pipe) will name its protocol the next time it happens; the cause is not yet known.
+7. ~~NGAP: PDU session release and modification, Service Request, paging, IPv6 sessions, NIA1/NEA1 and NIA3/NEA3.~~ Landed 25 October 2026.
+8. ~~ONVIF: Recording, Replay, Search; Basic Notification.~~ Landed 26 October 2026.
+9. ~~NVMe/TCP: DH-HMAC-CHAP, TLS, reservations, Compare/Verify/Copy.~~ Landed 26 October 2026 (TLS not built: rustls has no TLS 1.3 external PSK).
+10. ~~iSCSI: error recovery levels 1 and 2, multiple connections per session, the remaining task management functions.~~ Landed 26 October 2026.
+11. ~~FUSE: hard links, extended attributes, fallocate.~~ Landed 26 October 2026. macOS still needs macFUSE or FUSE-T installed, which waits on the maintainer.
+
+Every item in this queue has landed. What stays open: the intermittent post-sweep shutdown stall in `protocol_startup_smoke_test` (bounded and instrumented, cause unknown), bitcoin's unbounded queue behind an in-flight answer, FUSE on macOS, and PCoIP.
+
+PCoIP stays unbuilt: no published wire specification and no open implementation to test against.
 
 Priority: **A** strongest general fit · **B** useful follow-on · **C** workload-specific.
 Effort **S/M/L** covers both roles plus interoperability tests.
@@ -162,7 +253,7 @@ Effort **S/M/L** covers both roles plus interoperability tests.
 | ~~**Profinet / EtherCAT**~~ | **PROFINET IO landed 16 October 2026** as the `profinet` pair (device and controller): DCP Identify/Get/Set, PNIO-CM over DCE/RPC on UDP 34964 (Connect, Control, Release, Read/Write, I&M0–3) and RT_CLASS_1 cyclic IO with IOPS/IOCS, over raw Ethernet (`pnet` datalink, CAP_NET_RAW) or a labelled UDP lab transport, failing closed with IOPS BAD and refused connects; against profinet-py and pnio_dcp (device role) and rt-labs p-net (controller role) on a veth, under tshark's `pn_dcp`/`pn_io`/`pn_rt` dissectors, plus a `profinet_frame` fuzz target. Not built: alarms, RT_CLASS_2/3, MRP, multicast CRs, GSDML import, more than one AR on the controller. **EtherCAT landed 16 October 2026** as the `ethercat` pair: an emulated slave (ESC registers, SII, working counters, SyncManagers, FMMUs, the AL state machine, CoE SDO) whose model decides state changes, objects and inputs and refuses SAFE-OP until inputs are set, and a master that scans, configures, walks slaves to OP and runs cyclic LRW; over raw Ethernet (PROFINET's packet socket) or the standard EtherCAT-in-UDP encapsulation; against SOEM and ethercrab (slave role) and KickCAT's emulated CiA 402 drive (master role) under tshark's `ecat` dissectors, plus an `ethercat_frame` fuzz target. Not built: distributed clocks, FoE/EoE/SoE/AoE, PDO remapping, redundancy, ENI files. |
 | ~~**M-Bus**~~ | **Landed 16 October 2026** as the `mbus` pair over M-Bus/IP (TCP): a gateway with model-described meters (E5, short/control/long frames, primary and secondary addressing with wildcard search and collisions, FCB, DIF/VIF records encoded exactly from structured values, failing closed with an application-error status and no records) and a master that scans, searches and reads; against libmbus and pyMeterBus (gateway role) and pyMbusSlave and Addiva's mbus-device replaying real-meter captures (master role), plus an `mbus_frame` fuzz target. tshark has no wired M-Bus dissector, so there is no pcap oracle. Not built: wireless M-Bus, serial ports, encryption, CI 0x73 fixed data, alarms. |
 | ~~**AFP, NIS/YP, rsh/rlogin/rexec**~~ | Obsolete; low value, insecure legacy — built anyway on request. **AFP landed 17 October 2026** as the `afp` pair: AFP 3.x over DSI (TCP 548), No User Authent and Cleartxt Passwrd checked in Rust, volumes, listings, file contents and writes decided by the model and failing closed with kFPMiscErr; against netatalk 4.6.1's `afparg` and Nmap's AFP scripts (server role) and netatalk's `afpd` (client role) under tshark's `dsi`/`afp` dissectors, plus an `afp_dsi` fuzz target. Not built: DHX/DHX2/Kerberos UAMs, rename/copy/locks, the desktop database, resource-fork contents. **NIS/YP landed 17 October 2026** as the `nis` pair on NetGet's own ONC RPC code: ypserv (program 100004 v2, TCP and UDP, every procedure but XFR, optional portmapper registration) with the model deciding domains and map contents that Rust renders into canonical passwd/group/hosts/netgroup lines and refuses to let a field forge another, failing closed with YP_YPERR; and a client that binds and reads maps; against yp-tools and ypbind-mt (server role) and ypserv through rpcbind (client role) under tshark, plus a `nis_yp` fuzz target. NIS has no authentication or confidentiality, and the docs say so. Not built: yppasswdd, XFR/yppush, the ypbind protocol. **rsh, rlogin and rexec landed 17 October 2026** as one `rsh` module registering three servers and three clients: the NUL-field handshakes, the status byte, the stderr back-connection (only to the client's own address), rlogin's window-size control and reserved-port reporting in Rust; rexec passwords checked in Rust, rsh trust and rlogin sessions decided by the model, failing closed with `\1` and never trusting on failure; against inetutils and rsh-redone (clients and daemons) under tshark's `rsh`/`rlogin`/`exec` dissectors, plus an `rsh_handshake` fuzz target. Cleartext passwords and address trust are stated in the metadata. Not built: a second rexec client family, stdin on rsh/rexec, a pty for rlogin. |
-| **Zigbee** / ~~**LoRaWAN**~~ radio | **LoRaWAN landed 17 October 2026** as the `lorawan` pair over the Semtech UDP packet forwarder (v1/v2, UDP 1700): a network server and a gateway client with LoRaWAN 1.0.x MAC in Rust (AES-CMAC MICs, Join Accept encryption, session keys, 32-bit frame counters, EU868 RX1/RX2), the model deciding joins and application payloads and failing closed by sending nothing; against LWN Simulator (server role) and ChirpStack v4 with its Gateway Bridge (client role), with tshark's `lorawan` dissector verifying every MIC from LoRaTap captures, plus a fuzz target. Not built: LoRaWAN 1.1, classes B/C, ADR, regions other than EU868, Basic Station. **Zigbee** is still open: no open Zigbee stack runs on Linux's `mac802154_hwsim`, so there is no radio-level peer; the testable slice is NetGet as a Zigbee co-processor over TCP (ASH/EZSP or Z-Stack MT) against bellows/zigpy, zigpy-znp and zigbee-herdsman, which tests the host-to-co-processor link rather than Zigbee over the air. |
+| ~~**Zigbee**~~ / ~~**LoRaWAN**~~ radio | **LoRaWAN landed 17 October 2026** as the `lorawan` pair over the Semtech UDP packet forwarder (v1/v2, UDP 1700): a network server and a gateway client with LoRaWAN 1.0.x MAC in Rust (AES-CMAC MICs, Join Accept encryption, session keys, 32-bit frame counters, EU868 RX1/RX2), the model deciding joins and application payloads and failing closed by sending nothing; against LWN Simulator (server role) and ChirpStack v4 with its Gateway Bridge (client role), with tshark's `lorawan` dissector verifying every MIC from LoRaTap captures, plus a fuzz target. Not built: LoRaWAN 1.1, classes B/C, ADR, regions other than EU868, Basic Station. **Zigbee landed 21 October 2026** as the `zigbee` server: NetGet as a Silicon Labs EZSP network co-processor over TCP (6638, the port network-attached coordinators serve), ASH framing (CRC-CCITT, byte stuffing, randomisation, RST/RSTACK, ACK/NAK, frame numbers) and EZSP 14–17 in both the legacy and extended headers, implementing every command bellows and zigbee-herdsman send at startup, forming, joining and messaging. The model chooses whether a network is already formed, describes the devices that join (endpoints, clusters, attributes), decides each permit-join and each cluster command, and injects reports and button presses; descriptor queries, attribute reads and interviews are answered from the description with no model call, and a model failure becomes a ZCL Default Response FAILURE. Evidence: bellows 0.46.2 (CLI and a zigpy application) and zigbee-herdsman 11.1.1 (the Zigbee2MQTT stack), each forming or resuming the network and interviewing, switching and reading the model's device; fuzz target for the ASH deframer and EZSP decoder. This tests the host-to-co-processor link, not Zigbee over the air. **The TI Z-Stack 3.x.0 (MT/ZNP) dialect and EZSP 8–13 landed 24 October 2026**: a `dialect: znp` startup parameter selects Z-Stack, sharing the device descriptions, join decisions and ZCL answers with EZSP (`network.rs`); zigpy-znp 0.14.2 and zigbee-herdsman's `zstack` adapter each form or resume a network, interview the model's device, switch it and receive its report; bellows completes sessions at EZSP 8 through 13 and herdsman's `ember` at 13 (its floor). Not built: a client role (no independent co-processor simulator exists), EZSP 4–7 and 18+, Z-Stack 1.2 and 3.0.x, XNCP, Green Power, touchlink; tshark has no ASH, EZSP or MT dissector. |
 
 ---
 
@@ -174,10 +265,10 @@ Tier C, in this order:
 
 | Protocol | Transport | Shape | Independent peers |
 |---|---|---|---|
-| ~~**iSCSI**~~ | TCP 3260 | **Landed 20 October 2026** as the `iscsi` pair (RFC 7143). Target: discovery (SendTargets), CHAP MD5 and mutual CHAP checked in Rust, CRC32C header and data digests, R2T and immediate/unsolicited data, CmdSN ordering, ABORT TASK; the model decides which targets discovery reveals, whether a login is admitted and what the LUNs contain, then every SCSI command is answered from that description with no further model call. SCSI is shared with USB mass storage (`src/server/scsi_common.rs`) and the disk model with NBD (`src/server/described_disk.rs`). Initiator: discovery, login with CHAP/mutual CHAP and digests, REPORT LUNS, INQUIRY, READ CAPACITY, READ/WRITE, logout, driven by the model one command at a time. Fuzz target `iscsi_pdu`. Not built: error recovery levels above 0, multiple connections per session, iSER, task management beyond ABORT TASK. | Target: libiscsi (`iscsi-ls`, `iscsi-inq`, `iscsi-readcapacity16`, `iscsi-md5sum` and a subset of `iscsi-test-cu`) and the Linux kernel initiator (open-iscsi, reading the disk through its by-path link); initiator: gotgt and tgtd (CHAP and mutual CHAP, CRC32C); tshark reads the sessions |
-| **NVMe over TCP** | TCP 4420 | NVMe/TCP target and host; discovery controller, admin and I/O queues, namespaces the model describes | The Linux kernel's `nvme-tcp` host with `nvme-cli`, and its `nvmet-tcp` target (root, kernel modules — CI runners have them) |
-| **FUSE local filesystem** | Local mount (not a network protocol) | A directory on this machine whose every file operation the model answers | The operating system itself through ordinary file tools; Linux FUSE in CI, FUSE-T or macFUSE on macOS |
-| **HDFS** | TCP (NameNode RPC 8020, DataNode transfer 9866) | NameNode and DataNode protocols over Hadoop RPC/protobuf, model-described namespace and blocks; client role against a real cluster | The real Apache Hadoop `hdfs dfs` CLI and a single-node HDFS (Hadoop is already installed by the `yarn` pair job) |
+| ~~**iSCSI**~~ | TCP 3260 | **Landed 20 October 2026** as the `iscsi` pair (RFC 7143). Target: discovery (SendTargets), CHAP MD5 and mutual CHAP checked in Rust, CRC32C header and data digests, R2T and immediate/unsolicited data, CmdSN ordering, ABORT TASK; the model decides which targets discovery reveals, whether a login is admitted and what the LUNs contain, then every SCSI command is answered from that description with no further model call. SCSI is shared with USB mass storage (`src/server/scsi_common.rs`) and the disk model with NBD (`src/server/described_disk.rs`). Initiator: discovery, login with CHAP/mutual CHAP and digests, REPORT LUNS, INQUIRY, READ CAPACITY, READ/WRITE, logout, driven by the model one command at a time. Fuzz target `iscsi_pdu`. **Task management, multi-connection sessions and error recovery levels 1–2 landed 26 October 2026** on the target: ABORT/CLEAR TASK SET, LUN/target warm/cold resets as model decisions with the right unit attentions, TASK REASSIGN at level 2, sessions of up to 8 connections in CmdSN order, recovery R2Ts and SNACK; the initiator sends task management functions the model asks for. Only task management has independent peers (libiscsi's TMF tests, the kernel's `sg_reset`, tgtd and gotgt); no open initiator or target implements error recovery above 0 or MC/S, so those rest on NetGet's raw-PDU tests and are not built in the initiator. Not built: iSER (no RDMA verbs stack, no `rdma_rxe` on the runner), ACA, the RFC 7144 query functions, asynchronous messages. | Target: libiscsi (`iscsi-ls`, `iscsi-inq`, `iscsi-readcapacity16`, `iscsi-md5sum` and a subset of `iscsi-test-cu`) and the Linux kernel initiator (open-iscsi, reading the disk through its by-path link); initiator: gotgt and tgtd (CHAP and mutual CHAP, CRC32C); tshark reads the sessions |
+| ~~**NVMe over TCP**~~ | TCP 4420 | **Landed 20 October 2026** as the `NVMe-TCP` pair (`src/server/nvme_tcp`, `src/client/nvme_tcp`; NVMe/TCP transport 1.0). Target: ICReq/ICResp, CRC32C header and data digests, Fabrics Connect for admin and I/O queues, Property Get/Set, Identify (CNS 00h/01h/02h/03h/06h), Get Log Page (discovery 70h, error, SMART, changed namespaces), Set/Get Features, Keep Alive, held Asynchronous Event Requests, Read/Write/Flush/Write Zeroes, R2T and H2C/C2H data, and the well-known discovery subsystem; the model decides which subsystems exist and appear in discovery, which hosts may connect, and the namespaces and their contents (`src/server/described_disk.rs`, shared with NBD and iSCSI), asked once at the admin Connect. Writes to a namespace the model marks writable live in memory for that controller. Host: discovery, connect, Identify, Read/Write/Flush, shutdown, driven by the model one command at a time. Fuzz target for the PDU decoder. **DH-HMAC-CHAP, Compare/Verify/Copy and Persistent Reservations landed 26 October 2026** in both roles: SHA-256/384/512 with the NULL group and ffdhe2048–8192, one way and both ways, secrets redacted and never shown to the model, which decides which hosts must authenticate; Compare/Verify/Copy answered from the described namespace and overlay; reservations with each change a model decision and RESERVATION CONFLICT on I/O. The kernel host authenticated under six hash/group pairs and ran nvme-cli's compare, verify, copy and resv-* commands; NetGet's host authenticated to nvmet both ways and ran reservations against it; SPDK authenticated in both roles (and exposed I/O-queue authentication, now supported). Not built: TLS (rustls has no TLS 1.3 external PSK), ANA, namespace management, protection information, asynchronous event completions, more than one R2T outstanding per command, fused Compare-and-Write, reservation notifications; DH uses non-constant-time `num-bigint`. | Target: the Linux kernel host (`nvme-cli` discover/connect, the namespace block device read back, `id-ctrl`/`id-ns`/`smart-log`) and SPDK (`spdk_nvme_identify`, `spdk_dd`, `spdk_nvme_perf`); host: the kernel `nvmet-tcp` target through configfs and SPDK `nvmf_tgt`; tshark's `nvme-tcp` and `nvme` dissectors read both directions |
+| ~~**FUSE local filesystem**~~ | Local mount (not a network protocol) | **Landed 21 October 2026** as the `fuse` server (`src/server/fuse`, Linux only, `fuser` 0.18 with no libfuse; the kernel is the client, so there is no client role). A `mount_point` replaces the port. The model describes the tree lazily, one call per directory cached for the mount, with file contents in `described_disk`'s vocabulary (`src/server/described_tree.rs`); Rust serves lookup, getattr, readdir and reads. Each mutation (create, write, truncate, setattr, mkdir, unlink, rmdir, rename, symlink) is one model allow/deny with the errno it chooses, kept in a capped in-memory overlay for the life of the mount; `read_only` mounts without asking. Every model-dependent request has a deadline and fails closed with an errno. Stopping unmounts, and a watchdog unmounts after a killed process where fuse3 before 3.17 would leave the mount. Fuzz target for the tree description. **Hard links, extended attributes, fallocate and RENAME_EXCHANGE landed 26 October 2026**: inodes with several names and correct `nlink`, xattrs described per node and set/removed as model decisions (XATTR_CREATE/REPLACE, ENODATA/ERANGE, bounded), fallocate modes 0, KEEP_SIZE, PUNCH_HOLE and ZERO_RANGE within the overlay cap, and RENAME_EXCHANGE, each a model decision; tested through the kernel with coreutils, findutils, attr, util-linux and Python's `renameat2`. pjdfstest now passes 203 of 238 files in a rootless container and 235 as real root, each held as a floor. Not built: POSIX ACLs, fallocate collapse/insert/unshare, copy_file_range, SEEK_DATA/SEEK_HOLE, RENAME_WHITEOUT, macOS. | The Linux kernel FUSE driver through coreutils, findutils and Python as separate processes, and pjdfstest (198 of 238 files pass in full, held as a floor), unprivileged and as root on Ubuntu 24.04 |
+| ~~**HDFS**~~ | TCP (NameNode RPC 8020, DataNode transfer 9866) | **Landed 21 October 2026** as the `hdfs` pair (`src/server/hdfs`, `src/client/hdfs`, Unix; Hadoop 3.5.0's own `.proto` files vendored under `proto/hadoop`). Server: one NameNode and one DataNode on two listeners; Hadoop IPC (`hrpc` v9, SASL SIMPLE, call ids, Java exception classes) with about 40 ClientNamenodeProtocol methods, and DataTransferProtocol v28 READ_BLOCK, WRITE_BLOCK (CRC32C chunk checksums verified) and BLOCK_CHECKSUM. The model describes the namespace lazily through the FUSE tree (`src/server/described_tree.rs`) with contents in `described_disk`'s vocabulary, decides which users may connect, and allows or denies each mutation with the exception it names; a written block is staged and the model decides at `complete`, accepted bytes kept in a capped in-memory overlay. Client: list, stat, read, mkdir, write through the pipeline, delete, rename, setPermission, driven by the model with RPC exceptions reaching it structured. Fuzz target for the RPC and transfer decoders. **Append, truncate and concat landed 24 October 2026** in both roles (append continues the last partial block's checksum chunks through PIPELINE_SETUP_APPEND; a mid-block truncate goes through recovery as `hdfs dfs -truncate -w` expects; concat keeps Hadoop 3.5's checks), each a model decision, against `hdfs dfs` and colinmarc/hdfs (append, truncate); the five connection deadlines are startup parameters with a test each. Not built: Kerberos/tokens, symlinks (no Hadoop CLI creates one), variable-length blocks, snapshots, ACLs, xattrs, quotas, encryption, erasure coding, pipeline recovery, more than one DataNode. | Server: Apache Hadoop 3.5.0's `hdfs dfs` CLI and colinmarc/hdfs v2.4.0 (Go, its own RPC and transfer code); client: a real single-node Hadoop 3.5.0 NameNode and DataNode, read back with `hdfs dfs` and checked against the NameNode audit log; tshark's `hdfs`/`hdfsdata` dissectors predate protobuf and check only the `hrpc` and op headers |
 
 ## Existing protocols missing one role (true gaps)
 
@@ -190,10 +281,10 @@ is a phone or a switch). The genuinely missing **client** roles, with their peer
 |---|---|---|
 | ~~**mercurial**~~ | `hg` binary | Already existed (see status above). |
 | ~~**svn**~~ | `svn` / `svnserve` | Already existed (see status above). |
-| **rtsp / rtp / hls** | `ffmpeg`/`ffprobe` (installed), VLC | Media clients; ffmpeg is already a test peer. |
-| **rdp** | `xfreerdp` | Remote-desktop client (server exists). |
-| **zabbix** | `zabbix_server`/`zabbix_sender` | Agent/sender client. |
-| gtp, db2, snowflake, spark, yarn | peer-limited | Lower priority: no clean local independent server for most. |
+| ~~**rtsp / rtp / hls**~~ | `ffmpeg`/`ffprobe` (installed), VLC | Landed (see "Missing roles" above). |
+| ~~**rdp**~~ | `xfreerdp` | Landed (see "Missing roles" above). |
+| ~~**zabbix**~~ | `zabbix_server`/`zabbix_sender` | Landed (see "Missing roles" above). |
+| ~~gtp, db2, snowflake, spark, yarn~~ | peer-limited | Landed 15 October 2026 (see "Peer-limited missing clients" above). |
 
 ## Extensions to shipped protocols (the "separated extension" tradition)
 

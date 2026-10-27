@@ -226,3 +226,57 @@ async fn a_model_that_cannot_answer_sends_nothing() {
         .await
         .is_empty());
 }
+
+#[tokio::test]
+async fn task_management_is_the_models_action_and_its_response_comes_back() {
+    let srv = target::start(policy(POLICY), None).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (state, id) = client(
+        format!("127.0.0.1:{}", srv.port),
+        json!({"target_name": DISK0}),
+        chain(&stepping_policy(&dir.path().join("step"), &tmf_steps(0))),
+    )
+    .await
+    .unwrap();
+    let r = tmf_results(&state, id, 7).await;
+    let want = [
+        ("abort_task", "task_does_not_exist"),
+        ("abort_task_set", "function_complete"),
+        ("clear_aca", "function_not_supported"),
+        ("clear_task_set", "function_complete"),
+        ("logical_unit_reset", "function_complete"),
+        ("target_warm_reset", "function_complete"),
+        ("target_cold_reset", "function_complete"),
+    ];
+    let got: Vec<(&str, &str)> = r.iter().map(|(f, s)| (f.as_str(), s.as_str())).collect();
+    assert_eq!(got, want);
+    let all = client_events(&state, id, "iscsi_task_management_result").await;
+    assert_eq!(
+        all[6]["session_ended"], true,
+        "a cold reset ends the session"
+    );
+    // The TEST UNIT READY after the LUN reset reports the target's unit attention, once.
+    let c = results(&state, id, 4).await;
+    assert!(
+        c[2]["sense"]
+            .as_str()
+            .is_some_and(|s| s.contains("BUS DEVICE RESET FUNCTION OCCURRED")),
+        "{}",
+        c[2]
+    );
+    assert_eq!(c[3]["status"], "GOOD", "{}", c[3]);
+    // The target asked its model about each reset the initiator's model sent.
+    let asked = target::events(&srv.state, srv.id, "iscsi_task_management").await;
+    let functions: Vec<&str> = asked
+        .iter()
+        .filter_map(|e| e["function"].as_str())
+        .collect();
+    assert_eq!(
+        functions,
+        [
+            "logical_unit_reset",
+            "target_warm_reset",
+            "target_cold_reset"
+        ]
+    );
+}

@@ -35,6 +35,12 @@ hickory-proto = "0.24"
 # The Nostr target checks that every refusal NetGet renders is itself JSON.
 serde_json = "1"
 
+# The HDFS target decodes Hadoop's protocol buffers with the same prost as netget's.
+prost = "0.13"
+
+# The ONVIF target hands the device's clock to the termination-time parser, as the server does.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
 [dependencies.netget]
 package = "netget-tool"
 path = ".."
@@ -335,8 +341,85 @@ doc = false
 bench = false
 
 [[bin]]
+name = "nvme_tcp_pdu"
+path = "fuzz_targets/nvme_tcp_pdu.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuse_tree_description"
+path = "fuzz_targets/fuse_tree_description.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hdfs_wire"
+path = "fuzz_targets/hdfs_wire.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "lorawan_semtech"
 path = "fuzz_targets/lorawan_semtech.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "zigbee_ash_ezsp"
+path = "fuzz_targets/zigbee_ash_ezsp.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "zigbee_mt"
+path = "fuzz_targets/zigbee_mt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ngap_nas"
+path = "fuzz_targets/ngap_nas.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "onvif_request"
+path = "fuzz_targets/onvif_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "stratum_v2_message"
+path = "fuzz_targets/stratum_v2_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "unixfs_dag"
+path = "fuzz_targets/unixfs_dag.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ipns_record"
+path = "fuzz_targets/ipns_record.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "gre_packet"
+path = "fuzz_targets/gre_packet.rs"
 test = false
 doc = false
 bench = false

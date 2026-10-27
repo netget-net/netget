@@ -3,10 +3,13 @@
   newer on PATH;
 - Kubo 0.43.1 (go-ipfs), the official release tarball from github.com/ipfs/kubo, sha256
   pinned below (the release's own .sha512 files were checked when the pins were taken).
-  macOS arm64 and Linux amd64 only.
+  macOS arm64 and Linux amd64 only;
+- Helia (JavaScript IPFS: js-libp2p, @helia/unixfs, ipfs-unixfs-importer), pinned by
+  helia/package-lock.json and installed with npm ci. Needs Node 22 or newer.
 
 Usage: python3 install_peers.py /absolute/owned/root
-Prints the NETGET_LIBP2P_GO_PEER and NETGET_KUBO exports the server and client tests read.
+Prints the NETGET_LIBP2P_GO_PEER, NETGET_KUBO and NETGET_HELIA exports the server and client
+tests read.
 """
 import hashlib, io, os, pathlib, platform, shutil, subprocess, sys, tarfile, urllib.request
 
@@ -39,5 +42,18 @@ if not kubo.exists():
     kubo.chmod(0o755)
 version = subprocess.run([str(kubo), "version"], check=True, timeout=60, capture_output=True, text=True).stdout
 assert KUBO in version, version
+
+# Helia 7.1.16 (@helia/unixfs 8.0.9, ipfs-unixfs-importer 17.1.1, js-libp2p 3.5.1): every
+# module pinned with its integrity hash by helia/package-lock.json, installed with `npm ci`.
+node = subprocess.run(["node", "--version"], check=True, timeout=60, capture_output=True, text=True).stdout.strip()
+assert int(node.lstrip("v").split(".")[0]) >= 22, f"Helia needs Node 22 or newer, not {node}"
+helia_src = pathlib.Path(__file__).resolve().parent / "helia"
+helia = root / "helia"
+helia.mkdir(parents=True, exist_ok=True)
+for name in ("package.json", "package-lock.json", "helia_peer.mjs"):
+    shutil.copyfile(helia_src / name, helia / name)
+subprocess.run(["npm", "ci", "--no-audit", "--no-fund"], cwd=helia, check=True, timeout=1800)
+
 print("export NETGET_LIBP2P_GO_PEER=" + str(peer))
 print("export NETGET_KUBO=" + str(kubo))
+print("export NETGET_HELIA=" + str(helia / "helia_peer.mjs"))

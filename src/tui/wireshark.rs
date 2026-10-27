@@ -236,6 +236,10 @@ pub fn wire_for(protocol: &str) -> Wire {
         // No Semtech UDP packet-forwarder dissector exists in this build (4.6.8: `tshark -G protocols`
         // lists loratap and lorawan only, and lorawan is reached through LoRaTap captures, never
         // UDP). tests/server/lorawan writes the frames into a LoRaTap pcap to use it.
+        // No ASH, EZSP or ZNP dissector exists in this build (4.6.8: `tshark -G protocols` has
+        // zbee_nwk, zbee_aps, zbee_zcl and zep, all of which read over-the-air frames, and
+        // silabs-dch, Silicon Labs' debug channel). The co-processor link is plain TCP.
+        "zigbee" => with_note(PLAIN_TCP, "Wireshark has no ASH or EZSP dissector: each frame is stuffed bytes ending in 0x7E (0x7D escapes, data XORed with an LFSR seeded 0x42, CRC-CCITT); a DATA frame carries one EZSP frame — sequence, two frame-control bytes, a little-endian frame id and parameters. Its zbee_* dissectors read Zigbee over the air, which this link does not carry."),
         "lorawan" => with_note(PLAIN_UDP, "Wireshark has no Semtech UDP packet-forwarder dissector: each datagram is a 4-byte header (version, token, identifier), the gateway EUI on PUSH_DATA/PULL_DATA/TX_ACK, then JSON whose rxpk/txpk `data` is the base64 LoRaWAN PHYPayload. Its lorawan dissector reads LoRaTap captures only."),
         "gelf" | "graylog" => Wire {
             transport: Transport::TcpOrUdp,
@@ -323,7 +327,7 @@ pub fn wire_for(protocol: &str) -> Wire {
         "ocpp" => with_note(with_display(tcp("http"), "websocket"), "OCPP-J messages are JSON arrays in WebSocket text frames; the websocket filter shows each CALL, CALLRESULT and CALLERROR."),
         // A2A is JSON-RPC over plain HTTP (SSE for streams); no A2A dissector exists.
         "stratum v2" | "stratum_v2" | "stratumv2" => with_note(PLAIN_TCP, "Wireshark has no Stratum V2 dissector, and after the handshake there is nothing to dissect: the first 64 bytes from the device and 234 from the pool are the Noise NX handshake (ElligatorSwift keys, then the encrypted static key and certificate), and every frame after is a 22-byte encrypted header followed by ChaCha20-Poly1305 chunks. Message timing and sizes are all a capture shows."),
-        "onvif" => with_note(tcp("http"), "ONVIF is SOAP 1.2 in HTTP POST bodies to /onvif/device_service and /onvif/media_service; the http filter shows each envelope, with its WS-Security UsernameToken in the header."),
+        "onvif" => with_note(tcp("http"), "ONVIF is SOAP 1.2 in HTTP POST bodies to /onvif/device_service, media_service, media2_service, ptz_service, events_service, imaging_service and each pull-point subscription's /onvif/events/subscription/<id>; the http filter shows each envelope, with its WS-Security UsernameToken in the header."),
         "a2a" => with_note(tcp("http"), "A2A 1.0 is JSON-RPC 2.0 in HTTP POST bodies to /, with streamed answers as text/event-stream; the agent card is GET /.well-known/agent-card.json."),
         // GraphQL is JSON over plain HTTP; no GraphQL dissector exists in this build.
         "graphql" => with_note(tcp("http"), "GraphQL requests are JSON POST bodies (or GET query strings) to the endpoint path; answers are application/graphql-response+json or application/json. Subscriptions are graphql-transport-ws JSON in WebSocket text frames on the same path: add the websocket display filter."),
@@ -483,6 +487,18 @@ pub fn wire_for(protocol: &str) -> Wire {
         "mqtt" => tcp("mqtt"),
         "mqtt_sn" => udp("mqttsn"),
         "nbd" => tcp("nbd"),
+        // NVMe/TCP is in the tcp.port decode-as table (4420 and 8009 by default); the
+        // commands inside are dissected as `nvme`, which matches each completion to its command
+        // only when it saw the command, so capture from the start of the connection.
+        "nvme_tcp" => tcp("nvme-tcp"),
+        // HDFS: the NameNode's Hadoop IPC decodes as `hdfs` and the DataNode's transfers as
+        // `hdfsdata`; neither has a default port in the tcp.port table (both are empty-range
+        // preferences), so -d names the port. Both dissectors predate Hadoop 2's protocol
+        // buffers: on Hadoop 3 traffic `hdfs` reads the hrpc connection header and frame
+        // lengths, and `hdfsdata` the op header and packet framing, not the messages inside.
+        "hdfs" => with_note(tcp("hdfs"), "The DataNode listener (datanode_port, 9866 by default) decodes as hdfsdata: add -d tcp.port==<datanode port>,hdfsdata. Wireshark's hdfs and hdfsdata dissectors were written for Hadoop 1's Writable RPC; on Hadoop 3 they show the hrpc header, frame lengths, op codes and packet framing, while the protocol buffers inside show as data."),
+        // The hdfs server's second listener, named so the pcap oracle can frame it.
+        "hdfs_datanode" => tcp("hdfsdata"),
         // iSCSI is not in the tcp.port decode-as table (4.6.8: `tshark -G decodes` has no iscsi
         // row); the dissector claims the ports in its own `iscsi.target_ports` preference (3260
         // by default), so a capture on another port needs that preference set, not `-d`. The
@@ -551,7 +567,8 @@ pub fn wire_for(protocol: &str) -> Wire {
         "geneve" => udp("geneve"),
         // GRE-in-UDP (RFC 8086): tshark 4.6.8 registers `gre` on udp.port 4754 and accepts it
         // in `-d udp.port==N,gre`; protocol type 0x6558 hands the inner frame to `eth`.
-        "gre" | "gretap" => udp("gre"),
+        // Keyed `gretap` here: plain `gre` is the gre protocol, on IP protocol 47 (below).
+        "gretap" => udp("gre"),
         "bfd" => udp("bfd"),
         "sip" => either("sip"),
         // H.225.0 call signalling is Q.931 inside TPKT, which Wireshark finds on any TCP port
@@ -583,6 +600,9 @@ pub fn wire_for(protocol: &str) -> Wire {
         "icmp" => raw("icmp", "icmp"),
         "igmp" => raw("igmp", "igmp"),
         "ospf" => raw("ip proto 89", "ospf"),
+        // GRE on IP protocol 47. tshark dissects what it carries by protocol type: `eth` for a
+        // gretap payload (0x6558), `ip` for a gre one (0x0800). GRE-in-UDP is vxlan's.
+        "gre" => raw("ip proto 47", "gre"),
         // Same trap as isis: `arp` is an Ethernet-only BPF keyword and is rejected on
         // loopback (DLT_NULL on macOS). Capture on a real interface.
         "arp" => with_note(raw("arp", "arp"), ARP_LOOPBACK_NOTE),
@@ -628,6 +648,15 @@ pub fn wire_for(protocol: &str) -> Wire {
         "datalink" => raw("", ""),
         // ---- not on a network --------------------------------------------
         "pty" | "stdio" | "named_pipe" | "socket_file" | "ssh_agent" => offline(LOCAL_NOTE),
+        // The kernel's FUSE driver talks to the daemon over /dev/fuse; nothing reaches an
+        // interface, and Wireshark has no FUSE capture source.
+        "fuse" => offline(
+            "FUSE is the kernel talking to NetGet over /dev/fuse, never a network interface. \
+             Watch the system calls of the processes using the mount with `strace -f`, or the \
+             FUSE requests with the kernel's fuse tracepoints (`perf trace -e 'fuse:*'` or \
+             /sys/kernel/tracing/events/fuse); NetGet's own log has a decision= line for every \
+             description and change.",
+        ),
         // The client only. `wire_for_role` overrides this for the server, which is a plain
         // TCP vpcd socket. On Linux the reader's own USB traffic is capturable through usbmon
         // and Wireshark has a real `usbccid` dissector (confirmed present in `-G protocols`),

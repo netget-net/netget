@@ -89,6 +89,32 @@ const START_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long to wait for the socket to disappear after `remove_server()`.
 const RELEASE_TIMEOUT: Duration = Duration::from_secs(3);
 
+/// How long the whole server sweep may take before it stops and fails.
+///
+/// The sweep takes seconds. Without a bound of its own, a start that wedges something every
+/// later start needs turns each of the ~300 remaining protocols into a `START_TIMEOUT` hang,
+/// and the job is killed at its limit with nothing printed: on 24 October 2026 one sweep ran
+/// from 03:51 until the 60-minute job limit, and since libtest captures a test's output the log
+/// could not say which protocol it was on. Past this the sweep fails with every protocol's
+/// verdict and timing so far, and the ones it did not reach.
+const SWEEP_DEADLINE: Duration = Duration::from_secs(300);
+
+/// How long past its own deadline the sweep may be silent before the watchdog thread speaks.
+///
+/// The per-protocol `START_TIMEOUT` and the sweep deadline are both tokio timers, which fire
+/// only while the runtime can run. A start that blocks every worker thread stops both of them,
+/// so a plain OS thread watches from outside the runtime.
+const WATCHDOG_GRACE: Duration = Duration::from_secs(15);
+
+/// How long the shared `AppState` may take to answer after a protocol hung.
+///
+/// A hung start that is still holding the state's lock makes every later start wait on it, and
+/// each would then be reported as a hang of its own.
+const STATE_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// A start taking at least this long is printed outside libtest's capture as it happens.
+const SLOW_START_MS: u128 = 5_000;
+
 /// Hosts a protocol may legitimately default to. Anything else means the smoke test
 /// would put packets on a network it does not own.
 const LOCAL_HOSTS: &[&str] = &["127.0.0.1", "0.0.0.0", "::1", "::", "localhost", "[::1]"];
@@ -414,7 +440,8 @@ async fn probe_protocol(
         .await
     });
 
-    let outcome = tokio::time::timeout(START_TIMEOUT, handle).await;
+    let mut handle = handle;
+    let outcome = tokio::time::timeout(START_TIMEOUT, &mut handle).await;
     let ready_ms = started.elapsed().as_millis();
 
     let mut row = Row {
@@ -433,7 +460,9 @@ async fn probe_protocol(
         Err(_elapsed) => {
             // Timed out. Abort so the sweep is not slowly poisoned by stuck tasks —
             // abort cannot rescue a genuinely blocking call, but it releases the
-            // cooperative ones.
+            // cooperative ones. Dropping the handle would not: a dropped `JoinHandle`
+            // detaches its task and leaves it running, holding whatever it holds.
+            handle.abort();
             row.verdict = Verdict::Hang;
             None
         }
@@ -599,8 +628,257 @@ fn render_report(rows: &[Row]) -> String {
     out
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-async fn every_registered_server_protocol_starts_honestly() {
+/// Write straight to the process's stderr.
+///
+/// libtest captures `print!`/`eprint!` output and shows it only for a test that *finishes*
+/// failing, so a test killed at the job's time limit leaves none of it in the log. A direct
+/// write to the stream is not captured.
+fn write_uncaptured(text: &str) {
+    use std::io::Write;
+    let mut err = std::io::stderr().lock();
+    let _ = err.write_all(text.as_bytes());
+    let _ = err.flush();
+}
+
+/// Where the server sweep is, shared with the watchdog thread.
+struct SweepProgress {
+    started: Instant,
+    /// The protocol being started now, and since when.
+    current: Option<(String, Instant)>,
+    /// One line per protocol finished, in order.
+    finished: Vec<String>,
+}
+
+impl Default for SweepProgress {
+    fn default() -> Self {
+        Self {
+            started: Instant::now(),
+            current: None,
+            finished: Vec::new(),
+        }
+    }
+}
+
+impl SweepProgress {
+    fn begin(&mut self, name: &str) {
+        self.current = Some((name.to_string(), Instant::now()));
+    }
+
+    fn finish(&mut self, line: String) {
+        self.current = None;
+        self.finished.push(line);
+    }
+
+    fn report(&self, why: &str) -> String {
+        let mut out = format!(
+            "\n=== protocol_startup_smoke_test watchdog: {why} ===\nsweep running for {:.1}s\n",
+            self.started.elapsed().as_secs_f64()
+        );
+        match &self.current {
+            Some((name, since)) => out.push_str(&format!(
+                "IN PROGRESS: {name}, started {:.1}s ago\n",
+                since.elapsed().as_secs_f64()
+            )),
+            None => out.push_str("no protocol in progress\n"),
+        }
+        out.push_str(&format!("finished so far ({}):\n", self.finished.len()));
+        for line in &self.finished {
+            out.push_str(line);
+            out.push('\n');
+        }
+        out.push_str(&thread_states());
+        out
+    }
+}
+
+/// What every thread of this process is blocked in, from the kernel's side.
+///
+/// A start that blocks a worker thread shows up here as a thread sitting in a syscall other
+/// than the runtime's own parking (`epoll_wait`, `futex`).
+fn thread_states() -> String {
+    #[cfg(target_os = "linux")]
+    {
+        let mut out = String::from("threads (tid name state wchan | syscall number):\n");
+        let Ok(tasks) = std::fs::read_dir("/proc/self/task") else {
+            return out;
+        };
+        for task in tasks.flatten() {
+            let dir = task.path();
+            let read = |file: &str| {
+                std::fs::read_to_string(dir.join(file))
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_else(|_| "?".to_string())
+            };
+            let stat = read("stat");
+            // `pid (comm) S ...`: the state letter follows the last `)`.
+            let state = stat
+                .rsplit_once(')')
+                .and_then(|(_, rest)| rest.split_whitespace().next())
+                .unwrap_or("?")
+                .to_string();
+            let syscall_line = read("syscall");
+            let mut fields = syscall_line.split_whitespace();
+            let syscall = fields.next().unwrap_or("?").to_string();
+            // The first argument of read, recvfrom, accept, ioctl… is a descriptor: name what it
+            // is open on, which is what identifies the task a blocked thread belongs to.
+            let fd_target = fields
+                .next()
+                .and_then(|a| u64::from_str_radix(a.trim_start_matches("0x"), 16).ok())
+                .filter(|fd| *fd < 65_536)
+                .and_then(|fd| {
+                    std::fs::read_link(format!("/proc/self/fd/{fd}"))
+                        .ok()
+                        .map(|t| format!(" fd {fd} -> {}", t.display()))
+                })
+                .unwrap_or_default();
+            out.push_str(&format!(
+                "  {} {} {} {} | {}{}\n",
+                task.file_name().to_string_lossy(),
+                read("comm"),
+                state,
+                read("wchan"),
+                syscall,
+                fd_target
+            ));
+        }
+        out
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        String::from("(per-thread kernel state is read from /proc, so only on Linux)\n")
+    }
+}
+
+/// An OS thread watching the sweep from outside the tokio runtime.
+///
+/// It reports, uncaptured, any protocol still starting `WATCHDOG_GRACE` after its own
+/// `START_TIMEOUT` — the timer that should have ended it could not fire — and exits the process
+/// with a failure if the sweep is still running `WATCHDOG_GRACE` past [`SWEEP_DEADLINE`], since
+/// by then the sweep's own deadline check could not run either.
+struct Watchdog {
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Watchdog {
+    fn start(progress: Arc<std::sync::Mutex<SweepProgress>>) -> Self {
+        use std::sync::atomic::Ordering;
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let thread = {
+            let stop = Arc::clone(&stop);
+            std::thread::Builder::new()
+                .name("smoke-watchdog".to_string())
+                .spawn(move || {
+                    let mut reported: Option<String> = None;
+                    while !stop.load(Ordering::SeqCst) {
+                        std::thread::sleep(Duration::from_millis(250));
+                        let Ok(progress) = progress.lock() else {
+                            return;
+                        };
+                        if progress.started.elapsed() > SWEEP_DEADLINE + WATCHDOG_GRACE {
+                            write_uncaptured(&progress.report(&format!(
+                                "the sweep is {}s past its {}s deadline and cannot stop \
+                                 itself; exiting",
+                                WATCHDOG_GRACE.as_secs(),
+                                SWEEP_DEADLINE.as_secs()
+                            )));
+                            std::process::exit(101);
+                        }
+                        if let Some((name, since)) = &progress.current {
+                            if since.elapsed() > START_TIMEOUT + WATCHDOG_GRACE
+                                && reported.as_deref() != Some(name.as_str())
+                            {
+                                write_uncaptured(&progress.report(&format!(
+                                    "`{name}` has been starting for longer than its {}s \
+                                     timeout, so that timeout cannot fire",
+                                    START_TIMEOUT.as_secs()
+                                )));
+                                reported = Some(name.clone());
+                            }
+                        }
+                    }
+                })
+                .expect("spawn the watchdog thread")
+        };
+        Self {
+            stop,
+            thread: Some(thread),
+        }
+    }
+
+    fn stop(&self) {
+        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl Drop for Watchdog {
+    fn drop(&mut self) {
+        self.stop();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// After the sweep, how long the runtime may take to shut down before the stuck threads are
+/// printed, and the longest it is given before the test fails rather than waiting on them.
+///
+/// A protocol that leaves a task on tokio's blocking pool after its server stops (the stdio
+/// server's stdin read was one) makes dropping the runtime wait for that task forever. That
+/// happens after the sweep, where the watchdog above has already stopped, so twice in October
+/// 2026 it showed in CI only as this test "running for over 60 seconds" until the job limit.
+const SHUTDOWN_REPORT_AFTER: Duration = Duration::from_secs(20);
+const SHUTDOWN_LIMIT: Duration = Duration::from_secs(60);
+
+#[test]
+fn every_registered_server_protocol_starts_honestly() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(8)
+        .enable_all()
+        .build()
+        .expect("build the sweep's runtime");
+    runtime.block_on(server_sweep());
+    shut_down_or_name_what_holds_it(runtime);
+}
+
+/// Shut the sweep's runtime down with a bound, printing every thread's state if it is slow.
+fn shut_down_or_name_what_holds_it(runtime: tokio::runtime::Runtime) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let done = Arc::new(AtomicBool::new(false));
+    {
+        let done = Arc::clone(&done);
+        std::thread::Builder::new()
+            .name("smoke-shutdown-watch".to_string())
+            .spawn(move || {
+                let started = Instant::now();
+                while started.elapsed() < SHUTDOWN_REPORT_AFTER {
+                    if done.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                write_uncaptured(&format!(
+                    "\n=== protocol_startup_smoke_test: the sweep finished but its runtime has \
+                     taken over {}s to shut down; a task outlived its server ===\n{}",
+                    SHUTDOWN_REPORT_AFTER.as_secs(),
+                    thread_states()
+                ));
+            })
+            .expect("spawn the shutdown watcher");
+    }
+    let started = Instant::now();
+    runtime.shutdown_timeout(SHUTDOWN_LIMIT);
+    done.store(true, Ordering::SeqCst);
+    let took = started.elapsed();
+    assert!(
+        took < SHUTDOWN_REPORT_AFTER,
+        "the sweep's runtime took {took:.1?} to shut down: a protocol left a task running after \
+         its server stopped (every thread's state, with the file each blocked read is on, was \
+         printed to stderr)"
+    );
+}
+
+async fn server_sweep() {
     let state = Arc::new(AppState::new());
     // Unreachable on purpose: nothing on this machine listens on port 1, so any LLM
     // call fails on connect instead of reaching a model or the network.
@@ -624,26 +902,83 @@ async fn every_registered_server_protocol_starts_honestly() {
         "the server registry is empty — was this built with no protocol features?"
     );
 
+    let selected: Vec<_> = protocols
+        .iter()
+        .filter(|(name, _)| {
+            only.as_ref()
+                .is_none_or(|filter| filter.contains(&name.to_lowercase()))
+        })
+        .collect();
+
+    let progress = Arc::new(std::sync::Mutex::new(SweepProgress::default()));
+    let watchdog = Watchdog::start(Arc::clone(&progress));
+
     let mut rows = Vec::new();
-    for (name, proto) in &protocols {
-        if let Some(filter) = &only {
-            if !filter.contains(&name.to_lowercase()) {
-                continue;
-            }
+    for (index, (name, proto)) in selected.iter().enumerate() {
+        if progress.lock().expect("progress").started.elapsed() > SWEEP_DEADLINE {
+            let not_reached: Vec<&str> =
+                selected[index..].iter().map(|(n, _)| n.as_str()).collect();
+            watchdog.stop();
+            panic!(
+                "{}\nthe server sweep passed its {}s deadline after {} of {} protocols; not \
+                 reached ({}): {}",
+                render_report(&rows),
+                SWEEP_DEADLINE.as_secs(),
+                rows.len(),
+                selected.len(),
+                not_reached.len(),
+                not_reached.join(", ")
+            );
         }
+        progress.lock().expect("progress").begin(name);
         let row = probe_protocol(&state, name, proto).await;
-        // Stream as we go. The full table is only printed at the end, so without this a
-        // protocol that wedges the sweep cannot be named from the output — and naming it
-        // is most of the value.
-        println!(
+        let line = format!(
             "  {:<28} {:<14} {:>7}ms  {}",
             row.protocol,
             row.verdict.label(),
             row.ready_ms,
             row.verdict.detail()
         );
+        progress.lock().expect("progress").finish(line.clone());
+        // Stream as we go. The full table is only printed at the end, so without this a
+        // protocol that wedges the sweep cannot be named from the output — and naming it
+        // is most of the value. This line is captured unless `--nocapture`; the uncaptured
+        // one below and the watchdog are what reach a CI log.
+        println!("{line}");
+        if row.verdict == Verdict::Hang || row.ready_ms >= SLOW_START_MS {
+            write_uncaptured(&format!(
+                "protocol_startup_smoke_test: slow start:\n{line}\n"
+            ));
+        }
+
+        if row.verdict == Verdict::Hang {
+            // Is the shared state still usable? If the hung start holds its lock, every
+            // protocol after this one would wait on it and be reported as a hang of its own,
+            // which is how one defect becomes an hour-long sweep. Name it and stop instead.
+            //
+            // A write, for a server that does not exist: tokio's RwLock queues a writer
+            // behind any holder, reader or writer, so this fails if anything still holds it.
+            let probe = tokio::time::timeout(
+                STATE_PROBE_TIMEOUT,
+                state.update_server_status(ServerId::new(u32::MAX), ServerStatus::Stopped),
+            )
+            .await;
+            if probe.is_err() {
+                rows.push(row);
+                watchdog.stop();
+                panic!(
+                    "{}\n`{name}` hung on start, and {}s after its task was aborted the shared \
+                     AppState still cannot be locked: the hung start is holding it. Every \
+                     protocol after it would wait on that lock and time out, so the sweep \
+                     stops here.",
+                    render_report(&rows),
+                    STATE_PROBE_TIMEOUT.as_secs()
+                );
+            }
+        }
         rows.push(row);
     }
+    watchdog.stop();
 
     let report = render_report(&rows);
     println!("{report}");
@@ -817,4 +1152,146 @@ async fn every_registered_client_protocol_refuses_a_closed_port_promptly() {
         hangs.is_empty() && panics.is_empty(),
         "{report}\nhung: {hangs:?}\npanicked: {panics:?}"
     );
+}
+
+/// Set in the child process [`a_stopped_stdio_server_does_not_keep_the_process_alive`] runs.
+#[cfg(unix)]
+const STDIO_CHILD_ENV: &str = "NETGET_SMOKE_STDIO_CHILD";
+
+/// Stopping a stdio server must leave nothing behind that the process waits for at exit.
+///
+/// The server reads the process's stdin, and a stdin read blocks and cannot be cancelled. It
+/// used to read through `tokio::io::stdin()`, on tokio's blocking pool, and dropping a runtime
+/// waits for every blocking-pool thread: so once a stdio server had been started and stopped on
+/// a stdin that stayed open with nothing written, the runtime could never be dropped. The sweep
+/// above starts and stops `stdio` like everything else, and whenever this binary's stdin was an
+/// open pipe it finished its sweep, printed its report and then never returned.
+///
+/// The case needs a stdin of its own, so it runs in a child: this binary again, running
+/// [`stdio_child_starts_and_stops_a_stdio_server`], with stdin a pipe this test holds open. The
+/// child does not outlive this test even if this test is killed: the pipe's only writer is here,
+/// so the child's read then sees end of file.
+#[cfg(unix)]
+#[test]
+fn a_stopped_stdio_server_does_not_keep_the_process_alive() {
+    use std::io::{Read, Write};
+    use std::process::{Command, Stdio};
+
+    const CHILD_DEADLINE: Duration = Duration::from_secs(60);
+
+    let mut child = Command::new(std::env::current_exe().expect("current_exe"))
+        .args([
+            "stdio_child_starts_and_stops_a_stdio_server",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(STDIO_CHILD_ENV, "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn the child");
+    // One line for the server to read, so the child knows its read loop is running and the next
+    // read is outstanding. Then the pipe stays open, with nothing more on it.
+    let mut stdin = child.stdin.take().expect("child stdin");
+    stdin.write_all(b"hello\n").expect("write to the child");
+    stdin.flush().expect("flush");
+
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("try_wait") {
+            break Some(status);
+        }
+        if started.elapsed() > CHILD_DEADLINE {
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    if status.is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    let mut output = String::new();
+    if let Some(mut out) = child.stdout.take() {
+        let _ = out.read_to_string(&mut output);
+    }
+    if let Some(mut err) = child.stderr.take() {
+        let _ = err.read_to_string(&mut output);
+    }
+    drop(stdin);
+
+    let status = status.unwrap_or_else(|| {
+        panic!(
+            "the child had not exited after {}s, though it stops its stdio server at once: \
+             something that server started is still waiting on stdin, and the runtime cannot \
+             be dropped until it returns. Child output:\n{output}",
+            CHILD_DEADLINE.as_secs()
+        )
+    });
+    assert!(status.success(), "the child failed ({status}):\n{output}");
+    assert!(
+        output.contains("stdio child: runtime dropped"),
+        "the child did not get as far as dropping its runtime:\n{output}"
+    );
+}
+
+/// The child half of [`a_stopped_stdio_server_does_not_keep_the_process_alive`]. Does nothing
+/// unless that test launched it.
+#[cfg(unix)]
+#[test]
+fn stdio_child_starts_and_stops_a_stdio_server() {
+    if std::env::var_os(STDIO_CHILD_ENV).is_none() {
+        return;
+    }
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("runtime");
+    runtime.block_on(async {
+        let state = Arc::new(AppState::new());
+        state
+            .set_llm_client(netget::llm::OllamaClient::new("http://127.0.0.1:1"))
+            .await;
+        let (status_tx, mut status_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let id = netget::cli::server_startup::start_server_from_action(
+            &state,
+            None,
+            None,
+            None,
+            None,
+            "stdio",
+            false,
+            None,
+            "smoke test: start a stdio server and stop it".to_string(),
+            None,
+            None,
+            None,
+            None,
+            Default::default(),
+            status_tx,
+        )
+        .await
+        .expect("start the stdio server");
+
+        // The line the parent wrote reaches the model as an event, which fails (no model is
+        // reachable) and says so on the status stream. By then the reader has gone back to
+        // reading, and that read is the one nothing can cancel.
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while let Some(line) = status_rx.recv().await {
+                if line.contains("stdio_input_received") {
+                    return;
+                }
+            }
+            panic!("the status stream ended before the server read its stdin");
+        })
+        .await
+        .expect("the stdio server never read the line on its stdin");
+
+        state.remove_server(id).await;
+    });
+    // This is where it used to hang.
+    drop(runtime);
+    println!("stdio child: runtime dropped");
 }

@@ -26,10 +26,22 @@ pub struct LiveCapture {
 impl LiveCapture {
     /// Start capturing on `iface`; returns once tshark says it is capturing.
     pub fn start(iface: &str) -> LiveCapture {
+        Self::start_filtered(iface, None)
+    }
+
+    /// As [`start`](Self::start), keeping only what the BPF capture `filter` passes: for a
+    /// link the host's own stack also talks on (a GRE peer's host kernel answers every
+    /// protocol-47 packet it has no tunnel for with an ICMP error, which is not NetGet's).
+    pub fn start_filtered(iface: &str, filter: Option<&str>) -> LiveCapture {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("live.pcapng");
-        let mut child = Command::new("tshark")
-            .args(["-n", "-q", "-i", iface, "-w"])
+        let mut command = Command::new("tshark");
+        command.args(["-n", "-q", "-i", iface]);
+        if let Some(f) = filter {
+            command.args(["-f", f]);
+        }
+        let mut child = command
+            .arg("-w")
             .arg(&path)
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -82,8 +94,9 @@ impl LiveCapture {
     pub fn wait_for(&self, from: &str, field: &str, needle: &str, secs: u64) -> bool {
         let deadline = Instant::now() + Duration::from_secs(secs);
         while Instant::now() < deadline {
-            if self.fields(&[field]).iter().any(|r| {
-                r[0].eq_ignore_ascii_case(from) && r.get(1).is_some_and(|v| v.contains(needle))
+            if self.read_fields(&[field], true).iter().any(|r| {
+                outer_src(&r[0]).eq_ignore_ascii_case(from)
+                    && r.get(1).is_some_and(|v| v.contains(needle))
             }) {
                 return true;
             }
@@ -113,6 +126,14 @@ impl LiveCapture {
     /// Read `fields` for every packet: one row per packet, each cell as `-T fields` prints it
     /// (repeated occurrences joined by `,`). `eth.src` is always the first column.
     pub fn fields(&self, fields: &[&str]) -> Vec<Vec<String>> {
+        self.read_fields(fields, false)
+    }
+
+    /// `while_capturing`: the file is still being written, so its last packet may be half
+    /// there. tshark then prints every whole packet and exits non-zero saying the file was
+    /// "cut short in the middle of a packet"; that is the race, not a failure, while polling.
+    /// After `stop` the file is complete and any error is one.
+    fn read_fields(&self, fields: &[&str], while_capturing: bool) -> Vec<Vec<String>> {
         let mut cmd = Command::new("tshark");
         cmd.arg("-r").arg(&self.path).args([
             "-n",
@@ -129,10 +150,12 @@ impl LiveCapture {
             cmd.arg("-e").arg(f);
         }
         let out = cmd.output().expect("tshark");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let partial_tail =
+            while_capturing && stderr.contains("cut short in the middle of a packet");
         assert!(
-            out.status.success(),
-            "tshark -r failed: {}",
-            String::from_utf8_lossy(&out.stderr)
+            out.status.success() || partial_tail,
+            "tshark -r failed: {stderr}"
         );
         String::from_utf8_lossy(&out.stdout)
             .lines()
@@ -161,7 +184,7 @@ impl LiveCapture {
         let mut chains = Vec::new();
         let mut failures = Vec::new();
         for r in &rows {
-            if !r[0].eq_ignore_ascii_case(ours) {
+            if !outer_src(&r[0]).eq_ignore_ascii_case(ours) {
                 continue;
             }
             chains.push(r.get(2).cloned().unwrap_or_default());
@@ -189,6 +212,12 @@ impl LiveCapture {
         );
         chains
     }
+}
+
+/// The outermost source MAC of a row's `eth.src` cell. A tunnelled Ethernet frame (gretap,
+/// VXLAN) carries a second `eth` layer, and `-E occurrence=a` prints both, comma-joined.
+pub fn outer_src(cell: &str) -> &str {
+    cell.split(',').next().unwrap_or_default()
 }
 
 impl Drop for LiveCapture {

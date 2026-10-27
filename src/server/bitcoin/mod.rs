@@ -20,22 +20,18 @@ use crate::llm::ollama_client::OllamaClient;
 use crate::llm::ActionResult;
 use crate::logging::emit::Log;
 use crate::protocol::Event;
+use crate::server::read_queue::{Admitted, Held, ReadQueue};
 use crate::server::BitcoinProtocol;
 use crate::state::app_state::AppState;
 use actions::{BITCOIN_CONNECTION_OPENED_EVENT, BITCOIN_MESSAGE_RECEIVED_EVENT};
 
-/// Connection state for LLM processing
-#[derive(Debug, Clone, PartialEq)]
-enum ConnectionState {
-    Idle,
-    Processing,
-    Accumulating,
-}
-
 /// Per-connection data for Bitcoin protocol
 struct ConnectionData {
-    state: ConnectionState,
-    queued_data: Vec<u8>,
+    /// The Idle → Processing → Accumulating machine and the bytes waiting behind the message
+    /// being answered. Every decision on it is made under the connection map's lock; see
+    /// [`crate::server::read_queue`]. P2P messages are framed, so the answering task always
+    /// takes everything waiting and parses it message by message.
+    reads: ReadQueue,
     write_half: Arc<Mutex<tokio::io::WriteHalf<TcpStream>>>,
     #[allow(dead_code)]
     handshake_complete: bool,
@@ -64,8 +60,8 @@ const FIRST_BYTE_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_s
 /// is one Core would already have dropped — and fifteen times above the interval at which a live
 /// node speaks.
 ///
-/// The margin over 20 minutes matters for a reason specific to NetGet: `handle_data_with_actions`
-/// runs on its own task, so the reader keeps reading while a message is being answered, and a
+/// The margin over 20 minutes matters for a reason specific to NetGet: a message is answered on
+/// its own task, so the reader keeps reading while a message is being answered, and a
 /// peer waiting on a model round-trip — or on a `manual` rule parked for a human — is silent on
 /// this socket for the whole of that work.
 const IDLE_BETWEEN_MESSAGES_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1800);
@@ -205,19 +201,22 @@ impl BitcoinServer {
                         //
                         // This used to happen inside `handle_connection_opened`, which runs in
                         // its own task alongside the reader task below — so a peer that sent
-                        // its first message promptly raced the insert. `handle_data_with_actions`
-                        // finds no entry, returns at its "connection not found" guard, and the
-                        // bytes are dropped with no event, no queue and no log line: the read
-                        // loop reports "received N bytes" and nothing further ever happens.
+                        // its first message promptly raced the insert. The read finds no entry,
+                        // and the bytes are dropped with no event, no queue and no log line: the
+                        // read loop reports "received N bytes" and nothing further ever happens.
                         //
                         // A Bitcoin peer sends `version` immediately on connect, so this was hit
                         // constantly — three E2E tests waited out their 120s read timeouts, and
                         // flakily, since it is a race.
+                        //
+                        // Registered `Processing`: the opened event is answered first, and
+                        // whatever the peer sends meanwhile queues behind that answer rather
+                        // than racing it onto the wire. `handle_connection_opened` hands the
+                        // queue over when it is done.
                         connections.lock().await.insert(
                             connection_id,
                             ConnectionData {
-                                state: ConnectionState::Idle,
-                                queued_data: Vec::new(),
+                                reads: ReadQueue::answering(),
                                 write_half: write_half_arc.clone(),
                                 handshake_complete: false,
                             },
@@ -279,7 +278,7 @@ impl BitcoinServer {
                                         FIRST_BYTE_READ_TIMEOUT
                                     };
                                     // The deadline wraps this read and nothing else:
-                                    // `handle_data_with_actions` answers on its own task, so a
+                                    // `answer` runs on its own task, so a
                                     // model round-trip and a `manual` rule parked for a human
                                     // are outside it by construction.
                                     let read_result = match tokio::time::timeout(
@@ -358,21 +357,41 @@ impl BitcoinServer {
                                                 hex::encode(data)
                                             ));
 
-                                            // Handle data in separate task
+                                            // Into the connection's state machine here, in the
+                                            // order the reads arrived: either it starts an
+                                            // answer, or it waits behind the one in flight.
+                                            // Deciding that in a task spawned per read let two
+                                            // tasks race for it — a later read could be parsed
+                                            // and answered first, or two reads could both find
+                                            // the connection Idle and be parsed apart, each
+                                            // half of a message on its own.
+                                            let Some(payload) = Self::admit_read(
+                                                connection_id,
+                                                data,
+                                                &connections_clone,
+                                                &status_tx_clone,
+                                            )
+                                            .await
+                                            else {
+                                                continue;
+                                            };
+
+                                            // The answer runs in its own task so the loop can
+                                            // go back to reading: what arrives meanwhile is
+                                            // queued behind it by `admit_read`.
                                             let llm_clone = llm_client_clone.clone();
                                             let state_clone = app_state_clone.clone();
                                             let status_clone = status_tx_clone.clone();
                                             let conns_clone = connections_clone.clone();
                                             let protocol_clone = protocol_clone.clone();
-                                            let data_vec = data.to_vec();
                                             // Tracked, not detached: stop_server must abort this task too.
                                             let task_owner = app_state_clone.clone();
                                             task_owner
                                                 .spawn_server_task(server_id, async move {
-                                                    Self::handle_data_with_actions(
+                                                    Self::answer(
                                                         connection_id,
                                                         server_id,
-                                                        data_vec,
+                                                        payload,
                                                         llm_clone,
                                                         state_clone,
                                                         status_clone,
@@ -422,7 +441,9 @@ impl BitcoinServer {
         Ok(local_addr)
     }
 
-    /// Handle new connection opened event
+    /// Answer the opened event for a new connection, then the messages the peer sent while it
+    /// was being answered.
+    #[allow(clippy::too_many_arguments)]
     async fn handle_connection_opened(
         connection_id: ConnectionId,
         server_id: crate::state::ServerId,
@@ -525,6 +546,35 @@ impl BitcoinServer {
                 .await;
             }
         }
+
+        // Hand over whatever the peer sent while the opened event was being answered — a
+        // Bitcoin peer sends `version` at once, so usually that. The connection was registered
+        // `Processing` for exactly this: those messages waited behind the opened answer instead
+        // of being answered ahead of it, which put our `verack` on the wire before our own
+        // `version`. Taken and left `Processing` under one lock, or the reader could find the
+        // connection `Idle` in between. A connection the opened answer closed is gone from the
+        // map, and nothing is answered.
+        let queued = {
+            let mut conns = connections.lock().await;
+            let Some(conn) = conns.get_mut(&connection_id) else {
+                return;
+            };
+            conn.reads.next_or_idle(true)
+        };
+        if let Some(queued) = queued {
+            Self::answer(
+                connection_id,
+                server_id,
+                queued,
+                llm_client,
+                app_state,
+                status_tx,
+                connections,
+                protocol,
+                magic,
+            )
+            .await;
+        }
     }
 
     /// The LLM call itself failed. Bitcoin P2P has no error frame a modern peer will act on -
@@ -568,11 +618,67 @@ impl BitcoinServer {
         let _ = status_tx.send("__UPDATE_UI__".to_string());
     }
 
-    /// Handle data received on a connection with LLM actions
-    async fn handle_data_with_actions(
+    /// Take one read into the connection's state machine, in the order the reader got it.
+    ///
+    /// Returns the bytes the answer this read starts should parse, or `None` when they wait
+    /// behind the answer already in flight (or the connection has gone). Called by the reader
+    /// itself, never from a spawned task: the decision has to be made in arrival order and under
+    /// one lock. When each read's task made it, two reads could both find the connection `Idle`
+    /// and be parsed and answered at once, and a later read's task could run first — its `pong`
+    /// went out ahead of the earlier one's, and a message split across two reads was parsed as
+    /// two halves.
+    async fn admit_read(
+        connection_id: ConnectionId,
+        data: &[u8],
+        connections: &Mutex<HashMap<ConnectionId, ConnectionData>>,
+        status_tx: &mpsc::UnboundedSender<String>,
+    ) -> Option<Vec<u8>> {
+        let mut conns = connections.lock().await;
+        let Some(conn) = conns.get_mut(&connection_id) else {
+            // Never silent. A miss here means the connection was torn down after the read
+            // (peer reset, or close_this_connection on the answering task) - legitimate, but
+            // indistinguishable from a registration race, which is exactly what made the
+            // bitcoin accept-order bug so hard to find: the read loop logged "received N
+            // bytes" and then nothing at all.
+            debug!(
+                "Bitcoin connection {} is no longer registered; dropping {} received bytes",
+                connection_id,
+                data.len()
+            );
+            return None;
+        };
+        // Framed messages: the answer always takes everything waiting, held fragment first.
+        match conn.reads.admit(data, true) {
+            Admitted::Start(payload) => Some(payload),
+            Admitted::Queued(queued) => {
+                drop(conns);
+                debug!(
+                    "Queued {} bytes for Bitcoin connection {} ({} queued)",
+                    data.len(),
+                    connection_id,
+                    queued
+                );
+                let _ = status_tx.send(format!(
+                    "⏸ Queued {} bytes for {}",
+                    data.len(),
+                    connection_id
+                ));
+                None
+            }
+        }
+    }
+
+    /// Parse and answer `payload` on a connection [`Self::admit_read`] has moved to
+    /// `Processing`, message by message, then everything queued behind it, until nothing is
+    /// left but an incomplete message (held for the next read) or nothing at all.
+    ///
+    /// One of these runs per connection at a time: only the move into `Processing` starts one,
+    /// and it leaves `Processing` only when it ends.
+    #[allow(clippy::too_many_arguments)]
+    async fn answer(
         connection_id: ConnectionId,
         server_id: crate::state::ServerId,
-        data: Vec<u8>,
+        payload: Vec<u8>,
         llm_client: OllamaClient,
         app_state: Arc<AppState>,
         status_tx: mpsc::UnboundedSender<String>,
@@ -580,68 +686,7 @@ impl BitcoinServer {
         protocol: Arc<BitcoinProtocol>,
         magic: Magic,
     ) {
-        // Check connection state
-        let current_state = {
-            let conns = connections.lock().await;
-            if let Some(conn_data) = conns.get(&connection_id) {
-                conn_data.state.clone()
-            } else {
-                // Never silent. A miss here means the connection was torn down between the
-                // read and this lookup (peer reset, or close_this_connection on another
-                // task) - legitimate, but indistinguishable from a registration race, which
-                // is exactly what made the bitcoin accept-order bug so hard to find: the
-                // read loop logged "received N bytes" and then nothing at all.
-                debug!(
-                    "Bitcoin connection {} is no longer registered; dropping {} received bytes",
-                    connection_id,
-                    data.len()
-                );
-                return;
-            }
-        };
-
-        // If processing, queue the data
-        if current_state == ConnectionState::Processing {
-            connections
-                .lock()
-                .await
-                .entry(connection_id)
-                .and_modify(|conn| {
-                    conn.queued_data.extend_from_slice(&data);
-                });
-            debug!(
-                "Queued {} bytes for Bitcoin connection {}",
-                data.len(),
-                connection_id
-            );
-            let _ = status_tx.send(format!(
-                "⏸ Queued {} bytes for {}",
-                data.len(),
-                connection_id
-            ));
-            return;
-        }
-
-        // Merge any queued data with new data.
-        //
-        // The lock was released after the state check above, so the reader task's EOF branch
-        // or a close_this_connection may have removed this entry in between - `.unwrap()` here
-        // panicked the task whenever a peer disconnected while a datagram was in flight.
-        let Some(mut buffer) = ({
-            let mut conns = connections.lock().await;
-            conns.get_mut(&connection_id).map(|conn_data| {
-                conn_data.state = ConnectionState::Processing;
-                let mut merged = std::mem::take(&mut conn_data.queued_data);
-                merged.extend_from_slice(&data);
-                merged
-            })
-        }) else {
-            debug!(
-                "Bitcoin connection {} went away before its data could be processed",
-                connection_id
-            );
-            return;
-        };
+        let mut buffer = payload;
 
         loop {
             // Try to parse Bitcoin message
@@ -772,38 +817,33 @@ impl BitcoinServer {
                                 return;
                             }
 
-                            // Check for queued data
-                            let has_queued = {
-                                let conns = connections.lock().await;
-                                conns
-                                    .get(&connection_id)
-                                    .map(|c| !c.queued_data.is_empty())
-                                    .unwrap_or(false)
+                            // Fold anything that arrived during the LLM call onto the bytes
+                            // not consumed yet and go round again, or go Idle when there is
+                            // nothing at all — under one lock. Checked and set separately, a
+                            // read queued in between (the connection still `Processing`) was
+                            // stranded by the move to `Idle` until the peer sent something else.
+                            let more = {
+                                let mut conns = connections.lock().await;
+                                let Some(conn) = conns.get_mut(&connection_id) else {
+                                    return;
+                                };
+                                if buffer.is_empty() {
+                                    conn.reads.next_or_idle(true)
+                                } else {
+                                    Some(conn.reads.take_all())
+                                }
                             };
-
-                            if has_queued || !buffer.is_empty() {
+                            let Some(more) = more else {
+                                return;
+                            };
+                            if !more.is_empty() {
                                 Log::new(Some(&status_tx)).debug(format!(
-                                    "Processing queued data for Bitcoin connection {}",
+                                    "Processing {} queued bytes for Bitcoin connection {}",
+                                    more.len(),
                                     connection_id
                                 ));
-                                // Fold anything that arrived during the LLM call onto the
-                                // bytes we have not consumed yet, then go round again.
-                                {
-                                    let mut conns = connections.lock().await;
-                                    if let Some(conn) = conns.get_mut(&connection_id) {
-                                        let queued = std::mem::take(&mut conn.queued_data);
-                                        buffer.extend_from_slice(&queued);
-                                    }
-                                }
-                            } else {
-                                // Go to Idle state
-                                connections
-                                    .lock()
-                                    .await
-                                    .entry(connection_id)
-                                    .and_modify(|conn| conn.state = ConnectionState::Idle);
-                                return;
                             }
+                            buffer.extend_from_slice(&more);
                         }
                         Err(e) => {
                             // This used to reset the state to Idle and write nothing, leaving
@@ -835,19 +875,21 @@ impl BitcoinServer {
                         buffer.len(),
                         connection_id
                     ));
-                    connections
-                        .lock()
-                        .await
-                        .entry(connection_id)
-                        .and_modify(|conn| {
-                            conn.state = ConnectionState::Accumulating;
-                            let mut pending = buffer;
-                            // Anything that landed during the LLM call goes after it.
-                            let queued = std::mem::take(&mut conn.queued_data);
-                            pending.extend_from_slice(&queued);
-                            conn.queued_data = pending;
-                        });
-                    return;
+                    // Held at the head of the queue, ahead of anything that landed meanwhile;
+                    // if something did land, it may be the rest of the message, so the answer
+                    // goes round again with the joined bytes rather than wait for a read that
+                    // may never come.
+                    let held = {
+                        let mut conns = connections.lock().await;
+                        let Some(conn) = conns.get_mut(&connection_id) else {
+                            return;
+                        };
+                        conn.reads.hold_for_more(&buffer)
+                    };
+                    match held {
+                        Held::Resume(joined) => buffer = joined,
+                        Held::Waiting(_) => return,
+                    }
                 }
                 Err(e) => {
                     // Parse error
@@ -855,11 +897,9 @@ impl BitcoinServer {
                         "Failed to parse Bitcoin message on {}: {}",
                         connection_id, e
                     ));
-                    connections
-                        .lock()
-                        .await
-                        .entry(connection_id)
-                        .and_modify(|conn| conn.state = ConnectionState::Idle);
+                    if let Some(conn) = connections.lock().await.get_mut(&connection_id) {
+                        conn.reads.abandon();
+                    }
                     return;
                 }
             }

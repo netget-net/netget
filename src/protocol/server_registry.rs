@@ -342,6 +342,14 @@ impl ServerRegistry {
         self.register(Arc::new(crate::server::iscsi::actions::IscsiProtocol::new()));
         #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
+            crate::server::nvme_tcp::actions::NvmeTcpProtocol::new(),
+        ));
+        #[cfg(target_os = "linux")]
+        self.register(Arc::new(crate::server::fuse::actions::FuseProtocol::new()));
+        #[cfg(unix)]
+        self.register(Arc::new(crate::server::hdfs::actions::HdfsProtocol::new()));
+        #[cfg(not(target_arch = "wasm32"))]
+        self.register(Arc::new(
             crate::server::managesieve::actions::ManageSieveProtocol::new(),
         ));
         #[cfg(not(target_arch = "wasm32"))]
@@ -438,6 +446,8 @@ impl ServerRegistry {
         self.register(Arc::new(crate::server::bfd::actions::BfdProtocol::new()));
         #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(crate::server::vxlan::actions::VxlanProtocol::new()));
+        #[cfg(unix)]
+        self.register(Arc::new(crate::server::gre::actions::GreProtocol::new()));
         #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::openflow::actions::OpenFlowProtocol::new(),
@@ -483,6 +493,10 @@ impl ServerRegistry {
         #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
             crate::server::lorawan::actions::LorawanProtocol::new(),
+        ));
+        #[cfg(not(target_arch = "wasm32"))]
+        self.register(Arc::new(
+            crate::server::zigbee::actions::ZigbeeProtocol::new(),
         ));
         #[cfg(not(target_arch = "wasm32"))]
         self.register(Arc::new(
@@ -1693,6 +1707,9 @@ pub(crate) const ALL_KNOWN_PROTOCOLS: &[(&str, &str)] = &[
     ("MQTT-SN", "a native build (not the browser)"),
     ("NBD", "a native build (not the browser)"),
     ("iSCSI", "a native build (not the browser)"),
+    ("NVMe-TCP", "a native build (not the browser)"),
+    ("FUSE", "a Linux build (the kernel's FUSE driver through fusermount3; NetGet links no macFUSE or FUSE-T)"),
+    ("HDFS", "a Unix build (macOS or Linux)"),
     ("ManageSieve", "a native build (not the browser)"),
     ("Zenoh", "a native build (not the browser)"),
     ("LwM2M", "a native build (not the browser)"),
@@ -1726,6 +1743,7 @@ pub(crate) const ALL_KNOWN_PROTOCOLS: &[(&str, &str)] = &[
     ("D-Bus", "a native build (not the browser)"),
     ("BFD", "a native build (not the browser)"),
     ("VXLAN", "a native build (not the browser)"),
+    ("GRE", "a Unix build (macOS or Linux)"),
     ("OpenFlow", "a native build (not the browser)"),
     ("PROFINET", "a native build (not the browser)"),
     ("EtherCAT", "a native build (not the browser)"),
@@ -1741,6 +1759,7 @@ pub(crate) const ALL_KNOWN_PROTOCOLS: &[(&str, &str)] = &[
     ("REXEC", "a native build (not the browser)"),
     ("RLOGIN", "a native build (not the browser)"),
     ("LoRaWAN", "a native build (not the browser)"),
+    ("Zigbee", "a native build (not the browser)"),
     ("Guacamole", "a native build (not the browser)"),
     ("ActivityPub", "a native build (not the browser)"),
     ("Stratum", "a native build (not the browser)"),

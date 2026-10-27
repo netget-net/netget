@@ -47,18 +47,18 @@ struct ConnectionData {
     write_half: Arc<Mutex<tokio::io::WriteHalf<TcpStream>>>,
     /// Signalled by [`ModbusServer::close`] so the connection's reader stops too.
     ///
-    /// `close` runs on a `handle_data` task, not on the reader, and shutting the write half
-    /// only half-closes the socket. Without this signal the reader goes on reading from a peer
-    /// the server has already dropped — holding the read half, and with it the connection-cap
-    /// permit, until the peer hangs up or stays quiet for the whole idle bound. A peer could
-    /// then occupy a slot by sending one malformed header and keeping its end open.
+    /// `close` mostly runs on the answering task (`answer`), not on the reader, and shutting the
+    /// write half only half-closes the socket. Without this signal the reader goes on reading
+    /// from a peer the server has already dropped — holding the read half, and with it the
+    /// connection-cap permit, until the peer hangs up or stays quiet for the whole idle bound. A
+    /// peer could then occupy a slot by sending one malformed header and keeping its end open.
     closed: Arc<tokio::sync::Notify>,
 }
 
 /// How much one connection may accumulate before we give up on it: eight ADUs' worth.
 ///
 /// The buffer is both the framing accumulator and the queue for bytes that arrive while a
-/// request is with the model. It is enforced on *append*, in `handle_data`, which is the only
+/// request is with the model. It is enforced on *append*, in `admit_read`, which is the only
 /// code that grows the buffer — the framing loop only drains it. The placement is the point:
 /// while a request is with the model the framing loop does not run at all, so a bound checked
 /// there would leave the queue unbounded for the whole LLM call, which at the shipped
@@ -84,12 +84,12 @@ pub const FIRST_BYTE_READ_TIMEOUT: std::time::Duration = std::time::Duration::fr
 /// is, is polling. A SCADA master polls on a sub-second to few-second cycle, so any real client
 /// speaks orders of magnitude more often than this.
 ///
-/// The number is set by *this* server rather than by Modbus: `handle_data` runs on its own task,
-/// so the reader keeps reading while a request is being answered, and a peer waiting for its own
-/// reply is silent on this socket for the whole of that work — including a `manual` rule parked
-/// for a human, 300 seconds by default. Ten minutes leaves that a factor of two. Real Modbus/TCP
-/// gateways commonly reap an idle connection at 60 seconds; being ten times more patient is the
-/// deliberate price of letting a human answer.
+/// The number is set by *this* server rather than by Modbus: a request is answered on its own
+/// task, so the reader keeps reading while a request is being answered, and a peer waiting for
+/// its own reply is silent on this socket for the whole of that work — including a `manual`
+/// rule parked for a human, 300 seconds by default. Ten minutes leaves that a factor of two.
+/// Real Modbus/TCP gateways commonly reap an idle connection at 60 seconds; being ten times more
+/// patient is the deliberate price of letting a human answer.
 ///
 /// This is the default; the `idle_timeout_secs` startup parameter overrides it. An operator
 /// exposing the port to strangers with no human in the loop wants it near the gateway figure.
@@ -402,6 +402,27 @@ impl ModbusServer {
                                                 )
                                                 .await;
 
+                                            // Into the accumulator here, in the order the reads
+                                            // arrived. Appending in a task spawned per read let
+                                            // a later read's bytes land ahead of an earlier
+                                            // one's — the back of an ADU in front of its MBAP
+                                            // header — because nothing orders spawned tasks.
+                                            if !Self::admit_read(
+                                                connection_id,
+                                                server_id,
+                                                &data,
+                                                &state_clone,
+                                                &conns_clone,
+                                                &status_clone,
+                                            )
+                                            .await
+                                            {
+                                                continue;
+                                            }
+
+                                            // The answer runs in its own task so the loop can
+                                            // go back to reading: what arrives meanwhile is
+                                            // appended by `admit_read` and framed by that task.
                                             let llm = llm_clone.clone();
                                             let st = state_clone.clone();
                                             let stx = status_clone.clone();
@@ -411,10 +432,9 @@ impl ModbusServer {
                                             let task_owner = state_clone.clone();
                                             task_owner
                                                 .spawn_server_task(server_id, async move {
-                                                    Self::handle_data(
+                                                    Self::answer(
                                                         connection_id,
                                                         server_id,
-                                                        data,
                                                         unit_id_filter,
                                                         llm,
                                                         st,
@@ -463,12 +483,70 @@ impl ModbusServer {
         Ok(local_addr)
     }
 
-    /// Drive the per-connection state machine over newly arrived bytes.
-    #[allow(clippy::too_many_arguments)]
-    async fn handle_data(
+    /// Append one read to the connection's accumulator, in the order the reader got it, and
+    /// say whether it starts an answer.
+    ///
+    /// Called by the reader itself, never from a spawned task: appending in a task per read let
+    /// a later read's task run first, so its bytes landed ahead of the earlier read's — the
+    /// back of an ADU in front of its MBAP header, which is a framing error and a closed
+    /// connection. `true` moves the connection to `Processing`, and the caller must run exactly
+    /// one [`Self::answer`]; `false` means an answer is already running and will frame these
+    /// bytes when it loops (or the connection has gone, or was closed for buffering too much).
+    async fn admit_read(
         connection_id: ConnectionId,
         server_id: crate::state::ServerId,
-        data: Vec<u8>,
+        data: &[u8],
+        app_state: &Arc<AppState>,
+        connections: &Arc<Mutex<HashMap<ConnectionId, ConnectionData>>>,
+        status_tx: &mpsc::UnboundedSender<String>,
+    ) -> bool {
+        let mut conns = connections.lock().await;
+        let Some(conn) = conns.get_mut(&connection_id) else {
+            return false; // Closed: the bytes have nowhere to go.
+        };
+        conn.buffer.extend_from_slice(data);
+
+        // Enforced here, on append, rather than in the framing loop: while a request is with
+        // the model this is the *only* code touching the buffer, so a loop-only check would let
+        // a flooding peer grow the queue without bound for the whole duration of the call.
+        if conn.buffer.len() > MAX_BUFFERED {
+            error!(
+                "Modbus {} queued {} bytes, past the {} one connection may buffer; closing \
+                 decision={}",
+                connection_id,
+                conn.buffer.len(),
+                MAX_BUFFERED,
+                Decision::FailClosedBufferOverflow.as_str()
+            );
+            conn.buffer.clear();
+            drop(conns);
+            Self::close(connection_id, server_id, app_state, connections, status_tx).await;
+            return false;
+        }
+
+        if conn.state == ConnectionState::Processing {
+            drop(conns);
+            Log::new(Some(status_tx)).debug(format!(
+                "Queued {} bytes for Modbus {connection_id}",
+                data.len()
+            ));
+            return false;
+        }
+        conn.state = ConnectionState::Processing;
+        true
+    }
+
+    /// Frame and answer every complete ADU in the accumulator of a connection
+    /// [`Self::admit_read`] has moved to `Processing`, including bytes appended while it runs,
+    /// then park it `Accumulating` (a partial ADU) or `Idle` under the lock that found nothing
+    /// more to frame.
+    ///
+    /// One of these runs per connection at a time: only the move into `Processing` starts one,
+    /// and it leaves `Processing` only when it ends.
+    #[allow(clippy::too_many_arguments)]
+    async fn answer(
+        connection_id: ConnectionId,
+        server_id: crate::state::ServerId,
         unit_id_filter: Option<u8>,
         llm_client: OllamaClient,
         app_state: Arc<AppState>,
@@ -477,51 +555,6 @@ impl ModbusServer {
         protocol: Arc<ModbusProtocol>,
     ) {
         let log = Log::new(Some(&status_tx));
-
-        // Append, and bail out early if a request is already in flight: the in-flight
-        // invocation will pick these bytes up when it loops.
-        {
-            let mut conns = connections.lock().await;
-            let Some(conn) = conns.get_mut(&connection_id) else {
-                return; // Connection closed while we waited for the lock
-            };
-            conn.buffer.extend_from_slice(&data);
-
-            // Enforced here as well as in the framing loop below: while a request is with
-            // the model this function is the *only* code touching the buffer, and it
-            // returns early, so a loop-only check would let a flooding peer grow the queue
-            // without bound for the whole duration of the call.
-            if conn.buffer.len() > MAX_BUFFERED {
-                error!(
-                    "Modbus {} queued {} bytes, past the {} one connection may buffer; closing \
-                     decision={}",
-                    connection_id,
-                    conn.buffer.len(),
-                    MAX_BUFFERED,
-                    Decision::FailClosedBufferOverflow.as_str()
-                );
-                conn.buffer.clear();
-                drop(conns);
-                Self::close(
-                    connection_id,
-                    server_id,
-                    &app_state,
-                    &connections,
-                    &status_tx,
-                )
-                .await;
-                return;
-            }
-
-            if conn.state == ConnectionState::Processing {
-                log.debug(format!(
-                    "Queued {} bytes for Modbus {connection_id}",
-                    data.len()
-                ));
-                return;
-            }
-            conn.state = ConnectionState::Processing;
-        }
 
         loop {
             // Pull one complete ADU out of the accumulator.

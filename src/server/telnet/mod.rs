@@ -41,6 +41,10 @@ fn preview(text: &str, max: usize) -> String {
 /// loop, and telnet is the protocol an operator is most likely to point at a real device.
 pub const MAX_LINE_BYTES: usize = 8192;
 
+/// The most one socket read takes. A peer that sent more than this has the rest still in the
+/// kernel's receive buffer, which is where batching has to look for it.
+pub const READ_CHUNK_BYTES: usize = 4096;
+
 /// How long to wait for the first line from a peer that has only connected.
 ///
 /// **This was 120 seconds, and the argument for it was right about the peer and wrong about
@@ -205,7 +209,7 @@ impl<R: tokio::io::AsyncRead + Unpin> TelnetLineReader<R> {
         Self {
             reader,
             pending: Vec::new(),
-            chunk: vec![0u8; 4096],
+            chunk: vec![0u8; READ_CHUNK_BYTES],
             state: IacState::Data,
         }
     }

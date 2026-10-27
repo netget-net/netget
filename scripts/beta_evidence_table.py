@@ -162,6 +162,15 @@ PYTHON_THIRD_PARTY_PROTOCOL_SERVERS = (
     "os_ken",
 )
 
+# The `node` exception, mirroring the Python one: `node` is a runtime, but `node` running a
+# script that drives a third-party protocol library is that library acting as the peer. The
+# test file names the package where it locates it (the zigbee co-processor's
+# `node_modules/zigbee-herdsman`), so the name in the same file as `Command::new("node")` is
+# what counts. zigbee-herdsman's `ember` adapter is Zigbee2MQTT's EZSP host.
+NODE_THIRD_PARTY_PROTOCOL_CLIENTS = (
+    "zigbee-herdsman",
+)
+
 SKIP_MESSAGE = re.compile(
     r"""(?ix)
     (?:e?println!|warn!|info!|eprint!)\s*\(\s*
@@ -430,6 +439,10 @@ def scan_tests(directory: Path, known: set[str]) -> dict:
             for library in PYTHON_THIRD_PARTY_PROTOCOL_CLIENTS:
                 if re.search(r"^\s*(?:import|from)\s+" + re.escape(library) + r"\b", code, re.M):
                     file_binaries.add(f"python3 {library}")
+        if re.search(r'Command::new\(\s*"node"', code):
+            for library in NODE_THIRD_PARTY_PROTOCOL_CLIENTS:
+                if f"node_modules/{library}" in code:
+                    file_binaries.add(f"node {library}")
         binaries |= file_binaries
 
         file_tests = len(re.findall(r"#\[(?:tokio::)?test", code))

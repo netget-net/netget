@@ -46,6 +46,8 @@ pub const REAL_POLICY: &str = r#"import json,sys
 i=json.load(sys.stdin); t=i['event_type_id']; e=i['event']
 if t=='iscsi_discovery':
   a=[{'type':'iscsi_send_targets','targets':[{'name':'iqn.2026-10.net.netget:disk0'},{'name':'iqn.2026-10.net.netget:testcu'}]}]
+elif t=='iscsi_task_management':
+  a=[{'type':'iscsi_allow_reset'}]
 elif e['target_name']=='iqn.2026-10.net.netget:disk0':
   a=[{'type':'iscsi_accept_login','luns':[
     {'lun':0,'size':1048576,'writable':True,'product':'BOOT-DISK','serial':'SER0001',
@@ -248,7 +250,24 @@ pub const TEST_CU_SUBSET: &[&str] = &[
 
 /// Run one iscsi-test-cu selection; (passed, failed, the output).
 async fn test_cu(bin: &PathBuf, url: &str, test: &str) -> (u32, u32, String) {
-    let out = run(bin, &["-d", "-n", "-t", test, url]).await;
+    test_cu_paths(bin, &[url], test).await
+}
+
+/// iscsi-test-cu over one or more paths (a second URL is a second I_T nexus, logged in as the
+/// second initiator name, for the MultipathIO suite).
+async fn test_cu_paths(bin: &PathBuf, urls: &[&str], test: &str) -> (u32, u32, String) {
+    let mut args = vec![
+        "-d",
+        "-n",
+        "-i",
+        "iqn.2026-10.org.example:testcu-path0",
+        "-I",
+        "iqn.2026-10.org.example:testcu-path1",
+        "-t",
+        test,
+    ];
+    args.extend(urls);
+    let out = run(bin, &args).await;
     let o = format!("{}{}", text(&out.stdout), text(&out.stderr));
     // CUnit's run summary: "tests  <total> <ran> <passed> <failed> <inactive>".
     let row = o
@@ -280,6 +299,73 @@ async fn iscsi_test_cu_passes_the_implemented_subset() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
     assert!(total > 50, "the subset ran {total} tests");
+}
+
+/// The iscsi-test-cu tests that drive task management, each with how many paths (I_T nexuses)
+/// it needs. `SCSI.MultipathIO.Reset` resets the LUN on each path in turn and requires a unit
+/// attention on every path afterwards, which is the per-nexus unit attention of SAM-5 §6.3.3.
+pub const TEST_CU_TMF: &[(&str, usize)] = &[
+    ("iSCSI.iSCSITMF.AbortTaskSimpleAsync", 1),
+    ("iSCSI.iSCSITMF.LUNResetSimpleAsync", 1),
+    ("iSCSI.iSCSITMF.LogoutDuringIOAsync", 1),
+    ("SCSI.MultipathIO.Reset", 2),
+];
+
+/// The one assertion of the two async TMF tests that is about libiscsi rather than the target:
+/// `iscsi_out_queue_length(…) == 1` right after queuing the WRITE, before anything is serviced.
+/// libiscsi 1.20.3 has already sent it by then — Homebrew's bottle and the Linux source build
+/// alike ("dispatching out queue… dispatched" with no service call between) — so the queue is
+/// empty; every assertion about what the target answered passes. A failure is accepted only
+/// when it is that assertion and nothing else.
+fn only_libiscsi_queue_assert(out: &str) -> bool {
+    let failures: Vec<&str> = out
+        .lines()
+        .map(str::trim)
+        .filter(|l| {
+            l.split_once(". ")
+                .is_some_and(|(n, rest)| n.parse::<u32>().is_ok() && rest.contains(".c:"))
+        })
+        .collect();
+    !failures.is_empty()
+        && failures
+            .iter()
+            .all(|l| l.contains("CU_ASSERT_EQUAL(iscsi_out_queue_length(sd->iscsi_ctx),1)"))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn iscsi_test_cu_task_management_and_unit_attentions() {
+    let bin = require_tool("iscsi-test-cu", LIBISCSI);
+    let srv = start(policy(REAL_POLICY), None).await;
+    let url = format!("iscsi://127.0.0.1:{}/{TESTCU}/0", srv.port);
+    let mut failures = Vec::new();
+    for (test, paths) in TEST_CU_TMF {
+        let urls: Vec<&str> = std::iter::repeat_n(url.as_str(), *paths).collect();
+        let (passed, failed, out) = test_cu_paths(&bin, &urls, test).await;
+        let host_side = failed == 1 && passed == 0 && only_libiscsi_queue_assert(&out);
+        println!(
+            "iscsi-test-cu {test} over {paths} path(s): {passed} passed, {failed} failed{}",
+            if host_side {
+                " (only libiscsi's own out-queue assertion; every assertion about the target passed)"
+            } else {
+                ""
+            }
+        );
+        if !host_side && (failed > 0 || passed == 0) {
+            failures.push(format!("{test}: {passed} passed, {failed} failed\n{out}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+    // Every reset was the model's to allow, and named its LUN.
+    let asked = events(&srv.state, srv.id, "iscsi_task_management").await;
+    let resets = asked
+        .iter()
+        .filter(|e| e["function"] == "logical_unit_reset" && e["lun"] == 0)
+        .count();
+    // LUNResetSimpleAsync resets once, MultipathIO.Reset once per path.
+    assert!(
+        resets >= 3,
+        "the model decided {resets} LUN resets: {asked:?}"
+    );
 }
 
 #[cfg(target_os = "linux")]
@@ -321,6 +407,17 @@ mod open_iscsi {
     }
 
     /// Read `len` bytes from the start of the block device, once it opens and reads.
+    /// The port the target listens on for the kernel: any free one, unless
+    /// `NETGET_ISCSI_KERNEL_PORT` names one. Where iscsid is confined by SELinux (Fedora,
+    /// including podman's machine) it may only connect to iSCSI's own ports, so it times out
+    /// against an ephemeral one; set 3260 there and run these tests one at a time.
+    fn kernel_port() -> u16 {
+        std::env::var("NETGET_ISCSI_KERNEL_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(0)
+    }
+
     fn read_start(path: &std::path::Path, len: usize) -> std::io::Result<Vec<u8>> {
         use std::io::Read;
         let mut f = std::fs::File::open(path)?;
@@ -329,28 +426,22 @@ mod open_iscsi {
         Ok(buf)
     }
 
-    // Multi-thread, and the read below off the runtime: the target answering the kernel's READ
-    // runs on this runtime, so a blocking read of its disk on the only worker never returns.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn the_linux_kernel_initiator_reads_the_described_disk() {
-        require_root();
-        let iscsiadm = require_tool(
-            "iscsiadm",
-            "apt-get install open-iscsi (and modprobe iscsi_tcp)",
-        );
-        let srv = start_on("127.0.0.1", 0, policy(REAL_POLICY), None).await;
-        let portal = format!("127.0.0.1:{}", srv.port);
+    /// Discover the target at `portal` and log the kernel in to disk0: the by-path link of
+    /// its LUN 0. The kernel names the disk; udev links it by portal, target and LUN. Never
+    /// guess the sdX name: the runner has disks of its own, and LUN 1 is a disk of this
+    /// session too.
+    async fn kernel_login(iscsiadm: &PathBuf, portal: &str) -> PathBuf {
         let out = run(
-            &iscsiadm,
-            &["-m", "discovery", "-t", "sendtargets", "-p", &portal],
+            iscsiadm,
+            &["-m", "discovery", "-t", "sendtargets", "-p", portal],
         )
         .await;
         let o = text(&out.stdout);
         assert!(out.status.success(), "{o}\n{}", text(&out.stderr));
         assert!(o.contains(DISK0), "{o}");
         let out = run(
-            &iscsiadm,
-            &["-m", "node", "-T", DISK0, "-p", &portal, "--login"],
+            iscsiadm,
+            &["-m", "node", "-T", DISK0, "-p", portal, "--login"],
         )
         .await;
         assert!(
@@ -359,55 +450,158 @@ mod open_iscsi {
             text(&out.stdout),
             text(&out.stderr)
         );
-        // The kernel names the disk; udev links it by portal, target and LUN. Never guess the
-        // sdX name: the runner has disks of its own, and LUN 1 is a disk of this session too.
-        let link = PathBuf::from(format!("/dev/disk/by-path/ip-{portal}-iscsi-{DISK0}-lun-0"));
         if let Some(udevadm) = ["/usr/bin/udevadm", "/bin/udevadm", "/sbin/udevadm"]
             .iter()
             .find(|p| std::path::Path::new(p).exists())
         {
             let _ = run(&PathBuf::from(udevadm), &["settle", "--timeout=30"]).await;
         }
-        // The node can exist before the kernel has finished probing the disk (opening it then
-        // fails with ENXIO), so wait for a read to succeed, not for the name to appear.
+        PathBuf::from(format!("/dev/disk/by-path/ip-{portal}-iscsi-{DISK0}-lun-0"))
+    }
+
+    async fn kernel_logout(iscsiadm: &PathBuf, portal: &str) {
+        let _ = run(
+            iscsiadm,
+            &["-m", "node", "-T", DISK0, "-p", portal, "--logout"],
+        )
+        .await;
+        let _ = run(
+            iscsiadm,
+            &["-m", "node", "-T", DISK0, "-p", portal, "-o", "delete"],
+        )
+        .await;
+        // Discovery recorded every target it saw (testcu too): delete the record and the
+        // nodes it made, so no stale node outlives the test's portal.
+        let _ = run(
+            iscsiadm,
+            &[
+                "-m",
+                "discoverydb",
+                "-t",
+                "sendtargets",
+                "-p",
+                portal,
+                "-o",
+                "delete",
+            ],
+        )
+        .await;
+    }
+
+    /// The first 8 KiB of the kernel's disk. The node can exist before the kernel has finished
+    /// probing the disk (opening it then fails with ENXIO), so this waits for a read to
+    /// succeed, not for the name to appear: bounded, and off the runtime (the target answering
+    /// the kernel's READ runs on it).
+    async fn read_disk(link: &std::path::Path) -> Result<Vec<u8>, String> {
         let mut last = String::new();
-        let mut data = None;
         for _ in 0..150 {
-            let path = link.clone();
+            let path = link.to_path_buf();
             let read = tokio::task::spawn_blocking(move || read_start(&path, 8192));
             match tokio::time::timeout(std::time::Duration::from_secs(60), read).await {
-                Ok(Ok(Ok(d))) => {
-                    data = Some(d);
-                    break;
-                }
+                Ok(Ok(Ok(d))) => return Ok(d),
                 Ok(Ok(Err(e))) => last = format!("{}: {e}", link.display()),
                 Ok(Err(e)) => last = format!("{}: the read task failed: {e}", link.display()),
-                Err(_) => {
-                    last = format!("{}: a read took over 60 s", link.display());
-                    break;
-                }
+                Err(_) => return Err(format!("{}: a read took over 60 s", link.display())),
             }
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         }
-        let report = if data.is_none() {
+        Err(last)
+    }
+
+    fn assert_described(d: &[u8]) {
+        assert_eq!(&d[..17], b"hello from netget");
+        assert!(d[4096..4608].iter().all(|b| *b == 0xAB));
+        assert!(d[4608..8192].iter().all(|b| *b == 0));
+    }
+
+    // Multi-thread, and the read off the runtime: the target answering the kernel's READ runs
+    // on this runtime, so a blocking read of its disk on the only worker never returns.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_linux_kernel_initiator_reads_the_described_disk() {
+        require_root();
+        let iscsiadm = require_tool(
+            "iscsiadm",
+            "apt-get install open-iscsi (and modprobe iscsi_tcp)",
+        );
+        let srv = start_on("127.0.0.1", kernel_port(), policy(REAL_POLICY), None).await;
+        let portal = format!("127.0.0.1:{}", srv.port);
+        let link = kernel_login(&iscsiadm, &portal).await;
+        let data = read_disk(&link).await;
+        let report = match &data {
+            Err(_) => diagnostics(&iscsiadm).await,
+            Ok(_) => String::new(),
+        };
+        kernel_logout(&iscsiadm, &portal).await;
+        let d = data
+            .unwrap_or_else(|e| panic!("the kernel's disk for LUN 0 never read: {e}\n{report}"));
+        assert_described(&d);
+    }
+
+    /// sg_reset (sg3-utils) on the kernel's disk: `-d` makes the kernel's SCSI error handler
+    /// send LOGICAL UNIT RESET (iscsi_eh_device_reset), `-t` TARGET WARM RESET
+    /// (iscsi_eh_recover_target). `-N` keeps the ioctl from escalating to the next reset if one
+    /// fails. Each reaches the target's model, and the disk still reads afterwards: the kernel
+    /// retries through the unit attention each reset leaves.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_linux_kernel_initiator_resets_the_lun_and_the_target_through_sg_reset() {
+        require_root();
+        let iscsiadm = require_tool(
+            "iscsiadm",
+            "apt-get install open-iscsi (and modprobe iscsi_tcp)",
+        );
+        let sg_reset = require_tool("sg_reset", "apt-get install sg3-utils");
+        let srv = start_on("127.0.0.1", kernel_port(), policy(REAL_POLICY), None).await;
+        let portal = format!("127.0.0.1:{}", srv.port);
+        let link = kernel_login(&iscsiadm, &portal).await;
+        let mut failure = None;
+        match read_disk(&link).await {
+            Err(e) => failure = Some(format!("the disk never read: {e}")),
+            Ok(d) => assert_described(&d),
+        }
+        let mut sent = Vec::new();
+        if failure.is_none() {
+            for (flag, function) in [("-d", "logical_unit_reset"), ("-t", "target_warm_reset")] {
+                let dev = link.to_string_lossy().into_owned();
+                let out = run(&sg_reset, &["-N", flag, &dev]).await;
+                let asked = events(&srv.state, srv.id, "iscsi_task_management").await;
+                sent = asked
+                    .iter()
+                    .filter_map(|e| e["function"].as_str().map(str::to_string))
+                    .collect();
+                println!(
+                    "sg_reset {flag}: exit {:?}; functions the target was asked about: {sent:?}",
+                    out.status.code()
+                );
+                if !out.status.success() || !sent.iter().any(|f| f == function) {
+                    failure = Some(format!(
+                        "sg_reset {flag} did not reach the target as {function}: {}{}",
+                        text(&out.stdout),
+                        text(&out.stderr)
+                    ));
+                    break;
+                }
+                match read_disk(&link).await {
+                    Ok(d) => assert_described(&d),
+                    Err(e) => {
+                        failure = Some(format!("the disk stopped reading after {flag}: {e}"));
+                        break;
+                    }
+                }
+            }
+        }
+        let report = if failure.is_some() {
             diagnostics(&iscsiadm).await
         } else {
             String::new()
         };
-        let _ = run(
-            &iscsiadm,
-            &["-m", "node", "-T", DISK0, "-p", &portal, "--logout"],
-        )
-        .await;
-        let _ = run(
-            &iscsiadm,
-            &["-m", "node", "-T", DISK0, "-p", &portal, "-o", "delete"],
-        )
-        .await;
-        let d = data
-            .unwrap_or_else(|| panic!("the kernel's disk for LUN 0 never read: {last}\n{report}"));
-        assert_eq!(&d[..17], b"hello from netget");
-        assert!(d[4096..4608].iter().all(|b| *b == 0xAB));
-        assert!(d[4608..8192].iter().all(|b| *b == 0));
+        kernel_logout(&iscsiadm, &portal).await;
+        if let Some(f) = failure {
+            panic!("{f}\n{report}");
+        }
+        assert_eq!(
+            sent,
+            ["logical_unit_reset", "target_warm_reset"],
+            "one model decision per reset, nothing escalated"
+        );
     }
 }

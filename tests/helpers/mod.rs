@@ -1,5 +1,6 @@
 // Shared E2E test helpers for NetGet
 
+pub mod arrival;
 pub mod child_guard;
 pub mod client;
 pub mod common;
@@ -130,3 +131,6 @@ pub mod p2p;
 pub mod radsec_pki;
 
 pub mod kubo;
+
+pub mod helia;
+pub mod ipfs_fixtures;

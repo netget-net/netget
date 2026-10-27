@@ -51,7 +51,9 @@ fuzz_target!(|data: &[u8]| {
         if let Some(hickory_proto::rr::RData::SOA(soa)) = r.data() {
             let _ = soa.serial();
         }
-        let _ = r.data().map(|d| d.to_string());
+        // Through NetGet's helper, as the DoH and DoQ clients do: hickory's own Display
+        // returns Err for some crafted record data, which `to_string()` turns into a panic.
+        let _ = r.data().and_then(netget::utils::display::try_display);
     }
 
     // A message that decodes must re-encode; `to_vec` is what the servers call on the reply

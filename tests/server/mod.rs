@@ -310,8 +310,13 @@ pub mod bmp;
 
 pub mod mqtt_sn;
 
+#[cfg(unix)]
+pub mod fuse;
+#[cfg(unix)]
+pub mod hdfs;
 pub mod iscsi;
 pub mod nbd;
+pub mod nvme_tcp;
 
 pub mod managesieve;
 
@@ -330,6 +335,8 @@ pub mod consul;
 pub mod dbus;
 pub mod epp;
 pub mod ethercat;
+#[cfg(unix)]
+pub mod gre;
 pub mod guacamole;
 pub mod inetd;
 pub mod jmap;
@@ -366,6 +373,7 @@ pub mod vxlan;
 pub mod webtransport;
 pub mod wsdiscovery;
 pub mod zeromq;
+pub mod zigbee;
 pub mod zipkin;
 
 pub mod diameter;

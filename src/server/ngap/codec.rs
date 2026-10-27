@@ -8,8 +8,9 @@
 //! `(id, criticality, open type)` fields. [`decode_pdu`] walks that outer structure for every
 //! procedure, so any NGAP message can be framed, named and have its IE ids reported. The IE
 //! *values* are decoded only for the procedures listed in [`procedure_name`]'s implemented set:
-//! NG Setup, Initial UE Message, Downlink/Uplink NAS Transport, Error Indication, NG Reset and UE
-//! Context Release. An IE NetGet does not decode stays as its raw octets and is surfaced by id —
+//! NG Setup, Initial UE Message, Downlink/Uplink NAS Transport, Error Indication, NG Reset, UE
+//! Context Release, Initial Context Setup, PDU Session Resource Setup / Release / Modify and
+//! Paging. An IE NetGet does not decode stays as its raw octets and is surfaced by id —
 //! the open-type framing is exactly what lets a receiver do that honestly.
 //!
 //! Every value is checked against its ASN.1 constraint on the way in *and* on the way out, so an
@@ -49,6 +50,8 @@ pub const PROC_ERROR_INDICATION: u8 = 9;
 pub const PROC_INITIAL_UE_MESSAGE: u8 = 15;
 pub const PROC_NG_RESET: u8 = 20;
 pub const PROC_NG_SETUP: u8 = 21;
+pub const PROC_PAGING: u8 = 24;
+pub const PROC_PDU_SESSION_RESOURCE_MODIFY: u8 = 26;
 pub const PROC_RAN_CONFIGURATION_UPDATE: u8 = 35;
 pub const PROC_UE_CONTEXT_RELEASE: u8 = 41;
 pub const PROC_UPLINK_NAS_TRANSPORT: u8 = 46;
@@ -95,8 +98,9 @@ pub fn procedure_name(code: u8) -> Option<&'static str> {
         24 => "Paging",
         25 => "PathSwitchRequest",
         26 => "PDUSessionResourceModify",
-        29 => "PDUSessionResourceRelease",
-        30 => "PDUSessionResourceSetup",
+        28 => "PDUSessionResourceRelease",
+        29 => "PDUSessionResourceSetup",
+        30 => "PDUSessionResourceNotify",
         35 => "RANConfigurationUpdate",
         40 => "UEContextModification",
         41 => "UEContextRelease",
@@ -132,6 +136,35 @@ pub fn ie_name(id: u16) -> Option<&'static str> {
         IE_UE_CONTEXT_REQUEST => "UEContextRequest",
         IE_UE_NGAP_IDS => "UE-NGAP-IDs",
         IE_USER_LOCATION_INFORMATION => "UserLocationInformation",
+        IE_ALLOWED_NSSAI => "AllowedNSSAI",
+        IE_GUAMI => "GUAMI",
+        IE_MASKED_IMEISV => "MaskedIMEISV",
+        IE_PDU_SESSION_RESOURCE_FAILED_TO_SETUP_LIST_CXT_RES => {
+            "PDUSessionResourceFailedToSetupListCxtRes"
+        }
+        IE_PDU_SESSION_RESOURCE_FAILED_TO_SETUP_LIST_SU_RES => {
+            "PDUSessionResourceFailedToSetupListSURes"
+        }
+        IE_PDU_SESSION_RESOURCE_SETUP_LIST_CXT_REQ => "PDUSessionResourceSetupListCxtReq",
+        IE_PDU_SESSION_RESOURCE_SETUP_LIST_CXT_RES => "PDUSessionResourceSetupListCxtRes",
+        IE_PDU_SESSION_RESOURCE_SETUP_LIST_SU_REQ => "PDUSessionResourceSetupListSUReq",
+        IE_PDU_SESSION_RESOURCE_SETUP_LIST_SU_RES => "PDUSessionResourceSetupListSURes",
+        IE_SECURITY_KEY => "SecurityKey",
+        IE_UE_AGGREGATE_MAXIMUM_BIT_RATE => "UEAggregateMaximumBitRate",
+        IE_UE_SECURITY_CAPABILITIES => "UESecurityCapabilities",
+        IE_PDU_SESSION_RESOURCE_LIST_CXT_REL_REQ => "PDUSessionResourceListCxtRelReq",
+        IE_PDU_SESSION_RESOURCE_TO_RELEASE_LIST_REL_CMD => "PDUSessionResourceToReleaseListRelCmd",
+        IE_PDU_SESSION_RESOURCE_RELEASED_LIST_REL_RES => "PDUSessionResourceReleasedListRelRes",
+        IE_PDU_SESSION_RESOURCE_MODIFY_LIST_MOD_REQ => "PDUSessionResourceModifyListModReq",
+        IE_PDU_SESSION_RESOURCE_MODIFY_LIST_MOD_RES => "PDUSessionResourceModifyListModRes",
+        IE_PDU_SESSION_RESOURCE_FAILED_TO_MODIFY_LIST_MOD_RES => {
+            "PDUSessionResourceFailedToModifyListModRes"
+        }
+        IE_QOS_FLOW_ADD_OR_MODIFY_REQUEST_LIST => "QosFlowAddOrModifyRequestList",
+        IE_PDU_SESSION_AGGREGATE_MAXIMUM_BIT_RATE => "PDUSessionAggregateMaximumBitRate",
+        IE_UE_PAGING_IDENTITY => "UEPagingIdentity",
+        IE_TAI_LIST_FOR_PAGING => "TAIListForPaging",
+        IE_PAGING_DRX => "PagingDRX",
         _ => return None,
     })
 }
@@ -900,6 +933,21 @@ impl Plmn {
         Ok(Plmn { mcc, mnc })
     }
 
+    /// Refuse a PLMN whose digits [`Plmn::octets`] cannot encode — the fields are public, so a
+    /// caller may build one that never went through [`Plmn::from_json`].
+    fn check(&self) -> EncodeResult<()> {
+        if self.mcc.len() != 3 || !self.mcc.bytes().all(|c| c.is_ascii_digit()) {
+            return enc_err(format!("mcc {:?} must be three decimal digits", self.mcc));
+        }
+        if !(2..=3).contains(&self.mnc.len()) || !self.mnc.bytes().all(|c| c.is_ascii_digit()) {
+            return enc_err(format!(
+                "mnc {:?} must be two or three decimal digits",
+                self.mnc
+            ));
+        }
+        Ok(())
+    }
+
     fn decode(r: &mut Reader) -> CodecResult<Plmn> {
         let b = r.fixed_octets(3, "PLMNIdentity")?;
         Plmn::decode_octets(&b)
@@ -1539,17 +1587,39 @@ pub fn user_location_nr_ie(v: &Value, crit: Criticality) -> EncodeResult<Ie> {
     })
 }
 
+/// `FiveG-S-TMSI ::= SEQUENCE { aMFSetID BIT STRING (SIZE(10)), aMFPointer BIT STRING (SIZE(6)),
+/// fiveG-TMSI OCTET STRING (SIZE(4)), iE-Extensions OPTIONAL, ... }` as
+/// `(amf_set_id, amf_pointer, tmsi)`.
+fn read_five_g_s_tmsi(r: &mut Reader, budget: &mut Budget) -> CodecResult<(u16, u8, u32)> {
+    let ext = r.extension_bit("FiveG-S-TMSI")?;
+    let has_ext = r.bit("FiveG-S-TMSI")?;
+    let set = r.fixed_bits(10, "AMFSetID")? as u16;
+    let pointer = r.fixed_bits(6, "AMFPointer")? as u8;
+    let t = r.fixed_octets(4, "FiveG-TMSI")?;
+    opt_extension_container(r, has_ext, budget)?;
+    finish_sequence(r, ext)?;
+    Ok((set, pointer, u32::from_be_bytes([t[0], t[1], t[2], t[3]])))
+}
+
+fn write_five_g_s_tmsi(w: &mut Writer, set: u16, pointer: u8, tmsi: u32) -> EncodeResult<()> {
+    if set > 0x3FF {
+        return enc_err(format!("amf_set_id {set} does not fit in 10 bits"));
+    }
+    if pointer > 0x3F {
+        return enc_err(format!("amf_pointer {pointer} does not fit in 6 bits"));
+    }
+    w.bit(false);
+    w.bit(false);
+    w.fixed_bits(set as u64, 10);
+    w.fixed_bits(pointer as u64, 6);
+    w.fixed_octets(&tmsi.to_be_bytes());
+    Ok(())
+}
+
 fn decode_five_g_s_tmsi(ie: &Ie, budget: &mut Budget) -> CodecResult<Value> {
     decode_ie(ie, |r| {
-        let ext = r.extension_bit("FiveG-S-TMSI")?;
-        let has_ext = r.bit("FiveG-S-TMSI")?;
-        let set = r.fixed_bits(10, "AMFSetID")?;
-        let pointer = r.fixed_bits(6, "AMFPointer")?;
-        let t = r.fixed_octets(4, "FiveG-TMSI")?;
-        opt_extension_container(r, has_ext, budget)?;
-        finish_sequence(r, ext)?;
-        Ok(json!({"amf_set_id": set, "amf_pointer": pointer,
-                  "tmsi": u32::from_be_bytes([t[0], t[1], t[2], t[3]])}))
+        let (set, pointer, tmsi) = read_five_g_s_tmsi(r, budget)?;
+        Ok(json!({"amf_set_id": set, "amf_pointer": pointer, "tmsi": tmsi}))
     })
 }
 
@@ -1925,16 +1995,34 @@ pub fn initial_ue_message(
     user_location: &Value,
     rrc_establishment_cause: &str,
 ) -> EncodeResult<Vec<u8>> {
+    initial_ue_message_with_tmsi(ran, nas, user_location, rrc_establishment_cause, None)
+}
+
+/// Initial UE Message with the optional FiveG-S-TMSI IE (id 26, criticality reject), which a UE
+/// returning from CM-IDLE with a Service Request names: `(amf_set_id, amf_pointer, tmsi)`.
+pub fn initial_ue_message_with_tmsi(
+    ran: u64,
+    nas: &[u8],
+    user_location: &Value,
+    rrc_establishment_cause: &str,
+    five_g_s_tmsi: Option<(u16, u8, u32)>,
+) -> EncodeResult<Vec<u8>> {
+    let mut ies = vec![
+        ran_ue_ngap_id_ie(ran, Criticality::Reject)?,
+        nas_pdu_ie(nas)?,
+        user_location_nr_ie(user_location, Criticality::Reject)?,
+        rrc_cause_ie(rrc_establishment_cause)?,
+    ];
+    if let Some((set, pointer, tmsi)) = five_g_s_tmsi {
+        ies.push(encode_ie(IE_FIVE_G_S_TMSI, Criticality::Reject, |w| {
+            write_five_g_s_tmsi(w, set, pointer, tmsi)
+        })?);
+    }
     build(
         PduKind::Initiating,
         PROC_INITIAL_UE_MESSAGE,
         Criticality::Ignore,
-        vec![
-            ran_ue_ngap_id_ie(ran, Criticality::Reject)?,
-            nas_pdu_ie(nas)?,
-            user_location_nr_ie(user_location, Criticality::Reject)?,
-            rrc_cause_ie(rrc_establishment_cause)?,
-        ],
+        ies,
     )
 }
 
@@ -2019,3 +2107,1632 @@ pub fn summarize(bytes: &[u8]) -> Option<String> {
 
 /// Re-export so callers name one error type for "the peer sent garbage".
 pub use aper::AperError as WireError;
+
+// ============================================================================
+// UE context and PDU session resources (TS 38.413 sections 9.2.1, 9.2.2, 9.3)
+// ============================================================================
+
+pub const IE_ALLOWED_NSSAI: u16 = 0;
+pub const IE_GUAMI: u16 = 28;
+pub const IE_MASKED_IMEISV: u16 = 34;
+pub const IE_PDU_SESSION_RESOURCE_FAILED_TO_SETUP_LIST_CXT_RES: u16 = 55;
+pub const IE_PDU_SESSION_RESOURCE_FAILED_TO_SETUP_LIST_SU_RES: u16 = 58;
+pub const IE_PDU_SESSION_RESOURCE_SETUP_LIST_CXT_REQ: u16 = 71;
+pub const IE_PDU_SESSION_RESOURCE_SETUP_LIST_CXT_RES: u16 = 72;
+pub const IE_PDU_SESSION_RESOURCE_SETUP_LIST_SU_REQ: u16 = 74;
+pub const IE_PDU_SESSION_RESOURCE_SETUP_LIST_SU_RES: u16 = 75;
+pub const IE_SECURITY_KEY: u16 = 94;
+pub const IE_UE_AGGREGATE_MAXIMUM_BIT_RATE: u16 = 110;
+pub const IE_UE_SECURITY_CAPABILITIES: u16 = 119;
+pub const IE_PDU_SESSION_AGGREGATE_MAXIMUM_BIT_RATE: u16 = 130;
+pub const IE_PDU_SESSION_RESOURCE_LIST_CXT_REL_REQ: u16 = 133;
+pub const IE_PDU_SESSION_TYPE: u16 = 134;
+pub const IE_QOS_FLOW_SETUP_REQUEST_LIST: u16 = 136;
+pub const IE_UL_NGU_UP_TNL_INFORMATION: u16 = 139;
+
+pub const PROC_INITIAL_CONTEXT_SETUP: u8 = 14;
+pub const PROC_PDU_SESSION_RESOURCE_RELEASE: u8 = 28;
+pub const PROC_PDU_SESSION_RESOURCE_SETUP: u8 = 29;
+pub const PROC_UE_CONTEXT_RELEASE_REQUEST: u8 = 42;
+
+/// BitRate ::= INTEGER (0..4000000000000, ...), in bits per second.
+pub const MAX_BIT_RATE: u64 = 4_000_000_000_000;
+/// PDU sessions in one setup list NetGet writes or reads (the constraint allows 256).
+pub const MAX_PDU_SESSIONS: usize = 16;
+/// QoS flows per PDU session NetGet writes or reads (the constraint allows 64).
+pub const MAX_QOS_FLOWS: usize = 8;
+
+fn encode_container(ies: &[Ie]) -> EncodeResult<Vec<u8>> {
+    if ies.len() > MAX_IES {
+        return enc_err(format!("{} IEs exceeds {MAX_IES}", ies.len()));
+    }
+    let mut c = Writer::new();
+    c.bit(false);
+    c.size(ies.len(), 0, 65_535, "ProtocolIE-Container")?;
+    for ie in ies {
+        c.constrained(ie.id as u64, 0, 65_535, "ProtocolIE-ID")?;
+        c.constrained(ie.criticality.index(), 0, 2, "IE criticality")?;
+        c.open_type(&ie.value, "IE value")?;
+    }
+    Ok(c.finish())
+}
+
+/// A `SEQUENCE { protocolIEs ProtocolIE-Container, ... }` that is not a whole PDU — the
+/// PDU Session Resource Setup Request Transfer is one.
+fn decode_container(bytes: &[u8]) -> CodecResult<Vec<Ie>> {
+    let mut c = Reader::new(bytes);
+    let extended = c.extension_bit("container")?;
+    let count = c.size(0, 65_535, "ProtocolIE-Container")?;
+    if count > MAX_IES {
+        return Err(AperError(format!("{count} IEs exceeds the bound of {MAX_IES}")).into());
+    }
+    let mut ies: Vec<Ie> = Vec::with_capacity(count);
+    for _ in 0..count {
+        let id = c.constrained(0, 65_535, "ProtocolIE-ID")? as u16;
+        let crit = Criticality::from_index(c.constrained(0, 2, "IE criticality")?);
+        let value = c.open_type("IE value")?.to_vec();
+        if ies.iter().any(|ie| ie.id == id) {
+            return Err(ProtocolError {
+                cause: Cause::protocol(5),
+                detail: format!("IE {id} appears more than once"),
+            });
+        }
+        ies.push(Ie::new(id, crit, value));
+    }
+    if extended {
+        c.skip_extension_additions("container extension additions")?;
+    }
+    Ok(ies)
+}
+
+fn require_in(ies: &[Ie], id: u16, what: &str) -> CodecResult<Ie> {
+    ies.iter()
+        .find(|ie| ie.id == id)
+        .cloned()
+        .ok_or_else(|| abstract_reject(format!("{what} is missing mandatory IE {id}")))
+}
+
+fn put_bit_rate(w: &mut Writer, bps: u64) -> EncodeResult<()> {
+    w.bit(false);
+    Ok(w.constrained(bps, 0, MAX_BIT_RATE, "BitRate")?)
+}
+
+fn get_bit_rate(r: &mut Reader) -> CodecResult<u64> {
+    if r.extension_bit("BitRate")? {
+        return Err(semantic("a BitRate beyond its root range"));
+    }
+    Ok(r.constrained(0, MAX_BIT_RATE, "BitRate")?)
+}
+
+/// `{"uplink_bps", "downlink_bps"}` for UEAggregateMaximumBitRate and
+/// PDUSessionAggregateMaximumBitRate, which share a shape.
+fn encode_ambr(w: &mut Writer, dl: u64, ul: u64) -> EncodeResult<()> {
+    w.bit(false);
+    w.bit(false);
+    put_bit_rate(w, dl)?;
+    put_bit_rate(w, ul)
+}
+
+fn decode_ambr(r: &mut Reader, budget: &mut Budget) -> CodecResult<(u64, u64)> {
+    let ext = r.extension_bit("AMBR")?;
+    let has_ext = r.bit("AMBR")?;
+    let dl = get_bit_rate(r)?;
+    let ul = get_bit_rate(r)?;
+    opt_extension_container(r, has_ext, budget)?;
+    finish_sequence(r, ext)?;
+    Ok((dl, ul))
+}
+
+pub fn ue_ambr_ie(dl: u64, ul: u64) -> EncodeResult<Ie> {
+    encode_ie(IE_UE_AGGREGATE_MAXIMUM_BIT_RATE, Criticality::Reject, |w| {
+        encode_ambr(w, dl, ul)
+    })
+}
+
+fn encode_guami(w: &mut Writer, g: &Value) -> EncodeResult<()> {
+    let plmn = Plmn::from_json(g.get("plmn").unwrap_or(&Value::Null))?;
+    let region = json_u64(g, "amf_region_id", 0xFF)?;
+    let set = json_u64(g, "amf_set_id", 0x3FF)?;
+    let pointer = json_u64(g, "amf_pointer", 0x3F)?;
+    w.bit(false);
+    w.bit(false);
+    plmn.encode(w);
+    w.fixed_bits(region, 8);
+    w.fixed_bits(set, 10);
+    w.fixed_bits(pointer, 6);
+    Ok(())
+}
+
+pub fn guami_ie(g: &Value) -> EncodeResult<Ie> {
+    encode_ie(IE_GUAMI, Criticality::Reject, |w| encode_guami(w, g))
+}
+
+pub fn decode_guami_ie(ie: &Ie) -> CodecResult<Value> {
+    let mut budget = Budget::default();
+    decode_ie(ie, |r| decode_guami(r, &mut budget))
+}
+
+/// AllowedNSSAI ::= SEQUENCE (SIZE(1..8)) OF AllowedNSSAI-Item.
+pub fn allowed_nssai_ie(slices: &[Value]) -> EncodeResult<Ie> {
+    encode_ie(IE_ALLOWED_NSSAI, Criticality::Reject, |w| {
+        w.size(slices.len(), 1, 8, "allowed_nssai")?;
+        for s in slices {
+            w.bit(false);
+            w.bit(false);
+            encode_snssai(w, s)?;
+        }
+        Ok(())
+    })
+}
+
+pub fn decode_allowed_nssai(ie: &Ie) -> CodecResult<Vec<Value>> {
+    let mut budget = Budget::default();
+    decode_ie(ie, |r| {
+        let n = r.size(1, 8, "AllowedNSSAI")?;
+        budget.take(n, "AllowedNSSAI")?;
+        let mut out = Vec::with_capacity(n);
+        for _ in 0..n {
+            let ext = r.extension_bit("AllowedNSSAI-Item")?;
+            let has_ext = r.bit("AllowedNSSAI-Item")?;
+            out.push(decode_snssai(r, &mut budget)?);
+            opt_extension_container(r, has_ext, &mut budget)?;
+            finish_sequence(r, ext)?;
+        }
+        Ok(out)
+    })
+}
+
+/// UESecurityCapabilities: four `BIT STRING (SIZE(16, ...))` (NR encryption, NR integrity,
+/// E-UTRA encryption, E-UTRA integrity).
+pub fn ue_security_capabilities_ie(caps: [u16; 4]) -> EncodeResult<Ie> {
+    encode_ie(IE_UE_SECURITY_CAPABILITIES, Criticality::Reject, |w| {
+        w.bit(false);
+        w.bit(false);
+        for c in caps {
+            w.bit(false);
+            w.fixed_bits(c as u64, 16);
+        }
+        Ok(())
+    })
+}
+
+pub fn decode_ue_security_capabilities(ie: &Ie) -> CodecResult<[u16; 4]> {
+    let mut budget = Budget::default();
+    decode_ie(ie, |r| {
+        let ext = r.extension_bit("UESecurityCapabilities")?;
+        let has_ext = r.bit("UESecurityCapabilities")?;
+        let mut out = [0u16; 4];
+        for o in out.iter_mut() {
+            if r.extension_bit("algorithms")? {
+                return Err(semantic("an algorithm bitmap beyond 16 bits"));
+            }
+            *o = r.fixed_bits(16, "algorithms")? as u16;
+        }
+        opt_extension_container(r, has_ext, &mut budget)?;
+        finish_sequence(r, ext)?;
+        Ok(out)
+    })
+}
+
+/// SecurityKey ::= BIT STRING (SIZE(256)) — K_gNB.
+pub fn security_key_ie(key: &[u8; 32]) -> EncodeResult<Ie> {
+    encode_ie(IE_SECURITY_KEY, Criticality::Reject, |w| {
+        w.align();
+        w.octets_aligned(key);
+        Ok(())
+    })
+}
+
+pub fn decode_security_key(ie: &Ie) -> CodecResult<[u8; 32]> {
+    decode_ie(ie, |r| {
+        let b = r.octets_aligned(32, "SecurityKey")?;
+        let mut k = [0u8; 32];
+        k.copy_from_slice(b);
+        Ok(k)
+    })
+}
+
+pub fn nas_pdu_ie_with(nas: &[u8], crit: Criticality) -> EncodeResult<Ie> {
+    let mut ie = nas_pdu_ie(nas)?;
+    ie.criticality = crit;
+    Ok(ie)
+}
+
+/// A GTP tunnel endpoint: UPTransportLayerInformation's gTPTunnel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GtpTunnel {
+    pub address: std::net::IpAddr,
+    pub teid: u32,
+}
+
+impl GtpTunnel {
+    pub fn to_json(&self) -> Value {
+        json!({"address": self.address.to_string(), "teid": self.teid})
+    }
+}
+
+fn encode_tunnel(w: &mut Writer, t: &GtpTunnel) -> EncodeResult<()> {
+    put_choice(w, 0, 2, "UPTransportLayerInformation")?;
+    w.bit(false);
+    w.bit(false);
+    let addr = match t.address {
+        std::net::IpAddr::V4(a) => a.octets().to_vec(),
+        std::net::IpAddr::V6(a) => a.octets().to_vec(),
+    };
+    // TransportLayerAddress ::= BIT STRING (SIZE(1..160, ...))
+    w.bit(false);
+    w.size(addr.len() * 8, 1, 160, "TransportLayerAddress")?;
+    w.align();
+    w.octets_aligned(&addr);
+    // GTP-TEID ::= OCTET STRING (SIZE(4))
+    w.fixed_octets(&t.teid.to_be_bytes());
+    Ok(())
+}
+
+fn decode_tunnel(r: &mut Reader, budget: &mut Budget) -> CodecResult<GtpTunnel> {
+    choice(r, 2, "UPTransportLayerInformation")?;
+    let ext = r.extension_bit("GTPTunnel")?;
+    let has_ext = r.bit("GTPTunnel")?;
+    if r.extension_bit("TransportLayerAddress")? {
+        return Err(semantic("a TransportLayerAddress beyond 160 bits"));
+    }
+    let bits = r.size(1, 160, "TransportLayerAddress")?;
+    r.align();
+    let address = match bits {
+        32 => {
+            let b = r.octets_aligned(4, "IPv4 address")?;
+            std::net::IpAddr::from([b[0], b[1], b[2], b[3]])
+        }
+        128 | 160 => {
+            // 160 bits is IPv4 then IPv6 (TS 38.414); the IPv4 part is used.
+            let b = r.octets_aligned(bits / 8, "transport address")?;
+            if bits == 160 {
+                std::net::IpAddr::from([b[0], b[1], b[2], b[3]])
+            } else {
+                let mut a = [0u8; 16];
+                a.copy_from_slice(b);
+                std::net::IpAddr::from(a)
+            }
+        }
+        n => {
+            return Err(semantic(format!(
+                "a {n}-bit transport layer address is neither IPv4 nor IPv6"
+            )))
+        }
+    };
+    let teid = r.fixed_octets(4, "GTP-TEID")?;
+    opt_extension_container(r, has_ext, budget)?;
+    finish_sequence(r, ext)?;
+    Ok(GtpTunnel {
+        address,
+        teid: u32::from_be_bytes([teid[0], teid[1], teid[2], teid[3]]),
+    })
+}
+
+/// One QoS flow of a PDU session: QFI, a standardised 5QI and an ARP priority level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QosFlow {
+    pub qfi: u8,
+    pub five_qi: u8,
+    pub arp_priority: u8,
+}
+
+fn encode_qos_flow(w: &mut Writer, f: &QosFlow) -> EncodeResult<()> {
+    // QosFlowSetupRequestItem: ext, e-RAB-ID absent, iE-Extensions absent.
+    w.bit(false);
+    w.bit(false);
+    w.bit(false);
+    w.bit(false);
+    w.constrained(f.qfi as u64, 0, 63, "qosFlowIdentifier")?;
+    encode_qos_params(w, f)
+}
+
+/// QosFlowLevelQosParameters with a non-dynamic 5QI and an ARP priority, nothing optional.
+fn encode_qos_params(w: &mut Writer, f: &QosFlow) -> EncodeResult<()> {
+    // QosFlowLevelQosParameters: ext, four optionals absent.
+    w.bit(false);
+    for _ in 0..4 {
+        w.bit(false);
+    }
+    // QosCharacteristics: nonDynamic5QI.
+    put_choice(w, 0, 3, "QosCharacteristics")?;
+    w.bit(false);
+    for _ in 0..4 {
+        w.bit(false);
+    }
+    w.bit(false);
+    w.constrained(f.five_qi as u64, 0, 255, "fiveQI")?;
+    // AllocationAndRetentionPriority: ext, iE-Extensions absent, level, not-pre-empting.
+    w.bit(false);
+    w.bit(false);
+    w.constrained(f.arp_priority as u64, 1, 15, "priorityLevelARP")?;
+    w.enumerated(0, false, 2, true, "pre-emptionCapability")?;
+    w.enumerated(0, false, 2, true, "pre-emptionVulnerability")?;
+    Ok(())
+}
+
+fn decode_qos_flow(r: &mut Reader, budget: &mut Budget) -> CodecResult<QosFlow> {
+    let ext = r.extension_bit("QosFlowSetupRequestItem")?;
+    let has_erab = r.bit("QosFlowSetupRequestItem")?;
+    let has_ext = r.bit("QosFlowSetupRequestItem")?;
+    if r.extension_bit("qosFlowIdentifier")? {
+        return Err(semantic("a QFI beyond 63"));
+    }
+    let qfi = r.constrained(0, 63, "qosFlowIdentifier")? as u8;
+    let (five_qi, arp_priority) = decode_qos_params(r, budget)?;
+    if has_erab {
+        r.bit("E-RAB-ID ext")?;
+        r.constrained(0, 15, "E-RAB-ID")?;
+    }
+    opt_extension_container(r, has_ext, budget)?;
+    finish_sequence(r, ext)?;
+    Ok(QosFlow {
+        qfi,
+        five_qi,
+        arp_priority,
+    })
+}
+
+/// QosFlowLevelQosParameters as `(fiveQI, priorityLevelARP)`; a GBR flow, additional QoS flow
+/// information or a dynamic 5QI is refused.
+fn decode_qos_params(r: &mut Reader, budget: &mut Budget) -> CodecResult<(u8, u8)> {
+    let pext = r.extension_bit("QosFlowLevelQosParameters")?;
+    let opts: Vec<bool> = (0..4)
+        .map(|_| r.bit("QosFlowLevelQosParameters"))
+        .collect::<Result<_, _>>()?;
+    if opts[0] || opts[2] {
+        return Err(semantic(
+            "GBR or additional QoS flow information, which NetGet does not decode",
+        ));
+    }
+    let five_qi = match choice(r, 3, "QosCharacteristics")? {
+        0 => {
+            let dext = r.extension_bit("NonDynamic5QIDescriptor")?;
+            let dopts: Vec<bool> = (0..4)
+                .map(|_| r.bit("NonDynamic5QIDescriptor"))
+                .collect::<Result<_, _>>()?;
+            if r.extension_bit("fiveQI")? {
+                return Err(semantic("a 5QI beyond 255"));
+            }
+            let q = r.constrained(0, 255, "fiveQI")? as u8;
+            if dopts[0] {
+                r.bit("priorityLevelQos ext")?;
+                r.constrained(1, 127, "priorityLevelQos")?;
+            }
+            if dopts[1] {
+                r.bit("averagingWindow ext")?;
+                r.constrained(0, 4095, "averagingWindow")?;
+            }
+            if dopts[2] {
+                r.bit("maximumDataBurstVolume ext")?;
+                r.constrained(0, 4095, "maximumDataBurstVolume")?;
+            }
+            opt_extension_container(r, dopts[3], budget)?;
+            finish_sequence(r, dext)?;
+            q
+        }
+        _ => {
+            return Err(semantic(
+                "a dynamic 5QI descriptor, which NetGet does not decode",
+            ))
+        }
+    };
+    let aext = r.extension_bit("AllocationAndRetentionPriority")?;
+    let ahas = r.bit("AllocationAndRetentionPriority")?;
+    let arp_priority = r.constrained(1, 15, "priorityLevelARP")? as u8;
+    r.enumerated(2, true, "pre-emptionCapability")?;
+    r.enumerated(2, true, "pre-emptionVulnerability")?;
+    opt_extension_container(r, ahas, budget)?;
+    finish_sequence(r, aext)?;
+    if opts[1] {
+        r.enumerated(1, true, "reflectiveQosAttribute")?;
+    }
+    opt_extension_container(r, opts[3], budget)?;
+    finish_sequence(r, pext)?;
+    Ok((five_qi, arp_priority))
+}
+
+const PDU_SESSION_TYPES_NGAP: &[&str] = &["ipv4", "ipv6", "ipv4v6", "ethernet", "unstructured"];
+
+/// The PDU Session Resource Setup Request Transfer the SMF would build (TS 38.413 9.3.4.1).
+#[derive(Debug, Clone)]
+pub struct SetupRequestTransfer {
+    pub ambr_dl_bps: u64,
+    pub ambr_ul_bps: u64,
+    pub ul_tunnel: GtpTunnel,
+    pub pdu_session_type: String,
+    pub qos_flows: Vec<QosFlow>,
+}
+
+pub fn encode_setup_request_transfer(t: &SetupRequestTransfer) -> EncodeResult<Vec<u8>> {
+    if t.qos_flows.is_empty() || t.qos_flows.len() > MAX_QOS_FLOWS {
+        return enc_err(format!("1..{MAX_QOS_FLOWS} QoS flows"));
+    }
+    let ty = enum_index(
+        PDU_SESSION_TYPES_NGAP,
+        &t.pdu_session_type,
+        "pdu_session_type",
+    )?;
+    let ies = vec![
+        encode_ie(
+            IE_PDU_SESSION_AGGREGATE_MAXIMUM_BIT_RATE,
+            Criticality::Reject,
+            |w| encode_ambr(w, t.ambr_dl_bps, t.ambr_ul_bps),
+        )?,
+        encode_ie(IE_UL_NGU_UP_TNL_INFORMATION, Criticality::Reject, |w| {
+            encode_tunnel(w, &t.ul_tunnel)
+        })?,
+        encode_ie(IE_PDU_SESSION_TYPE, Criticality::Reject, |w| {
+            Ok(w.enumerated(ty, false, 5, true, "PDUSessionType")?)
+        })?,
+        encode_ie(IE_QOS_FLOW_SETUP_REQUEST_LIST, Criticality::Reject, |w| {
+            w.size(t.qos_flows.len(), 1, 64, "QosFlowSetupRequestList")?;
+            for f in &t.qos_flows {
+                encode_qos_flow(w, f)?;
+            }
+            Ok(())
+        })?,
+    ];
+    encode_container(&ies)
+}
+
+pub fn decode_setup_request_transfer(bytes: &[u8]) -> CodecResult<SetupRequestTransfer> {
+    let ies = decode_container(bytes)?;
+    let mut budget = Budget::default();
+    let (dl, ul) = match ies
+        .iter()
+        .find(|i| i.id == IE_PDU_SESSION_AGGREGATE_MAXIMUM_BIT_RATE)
+    {
+        Some(ie) => decode_ie(ie, |r| decode_ambr(r, &mut budget))?,
+        None => (0, 0),
+    };
+    let tunnel_ie = require_in(
+        &ies,
+        IE_UL_NGU_UP_TNL_INFORMATION,
+        "the setup request transfer",
+    )?;
+    let ul_tunnel = decode_ie(&tunnel_ie, |r| decode_tunnel(r, &mut budget))?;
+    let type_ie = require_in(&ies, IE_PDU_SESSION_TYPE, "the setup request transfer")?;
+    let (ext, ty) = decode_ie(&type_ie, |r| Ok(r.enumerated(5, true, "PDUSessionType")?))?;
+    let flows_ie = require_in(
+        &ies,
+        IE_QOS_FLOW_SETUP_REQUEST_LIST,
+        "the setup request transfer",
+    )?;
+    let qos_flows = decode_ie(&flows_ie, |r| {
+        let n = r.size(1, 64, "QosFlowSetupRequestList")?;
+        if n > MAX_QOS_FLOWS {
+            return Err(AperError(format!("{n} QoS flows exceeds {MAX_QOS_FLOWS}")).into());
+        }
+        budget.take(n, "QosFlowSetupRequestList")?;
+        (0..n).map(|_| decode_qos_flow(r, &mut budget)).collect()
+    })?;
+    Ok(SetupRequestTransfer {
+        ambr_dl_bps: dl,
+        ambr_ul_bps: ul,
+        ul_tunnel,
+        pdu_session_type: if ext {
+            format!("ext-{ty}")
+        } else {
+            PDU_SESSION_TYPES_NGAP[ty as usize].to_string()
+        },
+        qos_flows,
+    })
+}
+
+/// The gNB's answer for one PDU session (TS 38.413 9.3.4.2): its downlink tunnel and the QoS
+/// flows it set up.
+#[derive(Debug, Clone)]
+pub struct SetupResponseTransfer {
+    pub dl_tunnel: GtpTunnel,
+    pub qfis: Vec<u8>,
+}
+
+pub fn encode_setup_response_transfer(t: &SetupResponseTransfer) -> EncodeResult<Vec<u8>> {
+    if t.qfis.is_empty() || t.qfis.len() > MAX_QOS_FLOWS {
+        return enc_err(format!("1..{MAX_QOS_FLOWS} associated QoS flows"));
+    }
+    let mut w = Writer::new();
+    // PDUSessionResourceSetupResponseTransfer: ext, four optionals absent.
+    w.bit(false);
+    for _ in 0..4 {
+        w.bit(false);
+    }
+    // QosFlowPerTNLInformation: ext, iE-Extensions absent.
+    w.bit(false);
+    w.bit(false);
+    encode_tunnel(&mut w, &t.dl_tunnel)?;
+    w.size(t.qfis.len(), 1, 64, "AssociatedQosFlowList")?;
+    for q in &t.qfis {
+        w.bit(false);
+        w.bit(false);
+        w.bit(false);
+        w.bit(false);
+        w.constrained(*q as u64, 0, 63, "qosFlowIdentifier")?;
+    }
+    Ok(w.finish())
+}
+
+/// The downlink tunnel and QoS flows of a response transfer. What follows the first
+/// QosFlowPerTNLInformation (additional tunnels, security result, failed flows) is bounded by
+/// the octet string and not interpreted.
+pub fn decode_setup_response_transfer(bytes: &[u8]) -> CodecResult<SetupResponseTransfer> {
+    let mut r = Reader::new(bytes);
+    let mut budget = Budget::default();
+    r.extension_bit("PDUSessionResourceSetupResponseTransfer")?;
+    for _ in 0..4 {
+        r.bit("PDUSessionResourceSetupResponseTransfer")?;
+    }
+    r.extension_bit("QosFlowPerTNLInformation")?;
+    r.bit("QosFlowPerTNLInformation")?;
+    let dl_tunnel = decode_tunnel(&mut r, &mut budget)?;
+    let n = r.size(1, 64, "AssociatedQosFlowList")?;
+    if n > MAX_QOS_FLOWS {
+        return Err(AperError(format!("{n} associated QoS flows exceeds {MAX_QOS_FLOWS}")).into());
+    }
+    let mut qfis = Vec::with_capacity(n);
+    for _ in 0..n {
+        let ext = r.extension_bit("AssociatedQosFlowItem")?;
+        let has_mapping = r.bit("AssociatedQosFlowItem")?;
+        let has_ext = r.bit("AssociatedQosFlowItem")?;
+        r.extension_bit("qosFlowIdentifier")?;
+        qfis.push(r.constrained(0, 63, "qosFlowIdentifier")? as u8);
+        if has_mapping {
+            r.enumerated(2, true, "qosFlowMappingIndication")?;
+        }
+        opt_extension_container(&mut r, has_ext, &mut budget)?;
+        finish_sequence(&mut r, ext)?;
+    }
+    Ok(SetupResponseTransfer { dl_tunnel, qfis })
+}
+
+/// One item of a PDU Session Resource Setup Request (SUReq) list.
+#[derive(Debug, Clone)]
+pub struct SetupItem {
+    pub pdu_session_id: u8,
+    pub nas: Option<Vec<u8>>,
+    pub s_nssai: Value,
+    pub transfer: Vec<u8>,
+}
+
+/// PDU Session Resource Setup Request (TS 38.413 9.2.1.1).
+pub fn pdu_session_resource_setup_request(
+    amf: u64,
+    ran: u64,
+    items: &[SetupItem],
+    ue_ambr: Option<(u64, u64)>,
+) -> EncodeResult<Vec<u8>> {
+    if items.is_empty() || items.len() > MAX_PDU_SESSIONS {
+        return enc_err(format!("1..{MAX_PDU_SESSIONS} PDU sessions"));
+    }
+    let list = encode_setup_items(IE_PDU_SESSION_RESOURCE_SETUP_LIST_SU_REQ, items)?;
+    let mut ies = vec![
+        amf_ue_ngap_id_ie(amf, Criticality::Reject)?,
+        ran_ue_ngap_id_ie(ran, Criticality::Reject)?,
+        list,
+    ];
+    if let Some((dl, ul)) = ue_ambr {
+        let mut ie = ue_ambr_ie(dl, ul)?;
+        ie.criticality = Criticality::Ignore;
+        ies.push(ie);
+    }
+    build(
+        PduKind::Initiating,
+        PROC_PDU_SESSION_RESOURCE_SETUP,
+        Criticality::Reject,
+        ies,
+    )
+}
+
+/// A PDU Session Resource Setup item list: `PDUSessionResourceSetupListSUReq` and
+/// `PDUSessionResourceSetupListCxtReq` items share one shape.
+fn decode_setup_items(ie: &Ie, what: &str) -> CodecResult<Vec<SetupItem>> {
+    let mut budget = Budget::default();
+    decode_ie(ie, |r| {
+        let n = r.size(1, 256, what)?;
+        if n > MAX_PDU_SESSIONS {
+            return Err(AperError(format!("{n} PDU sessions exceeds {MAX_PDU_SESSIONS}")).into());
+        }
+        budget.take(n, what)?;
+        let mut out = Vec::with_capacity(n);
+        for _ in 0..n {
+            let ext = r.extension_bit("PDUSessionResourceSetupItem")?;
+            let has_nas = r.bit("item")?;
+            let has_ext = r.bit("item")?;
+            let psi = r.constrained(0, 255, "pDUSessionID")? as u8;
+            let nas = if has_nas {
+                Some(r.octet_string(MAX_NAS_PDU_LEN, "NAS-PDU")?.to_vec())
+            } else {
+                None
+            };
+            let s_nssai = decode_snssai(r, &mut budget)?;
+            let transfer = r
+                .octet_string(MAX_PDU_LEN, "pDUSessionResourceSetupRequestTransfer")?
+                .to_vec();
+            opt_extension_container(r, has_ext, &mut budget)?;
+            finish_sequence(r, ext)?;
+            out.push(SetupItem {
+                pdu_session_id: psi,
+                nas,
+                s_nssai,
+                transfer,
+            });
+        }
+        Ok(out)
+    })
+}
+
+fn encode_setup_items(id: u16, items: &[SetupItem]) -> EncodeResult<Ie> {
+    if items.is_empty() || items.len() > MAX_PDU_SESSIONS {
+        return enc_err(format!("1..{MAX_PDU_SESSIONS} PDU sessions"));
+    }
+    encode_ie(id, Criticality::Reject, |w| {
+        w.size(items.len(), 1, 256, "PDU session setup list")?;
+        for it in items {
+            w.bit(false);
+            w.bit(it.nas.is_some());
+            w.bit(false);
+            w.constrained(it.pdu_session_id as u64, 0, 255, "pDUSessionID")?;
+            if let Some(n) = &it.nas {
+                if n.is_empty() || n.len() > MAX_NAS_PDU_LEN {
+                    return enc_err("NAS-PDU size");
+                }
+                w.octet_string(n, "NAS-PDU")?;
+            }
+            encode_snssai(w, &it.s_nssai)?;
+            w.octet_string(&it.transfer, "pDUSessionResourceSetupRequestTransfer")?;
+        }
+        Ok(())
+    })
+}
+
+pub fn parse_pdu_session_resource_setup_request(
+    pdu: &Pdu,
+) -> CodecResult<(u64, u64, Vec<SetupItem>)> {
+    let amf = decode_amf_ue_ngap_id(pdu.require(IE_AMF_UE_NGAP_ID)?)?;
+    let ran = decode_ran_ue_ngap_id(pdu.require(IE_RAN_UE_NGAP_ID)?)?;
+    let items = decode_setup_items(
+        pdu.require(IE_PDU_SESSION_RESOURCE_SETUP_LIST_SU_REQ)?,
+        "PDUSessionResourceSetupListSUReq",
+    )?;
+    Ok((amf, ran, items))
+}
+
+/// A setup outcome list: `(PDU session ID, transfer octets)` per item. Used for the SURes and
+/// CxtRes lists (response transfers) and the failed-to-setup lists (unsuccessful transfers),
+/// which share this shape.
+fn encode_outcome_list(id: u16, items: &[(u8, Vec<u8>)]) -> EncodeResult<Ie> {
+    encode_ie(id, Criticality::Ignore, |w| {
+        w.size(items.len(), 1, 256, "PDU session outcome list")?;
+        for (psi, transfer) in items {
+            w.bit(false);
+            w.bit(false);
+            w.constrained(*psi as u64, 0, 255, "pDUSessionID")?;
+            w.octet_string(transfer, "transfer")?;
+        }
+        Ok(())
+    })
+}
+
+fn decode_outcome_list(ie: &Ie, budget: &mut Budget) -> CodecResult<Vec<(u8, Vec<u8>)>> {
+    decode_ie(ie, |r| {
+        let n = r.size(1, 256, "PDU session outcome list")?;
+        if n > MAX_PDU_SESSIONS {
+            return Err(AperError(format!("{n} PDU sessions exceeds {MAX_PDU_SESSIONS}")).into());
+        }
+        budget.take(n, "PDU session outcome list")?;
+        let mut out = Vec::with_capacity(n);
+        for _ in 0..n {
+            let ext = r.extension_bit("outcome item")?;
+            let has_ext = r.bit("outcome item")?;
+            let psi = r.constrained(0, 255, "pDUSessionID")? as u8;
+            let t = r.octet_string(MAX_PDU_LEN, "transfer")?.to_vec();
+            opt_extension_container(r, has_ext, budget)?;
+            finish_sequence(r, ext)?;
+            out.push((psi, t));
+        }
+        Ok(out)
+    })
+}
+
+/// `PDUSessionResourceSetupUnsuccessfulTransfer ::= SEQUENCE { cause, criticalityDiagnostics
+/// OPTIONAL, iE-Extensions OPTIONAL, ... }` with only the cause.
+pub fn encode_unsuccessful_transfer(cause: &Cause) -> EncodeResult<Vec<u8>> {
+    let mut w = Writer::new();
+    w.bit(false);
+    w.bit(false);
+    w.bit(false);
+    cause.encode(&mut w)?;
+    Ok(w.finish())
+}
+
+pub fn decode_unsuccessful_transfer(bytes: &[u8]) -> CodecResult<Cause> {
+    let mut r = Reader::new(bytes);
+    r.extension_bit("PDUSessionResourceSetupUnsuccessfulTransfer")?;
+    r.bit("criticalityDiagnostics")?;
+    r.bit("iE-Extensions")?;
+    Cause::decode(&mut r)
+}
+
+/// What a gNB answered to PDU session setup: the established sessions with their downlink
+/// tunnels, and the failed ones with their causes.
+#[derive(Debug, Clone, Default)]
+pub struct SetupOutcome {
+    pub amf_ue_ngap_id: u64,
+    pub ran_ue_ngap_id: u64,
+    pub established: Vec<(u8, SetupResponseTransfer)>,
+    pub failed: Vec<(u8, Cause)>,
+}
+
+fn parse_setup_outcome(pdu: &Pdu, ok_id: u16, failed_id: u16) -> CodecResult<SetupOutcome> {
+    let mut budget = Budget::default();
+    let mut out = SetupOutcome {
+        amf_ue_ngap_id: decode_amf_ue_ngap_id(pdu.require(IE_AMF_UE_NGAP_ID)?)?,
+        ran_ue_ngap_id: decode_ran_ue_ngap_id(pdu.require(IE_RAN_UE_NGAP_ID)?)?,
+        ..Default::default()
+    };
+    if let Some(ie) = pdu.ie(ok_id) {
+        for (psi, t) in decode_outcome_list(ie, &mut budget)? {
+            out.established
+                .push((psi, decode_setup_response_transfer(&t)?));
+        }
+    }
+    if let Some(ie) = pdu.ie(failed_id) {
+        for (psi, t) in decode_outcome_list(ie, &mut budget)? {
+            out.failed.push((psi, decode_unsuccessful_transfer(&t)?));
+        }
+    }
+    Ok(out)
+}
+
+pub fn parse_pdu_session_resource_setup_response(pdu: &Pdu) -> CodecResult<SetupOutcome> {
+    parse_setup_outcome(
+        pdu,
+        IE_PDU_SESSION_RESOURCE_SETUP_LIST_SU_RES,
+        IE_PDU_SESSION_RESOURCE_FAILED_TO_SETUP_LIST_SU_RES,
+    )
+}
+
+pub fn parse_initial_context_setup_response(pdu: &Pdu) -> CodecResult<SetupOutcome> {
+    parse_setup_outcome(
+        pdu,
+        IE_PDU_SESSION_RESOURCE_SETUP_LIST_CXT_RES,
+        IE_PDU_SESSION_RESOURCE_FAILED_TO_SETUP_LIST_CXT_RES,
+    )
+}
+
+/// PDU Session Resource Setup Response (gNB side).
+pub fn pdu_session_resource_setup_response(
+    amf: u64,
+    ran: u64,
+    established: &[(u8, SetupResponseTransfer)],
+    failed: &[(u8, Cause)],
+) -> EncodeResult<Vec<u8>> {
+    let mut ies = vec![
+        amf_ue_ngap_id_ie(amf, Criticality::Ignore)?,
+        ran_ue_ngap_id_ie(ran, Criticality::Ignore)?,
+    ];
+    if !established.is_empty() {
+        let items = established
+            .iter()
+            .map(|(p, t)| Ok((*p, encode_setup_response_transfer(t)?)))
+            .collect::<EncodeResult<Vec<_>>>()?;
+        ies.push(encode_outcome_list(
+            IE_PDU_SESSION_RESOURCE_SETUP_LIST_SU_RES,
+            &items,
+        )?);
+    }
+    if !failed.is_empty() {
+        let items = failed
+            .iter()
+            .map(|(p, c)| Ok((*p, encode_unsuccessful_transfer(c)?)))
+            .collect::<EncodeResult<Vec<_>>>()?;
+        ies.push(encode_outcome_list(
+            IE_PDU_SESSION_RESOURCE_FAILED_TO_SETUP_LIST_SU_RES,
+            &items,
+        )?);
+    }
+    build(
+        PduKind::Successful,
+        PROC_PDU_SESSION_RESOURCE_SETUP,
+        Criticality::Reject,
+        ies,
+    )
+}
+
+/// What an Initial Context Setup Request carries that NetGet builds or a gNB reads.
+#[derive(Debug, Clone)]
+pub struct InitialContext {
+    pub amf_ue_ngap_id: u64,
+    pub ran_ue_ngap_id: u64,
+    pub guami: Value,
+    pub allowed_nssai: Vec<Value>,
+    pub ue_security_capabilities: [u16; 4],
+    pub security_key: [u8; 32],
+    pub ue_ambr: Option<(u64, u64)>,
+    pub nas: Option<Vec<u8>>,
+    /// PDU sessions set up with the context (`PDUSessionResourceSetupListCxtReq`): an AMF that
+    /// sent the Registration Accept in a Downlink NAS Transport sets the first session up here.
+    pub pdu_sessions: Vec<SetupItem>,
+}
+
+/// Initial Context Setup Request (TS 38.413 9.2.2.1), IEs in the order the ASN.1 lists them.
+pub fn initial_context_setup_request(c: &InitialContext) -> EncodeResult<Vec<u8>> {
+    let mut ies = vec![
+        amf_ue_ngap_id_ie(c.amf_ue_ngap_id, Criticality::Reject)?,
+        ran_ue_ngap_id_ie(c.ran_ue_ngap_id, Criticality::Reject)?,
+    ];
+    if let Some((dl, ul)) = c.ue_ambr {
+        ies.push(ue_ambr_ie(dl, ul)?);
+    }
+    ies.push(guami_ie(&c.guami)?);
+    if !c.pdu_sessions.is_empty() {
+        ies.push(encode_setup_items(
+            IE_PDU_SESSION_RESOURCE_SETUP_LIST_CXT_REQ,
+            &c.pdu_sessions,
+        )?);
+    }
+    ies.push(allowed_nssai_ie(&c.allowed_nssai)?);
+    ies.push(ue_security_capabilities_ie(c.ue_security_capabilities)?);
+    ies.push(security_key_ie(&c.security_key)?);
+    if let Some(n) = &c.nas {
+        ies.push(nas_pdu_ie_with(n, Criticality::Ignore)?);
+    }
+    build(
+        PduKind::Initiating,
+        PROC_INITIAL_CONTEXT_SETUP,
+        Criticality::Reject,
+        ies,
+    )
+}
+
+pub fn parse_initial_context_setup_request(pdu: &Pdu) -> CodecResult<InitialContext> {
+    let mut budget = Budget::default();
+    Ok(InitialContext {
+        amf_ue_ngap_id: decode_amf_ue_ngap_id(pdu.require(IE_AMF_UE_NGAP_ID)?)?,
+        ran_ue_ngap_id: decode_ran_ue_ngap_id(pdu.require(IE_RAN_UE_NGAP_ID)?)?,
+        guami: decode_guami_ie(pdu.require(IE_GUAMI)?)?,
+        allowed_nssai: decode_allowed_nssai(pdu.require(IE_ALLOWED_NSSAI)?)?,
+        ue_security_capabilities: decode_ue_security_capabilities(
+            pdu.require(IE_UE_SECURITY_CAPABILITIES)?,
+        )?,
+        security_key: decode_security_key(pdu.require(IE_SECURITY_KEY)?)?,
+        ue_ambr: match pdu.ie(IE_UE_AGGREGATE_MAXIMUM_BIT_RATE) {
+            Some(ie) => Some(decode_ie(ie, |r| decode_ambr(r, &mut budget))?),
+            None => None,
+        },
+        nas: match pdu.ie(IE_NAS_PDU) {
+            Some(ie) => Some(decode_nas_pdu(ie)?),
+            None => None,
+        },
+        pdu_sessions: match pdu.ie(IE_PDU_SESSION_RESOURCE_SETUP_LIST_CXT_REQ) {
+            Some(ie) => decode_setup_items(ie, "PDUSessionResourceSetupListCxtReq")?,
+            None => Vec::new(),
+        },
+    })
+}
+
+/// Initial Context Setup Response (gNB side), with the outcome of any PDU sessions the request
+/// set up.
+pub fn initial_context_setup_response(
+    amf: u64,
+    ran: u64,
+    established: &[(u8, SetupResponseTransfer)],
+    failed: &[(u8, Cause)],
+) -> EncodeResult<Vec<u8>> {
+    let mut ies = vec![
+        amf_ue_ngap_id_ie(amf, Criticality::Ignore)?,
+        ran_ue_ngap_id_ie(ran, Criticality::Ignore)?,
+    ];
+    if !established.is_empty() {
+        let items = established
+            .iter()
+            .map(|(p, t)| Ok((*p, encode_setup_response_transfer(t)?)))
+            .collect::<EncodeResult<Vec<_>>>()?;
+        ies.push(encode_outcome_list(
+            IE_PDU_SESSION_RESOURCE_SETUP_LIST_CXT_RES,
+            &items,
+        )?);
+    }
+    if !failed.is_empty() {
+        let items = failed
+            .iter()
+            .map(|(p, c)| Ok((*p, encode_unsuccessful_transfer(c)?)))
+            .collect::<EncodeResult<Vec<_>>>()?;
+        ies.push(encode_outcome_list(
+            IE_PDU_SESSION_RESOURCE_FAILED_TO_SETUP_LIST_CXT_RES,
+            &items,
+        )?);
+    }
+    build(
+        PduKind::Successful,
+        PROC_INITIAL_CONTEXT_SETUP,
+        Criticality::Reject,
+        ies,
+    )
+}
+
+/// UE Context Release Request from a gNB (TS 38.413 9.2.2.4): the UE's ids and the cause.
+pub fn parse_ue_context_release_request(pdu: &Pdu) -> CodecResult<(u64, u64, Option<Cause>)> {
+    Ok((
+        decode_amf_ue_ngap_id(pdu.require(IE_AMF_UE_NGAP_ID)?)?,
+        decode_ran_ue_ngap_id(pdu.require(IE_RAN_UE_NGAP_ID)?)?,
+        match pdu.ie(IE_CAUSE) {
+            Some(ie) => Some(decode_cause(ie)?),
+            None => None,
+        },
+    ))
+}
+
+pub fn ue_context_release_request(amf: u64, ran: u64, cause: &Cause) -> EncodeResult<Vec<u8>> {
+    build(
+        PduKind::Initiating,
+        PROC_UE_CONTEXT_RELEASE_REQUEST,
+        Criticality::Ignore,
+        vec![
+            amf_ue_ngap_id_ie(amf, Criticality::Reject)?,
+            ran_ue_ngap_id_ie(ran, Criticality::Reject)?,
+            cause_ie(cause, Criticality::Ignore)?,
+        ],
+    )
+}
+
+// ============================================================================
+// PDU Session Resource Release and Modify, and Paging (TS 38.413 sections 8.2.2, 8.2.3, 8.5.1,
+// 9.2.1.3-9.2.1.6, 9.2.4.1, 9.3.4)
+// ============================================================================
+
+pub const IE_PAGING_DRX: u16 = 50;
+pub const IE_PDU_SESSION_RESOURCE_FAILED_TO_MODIFY_LIST_MOD_RES: u16 = 54;
+pub const IE_PDU_SESSION_RESOURCE_MODIFY_LIST_MOD_REQ: u16 = 64;
+pub const IE_PDU_SESSION_RESOURCE_MODIFY_LIST_MOD_RES: u16 = 65;
+pub const IE_PDU_SESSION_RESOURCE_RELEASED_LIST_REL_RES: u16 = 70;
+pub const IE_PDU_SESSION_RESOURCE_TO_RELEASE_LIST_REL_CMD: u16 = 79;
+pub const IE_TAI_LIST_FOR_PAGING: u16 = 103;
+pub const IE_UE_PAGING_IDENTITY: u16 = 115;
+pub const IE_QOS_FLOW_ADD_OR_MODIFY_REQUEST_LIST: u16 = 135;
+
+/// TAIs in one Paging NetGet writes or reads. `TAIListForPaging ::= SEQUENCE (SIZE(1..16))`
+/// (maxnoofTAIforPaging), so the bound is the constraint itself: a seventeenth item cannot be
+/// expressed in the four-bit count.
+pub const MAX_PAGING_TAIS: usize = 16;
+
+fn check_session_count(n: usize, what: &str) -> EncodeResult<()> {
+    if n == 0 || n > MAX_PDU_SESSIONS {
+        return enc_err(format!(
+            "{what}: {n} PDU sessions is outside 1..{MAX_PDU_SESSIONS}"
+        ));
+    }
+    Ok(())
+}
+
+/// `PDUSessionResourceReleaseCommandTransfer ::= SEQUENCE { cause, iE-Extensions OPTIONAL, ... }`.
+pub fn encode_release_command_transfer(cause: &Cause) -> EncodeResult<Vec<u8>> {
+    let mut w = Writer::new();
+    w.bit(false);
+    w.bit(false);
+    cause.encode(&mut w)?;
+    Ok(w.finish())
+}
+
+pub fn decode_release_command_transfer(bytes: &[u8]) -> CodecResult<Cause> {
+    let mut r = Reader::new(bytes);
+    let mut budget = Budget::default();
+    let ext = r.extension_bit("PDUSessionResourceReleaseCommandTransfer")?;
+    let has_ext = r.bit("PDUSessionResourceReleaseCommandTransfer")?;
+    let cause = Cause::decode(&mut r)?;
+    opt_extension_container(&mut r, has_ext, &mut budget)?;
+    finish_sequence(&mut r, ext)?;
+    Ok(cause)
+}
+
+/// `PDUSessionResourceReleaseResponseTransfer ::= SEQUENCE { iE-Extensions OPTIONAL, ... }`:
+/// two zero bits, one octet.
+fn encode_release_response_transfer() -> Vec<u8> {
+    let mut w = Writer::new();
+    w.bit(false);
+    w.bit(false);
+    w.finish()
+}
+
+/// Reads a release response transfer through to its end; it carries nothing NetGet keeps.
+pub fn decode_release_response_transfer(bytes: &[u8]) -> CodecResult<()> {
+    let mut r = Reader::new(bytes);
+    let mut budget = Budget::default();
+    let ext = r.extension_bit("PDUSessionResourceReleaseResponseTransfer")?;
+    let has_ext = r.bit("PDUSessionResourceReleaseResponseTransfer")?;
+    opt_extension_container(&mut r, has_ext, &mut budget)?;
+    finish_sequence(&mut r, ext)
+}
+
+/// PDU Session Resource Release Command (TS 38.413 9.2.1.3): the UE's ids, an optional NAS-PDU
+/// (the 5GSM release command inside a DL NAS Transport) and each session to release with the
+/// cause its ReleaseCommandTransfer carries.
+pub fn pdu_session_resource_release_command(
+    amf: u64,
+    ran: u64,
+    nas: Option<&[u8]>,
+    sessions: &[(u8, Cause)],
+) -> EncodeResult<Vec<u8>> {
+    check_session_count(sessions.len(), "PDUSessionResourceToReleaseListRelCmd")?;
+    let mut ies = vec![
+        amf_ue_ngap_id_ie(amf, Criticality::Reject)?,
+        ran_ue_ngap_id_ie(ran, Criticality::Reject)?,
+    ];
+    if let Some(n) = nas {
+        ies.push(nas_pdu_ie_with(n, Criticality::Ignore)?);
+    }
+    let items = sessions
+        .iter()
+        .map(|(p, c)| Ok((*p, encode_release_command_transfer(c)?)))
+        .collect::<EncodeResult<Vec<_>>>()?;
+    let mut list = encode_outcome_list(IE_PDU_SESSION_RESOURCE_TO_RELEASE_LIST_REL_CMD, &items)?;
+    list.criticality = Criticality::Reject;
+    ies.push(list);
+    build(
+        PduKind::Initiating,
+        PROC_PDU_SESSION_RESOURCE_RELEASE,
+        Criticality::Reject,
+        ies,
+    )
+}
+
+/// What a PDU Session Resource Release Command carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReleaseCommand {
+    pub amf_ue_ngap_id: u64,
+    pub ran_ue_ngap_id: u64,
+    pub nas: Option<Vec<u8>>,
+    pub sessions: Vec<(u8, Cause)>,
+}
+
+fn optional_nas(pdu: &Pdu) -> CodecResult<Option<Vec<u8>>> {
+    match pdu.ie(IE_NAS_PDU) {
+        Some(ie) => {
+            let nas = decode_nas_pdu(ie)?;
+            if nas.is_empty() {
+                return Err(semantic("empty NAS-PDU"));
+            }
+            Ok(Some(nas))
+        }
+        None => Ok(None),
+    }
+}
+
+pub fn parse_pdu_session_resource_release_command(pdu: &Pdu) -> CodecResult<ReleaseCommand> {
+    let mut budget = Budget::default();
+    let amf = decode_amf_ue_ngap_id(pdu.require(IE_AMF_UE_NGAP_ID)?)?;
+    let ran = decode_ran_ue_ngap_id(pdu.require(IE_RAN_UE_NGAP_ID)?)?;
+    let nas = optional_nas(pdu)?;
+    let mut sessions = Vec::new();
+    for (psi, t) in decode_outcome_list(
+        pdu.require(IE_PDU_SESSION_RESOURCE_TO_RELEASE_LIST_REL_CMD)?,
+        &mut budget,
+    )? {
+        sessions.push((psi, decode_release_command_transfer(&t)?));
+    }
+    Ok(ReleaseCommand {
+        amf_ue_ngap_id: amf,
+        ran_ue_ngap_id: ran,
+        nas,
+        sessions,
+    })
+}
+
+/// PDU Session Resource Release Response (TS 38.413 9.2.1.4): the released sessions, each with
+/// an empty-bodied ReleaseResponseTransfer.
+pub fn pdu_session_resource_release_response(
+    amf: u64,
+    ran: u64,
+    released: &[u8],
+) -> EncodeResult<Vec<u8>> {
+    check_session_count(released.len(), "PDUSessionResourceReleasedListRelRes")?;
+    let items: Vec<(u8, Vec<u8>)> = released
+        .iter()
+        .map(|p| (*p, encode_release_response_transfer()))
+        .collect();
+    build(
+        PduKind::Successful,
+        PROC_PDU_SESSION_RESOURCE_RELEASE,
+        Criticality::Reject,
+        vec![
+            amf_ue_ngap_id_ie(amf, Criticality::Ignore)?,
+            ran_ue_ngap_id_ie(ran, Criticality::Ignore)?,
+            encode_outcome_list(IE_PDU_SESSION_RESOURCE_RELEASED_LIST_REL_RES, &items)?,
+        ],
+    )
+}
+
+/// What a PDU Session Resource Release Response carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReleaseResponse {
+    pub amf_ue_ngap_id: u64,
+    pub ran_ue_ngap_id: u64,
+    pub released: Vec<u8>,
+}
+
+pub fn parse_pdu_session_resource_release_response(pdu: &Pdu) -> CodecResult<ReleaseResponse> {
+    let mut budget = Budget::default();
+    let amf = decode_amf_ue_ngap_id(pdu.require(IE_AMF_UE_NGAP_ID)?)?;
+    let ran = decode_ran_ue_ngap_id(pdu.require(IE_RAN_UE_NGAP_ID)?)?;
+    let mut released = Vec::new();
+    for (psi, t) in decode_outcome_list(
+        pdu.require(IE_PDU_SESSION_RESOURCE_RELEASED_LIST_REL_RES)?,
+        &mut budget,
+    )? {
+        decode_release_response_transfer(&t)?;
+        released.push(psi);
+    }
+    Ok(ReleaseResponse {
+        amf_ue_ngap_id: amf,
+        ran_ue_ngap_id: ran,
+        released,
+    })
+}
+
+/// `PDUSessionResourceModifyRequestTransfer`, a ProtocolIE-Container (TS 38.413 9.3.4.3), with
+/// the two IEs NetGet writes: PDUSessionAggregateMaximumBitRate (130) and
+/// QosFlowAddOrModifyRequestList (135). The AMBR is both directions or neither.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModifyRequestTransfer {
+    pub ambr_dl_bps: Option<u64>,
+    pub ambr_ul_bps: Option<u64>,
+    pub qos_flows: Vec<QosFlow>,
+}
+
+pub fn encode_modify_request_transfer(t: &ModifyRequestTransfer) -> EncodeResult<Vec<u8>> {
+    if t.qos_flows.len() > MAX_QOS_FLOWS {
+        return enc_err(format!(
+            "{} QoS flows exceeds {MAX_QOS_FLOWS}",
+            t.qos_flows.len()
+        ));
+    }
+    let mut ies = Vec::new();
+    match (t.ambr_dl_bps, t.ambr_ul_bps) {
+        (Some(dl), Some(ul)) => ies.push(encode_ie(
+            IE_PDU_SESSION_AGGREGATE_MAXIMUM_BIT_RATE,
+            Criticality::Reject,
+            |w| encode_ambr(w, dl, ul),
+        )?),
+        (None, None) => {}
+        _ => return enc_err("the PDU session AMBR needs both downlink and uplink, or neither"),
+    }
+    if !t.qos_flows.is_empty() {
+        ies.push(encode_ie(
+            IE_QOS_FLOW_ADD_OR_MODIFY_REQUEST_LIST,
+            Criticality::Reject,
+            |w| {
+                w.size(t.qos_flows.len(), 1, 64, "QosFlowAddOrModifyRequestList")?;
+                for f in &t.qos_flows {
+                    // QosFlowAddOrModifyRequestItem: ext, qosFlowLevelQosParameters present,
+                    // e-RAB-ID absent, iE-Extensions absent; QFI ext.
+                    w.bit(false);
+                    w.bit(true);
+                    w.bit(false);
+                    w.bit(false);
+                    w.bit(false);
+                    w.constrained(f.qfi as u64, 0, 63, "qosFlowIdentifier")?;
+                    encode_qos_params(w, f)?;
+                }
+                Ok(())
+            },
+        )?);
+    }
+    encode_container(&ies)
+}
+
+fn decode_qos_add_or_modify_item(r: &mut Reader, budget: &mut Budget) -> CodecResult<QosFlow> {
+    let ext = r.extension_bit("QosFlowAddOrModifyRequestItem")?;
+    let has_params = r.bit("QosFlowAddOrModifyRequestItem")?;
+    let has_erab = r.bit("QosFlowAddOrModifyRequestItem")?;
+    let has_ext = r.bit("QosFlowAddOrModifyRequestItem")?;
+    if r.extension_bit("qosFlowIdentifier")? {
+        return Err(semantic("a QFI beyond 63"));
+    }
+    let qfi = r.constrained(0, 63, "qosFlowIdentifier")? as u8;
+    if !has_params {
+        return Err(semantic(format!(
+            "QoS flow {qfi} is modified without qosFlowLevelQosParameters, which NetGet does \
+             not decode"
+        )));
+    }
+    let (five_qi, arp_priority) = decode_qos_params(r, budget)?;
+    if has_erab {
+        if r.extension_bit("E-RAB-ID")? {
+            return Err(semantic("an E-RAB-ID beyond 15"));
+        }
+        r.constrained(0, 15, "E-RAB-ID")?;
+    }
+    opt_extension_container(r, has_ext, budget)?;
+    finish_sequence(r, ext)?;
+    Ok(QosFlow {
+        qfi,
+        five_qi,
+        arp_priority,
+    })
+}
+
+/// The AMBR and QoS flows of a modify request transfer. Its other IEs (tunnel modifications,
+/// network instance, flows to release, ...) are open types and stepped over by length.
+pub fn decode_modify_request_transfer(bytes: &[u8]) -> CodecResult<ModifyRequestTransfer> {
+    let ies = decode_container(bytes)?;
+    let mut budget = Budget::default();
+    let (ambr_dl_bps, ambr_ul_bps) = match ies
+        .iter()
+        .find(|i| i.id == IE_PDU_SESSION_AGGREGATE_MAXIMUM_BIT_RATE)
+    {
+        Some(ie) => {
+            let (dl, ul) = decode_ie(ie, |r| decode_ambr(r, &mut budget))?;
+            (Some(dl), Some(ul))
+        }
+        None => (None, None),
+    };
+    let qos_flows = match ies
+        .iter()
+        .find(|i| i.id == IE_QOS_FLOW_ADD_OR_MODIFY_REQUEST_LIST)
+    {
+        Some(ie) => decode_ie(ie, |r| {
+            let n = r.size(1, 64, "QosFlowAddOrModifyRequestList")?;
+            if n > MAX_QOS_FLOWS {
+                return Err(AperError(format!("{n} QoS flows exceeds {MAX_QOS_FLOWS}")).into());
+            }
+            budget.take(n, "QosFlowAddOrModifyRequestList")?;
+            (0..n)
+                .map(|_| decode_qos_add_or_modify_item(r, &mut budget))
+                .collect()
+        })?,
+        None => Vec::new(),
+    };
+    Ok(ModifyRequestTransfer {
+        ambr_dl_bps,
+        ambr_ul_bps,
+        qos_flows,
+    })
+}
+
+/// One item of a PDU Session Resource Modify Request (ModReq) list.
+#[derive(Debug, Clone)]
+pub struct ModifyItem {
+    pub pdu_session_id: u8,
+    pub nas: Option<Vec<u8>>,
+    pub transfer: Vec<u8>,
+}
+
+/// PDU Session Resource Modify Request (TS 38.413 9.2.1.5).
+pub fn pdu_session_resource_modify_request(
+    amf: u64,
+    ran: u64,
+    items: &[ModifyItem],
+) -> EncodeResult<Vec<u8>> {
+    check_session_count(items.len(), "PDUSessionResourceModifyListModReq")?;
+    let list = encode_ie(
+        IE_PDU_SESSION_RESOURCE_MODIFY_LIST_MOD_REQ,
+        Criticality::Reject,
+        |w| {
+            w.size(items.len(), 1, 256, "PDUSessionResourceModifyListModReq")?;
+            for it in items {
+                // PDUSessionResourceModifyItemModReq: ext, nAS-PDU, iE-Extensions.
+                w.bit(false);
+                w.bit(it.nas.is_some());
+                w.bit(false);
+                w.constrained(it.pdu_session_id as u64, 0, 255, "pDUSessionID")?;
+                if let Some(n) = &it.nas {
+                    if n.is_empty() || n.len() > MAX_NAS_PDU_LEN {
+                        return enc_err(format!(
+                            "NAS-PDU of {} octets is outside 1..{MAX_NAS_PDU_LEN}",
+                            n.len()
+                        ));
+                    }
+                    w.octet_string(n, "NAS-PDU")?;
+                }
+                w.octet_string(&it.transfer, "pDUSessionResourceModifyRequestTransfer")?;
+            }
+            Ok(())
+        },
+    )?;
+    build(
+        PduKind::Initiating,
+        PROC_PDU_SESSION_RESOURCE_MODIFY,
+        Criticality::Reject,
+        vec![
+            amf_ue_ngap_id_ie(amf, Criticality::Reject)?,
+            ran_ue_ngap_id_ie(ran, Criticality::Reject)?,
+            list,
+        ],
+    )
+}
+
+pub fn parse_pdu_session_resource_modify_request(
+    pdu: &Pdu,
+) -> CodecResult<(u64, u64, Vec<ModifyItem>)> {
+    let mut budget = Budget::default();
+    let amf = decode_amf_ue_ngap_id(pdu.require(IE_AMF_UE_NGAP_ID)?)?;
+    let ran = decode_ran_ue_ngap_id(pdu.require(IE_RAN_UE_NGAP_ID)?)?;
+    let items = decode_ie(
+        pdu.require(IE_PDU_SESSION_RESOURCE_MODIFY_LIST_MOD_REQ)?,
+        |r| {
+            let n = r.size(1, 256, "PDUSessionResourceModifyListModReq")?;
+            if n > MAX_PDU_SESSIONS {
+                return Err(
+                    AperError(format!("{n} PDU sessions exceeds {MAX_PDU_SESSIONS}")).into(),
+                );
+            }
+            budget.take(n, "PDUSessionResourceModifyListModReq")?;
+            let mut out = Vec::with_capacity(n);
+            for _ in 0..n {
+                let ext = r.extension_bit("PDUSessionResourceModifyItemModReq")?;
+                let has_nas = r.bit("PDUSessionResourceModifyItemModReq")?;
+                let has_ext = r.bit("PDUSessionResourceModifyItemModReq")?;
+                let psi = r.constrained(0, 255, "pDUSessionID")? as u8;
+                let nas = if has_nas {
+                    let n = r.octet_string(MAX_NAS_PDU_LEN, "NAS-PDU")?;
+                    if n.is_empty() {
+                        return Err(semantic("empty NAS-PDU"));
+                    }
+                    Some(n.to_vec())
+                } else {
+                    None
+                };
+                let transfer = r
+                    .octet_string(MAX_PDU_LEN, "pDUSessionResourceModifyRequestTransfer")?
+                    .to_vec();
+                opt_extension_container(r, has_ext, &mut budget)?;
+                finish_sequence(r, ext)?;
+                out.push(ModifyItem {
+                    pdu_session_id: psi,
+                    nas,
+                    transfer,
+                });
+            }
+            Ok(out)
+        },
+    )?;
+    Ok((amf, ran, items))
+}
+
+/// `PDUSessionResourceModifyResponseTransfer` (TS 38.413 9.3.4.4) with only
+/// qosFlowAddOrModifyResponseList set: the QFIs the gNB added or modified.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModifyResponseTransfer {
+    pub qfis: Vec<u8>,
+}
+
+pub fn encode_modify_response_transfer(t: &ModifyResponseTransfer) -> EncodeResult<Vec<u8>> {
+    if t.qfis.len() > MAX_QOS_FLOWS {
+        return enc_err(format!(
+            "{} QoS flows exceeds {MAX_QOS_FLOWS}",
+            t.qfis.len()
+        ));
+    }
+    let mut w = Writer::new();
+    // ext; dL-NGU-UP-TNLInformation, uL-NGU-UP-TNLInformation, qosFlowAddOrModifyResponseList,
+    // additionalDLQosFlowPerTNLInformation, qosFlowFailedToAddOrModifyList, iE-Extensions.
+    w.bit(false);
+    w.bit(false);
+    w.bit(false);
+    w.bit(!t.qfis.is_empty());
+    w.bit(false);
+    w.bit(false);
+    w.bit(false);
+    if !t.qfis.is_empty() {
+        w.size(t.qfis.len(), 1, 64, "QosFlowAddOrModifyResponseList")?;
+        for q in &t.qfis {
+            // QosFlowAddOrModifyResponseItem: ext, iE-Extensions; QFI ext.
+            w.bit(false);
+            w.bit(false);
+            w.bit(false);
+            w.constrained(*q as u64, 0, 63, "qosFlowIdentifier")?;
+        }
+    }
+    Ok(w.finish())
+}
+
+/// The QFIs of a modify response transfer. Both tunnels, when present, are decoded (and
+/// discarded) to reach the list; what follows it (additional DL tunnels, failed flows,
+/// extensions) is bounded by the octet string and not interpreted.
+pub fn decode_modify_response_transfer(bytes: &[u8]) -> CodecResult<ModifyResponseTransfer> {
+    let mut r = Reader::new(bytes);
+    let mut budget = Budget::default();
+    r.extension_bit("PDUSessionResourceModifyResponseTransfer")?;
+    let mut present = [false; 6];
+    for p in present.iter_mut() {
+        *p = r.bit("PDUSessionResourceModifyResponseTransfer")?;
+    }
+    if present[0] {
+        decode_tunnel(&mut r, &mut budget)?;
+    }
+    if present[1] {
+        decode_tunnel(&mut r, &mut budget)?;
+    }
+    let mut qfis = Vec::new();
+    if present[2] {
+        let n = r.size(1, 64, "QosFlowAddOrModifyResponseList")?;
+        if n > MAX_QOS_FLOWS {
+            return Err(AperError(format!("{n} QoS flows exceeds {MAX_QOS_FLOWS}")).into());
+        }
+        budget.take(n, "QosFlowAddOrModifyResponseList")?;
+        for _ in 0..n {
+            let ext = r.extension_bit("QosFlowAddOrModifyResponseItem")?;
+            let has_ext = r.bit("QosFlowAddOrModifyResponseItem")?;
+            if r.extension_bit("qosFlowIdentifier")? {
+                return Err(semantic("a QFI beyond 63"));
+            }
+            qfis.push(r.constrained(0, 63, "qosFlowIdentifier")? as u8);
+            opt_extension_container(&mut r, has_ext, &mut budget)?;
+            finish_sequence(&mut r, ext)?;
+        }
+    }
+    Ok(ModifyResponseTransfer { qfis })
+}
+
+/// What a gNB answered to PDU Session Resource Modify: the modified sessions with their
+/// response transfers, and the failed ones with their causes.
+#[derive(Debug, Clone, Default)]
+pub struct ModifyOutcome {
+    pub amf_ue_ngap_id: u64,
+    pub ran_ue_ngap_id: u64,
+    pub modified: Vec<(u8, ModifyResponseTransfer)>,
+    pub failed: Vec<(u8, Cause)>,
+}
+
+/// PDU Session Resource Modify Response (TS 38.413 9.2.1.6). A failed item's
+/// PDUSessionResourceModifyUnsuccessfulTransfer has the setup unsuccessful transfer's shape.
+pub fn pdu_session_resource_modify_response(
+    amf: u64,
+    ran: u64,
+    modified: &[(u8, ModifyResponseTransfer)],
+    failed: &[(u8, Cause)],
+) -> EncodeResult<Vec<u8>> {
+    let mut ies = vec![
+        amf_ue_ngap_id_ie(amf, Criticality::Ignore)?,
+        ran_ue_ngap_id_ie(ran, Criticality::Ignore)?,
+    ];
+    if !modified.is_empty() {
+        check_session_count(modified.len(), "PDUSessionResourceModifyListModRes")?;
+        let items = modified
+            .iter()
+            .map(|(p, t)| Ok((*p, encode_modify_response_transfer(t)?)))
+            .collect::<EncodeResult<Vec<_>>>()?;
+        ies.push(encode_outcome_list(
+            IE_PDU_SESSION_RESOURCE_MODIFY_LIST_MOD_RES,
+            &items,
+        )?);
+    }
+    if !failed.is_empty() {
+        check_session_count(failed.len(), "PDUSessionResourceFailedToModifyListModRes")?;
+        let items = failed
+            .iter()
+            .map(|(p, c)| Ok((*p, encode_unsuccessful_transfer(c)?)))
+            .collect::<EncodeResult<Vec<_>>>()?;
+        ies.push(encode_outcome_list(
+            IE_PDU_SESSION_RESOURCE_FAILED_TO_MODIFY_LIST_MOD_RES,
+            &items,
+        )?);
+    }
+    build(
+        PduKind::Successful,
+        PROC_PDU_SESSION_RESOURCE_MODIFY,
+        Criticality::Reject,
+        ies,
+    )
+}
+
+pub fn parse_pdu_session_resource_modify_response(pdu: &Pdu) -> CodecResult<ModifyOutcome> {
+    let mut budget = Budget::default();
+    let mut out = ModifyOutcome {
+        amf_ue_ngap_id: decode_amf_ue_ngap_id(pdu.require(IE_AMF_UE_NGAP_ID)?)?,
+        ran_ue_ngap_id: decode_ran_ue_ngap_id(pdu.require(IE_RAN_UE_NGAP_ID)?)?,
+        ..Default::default()
+    };
+    if let Some(ie) = pdu.ie(IE_PDU_SESSION_RESOURCE_MODIFY_LIST_MOD_RES) {
+        for (psi, t) in decode_outcome_list(ie, &mut budget)? {
+            out.modified
+                .push((psi, decode_modify_response_transfer(&t)?));
+        }
+    }
+    if let Some(ie) = pdu.ie(IE_PDU_SESSION_RESOURCE_FAILED_TO_MODIFY_LIST_MOD_RES) {
+        for (psi, t) in decode_outcome_list(ie, &mut budget)? {
+            out.failed.push((psi, decode_unsuccessful_transfer(&t)?));
+        }
+    }
+    Ok(out)
+}
+
+/// Paging (TS 38.413 9.2.4.1): the UE's 5G-S-TMSI, an optional paging DRX (`"v32"` ..
+/// `"v256"`) and the tracking areas to page in, `(PLMN, TAC)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Paging {
+    pub amf_set_id: u16,
+    pub amf_pointer: u8,
+    pub tmsi: u32,
+    pub tais: Vec<(Plmn, u32)>,
+    pub paging_drx: Option<String>,
+}
+
+pub fn paging(p: &Paging) -> EncodeResult<Vec<u8>> {
+    if p.tais.is_empty() || p.tais.len() > MAX_PAGING_TAIS {
+        return enc_err(format!(
+            "{} TAIs is outside 1..{MAX_PAGING_TAIS}",
+            p.tais.len()
+        ));
+    }
+    // UEPagingIdentity ::= CHOICE { fiveG-S-TMSI, choice-Extensions }: two root alternatives and
+    // no extension marker, so the index is one bit and there is no extension bit before it.
+    let mut ies = vec![encode_ie(
+        IE_UE_PAGING_IDENTITY,
+        Criticality::Ignore,
+        |w| {
+            put_choice(w, 0, 2, "UEPagingIdentity")?;
+            write_five_g_s_tmsi(w, p.amf_set_id, p.amf_pointer, p.tmsi)
+        },
+    )?];
+    if let Some(d) = &p.paging_drx {
+        let i = enum_index(PAGING_DRX, d, "paging_drx")?;
+        ies.push(encode_ie(IE_PAGING_DRX, Criticality::Ignore, |w| {
+            Ok(w.enumerated(i, false, 4, true, "PagingDRX")?)
+        })?);
+    }
+    ies.push(encode_ie(
+        IE_TAI_LIST_FOR_PAGING,
+        Criticality::Ignore,
+        |w| {
+            w.size(p.tais.len(), 1, 16, "TAIListForPaging")?;
+            for (plmn, tac) in &p.tais {
+                plmn.check()?;
+                if *tac > 0xFF_FFFF {
+                    return enc_err(format!("tac {tac} does not fit in three octets"));
+                }
+                // TAIListForPagingItem: ext, iE-Extensions; TAI: ext, iE-Extensions.
+                w.bit(false);
+                w.bit(false);
+                w.bit(false);
+                w.bit(false);
+                plmn.encode(w);
+                w.fixed_octets(&tac_octets(*tac as u64));
+            }
+            Ok(())
+        },
+    )?);
+    build(PduKind::Initiating, PROC_PAGING, Criticality::Ignore, ies)
+}
+
+pub fn parse_paging(pdu: &Pdu) -> CodecResult<Paging> {
+    let mut budget = Budget::default();
+    let (amf_set_id, amf_pointer, tmsi) = decode_ie(pdu.require(IE_UE_PAGING_IDENTITY)?, |r| {
+        choice(r, 2, "UEPagingIdentity")?;
+        read_five_g_s_tmsi(r, &mut budget)
+    })?;
+    let paging_drx = match pdu.ie(IE_PAGING_DRX) {
+        Some(ie) => Some(decode_paging_drx(ie)?),
+        None => None,
+    };
+    let tais = decode_ie(pdu.require(IE_TAI_LIST_FOR_PAGING)?, |r| {
+        let n = r.size(1, 16, "TAIListForPaging")?;
+        if n > MAX_PAGING_TAIS {
+            return Err(AperError(format!("{n} TAIs exceeds {MAX_PAGING_TAIS}")).into());
+        }
+        budget.take(n, "TAIListForPaging")?;
+        let mut out = Vec::with_capacity(n);
+        for _ in 0..n {
+            let ext = r.extension_bit("TAIListForPagingItem")?;
+            let has_ext = r.bit("TAIListForPagingItem")?;
+            let text = r.extension_bit("TAI")?;
+            let thas = r.bit("TAI")?;
+            let plmn = Plmn::decode(r)?;
+            let tac = decode_tac(r)? as u32;
+            opt_extension_container(r, thas, &mut budget)?;
+            finish_sequence(r, text)?;
+            opt_extension_container(r, has_ext, &mut budget)?;
+            finish_sequence(r, ext)?;
+            out.push((plmn, tac));
+        }
+        Ok(out)
+    })?;
+    Ok(Paging {
+        amf_set_id,
+        amf_pointer,
+        tmsi,
+        tais,
+        paging_drx,
+    })
+}

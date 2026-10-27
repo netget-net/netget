@@ -35,6 +35,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &["proto/etcd"],
         )?;
     }
+    {
+        // Hadoop 3.5.0's IPC headers and the HDFS client protocols (ClientNamenodeProtocol and
+        // DataTransferProtocol), copied unmodified from the Apache Hadoop 3.5.0 source release
+        // (Apache-2.0, licence headers kept). The HDFS server and client share the generated
+        // `hadoop.common` and `hadoop.hdfs` modules (src/server/hdfs/proto.rs).
+        println!("cargo:rerun-if-changed=proto/hadoop");
+        prost_build::Config::new().compile_protos(
+            &[
+                "proto/hadoop/RpcHeader.proto",
+                "proto/hadoop/IpcConnectionContext.proto",
+                "proto/hadoop/ProtobufRpcEngine2.proto",
+                "proto/hadoop/ClientNamenodeProtocol.proto",
+                "proto/hadoop/datatransfer.proto",
+            ],
+            &["proto/hadoop"],
+        )?;
+    }
 
     Ok(())
 }

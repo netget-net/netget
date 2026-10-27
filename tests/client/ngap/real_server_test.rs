@@ -258,3 +258,499 @@ async fn open5gs_refuses_a_gnb_from_a_plmn_it_does_not_serve() {
         "the AMF's cause is carried through: {detail}"
     );
 }
+
+// ----------------------------------------------------------------------------------------------
+// A whole Open5GS core: registration with 5G-AKA and NAS security, and a PDU session
+// ----------------------------------------------------------------------------------------------
+
+const MONGO_HINT: InstallHint = InstallHint {
+    brew: "mongodb-community (and Open5GS, which needs Linux for SCTP)",
+    apt: "mongodb-org-server and mongodb-mongosh (repo.mongodb.org), plus open5gs-{nrf,ausf,udm,udr,pcf,nssf,bsf,smf,upf,amf} from ppa:open5gs/latest",
+};
+
+/// The core's addresses: one loopback /24 of its own, each network function on its usual
+/// port. There is one full-core test, so nothing else binds these.
+const CORE: &str = "127.0.20";
+
+fn nf_config(dir: &std::path::Path, nf: &str) -> String {
+    let log = format!(
+        "logger:\n  file:\n    path: {}/{nf}.log\n  level: info\nglobal:\n  max:\n    ue: 64\n",
+        dir.display()
+    );
+    let sbi = |ip: u8| {
+        format!(
+            "  sbi:\n    server:\n      - address: {CORE}.{ip}\n        port: 7777\n    client:\n      nrf:\n        - uri: http://{CORE}.10:7777\n"
+        )
+    };
+    let db = format!("db_uri: mongodb://{CORE}.30/open5gs\n");
+    match nf {
+        "nrf" => format!("{log}nrf:\n  serving:\n    - plmn_id:\n        mcc: 001\n        mnc: 01\n  sbi:\n    server:\n      - address: {CORE}.10\n        port: 7777\n"),
+        "ausf" => format!("{log}ausf:\n{}", sbi(11)),
+        "udm" => format!("{log}udm:\n{}", sbi(12)),
+        "udr" => format!("{db}{log}udr:\n{}", sbi(20)),
+        "pcf" => format!("{db}{log}pcf:\n{}", sbi(13)),
+        "nssf" => format!(
+            "{log}nssf:\n{}      nsi:\n        - uri: http://{CORE}.10:7777\n          s_nssai:\n            sst: 1\n",
+            sbi(14)
+        ),
+        "bsf" => format!("{log}bsf:\n{}", sbi(15)),
+        "smf" => format!(
+            "{log}smf:\n{}  pfcp:\n    server:\n      - address: {CORE}.4\n    client:\n      upf:\n        - address: {CORE}.7\n  gtpu:\n    server:\n      - address: {CORE}.4\n  session:\n    - subnet: 10.45.0.0/16\n      gateway: 10.45.0.1\n    - subnet: 2001:db8:cafe::/48\n      gateway: 2001:db8:cafe::1\n  dns:\n    - 8.8.8.8\n  mtu: 1400\n",
+            sbi(4)
+        ),
+        "upf" => format!(
+            "{log}upf:\n  pfcp:\n    server:\n      - address: {CORE}.7\n  gtpu:\n    server:\n      - address: {CORE}.7\n  session:\n    - subnet: 10.45.0.0/16\n      gateway: 10.45.0.1\n      dev: ngtun0\n    - subnet: 2001:db8:cafe::/48\n      gateway: 2001:db8:cafe::1\n      dev: ngtun0\n"
+        ),
+        "amf" => format!(
+            "{log}amf:\n{}  ngap:\n    server:\n      - address: {CORE}.5\n  guami:\n    - plmn_id:\n        mcc: 001\n        mnc: 01\n      amf_id:\n        region: 2\n        set: 1\n  tai:\n    - plmn_id:\n        mcc: 001\n        mnc: 01\n      tac: 1\n  plmn_support:\n    - plmn_id:\n        mcc: 001\n        mnc: 01\n      s_nssai:\n        - sst: 1\n  security:\n    integrity_order : [ NIA2, NIA1, NIA0 ]\n    ciphering_order : [ NEA0, NEA1, NEA2 ]\n  network_name:\n    full: NetGetTest\n  amf_name: open5gs-amf-netget\n  time:\n    t3512:\n      value: 540\n",
+            sbi(5)
+        ),
+        other => panic!("no config for {other}"),
+    }
+}
+
+/// The subscriber, as `open5gs-dbctl add` would write it (Open5GS's UDR schema).
+const SUBSCRIBER: &str = r#"db.subscribers.insertOne({schema_version: NumberInt(1), imsi: "001010000000003", msisdn: [], imeisv: [], mme_host: [], mm_realm: [], purge_flag: [], slice: [{sst: NumberInt(1), default_indicator: true, session: [{name: "internet", type: NumberInt(3), qos: {index: NumberInt(9), arp: {priority_level: NumberInt(8), pre_emption_capability: NumberInt(1), pre_emption_vulnerability: NumberInt(1)}}, ambr: {downlink: {value: NumberInt(1), unit: NumberInt(3)}, uplink: {value: NumberInt(1), unit: NumberInt(3)}}, pcc_rule: []}]}], security: {k: "465B5CE8B199B49FAA5F0A2EE238A6BC", op: null, opc: "E8ED289DEBA952E4283B54E88E6183CA", amf: "8000", sqn: NumberLong("64")}, ambr: {downlink: {value: NumberInt(1), unit: NumberInt(3)}, uplink: {value: NumberInt(1), unit: NumberInt(3)}}, access_restriction_data: 32, network_access_mode: 0, subscriber_status: 0, operator_determined_barring: 0, subscribed_rau_tau_timer: 12, __v: 0})"#;
+
+/// MongoDB and ten Open5GS network functions, each killed with the test.
+struct Core5g {
+    procs: Vec<(String, crate::helpers::real_server::ToolProcess)>,
+    _dir: tempfile::TempDir,
+}
+
+impl Core5g {
+    fn dump(&self) -> String {
+        self.procs
+            .iter()
+            .map(|(n, p)| {
+                let lines = p.lines();
+                let tail = &lines[lines.len().saturating_sub(40)..];
+                format!("--- {n} ---\n{}", tail.join("\n"))
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn lines_of(&self, nf: &str) -> Vec<String> {
+        self.procs
+            .iter()
+            .find(|(n, _)| n == nf)
+            .map(|(_, p)| p.lines())
+            .unwrap_or_default()
+    }
+
+    async fn wait(&self, nf: &str, needle: &str, secs: u64) {
+        let p = &self.procs.iter().find(|(n, _)| n == nf).unwrap().1;
+        if let Err(e) = p
+            .wait_for_line(needle, Duration::from_secs(secs), |l| l.contains(needle))
+            .await
+        {
+            panic!("{nf} never logged {needle:?}: {e}\n{}", self.dump());
+        }
+    }
+
+    async fn start() -> Core5g {
+        use crate::helpers::real_server::{run_tool, ToolProcess};
+        use std::process::Command;
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("db");
+        std::fs::create_dir_all(&db).unwrap();
+        let mut procs = Vec::new();
+        let mut mongod = Command::new("mongod");
+        mongod.arg("--dbpath").arg(&db).args([
+            "--bind_ip",
+            &format!("{CORE}.30"),
+            "--port",
+            "27017",
+        ]);
+        procs.push((
+            "mongod".to_string(),
+            ToolProcess::spawn(mongod, "mongod", MONGO_HINT).unwrap(),
+        ));
+        let mut core = Core5g { procs, _dir: dir };
+        core.wait("mongod", "Waiting for connections", 60).await;
+        let mut sh = Command::new("mongosh");
+        sh.args([
+            "--quiet",
+            &format!("mongodb://{CORE}.30/open5gs"),
+            "--eval",
+            SUBSCRIBER,
+        ]);
+        if let Err(e) = run_tool(sh, "mongosh", MONGO_HINT).await {
+            panic!("provisioning the subscriber: {e}\n{}", core.dump());
+        }
+        for nf in [
+            "nrf", "ausf", "udm", "udr", "pcf", "nssf", "bsf", "upf", "smf", "amf",
+        ] {
+            let path = core._dir.path().join(format!("{nf}.yaml"));
+            std::fs::write(&path, nf_config(core._dir.path(), nf)).unwrap();
+            // Each binary named as a literal, so the evidence scan reads which peers run.
+            let mut cmd = match nf {
+                "nrf" => Command::new("open5gs-nrfd"),
+                "ausf" => Command::new("open5gs-ausfd"),
+                "udm" => Command::new("open5gs-udmd"),
+                "udr" => Command::new("open5gs-udrd"),
+                "pcf" => Command::new("open5gs-pcfd"),
+                "nssf" => Command::new("open5gs-nssfd"),
+                "bsf" => Command::new("open5gs-bsfd"),
+                "upf" => Command::new("open5gs-upfd"),
+                "smf" => Command::new("open5gs-smfd"),
+                _ => Command::new("open5gs-amfd"),
+            };
+            cmd.arg("-c").arg(&path);
+            let p = ToolProcess::spawn(cmd, &format!("open5gs-{nf}d"), MONGO_HINT).unwrap();
+            core.procs.push((nf.to_string(), p));
+            let ready = match nf {
+                "upf" => "UPF initialize...done",
+                "amf" => "ngap_server()",
+                _ => "initialize...done",
+            };
+            core.wait(nf, ready, 30).await;
+        }
+        // The SMF must hold its PFCP association with the UPF before a session can be made.
+        core.wait("smf", "PFCP associated", 30).await;
+        core
+    }
+}
+
+/// The model as a gNB with the subscriber's credentials: bring the UE in; once it is registered
+/// ask for an internet session; release it; ask for an IPv4v6 session; ask the AMF to release
+/// the UE's context for inactivity; bring the idle UE back with a Service Request; and ask for
+/// 5QI 8 on the session it came back with.
+const CORE_POLICY: &str = r#"import json, sys
+i = json.load(sys.stdin); t = i["event_type_id"]; e = i["event"]
+suci = {"type": "suci", "plmn": {"mcc": "001", "mnc": "01"}, "routing_indicator": "0000", "msin": "0000000003"}
+a = []
+if t == "ngap_connected":
+    a = [{"type": "ngap_initial_ue_message", "nas": {"message": "registration_request",
+          "registration_type": "initial", "mobile_identity": suci}}]
+elif t == "ngap_ue_registered":
+    a = [{"type": "ngap_pdu_session_request", "ran_ue_ngap_id": e["ran_ue_ngap_id"],
+          "pdu_session_id": 1, "dnn": "internet", "s_nssai": {"sst": 1}}]
+elif t == "ngap_pdu_session_established" and e["result"] == "accepted":
+    if e["pdu_session_id"] == 1:
+        a = [{"type": "ngap_pdu_session_release", "ran_ue_ngap_id": e["ran_ue_ngap_id"], "pdu_session_id": 1}]
+    else:
+        a = [{"type": "ngap_ue_context_release_request", "ran_ue_ngap_id": e["ran_ue_ngap_id"]}]
+elif t == "ngap_pdu_session_released" and e["result"] == "released" and e["pdu_session_id"] == 1:
+    a = [{"type": "ngap_pdu_session_request", "ran_ue_ngap_id": e["ran_ue_ngap_id"],
+          "pdu_session_id": 2, "dnn": "internet", "s_nssai": {"sst": 1}, "pdu_session_type": "ipv4v6"}]
+elif t == "ngap_ue_context_release" and e.get("cm_state") == "idle":
+    a = [{"type": "ngap_service_request", "supi": e["supi"]}]
+elif t == "ngap_service_accepted":
+    a = [{"type": "ngap_pdu_session_modification", "ran_ue_ngap_id": e["ran_ue_ngap_id"],
+          "pdu_session_id": 2, "five_qi": 8}]
+print(json.dumps({"actions": a}))"#;
+
+/// NetGet's gNB against a whole Open5GS 2.8 core (NRF, AUSF, UDM, UDR on MongoDB, PCF, NSSF,
+/// BSF, SMF, UPF, AMF). The subscriber is provisioned in Open5GS's own database; NetGet's UE
+/// verifies the AUTN Open5GS's UDM built, Open5GS's AUSF accepts NetGet's RES*, the security
+/// mode procedure completes, Open5GS registers the UE and hands the gNB a K_gNB equal to the one
+/// NetGet's UE derived, and the SMF allocates the PDU session the model asked for.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn open5gs_registers_netgets_ue_and_creates_its_pdu_session() {
+    let core = Core5g::start().await;
+    let capture = LiveCapture::start(38412).await;
+    let state = AppState::new_with_options(false, "http://127.0.0.1:1".into());
+    // NetGet's own status lines, printed (the last of them) when a capture assertion fails.
+    let (tx, mut status_rx) = mpsc::unbounded_channel::<String>();
+    let netget_log = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    {
+        let sink = netget_log.clone();
+        tokio::spawn(async move {
+            while let Some(l) = status_rx.recv().await {
+                sink.lock().unwrap().push(l);
+            }
+        });
+    }
+    let netget_tail = move || {
+        let lines = netget_log.lock().unwrap();
+        lines[lines.len().saturating_sub(40)..].join("\n")
+    };
+    let id = ClientForm {
+        protocol: "ngap".into(),
+        remote_addr: Some(format!("{CORE}.5:38412")),
+        instruction: Some("Be a gNB".into()),
+        startup_params: Some(json!({
+            "transport": "sctp", "mcc": "001", "mnc": "01", "tac": 1, "sst": 1,
+            "supi": "imsi-001010000000003",
+            "subscriber_key": "465B5CE8B199B49FAA5F0A2EE238A6BC",
+            "subscriber_opc": "E8ED289DEBA952E4283B54E88E6183CA",
+        })),
+        event_handlers: Some(vec![json!({"event_pattern": "*", "handler": {"type": "script", "language": "python", "code": CORE_POLICY}})]),
+        ..Default::default()
+    }
+    .create(&state, netget::llm::OllamaClient::new("http://127.0.0.1:1"), tx)
+    .await
+    .unwrap_or_else(|e| panic!("the gNB did not connect: {e}\n{}", core.dump()));
+
+    let registered = tokio::time::timeout(
+        Duration::from_secs(60),
+        wait_event(&state, id, "ngap_ue_registered", 60, |_| true),
+    )
+    .await
+    .unwrap_or_else(|_| panic!("never registered\n{}", core.dump()));
+    assert_eq!(registered["supi"], "imsi-001010000000003", "{registered}");
+    // Open5GS sends the Registration Accept in a Downlink NAS Transport and the K_gNB later,
+    // in the Initial Context Setup that carries the first PDU session; nothing to compare yet.
+    assert_ne!(registered["k_gnb_verified"], false, "{registered}");
+    assert_eq!(registered["nas_security"]["integrity"], "NIA2");
+    assert_eq!(registered["guti"]["amf_region_id"], 2);
+    assert_eq!(
+        registered["tai_list"],
+        json!([{"plmn": {"mcc": "001", "mnc": "01"}, "tac": 1}]),
+        "Open5GS's type-10 TAI list: {registered}"
+    );
+    core.wait("amf", "[imsi-001010000000003] Registration complete", 30)
+        .await;
+
+    let session = wait_event(&state, id, "ngap_pdu_session_established", 60, |_| true).await;
+    assert_eq!(session["result"], "accepted", "{session}\n{}", core.dump());
+    assert_eq!(
+        session["k_gnb_verified"],
+        true,
+        "Open5GS's K_gNB (in the Initial Context Setup with the session) is the one NetGet's UE \
+         derived: {session}\n{}",
+        core.dump()
+    );
+    let ip = session["ue_ipv4"].as_str().unwrap_or_default().to_string();
+    assert!(ip.starts_with("10.45."), "{session}");
+    assert_eq!(session["upf_tunnel"]["address"], format!("{CORE}.7"));
+    // The SMF's own record of the session it created for this UE, with the address it gave.
+    core.wait(
+        "smf",
+        &format!("UE SUPI[imsi-001010000000003] DNN[internet] IPv4[{ip}]"),
+        30,
+    )
+    .await;
+    // The AMF saw the gNB set the session up.
+    assert!(
+        core.lines_of("amf")
+            .iter()
+            .any(|l| l.contains("UE SUPI[imsi-001010000000003] DNN[internet]")),
+        "{}",
+        core.dump()
+    );
+
+    // The model releases session 1: Open5GS's AMF hears both halves (the gNB's resource release
+    // response, N2, and the UE's Release Complete, N1) and its SMF removes the session.
+    let released = wait_event(&state, id, "ngap_pdu_session_released", 60, |_| true).await;
+    assert_eq!(
+        (
+            &released["pdu_session_id"],
+            &released["result"],
+            &released["requested_by"]
+        ),
+        (&json!(1), &json!("released"), &json!("ue")),
+        "{released}\n{}",
+        core.dump()
+    );
+    core.wait(
+        "amf",
+        "[imsi-001010000000003:1] Receive Update SM context(N2-RELEASED)",
+        30,
+    )
+    .await;
+    core.wait(
+        "amf",
+        "[imsi-001010000000003:1] Receive Update SM context(N1-RELEASED)",
+        30,
+    )
+    .await;
+    core.wait(
+        "smf",
+        "Removed Session: UE IMSI:[imsi-001010000000003] DNN:[internet:1]",
+        30,
+    )
+    .await;
+
+    // An IPv4v6 session 2: the interface identifier NetGet's UE reports is the low 64 bits of
+    // the IPv6 address Open5GS's SMF logs for it.
+    let s2 = wait_event(&state, id, "ngap_pdu_session_established", 60, |e| {
+        e["pdu_session_id"] == 2
+    })
+    .await;
+    assert_eq!(s2["result"], "accepted", "{s2}\n{}", core.dump());
+    assert_eq!(s2["pdu_session_type"], "ipv4v6", "{s2}");
+    let ip2 = s2["ue_ipv4"].as_str().unwrap_or_default().to_string();
+    let needle = format!("UE SUPI[imsi-001010000000003] DNN[internet] IPv4[{ip2}] IPv6[");
+    core.wait("smf", &needle, 30).await;
+    let line = core
+        .lines_of("smf")
+        .into_iter()
+        .find(|l| l.contains(&needle))
+        .unwrap();
+    let v6 = line
+        .split("IPv6[")
+        .nth(1)
+        .unwrap()
+        .split(']')
+        .next()
+        .unwrap();
+    let v6: std::net::Ipv6Addr = v6
+        .parse()
+        .unwrap_or_else(|_| panic!("the SMF's IPv6 address {v6:?} in {line:?}"));
+    let mut low = [0u8; 16];
+    low[8..].copy_from_slice(&v6.octets()[8..]);
+    assert_eq!(
+        s2["ue_ipv6_interface_identifier"],
+        std::net::Ipv6Addr::from(low).to_string(),
+        "{s2}\n{line}"
+    );
+
+    // The gNB asks for the UE's context to be released; Open5GS deactivates the user plane and
+    // releases it, and the UE is CM-IDLE on NetGet's side.
+    let idle = wait_event(&state, id, "ngap_ue_context_release", 60, |_| true).await;
+    assert_eq!(idle["cm_state"], "idle", "{idle}\n{}", core.dump());
+    assert_eq!(idle["pdu_sessions"], json!([2]), "{idle}");
+    core.wait("amf", "UE Context Release [Action:", 30).await;
+
+    // The model's Service Request brings it back: Open5GS's AMF verifies it (MAC at the Service
+    // Request's COUNT, the NAS message container) and its K_gNB from that COUNT equals the UE's.
+    let back = wait_event(&state, id, "ngap_service_accepted", 60, |_| true).await;
+    // Open5GS's AMF read the FiveG-S-TMSI from the Initial UE Message (AMF ID 0x20040: region 2,
+    // set 1, pointer 0, and the 5G-TMSI it assigned in the Registration Accept), then the
+    // Service Request.
+    let tmsi = registered["guti"]["tmsi"].as_u64().unwrap_or_default();
+    core.wait(
+        "amf",
+        &format!("5G-S_TMSI[AMF_ID:0x20040,M_TMSI:0x{tmsi:x}]"),
+        30,
+    )
+    .await;
+    core.wait("amf", "Service request", 30).await;
+    assert_eq!(back["trigger"], "ue", "{back}");
+    assert_eq!(back["k_gnb_verified"], true, "{back}\n{}", core.dump());
+    assert_eq!(back["pdu_session_status"], json!([2]), "{back}");
+    assert_eq!(back["user_plane_sessions"], json!([2]), "{back}");
+
+    // The UE asks for 5QI 8 on session 2. What Open5GS 2.8.0 does with it is the assertion.
+    let modified = wait_event(&state, id, "ngap_pdu_session_modified", 60, |_| true).await;
+    println!("Open5GS's answer to the modification request: {modified}");
+    // Open5GS 2.8.0 accepts it (`gsm_handle_pdu_session_modification_qos_flow_descriptions`
+    // finds QFI 1 and treats the 5QI parameter as "Nothing"): it modifies the UPF over PFCP and
+    // answers with a PDU Session Resource Modify Request whose Modification Command restates
+    // the flow with the subscribed 5QI 9 — the 8 the UE asked for is not granted — and carries
+    // no session AMBR and no QoS rule.
+    assert_eq!(modified["pdu_session_id"], 2, "{modified}");
+    assert_eq!(modified["result"], "modified", "{modified}");
+    assert_eq!(modified["requested_by"], "ue", "{modified}");
+    assert_eq!(modified["requested_five_qi"], 8, "{modified}");
+    assert_eq!(modified["five_qi"], 9, "{modified}");
+    assert_eq!(modified["qfi"], 1, "{modified}");
+    assert_eq!(modified["session_ambr_kbps"], Value::Null, "{modified}");
+    assert_eq!(
+        modified["ies"],
+        json!(["qos_flow_descriptions"]),
+        "{modified}"
+    );
+
+    // The Modification Complete is the last message NetGet writes. It was handed to the kernel
+    // before the event above was raised, so wait for the condition the assertions below need —
+    // that message in the capture — before stopping it.
+    if let Err(nas) = capture
+        .wait_for_nas(30, |nas| {
+            nas.iter()
+                .any(|f| f.src_port != 38412 && f.sm_types.contains(&0xcc))
+        })
+        .await
+    {
+        panic!(
+            "NetGet's Modification Complete never reached the capture: {nas:#?}\n--- NetGet ---\n{}\n{}",
+            netget_tail(),
+            core.dump()
+        );
+    }
+    let (frames, nas) = capture.finish_with_nas().await;
+    let netget_port = frames
+        .iter()
+        .find(|f| f.src_port != 38412)
+        .map(|f| f.src_port)
+        .expect("NetGet sent nothing");
+    assert_capture(
+        &frames,
+        netget_port,
+        &[
+            (codec::PROC_INITIAL_UE_MESSAGE, 0),
+            (codec::PROC_UPLINK_NAS_TRANSPORT, 0),
+            // Open5GS sets the first session up inside the Initial Context Setup, so NetGet's
+            // answer carries it (PDUSessionResourceSetupListCxtRes).
+            (codec::PROC_INITIAL_CONTEXT_SETUP, 1),
+            // The release answered, the context release asked for.
+            (codec::PROC_PDU_SESSION_RESOURCE_RELEASE, 1),
+            (codec::PROC_UE_CONTEXT_RELEASE_REQUEST, 0),
+            (codec::PROC_UE_CONTEXT_RELEASE, 1),
+            (codec::PROC_PDU_SESSION_RESOURCE_MODIFY, 1),
+        ],
+    );
+    for code in [
+        codec::PROC_INITIAL_CONTEXT_SETUP,
+        codec::PROC_PDU_SESSION_RESOURCE_RELEASE,
+        codec::PROC_UE_CONTEXT_RELEASE,
+        codec::PROC_PDU_SESSION_RESOURCE_MODIFY,
+    ] {
+        assert!(
+            frames.iter().any(|f| f.src_port == 38412
+                && f.procedures
+                    .iter()
+                    .zip(&f.pdu_kinds)
+                    .any(|(c, k)| *c == code && *k == 0)),
+            "Open5GS never sent procedure {code}: {frames:#?}"
+        );
+    }
+    let mine = |mm: u8| {
+        nas.iter()
+            .any(|f| f.src_port == netget_port && f.mm_types.contains(&mm))
+    };
+    let theirs = |mm: u8| {
+        nas.iter()
+            .any(|f| f.src_port == 38412 && f.mm_types.contains(&mm))
+    };
+    // ... and the Service Request (0x4c), integrity protected (header type 1).
+    for mm in [0x57, 0x5e, 0x43, 0x67, 0x4c] {
+        assert!(mine(mm), "NetGet's 5GMM 0x{mm:02x} not dissected: {nas:#?}");
+    }
+    // ... and the Service Accept (0x4e).
+    for mm in [0x56, 0x5d, 0x42, 0x4e] {
+        assert!(
+            theirs(mm),
+            "Open5GS's 5GMM 0x{mm:02x} not dissected: {nas:#?}"
+        );
+    }
+    assert!(nas
+        .iter()
+        .any(|f| f.src_port == netget_port && f.security_headers.contains(&4)));
+    assert!(nas
+        .iter()
+        .any(|f| f.src_port == netget_port && f.sm_types.contains(&0xc1)));
+    assert!(nas
+        .iter()
+        .any(|f| f.src_port == 38412 && f.sm_types.contains(&0xc2)));
+    assert!(nas
+        .iter()
+        .any(|f| f.src_port == netget_port && f.security_headers.contains(&1)));
+    // The UE's Release Request and Release Complete, Open5GS's Release Command.
+    // ... and the Modification Request and Complete; Open5GS's Modification Command.
+    for sm in [0xd1u8, 0xd4, 0xc9, 0xcc] {
+        assert!(
+            nas.iter()
+                .any(|f| f.src_port == netget_port && f.sm_types.contains(&sm)),
+            "NetGet's 5GSM 0x{sm:02x} not dissected: {nas:#?}\n--- NetGet ---\n{}",
+            netget_tail()
+        );
+    }
+    assert!(nas
+        .iter()
+        .any(|f| f.src_port == 38412 && f.sm_types.contains(&0xd3)));
+    assert!(nas
+        .iter()
+        .any(|f| f.src_port == 38412 && f.sm_types.contains(&0xcb)));
+    for f in &nas {
+        assert!(
+            f.experts.iter().all(|s| *s < 0x0060_0000),
+            "tshark flags NAS frame {}: {nas:#?}",
+            f.number
+        );
+    }
+    drop(core);
+}
