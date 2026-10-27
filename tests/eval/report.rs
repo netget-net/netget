@@ -5,7 +5,7 @@
 //! - `eval-results/latest.json` — every run, every verdict, and the model's
 //!   actual output for each. Machine-readable; this is what a trend line or a
 //!   regression check would read.
-//! - `EVAL_RESULTS.md` — the same data as a table a human reads, plus the
+//! - `eval-results/EVAL_RESULTS.md` — the same data as a table a human reads, plus the
 //!   ranked failure modes, which are the actionable part.
 //!
 //! Both are regenerated wholesale from one run. Nothing is merged from a
@@ -270,7 +270,7 @@ fn output_paths() -> (PathBuf, PathBuf) {
             let root = repo_root();
             (
                 root.join("eval-results").join("latest.json"),
-                root.join("EVAL_RESULTS.md"),
+                root.join("eval-results").join("EVAL_RESULTS.md"),
             )
         }
     }

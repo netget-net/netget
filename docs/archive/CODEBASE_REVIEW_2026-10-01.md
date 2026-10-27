@@ -13,7 +13,7 @@ The selected remaining audit backlog is implemented and locally validated. This 
 
 **Final validation: 376 successful test executions**, comprising 324 merged-tree regressions, 38 focused audit checks and 14 Node fixtures. The rebuilt WASM package additionally passed **43 synthetic requests**. Strict correctness/suspicious Clippy, formatting, workflow YAML parsing and reachability of 2,371 source/test files passed. No GPUs, GPU probes, real model calls, model downloads or device access were used. The Windows fixtures cross-compile; native Windows execution remains a CI boundary.
 
-The integration preserves the published protocol work at `cf3f6a74` and the signed initial review snapshot `5e3bfa0b`. Publication is authorized to `master`; the final commit and push result is reported separately. The comprehensive implementation chapter is appended below. Exact commands, logs, failure corrections and source hashes are under [audit/2026-10-02](audit/2026-10-02/verification-results.json). Earlier chapters retain their historical counts and verification-time publication statements.
+The integration preserves the published protocol work at `cf3f6a74` and the signed initial review snapshot `5e3bfa0b`. Publication is authorized to `master`; the final commit and push result is reported separately. The comprehensive implementation chapter is appended below. Exact commands, logs, failure corrections and source hashes are under [audit/2026-10-02](../../audit/2026-10-02/verification-results.json). Earlier chapters retain their historical counts and verification-time publication statements.
 
 Date: 2026-10-01. Base commit: `d34d91c09ee1731ec13eb3977c17344aeda95497`.
 
@@ -36,7 +36,7 @@ The first review inventoried 3,342 tracked files and scanned 811 Rust source fil
 3. The current file ledger identifies every changed file and whether it changed in this follow-up.
 4. The full first-pass report is retained as a historical appendix. Its old “remaining/deferred” statements are superseded by the current chapters, and its old test totals describe that earlier snapshot.
 
-Structured evidence: [final verification manifest](audit/2026-10-01/followup-verification-results.json), [native target results](audit/2026-10-01/followup-native-test-results.json), [file hashes and dispositions](audit/2026-10-01/followup-changed-files.json), [WASM source/artifact verification](audit/2026-10-01/wasm-final-verification.json), and [preserved logs](audit/2026-10-01/followup/logs/). The exact original summary is also preserved at [first-pass-consolidated.md](audit/2026-10-01/first-pass-consolidated.md).
+Structured evidence: [final verification manifest](../../audit/2026-10-01/followup-verification-results.json), [native target results](../../audit/2026-10-01/followup-native-test-results.json), [file hashes and dispositions](../../audit/2026-10-01/followup-changed-files.json), [WASM source/artifact verification](../../audit/2026-10-01/wasm-final-verification.json), and [preserved logs](../../audit/2026-10-01/followup/logs). The exact original summary is also preserved at [first-pass-consolidated.md](../../audit/2026-10-01/first-pass-consolidated.md).
 
 ## Principal completed changes
 
@@ -176,7 +176,7 @@ Final native/feature/platform results and exact command arrays are recorded by t
 
 ## Scope and authorization
 
-This follows the user's request to implement the remaining findings, including optional ones, from [server-review.md](audit/2026-10-01/server-review.md) and [runtime-review.md](audit/2026-10-01/runtime-review.md). Those reports preserve the original inventory and the distinction between full-tree scans and focused manual review. Their sections describing unfixed issues are historical; the disposition table below supersedes them.
+This follows the user's request to implement the remaining findings, including optional ones, from [server-review.md](../../audit/2026-10-01/server-review.md) and [runtime-review.md](../../audit/2026-10-01/runtime-review.md). Those reports preserve the original inventory and the distinction between full-tree scans and focused manual review. Their sections describing unfixed issues are historical; the disposition table below supersedes them.
 
 Owned source areas: `src/server/**`, `src/state/**`, `src/cli/**`, and `src/protocol/**`, with focused changes to scheduler call sites in `src/events/handler.rs` and `src/llm/actions/task_actions.rs`. The root agent owns session serialization and documentation-state bounds. The surfaces agent owns the additional scheduler execution-owner token integration with MCP. Source ownership was explicitly transferred at those boundaries to avoid conflicting edits.
 
@@ -1128,7 +1128,7 @@ Existing untracked user artifacts were preserved: `netget.log.1`, `netget.log.2`
 <a id="validation"></a>
 ## Validation and reproducibility
 
-The authoritative structured result is [verification-results.json](audit/2026-10-01/verification-results.json). Raw local build/test output remains in `tmp/audit-2026-10-01/`; those temporary logs are supporting evidence, not required source files.
+The authoritative structured result is [verification-results.json](../../audit/2026-10-01/verification-results.json). Raw local build/test output remains in `tmp/audit-2026-10-01/`; those temporary logs are supporting evidence, not required source files.
 
 | Validation set | Final result | Evidence |
 |---|---:|---|
@@ -6951,19 +6951,19 @@ Every tracked path at the inventory checkpoint appears below. Ownership labels i
 
 | Artifact | Purpose |
 |---|---|
-| [verification-results.json](audit/2026-10-01/verification-results.json) | Final results, concrete command arrays, feature/environment constraints and preserved corrected failure history |
-| [native-test-results.json](audit/2026-10-01/native-test-results.json) | Per-target counts for the 24 native regression targets |
-| [changed-files.json](audit/2026-10-01/changed-files.json) | All 119 changed source/test/workflow/documentation files, sizes and final SHA-256 digests |
-| [tracked-file-inventory.json](audit/2026-10-01/tracked-file-inventory.json) | Complete 3,342-file checkpoint inventory with sizes, owners and hashes |
-| [static-scan.json](audit/2026-10-01/static-scan.json) | Per-source-file heuristic signal locations; findings require interpretation |
-| [script-syntax-results.json](audit/2026-10-01/script-syntax-results.json) | 40 independent syntax check outcomes |
-| [core-review.md](audit/2026-10-01/core-review.md) | Standalone shared core/build/CI section |
-| [server-review.md](audit/2026-10-01/server-review.md) | Standalone server section and per-directory coverage ledger |
-| [client-review.md](audit/2026-10-01/client-review.md) | Standalone client/easy/pipe section and file inventory |
-| [runtime-review.md](audit/2026-10-01/runtime-review.md) | Standalone CLI/state/protocol section |
-| [surfaces-review.md](audit/2026-10-01/surfaces-review.md) | Standalone TUI/display/browser/npm section |
-| [automation-review.md](audit/2026-10-01/automation-review.md) | Standalone scripting/MCP section |
-| [test-infrastructure-review.md](audit/2026-10-01/test-infrastructure-review.md) | Standalone tests/examples/prompts/schema/vendor section |
+| [verification-results.json](../../audit/2026-10-01/verification-results.json) | Final results, concrete command arrays, feature/environment constraints and preserved corrected failure history |
+| [native-test-results.json](../../audit/2026-10-01/native-test-results.json) | Per-target counts for the 24 native regression targets |
+| [changed-files.json](../../audit/2026-10-01/changed-files.json) | All 119 changed source/test/workflow/documentation files, sizes and final SHA-256 digests |
+| [tracked-file-inventory.json](../../audit/2026-10-01/tracked-file-inventory.json) | Complete 3,342-file checkpoint inventory with sizes, owners and hashes |
+| [static-scan.json](../../audit/2026-10-01/static-scan.json) | Per-source-file heuristic signal locations; findings require interpretation |
+| [script-syntax-results.json](../../audit/2026-10-01/script-syntax-results.json) | 40 independent syntax check outcomes |
+| [core-review.md](../../audit/2026-10-01/core-review.md) | Standalone shared core/build/CI section |
+| [server-review.md](../../audit/2026-10-01/server-review.md) | Standalone server section and per-directory coverage ledger |
+| [client-review.md](../../audit/2026-10-01/client-review.md) | Standalone client/easy/pipe section and file inventory |
+| [runtime-review.md](../../audit/2026-10-01/runtime-review.md) | Standalone CLI/state/protocol section |
+| [surfaces-review.md](../../audit/2026-10-01/surfaces-review.md) | Standalone TUI/display/browser/npm section |
+| [automation-review.md](../../audit/2026-10-01/automation-review.md) | Standalone scripting/MCP section |
+| [test-infrastructure-review.md](../../audit/2026-10-01/test-infrastructure-review.md) | Standalone tests/examples/prompts/schema/vendor section |
 
 The seven detailed reports are embedded in full above so this Markdown file remains the primary consolidated deliverable. Temporary raw logs are available under `tmp/audit-2026-10-01/` in the current workspace; generated build directories and user runtime logs are not included in the report inventory.
 
@@ -7408,17 +7408,17 @@ or rewriting the earlier review's historical test evidence.
 
 | Check | Result | Evidence |
 |---|---|---|
-| `remaining-native-final` | Passed; 233.33 seconds | [remaining-native-final](audit/2026-10-02/logs/remaining-native-final.log) |
-| `wrapper-lifecycle-final` | Passed; 9.66 seconds | [wrapper-lifecycle-final](audit/2026-10-02/logs/wrapper-lifecycle-final.log) |
-| `pty-lifecycle-final` | Passed; 3.0 seconds | [pty-lifecycle-final](audit/2026-10-02/logs/pty-lifecycle-final.log) |
-| `integrated-native` | Passed; 81.65 seconds | [integrated-native](audit/2026-10-02/logs/integrated-native.log) |
-| `integrated-clippy-final` | Passed; 38.35 seconds | [integrated-clippy-final](audit/2026-10-02/logs/integrated-clippy-final.log) |
-| `node-regressions` | Passed; 0.73 seconds | [node-regressions](audit/2026-10-02/logs/node-regressions.log) |
-| `formatting` | Passed; 35.05 seconds | [formatting](audit/2026-10-02/logs/formatting.log) |
-| `module-reachability` | Passed; 118.3 seconds | [module-reachability](audit/2026-10-02/logs/module-reachability.log) |
-| `workflow-yaml` | Passed; 0.11 seconds | [workflow-yaml](audit/2026-10-02/logs/workflow-yaml.log) |
-| `integrated-wasm-build` | Passed; 311.08 seconds | [integrated-wasm-build](audit/2026-10-02/logs/integrated-wasm-build.log) |
-| `integrated-wasm-smoke` | Passed; 4.03 seconds | [integrated-wasm-smoke](audit/2026-10-02/logs/integrated-wasm-smoke.log) |
+| `remaining-native-final` | Passed; 233.33 seconds | [remaining-native-final](../../audit/2026-10-02/logs/remaining-native-final.log) |
+| `wrapper-lifecycle-final` | Passed; 9.66 seconds | [wrapper-lifecycle-final](../../audit/2026-10-02/logs/wrapper-lifecycle-final.log) |
+| `pty-lifecycle-final` | Passed; 3.0 seconds | [pty-lifecycle-final](../../audit/2026-10-02/logs/pty-lifecycle-final.log) |
+| `integrated-native` | Passed; 81.65 seconds | [integrated-native](../../audit/2026-10-02/logs/integrated-native.log) |
+| `integrated-clippy-final` | Passed; 38.35 seconds | [integrated-clippy-final](../../audit/2026-10-02/logs/integrated-clippy-final.log) |
+| `node-regressions` | Passed; 0.73 seconds | [node-regressions](../../audit/2026-10-02/logs/node-regressions.log) |
+| `formatting` | Passed; 35.05 seconds | [formatting](../../audit/2026-10-02/logs/formatting.log) |
+| `module-reachability` | Passed; 118.3 seconds | [module-reachability](../../audit/2026-10-02/logs/module-reachability.log) |
+| `workflow-yaml` | Passed; 0.11 seconds | [workflow-yaml](../../audit/2026-10-02/logs/workflow-yaml.log) |
+| `integrated-wasm-build` | Passed; 311.08 seconds | [integrated-wasm-build](../../audit/2026-10-02/logs/integrated-wasm-build.log) |
+| `integrated-wasm-smoke` | Passed; 4.03 seconds | [integrated-wasm-smoke](../../audit/2026-10-02/logs/integrated-wasm-smoke.log) |
 
 Windows fixture compilation passed; native Windows execution is not claimed. The source fingerprint file is conservative and includes protocol sources beyond this run’s feature set. Build outputs are ignored local artifacts, not committed binaries.
 

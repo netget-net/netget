@@ -54,7 +54,7 @@ code, pre { font-family: var(--mono); }
 .logo-mark { width: 24px; height: 24px; flex: none; }
 .lm-top { fill: var(--logo-top); } .lm-layer { fill: var(--logo-layer); }
 .nav-right { display: flex; align-items: center; gap: 1.25rem; }
-.nav-link { font-size: 0.8rem; color: var(--muted); text-decoration: none; }
+.nav-link { white-space: nowrap; font-size: 0.8rem; color: var(--muted); text-decoration: none; }
 .nav-link:hover, .footer a:hover { color: var(--green); }
 .button { display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border); border-radius: 5px; background: var(--panel); color: var(--text); text-decoration: none; font-weight: 500; }
 .button-small { padding: 0.35rem 1rem; font-size: 0.8rem; }
@@ -71,26 +71,47 @@ h1 { font-size: clamp(2.25rem, 5vw, 3.3rem); line-height: 1.12; letter-spacing: 
 .button-primary:hover { background: color-mix(in srgb, var(--green) 85%, var(--text)); color: var(--bg); }
 .section { padding: 1.8rem 0; }
 h2 { font-size: 1.3rem; font-weight: 600; letter-spacing: -0.025em; margin-bottom: 1rem; }
-/* Protocol stacks of different depths align at their base layers. */
-/* CSS fits whole columns in one row, even when JavaScript is unavailable. */
-#how-it-works { container-type: inline-size; }
-.protocol-landscape { display: flex; align-items: flex-end; gap: 10px; margin: 0; padding: 1.25rem 0 0.75rem; }
-.protocol-stack { flex: 1 1 0; min-width: 0; display: grid; grid-auto-rows: 1fr; gap: 5px; list-style: none; margin: 0; padding: 0; }
-.protocol-stack:nth-child(n+2) { display: none; }
-/* Each additional 88px column needs another 10px gap. */
-@container (min-width: 186px) { .protocol-stack:nth-child(2) { display: grid; } }
-@container (min-width: 284px) { .protocol-stack:nth-child(3) { display: grid; } }
-@container (min-width: 382px) { .protocol-stack:nth-child(4) { display: grid; } }
-@container (min-width: 480px) { .protocol-stack:nth-child(5) { display: grid; } }
-@container (min-width: 578px) { .protocol-stack:nth-child(6) { display: grid; } }
-@container (min-width: 676px) { .protocol-stack:nth-child(7) { display: grid; } }
-@container (min-width: 774px) { .protocol-stack:nth-child(8) { display: grid; } }
-.protocol-stack li { display: grid; place-items: center; min-height: 36px; padding: 0.15rem 0.25rem; border: 1px solid var(--border); border-radius: 4px; background: var(--panel); color: var(--text); font-family: var(--mono); font-size: 0.7rem; line-height: 1.3; text-align: center; overflow-wrap: anywhere; }
-.protocol-stack .stack-driver { color: var(--bg); background: var(--green); border-color: var(--green); font-weight: 600; }
-.protocol-stack .stack-application { color: var(--cyan); border-color: color-mix(in srgb, var(--cyan) 30%, var(--border)); background: color-mix(in srgb, var(--cyan) 7%, var(--panel)); }
-.protocol-stack .stack-transport { color: var(--cyan); }
-.protocol-stack .stack-network { color: var(--muted); }
-.protocol-stack .stack-link { background: var(--panel-2); color: var(--muted); }
+/* Equal outer columns center NetGet; every horizontal connection shares one baseline. */
+#how-it-works { padding-top: 0.5rem; padding-bottom: 1rem; }
+.network-diagram { --hub-width: 140px; --label-width: 80px; display: grid; grid-template-columns: var(--label-width) minmax(0, 1fr) var(--hub-width) minmax(0, 1fr) var(--label-width); grid-template-rows: 36px 42px 132px; align-items: center; width: 100%; max-width: 760px; margin: 0 auto; padding: 0 0 0.5rem; }
+.network-diagram > :not(.network-invocation) { grid-row: 3; }
+.network-invocation { grid-column: 3; grid-row: 1; align-self: stretch; }
+.network-entrypoints { display: grid; grid-template-columns: 1fr 20px 1fr; height: 100%; align-items: stretch; }
+.network-entrypoint { position: relative; display: grid; }
+.network-entrypoint > span { display: grid; place-items: center; background: var(--panel); border: 1px solid var(--border); border-radius: 5px; font-family: var(--mono); font-size: 0.8rem; }
+.network-entrypoints small { align-self: center; text-align: center; font-size: 0.7rem; color: var(--muted); }
+/* 42px gap + 22px inset to the centered, 88px-high hub. */
+.network-down-arrow { position: absolute; top: 100%; left: 50%; height: 64px; border-left: 1px solid var(--green); }
+.network-down-arrow::after { content: ""; position: absolute; bottom: 1px; left: -4px; width: 7px; height: 7px; border-right: 1px solid var(--green); border-bottom: 1px solid var(--green); transform: rotate(45deg); }
+.network-client, .network-drivers { font-family: var(--mono); font-size: 0.85rem; }
+.network-client { position: relative; text-align: center; line-height: 1; }
+.network-client-icon { position: absolute; bottom: calc(100% + 10px); left: 50%; transform: translateX(-50%); width: 40px; height: 40px; color: var(--muted); }
+.network-wire { position: relative; height: 0; }
+.network-protocols { position: absolute; bottom: 14px; left: 5px; right: 5px; text-align: center; color: var(--muted); font-family: var(--mono); font-size: 0.7rem; line-height: 1.5; white-space: normal; }
+.network-hub { display: grid; place-items: center; height: 88px; border: 1px solid var(--green); border-radius: 8px; background: var(--panel); }
+.network-hub strong { font-family: var(--mono); font-size: 1.5rem; letter-spacing: -0.05em; line-height: 1; }
+.network-hub strong span { color: var(--green); }
+.network-arrow, .network-branch i { position: absolute; left: 0; right: 0; height: 0; border-top: 1px solid var(--green); }
+.network-arrow::after, .network-branch i::after { content: ""; position: absolute; right: 1px; top: -4px; width: 7px; height: 7px; border-top: 1px solid var(--green); border-right: 1px solid var(--green); transform: rotate(45deg); }
+/* One full-width line to Script; two branches at the other labels' exact centers. */
+.network-branch { position: relative; height: 132px; margin-right: 10px; }
+.network-branch::before { content: ""; position: absolute; left: 50%; top: 22px; height: 88px; border-left: 1px solid var(--green); }
+.network-branch i:nth-child(1) { top: 22px; left: 50%; }
+.network-branch i:nth-child(2) { top: 66px; }
+.network-branch i:nth-child(3) { top: 110px; left: 50%; }
+.network-drivers { display: grid; grid-template-rows: repeat(3, 44px); list-style: none; margin: 0; padding: 0; }
+.network-drivers li { display: flex; align-items: center; line-height: 1; white-space: nowrap; }
+@media (max-width: 600px) {
+    .network-diagram { --hub-width: 86px; --label-width: 44px; }
+    .network-entrypoints { grid-template-columns: 1fr 18px 1fr; }
+    .network-entrypoint > span { font-size: 0.7rem; }
+    .network-entrypoints small { font-size: 0.6rem; }
+    .network-client, .network-drivers { font-size: 0.65rem; }
+    .network-client-icon { width: 30px; height: 30px; bottom: calc(100% + 20px); }
+    .network-hub strong { font-size: 1.1rem; }
+    .network-protocols { font-size: 0.6rem; }
+    .network-branch { margin-right: 7px; }
+}
 .examples { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
 .examples article { padding: 1.1rem; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; }
 .examples p { font-size: 0.85rem; line-height: 1.8; color: var(--green); }
@@ -120,9 +141,6 @@ main.demo-main { width: 100%; max-width: none; }
 .demo-intro { width: min(100% - 3rem, 1288px); margin: 2rem auto 1.5rem; }
 .demo-intro h1 { font-size: 1.5rem; }
 .demo-intro p { margin-top: 0.5rem; font-size: 0.85rem; color: var(--muted); }
-@media (max-width: 760px) {
-    .protocol-landscape { padding-top: 0.25rem; }
-}
 @media (max-width: 600px) {
     .nav, main, .footer { width: calc(100% - 2.5rem); }
     .nav { min-height: 70px; }
@@ -136,6 +154,9 @@ main.demo-main { width: 100%; max-width: none; }
     .proto-cat, .proto-list { padding: 0.6rem; }
     .code-block pre { padding: 2.5rem 1rem 1rem; font-size: 0.7rem; }
     .demo-intro { width: calc(100% - 2rem); }
+}
+@media (max-width: 380px) {
+    .nav-right { gap: 0.5rem; }
 }
 @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; }

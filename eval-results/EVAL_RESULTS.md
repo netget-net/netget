@@ -771,4 +771,4 @@ Run 5 — `wrong_content`: valid actions executed, but client output does not co
 
 ## Shared prompt change: full before/after and fixed-request replay
 
-The 105-case matrix measured 455/520 before and 457/520 after, with five trials and seed 42 on `llama3.1:8b`. [Comparison, provenance, all regressions, and captured-prompt replay](eval-results/2026-10-02-shared-prompts/README.md) document the resumed baseline and its backend/sleep-affected protocol repeats. This historical comparison pins the unchanged 105-case harness at the stated source revisions; later protocol and harness changes are outside it.
+The 105-case matrix measured 455/520 before and 457/520 after, with five trials and seed 42 on `llama3.1:8b`. [Comparison, provenance, all regressions, and captured-prompt replay](2026-10-02-shared-prompts/README.md) document the resumed baseline and its backend/sleep-affected protocol repeats. This historical comparison pins the unchanged 105-case harness at the stated source revisions; later protocol and harness changes are outside it.

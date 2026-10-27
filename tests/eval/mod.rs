@@ -32,7 +32,7 @@
 //!
 //! # What comes out
 //!
-//! `eval-results/latest.json` and `EVAL_RESULTS.md`, regenerated together. The
+//! `eval-results/latest.json` and `eval-results/EVAL_RESULTS.md`, regenerated together. The
 //! pass rate is the headline; the ranked **failure modes**, each carrying the
 //! model's actual output, are the useful part — an action description that
 //! misleads a model is a defect in the description, and this is the only thing
