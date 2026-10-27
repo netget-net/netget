@@ -140,7 +140,7 @@ OUTPUT:
   Binary will be in: target/${TARGET}/release/netget
   or: target/${TARGET}/debug/netget (if --debug)
 
-For more information, see TERMUX_INSTALL.md
+For more information, see docs/guides/TERMUX_INSTALL.md
 EOF
 }
 
@@ -272,7 +272,7 @@ NOTES:
   - Works on Android 7.0+ (API level 24+)
   - Most protocols will work, but privileged ports (<1024) require root
 
-For more details, see TERMUX_INSTALL.md
+For more details, see docs/guides/TERMUX_INSTALL.md
 
 EOF
 }

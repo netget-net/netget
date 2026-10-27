@@ -11,7 +11,7 @@ NetGet's whole premise. Before this existed, every action description, every
 `example` and every startup-parameter blurb in the tree was unmeasured.
 
 Run it: `./run-eval.sh` (see `--help`). Output: `eval-results/latest.json` and
-`EVAL_RESULTS.md`, regenerated together.
+`eval-results/EVAL_RESULTS.md`, regenerated together.
 
 ## This is not a gate, and must not become one
 
@@ -56,7 +56,7 @@ event. Setup correctness is a separate question with its own tests in
    been burned by conflating them before.
 3. **Never skip silently.** A missing binary is `client-missing`; a protocol no
    installed client can reach is `EvalCase::unavailable` with the reason. A skip
-   that reads as a pass is the exact defect `PROTOCOL_QUALITY.md` catalogues in
+   that reads as a pass is the exact defect `docs/planning/PROTOCOL_QUALITY.md` catalogues in
    the rest of the suite (19 files that print `SKIP` and return `Ok(())`).
 4. **Check what the client observed**, not what netget logged — except for
    one-way protocols (syslog), where `Expect::executed_action` is the only
@@ -101,7 +101,7 @@ Each of these cost a debugging pass and every one presented as a model failure.
 - **macOS `whois` segfaults when `-p` follows `-h`** — exit 139, zero bytes sent.
   No argument order reaches a loopback port, so whois is driven with `nc`.
   Worth knowing because `whois` is counted among the installed real clients in
-  `PROTOCOL_QUALITY.md`.
+  `docs/planning/PROTOCOL_QUALITY.md`.
 - **The shared helpers' Ollama checks used to be too tight to survive
   back-to-back model calls, and that is fixed.** `check_ollama_available`
   (`tests/helpers/netget.rs`) built a fresh `reqwest::Client` and gave

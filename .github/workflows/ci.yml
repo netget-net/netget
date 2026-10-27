@@ -1522,7 +1522,7 @@ jobs:
       # directories declared with `pub mod <name>;` in the sibling
       # mod.rs. A directory present on disk but undeclared there is
       # never compiled and never run - no error, no warning, just
-      # missing coverage (see IMPROVEMENTS.md #5/#6). This job fails
+      # missing coverage (see docs/planning/IMPROVEMENTS.md #5/#6). This job fails
       # the build the moment that happens again.
       - name: Check for orphaned test directories
         shell: bash
