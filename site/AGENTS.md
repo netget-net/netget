@@ -5,15 +5,14 @@ demo loads xterm.js and the WebAssembly runtime. The Telnet terminal takes focus
 is created on load, and only if nothing else on the page has focus; after that focus belongs to
 the visitor: connection, incoming requests, and sending a composer reply must not focus a terminal.
 
-The landing page ships complete example stacks in HTML. CSS container queries fit whole
-columns to the available width, and equal grid rows keep each driver box the same height
-as its protocol layers. `js/protocol-landscape.js` optionally shuffles all protocol features
-on each page load. Each stack independently chooses LLM-driven with probability 1/3, and
-static, manual or script with probability 2/9 each. Script then chooses Python, JavaScript,
-Perl or Go equally, so adding a language cannot increase the script category's probability.
-Its generated `js/protocol-stacks.js` comes from both registries and their `stack_name()`
-declarations, including platform-gated protocols. `python3 scripts/site_protocol_stacks.py`
-refreshes it; `--check` detects drift. Deployment refreshes it before hashing the assets.
+The landing page shows a left-to-right network diagram: Client → NetGet → LLM / Script /
+Manual. HTML and CSS keep the diagram visible without JavaScript and preserve the direction
+on narrow screens. The hub shows a few protocol examples and links its count to the full
+protocol table. Check that count against `python3 scripts/site_protocol_stacks.py --check`
+when updating the diagram. The generated `js/protocol-stacks.js` still comes from both
+registries and their `stack_name()` declarations, including platform-gated protocols;
+deployment refreshes it before hashing the assets. The older `js/protocol-landscape.js`
+stack renderer is no longer loaded by the landing page.
 Without JavaScript, the fixed stacks, protocol links, examples and install commands remain
 available; Copy/theme buttons are hidden until their handlers are installed. The demo's
 `noscript` preview uses actual desktop/mobile screenshots in `demo/preview*.png`.

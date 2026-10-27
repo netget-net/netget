@@ -37,60 +37,29 @@
             </div>
         </header>
 
-        <section class="section" id="how-it-works" aria-label="Protocol stacks">
-            <figure class="protocol-landscape" aria-label="Protocol stacks with LLM-driven, static, scripted, and manual responses">
-                <ol class="protocol-stack" data-protocol="http" aria-label="LLM-driven: HTTP over TCP over IP over Ethernet">
-                    <li class="stack-driver">LLM-driven</li>
-                    <li class="stack-application">HTTP</li>
-                    <li class="stack-transport">TCP</li>
-                    <li class="stack-network">IP</li>
-                    <li class="stack-link">Ethernet</li>
-                </ol>
-                <ol class="protocol-stack" data-protocol="dns" aria-label="static response: DNS over UDP over IP over Ethernet">
-                    <li class="stack-driver">static response</li>
-                    <li class="stack-application">DNS</li>
-                    <li class="stack-transport">UDP</li>
-                    <li class="stack-network">IP</li>
-                    <li class="stack-link">Ethernet</li>
-                </ol>
-                <ol class="protocol-stack" data-protocol="postgresql" aria-label="Python script: PostgreSQL over TCP over IP over Ethernet">
-                    <li class="stack-driver">Python script</li>
-                    <li class="stack-application">PostgreSQL</li>
-                    <li class="stack-transport">TCP</li>
-                    <li class="stack-network">IP</li>
-                    <li class="stack-link">Ethernet</li>
-                </ol>
-                <ol class="protocol-stack" data-protocol="mqtt" aria-label="manual response: MQTT over TCP over IP over Ethernet">
-                    <li class="stack-driver">manual response</li>
-                    <li class="stack-application">MQTT</li>
-                    <li class="stack-transport">TCP</li>
-                    <li class="stack-network">IP</li>
-                    <li class="stack-link">Ethernet</li>
-                </ol>
-                <ol class="protocol-stack" data-protocol="usb-keyboard" aria-label="LLM-driven: Keyboard over HID over USB">
-                    <li class="stack-driver">LLM-driven</li>
-                    <li class="stack-application">Keyboard</li>
-                    <li class="stack-application">HID</li>
-                    <li class="stack-link">USB</li>
-                </ol>
-                <ol class="protocol-stack" data-protocol="ssh" aria-label="static response: SSH over TCP over IP over Ethernet">
-                    <li class="stack-driver">static response</li>
-                    <li class="stack-application">SSH</li>
-                    <li class="stack-transport">TCP</li>
-                    <li class="stack-network">IP</li>
-                    <li class="stack-link">Ethernet</li>
-                </ol>
-                <ol class="protocol-stack" data-protocol="bluetooth-ble" aria-label="manual response: Bluetooth LE">
-                    <li class="stack-driver">manual response</li>
-                    <li class="stack-link">Bluetooth LE</li>
-                </ol>
-                <ol class="protocol-stack" data-protocol="quic" aria-label="LLM-driven: QUIC over UDP over IP over Ethernet">
-                    <li class="stack-driver">LLM-driven</li>
-                    <li class="stack-transport">QUIC</li>
-                    <li class="stack-transport">UDP</li>
-                    <li class="stack-network">IP</li>
-                    <li class="stack-link">Ethernet</li>
-                </ol>
+        <section class="section" id="how-it-works" aria-label="How NetGet works">
+            <figure class="network-diagram" aria-label="A client connects to NetGet over one of 293 protocols. Responses are controlled by an LLM, a script, or manually.">
+                <div class="network-client">
+                    <svg class="network-client-icon" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                        <rect x="6" y="6" width="36" height="26" rx="3"/>
+                        <path d="M17 41h14M24 32v9M12 26h24"/>
+                    </svg>
+                    <span>Client</span>
+                </div>
+                <div class="network-arrow" aria-hidden="true"></div>
+                <div class="network-hub">
+                    <strong>net<span>get</span></strong>
+                    <a class="network-count" href="#protocols">293 protocols</a>
+                    <div class="network-protocols" aria-hidden="true">
+                        <span>HTTP</span><span>DNS</span><span>SSH</span><span>MQTT</span><span>…</span>
+                    </div>
+                </div>
+                <div class="network-branch" aria-hidden="true"><i></i><i></i><i></i></div>
+                <ul class="network-drivers" aria-label="Choose who controls the responses">
+                    <li><span aria-hidden="true">✧</span> LLM</li>
+                    <li><span aria-hidden="true">&lt;/&gt;</span> Script</li>
+                    <li><span aria-hidden="true">↳</span> Manual</li>
+                </ul>
             </figure>
         </section>
 
@@ -531,6 +500,5 @@
         <a href="https://github.com/netget-net/netget/blob/master/LICENSE">AGPL-3.0</a>
     </footer>
     <script src="js/main.js"></script>
-    <script type="module" src="js/protocol-landscape.js"></script>
 </body>
 </html>
