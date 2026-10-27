@@ -169,7 +169,9 @@ fn a_root_process_excludes_nothing_derived_from_privilege() {
             assert!(
                 matches!(
                     dep,
-                    ProtocolDependency::SystemLibrary(_) | ProtocolDependency::ToolInPath(_)
+                    ProtocolDependency::SystemLibrary(_)
+                        | ProtocolDependency::ToolInPath(_)
+                        | ProtocolDependency::ProgramAt { .. }
                 ),
                 "{protocol} reports {:?} missing for a root process with every capability; \
                  privilege-derived dependencies should all be satisfied",

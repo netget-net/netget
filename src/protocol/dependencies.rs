@@ -35,6 +35,15 @@ pub enum ProtocolDependency {
     /// Requires a tool to be available in PATH (e.g., "protoc", "openssl")
     ToolInPath(&'static str),
 
+    /// Requires a program at a fixed absolute path, not looked up on `PATH` (FUSE-T's
+    /// `go-nfsv4`, which FUSE-T's own libraries start from `/usr/local/bin` whatever `PATH`
+    /// says — a process launched by launchd has no `/usr/local/bin` on it). When `env` is set in
+    /// the environment it names the program instead, as it does for the code that starts it.
+    ProgramAt {
+        path: &'static str,
+        env: Option<&'static str>,
+    },
+
     /// Requires raw socket access (CAP_NET_RAW on Linux, or root)
     RawSocketAccess,
 
@@ -59,6 +68,10 @@ impl ProtocolDependency {
         match self {
             Self::SystemLibrary(name) => format!("lib{}", name),
             Self::ToolInPath(name) => name.to_string(),
+            Self::ProgramAt { path, .. } => std::path::Path::new(path)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.to_string()),
             Self::RawSocketAccess => "raw socket access".to_string(),
             Self::PrivilegedPort(port) => format!("port {}", port),
             Self::RootAccess => "root access".to_string(),
@@ -76,6 +89,10 @@ impl ProtocolDependency {
             Self::ToolInPath(name) => {
                 format!("Tool '{}' must be available in PATH", name)
             }
+            Self::ProgramAt { path, env } => format!(
+                "Program {} must be installed",
+                program_path(path, *env).display()
+            ),
             Self::RawSocketAccess => {
                 "Raw socket access (requires root or CAP_NET_RAW capability)".to_string()
             }
@@ -108,6 +125,13 @@ impl ProtocolDependency {
         match self {
             Self::SystemLibrary(name) => system_library_status(name),
             Self::ToolInPath(name) => tool_in_path_status(name),
+            Self::ProgramAt { path, env } => {
+                if is_executable_file(&program_path(path, *env)) {
+                    DependencyStatus::Available
+                } else {
+                    DependencyStatus::Missing
+                }
+            }
             other => {
                 if other.is_met_by_capabilities(caps) {
                     DependencyStatus::Available
@@ -123,7 +147,7 @@ impl ProtocolDependency {
     /// [`SystemCapabilities`]: crate::privilege::SystemCapabilities
     fn is_met_by_capabilities(&self, caps: &crate::privilege::SystemCapabilities) -> bool {
         match self {
-            Self::SystemLibrary(_) | Self::ToolInPath(_) => true,
+            Self::SystemLibrary(_) | Self::ToolInPath(_) | Self::ProgramAt { .. } => true,
             Self::RawSocketAccess => caps.has_raw_socket_access,
             Self::PrivilegedPort(_) => caps.can_bind_privileged_ports,
             Self::RootAccess => caps.is_root,
@@ -181,6 +205,12 @@ impl ProtocolDependency {
                     _ => format!("Ensure '{}' is installed and in PATH", name),
                 }
             }
+            Self::ProgramAt { path, .. } => match *path {
+                "/usr/local/bin/go-nfsv4" => {
+                    "Install FUSE-T: brew install --cask macos-fuse-t/cask/fuse-t".to_string()
+                }
+                _ => format!("Install {path}"),
+            },
             Self::RawSocketAccess => {
                 #[cfg(target_os = "linux")]
                 {
@@ -424,6 +454,15 @@ fn tool_in_path_status(tool: &str) -> DependencyStatus {
     DependencyStatus::Missing
 }
 
+/// Where a [`ProtocolDependency::ProgramAt`] program is: what `env` names when it is set and not
+/// empty, else `path`.
+pub fn program_path(path: &str, env: Option<&str>) -> std::path::PathBuf {
+    env.and_then(std::env::var_os)
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(path))
+}
+
 /// A regular file (symlinks followed) the current user may execute.
 fn is_executable_file(path: &std::path::Path) -> bool {
     let Ok(metadata) = std::fs::metadata(path) else {
@@ -443,7 +482,7 @@ fn is_executable_file(path: &std::path::Path) -> bool {
     }
 }
 
-/// The dependency that must stop a start, if any: the first **system library or tool** among
+/// The dependency that must stop a start, if any: the first **system library, tool or program** among
 /// `deps` whose probe established it is absent.
 ///
 /// Dependencies derived from `privilege_requirement` are skipped — startup gates privilege
@@ -457,7 +496,9 @@ pub fn startup_blocker(
     for dep in deps {
         if !matches!(
             dep,
-            ProtocolDependency::SystemLibrary(_) | ProtocolDependency::ToolInPath(_)
+            ProtocolDependency::SystemLibrary(_)
+                | ProtocolDependency::ToolInPath(_)
+                | ProtocolDependency::ProgramAt { .. }
         ) {
             continue;
         }

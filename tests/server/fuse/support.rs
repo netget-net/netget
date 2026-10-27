@@ -24,6 +24,7 @@ pub fn policy(code: &str) -> Option<Vec<Value>> {
     ])
 }
 
+#[cfg(target_os = "linux")]
 pub fn fusermount3() -> PathBuf {
     let mut dirs: Vec<PathBuf> =
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect();
@@ -41,11 +42,37 @@ pub fn fusermount3() -> PathBuf {
     );
 }
 
+#[cfg(target_os = "linux")]
 pub fn require_fuse() {
     fusermount3();
     assert!(
         Path::new("/dev/fuse").exists(),
         "/dev/fuse does not exist: load the module with modprobe fuse (and apt-get install fuse3)"
+    );
+}
+
+/// The environment variable that lets the macOS mount tests run. They mount through FUSE-T,
+/// which is an NFS mount, and Apple's NFS client has a race that panics the whole machine under
+/// attribute churn (`nfs_vinvalbuf2: ubc_msync failed!, error 22`, FUSE-T issue #109, Apple
+/// FB23527406). Exploring this backend did exactly that to a developer's Mac. So they run only
+/// on CI's throwaway macOS VM, in the `fuse-macos` pair job, which sets it.
+pub const MACOS_CI_GATE: &str = "NETGET_FUSE_MACOS_CI";
+
+/// macOS: fail (never skip) unless this is the CI job, then require FUSE-T.
+#[cfg(target_os = "macos")]
+pub fn require_fuse() {
+    assert!(
+        std::env::var(MACOS_CI_GATE).as_deref() == Ok("1"),
+        "the macOS FUSE mount tests run only in CI (the fuse-macos job in \
+         .github/workflows/protocol-pairs.yml sets {MACOS_CI_GATE}=1). A FUSE-T mount is an NFS \
+         mount, and Apple's NFS client can panic the host under attribute churn (FUSE-T issue \
+         #109, Apple FB23527406); do not run them on a machine you cannot afford to lose"
+    );
+    assert!(
+        netget::server::fuse::fuse_t_installed(),
+        "FUSE-T is not installed. It serves the mount to macOS's NFS client, and skipping would \
+         leave the FUSE server's macOS evidence resting on nothing. Install it with: brew \
+         install --cask macos-fuse-t/cask/fuse-t"
     );
 }
 
@@ -238,6 +265,15 @@ pub async fn mount_at(
 /// the kernel's last words and the daemon's own log.
 pub fn diagnostics(path: &Path, log: &Arc<Mutex<Vec<String>>>) {
     eprintln!("---- FUSE diagnostics for {}", path.display());
+    platform_diagnostics();
+    for l in log.lock().map(|l| l.clone()).unwrap_or_default() {
+        eprintln!("daemon: {l}");
+    }
+    eprintln!("---- end of FUSE diagnostics");
+}
+
+#[cfg(target_os = "linux")]
+fn platform_diagnostics() {
     for l in std::fs::read_to_string("/proc/self/mountinfo")
         .unwrap_or_default()
         .lines()
@@ -258,10 +294,39 @@ pub fn diagnostics(path: &Path, log: &Arc<Mutex<Vec<String>>>) {
         }
         Err(e) => eprintln!("dmesg: {e}"),
     }
-    for l in log.lock().map(|l| l.clone()).unwrap_or_default() {
-        eprintln!("daemon: {l}");
+}
+
+/// The mount table, FUSE-T's own log (go-nfsv4 writes every mount, negotiation and unmount
+/// there) and any kernel panic report.
+#[cfg(target_os = "macos")]
+fn platform_diagnostics() {
+    macos_diagnostics(80);
+}
+
+#[cfg(target_os = "macos")]
+pub fn macos_diagnostics(log_lines: usize) {
+    if let Ok(o) = std::process::Command::new("/sbin/mount").output() {
+        for l in String::from_utf8_lossy(&o.stdout).lines() {
+            eprintln!("mount: {l}");
+        }
     }
-    eprintln!("---- end of FUSE diagnostics");
+    let path = netget::server::fuse::fuse_t_log_path();
+    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    let lines: Vec<&str> = text.lines().collect();
+    eprintln!("FUSE-T log {} (last {log_lines} lines):", path.display());
+    for l in &lines[lines.len().saturating_sub(log_lines)..] {
+        eprintln!("fuse-t: {l}");
+    }
+    for dir in [
+        "/Library/Logs/DiagnosticReports",
+        "/Library/Logs/DiagnosticReports/Retired",
+    ] {
+        for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            if e.path().extension().is_some_and(|x| x == "panic") {
+                eprintln!("panic report: {}", e.path().display());
+            }
+        }
+    }
 }
 
 /// Prints the diagnostics if the test panics while it is alive.

@@ -7,25 +7,29 @@ editor, Python) are what drive it. There is no network, no port and no NetGet cl
 
 | File | What it does |
 |---|---|
-| `mod.rs` | settings, the fusermount3 mount (socket pair, `_FUSE_COMMFD`, SCM_RIGHTS) and the unmount guard, the `fuser::Filesystem` that answers from the tree on fuser's thread, the bounded queue and the one worker per mount that asks the model under a deadline |
+| `mod.rs` | settings, the mount guard, the `fuser::Filesystem` that answers from the tree on fuser's thread, the bounded queue and the one worker per mount that asks the model under a deadline |
+| `linux.rs` | the Linux backend: the fusermount3 mount (socket pair, `_FUSE_COMMFD`, SCM_RIGHTS), its unmount and the watchdog |
+| `macos.rs` | the macOS backend: FUSE-T's go-nfsv4 started by NetGet, the request/reply relay, the unmount and the watchdog |
 | `actions.rs` | events, actions, startup parameters, metadata |
 | `src/server/described_tree.rs` | the model-described tree and the overlay: description parsing (iterative, every bound), reads, every mutation as a pure function; compiled on every Unix so its tests and fuzz target run off Linux |
 
 ## Platform and crate
 
-**Linux only** (`#[cfg(target_os = "linux")]` on the module, the registration and the Linux
-half of the tests; the `ALL_KNOWN_PROTOCOLS` row says "a Linux build"). The kernel's FUSE driver
-is reached through `/dev/fuse`, mounted by the setuid `fusermount3` from fuse3 — the same helper
-libfuse uses — so NetGet links no C library and needs no privilege of its own.
+**Linux and macOS**, `#[cfg(any(target_os = "linux", target_os = "macos"))]` on the module, the
+registration and the platform test modules; the `ALL_KNOWN_PROTOCOLS` row names both. Everything
+but the mount is shared: `mod.rs` and the tree are the same code on both, and the platform
+difference lives in one backend module each (`linux.rs`, `macos.rs`) exposing `preflight`,
+`start`, a `Mount` whose `Drop` unmounts, and `is_fuse_mounted`.
 
-**fuser 0.18** (MIT, July 2026, `default-features = false`). Without its `libfuse` feature its
-build script selects the pure-Rust mount on Linux and links nothing. It is a dependency of
-`[target.'cfg(target_os = "linux")'.dependencies]` only: on macOS the same build script requires
-macFUSE through pkg-config (or the `macos-no-mount` feature, which cannot mount), so putting it
-anywhere else would make every macOS build depend on a kernel extension. macFUSE and FUSE-T
-would fit the system-library rule only as a new default-off library feature, and neither can be
-installed on the development machine; that is the reason there is no macOS support, not a
-judgement that it is unwanted.
+**fuser 0.18** (MIT, July 2026, `default-features = false`) speaks the FUSE protocol on both.
+On Linux, without its `libfuse` feature, its build script selects the pure-Rust mount and links
+nothing. On macOS its build script would require macFUSE through pkg-config, so the macOS table
+in `Cargo.toml` turns on `macos-no-mount`, which builds the protocol and no mount code; NetGet
+mounts through FUSE-T itself. **Not** `macfuse-4-compat`: FUSE-T's libfuse2 profile sends the
+8-byte `rename_in` (measured: with the 16-byte one fuser read the old name's first eight bytes as
+flags, so `mv` renamed "in" instead of "upload.bin").
+
+### Linux
 
 fuser's own `Session::new` refuses `AutoUnmount` without `allow_other`, which an unprivileged
 user cannot have unless `/etc/fuse.conf` says `user_allow_other`. fusermount3 itself has no such
@@ -38,6 +42,107 @@ and hands the descriptor to `fuser::Session::from_fd`. fuser then does only the 
 it is refused before anything is registered, with `apt-get install fuse3` as the hint. A missing
 `/dev/fuse` is refused by `spawn()` naming `modprobe fuse`.
 
+### macOS: FUSE-T, found at runtime, never linked
+
+FUSE-T (`brew install --cask macos-fuse-t/cask/fuse-t`, 1.2.9 measured) has no kernel extension:
+its `go-nfsv4` serves the mount point to macOS's own NFSv4 client over loopback TCP and turns each
+NFS call into FUSE requests, which it sends to the daemon over a **stream** socket. NetGet links
+neither FUSE-T's libfuse nor anything else; it starts `go-nfsv4` itself, as FUSE-T's own Go
+libraries (its forks of go-fuse, jacobsa/fuse and bazil.org/fuse) do: two socket pairs, the server
+in a session of its own with `_FUSE_COMMFD` (requests), `_FUSE_MONFD` (control) and
+`_FUSE_COMMVERS=2`, `mount` written on the control socket, then FUSE_INIT on the stream, the NFS
+mount, and a 32-bit status back on the control socket. `spawn()` returns only after that status
+says 0 and the mount table lists `fuse-t:/netget` on the mount point. Options: `--noappledouble`,
+`--dontbrowse` (no Finder or Spotlight walking it), `--rwsize=131072` (one NFS read or write is at
+most one FUSE request of `max_write`), `-r` for `read_only`; **never `--namedattr`** (see the risk
+below).
+
+Why not FUSE-T's libfuse3 through `dlopen` (route b) or for the mount only: its Darwin mount code
+keeps the helper's pid and control socket in process-wide statics, so a second mount in one
+process overwrites the first's and stopping one closes the other's control socket; and it forks a
+multi-threaded process and calls `setenv`/`freopen` before `exec`. NetGet runs many mounts per
+process, so it owns the launch, one helper per mount. The cost is depending on FUSE-T's launch
+contract rather than its C API; FUSE-T's own libraries depend on the same contract, and the CI job
+pins the version.
+
+**FUSE-T's descriptor does carry the FUSE wire protocol — but as a stream.** fuser reads one
+request per `read(2)`, which `/dev/fuse` guarantees and a stream does not. A relay (three threads
+per mount) reads each request off the stream (the 40-byte header, then the length it gives) and
+hands it to fuser as one datagram over a `SOCK_DGRAM` pair; fuser's replies come back the same way
+and are queued to the stream by a writer thread. The reply reader never blocks on anything but its
+read, because macOS answers a send to a full Unix datagram socket with ENOBUFS instead of waiting
+(measured), and a reply lost that way would leave an NFS call unanswered. A Unix datagram socket
+whose peer closes does not wake its reader on macOS (measured), so every socket is shut down
+explicitly when any side ends. A request over 1 MiB is answered E2BIG by the relay itself.
+
+**Two things in the INIT reply are rewritten**, both measured against go-nfsv4 1.2.9:
+
+- FUSE-T picks its wire profile from the INIT reply's **size**. fuser declares ABI 7.19 on macOS
+  (macFUSE's layout: `crtime` and `flags` in every attribute) but sizes its reply by the version
+  FUSE-T offers (7.23), 64 bytes, which FUSE-T reads as libfuse3 with Linux's layout — its log says
+  `profile=v3 client=libfuse3 proto=7.19` and the first READLINK of the root failed. Cut to the
+  24-byte 7.19 `fuse_init_out`, it says `profile=v2 client=libfuse2-compatible proto=7.19`.
+- fuser requests case-insensitivity, volume rename and extended times on macOS unconditionally;
+  the tree is case-sensitive and implements neither of the others, so the relay clears them.
+
+FUSE-T is declared as `ProtocolDependency::ProgramAt { path: "/usr/local/bin/go-nfsv4", env:
+Some("FUSE_NFSSRV_PATH") }` — a fixed path, not `PATH` (a process launched by launchd has no
+`/usr/local/bin` on it, and FUSE-T's libraries use that path whatever `PATH` says);
+`FUSE_NFSSRV_PATH` overrides it for both the probe and the launch, as it does for FUSE-T. A start
+without it is refused by the startup gate, before anything is registered or created: `Cannot start
+FUSE server: Program /usr/local/bin/go-nfsv4 must be installed. Install FUSE-T: brew install
+--cask macos-fuse-t/cask/fuse-t`. `spawn()` checks again (`preflight`), and a failed launch names
+the cask too.
+
+**What NFS changes.** macOS's NFS client is between every process and NetGet, so:
+
+- A read is an NFS READ of up to 128 KiB. A file with a failing region (`errors`) fails every read
+  whose chunk covers the region: `head -c 4` of a file whose second page fails is EIO on macOS and
+  reads on Linux.
+- A write is decided when the client writes back, at `close` or `fsync`, so a refusal reaches the
+  process there (`dd: close: Permission denied`). Before the panic stopped local testing, the
+  client was seen to keep the refused bytes in its own cache afterwards; the CI test reports what
+  `cat` shows rather than asserting it.
+- `cp` copies metadata with `copyfile`, so each copy is a create, the writes, and several
+  setattr decisions (mode and times).
+- Events carry `pid` 0 and an empty `process`: NFS carries the caller's uid and gid, no pid.
+- **No extended attributes.** Without named attributes the NFS client has nowhere to put them but
+  AppleDouble `._name` files, which `--noappledouble` refuses and `FuseFs` refuses too (create,
+  mknod, mkdir, symlink, link and rename to a `._` name are EPERM, `decision=protocol_refusal`,
+  unasked), so `xattr -w` fails with EPERM or ENOTSUP and nothing reaches the model. macOS also
+  stamps quarantine/provenance attributes on files by itself; those fail the same way, silently.
+- No RENAME_EXCHANGE, no fallocate, no `renamex_np` swap or exclusive rename: NFS has none of them,
+  so they never reach the daemon (`rename_mode` refuses any rename flag EINVAL on macOS).
+- Byte-range locks are the NFS client's and go-nfsv4's business; fuser answers no lock request.
+  Measured once before the ban: `flock` succeeded and a non-blocking `lockf` failed EAGAIN.
+
+**The residual risk: Apple's NFS client can panic the Mac.** `nfs_vinvalbuf2` turns an EINVAL
+from `ubc_msync` — a race between page-cache invalidation and vnode reclaim — into a deliberate
+`panic("nfs_vinvalbuf2: ubc_msync failed!, error 22")` (Apple NFS `nfs_bio.c:4260`; FUSE-T issue
+#109; Apple FB23527406). Every FUSE-T mount is a loopback NFS mount, so every FUSE-T filesystem can
+reach it. It is made likely by **named attributes** (each xattr call, including the ones macOS
+makes on its own, opens and closes a hidden attribute vnode) and by **served attributes that
+churn** (a fileid changing under a path, size or mtime flapping or going backwards, times that move
+on every GETATTR). It happened here: the development Mac panicked 9 s after a build that passed
+`--namedattr`, in an `xattr` process run against the mount. So:
+
+- `--namedattr` is never passed; extended attributes are unsupported on macOS (above).
+- Served attributes are stable, on both platforms: an inode number is assigned once and kept
+  for the node's life (a rename moves the name, not the inode; nothing is reused); nothing is
+  computed at getattr time — a description without `mtime` gets the mount's birth time once, when
+  the node is made, and `atime` is never moved by a read; size, mtime and ctime change only when
+  the model allows a write, truncate, fallocate, setattr, link, unlink or rename, and then
+  `advance` moves mtime and ctime forward to now, or a microsecond past where they are when the
+  clock reads earlier (a described mtime in the future, a clock stepped back), so they never go
+  backwards. An explicit utimes/`touch -t` still sets the mtime asked for (that is the change the
+  model allowed). One attribute does move without a write: a directory's `nlink` is 2 until it is
+  described and then counts its subdirectories, once.
+- The mount tests run only on CI's throwaway macOS VM (the `fuse-macos` pair job sets
+  `NETGET_FUSE_MACOS_CI=1`; without it they fail, saying why). Never mount FUSE-T on a machine you
+  cannot afford to lose to a panic.
+
+NetGet lowers how often the race can run; only Apple's fix removes it.
+
 ## Startup
 
 | Parameter | Meaning |
@@ -48,8 +153,9 @@ it is refused before anything is registered, with `apt-get install fuse3` as the
 | `decision_timeout_secs` | how long a process waits for a description or decision before EIO (1–600, default 60) |
 | `max_overlay_bytes` | the overlay's bound (default 64 MiB, at most 1 GiB) |
 
-There is no port (`NO_WELL_KNOWN_PORT` in `tests/well_known_port_declaration_test.rs` says so),
-and privilege is `None`: fusermount3 is the setuid part. `spawn()` returns only after the
+There is no port (`NO_WELL_KNOWN_PORT` in `tests/well_known_port_declaration_test.rs` says so;
+FUSE-T's NFS server picks its own loopback port), and privilege is `None`: fusermount3 is the
+setuid part on Linux, and on macOS an NFS mount by its owner needs none. `spawn()` returns only after the
 kernel's INIT handshake has completed and a `stat` of the mount point shows a different device
 from its parent's, so a mount that did not come up is `Err` and `ServerStatus::Error`. The
 returned address is the `127.0.0.1:0` placeholder the other local servers use.
@@ -196,8 +302,20 @@ them is refused whole before anything is committed.
 
 ## Stopping
 
-`stop_server` aborts the worker task, which owns the mount guard. Dropping it runs `fusermount3
--u`, then `fusermount3 -u -z` if the mount is busy (lazy: it leaves the tree at once and goes when
+**macOS.** Dropping the guard writes `unmount` on FUSE-T's control socket (go-nfsv4 runs `umount
+-f` and closes the stream), waits up to 10 s for the mount table to drop the mount point, then runs
+`umount -f` and `diskutil unmount force` itself if it has not; then it kills the watchdog and shuts
+the relay down, which ends fuser's session thread, and reaps go-nfsv4 on a thread of its own. A
+killed process: go-nfsv4 sees its stream close ("Parent process has died") and runs `umount -f`
+itself, but that was measured to fail ("exit status 1") once, after which go-nfsv4 exited anyway
+and left an NFS mount whose server was gone — `ls` of it hung. So the watchdog is the same idea as
+on Linux: `/bin/sh` in a session of its own, blocked on a pipe only this process writes, and at end
+of file it runs `umount -f` and `diskutil unmount force` until `mount` no longer lists the mount
+point, for up to 30 s. The killed-daemon test was measured (before the ban) unmounting in about
+6 s.
+
+**Linux.** `stop_server` aborts the worker task, which owns the mount guard. Dropping it runs
+`fusermount3 -u`, then `fusermount3 -u -z` if the mount is busy (lazy: it leaves the tree at once and goes when
 the last process lets go), closes the auto_unmount socket, and removes a mount point it created.
 The session thread ends by itself when the kernel ends the connection. If the process dies
 instead — SIGKILL, a crash, `std::process::exit` — no destructor runs, but the descriptor closes
@@ -229,7 +347,8 @@ kernel for ACL support), fallocate's COLLAPSE_RANGE, INSERT_RANGE and UNSHARE_RA
 (EOPNOTSUPP; the kernel's FUSE driver does not send the first two at all), byte-range locks
 beyond the kernel's local ones, copy_file_range and lseek SEEK_DATA/SEEK_HOLE (the kernel falls
 back to reads and writes), and notifications to the kernel (nothing is ever invalidated from this
-side, because nothing changes without a request). macOS and every other platform (see above).
+side, because nothing changes without a request). On macOS, additionally: extended attributes,
+RENAME_EXCHANGE and fallocate (see above). Windows and every other platform.
 
 ## Evidence, and why there is no pcap oracle
 
@@ -256,6 +375,12 @@ non-directory's link count equals the names it is listed under and that unlinkin
 file with several keeps the inode.
 
 ## Maturity
+
+The macOS backend's evidence runs only in the `fuse-macos` pair job (FUSE-T 1.2.9 pinned by the
+installer's SHA-256): the BSD tools test, bounds, busy stop, killed daemon, pjdfstest as root
+(reported on its own line, no floor yet), and four mutation checks
+(`scripts/test-peers/fuse-macos-mutation.sh`). The startup refusal is tested anywhere, without a
+mount, and its mutation (dropping the `ProgramAt` declaration) was checked locally.
 
 Experimental. The kernel peer is measured on Linux 7.2 (aarch64): unprivileged through
 fusermount3 in the podman VM (Fedora, fuse3 3.18) and in a rootful Ubuntu 24.04 container (fuse3

@@ -105,8 +105,9 @@ const NO_WELL_KNOWN_PORT: &[(&str, &str)] = &[
     ("stdio", "the process's own stdin and stdout; nothing to bind"),
     (
         "fuse",
-        "a local filesystem mount: the kernel's FUSE driver over /dev/fuse at a mount_point, no \
-         socket and no port",
+        "a local filesystem mount at a mount_point: the kernel's FUSE driver over /dev/fuse on \
+         Linux, FUSE-T's own loopback NFS server (which picks its port) on macOS; NetGet binds \
+         no socket and has no port",
     ),
     ("nfc", "a PC/SC reader device; no network port"),
     ("bluetooth_ble", "a Bluetooth LE radio; GATT has no IP port"),

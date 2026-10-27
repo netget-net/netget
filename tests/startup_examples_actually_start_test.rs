@@ -130,6 +130,18 @@ struct Failure {
 
 fn hardware_skip_reason(protocol: &str) -> Option<&'static str> {
     let lower = protocol.to_lowercase();
+    // FUSE on macOS mounts through FUSE-T, which is an NFS mount, and Apple's NFS client can
+    // panic the host under attribute churn (FUSE-T issue #109, Apple FB23527406). Only CI's
+    // throwaway VM in the fuse-macos job, which sets NETGET_FUSE_MACOS_CI=1, starts it.
+    if cfg!(target_os = "macos")
+        && lower == "fuse"
+        && std::env::var("NETGET_FUSE_MACOS_CI").as_deref() != Ok("1")
+    {
+        return Some(
+            "a FUSE-T mount is an NFS mount, which can panic a Mac (FB23527406); it is started \
+             only in CI's fuse-macos job (NETGET_FUSE_MACOS_CI=1)",
+        );
+    }
     let matches = |table: &'static [(&'static str, &'static str)]| {
         table
             .iter()

@@ -1,15 +1,31 @@
-//! FUSE local filesystem (Linux): a directory on this machine whose every file operation the
-//! model answers. The kernel is the client; there is no network and no NetGet client role.
+//! FUSE local filesystem (Linux and macOS): a directory on this machine whose every file
+//! operation the model answers. The kernel is the client; there is no network and no NetGet
+//! client role.
 //!
-//! `fusermount3` (setuid) mounts `/dev/fuse` at the mount point with `auto_unmount`, so the
-//! mount goes when this process does however it ends; fuser speaks the kernel protocol on the
-//! descriptor it hands back. Lookups, getattr, readdir, read and readlink are answered on fuser's
-//! thread from the described tree (`src/server/described_tree.rs`). Anything that needs the
-//! model — a directory nobody has described yet, or any change — is queued (bounded) for this
-//! mount's one worker task, which asks one decision at a time under a deadline and replies to
-//! the kernel itself. A request still waiting when the deadline passes is answered EIO, so a
+//! How the mount is made is the backend's business: on Linux (`linux.rs`) the setuid
+//! `fusermount3` mounts `/dev/fuse`; on macOS (`macos.rs`) FUSE-T's `go-nfsv4` serves the mount
+//! to the kernel's NFS client and relays each request to fuser in the FUSE wire format. Either
+//! way fuser speaks the protocol and everything below is the same.
+//!
+//! Lookups, getattr, readdir, read and readlink are answered on fuser's thread from the
+//! described tree (`src/server/described_tree.rs`). Anything that needs the model — a directory
+//! nobody has described yet, or any change — is queued (bounded) for this mount's one worker
+//! task, which asks one decision at a time under a deadline and replies to the kernel itself. A request still waiting when the deadline passes is answered EIO, so a
 //! process doing I/O on the mount never blocks for longer than `decision_timeout_secs`.
 pub mod actions;
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
+
+#[cfg(target_os = "linux")]
+use linux as backend;
+#[cfg(target_os = "macos")]
+use macos as backend;
+
+pub use backend::is_fuse_mounted;
+#[cfg(target_os = "macos")]
+pub use macos::{fuse_t_installed, log_path as fuse_t_log_path};
 
 use crate::llm::action_helper::call_llm;
 use crate::llm::actions::protocol_trait::ActionResult;
@@ -22,7 +38,7 @@ use crate::server::described_tree::{
 use crate::state::server::{ConnectionState, ConnectionStatus, ProtocolConnectionInfo};
 use crate::utils::sanitize;
 use crate::utils::wire_failure::WireFailure;
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{ensure, Context, Result};
 use fuser::{
     Errno, FileAttr, FileHandle, FileType, Filesystem, FopenFlags, Generation, INodeNo,
     KernelConfig, LockOwner, OpenFlags, RenameFlags, ReplyAttr, ReplyCreate, ReplyData,
@@ -32,11 +48,7 @@ use fuser::{
 use serde_json::{json, Value};
 use std::ffi::OsStr;
 use std::net::SocketAddr;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-use std::os::unix::net::UnixStream;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use tokio::sync::mpsc;
@@ -50,13 +62,12 @@ pub const MAX_PENDING: usize = 64;
 pub const MAX_WRITE_BYTES: u32 = 128 * 1024;
 /// How long the kernel may cache an entry or attributes.
 const TTL: Duration = Duration::from_secs(1);
-/// fusermount3 handing back the descriptor, and the kernel's INIT.
+/// The mount helper coming up, and the kernel's INIT.
 const MOUNT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Bytes of a write shown to the model.
 const DATA_PREVIEW: usize = 512;
 /// Descriptions one request may need before it can be decided (a rename needs two).
 const MAX_DESCRIBES_PER_REQUEST: usize = 4;
-const FUSERMOUNT: &str = "fusermount3";
 
 struct Settings {
     mount_point: PathBuf,
@@ -99,220 +110,19 @@ fn settings(ctx: &SpawnContext) -> Result<Settings> {
 
 // ------------------------------------------------------------------ mounting
 
-/// What fusermount3 hands back: the /dev/fuse descriptor, and (auto_unmount) the socket it
-/// watches and the helper itself, which unmounts when the socket closes with the mount dead.
-struct Mounted {
-    fd: OwnedFd,
-    watch: UnixStream,
-    helper: Child,
-}
-
-/// Receive the descriptor fusermount3 sends over the socket (one byte, SCM_RIGHTS).
-fn receive_fd(sock: &UnixStream) -> std::io::Result<OwnedFd> {
-    let mut byte = [0u8; 1];
-    let mut iov = libc::iovec {
-        iov_base: byte.as_mut_ptr().cast(),
-        iov_len: 1,
-    };
-    // SAFETY: CMSG_SPACE is a pure size computation.
-    let space = unsafe { libc::CMSG_SPACE(std::mem::size_of::<libc::c_int>() as u32) } as usize;
-    // u64 words keep the control buffer aligned for cmsghdr.
-    let mut control = vec![0u64; space.div_ceil(8)];
-    // SAFETY: an all-zero msghdr is a valid empty header; the pointers set below outlive the
-    // recvmsg call.
-    let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
-    msg.msg_iov = &mut iov;
-    msg.msg_iovlen = 1;
-    msg.msg_control = control.as_mut_ptr().cast();
-    msg.msg_controllen = space as _;
-    loop {
-        // SAFETY: msg points at live buffers sized as declared.
-        let n = unsafe { libc::recvmsg(sock.as_raw_fd(), &mut msg, libc::MSG_CMSG_CLOEXEC) };
-        if n > 0 {
-            break;
-        }
-        if n == 0 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "fusermount3 closed the socket without sending a descriptor",
-            ));
-        }
-        let e = std::io::Error::last_os_error();
-        if e.kind() != std::io::ErrorKind::Interrupted {
-            return Err(e);
-        }
-    }
-    // SAFETY: msg was filled by recvmsg; CMSG_FIRSTHDR/CMSG_DATA stay inside `control`.
-    unsafe {
-        let cmsg = libc::CMSG_FIRSTHDR(&msg);
-        if cmsg.is_null()
-            || (*cmsg).cmsg_level != libc::SOL_SOCKET
-            || (*cmsg).cmsg_type != libc::SCM_RIGHTS
-        {
-            return Err(std::io::Error::other(
-                "fusermount3 sent no descriptor (no SCM_RIGHTS message)",
-            ));
-        }
-        let fd = std::ptr::read_unaligned(libc::CMSG_DATA(cmsg) as *const libc::c_int);
-        if fd < 0 {
-            return Err(std::io::Error::other(
-                "fusermount3 sent an invalid descriptor",
-            ));
-        }
-        Ok(OwnedFd::from_raw_fd(fd))
-    }
-}
-
-/// Mount through fusermount3, as libfuse does: a socket pair, `_FUSE_COMMFD` naming our end in
-/// the helper, and the /dev/fuse descriptor coming back over it. Blocking.
-fn mount(mount_point: &Path, options: &str) -> Result<Mounted> {
-    let (ours, theirs) = UnixStream::pair()?;
-    let theirs_fd = theirs.as_raw_fd();
-    let mut cmd = Command::new(FUSERMOUNT);
-    cmd.arg("-o")
-        .arg(options)
-        .arg("--")
-        .arg(mount_point)
-        .env("_FUSE_COMMFD", theirs_fd.to_string())
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped());
-    // SAFETY: only fcntl, which is async-signal-safe, runs between fork and exec.
-    unsafe {
-        cmd.pre_exec(move || {
-            let flags = libc::fcntl(theirs_fd, libc::F_GETFD);
-            if flags < 0 || libc::fcntl(theirs_fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    let mut helper = cmd.spawn().with_context(|| {
-        format!(
-            "running {FUSERMOUNT}: install it with apt-get install fuse3 (Debian/Ubuntu) or dnf \
-             install fuse3"
-        )
-    })?;
-    drop(theirs);
-    ours.set_read_timeout(Some(MOUNT_TIMEOUT))?;
-    match receive_fd(&ours) {
-        Ok(fd) => {
-            ours.set_read_timeout(None)?;
-            // The helper stays to unmount when this process goes; drain what it says.
-            if let Some(mut err) = helper.stderr.take() {
-                std::thread::spawn(move || {
-                    let mut s = String::new();
-                    let _ = std::io::Read::read_to_string(&mut err, &mut s);
-                    if !s.trim().is_empty() {
-                        tracing::debug!("fusermount3: {}", sanitize::multiline(s.trim()));
-                    }
-                });
-            }
-            Ok(Mounted {
-                fd,
-                watch: ours,
-                helper,
-            })
-        }
-        Err(e) => {
-            drop(ours);
-            let out = helper.wait_with_output();
-            let said = out
-                .map(|o| String::from_utf8_lossy(&o.stderr).trim().to_string())
-                .unwrap_or_default();
-            bail!(
-                "{FUSERMOUNT} could not mount {}: {} ({e})",
-                mount_point.display(),
-                sanitize::strip_controls(&said)
-            )
-        }
-    }
-}
-
-/// `/proc/self/mountinfo` escapes these in a mount point.
-fn mountinfo_escape(p: &Path) -> String {
-    let mut out = String::new();
-    for b in p.as_os_str().as_encoded_bytes() {
-        match b {
-            b' ' | b'\t' | b'\n' | b'\\' => out.push_str(&format!("\\{b:03o}")),
-            _ => out.push(*b as char),
-        }
-    }
-    out
-}
-
-/// Whether a FUSE filesystem is mounted at `p` in this process's mount namespace.
-pub fn is_fuse_mounted(p: &Path) -> bool {
-    let want = mountinfo_escape(p);
-    std::fs::read_to_string("/proc/self/mountinfo")
-        .unwrap_or_default()
-        .lines()
-        .any(|l| {
-            let mut halves = l.splitn(2, " - ");
-            let (left, right) = (halves.next().unwrap_or(""), halves.next().unwrap_or(""));
-            left.split(' ').nth(4) == Some(want.as_str()) && right.starts_with("fuse")
-        })
-}
-
-/// fusermount3 -u, and if the mount is busy, a lazy unmount (-z): it leaves the tree at once
-/// and goes when the last process using it lets go.
-fn unmount(p: &Path) {
-    if !is_fuse_mounted(p) {
-        return;
-    }
-    let run = |lazy: bool| {
-        let mut c = Command::new(FUSERMOUNT);
-        c.arg("-u").arg("-q");
-        if lazy {
-            c.arg("-z");
-        }
-        let _ = c
-            .arg("--")
-            .arg(p)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-    };
-    run(false);
-    if is_fuse_mounted(p) {
-        run(true);
-    }
-}
-
-/// Owns the mount: dropping it unmounts, closes the auto_unmount socket, and removes the mount
-/// point if this server created it. Held by the worker task, so `stop_server` aborting that
-/// task unmounts.
+/// Owns the mount: dropping it unmounts (the backend's `Mount`) and removes the mount point if
+/// this server created it. Held by the worker task, so `stop_server` aborting that task
+/// unmounts.
 struct MountGuard {
     mount_point: PathBuf,
     created_dir: bool,
-    watch: Option<UnixStream>,
-    helper: Option<Child>,
-    watchdog: Option<Child>,
-    session: Option<fuser::BackgroundSession>,
+    mount: Option<backend::Mount>,
     status_tx: tokio::sync::mpsc::UnboundedSender<String>,
 }
 
 impl Drop for MountGuard {
     fn drop(&mut self) {
-        unmount(&self.mount_point);
-        // Stopped on purpose: the watchdog's job is done, and killing it before its pipe closes
-        // keeps it from unmounting whatever is at this path later.
-        if let Some(mut watchdog) = self.watchdog.take() {
-            let _ = watchdog.kill();
-            std::thread::spawn(move || {
-                let _ = watchdog.wait();
-            });
-        }
-        drop(self.watch.take());
-        if let Some(mut helper) = self.helper.take() {
-            // It exits once it sees the socket close; reap it without waiting here.
-            std::thread::spawn(move || {
-                let _ = helper.wait();
-            });
-        }
-        // The session thread ends by itself when the kernel ends the connection.
-        drop(self.session.take());
+        drop(self.mount.take());
         if self.created_dir {
             let _ = std::fs::remove_dir(&self.mount_point);
         }
@@ -321,37 +131,16 @@ impl Drop for MountGuard {
     }
 }
 
-/// A process in a session of its own that lazily unmounts `mount_point` when this process is
-/// gone, however it went.
-///
-/// fusermount3's `auto_unmount` is meant to do this, and on fuse3 3.17 and later it does. Before
-/// that (Ubuntu 24.04 ships 3.14) its check runs as root and opens the mount point to see
-/// whether the daemon died; a mount made without `allow_other` refuses root with EACCES rather
-/// than answering ENOTCONN, so the check concludes the daemon is alive and leaves the dead
-/// mount behind. The watchdog runs as this user, who owns the mount: `sh` blocks reading a pipe
-/// whose only writer is this process, the read returns at end of file when this process is gone
-/// (SIGKILL included, since the kernel closes the descriptor), and it execs `fusermount3 -u -z`.
-/// A normal stop unmounts first and then kills the watchdog before closing the pipe.
-fn spawn_watchdog(mount_point: &Path) -> std::io::Result<Child> {
-    let mut cmd = Command::new("sh");
-    cmd.arg("-c")
-        .arg("read -r _ || true; exec fusermount3 -u -q -z -- \"$1\"")
-        .arg("netget-fuse-watchdog")
-        .arg(mount_point)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    // SAFETY: only setsid, which is async-signal-safe, runs between fork and exec. A session
-    // of its own keeps a terminal's Ctrl+C or a kill of this process group from reaching it.
-    unsafe {
-        cmd.pre_exec(|| {
-            if libc::setsid() < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    cmd.spawn()
+/// Who may use the mount, and fuser's settings: one session thread.
+fn session_config(allow_other: bool) -> (SessionACL, fuser::Config) {
+    let acl = if allow_other {
+        SessionACL::All
+    } else {
+        SessionACL::Owner
+    };
+    let mut config = fuser::Config::default();
+    config.n_threads = Some(1);
+    (acl, config)
 }
 
 /// Make sure the mount point is an empty directory: an existing one, or a new one in an
@@ -672,6 +461,26 @@ impl FuseFs {
         }
     }
 
+    /// macOS only: whether `name` is an AppleDouble sidecar (`._x`), refused EPERM without
+    /// asking. Without named attributes (which FUSE-T is never given, see `macos.rs`) the NFS
+    /// client keeps extended attributes in such files; refusing them makes extended attributes
+    /// unsupported on macOS, as FUSE-T's `--noappledouble` intends, instead of a create and
+    /// writes for the model to decide about every time macOS stamps a file. Never on Linux.
+    fn apple_double(&self, op: &str, name: &OsStr) -> bool {
+        #[cfg(target_os = "macos")]
+        if name.as_encoded_bytes().starts_with(b"._") {
+            Log::new(Some(&self.status_tx)).info(format!(
+                "FUSE {} operation={op} decision=protocol_refusal {} is an AppleDouble name \
+                 (extended attributes are not supported on macOS); answered EPERM",
+                self.mount_label,
+                sanitize::token(&name.to_string_lossy(), 255)
+            ));
+            return true;
+        }
+        let _ = (op, name);
+        false
+    }
+
     fn refuse_read_only(&self, op: &str) -> Errno {
         Log::new(Some(&self.status_tx)).info(format!(
             "FUSE {} operation={op} decision=read_only answered EROFS",
@@ -683,6 +492,29 @@ impl FuseFs {
 
 fn name_of(name: &OsStr) -> Option<String> {
     name.to_str().map(str::to_string)
+}
+
+/// A rename's flags as (exchange, no_replace), or None for EINVAL. A whiteout is overlayfs's
+/// marker for a deleted lower entry, which this tree has no notion of; EXCHANGE with NOREPLACE
+/// contradicts itself. Both are EINVAL, as from a filesystem that does not support them, and the
+/// model is not asked.
+#[cfg(target_os = "linux")]
+fn rename_mode(flags: RenameFlags) -> Option<(bool, bool)> {
+    let exchange = flags.contains(RenameFlags::RENAME_EXCHANGE);
+    let no_replace = flags.contains(RenameFlags::RENAME_NOREPLACE);
+    let known = RenameFlags::RENAME_EXCHANGE | RenameFlags::RENAME_NOREPLACE;
+    if !(flags - known).is_empty() || (exchange && no_replace) {
+        None
+    } else {
+        Some((exchange, no_replace))
+    }
+}
+
+/// On macOS a rename carries no flags: FUSE-T's NFS server has no renamex_np, so RENAME_SWAP
+/// and RENAME_EXCL never reach a FUSE-T daemon. Anything else is EINVAL, unasked.
+#[cfg(target_os = "macos")]
+fn rename_mode(flags: RenameFlags) -> Option<(bool, bool)> {
+    flags.is_empty().then_some((false, false))
 }
 
 impl Filesystem for FuseFs {
@@ -790,16 +622,20 @@ impl Filesystem for FuseFs {
     ) {
         // A FIFO, socket or device node is only a name here: the kernel serves its I/O (and the
         // mount is nodev, so a device node cannot be opened through it).
-        let kind = match mode & libc::S_IFMT {
-            libc::S_IFREG => Kind::File,
-            libc::S_IFIFO => Kind::Fifo,
-            libc::S_IFSOCK => Kind::Socket,
-            libc::S_IFCHR => Kind::CharDevice,
-            libc::S_IFBLK => Kind::BlockDevice,
+        // `mode_t` is 16 bits on macOS and 32 on Linux.
+        let kind = match mode & libc::S_IFMT as u32 {
+            m if m == libc::S_IFREG as u32 => Kind::File,
+            m if m == libc::S_IFIFO as u32 => Kind::Fifo,
+            m if m == libc::S_IFSOCK as u32 => Kind::Socket,
+            m if m == libc::S_IFCHR as u32 => Kind::CharDevice,
+            m if m == libc::S_IFBLK as u32 => Kind::BlockDevice,
             _ => return reply.error(Errno::EINVAL),
         };
         if self.read_only {
             return reply.error(self.refuse_read_only("create"));
+        }
+        if self.apple_double("create", name) {
+            return reply.error(Errno::EPERM);
         }
         let Some(name) = name_of(name) else {
             return reply.error(Errno::EINVAL);
@@ -828,6 +664,9 @@ impl Filesystem for FuseFs {
     ) {
         if self.read_only {
             return reply.error(self.refuse_read_only("mkdir"));
+        }
+        if self.apple_double("mkdir", name) {
+            return reply.error(Errno::EPERM);
         }
         let Some(name) = name_of(name) else {
             return reply.error(Errno::EINVAL);
@@ -888,6 +727,9 @@ impl Filesystem for FuseFs {
         if self.read_only {
             return reply.error(self.refuse_read_only("symlink"));
         }
+        if self.apple_double("symlink", link_name) {
+            return reply.error(Errno::EPERM);
+        }
         let (Some(name), Some(target)) = (name_of(link_name), target.to_str()) else {
             return reply.error(Errno::EINVAL);
         };
@@ -915,13 +757,10 @@ impl Filesystem for FuseFs {
         if self.read_only {
             return reply.error(self.refuse_read_only("rename"));
         }
-        let exchange = flags.contains(RenameFlags::RENAME_EXCHANGE);
-        let no_replace = flags.contains(RenameFlags::RENAME_NOREPLACE);
-        // A whiteout is overlayfs's marker for a deleted lower entry, which this tree has no
-        // notion of; EXCHANGE with NOREPLACE contradicts itself. Both are EINVAL, as from a
-        // filesystem that does not support them, and the model is not asked.
-        let known = RenameFlags::RENAME_EXCHANGE | RenameFlags::RENAME_NOREPLACE;
-        if !(flags - known).is_empty() || (exchange && no_replace) {
+        if self.apple_double("rename", newname) {
+            return reply.error(Errno::EPERM);
+        }
+        let Some((exchange, no_replace)) = rename_mode(flags) else {
             Log::new(Some(&self.status_tx)).info(format!(
                 "FUSE {} operation=rename decision=protocol_refusal flags {:#x} (whiteout, or \
                  exchange with noreplace) answered EINVAL",
@@ -929,7 +768,7 @@ impl Filesystem for FuseFs {
                 flags.bits()
             ));
             return reply.error(Errno::EINVAL);
-        }
+        };
         let (Some(name), Some(new_name)) = (name_of(name), name_of(newname)) else {
             return reply.error(Errno::EINVAL);
         };
@@ -957,6 +796,9 @@ impl Filesystem for FuseFs {
     ) {
         if self.read_only {
             return reply.error(self.refuse_read_only("link"));
+        }
+        if self.apple_double("link", newname) {
+            return reply.error(Errno::EPERM);
         }
         if newname.len() > tree::MAX_NAME_BYTES {
             return reply.error(Errno::ENAMETOOLONG);
@@ -1163,7 +1005,7 @@ impl Filesystem for FuseFs {
         let t = lock(&self.tree);
         match t.getxattr(ino.0, &name) {
             Ok(v) => xattr_reply(v, size, reply),
-            Err(Stop::Errno(c)) => reply.error(Errno::from_i32(c)),
+            Err(Stop::Errno(c)) => reply.error(Errno::from_i32(xattr_errno(c))),
             Err(Stop::Describe(_)) => reply.error(Errno::EIO),
         }
     }
@@ -1241,6 +1083,9 @@ impl Filesystem for FuseFs {
         if self.read_only {
             return reply.error(self.refuse_read_only("create"));
         }
+        if self.apple_double("create", name) {
+            return reply.error(Errno::EPERM);
+        }
         let Some(name) = name_of(name) else {
             return reply.error(Errno::EINVAL);
         };
@@ -1255,6 +1100,16 @@ impl Filesystem for FuseFs {
             },
         );
     }
+}
+
+/// The errno for an extended attribute that is not there. The tree says ENODATA, which is what
+/// Linux's xattr calls return; macOS's return ENOATTR, and ENODATA there means something else.
+fn xattr_errno(code: i32) -> i32 {
+    #[cfg(target_os = "macos")]
+    if code == libc::ENODATA {
+        return libc::ENOATTR;
+    }
+    code
 }
 
 /// An extended attribute's value or the name list: its length when `size` is 0, ERANGE when it
@@ -1733,12 +1588,12 @@ impl Worker {
                 reply,
             } => match self.setxattr(ino, &name, &value, mode, who, deadline).await {
                 Ok(()) => reply.ok(),
-                Err(c) => reply.error(Errno::from_i32(c)),
+                Err(c) => reply.error(Errno::from_i32(xattr_errno(c))),
             },
             Job::Removexattr { ino, name, reply } => {
                 match self.removexattr(ino, &name, who, deadline).await {
                     Ok(()) => reply.ok(),
-                    Err(c) => reply.error(Errno::from_i32(c)),
+                    Err(c) => reply.error(Errno::from_i32(xattr_errno(c))),
                 }
             }
             Job::Fallocate {
@@ -2284,11 +2139,7 @@ fn mount_is_live(p: &Path) -> bool {
 
 pub async fn spawn(ctx: SpawnContext) -> Result<SocketAddr> {
     let s = settings(&ctx)?;
-    ensure!(
-        Path::new("/dev/fuse").exists(),
-        "/dev/fuse does not exist: load the module (modprobe fuse) and install fuse3 \
-         (apt-get install fuse3)"
-    );
+    backend::preflight()?;
     let created_dir = prepare_mount_point(&s.mount_point)?;
     let mount_point = s.mount_point.canonicalize()?;
     let label = sanitize::token(&mount_point.to_string_lossy(), 256);
@@ -2297,18 +2148,23 @@ pub async fn spawn(ctx: SpawnContext) -> Result<SocketAddr> {
     let tree = Arc::new(Mutex::new(Tree::new(0o755, uid, gid, s.max_overlay)));
     let (tx, rx) = mpsc::channel(MAX_PENDING);
 
-    let mut options = String::from("fsname=netget,subtype=netget,default_permissions,auto_unmount");
-    if s.read_only {
-        options.push_str(",ro");
-    }
-    if s.allow_other {
-        options.push_str(",allow_other");
-    }
-    let mp = mount_point.clone();
-    let mounted = tokio::task::spawn_blocking(move || mount(&mp, &options))
-        .await
-        .context("the mount task failed")?;
-    let mounted = match mounted {
+    let fs = FuseFs {
+        tree: tree.clone(),
+        queue: tx,
+        read_only: s.read_only,
+        status_tx: ctx.status_tx.clone(),
+        mount_label: label.clone(),
+    };
+    let mount = backend::start(
+        &mount_point,
+        s.read_only,
+        s.allow_other,
+        fs,
+        &label,
+        &ctx.status_tx,
+    )
+    .await;
+    let mount = match mount {
         Ok(m) => m,
         Err(e) => {
             if created_dir {
@@ -2317,51 +2173,12 @@ pub async fn spawn(ctx: SpawnContext) -> Result<SocketAddr> {
             return Err(e);
         }
     };
-    let mut guard = MountGuard {
+    let guard = MountGuard {
         mount_point: mount_point.clone(),
         created_dir,
-        watch: Some(mounted.watch),
-        helper: Some(mounted.helper),
-        watchdog: None,
-        session: None,
+        mount: Some(mount),
         status_tx: ctx.status_tx.clone(),
     };
-
-    match spawn_watchdog(&mount_point) {
-        Ok(w) => guard.watchdog = Some(w),
-        Err(e) => Log::new(Some(&ctx.status_tx)).warn(format!(
-            "FUSE {label}: no unmount watchdog ({e}); if this process is killed, only \
-             fusermount3's auto_unmount (fuse3 3.17 or later) removes the mount"
-        )),
-    }
-
-    let fs = FuseFs {
-        tree: tree.clone(),
-        queue: tx,
-        read_only: s.read_only,
-        status_tx: ctx.status_tx.clone(),
-        mount_label: label.clone(),
-    };
-    let acl = if s.allow_other {
-        SessionACL::All
-    } else {
-        SessionACL::Owner
-    };
-    let mut config = fuser::Config::default();
-    config.n_threads = Some(1);
-    let fd = mounted.fd;
-    // The INIT handshake: the kernel sends it as soon as the mount exists.
-    let session = tokio::time::timeout(
-        MOUNT_TIMEOUT,
-        tokio::task::spawn_blocking(move || {
-            fuser::Session::from_fd(fs, fd, acl, config).and_then(|s| s.spawn())
-        }),
-    )
-    .await
-    .context("the kernel did not start the FUSE session within 30 s")?
-    .context("the FUSE session task failed")?
-    .context("the FUSE session handshake failed")?;
-    guard.session = Some(session);
 
     let mp = mount_point.clone();
     let live = tokio::time::timeout(

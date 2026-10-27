@@ -121,7 +121,8 @@ fn who() -> Vec<Parameter> {
         p(
             "pid",
             "number",
-            "The process asking (0 when the kernel asks on its own)",
+            "The process asking (0 when the kernel asks on its own; always 0 on macOS, where \
+             the request arrives over NFS, which carries no pid)",
             true,
         ),
         p("uid", "number", "The process's user id", true),
@@ -129,7 +130,7 @@ fn who() -> Vec<Parameter> {
         p(
             "process",
             "string",
-            "The process's command name, from /proc/<pid>/comm",
+            "The process's command name, from /proc/<pid>/comm (empty on macOS)",
             false,
         ),
     ]
@@ -549,12 +550,14 @@ impl Protocol for FuseProtocol {
             "fuse mount",
             "filesystem in userspace",
             "fusermount",
+            "fuse-t",
         ]
     }
     fn description(&self) -> &'static str {
-        "FUSE local filesystem (Linux): a directory on this machine whose contents the model \
-         describes and whose every change it decides; the kernel is the client, NetGet serves \
-         reads from the description and keeps accepted changes in memory"
+        "FUSE local filesystem (Linux, and macOS through FUSE-T): a directory on this machine \
+         whose contents the model describes and whose every change it decides; the kernel is \
+         the client, NetGet serves reads from the description and keeps accepted changes in \
+         memory"
     }
     fn get_async_actions(&self, _: &AppState) -> Vec<ActionDefinition> {
         vec![]
@@ -640,7 +643,11 @@ impl Protocol for FuseProtocol {
     fn get_dependencies(&self) -> Vec<ProtocolDependency> {
         let mut deps =
             crate::llm::actions::protocol_trait::default_dependencies_from_privilege(self);
+        // Linux: the setuid helper that mounts /dev/fuse. macOS: FUSE-T's NFS server.
+        #[cfg(target_os = "linux")]
         deps.push(ProtocolDependency::ToolInPath("fusermount3"));
+        #[cfg(target_os = "macos")]
+        deps.push(super::macos::DEPENDENCY);
         deps
     }
     fn metadata(&self) -> crate::protocol::metadata::ProtocolMetadataV2 {
@@ -648,10 +655,10 @@ impl Protocol for FuseProtocol {
         ProtocolMetadataV2::builder()
             .state(DevelopmentState::Experimental)
             .privilege_requirement(PrivilegeRequirement::None)
-            .implementation("Linux FUSE through the fuser crate (0.18, MIT, no libfuse: /dev/fuse is mounted by the setuid fusermount3 helper with auto_unmount, and fuser speaks the kernel protocol); a lazily described file tree with an in-memory overlay (src/server/described_tree.rs, content through src/server/described_disk.rs); one worker per mount asks the model one decision at a time under a deadline")
+            .implementation("FUSE through the fuser crate (0.18, MIT), which speaks the protocol; how the mount is made is a platform backend. Linux (src/server/fuse/linux.rs): no libfuse, /dev/fuse mounted by the setuid fusermount3 helper with auto_unmount plus an unmount watchdog. macOS (src/server/fuse/macos.rs): FUSE-T, found and started at runtime and never linked - NetGet launches FUSE-T's go-nfsv4 itself (the launch contract FUSE-T's own Go libraries use), which serves the mount to the kernel's NFSv4 client over loopback and sends each call as a FUSE request over a stream socket; a relay hands fuser one request per datagram and trims the INIT reply to ABI 7.19 so FUSE-T speaks the macFUSE layout fuser uses. A lazily described file tree with an in-memory overlay (src/server/described_tree.rs, content through src/server/described_disk.rs); one worker per mount asks the model one decision at a time under a deadline")
             .llm_control("What each directory contains (names, kinds, modes, owners, times, file content as text/hex/extents with failing regions, symlink targets, hard links naming a file by path, extended attributes on any node), asked once per directory when something first looks inside it; and every change a process asks for - create, write, truncate, fallocate (allocate, punch hole, zero range), chmod/chown/utimes, mkdir, unlink, rmdir, rename and RENAME_EXCHANGE, link, symlink, setxattr, removexattr - allowed into the overlay or refused with an errno")
-            .e2e_testing("tests/server/fuse: ordinary tools on the mount (ls, stat, cat, dd at offsets, find and find -samefile, sha256sum against the described bytes, cp in and out, mv, rm, mkdir/rmdir, ln and ln -s/readlink, chmod, truncate, setfattr/getfattr, fallocate) and Python's os.walk/os.stat/open/os.setxattr/os.posix_fallocate plus libc getxattr and renameat2 through ctypes, as separate processes, with the model calls each operation caused; deadline, model failure (every decision fails closed), depth, overlay (writes and fallocate), link, xattr and refused-change bounds; stop and a killed daemon unmount; pjdfstest (the C suite) on the mount, 235 of 238 files passing in full as real root and 203 where device nodes are refused, the rest on the 1 GiB file bound and pjdfstest's own TODO cases; Linux only, in the fuse pair job. There is no wire: the kernel's FUSE driver is the peer, so no pcap oracle applies")
-            .notes("Experimental: the peer is the Linux kernel's FUSE driver driven by coreutils, findutils, attr, util-linux, Python and pjdfstest, measured on a Linux 7.2 aarch64 kernel unprivileged (fuse3 3.14 and 3.18), as root in a user namespace and as real root; in CI only the fuse pair job runs it. Linux only (no macFUSE or FUSE-T: NetGet links neither). FIFOs, sockets and device nodes are names only (the kernel serves their I/O; the mount is nodev). Hard links share one inode (content, attributes, xattrs) and count nlink; extended attributes are user.*, trusted.* and security.* (the kernel decides who may set the last two). Not implemented: RENAME_WHITEOUT (EINVAL), POSIX ACLs, fallocate's collapse/insert/unshare ranges (EOPNOTSUPP), file locks beyond the kernel's own, copy_file_range and SEEK_DATA/SEEK_HOLE (the kernel falls back). A description, decision or model failure past decision_timeout_secs is EIO; a model refusal is its errno. Bounds: 65536 entries, 4096 per directory, names of 255 bytes, 64 directories deep, files up to 1 GiB, 16 MiB of described text and hex, the overlay (default 64 MiB, fallocate included), 128 KiB per write request, 64 requests waiting for the model, three description attempts per directory, 1024 names per file and 65536 hard links, xattr names of 255 bytes, values of 64 KiB, 128 per node and 16 MiB in all.")
+            .e2e_testing("tests/server/fuse. Linux: ordinary tools on the mount (ls, stat, cat, dd at offsets, find and find -samefile, sha256sum against the described bytes, cp in and out, mv, rm, mkdir/rmdir, ln and ln -s/readlink, chmod, truncate, setfattr/getfattr, fallocate) and Python's os.walk/os.stat/open/os.setxattr/os.posix_fallocate plus libc getxattr and renameat2 through ctypes, as separate processes, with the model calls each operation caused; deadline, model failure (every decision fails closed), depth, overlay (writes and fallocate), link, xattr and refused-change bounds; stop and a killed daemon unmount; pjdfstest (the C suite), 235 of 238 files passing in full as real root and 203 where device nodes are refused; in the fuse pair job. macOS (FUSE-T 1.2.9, CI only, in the fuse-macos pair job, because a FUSE-T mount can panic the host): BSD ls, stat -f, cat, dd, head, shasum, find, cp, mv, rm, mkdir/rmdir, ln and ln -s, readlink, chmod, truncate, xattr (refused) and Python's os.walk, with the model calls each caused and attributes checked to stand still; unreachable and slow model, read-only, a busy stop and a SIGKILLed daemon; pjdfstest as root, reported with no floor; four mutation checks. A missing FUSE-T is refused at startup naming the cask, tested without mounting. There is no wire NetGet authors: the kernel (on macOS through FUSE-T's NFS server) is the peer, so no pcap oracle applies")
+            .notes("Experimental. Linux: the peer is the kernel's FUSE driver driven by coreutils, findutils, attr, util-linux, Python and pjdfstest, measured on a Linux 7.2 aarch64 kernel unprivileged (fuse3 3.14 and 3.18), as root in a user namespace and as real root; in CI only the fuse pair job runs it. macOS: through FUSE-T (brew install --cask macos-fuse-t/cask/fuse-t), refused at startup when it is missing; a FUSE-T mount is an NFS mount, so macOS's NFS client sits between processes and NetGet: reads are NFS READs of up to 128 KiB (a failing region fails every read whose chunk covers it), a write's decision reaches the process at close or fsync, events carry pid 0 and no process name, extended attributes are not supported (FUSE-T is never given --namedattr, and AppleDouble ._ files are refused EPERM), and RENAME_EXCHANGE, fallocate and the macOS swap/excl renames do not exist over NFS. Residual risk on macOS: Apple's NFS client has a race that panics the whole machine (nfs_vinvalbuf2: ubc_msync failed!, error 22; FUSE-T issue #109, Apple FB23527406), made likely by named attributes and by served attributes that churn. NetGet minimises it - no named attributes, inode numbers fixed for a node's life, mtime and ctime that never go backwards and move only on an approved change, no time taken at getattr - but cannot remove it until Apple fixes the kext; it panicked the development Mac once, with --namedattr. FIFOs, sockets and device nodes are names only (the kernel serves their I/O; the mount is nodev). Hard links share one inode (content, attributes, xattrs) and count nlink; extended attributes (Linux) are user.*, trusted.* and security.* (the kernel decides who may set the last two). Not implemented: RENAME_WHITEOUT (EINVAL), POSIX ACLs, fallocate's collapse/insert/unshare ranges (EOPNOTSUPP), file locks beyond the kernel's own, copy_file_range and SEEK_DATA/SEEK_HOLE (the kernel falls back). A description, decision or model failure past decision_timeout_secs is EIO; a model refusal is its errno. Bounds: 65536 entries, 4096 per directory, names of 255 bytes, 64 directories deep, files up to 1 GiB, 16 MiB of described text and hex, the overlay (default 64 MiB, fallocate included), 128 KiB per write request, 64 requests waiting for the model, three description attempts per directory, 1024 names per file and 65536 hard links, xattr names of 255 bytes, values of 64 KiB, 128 per node and 16 MiB in all.")
             .answers_on_failure()
             .request_only("The kernel asks and the daemon answers: a FUSE daemon sends nothing that is not the reply to a kernel request, and this one sends no notifications")
             .max_inbound_bytes(super::MAX_WRITE_BYTES as usize)

@@ -489,8 +489,16 @@ bluer = { version = "0.17", optional = true, features = ["bluetoothd"] }
 socketcan = { version = "3.5" }
 # FUSE: the kernel's /dev/fuse, mounted through the setuid fusermount3 helper. Without the
 # `libfuse` feature fuser links no C library on Linux (its build script selects the pure-Rust
-# mount); on macOS its build script needs macFUSE, which is why this is Linux-only.
+# mount); on macOS its build script needs macFUSE, which is why this table is Linux-only.
 fuser = { version = "0.18", default-features = false }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# FUSE on macOS through FUSE-T, which is found and started at runtime, never linked: NetGet
+# launches FUSE-T's go-nfsv4 server itself and gives fuser the FUSE requests it relays.
+# `macos-no-mount` keeps fuser's build script from requiring macFUSE through pkg-config. Not
+# `macfuse-4-compat`: FUSE-T's libfuse2 profile sends the 8-byte rename_in, without macFUSE 4's
+# flags (measured: with them, fuser read the first eight bytes of the old name as flags).
+fuser = { version = "0.18", default-features = false, features = ["macos-no-mount"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }

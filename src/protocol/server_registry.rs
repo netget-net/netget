@@ -344,7 +344,7 @@ impl ServerRegistry {
         self.register(Arc::new(
             crate::server::nvme_tcp::actions::NvmeTcpProtocol::new(),
         ));
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         self.register(Arc::new(crate::server::fuse::actions::FuseProtocol::new()));
         #[cfg(unix)]
         self.register(Arc::new(crate::server::hdfs::actions::HdfsProtocol::new()));
@@ -1708,7 +1708,7 @@ pub(crate) const ALL_KNOWN_PROTOCOLS: &[(&str, &str)] = &[
     ("NBD", "a native build (not the browser)"),
     ("iSCSI", "a native build (not the browser)"),
     ("NVMe-TCP", "a native build (not the browser)"),
-    ("FUSE", "a Linux build (the kernel's FUSE driver through fusermount3; NetGet links no macFUSE or FUSE-T)"),
+    ("FUSE", "a Linux build (the kernel's FUSE driver through fusermount3) or a macOS build (FUSE-T, found at runtime; NetGet links no macFUSE or FUSE-T)"),
     ("HDFS", "a Unix build (macOS or Linux)"),
     ("ManageSieve", "a native build (not the browser)"),
     ("Zenoh", "a native build (not the browser)"),

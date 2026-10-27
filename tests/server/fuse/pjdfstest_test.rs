@@ -462,14 +462,28 @@ async fn pjdfstest_passes_on_the_mount() {
                 0
             }
     );
-    let floor: Vec<&&str> = MUST_PASS
-        .iter()
-        .chain(if devices {
-            MUST_PASS_WITH_DEVICE_NODES.iter()
-        } else {
-            [].iter()
-        })
-        .collect();
+    // The floors were measured on Linux. On macOS the suite runs through FUSE-T and Apple's NFS
+    // client, which decide much of it before NetGet sees a request; its pass count is reported
+    // on its own line and held to no floor until repeated CI runs show which files pass
+    // reliably.
+    if cfg!(target_os = "macos") {
+        println!(
+            "pjdfstest (macOS, FUSE-T): {files_ok}/{} files pass in full; no floor yet",
+            table.len()
+        );
+    }
+    let floor: Vec<&&str> = if cfg!(target_os = "linux") {
+        MUST_PASS
+            .iter()
+            .chain(if devices {
+                MUST_PASS_WITH_DEVICE_NODES.iter()
+            } else {
+                [].iter()
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     let regressed: Vec<&&str> = floor
         .into_iter()
         .filter(|f| !table.get(**f).is_some_and(|(ok, bad)| *bad == 0 && *ok > 0))
