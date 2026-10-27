@@ -596,6 +596,19 @@ fn file_content(e: &Json) -> Result<(u64, Vec<Extent>, Vec<ErrorRegion>, usize)>
     Ok((size, base, errors, explicit))
 }
 
+/// Move a served timestamp forward: to `now`, or a microsecond past where it is when the clock
+/// reads earlier (a description's mtime in the future, a clock stepped back). mtime and ctime
+/// never go backwards, and every approved change moves them. An NFS client (FUSE-T on macOS)
+/// invalidates its caches on what it sees change; a time that regresses across a change is the
+/// attribute churn that provokes a known panic in Apple's NFS client (FB23527406).
+fn advance(t: &mut SystemTime, now: SystemTime) {
+    *t = if now > *t {
+        now
+    } else {
+        *t + Duration::from_micros(1)
+    };
+}
+
 impl Tree {
     /// An empty tree whose root is a directory waiting for its description, owned by
     /// `uid`/`gid` (and every described entry that names no owner).
@@ -1281,7 +1294,7 @@ impl Tree {
         if !self.forget_name(ino, parent, name) {
             // Other names remain: the inode stays, its link count one less.
             if let Some(n) = self.nodes.get_mut(&ino) {
-                n.ctime = now;
+                advance(&mut n.ctime, now);
             }
             return;
         }
@@ -1289,7 +1302,7 @@ impl Tree {
         if open {
             if let Some(n) = self.nodes.get_mut(&ino) {
                 n.parent = 0;
-                n.ctime = now;
+                advance(&mut n.ctime, now);
             }
         } else {
             self.drop_node(ino);
@@ -1298,8 +1311,8 @@ impl Tree {
 
     fn touch_dir(&mut self, ino: u64, now: SystemTime) {
         if let Some(n) = self.nodes.get_mut(&ino) {
-            n.mtime = now;
-            n.ctime = now;
+            advance(&mut n.mtime, now);
+            advance(&mut n.ctime, now);
         }
     }
 
@@ -1363,7 +1376,7 @@ impl Tree {
         self.touch_dir(new_parent, now);
         let n = self.nodes.get_mut(&ino).expect("checked");
         n.links.push((new_parent, new_name.to_string()));
-        n.ctime = now;
+        advance(&mut n.ctime, now);
         self.hard_links += 1;
         Ok(self.attr(ino).expect("live"))
     }
@@ -1687,7 +1700,7 @@ impl Tree {
             .insert(new_name.to_string(), src);
         self.move_name(src, (parent, name), (new_parent, new_name));
         if let Some(n) = self.nodes.get_mut(&src) {
-            n.ctime = now;
+            advance(&mut n.ctime, now);
         }
         self.touch_dir(parent, now);
         self.touch_dir(new_parent, now);
@@ -1749,7 +1762,7 @@ impl Tree {
         self.move_name(a, (0, ""), (new_parent, new_name));
         for ino in [a, b] {
             if let Some(n) = self.nodes.get_mut(&ino) {
-                n.ctime = now;
+                advance(&mut n.ctime, now);
             }
         }
         self.touch_dir(parent, now);
@@ -1823,8 +1836,8 @@ impl Tree {
                 .copy_from_slice(&data[(s - offset) as usize..(e - offset) as usize]);
         }
         f.size = f.size.max(end);
-        node.mtime = now;
-        node.ctime = now;
+        advance(&mut node.mtime, now);
+        advance(&mut node.ctime, now);
         self.overlay_bytes += extra;
         Ok(data.len() as u32)
     }
@@ -1865,8 +1878,8 @@ impl Tree {
             f.base_limit = f.base_limit.min(size);
         }
         f.size = size;
-        node.mtime = now;
-        node.ctime = now;
+        advance(&mut node.mtime, now);
+        advance(&mut node.ctime, now);
         self.overlay_bytes -= freed;
         Ok(())
     }
@@ -1888,7 +1901,7 @@ impl Tree {
         if let Some(t) = changes.mtime {
             node.mtime = t;
         }
-        node.ctime = SystemTime::now();
+        advance(&mut node.ctime, SystemTime::now());
         Ok(self.attr(ino).expect("live"))
     }
 
@@ -1966,7 +1979,7 @@ impl Tree {
             .xattrs
             .insert(name.to_string(), value.to_vec())
             .map_or(0, |v| xattr_cost(name, &v));
-        n.ctime = SystemTime::now();
+        advance(&mut n.ctime, SystemTime::now());
         self.xattr_bytes = self.xattr_bytes - freed + xattr_cost(name, value);
         Ok(())
     }
@@ -1982,7 +1995,7 @@ impl Tree {
         if let Some(v) = n.xattrs.remove(name) {
             self.xattr_bytes -= xattr_cost(name, &v);
         }
-        n.ctime = SystemTime::now();
+        advance(&mut n.ctime, SystemTime::now());
         Ok(())
     }
 
@@ -2100,8 +2113,8 @@ impl Tree {
         if !how.keep_size() {
             f.size = f.size.max(end);
         }
-        node.mtime = now;
-        node.ctime = now;
+        advance(&mut node.mtime, now);
+        advance(&mut node.ctime, now);
         self.overlay_bytes = self.overlay_bytes + added - freed;
         Ok(())
     }
