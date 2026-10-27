@@ -155,9 +155,10 @@ NetGet lowers how often the race can run; only Apple's fix removes it.
 
 There is no port (`NO_WELL_KNOWN_PORT` in `tests/well_known_port_declaration_test.rs` says so;
 FUSE-T's NFS server picks its own loopback port), and privilege is `None`: fusermount3 is the
-setuid part on Linux, and on macOS an NFS mount by its owner needs none. `spawn()` returns only after the
-kernel's INIT handshake has completed and a `stat` of the mount point shows a different device
-from its parent's, so a mount that did not come up is `Err` and `ServerStatus::Error`. The
+setuid part on Linux, and on macOS an NFS mount by its owner needs none. `spawn()` returns only
+after the INIT handshake has completed (on macOS, also FUSE-T's mount status) and a `stat` of the
+mount point shows a different device from its parent's, so a mount that did not come up is `Err`
+and `ServerStatus::Error`. The
 returned address is the `127.0.0.1:0` placeholder the other local servers use.
 
 ## What the model decides, and what it does not
@@ -215,7 +216,8 @@ ENOTDIR, EINVAL for a rename into its own subtree, ENAMETOOLONG, EFBIG, ENOSPC p
 and the model is not asked about those (`decision=protocol_refusal`). A write event carries the
 offset, length, size before, and the first 512 bytes as text when they are text and as hex
 otherwise (`encoding` says which, `data_truncated` whether there is more). Every event carries
-the requesting pid, uid, gid and process name (`/proc/<pid>/comm`).
+the requesting pid, uid, gid and process name (`/proc/<pid>/comm`; on macOS pid 0 and no name,
+because NFS carries none).
 
 **What the kernel decides before the tree does.** `link` of a directory, `user.*` on a symlink
 or special file, `trusted.*` without CAP_SYS_ADMIN in the initial user namespace, `security.*`
@@ -314,9 +316,9 @@ of file it runs `umount -f` and `diskutil unmount force` until `mount` no longer
 point, for up to 30 s. The killed-daemon test was measured (before the ban) unmounting in about
 6 s.
 
-**Linux.** `stop_server` aborts the worker task, which owns the mount guard. Dropping it runs
-`fusermount3 -u`, then `fusermount3 -u -z` if the mount is busy (lazy: it leaves the tree at once and goes when
-the last process lets go), closes the auto_unmount socket, and removes a mount point it created.
+**Linux.** `stop_server` aborts the worker task, which owns the mount guard (on both
+platforms). Dropping it runs `fusermount3 -u`, then `fusermount3 -u -z` if the mount is busy
+(lazy: it leaves the tree at once and goes when the last process lets go), closes the auto_unmount socket, and removes a mount point it created.
 The session thread ends by itself when the kernel ends the connection. If the process dies
 instead — SIGKILL, a crash, `std::process::exit` — no destructor runs, but the descriptor closes
 and the connection aborts. Two things then unmount it:
