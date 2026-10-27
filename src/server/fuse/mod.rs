@@ -622,7 +622,8 @@ impl Filesystem for FuseFs {
     ) {
         // A FIFO, socket or device node is only a name here: the kernel serves its I/O (and the
         // mount is nodev, so a device node cannot be opened through it).
-        // `mode_t` is 16 bits on macOS and 32 on Linux.
+        // `mode_t` is 16 bits on macOS and 32 on Linux, so the casts are needed on one of them.
+        #[allow(clippy::unnecessary_cast)]
         let kind = match mode & libc::S_IFMT as u32 {
             m if m == libc::S_IFREG as u32 => Kind::File,
             m if m == libc::S_IFIFO as u32 => Kind::Fifo,
