@@ -87,7 +87,7 @@ h2 { font-size: 1.3rem; font-weight: 600; letter-spacing: -0.025em; margin-botto
 .network-client { position: relative; text-align: center; line-height: 1; }
 .network-client-icon { position: absolute; bottom: calc(100% + 10px); left: 50%; transform: translateX(-50%); width: 40px; height: 40px; color: var(--muted); }
 .network-wire { position: relative; height: 0; }
-.network-protocols { position: absolute; bottom: 14px; right: 50%; transform: translateX(50%); display: flex; flex-wrap: nowrap; gap: 0.6rem; width: max-content; color: var(--muted); font-family: var(--mono); font-size: 0.7rem; line-height: 1; white-space: nowrap; }
+.network-protocols { position: absolute; bottom: 14px; left: 5px; right: 5px; text-align: center; color: var(--muted); font-family: var(--mono); font-size: 0.7rem; line-height: 1.5; white-space: normal; }
 .network-hub { display: grid; place-items: center; height: 88px; border: 1px solid var(--green); border-radius: 8px; background: var(--panel); }
 .network-hub strong { font-family: var(--mono); font-size: 1.5rem; letter-spacing: -0.05em; line-height: 1; }
 .network-hub strong span { color: var(--green); }
@@ -109,7 +109,7 @@ h2 { font-size: 1.3rem; font-weight: 600; letter-spacing: -0.025em; margin-botto
     .network-client, .network-drivers { font-size: 0.65rem; }
     .network-client-icon { width: 30px; height: 30px; bottom: calc(100% + 20px); }
     .network-hub strong { font-size: 1.1rem; }
-    .network-protocols { gap: 0.35rem; font-size: 0.6rem; }
+    .network-protocols { font-size: 0.6rem; }
     .network-branch { margin-right: 7px; }
 }
 .examples { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
