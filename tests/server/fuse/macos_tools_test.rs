@@ -3,9 +3,12 @@
 //! the description, and so is what the model was asked: reads cost nothing, each directory is
 //! described once, each change is a decision.
 //!
-//! **CI only.** `require_fuse` fails unless `NETGET_FUSE_MACOS_CI=1`: a FUSE-T mount is an NFS
-//! mount, and Apple's NFS client can panic the host under attribute churn (FUSE-T issue #109,
-//! Apple FB23527406). The `fuse-macos` pair job runs this on a throwaway VM.
+//! **These mount FUSE-T.** `require_fuse` fails unless `NETGET_FUSE_MACOS_MOUNT=1`, which says
+//! the operator accepts mounting FUSE-T on this Mac: a FUSE-T mount is an NFS mount, and Apple's
+//! NFS client can panic the host under attribute churn (FUSE-T issue #109, Apple FB23527406). No
+//! CI job runs them; they are run by hand, one at a time, in the order `tests/server/fuse/AGENTS.md`
+//! gives. Each test makes its own mount and depends on no other: the reads, the writes and the
+//! extended-attribute refusal are separate so the read-only checks can run alone.
 //!
 //! Where NFS makes macOS differ from Linux, the test says so where it asserts it: a read is an
 //! NFS READ of up to 128 KiB, so a file with a failing region fails to read wherever that chunk
@@ -105,8 +108,9 @@ async fn stands_still(m: &Mounted, paths: &str) {
     );
 }
 
+/// Read-only: nothing here changes the mount, and the model is asked nothing but descriptions.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn bsd_tools_read_the_description_and_change_the_overlay_on_macos() {
+async fn bsd_tools_read_the_description_on_macos() {
     let m = mount(policy(POLICY), json!({"decision_timeout_secs": 30})).await;
     let _diag = OnFailure(&m);
 
@@ -222,6 +226,26 @@ async fn bsd_tools_read_the_description_and_change_the_overlay_on_macos() {
         std::fs::read(m.dir.path().join("out.bin")).unwrap(),
         expected
     );
+    let census = m.census().await;
+    assert_eq!(
+        census.keys().collect::<Vec<_>>(),
+        vec!["fuse_describe_directory"],
+        "reading asked the model nothing else: {census:?}"
+    );
+    m.stop().await;
+    assert!(
+        eventually(20, || !mounted_at(&m.path)).await,
+        "stop unmounts"
+    );
+}
+
+/// Every change a tool makes is one decision, allowed or refused, on a mount of its own.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn bsd_tools_change_the_overlay_through_decisions_on_macos() {
+    let m = mount(policy(POLICY), json!({"decision_timeout_secs": 30})).await;
+    let _diag = OnFailure(&m);
+    // The root, and /src (the lazy one) before anything moves into it.
+    m.ok(r#"ls "$M" "$M/src""#).await;
 
     // ---- cp in: a create, and the writes decided in requests of at most 128 KiB.
     let upload: Vec<u8> = (0..300 * 1024u32)
@@ -358,27 +382,6 @@ async fn bsd_tools_read_the_description_and_change_the_overlay_on_macos() {
     let log = m.log.lock().unwrap().join("\n");
     assert!(log.contains("operation=write") && log.contains("decision=model_reject"));
 
-    // ---- No extended attributes on macOS: refused cleanly, nothing reaches the model.
-    let set = m.sh(r#"xattr -w user.color blue "$M/src/main.rs""#).await;
-    let said = String::from_utf8_lossy(&set.stderr).to_string();
-    assert!(
-        !set.status.success()
-            && (said.contains("Operation not permitted") || said.contains("not supported")),
-        "xattr -w fails cleanly: {said:?}"
-    );
-    let census = m.census().await;
-    assert!(
-        !census.contains_key("fuse_setxattr"),
-        "no xattr decision: {census:?}"
-    );
-    let creates = m.paths("fuse_create").await;
-    assert!(
-        creates
-            .iter()
-            .all(|p| !p.rsplit('/').next().unwrap_or("").starts_with("._")),
-        "no AppleDouble file reached the model: {creates:?}"
-    );
-
     // ---- rm.
     m.ok(r#"rm "$M/src/moved.bin""#).await;
     m.fails(r#"ls "$M/src/moved.bin""#, "No such file").await;
@@ -388,8 +391,44 @@ async fn bsd_tools_read_the_description_and_change_the_overlay_on_macos() {
         .iter()
         .any(|u| u["path"] == "/src/moved.bin"));
 
-    // Still exactly three descriptions after all of it.
-    assert_eq!(m.events("fuse_describe_directory").await.len(), 3);
+    // Each directory was described once, however many changes touched it.
+    let mut described = m.paths("fuse_describe_directory").await;
+    let all = described.len();
+    described.sort();
+    described.dedup();
+    assert_eq!(
+        described.len(),
+        all,
+        "a directory was described twice: {described:?}"
+    );
+    m.stop().await;
+    assert!(
+        eventually(20, || !mounted_at(&m.path)).await,
+        "stop unmounts"
+    );
+}
+
+/// No extended attributes on macOS: `xattr` is refused cleanly and nothing reaches the model.
+/// FUSE-T is never given `--namedattr` (see `src/server/fuse/macos.rs`), so the NFS client can only
+/// try an AppleDouble `._` file, which FUSE-T's `--noappledouble` and `FuseFs` both refuse. This
+/// test expects only that refusal.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn xattr_is_refused_without_asking_on_macos() {
+    let m = mount(policy(POLICY), json!({"decision_timeout_secs": 30})).await;
+    let _diag = OnFailure(&m);
+    m.ok(r#"ls "$M""#).await;
+    let set = m.sh(r#"xattr -w user.color blue "$M/README.txt""#).await;
+    let said = String::from_utf8_lossy(&set.stderr).to_string();
+    assert!(
+        !set.status.success()
+            && (said.contains("Operation not permitted") || said.contains("not supported")),
+        "xattr -w fails cleanly: {said:?}"
+    );
+    let census = m.census().await;
+    assert!(
+        !census.contains_key("fuse_setxattr") && !census.contains_key("fuse_create"),
+        "no xattr decision and no AppleDouble file reached the model: {census:?}"
+    );
     m.stop().await;
     assert!(
         eventually(20, || !mounted_at(&m.path)).await,

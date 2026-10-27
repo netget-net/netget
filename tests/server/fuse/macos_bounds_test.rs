@@ -2,9 +2,10 @@
 //! server stops or dies, through FUSE-T. Every case ends in an errno or an unmount, never a
 //! hang. And FUSE-T missing is refused at startup with the cask to install.
 //!
-//! The mount tests are **CI only** (`require_fuse` fails unless `NETGET_FUSE_MACOS_CI=1`; see
-//! `support::MACOS_CI_GATE` for why). The refusal test mounts nothing — it points FUSE-T's
-//! server path at a file that does not exist — so it runs anywhere.
+//! The mount tests mount FUSE-T, so `require_fuse` fails unless `NETGET_FUSE_MACOS_MOUNT=1` (see
+//! `support::MACOS_MOUNT_GATE` for why); no CI job runs them, and each is run by hand on its own,
+//! with a mount of its own. The refusal test mounts nothing — it points FUSE-T's server path at a
+//! file that does not exist — so it runs anywhere.
 use super::support::*;
 use serde_json::json;
 use std::time::{Duration, Instant};

@@ -464,7 +464,7 @@ async fn pjdfstest_passes_on_the_mount() {
     );
     // The floors were measured on Linux. On macOS the suite runs through FUSE-T and Apple's NFS
     // client, which decide much of it before NetGet sees a request; its pass count is reported
-    // on its own line and held to no floor until repeated CI runs show which files pass
+    // on its own line and held to no floor until repeated runs show which files pass
     // reliably.
     if cfg!(target_os = "macos") {
         println!(

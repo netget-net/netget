@@ -62,8 +62,8 @@ keeps the helper's pid and control socket in process-wide statics, so a second m
 process overwrites the first's and stopping one closes the other's control socket; and it forks a
 multi-threaded process and calls `setenv`/`freopen` before `exec`. NetGet runs many mounts per
 process, so it owns the launch, one helper per mount. The cost is depending on FUSE-T's launch
-contract rather than its C API; FUSE-T's own libraries depend on the same contract, and the CI job
-pins the version.
+contract rather than its C API; FUSE-T's own libraries depend on the same contract. Measured
+against FUSE-T 1.2.9; a different version should be rechecked by hand before it is trusted.
 
 **FUSE-T's descriptor does carry the FUSE wire protocol — but as a stream.** fuser reads one
 request per `read(2)`, which `/dev/fuse` guarantees and a stream does not. A relay (three threads
@@ -101,8 +101,8 @@ the cask too.
   reads on Linux.
 - A write is decided when the client writes back, at `close` or `fsync`, so a refusal reaches the
   process there (`dd: close: Permission denied`). Before the panic stopped local testing, the
-  client was seen to keep the refused bytes in its own cache afterwards; the CI test reports what
-  `cat` shows rather than asserting it.
+  client was seen to keep the refused bytes in its own cache afterwards; the writes test reports
+  what `cat` shows rather than asserting it.
 - `cp` copies metadata with `copyfile`, so each copy is a create, the writes, and several
   setattr decisions (mode and times).
 - Events carry `pid` 0 and an empty `process`: NFS carries the caller's uid and gid, no pid.
@@ -137,9 +137,10 @@ on every GETATTR). It happened here: the development Mac panicked 9 s after a bu
   backwards. An explicit utimes/`touch -t` still sets the mtime asked for (that is the change the
   model allowed). One attribute does move without a write: a directory's `nlink` is 2 until it is
   described and then counts its subdirectories, once.
-- The mount tests run only on CI's throwaway macOS VM (the `fuse-macos` pair job sets
-  `NETGET_FUSE_MACOS_CI=1`; without it they fail, saying why). Never mount FUSE-T on a machine you
-  cannot afford to lose to a panic.
+- The mount tests mount FUSE-T, so they run only when `NETGET_FUSE_MACOS_MOUNT=1` says the
+  operator accepts that on this Mac (without it they fail, naming the variable and the panic).
+  They are run by hand, one at a time, in the order `tests/server/fuse/AGENTS.md` gives; no CI job
+  runs them. Never mount FUSE-T on a machine you cannot afford to lose to a panic.
 
 NetGet lowers how often the race can run; only Apple's fix removes it.
 
@@ -313,8 +314,8 @@ itself, but that was measured to fail ("exit status 1") once, after which go-nfs
 and left an NFS mount whose server was gone — `ls` of it hung. So the watchdog is the same idea as
 on Linux: `/bin/sh` in a session of its own, blocked on a pipe only this process writes, and at end
 of file it runs `umount -f` and `diskutil unmount force` until `mount` no longer lists the mount
-point, for up to 30 s. The killed-daemon test was measured (before the ban) unmounting in about
-6 s.
+point, for up to 30 s. Before the ban, a SIGKILLed daemon (a protocol prototype and then netget
+itself) was seen unmounted in about 6 s, by go-nfsv4 or the watchdog.
 
 **Linux.** `stop_server` aborts the worker task, which owns the mount guard (on both
 platforms). Dropping it runs `fusermount3 -u`, then `fusermount3 -u -z` if the mount is busy
@@ -378,11 +379,12 @@ file with several keeps the inode.
 
 ## Maturity
 
-The macOS backend's evidence runs only in the `fuse-macos` pair job (FUSE-T 1.2.9 pinned by the
-installer's SHA-256): the BSD tools test, bounds, busy stop, killed daemon, pjdfstest as root
-(reported on its own line, no floor yet), and four mutation checks
-(`scripts/test-peers/fuse-macos-mutation.sh`). The startup refusal is tested anywhere, without a
-mount, and its mutation (dropping the `ProgramAt` declaration) was checked locally.
+**The macOS backend has no CI evidence.** There are no macOS runners for it: its mount tests
+(BSD tools, extended-attribute refusal, bounds, busy stop, killed daemon, pjdfstest as root with no
+floor) and their mutation steps run only by hand on a maintainer's Mac with FUSE-T 1.2.9 and
+`NETGET_FUSE_MACOS_MOUNT=1`, and whatever they have shown is only those local runs. The startup
+refusal is tested anywhere, without a mount, and its mutation (dropping the `ProgramAt`
+declaration) was checked.
 
 Experimental. The kernel peer is measured on Linux 7.2 (aarch64): unprivileged through
 fusermount3 in the podman VM (Fedora, fuse3 3.18) and in a rootful Ubuntu 24.04 container (fuse3

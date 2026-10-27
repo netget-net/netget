@@ -16,18 +16,22 @@ They fail, never skip, when `/dev/fuse` or `fusermount3` is missing (`apt-get in
 `modprobe fuse`), and the pjdfstest test fails when `NETGET_PJDFSTEST` is unset or it is not
 root.
 
-**macOS: CI only.** The macOS suites mount through FUSE-T, which is an NFS mount, and Apple's NFS
-client can panic the whole machine under attribute churn (`nfs_vinvalbuf2: ubc_msync failed!,
-error 22`; FUSE-T issue #109, Apple FB23527406). Exploring this backend panicked the development
-Mac once. So `support::require_fuse` on macOS **fails** unless `NETGET_FUSE_MACOS_CI=1`, which only
-the `fuse-macos` pair job sets, on a throwaway VM; then it requires FUSE-T installed (`brew install
---cask macos-fuse-t/cask/fuse-t`). The two registry sweeps that would start the FUSE example
-(`startup_examples_actually_start_test`, `examples`) skip `fuse` on macOS without the same
-variable, saying why. To run anything else of this suite locally on a Mac, also export
-`FUSE_NFSSRV_PATH=/nonexistent/go-nfsv4`: the dependency gate then refuses every FUSE start, so
-nothing can mount even by mistake. On failure the macOS diagnostics print the mount table, the
-last lines of FUSE-T's log (`~/Library/Logs/fuse-t/fuse-t.log`, where go-nfsv4 logs each mount,
-its negotiated profile and each unmount) and any kernel panic report.
+**macOS: by hand, one test at a time, never in CI.** The macOS suites mount through FUSE-T,
+which is an NFS mount, and Apple's NFS client can panic the whole machine under attribute churn
+(`nfs_vinvalbuf2: ubc_msync failed!, error 22`; FUSE-T issue #109, Apple FB23527406). Exploring
+this backend panicked the development Mac once. There are no macOS runners for it, so **the macOS
+backend has no CI evidence**: its mount tests run only on a maintainer's Mac, started explicitly.
+`support::require_fuse` on macOS **fails** unless `NETGET_FUSE_MACOS_MOUNT=1`, which says the
+operator accepts mounting FUSE-T on this Mac, naming the variable and the panic; then it requires
+FUSE-T installed (`brew install --cask macos-fuse-t/cask/fuse-t`). The two registry sweeps that
+would start the FUSE example (`startup_examples_actually_start_test`, `examples`) skip `fuse` on
+macOS without the same variable, saying why. To run anything else of this suite on a Mac, export
+`FUSE_NFSSRV_PATH=/nonexistent/go-nfsv4` too: the dependency gate then refuses every FUSE start, so
+nothing can mount even by mistake. Every macOS mount test makes its own mount on its own temporary
+mount point and depends on no other test's state, so each runs alone (`Running on macOS` below).
+On failure the macOS diagnostics print the mount table, the last lines of FUSE-T's log
+(`~/Library/Logs/fuse-t/fuse-t.log`, where go-nfsv4 logs each mount, its negotiated profile and
+each unmount) and any kernel panic report.
 
 ## `tree_test.rs` — the described tree, on every Unix
 
@@ -127,34 +131,40 @@ unchanged; `rm`; and stop unmounting.
 | `stop_unmounts_even_while_the_mount_is_busy` | a shell whose working directory is in the mount; stop unmounts (lazily) and the mount point is an empty directory again, its parent lists at once; a mount point the server created is removed |
 | `a_killed_daemon_leaves_no_mount_behind` | `netget --server fuse` in a child process, SIGKILLed once mounted (death-tied through `child_guard` until then): the watchdog removes the mount within 20 s, `ls` of the parent answers at once, the mount point is an empty directory. On failure it prints the mount table, every fusermount3 and watchdog process, fusermount3's version, the dmesg tail and any AppArmor/FUSE journal lines, then lazily unmounts what was left |
 
-## `macos_tools_test.rs` — BSD userland and Python through FUSE-T (CI only)
+## `macos_tools_test.rs` — BSD userland and Python through FUSE-T (by hand)
 
-The Linux tools test's policy and tree, read and changed with what a Mac has: `ls -la`, `stat -f`
-(size, mode, type, mtime), `cat`, `dd` and `head -c` at offsets, `shasum -a 256` against the
-described bytes, `find` (the lazy `/src` described when visited, the inline `/docs` never asked
-about, the refused `/locked` asked once), `readlink`, Python's `os.walk`; and that reading asked
-nothing but descriptions. Attributes stand still: `stat -f '%i %z %m %c %l'` of files, a
-directory and the root, three times a second apart, prints the same each time. Then the changes,
-each asserted on the tool's side and the model's: `cp` out byte for byte; `cp` in (a create and
-writes of at most 128 KiB adding up to the file, `cmp` and `shasum`, `uid` the caller's and `pid`
-0, which is all NFS carries); `mv` (one rename, the inode kept); `mkdir`/`rmdir`; `ln -s`; `ln`
-(one inode, two links, one `fuse_link`); `chmod`; `truncate` shrinking and growing; refused writes
-(`dd` gets EACCES or ENOSPC — at `close`, when the client writes back — and each was one
-decision; what `cat` shows afterwards is printed, not asserted, because it is the NFS client's
-cache); `xattr -w` refused cleanly (EPERM or ENOTSUP) with no setxattr decision and no `._` create
-reaching the model; `rm`; and stop unmounting. Differences from Linux it pins: a file with a
-failing region is EIO for `cat` (the client reads 128 KiB at a time, so `head -c 4` cannot read the
-good first page as on Linux).
+The Linux tools test's policy and tree, on three mounts of their own:
+
+- `bsd_tools_read_the_description_on_macos` — **read-only**: `ls -la`, `stat -f` (size, mode,
+  type, mtime), `cat`, `dd` and `head -c` at offsets, `shasum -a 256` against the described bytes,
+  `find` (the lazy `/src` described when visited, the inline `/docs` never asked about, the
+  refused `/locked` asked once), `readlink`, Python's `os.walk`, `cp` out byte for byte; that the
+  model was asked nothing but descriptions; and that attributes stand still (`stat -f '%i %z %m %c
+  %l'` of files, a directory and the root, three times a second apart, prints the same each time).
+  A file with a failing region is EIO for `cat` (the client reads 128 KiB at a time, so `head -c
+  4` cannot read the good first page as on Linux).
+- `bsd_tools_change_the_overlay_through_decisions_on_macos` — the changes, each asserted on the
+  tool's side and the model's: `cp` in (a create and writes of at most 128 KiB adding up to the
+  file, `cmp` and `shasum`, `uid` the caller's and `pid` 0, which is all NFS carries); `mv` (one
+  rename, the inode kept); `mkdir`/`rmdir`; `ln -s`; `ln` (one inode, two links, one `fuse_link`);
+  `chmod`; `truncate` shrinking and growing; refused writes (`dd` gets EACCES or ENOSPC — at
+  `close`, when the client writes back — and each was one decision; what `cat` shows afterwards is
+  printed, not asserted, because it is the NFS client's cache); `rm`; no directory described twice.
+- `xattr_is_refused_without_asking_on_macos` — `xattr -w` fails cleanly (EPERM or ENOTSUP), with
+  no setxattr decision and no create (an AppleDouble `._` file) reaching the model. It expects only
+  the refusal: FUSE-T is never given `--namedattr`.
+
+Each ends by stopping and checking the mount is gone.
 
 ## `macos_bounds_test.rs` — failure, read-only, stopping, dying, and FUSE-T missing
 
 | Test | What it pins |
 |---|---|
-| `an_unreachable_model_is_eio_promptly_on_macos` (CI) | `ls` EIO at once, at most three description attempts, `stat` of the root needs no model, a change in a failed directory EIO unasked, `decision=fail_closed_llm_error` |
-| `a_slow_model_is_eio_at_the_deadline_on_macos` (CI) | `decision_timeout_secs` 2: a description and a write (at `close`) EIO after about two seconds, `decision=fail_closed_deadline` |
-| `a_read_only_mount_refuses_changes_without_asking_on_macos` (CI) | `touch`, `rm`, `mkdir` and an append are EROFS (FUSE-T's `-r`), no change put to the model |
-| `stop_unmounts_even_while_the_mount_is_busy_on_macos` (CI) | a shell whose working directory is in the mount; stop unmounts within 20 s, the parent lists, the mount point the server made is gone |
-| `a_killed_daemon_leaves_no_mount_behind_on_macos` (CI) | `netget --server fuse` SIGKILLed once mounted (death-tied through `child_guard`): the mount is gone within 45 s, `ls` of the parent answers at once, the mount point is an empty directory; on failure the mount table, FUSE-T's log and panic reports |
+| `an_unreachable_model_is_eio_promptly_on_macos` (by hand) | `ls` EIO at once, at most three description attempts, `stat` of the root needs no model, a change in a failed directory EIO unasked, `decision=fail_closed_llm_error` |
+| `a_slow_model_is_eio_at_the_deadline_on_macos` (by hand) | `decision_timeout_secs` 2: a description and a write (at `close`) EIO after about two seconds, `decision=fail_closed_deadline` |
+| `a_read_only_mount_refuses_changes_without_asking_on_macos` (by hand) | `touch`, `rm`, `mkdir` and an append are EROFS (FUSE-T's `-r`), no change put to the model |
+| `stop_unmounts_even_while_the_mount_is_busy_on_macos` (by hand) | a shell whose working directory is in the mount; stop unmounts within 20 s, the parent lists, the mount point the server made is gone |
+| `a_killed_daemon_leaves_no_mount_behind_on_macos` (by hand) | `netget --server fuse` SIGKILLed once mounted (death-tied through `child_guard`): the mount is gone within 45 s, `ls` of the parent answers at once, the mount point is an empty directory; on failure the mount table, FUSE-T's log and panic reports |
 | `a_missing_fuse_t_is_refused_at_startup_naming_the_cask` (anywhere) | `FUSE_NFSSRV_PATH` at a file that does not exist: netget exits non-zero with `Cannot start FUSE server: Program … must be installed. Install FUSE-T: brew install --cask macos-fuse-t/cask/fuse-t`, nothing created, nothing mounted |
 
 ## `pjdfstest_test.rs` — the compliance suite
@@ -169,10 +179,11 @@ measured as real root in a rootful container) where a probe `mknod` of a block d
 mount succeeds, as it does under CI's sudo. See `src/server/fuse/AGENTS.md` for what the last
 three fail on. It needs perl and openssl (`openssl md5` names its files).
 
-On macOS (CI only, through FUSE-T, as root through sudo) the same test runs the suite and prints
-the table and a `pjdfstest (macOS, FUSE-T): N/238 files pass in full` line; there is no macOS floor
-until repeated runs show which files pass reliably, so it asserts only that the suite ran and that
-no file hung.
+On macOS (by hand only, through FUSE-T, as root through sudo, with `NETGET_FUSE_MACOS_MOUNT=1`)
+the same test runs the suite and prints the table and a `pjdfstest (macOS, FUSE-T): N/238 files
+pass in full` line; there is no macOS floor until repeated runs show which files pass reliably, so
+it asserts only that the suite ran and that no file hung. It drives far more attribute churn than
+the other tests, so it is the last one to run.
 
 ## Mutation-checked
 
@@ -184,15 +195,26 @@ applying a write whatever the model answered (the refused writes in the tools te
 deadline test); and not starting the unmount watchdog (the killed-daemon test, run as an
 unprivileged user on Ubuntu 24.04's fuse3 3.14, where the mount outlived the process).
 
-**macOS, in CI.** `scripts/test-peers/fuse-macos-mutation.sh` breaks one mechanism, runs the
-test meant to catch it, requires it to fail and restores the file: the unmount on stop
-(`no-unmount-on-stop`, the busy-stop test), a model refusal applied as an allow
-(`refusal-ignored`, the tools test), a failed or late decision applied as an allow (`fail-open`,
-the slow-model test), and the watchdog (`no-watchdog`, the killed-daemon test) — run
-`--informational`, because go-nfsv4's own cleanup on its stream closing may unmount without it,
-and whether it does is the finding. Locally, without mounting: dropping the `ProgramAt`
-declaration from `get_dependencies` turns the missing-FUSE-T test red (the refusal then comes from
-`spawn()`'s preflight in other words).
+**macOS, by hand.** Each is one edit, made, run and reverted (`git checkout -- <file>`)
+before the next, and each expects one test red. They mount FUSE-T, so the same gate and order
+apply:
+
+- `src/server/fuse/macos.rs`, `impl Drop for Mount`: make `drop` begin with `if let Some(m) =
+  self.monitor.take() { std::mem::forget(m); } if let Some(r) = self.relay.take() {
+  std::mem::forget(r); } if true { return; }` → `stop_unmounts_even_while_the_mount_is_busy_on_macos`
+  red. It leaves a live mount behind: unmount it with `umount -f <mount point>` afterwards.
+- `src/server/fuse/mod.rs`, `Worker::decide`: `Ok(a) if a["type"] == actions::ALLOW => Ok(()),`
+  becomes `Ok(_) => Ok(()),` (a refusal applied as an allow) →
+  `bsd_tools_change_the_overlay_through_decisions_on_macos` red.
+- `src/server/fuse/mod.rs`, `Worker::decide`: the `Err(f)` arm returns `Ok(())` instead of
+  `Err(f.errno())` (a failed or late decision applied) → `a_slow_model_is_eio_at_the_deadline_on_macos`
+  red.
+- `src/server/fuse/macos.rs`, `spawn_watchdog`: return `Err(std::io::Error::other("mutation"))`
+  at once → `a_killed_daemon_leaves_no_mount_behind_on_macos` red **if** go-nfsv4's own cleanup
+  fails that time; if it stays green, write down that go-nfsv4's cleanup was enough in that run
+  (it was measured failing once, which is why the watchdog exists).
+- `src/server/fuse/actions.rs`, `get_dependencies`: drop `deps.push(super::macos::DEPENDENCY);`
+  → `a_missing_fuse_t_is_refused_at_startup_naming_the_cask` red. Mounts nothing; checked.
 
 ## Running
 
@@ -204,13 +226,47 @@ cargo test --no-default-features --test server -- fuse:: --test-threads=4
 ```
 
 In CI the `fuse` job in `.github/workflows/protocol-pairs.yml` runs the suite twice: as the
-runner user (the unprivileged fusermount3 path, pjdfstest skipped) and as root (everything). The
-`fuse-macos` job does the same on `macos-15` with FUSE-T 1.2.9 installed from its pinned package,
-then the mutation checks, and prints FUSE-T's log, the mount table and any panic report at the
-end.
+runner user (the unprivileged fusermount3 path, pjdfstest skipped) and as root (everything). No CI
+job runs the macOS suite.
 
 ```bash
 # On a Mac, only what does not mount (the tree tests and the refusal), with every FUSE start refused:
 FUSE_NFSSRV_PATH=/nonexistent/go-nfsv4 cargo test --no-default-features --test server -- \
   server::fuse::tree server::fuse::macos_bounds_test::a_missing_fuse_t
 ```
+
+### Running on macOS (mounts FUSE-T: one test at a time, by hand)
+
+Build once, then run each test alone with `--exact --test-threads=1`, in this order, checking
+`mount | grep fuse-t` is empty between them. Read-only checks first, then writes, then stopping and
+dying; pjdfstest last.
+
+```bash
+cargo test --no-default-features --test server --no-run
+run() { NETGET_FUSE_MACOS_MOUNT=1 cargo test --no-default-features --test server -- \
+          --exact --test-threads=1 --nocapture "$1"; }
+# 0. No mount at all: FUSE-T missing is refused.
+FUSE_NFSSRV_PATH=/nonexistent/go-nfsv4 cargo test --no-default-features --test server -- \
+  --exact --test-threads=1 server::fuse::macos_bounds_test::a_missing_fuse_t_is_refused_at_startup_naming_the_cask
+# 1. Read-only.
+run server::fuse::macos_tools_test::bsd_tools_read_the_description_on_macos
+run server::fuse::macos_bounds_test::a_read_only_mount_refuses_changes_without_asking_on_macos
+run server::fuse::macos_bounds_test::an_unreachable_model_is_eio_promptly_on_macos
+# 2. Writes (the xattr test expects only a refusal).
+run server::fuse::macos_tools_test::bsd_tools_change_the_overlay_through_decisions_on_macos
+run server::fuse::macos_tools_test::xattr_is_refused_without_asking_on_macos
+run server::fuse::macos_bounds_test::a_slow_model_is_eio_at_the_deadline_on_macos
+# 3. Stopping and dying.
+run server::fuse::macos_bounds_test::stop_unmounts_even_while_the_mount_is_busy_on_macos
+run server::fuse::macos_bounds_test::a_killed_daemon_leaves_no_mount_behind_on_macos
+# 4. pjdfstest, as root (sh scripts/test-peers/build-pjdfstest.sh <dir> first; needs autoconf,
+#    automake, perl's prove and openssl).
+NETGET_PJDFSTEST=<dir>/src NETGET_FUSE_MACOS_MOUNT=1 \
+  CARGO_TARGET_AARCH64_APPLE_DARWIN_RUNNER="sudo -E env PATH=$PATH" \
+  cargo test --no-default-features --test server -- --exact --test-threads=1 --nocapture \
+  server::fuse::pjdfstest_test::pjdfstest_passes_on_the_mount
+```
+
+If a test fails, its diagnostics print the mount table and FUSE-T's log. If a mount is left
+behind, `umount -f <mount point>` (and `diskutil unmount force <mount point>` if that fails)
+before the next test; never `ls` a mount point that may be dead.

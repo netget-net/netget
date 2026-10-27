@@ -51,22 +51,22 @@ pub fn require_fuse() {
     );
 }
 
-/// The environment variable that lets the macOS mount tests run. They mount through FUSE-T,
-/// which is an NFS mount, and Apple's NFS client has a race that panics the whole machine under
-/// attribute churn (`nfs_vinvalbuf2: ubc_msync failed!, error 22`, FUSE-T issue #109, Apple
-/// FB23527406). Exploring this backend did exactly that to a developer's Mac. So they run only
-/// on CI's throwaway macOS VM, in the `fuse-macos` pair job, which sets it.
-pub const MACOS_CI_GATE: &str = "NETGET_FUSE_MACOS_CI";
+/// The environment variable that lets the macOS mount tests run: setting it to 1 says the
+/// operator accepts mounting FUSE-T on this Mac. FUSE-T is an NFS mount, and Apple's NFS client
+/// has a race that panics the whole machine under attribute churn (`nfs_vinvalbuf2: ubc_msync
+/// failed!, error 22`, FUSE-T issue #109, Apple FB23527406); exploring this backend did exactly
+/// that to a developer's Mac. No CI job runs these tests: they are run by hand, one at a time.
+pub const MACOS_MOUNT_GATE: &str = "NETGET_FUSE_MACOS_MOUNT";
 
-/// macOS: fail (never skip) unless this is the CI job, then require FUSE-T.
+/// macOS: fail (never skip) unless the operator accepted mounting, then require FUSE-T.
 #[cfg(target_os = "macos")]
 pub fn require_fuse() {
     assert!(
-        std::env::var(MACOS_CI_GATE).as_deref() == Ok("1"),
-        "the macOS FUSE mount tests run only in CI (the fuse-macos job in \
-         .github/workflows/protocol-pairs.yml sets {MACOS_CI_GATE}=1). A FUSE-T mount is an NFS \
-         mount, and Apple's NFS client can panic the host under attribute churn (FUSE-T issue \
-         #109, Apple FB23527406); do not run them on a machine you cannot afford to lose"
+        std::env::var(MACOS_MOUNT_GATE).as_deref() == Ok("1"),
+        "this test mounts FUSE-T on this Mac, and runs only when {MACOS_MOUNT_GATE}=1 says the \
+         operator accepts that. A FUSE-T mount is an NFS mount, and Apple's NFS client can panic \
+         the whole machine under attribute churn (FUSE-T issue #109, Apple FB23527406). Run \
+         these one at a time, as tests/server/fuse/AGENTS.md lists them"
     );
     assert!(
         netget::server::fuse::fuse_t_installed(),

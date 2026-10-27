@@ -66,12 +66,12 @@ fn unsupported_on_this_platform(protocol_name: &str) -> Option<&'static str> {
         // M3UA is SIGTRAN, SCTP by RFC 4666, and its examples ask for it the same way.
         "M3UA" if !host_has_sctp() => Some("M3UA's transport is SCTP, which this host lacks"),
         // On macOS a FUSE mount is FUSE-T's NFS mount, and Apple's NFS client can panic the host
-        // (FUSE-T issue #109, Apple FB23527406): only CI's fuse-macos job starts it.
+        // (FUSE-T issue #109, Apple FB23527406): started only with NETGET_FUSE_MACOS_MOUNT=1.
         "FUSE"
             if cfg!(target_os = "macos")
-                && std::env::var("NETGET_FUSE_MACOS_CI").as_deref() != Ok("1") =>
+                && std::env::var("NETGET_FUSE_MACOS_MOUNT").as_deref() != Ok("1") =>
         {
-            Some("a FUSE-T mount can panic a Mac; started only in CI's fuse-macos job")
+            Some("it mounts FUSE-T, which can panic a Mac; started only with NETGET_FUSE_MACOS_MOUNT=1")
         }
         _ => None,
     }
