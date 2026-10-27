@@ -225,6 +225,11 @@ pub mod mqtt_sn;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod nbd;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod nvme_tcp;
+// HDFS client: shares the server's IPC and DataTransferProtocol modules, which are Unix-only.
+#[cfg(unix)]
+pub mod hdfs;
+#[cfg(not(target_arch = "wasm32"))]
 pub use mqtt::actions::MqttClientProtocol;
 
 // amqp client
@@ -789,6 +794,9 @@ pub mod sunrpc;
 pub mod tr069;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod vxlan;
+// A raw IP protocol-47 socket (root, or CAP_NET_RAW): Unix only.
+#[cfg(unix)]
+pub mod gre;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod webtransport;
 #[cfg(not(target_arch = "wasm32"))]

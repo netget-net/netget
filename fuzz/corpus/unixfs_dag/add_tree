@@ -1,0 +1,1 @@
+{"entries": [{"name": "a.txt", "text": "a"}, {"name": "sub", "kind": "dir", "entries": [{"name": "b", "hex": "00ff"}]}, {"name": "link", "kind": "symlink", "target": "a.txt"}, {"name": "sparse", "size": 4096, "extents": [{"offset": 100, "length": 50, "fill": 7}]}], "cid_version": 1}

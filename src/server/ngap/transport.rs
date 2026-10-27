@@ -22,6 +22,11 @@
 //!   one SCTP user message. A message longer than [`super::codec::MAX_PDU_LEN`] is drained to its
 //!   end and reported as [`ReadOutcome::TooLarge`]; the association survives because the next
 //!   boundary is still known.
+//! - **`SCTP_NODELAY`** on every association. Without it the kernel holds a message back while
+//!   an earlier one is unacknowledged, and the peer's delayed SACK makes that 200 ms: measured
+//!   against Open5GS, a 5GSM Modification Complete written right after the Modify Response left
+//!   208 ms later, and a UL NAS Transport after an Initial Context Setup Response the same. NGAP
+//!   signalling is request/response with no batching to win.
 //!
 //! # `tcp`, the lab one
 //!
@@ -178,6 +183,9 @@ pub struct Conn {
 
 impl Conn {
     pub fn new(stream: TcpStream, transport: Transport) -> Self {
+        if transport == Transport::Sctp {
+            crate::utils::sctp::set_nodelay(&stream, "NGAP");
+        }
         Conn {
             stream: Arc::new(stream),
             transport,

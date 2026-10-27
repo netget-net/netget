@@ -1,7 +1,10 @@
 //! VXLAN (RFC 7348), Geneve (RFC 8926) and Ethernet over GRE (RFC 2784 with RFC 2890's key
 //! and sequence number, carried in UDP per RFC 8086) encapsulation, and just enough of
 //! Ethernet, ARP, IPv4, ICMP echo and UDP to be a host on the overlay. Shared by the server
-//! and the client (`src/client/vxlan/`). Pure: no sockets here.
+//! and the client (`src/client/vxlan/`), and by the `gre` protocol (GRE on IP protocol 47),
+//! whose overlay hosts are the same. The GRE header itself is `crate::utils::gre`. Pure: no
+//! sockets here.
+use crate::utils::gre;
 use anyhow::{bail, ensure, Context, Result};
 use std::net::Ipv4Addr;
 
@@ -10,15 +13,7 @@ pub const GENEVE_PORT: u16 = 6081;
 /// GRE-in-UDP (RFC 8086): the UDP payload is a GRE header and what it carries.
 pub const GRE_IN_UDP_PORT: u16 = 4754;
 /// Geneve's and GRE's protocol type for an Ethernet payload (Transparent Ethernet Bridging).
-const ETH_BRIDGING: u16 = 0x6558;
-/// GRE flag bits in the first header byte (RFC 2784 section 2.1, RFC 2890 section 2).
-const GRE_CHECKSUM: u8 = 0x80;
-const GRE_KEY: u8 = 0x20;
-const GRE_SEQUENCE: u8 = 0x10;
-/// RFC 2784's "bits 1-5", less RFC 2890's K and S: RFC 1701's Routing Present (0x40), Strict
-/// Source Route (0x08) and the top bit of Recursion Control (0x04). A receiver discards a
-/// packet with any of them set.
-const GRE_RFC1701_ONLY: u8 = 0x40 | 0x08 | 0x04;
+const ETH_BRIDGING: u16 = gre::PROTO_TEB;
 pub const ETHERTYPE_IPV4: u16 = 0x0800;
 pub const ETHERTYPE_ARP: u16 = 0x0806;
 /// The largest UDP payload: one IPv4 datagram's worth.
@@ -139,57 +134,22 @@ pub fn decap(encap: Encap, b: &[u8]) -> Result<(Header, &[u8])> {
     }
 }
 
-/// RFC 2784 with RFC 2890's key and sequence number. Each optional field is length-checked
-/// before it is read, and a present checksum must verify over the header and the payload.
+/// GRE (the shared codec in `crate::utils::gre`: version, RFC 1701 bits, field lengths and
+/// the checksum are checked there) carrying Ethernet.
 fn decap_gre(b: &[u8]) -> Result<(Header, &[u8])> {
+    let (h, inner) = gre::decode(b)?;
     ensure!(
-        b.len() >= 4,
-        "a {}-byte datagram has no GRE header",
-        b.len()
+        h.protocol == ETH_BRIDGING,
+        "GRE protocol type {:#06x}, not Transparent Ethernet Bridging",
+        h.protocol
     );
-    let version = b[1] & 0x07;
-    ensure!(
-        version == 0,
-        "GRE version {version} (1 is PPTP's enhanced GRE)"
-    );
-    ensure!(
-        b[0] & GRE_RFC1701_ONLY == 0,
-        "GRE flags {:#04x}: RFC 1701 routing, strict source route or recursion bits are set",
-        b[0]
-    );
-    let protocol = u16::from_be_bytes([b[2], b[3]]);
-    ensure!(
-        protocol == ETH_BRIDGING,
-        "GRE protocol type {protocol:#06x}, not Transparent Ethernet Bridging"
-    );
-    let checksum = b[0] & GRE_CHECKSUM != 0;
-    let mut at = 4;
-    let mut field = |present: bool, what: &str| -> Result<Option<u32>> {
-        if !present {
-            return Ok(None);
-        }
-        ensure!(
-            b.len() >= at + 4,
-            "a {}-byte datagram ends inside the GRE {what}",
-            b.len()
-        );
-        let v = u32::from_be_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]]);
-        at += 4;
-        Ok(Some(v))
-    };
-    field(checksum, "checksum")?;
-    let key = field(b[0] & GRE_KEY != 0, "key")?;
-    let sequence = field(b[0] & GRE_SEQUENCE != 0, "sequence number")?;
-    // RFC 2784: the checksum covers the GRE header and the payload, so a correct one sums the
-    // whole datagram, checksum field included, to zero.
-    ensure!(!checksum || self::checksum(&[b]) == 0, "bad GRE checksum");
     Ok((
         Header {
-            vni: key,
-            checksum,
-            sequence,
+            vni: h.key,
+            checksum: h.checksum,
+            sequence: h.sequence,
         },
-        &b[at..],
+        inner,
     ))
 }
 
@@ -206,30 +166,15 @@ pub fn encap(encap: Encap, header: &Header, inner: &[u8]) -> Vec<u8> {
             out.extend_from_slice(&[v[1], v[2], v[3], 0]);
         }
         Encap::Gretap => {
-            let flags = if header.checksum { GRE_CHECKSUM } else { 0 }
-                | if header.vni.is_some() { GRE_KEY } else { 0 }
-                | if header.sequence.is_some() {
-                    GRE_SEQUENCE
-                } else {
-                    0
-                };
-            out.extend_from_slice(&[flags, 0]);
-            out.extend_from_slice(&ETH_BRIDGING.to_be_bytes());
-            if header.checksum {
-                out.extend_from_slice(&[0; 4]);
-            }
-            if header.vni.is_some() {
-                out.extend_from_slice(&v);
-            }
-            if let Some(s) = header.sequence {
-                out.extend_from_slice(&s.to_be_bytes());
-            }
-            out.extend_from_slice(inner);
-            if header.checksum {
-                let sum = checksum(&[&out]);
-                out[4..6].copy_from_slice(&sum.to_be_bytes());
-            }
-            return out;
+            return gre::encode(
+                &gre::Header {
+                    protocol: ETH_BRIDGING,
+                    key: header.vni,
+                    checksum: header.checksum,
+                    sequence: header.sequence,
+                },
+                inner,
+            )
         }
     }
     out.extend_from_slice(inner);
@@ -241,21 +186,7 @@ pub fn encap(encap: Encap, header: &Header, inner: &[u8]) -> Vec<u8> {
 /// sequence numbers (a Linux `gretap` with `iseq`) drops one that goes backwards. False, with
 /// nothing changed, for a datagram that carries none.
 pub fn stamp_sequence(encap: Encap, datagram: &mut [u8], sequence: u32) -> bool {
-    if encap != Encap::Gretap || datagram.len() < 4 || datagram[0] & GRE_SEQUENCE == 0 {
-        return false;
-    }
-    let has_checksum = datagram[0] & GRE_CHECKSUM != 0;
-    let at = 4 + 4 * usize::from(has_checksum) + 4 * usize::from(datagram[0] & GRE_KEY != 0);
-    if datagram.len() < at + 4 {
-        return false;
-    }
-    datagram[at..at + 4].copy_from_slice(&sequence.to_be_bytes());
-    if has_checksum {
-        datagram[4..6].copy_from_slice(&[0, 0]);
-        let sum = checksum(&[datagram]);
-        datagram[4..6].copy_from_slice(&sum.to_be_bytes());
-    }
-    true
+    encap == Encap::Gretap && gre::stamp_sequence(datagram, sequence)
 }
 
 pub fn parse_mac(s: &str) -> Result<Mac> {
@@ -328,25 +259,7 @@ pub struct Frame {
 }
 
 /// RFC 1071.
-pub fn checksum(parts: &[&[u8]]) -> u16 {
-    let mut sum: u32 = 0;
-    let mut odd: Option<u8> = None;
-    for part in parts {
-        for &b in *part {
-            match odd.take() {
-                Some(hi) => sum += u32::from(u16::from_be_bytes([hi, b])),
-                None => odd = Some(b),
-            }
-        }
-    }
-    if let Some(hi) = odd {
-        sum += u32::from(u16::from_be_bytes([hi, 0]));
-    }
-    while sum >> 16 != 0 {
-        sum = (sum & 0xffff) + (sum >> 16);
-    }
-    !(sum as u16)
-}
+pub use gre::internet_checksum as checksum;
 
 fn ip(b: &[u8]) -> Ipv4Addr {
     Ipv4Addr::new(b[0], b[1], b[2], b[3])
@@ -402,6 +315,12 @@ pub fn parse_frame(b: &[u8]) -> Result<Frame> {
         ETHERTYPE_IPV4 => parse_ipv4(dst_mac, src_mac, body),
         other_type => Ok(other(format!("ethertype {other_type:#06x}"))),
     }
+}
+
+/// Parse a bare IPv4 packet, as an L3 tunnel (GRE protocol type 0x0800) carries it: a
+/// [`Frame`] whose MACs are zero.
+pub fn parse_ipv4_packet(b: &[u8]) -> Result<Frame> {
+    parse_ipv4([0; 6], [0; 6], b)
 }
 
 fn parse_ipv4(dst_mac: Mac, src_mac: Mac, b: &[u8]) -> Result<Frame> {

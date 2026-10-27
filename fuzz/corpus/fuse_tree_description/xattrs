@@ -1,0 +1,1 @@
+{"xattrs": [{"name": "user.root", "text": "r"}], "entries": [{"name": "f", "kind": "file", "text": "x", "xattrs": [{"name": "user.mime_type", "text": "text/plain"}, {"name": "user.bin", "hex": "00ff"}, {"name": "trusted.t"}, {"name": "security.s", "text": "s"}]}, {"name": "d", "kind": "dir", "xattrs": [{"name": "user.d", "text": "d"}], "entries": []}]}

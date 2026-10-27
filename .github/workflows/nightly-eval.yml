@@ -126,6 +126,6 @@ jobs:
           name: eval-results
           path: |
             eval-results/latest.json
-            EVAL_RESULTS.md
+            eval-results/EVAL_RESULTS.md
           if-no-files-found: error
           retention-days: 90

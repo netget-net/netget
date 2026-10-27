@@ -357,6 +357,9 @@ chacha20poly1305 = { version = "0.10" }
 sha3 = { version = "0.10" }
 snap = { version = "1.1" }
 x25519-dalek = { version = "2.0", features = ["static_secrets"] }  # For WireGuard key generation
+# NGAP: SUCI concealment Profile B (TS 33.501 Annex C.3.4.2), ECDH on secp256r1. The 0.13 line is
+# already in the tree through other crates; only its `ecdh` feature is new.
+p256 = { version = "0.13", features = ["ecdh"] }
 # MCP (Model Context Protocol) server
 axum = { version = "0.7" }
 tower-http = { version = "0.5", features = ["fs", "trace"] }
@@ -382,6 +385,7 @@ naive-cityhash = { version = "0.2" }  # CityHash128 v1.0.2, the ClickHouse frame
 opentelemetry-proto = { package = "netget-opentelemetry-proto", version = "0.29.0", default-features = false, features = ["gen-tonic-messages", "trace", "metrics", "logs", "gen-tonic"] }
 ed25519-dalek = { version = "2.1" }  # Ed25519 signatures for relay identity
 rsa = { version = "0.9", features = ["sha2"] }  # ActivityPub: HTTP signatures (rsa-sha256)
+num-bigint = { version = "0.4" }  # NVMe/TCP DH-HMAC-CHAP: the RFC 7919 ffdhe group exponentiations
 md4 = { version = "0.10" }  # MD4: rsync protocol 29 file and block checksums, and its daemon auth response
 ctr = { version = "0.9" }  # CTR mode for AES
 hkdf = { version = "0.12" }  # HKDF for key derivation in ntor
@@ -459,6 +463,9 @@ nusb = { version = "0.1" }
 ring = { version = "0.17", features = ["std"] }  # ECDSA P-256 cryptography for FIDO2
 # iSCSI header and data digests (CRC32C, RFC 7143 §13.1) - already in the tree transitively
 crc32c = { version = "0.6" }
+# HDFS DataTransferProtocol chunk checksums of type CRC32 (CRC32C is the crate above) - already
+# in the tree transitively
+crc32fast = { version = "1.5" }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Cargo forbids one dependency name resolving to different packages per target, so these keep
 # their own names here and `src/lib.rs` binds them as `tokio` and `crossterm` for the whole
@@ -480,6 +487,10 @@ bluer = { version = "0.17", optional = true, features = ["bluetoothd"] }
 # same reason as bluer above: the `can` feature compiles everywhere, and the protocol returns a
 # clear Err naming the platform rather than being hidden, on every other OS.
 socketcan = { version = "3.5" }
+# FUSE: the kernel's /dev/fuse, mounted through the setuid fusermount3 helper. Without the
+# `libfuse` feature fuser links no C library on Linux (its build script selects the pure-Rust
+# mount); on macOS its build script needs macFUSE, which is why this is Linux-only.
+fuser = { version = "0.18", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
@@ -636,6 +647,21 @@ lto = "thin"
 # task death (`src/panic_log.rs`), which is strictly better for a server whose inputs are
 # hostile by design.
 overflow-checks = true
+
+# RSA key generation, optimised even in debug and test builds. ActivityPub makes a 2048-bit key
+# every time it starts, and unoptimised big-integer arithmetic took 1.4 s for it on an idle
+# M-series Mac and past 15 s under load, which `protocol_startup_smoke_test` reports as a hang.
+# Only these two crates are affected; NetGet's own code keeps its debug settings.
+[profile.dev.package.num-bigint-dig]
+opt-level = 3
+
+[profile.dev.package.rsa]
+opt-level = 3
+
+# NVMe/TCP DH-HMAC-CHAP: an ffdhe8192 exponentiation, unoptimised, takes seconds, and the
+# Linux host gives the whole exchange a timeout of its own.
+[profile.dev.package.num-bigint]
+opt-level = 3
 
 # The browser bundle (crates/netget-web, ./web/build.sh): size over speed. With 68 protocols
 # compiled in, the .wasm is what the visitor downloads, and it is not CPU-bound.

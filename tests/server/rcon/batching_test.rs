@@ -6,15 +6,23 @@
 //! handler gave exactly one response per command; any other count closes the connection, the
 //! same way a failed command does, rather than misattributing output.
 //!
-//! Raw packets, as in `wire_test.rs`: log in with a Rust-checked password, send command 10
-//! (answered slowly), then pipeline 11 and 12 during that call. Control and claims are one
-//! test: with batching off the three commands must be three model calls.
+//! Raw packets, as in `wire_test.rs`: log in with a Rust-checked password, send command 10,
+//! then pipeline 11 and 12 during its call. Control and claims are one test: with batching off
+//! the three commands must be three model calls.
+//!
+//! "During its call" is made true rather than likely: the answer to 10 is held on a gate until
+//! the call for 10 itself has been seen, 11 and 12 have been written, and the server has
+//! acknowledged every byte of them. The password is checked in Rust, so the call for 10 is the
+//! first the model sees, but the test waits for that command by name rather than for "any
+//! call" — the premise a connect event once broke in the telnet suite.
 //!
 //! LLM budget: 3 calls (off), 2 (on), 2 (on, mismatched answer).
 
 use std::time::Duration;
 
+use crate::helpers::arrival::wait_until_acknowledged;
 use crate::helpers::mock_builder::MockLlmBuilder;
+use crate::helpers::mock_config::MockGate;
 use crate::helpers::mock_ollama::MockOllamaServer;
 use netget::cli::management::ServerForm;
 use netget::state::app_state::AppState;
@@ -62,12 +70,14 @@ async fn session(
     batching: bool,
     pipelined: [&str; 2],
 ) -> (Vec<(String, String)>, Vec<(i32, i32, String)>) {
+    let first_answer = MockGate::new();
     let mock = MockOllamaServer::start(
         MockLlmBuilder::new()
+            // The answer to 10 waits until 11 and 12 are in the server's receive buffer.
             .on_event("rcon_command")
             .and_event_data_contains("command", "first")
             .respond_with_actions(json!([response("ran: first")]))
-            .after_delay(Duration::from_millis(1500))
+            .held_until(&first_answer)
             .expect_calls(1)
             .and()
             // A batched call answers each command it lists, in order.
@@ -134,8 +144,13 @@ async fn session(
     assert_eq!(read(&mut s).await, Some((1, 2, String::new())), "logged in");
 
     s.write_all(&packet(10, 2, "first")).await.unwrap();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while mock.call_count().await == 0 {
+    // Once the call for 10 is recorded the server has read 10, found nothing else waiting, and
+    // is held on the model; nothing written from here on can join 10's call.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while !mock.recorded_calls().await.iter().any(|c| {
+        c.context.event_type.as_deref() == Some("rcon_command")
+            && c.context.event_data["command"] == "first"
+    }) {
         assert!(
             tokio::time::Instant::now() < deadline,
             "the first command never reached the model"
@@ -145,6 +160,8 @@ async fn session(
     let mut rest = packet(11, 2, pipelined[0]);
     rest.extend(packet(12, 2, pipelined[1]));
     s.write_all(&rest).await.unwrap();
+    wait_until_acknowledged(&s).await;
+    first_answer.release();
 
     let mut packets = Vec::new();
     while packets.len() < 3 {

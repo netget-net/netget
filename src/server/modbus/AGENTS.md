@@ -211,6 +211,17 @@ buffered"; `Processing` means "a request is with the model". A second write land
 appended and picked up by the loop that is already running, so requests on one connection are
 answered in order and never concurrently.
 
+**That ordering holds because the reader appends.** Every read goes into the accumulator from
+the reader task itself, in arrival order and under the connection lock (`admit_read`), and only
+the move into `Processing` spawns the one framing-and-answering task (`answer`). The append used
+to happen in a task spawned per read: the decision was one lock acquisition, but nothing orders
+spawned tasks, so a later read's bytes could land ahead of an earlier read's — the back of an ADU
+in front of its MBAP header, which is a framing error and a closed connection.
+`tests/server/modbus/read_order_test.rs` writes each request in two halves split inside the
+header, four outstanding per connection; with the append back in a spawned task it failed 200 of
+200 runs under load (closed mid-stream, or an answer framed out of the wrong bytes), and it
+passes 200 of 200 as it is.
+
 The connection is registered in the map **synchronously in the accept loop**, before the reader
 task is spawned, for the same reason TCP does it: a client that writes immediately after
 `connect()` must not lose its first frame.
@@ -218,7 +229,7 @@ task is spawned, for the same reason TCP does it: a client that writes immediate
 A framing error (`protocol_id != 0`, or an MBAP length outside 2..=254) closes the connection.
 Neither is answerable — we no longer know where the next frame starts.
 
-**Closing means the whole connection, reader included.** `close` runs on a `handle_data` task
+**Closing means the whole connection, reader included.** `close` mostly runs on the `answer` task
 and shuts the write half, so the peer reads EOF; it also signals the connection's `closed`
 `Notify`, and the reader's `select!` stops on it. Without that signal the reader went on reading
 the still-open socket and held the connection-cap permit until the peer hung up or went quiet for
@@ -227,9 +238,9 @@ open. `bounds_test.rs::the_connection_cap_refuses_silently_and_every_close_retur
 asserts the slot comes back while the peer is still connected.
 
 The buffer is capped at `MAX_BUFFERED` (eight ADUs' worth), enforced **on append**, in
-`handle_data`, which is the only code that grows it — the framing loop only drains. That
-placement is what matters: while a request is with the model, `handle_data` appends the new
-bytes and returns early, and the framing loop does not run until the LLM call returns, so a
+`admit_read`, which is the only code that grows it — the framing loop only drains. That
+placement is what matters: while a request is with the model, `admit_read` appends the new
+bytes and starts nothing, and the framing loop does not run until the LLM call returns, so a
 loop-side check would leave the queue unbounded for the whole call (two minutes at the shipped
 `--llm-queue-timeout`). Outside a model call the bound cannot be reached, since an incomplete ADU
 is at most 259 octets. An overrun closes the connection rather than trimming — a peer that
@@ -254,7 +265,7 @@ This is deliberately **not** the redis-style refactor (encoders moved into `exec
 returning `Output`), and moving them would not help: the MBAP header needs the request's
 transaction id and unit id, `encode_bits_response`/`encode_registers_response` validate
 against the request's quantity, and `encode_write_ack` literally echoes the request — none of
-which exists outside `handle_data`'s request context. More fundamentally, Modbus TCP has no
+which exists outside `answer`'s request context. More fundamentally, Modbus TCP has no
 protocol-legal unsolicited server frame: a client matches responses to requests by
 transaction id, so anything injected between exchanges would either be dropped or desync the
 master. There is no fix to make; `close_connection` is the entire meaningful surface, and
@@ -357,7 +368,7 @@ beside them in `src/server/modbus/mod.rs`.
 | `codec::MAX_ADU_LEN`, declared as `max_inbound_bytes` | 260 octets | The specification's maximum: a 7-octet MBAP header and a 253-octet PDU. It governs the **inbound** direction through the MBAP length field — 254 is the largest legal value and 255 is refused by closing. Outbound, the encoders refuse anything past it, and every response to a legal request fits. |
 | `MAX_BUFFERED` | 2080 octets | Eight ADUs' worth of bytes queued behind a request that is with the model; see decision 5. |
 | `FIRST_BYTE_READ_TIMEOUT` | 30s | Modbus TCP is client-speaks-first and a client sends its first PDU inside its own connect path (`tokio-modbus` and `mbpoll` both do), so a peer that has sent nothing has begun no transaction. |
-| `IDLE_BETWEEN_REQUESTS_TIMEOUT` | 600s | Modbus defines no keepalive, so there is no protocol interval to sit above; what there is, is polling, and a SCADA master polls on a sub-second to few-second cycle. The number is set by *this* server: `handle_data` runs on its own task, so the reader keeps reading while a request is answered and a peer waiting for its own reply — including one parked on a `manual` rule for a human, 300s by default — is silent on this socket for the whole of that work. Ten minutes leaves that a factor of two. Real Modbus/TCP gateways reap an idle connection at ~60s; being ten times more patient is the deliberate price of letting a human answer. |
+| `IDLE_BETWEEN_REQUESTS_TIMEOUT` | 600s | Modbus defines no keepalive, so there is no protocol interval to sit above; what there is, is polling, and a SCADA master polls on a sub-second to few-second cycle. The number is set by *this* server: a request is answered on its own task, so the reader keeps reading while a request is answered and a peer waiting for its own reply — including one parked on a `manual` rule for a human, 300s by default — is silent on this socket for the whole of that work. Ten minutes leaves that a factor of two. Real Modbus/TCP gateways reap an idle connection at ~60s; being ten times more patient is the deliberate price of letting a human answer. |
 | `MAX_CONNECTIONS` | 256 | Refusal: **nothing**. Every Modbus server message is a reply and carries the transaction identifier, unit id and function code of a request this peer has not sent, so inventing one means inventing a transaction — worse than silence, for the same reason twenty protocols here are deliberately silent on an LLM failure. The reason lives in the log, under `decision=fail_closed_connection_cap`. |
 
 **NetGet's own Modbus client (`src/client/modbus/`) is a peer these bounds can close.** It

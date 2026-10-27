@@ -162,6 +162,60 @@ fn lorawan_device_keys_are_redacted_and_their_euis_are_not() {
     assert_eq!(d[1]["dev_addr"], json!("26011bda"));
 }
 
+/// The Zigbee co-processor's network key is masked; the network it belongs to is shown.
+#[test]
+fn zigbee_network_key_is_redacted_and_the_network_is_not() {
+    let shown = redact_sensitive(&json!({
+        "network": {"channel": 15, "pan_id": "0x1a62", "extended_pan_id": "dd:dd:dd:dd:dd:dd:dd:dd"},
+        "network_key": "c0ffee00112233445566778899aabbcc",
+        "devices": [{"name": "kitchen-lamp", "ieee": "00:12:4b:00:1c:a1:b2:01"}]
+    }));
+    assert_eq!(shown["network_key"], json!(REDACTED));
+    assert_eq!(shown["network"]["pan_id"], json!("0x1a62"));
+    assert_eq!(
+        shown["network"]["extended_pan_id"],
+        json!("dd:dd:dd:dd:dd:dd:dd:dd")
+    );
+    assert_eq!(
+        shown["devices"][0]["ieee"],
+        json!("00:12:4b:00:1c:a1:b2:01")
+    );
+    assert!(!shown.to_string().contains("c0ffee00"));
+}
+
+/// NGAP: a 5G subscriber's K and OPc/OP and the SUCI home network private key are masked, in the
+/// AMF's `subscribers` list and in the gNB's flat parameters; the SUPI, AMF field and SQN are not.
+#[test]
+fn ngap_subscriber_keys_are_redacted_and_the_subscriber_is_not() {
+    let shown = redact_sensitive(&json!({
+        "subscribers": [{"supi": "imsi-001010000000001",
+                         "subscriber_key": "465B5CE8B199B49FAA5F0A2EE238A6BC",
+                         "subscriber_opc": "E8ED289DEBA952E4283B54E88E6183CA",
+                         "amf_field": "8000", "sqn": 32}],
+        "suci_keys": [{"key_id": 1, "scheme": "profile_a",
+                       "home_network_private_key": "c53c22208b61860b06c62e5406a7b330c2b577aa5558981510d128247d38bd1d"}],
+        "subscriber_op": "CDC202D5123E20F62B6D676AC72CB318",
+        "supi": "imsi-001010000000003"
+    }));
+    let s = &shown["subscribers"][0];
+    assert_eq!(s["subscriber_key"], json!(REDACTED));
+    assert_eq!(s["subscriber_opc"], json!(REDACTED));
+    assert_eq!(shown["subscriber_op"], json!(REDACTED));
+    assert_eq!(
+        shown["suci_keys"][0]["home_network_private_key"],
+        json!(REDACTED)
+    );
+    assert_eq!(s["supi"], json!("imsi-001010000000001"));
+    assert_eq!(s["amf_field"], json!("8000"));
+    assert_eq!(s["sqn"], json!(32));
+    assert_eq!(shown["suci_keys"][0]["key_id"], json!(1));
+    assert_eq!(shown["supi"], json!("imsi-001010000000003"));
+    let text = shown.to_string().to_ascii_uppercase();
+    for secret in ["465B5CE8", "E8ED289D", "CDC202D5", "C53C2220"] {
+        assert!(!text.contains(secret), "{secret} leaked: {text}");
+    }
+}
+
 /// A startup parameter's diagnostic applies the redactor's own key/value rule. A string-valued
 /// `auth` (`username:password`) is a credential by its value, not its name, so the name-only
 /// check let it into the "expected …, got …" error a mistyped `auth` produces.

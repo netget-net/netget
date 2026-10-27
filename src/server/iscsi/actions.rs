@@ -15,6 +15,19 @@ use std::sync::LazyLock;
 pub const ACCEPT_LOGIN: &str = "iscsi_accept_login";
 pub const REJECT_LOGIN: &str = "iscsi_reject_login";
 pub const SEND_TARGETS: &str = "iscsi_send_targets";
+pub const ALLOW_TASK_MANAGEMENT: &str = "iscsi_allow_reset";
+pub const REFUSE_TASK_MANAGEMENT: &str = "iscsi_refuse_reset";
+
+/// The task management response a refusal names (RFC 7143 §11.6.1); anything else is
+/// "function rejected".
+pub fn refusal_code(response: &str) -> u8 {
+    use super::pdu::tmf;
+    match response {
+        "not_supported" => tmf::NOT_SUPPORTED,
+        "unauthorized" => tmf::AUTHORIZATION_FAILED,
+        _ => tmf::REJECTED,
+    }
+}
 
 /// Targets one SendTargets answer may list.
 pub const MAX_TARGETS: usize = 256;
@@ -106,6 +119,88 @@ pub fn send_targets_action() -> ActionDefinition {
         json!({"type": SEND_TARGETS, "targets": [{"name": "iqn.2026-10.net.netget:disk0"}]}),
     )
 }
+
+pub fn allow_reset_action() -> ActionDefinition {
+    action(
+        ALLOW_TASK_MANAGEMENT,
+        "Let the reset go ahead. NetGet ends the tasks it covers in every session logged in to \
+         the target and reports the reset to each initiator as a unit attention on its next \
+         command; a cold reset also ends every session of the target.",
+        vec![],
+        json!({"type": ALLOW_TASK_MANAGEMENT}),
+    )
+}
+
+pub fn refuse_reset_action() -> ActionDefinition {
+    action(
+        REFUSE_TASK_MANAGEMENT,
+        "Refuse the reset; nothing is reset. response names the answer the initiator gets: \
+         rejected (function rejected, 255), not_supported (5) or unauthorized (function \
+         authorization failed, 6).",
+        vec![p(
+            "response",
+            "string",
+            "rejected, not_supported or unauthorized",
+            true,
+        )],
+        json!({"type": REFUSE_TASK_MANAGEMENT, "response": "unauthorized"}),
+    )
+}
+
+pub static TASK_MANAGEMENT_EVENT: LazyLock<EventType> =
+    LazyLock::new(|| {
+        EventType::new(
+        "iscsi_task_management",
+        "An initiator asks for a reset: logical_unit_reset (one LUN), target_warm_reset (every \
+         LUN of the target) or target_cold_reset (a power cycle: every session of the target \
+         ends). Answer iscsi_allow_reset or iscsi_refuse_reset.",
+        allow_reset_action().example,
+    )
+    .with_parameters(vec![
+        p(
+            "function",
+            "string",
+            "logical_unit_reset, target_warm_reset or target_cold_reset",
+            true,
+        ),
+        p(
+            "lun",
+            "number",
+            "The LUN a logical_unit_reset names; null for the target resets",
+            false,
+        ),
+        p("initiator_name", "string", "The initiator asking", true),
+        p("target_name", "string", "The target it is logged in to", true),
+        p(
+            "initiator_address",
+            "string",
+            "The address the initiator connected from",
+            true,
+        ),
+        p(
+            "authenticated_user",
+            "string",
+            "The CHAP name it authenticated as; null when no authentication was configured",
+            false,
+        ),
+        p(
+            "outstanding_tasks",
+            "number",
+            "Tasks the reset would end, across every session of the target",
+            true,
+        ),
+        p(
+            "sessions_affected",
+            "number",
+            "Sessions logged in to the target, the asking one included",
+            true,
+        ),
+    ])
+    .with_actions(vec![allow_reset_action(), refuse_reset_action()])
+    .with_log_template(
+        LogTemplate::new().with_info("iSCSI {function} from {initiator_name} on {target_name}"),
+    )
+    });
 
 pub static LOGIN_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
@@ -241,6 +336,14 @@ pub fn check(v: &Value) -> Result<()> {
         SEND_TARGETS => {
             targets_of(v)?;
         }
+        ALLOW_TASK_MANAGEMENT => {}
+        REFUSE_TASK_MANAGEMENT => ensure!(
+            matches!(
+                v["response"].as_str(),
+                Some("rejected" | "not_supported" | "unauthorized")
+            ),
+            "response is rejected, not_supported or unauthorized"
+        ),
         other => bail!("Unknown iSCSI target action {other:?}"),
     }
     Ok(())
@@ -288,10 +391,16 @@ impl Protocol for IscsiProtocol {
             accept_login_action(),
             reject_login_action(),
             send_targets_action(),
+            allow_reset_action(),
+            refuse_reset_action(),
         ]
     }
     fn get_event_types(&self) -> Vec<EventType> {
-        vec![LOGIN_EVENT.clone(), DISCOVERY_EVENT.clone()]
+        vec![
+            LOGIN_EVENT.clone(),
+            DISCOVERY_EVENT.clone(),
+            TASK_MANAGEMENT_EVENT.clone(),
+        ]
     }
     fn get_startup_parameters(&self) -> Vec<ParameterDefinition> {
         vec![
@@ -341,6 +450,29 @@ impl Protocol for IscsiProtocol {
                 example: json!("either"),
                 default: Some(json!(super::DEFAULT_DIGESTS)),
             },
+            ParameterDefinition {
+                name: "max_connections".into(),
+                type_hint: "number".into(),
+                description: "MaxConnections this target offers: how many TCP connections one \
+                              session may have (1 to 8). An initiator that offers fewer gets \
+                              fewer (the result is the minimum)"
+                    .into(),
+                required: false,
+                example: json!(2),
+                default: Some(json!(super::DEFAULT_MAX_CONNECTIONS_PER_SESSION)),
+            },
+            ParameterDefinition {
+                name: "error_recovery_level".into(),
+                type_hint: "number".into(),
+                description: "The highest ErrorRecoveryLevel this target offers: 0 (session \
+                              recovery only), 1 (digest error recovery: SNACK, recovery R2T) or \
+                              2 (connection recovery and task reassignment). The result is the \
+                              lower of this and the initiator's"
+                    .into(),
+                required: false,
+                example: json!(1),
+                default: Some(json!(super::DEFAULT_ERROR_RECOVERY_LEVEL)),
+            },
         ]
     }
     fn metadata(&self) -> crate::protocol::metadata::ProtocolMetadataV2 {
@@ -349,10 +481,10 @@ impl Protocol for IscsiProtocol {
             .state(DevelopmentState::Experimental)
             .privilege_requirement(PrivilegeRequirement::None)
             .well_known_port(3260)
-            .implementation("Hand-written iSCSI target (src/server/iscsi): PDU framing with CRC32C header and data digests (pdu.rs), login through the security and operational stages with text-key negotiation (text.rs), CHAP MD5 with optional mutual CHAP checked against configured secrets (chap.rs), discovery sessions with SendTargets and multi-PDU text continuation, CmdSN/StatSN/DataSN/R2TSN sequencing with a 32-command window, SCSI Command/Response, Data-In with phase collapse and residuals, unsolicited, immediate and R2T-solicited Data-Out, NOP-In/Out, Logout, task management (ABORT TASK, ABORT/CLEAR TASK SET, LUN RESET, TARGET WARM/COLD RESET), Reject. SCSI (src/server/scsi_common.rs, shared with the USB mass-storage device): INQUIRY with VPD 0x00/0x80/0x83, READ CAPACITY(10)/(16), READ/WRITE 6/10/12/16, TEST UNIT READY, REQUEST SENSE, MODE SENSE(6)/(10), REPORT LUNS, SYNCHRONIZE CACHE(10)/(16), START STOP UNIT, PREVENT ALLOW MEDIUM REMOVAL, fixed-format sense")
-            .llm_control("Which targets discovery reveals, whether each login is admitted (initiator name, target name, address and authenticated CHAP user are in the event), and every LUN: size, block size, content, failing regions, identity and whether writes are accepted")
-            .e2e_testing("tests/server/iscsi: raw-socket sessions for login, CHAP, negotiation, digests, every bound, sequence numbers and the fail-closed paths, with the pcap oracle (tshark's iscsi and scsi dissectors) in e2e_test.rs; libiscsi 1.20's iscsi-ls, iscsi-inq, iscsi-readcapacity16, iscsi-md5sum and iscsi-test-cu in libiscsi_test.rs; the Linux kernel initiator (open-iscsi iscsiadm, then dd from the block device) in open_iscsi_test.rs, as root in CI")
-            .notes("Experimental: libiscsi passes its discovery, login, inquiry, capacity and read/write tools and the iscsi-test-cu subset named in tests/server/iscsi/AGENTS.md; the open-iscsi kernel initiator runs only as root in the pair job, which had not run in CI when this landed. Error recovery level 0, one connection per session, no reinstatement, no SNACK, no ACA, no persistent reservations, no protection information, no UNMAP/WRITE SAME/COMPARE AND WRITE. A login the model fails or does not answer is refused (status 0x0300, or 0x0301 when the backend is saturated) and no LUN is ever exposed that the model did not describe; discovery that fails lists no targets. Writes are held in memory for the session only (64 MiB) and discarded with it. Bounds: data segment ≤ the negotiated MaxRecvDataSegmentLength (8 KiB during login, 256 KiB after), AHS ≤ 1020 bytes, 128 text keys and 64 KiB of text per exchange, 32 outstanding commands, 32 MiB per command, bursts as negotiated, 256 LUNs of up to 64 TiB, login within 60 s, a PDU's rest within 60 s of its first byte, 256 connections.")
+            .implementation("Hand-written iSCSI target (src/server/iscsi): PDU framing with CRC32C header and data digests and a cancel-safe PDU reader (pdu.rs), login through the security and operational stages with text-key negotiation (text.rs), CHAP MD5 with optional mutual CHAP checked against configured secrets (chap.rs), discovery sessions with SendTargets and multi-PDU text continuation; sessions of up to MaxConnections connections sharing one CmdSN window, task set, write overlay and unit attentions (session.rs), with commands run in CmdSN order across connections, session and connection reinstatement, and logout of the session, of a connection or for recovery (ffp.rs); SCSI Command/Response, Data-In with phase collapse and residuals, unsolicited, immediate and R2T-solicited Data-Out (scsi.rs); every task management function: ABORT TASK, ABORT TASK SET and CLEAR TASK SET (answered once the transfers they end have finished), CLEAR ACA (not supported: no ACA), LOGICAL UNIT RESET and TARGET WARM/COLD RESET (each the model's decision, leaving 29h/03h, 29h/00h or 29h/01h on every I_T nexus), TASK REASSIGN (tmf.rs); error recovery levels 1 and 2: recovery R2T after a lost Data-Out, Data/R2T, Status, DataACK and R-Data SNACK with bounded retransmission, connection recovery with Time2Wait/Time2Retain (recovery.rs); NOP-In/Out, Reject. SCSI (src/server/scsi_common.rs, shared with the USB mass-storage device): INQUIRY with VPD 0x00/0x80/0x83/0xB0/0xB1, READ CAPACITY(10)/(16), READ/WRITE 6/10/12/16, TEST UNIT READY, REQUEST SENSE (reporting a pending unit attention), MODE SENSE(6)/(10), REPORT LUNS, SYNCHRONIZE CACHE(10)/(16), START STOP UNIT, PREVENT ALLOW MEDIUM REMOVAL, fixed-format sense")
+            .llm_control("Which targets discovery reveals, whether each login is admitted (initiator name, target name, address and authenticated CHAP user are in the event), every LUN (size, block size, content, failing regions, identity and whether writes are accepted), and whether each LOGICAL UNIT RESET, TARGET WARM RESET and TARGET COLD RESET may go ahead (iscsi_task_management, with how many tasks and sessions it would affect)")
+            .e2e_testing("tests/server/iscsi: raw-socket sessions for login, CHAP, negotiation, digests, every bound, sequence numbers and the fail-closed paths (e2e_test.rs), and for task management, unit attentions, two-connection sessions, CmdSN order across connections, reinstatement, recovery R2T, every SNACK type and TASK REASSIGN (recovery_test.rs), with the pcap oracle (tshark's iscsi and scsi dissectors); libiscsi 1.20's iscsi-ls, iscsi-inq, iscsi-readcapacity16, iscsi-md5sum and iscsi-test-cu (a subset, and the iSCSITMF and MultipathIO.Reset suites) and the Linux kernel initiator (open-iscsi iscsiadm, dd from the block device, sg_reset for LUN and target resets) in real_client_test.rs, the kernel as root in CI")
+            .notes("Experimental: libiscsi passes its discovery, login, inquiry, capacity and read/write tools, the iscsi-test-cu subset and its task management tests named in tests/server/iscsi/AGENTS.md; the open-iscsi kernel initiator runs only as root in the pair job. Error recovery levels 1 and 2 and sessions of several connections are driven by NetGet's own raw-PDU tests only: libiscsi and open-iscsi both hard-code ErrorRecoveryLevel=0 and MaxConnections=1 and send no SNACK, DataACK or TASK REASSIGN, so no independent initiator exercises them. No ACA, no persistent reservations, no protection information, no UNMAP/WRITE SAME/COMPARE AND WRITE, no asynchronous messages, no iSER. A login or reset the model fails or does not answer is refused (login status 0x0300 or 0x0301; task management response 255) and no LUN is ever exposed that the model did not describe; discovery that fails lists no targets. Writes are held in memory for the session only (64 MiB) and discarded with it, so two sessions of one target do not see each other's writes. Bounds: data segment ≤ the negotiated MaxRecvDataSegmentLength (8 KiB during login, 256 KiB after), AHS ≤ 1020 bytes, 128 text keys and 64 KiB of text per exchange, 32 outstanding commands, 32 MiB per command, bursts as negotiated, 256 LUNs of up to 64 TiB, login within 60 s, a PDU's rest within 60 s of its first byte, 256 connections, 256 sessions, 8 connections per session, 8 retransmissions per task, 256 completed tasks and 64 MiB of read data kept per session, 256 statuses kept per connection, failed connections' tasks kept at most 120 s.")
             .answers_on_failure()
             .request_only("Every PDU this target sends answers one the initiator sent: it sends no NOP-In pings and no asynchronous messages, and StatSN is the connection task's to assign")
             .max_inbound_bytes(super::text::OUR_MAX_RECV_DATA_SEGMENT as usize)

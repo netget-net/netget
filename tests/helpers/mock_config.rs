@@ -199,6 +199,43 @@ pub struct MockRule {
     /// that gives up in between passes every mocked test. `tests/eval/probe_check.rs` uses
     /// this to stand in for a model call.
     pub delay: Option<std::time::Duration>,
+
+    /// Held until the test releases it, when set: the call is recorded, then the answer waits.
+    ///
+    /// For a test whose premise is "this happened while the model was still answering". A
+    /// delay only makes that likely, and under load the premise fails without the code under
+    /// test doing anything wrong; a gate makes it true by construction.
+    pub gate: Option<MockGate>,
+}
+
+/// A gate a mock rule's answer waits on until the test calls [`MockGate::release`].
+///
+/// Released once, open for good: every call held on it, and every later one, proceeds. A
+/// release before the call arrives is not lost.
+#[derive(Clone)]
+pub struct MockGate(Arc<tokio::sync::Semaphore>);
+
+impl MockGate {
+    pub fn new() -> Self {
+        Self(Arc::new(tokio::sync::Semaphore::new(0)))
+    }
+
+    /// Let every held answer, and every later one, go.
+    pub fn release(&self) {
+        // A closed semaphore fails every pending and future `acquire`, which is the open state.
+        self.0.close();
+    }
+
+    /// Wait until [`Self::release`] has been called.
+    pub async fn wait(&self) {
+        let _ = self.0.acquire().await;
+    }
+}
+
+impl Default for MockGate {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MockRule {
@@ -217,6 +254,7 @@ impl MockRule {
             max_calls: None,
             actual_calls: Arc::new(AtomicUsize::new(0)),
             delay: None,
+            gate: None,
         }
     }
 
@@ -280,6 +318,8 @@ impl MockRule {
             max_calls: s.max_calls,
             actual_calls: Arc::new(AtomicUsize::new(0)),
             delay: s.delay_ms.map(std::time::Duration::from_millis),
+            // A gate is an in-process handle; a rule that crossed a process boundary has none.
+            gate: None,
         }
     }
 
@@ -296,6 +336,7 @@ impl MockRule {
             max_calls: self.max_calls,
             actual_calls: Arc::clone(&self.actual_calls),
             delay: self.delay,
+            gate: self.gate.clone(),
         }
     }
 }

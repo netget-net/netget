@@ -3,7 +3,9 @@
 pub mod bencode;
 pub mod bson_depth;
 pub mod clock;
+pub mod display;
 pub mod file_io;
+pub mod gre;
 pub mod json_budget;
 pub mod line_reader;
 pub mod redact;
@@ -11,6 +13,8 @@ pub mod redis_keys;
 pub mod resp;
 pub mod sanitize;
 pub mod save_load;
+#[cfg(unix)]
+pub mod sctp;
 pub mod shutdown;
 pub mod sql;
 pub mod task_guard;

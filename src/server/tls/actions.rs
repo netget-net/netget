@@ -133,7 +133,7 @@ impl Protocol for TlsProtocol {
             .notes("Generic TLS server for custom protocols - LLM implements application layer. No client certificate authentication (no mTLS)")
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
             // Decrypted bytes arriving during a call are the next call's payload, whole
-            // (batching on) or one read at a time (off) — `ConnectionData::take_next`.
+            // (batching on) or one read at a time (off) — `ReadQueue::next_or_idle`.
             .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }

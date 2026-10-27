@@ -1,27 +1,19 @@
-//! 5GS mobility management (5GMM, TS 24.501) — the plain-NAS subset NGAP carries during initial
-//! registration.
+//! 5GS mobility management (5GMM, TS 24.501) as NGAP carries it, in two layers.
 //!
-//! NAS is opaque to NGAP: a NAS-PDU IE is just octets. NetGet decodes the 5GMM messages that cross
-//! N2 before a NAS security context exists, so the model sees *what the UE asked for* —
+//! NAS is opaque to NGAP: a NAS-PDU IE is just octets. [`decode`] turns a plain 5GMM message (and
+//! a 5GSM payload, through `sm`) into fields, so the model sees *what the UE asked for* —
 //! registration type, the SUCI's PLMN, routing indicator and protection scheme, the 5GMM cause of
-//! a failure — instead of a hex string, and answers with a structured action that Rust encodes.
+//! a failure — instead of a hex string, and [`encode`] builds what the model may say to a UE from
+//! structured fields: the messages TS 24.501 section 4.4.4.2 lets a UE process before security,
+//! which the session protects for it once security is on.
 //!
-//! # What is out of scope, and why
+//! The second layer, from "Structured 5GMM for the security procedures" down, is Rust's own:
+//! the parsers and builders 5G-AKA, the security mode procedure, registration and the 5GSM NAS
+//! transport need. Protection itself (MAC, COUNT, ciphering) is `security::NasContext`'s.
 //!
-//! **NAS security.** 5G-AKA (deriving RES*, K_AUSF, K_SEAF, K_AMF), Security Mode Command and
-//! integrity/ciphering of later messages are not implemented. Without them a UE accepts only the
-//! messages TS 24.501 section 4.4.4.2 lists as processable before security is established —
-//! Identity Request, Authentication Request/Reject, Registration Reject, Service Reject,
-//! Deregistration Accept — which is exactly the set [`encode`] offers the AMF. An Authentication
-//! Request NetGet sends carries a RAND and AUTN the model chooses (random by default); a real UE
-//! computes the expected MAC from its own key, finds it does not match, and answers with
-//! Authentication Failure #20 (MAC failure). That round trip is real and is what the tests prove;
-//! a *successful* authentication is not available without the subscriber key and the AKA
-//! derivations.
-//!
-//! A security-protected message is reported with its header fields; when it is integrity
-//! protected but not ciphered, the plain message inside is decoded too, because its octets are in
-//! the clear. The MAC is not verified — there is no key to verify it with — and the event says so.
+//! A security-protected message given to [`decode`] directly is reported with its header fields
+//! and, when not ciphered, the plain message inside, marked `mac_verified: false`: [`decode`] has
+//! no key. The AMF and the gNB's UE decode only after `security` verified the MAC.
 
 use serde_json::{json, Map, Value};
 
@@ -429,8 +421,7 @@ fn decode_inner(b: &[u8], depth: usize) -> Result<Value, String> {
     let mut c = Cursor { b, i: 0 };
     let epd = c.u8("extended protocol discriminator")?;
     if epd == EPD_5GSM {
-        return Ok(json!({"epd": "5gsm", "length": b.len(), "decoded": false,
-                         "error": "5GSM messages are not decoded by NetGet"}));
+        return Ok(super::sm::decode(b));
     }
     if epd != EPD_5GMM {
         return Err(format!(
@@ -572,13 +563,85 @@ fn decode_inner(b: &[u8], depth: usize) -> Result<Value, String> {
                 decode_mobile_identity(c.lve("mobile identity")?),
             );
         }
+        SECURITY_MODE_COMMAND => {
+            let smc = parse_security_mode_command(b)?;
+            v.insert(
+                "selected_algorithms".into(),
+                json!({"integrity": super::security::integrity_name(smc.ia),
+                       "ciphering": super::security::ciphering_name(smc.ea)}),
+            );
+            v.insert("ngksi".into(), json!(smc.ngksi));
+            v.insert("imeisv_request".into(), json!(smc.imeisv_request));
+            v.insert("retransmit_initial_nas".into(), json!(smc.rinmr));
+        }
+        SECURITY_MODE_COMPLETE => {
+            let smc = parse_security_mode_complete(b)?;
+            v.insert("imeisv".into(), json!(smc.imeisv));
+            v.insert(
+                "nas_message_container_length".into(),
+                json!(smc.nas_container.map(|c| c.len())),
+            );
+        }
+        REGISTRATION_ACCEPT => {
+            let a = parse_registration_accept(b)?;
+            v.insert("guti".into(), json!(a.guti));
+            v.insert("tai_list".into(), json!(a.tai_list));
+            v.insert(
+                "allowed_nssai".into(),
+                json!(a
+                    .allowed_nssai
+                    .iter()
+                    .map(Snssai::to_json)
+                    .collect::<Vec<_>>()),
+            );
+        }
+        UL_NAS_TRANSPORT | DL_NAS_TRANSPORT => {
+            let t = parse_nas_transport_sm(b, t)?;
+            v.insert("payload_container_type".into(), json!(t.payload_type));
+            v.insert("pdu_session_id".into(), json!(t.pdu_session_id));
+            v.insert("request_type".into(), json!(t.request_type));
+            v.insert("s_nssai".into(), json!(t.s_nssai.map(|s| s.to_json())));
+            v.insert("dnn".into(), json!(t.dnn));
+            if t.payload_type == PAYLOAD_N1_SM {
+                v.insert("payload".into(), super::sm::decode(&t.payload));
+            } else {
+                v.insert("payload_length".into(), json!(t.payload.len()));
+            }
+        }
         SERVICE_REQUEST => {
-            let o = c.u8("service type")?;
-            v.insert("service_type".into(), json!(o & 0x0F));
-            v.insert("ngksi".into(), json!((o >> 4) & 0x07));
+            let r = parse_service_request(b)?;
+            v.insert(
+                "service_type".into(),
+                json!(service_type_name(r.service_type)),
+            );
+            v.insert("ngksi".into(), json!(r.ngksi));
             v.insert(
                 "mobile_identity".into(),
-                decode_mobile_identity(c.lve("5G-S-TMSI")?),
+                json!({"type": "5g_s_tmsi", "amf_set_id": r.amf_set_id,
+                       "amf_pointer": r.amf_pointer, "tmsi": r.tmsi}),
+            );
+            v.insert(
+                "uplink_data_status".into(),
+                json!(r.uplink_data_status.map(psi_list)),
+            );
+            v.insert(
+                "pdu_session_status".into(),
+                json!(r.pdu_session_status.map(psi_list)),
+            );
+            v.insert(
+                "nas_message_container_length".into(),
+                json!(r.nas_container.map(|c| c.len())),
+            );
+        }
+        SERVICE_ACCEPT => {
+            let a = parse_service_accept(b)?;
+            v.insert(
+                "pdu_session_status".into(),
+                json!(a.pdu_session_status.map(psi_list)),
+            );
+            v.insert(
+                "pdu_session_reactivation_result".into(),
+                json!(a.reactivation_result.map(psi_list)),
             );
         }
         _ => {
@@ -892,3 +955,827 @@ pub fn encode(v: &Value, allowed: &[&str]) -> Result<Vec<u8>, String> {
     }
     Ok(out)
 }
+
+// ============================================================================
+// Structured 5GMM for the security procedures (Rust's side, never the model's)
+// ============================================================================
+//
+// These parse and build the messages 5G-AKA, the security mode procedure, registration and the
+// NAS transport of 5GSM need. They work on plain 5GMM (header type 0); protection is
+// `security::NasContext`'s job. Every parse is bounded by the octets it is given and refuses a
+// truncated IE rather than guessing.
+
+pub const UL_NAS_TRANSPORT: u8 = 0x67;
+pub const DL_NAS_TRANSPORT: u8 = 0x68;
+pub const SERVICE_ACCEPT: u8 = 0x4e;
+pub const DEREGISTRATION_REQUEST_UE_TERMINATED: u8 = 0x47;
+
+/// Payload container type N1 SM information (TS 24.501 9.11.3.40).
+pub const PAYLOAD_N1_SM: u8 = 1;
+
+/// One S-NSSAI (TS 24.501 9.11.2.8): an SST and an optional 24-bit SD.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Snssai {
+    pub sst: u8,
+    pub sd: Option<u32>,
+}
+
+impl Snssai {
+    pub fn to_json(&self) -> Value {
+        let mut v = json!({"sst": self.sst});
+        if let Some(sd) = self.sd {
+            v["sd"] = json!(format!("{sd:06x}"));
+        }
+        v
+    }
+
+    /// `{"sst": 1, "sd": "010203"}`; `sd` may be omitted, or a number.
+    pub fn from_json(v: &Value) -> Result<Snssai, String> {
+        let sst = v
+            .get("sst")
+            .and_then(Value::as_u64)
+            .filter(|s| *s <= 255)
+            .ok_or("s_nssai.sst must be 0..255")? as u8;
+        let sd = match v.get("sd") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(s)) => {
+                let s = s.trim().trim_start_matches("0x");
+                if s.len() != 6 {
+                    return Err(format!("sd {s:?} must be six hex digits"));
+                }
+                Some(u32::from_str_radix(s, 16).map_err(|_| format!("sd {s:?} is not hex"))?)
+            }
+            Some(Value::Number(n)) => Some(
+                n.as_u64()
+                    .filter(|x| *x <= 0xFF_FFFF)
+                    .ok_or("sd must be 24 bits")? as u32,
+            ),
+            Some(_) => return Err("sd must be six hex digits".into()),
+        };
+        Ok(Snssai { sst, sd })
+    }
+
+    /// The S-NSSAI IE contents (length octet not included).
+    pub fn octets(&self) -> Vec<u8> {
+        let mut out = vec![self.sst];
+        if let Some(sd) = self.sd {
+            out.extend_from_slice(&[(sd >> 16) as u8, (sd >> 8) as u8, sd as u8]);
+        }
+        out
+    }
+
+    pub fn parse(b: &[u8]) -> Result<Snssai, String> {
+        match b.len() {
+            1 | 2 => Ok(Snssai {
+                sst: b[0],
+                sd: None,
+            }),
+            4 | 5 | 8 => Ok(Snssai {
+                sst: b[0],
+                sd: Some(((b[1] as u32) << 16) | ((b[2] as u32) << 8) | b[3] as u32),
+            }),
+            n => Err(format!("an S-NSSAI of {n} octets")),
+        }
+    }
+}
+
+/// NSSAI contents (TS 24.501 9.11.3.37): a list of LV S-NSSAIs. At most 16 are read.
+pub fn parse_nssai(b: &[u8]) -> Result<Vec<Snssai>, String> {
+    let mut out = Vec::new();
+    let mut c = Cursor { b, i: 0 };
+    while !c.done() {
+        if out.len() >= 16 {
+            return Err("more than 16 S-NSSAIs".into());
+        }
+        out.push(Snssai::parse(c.lv("S-NSSAI")?)?);
+    }
+    Ok(out)
+}
+
+pub fn nssai_octets(list: &[Snssai]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for s in list {
+        let o = s.octets();
+        out.push(o.len() as u8);
+        out.extend_from_slice(&o);
+    }
+    out
+}
+
+/// A Registration Request's fields the AMF acts on.
+#[derive(Debug, Clone)]
+pub struct RegistrationRequest {
+    pub registration_type: u8,
+    pub ngksi: u8,
+    pub mobile_identity: Vec<u8>,
+    /// The UE security capability IE's contents, replayed verbatim in Security Mode Command.
+    pub ue_security_capability: Option<Vec<u8>>,
+    pub requested_nssai: Vec<Snssai>,
+}
+
+pub fn parse_registration_request(b: &[u8]) -> Result<RegistrationRequest, String> {
+    let mut c = plain_header(b, REGISTRATION_REQUEST)?;
+    let o = c.u8("registration type")?;
+    let id = c.lve("5GS mobile identity")?.to_vec();
+    let mut r = RegistrationRequest {
+        registration_type: o & 0x07,
+        ngksi: (o >> 4) & 0x07,
+        mobile_identity: id,
+        ue_security_capability: None,
+        requested_nssai: Vec::new(),
+    };
+    for (iei, val) in optional_ies(&mut c, &[(0x52, 6)])? {
+        match iei {
+            0x2e => {
+                if !(2..=8).contains(&val.len()) {
+                    return Err("UE security capability must be 2..8 octets".into());
+                }
+                r.ue_security_capability = Some(val.to_vec());
+            }
+            0x2f => r.requested_nssai = parse_nssai(val)?,
+            _ => {}
+        }
+    }
+    Ok(r)
+}
+
+/// A SUCI with an IMSI-format SUPI (TS 24.501 figure 9.11.3.4.3).
+#[derive(Debug, Clone)]
+pub struct Suci {
+    pub plmn: super::codec::Plmn,
+    pub routing_indicator: String,
+    pub protection_scheme: u8,
+    pub home_network_public_key_id: u8,
+    pub scheme_output: Vec<u8>,
+}
+
+pub fn parse_suci(b: &[u8]) -> Option<Suci> {
+    if b.len() < 9 || b[0] & 0x07 != 1 || (b[0] >> 4) & 0x07 != 0 {
+        return None;
+    }
+    Some(Suci {
+        plmn: super::codec::Plmn::decode_octets(&b[1..4]).ok()?,
+        routing_indicator: bcd(&b[4..6]),
+        protection_scheme: b[6] & 0x0F,
+        home_network_public_key_id: b[7],
+        scheme_output: b[8..].to_vec(),
+    })
+}
+
+/// MSIN digits from BCD scheme input (low nibble first, 0xF filler in the last nibble only).
+pub fn msin_from_bcd(b: &[u8]) -> Option<String> {
+    let mut s = String::new();
+    for (i, x) in b.iter().enumerate() {
+        for (j, nib) in [x & 0x0F, x >> 4].into_iter().enumerate() {
+            match nib {
+                0..=9 => s.push((b'0' + nib) as char),
+                0xF if i == b.len() - 1 && j == 1 => {}
+                _ => return None,
+            }
+        }
+    }
+    if (5..=10).contains(&s.len()) {
+        Some(s)
+    } else {
+        None
+    }
+}
+
+pub fn bcd_from_digits(s: &str) -> Vec<u8> {
+    to_bcd(s)
+}
+
+/// A 5G-GUTI mobile identity (11 octets).
+pub fn guti_octets(
+    plmn: &super::codec::Plmn,
+    region: u8,
+    set: u16,
+    pointer: u8,
+    tmsi: u32,
+) -> Vec<u8> {
+    let mut out = vec![0xF2];
+    out.extend_from_slice(&plmn.octets());
+    out.push(region);
+    out.push((set >> 2) as u8);
+    out.push((((set & 0x03) as u8) << 6) | (pointer & 0x3F));
+    out.extend_from_slice(&tmsi.to_be_bytes());
+    out
+}
+
+fn tlv(out: &mut Vec<u8>, iei: u8, v: &[u8]) {
+    out.push(iei);
+    out.push(v.len() as u8);
+    out.extend_from_slice(v);
+}
+
+fn tlve(out: &mut Vec<u8>, iei: u8, v: &[u8]) {
+    out.push(iei);
+    lve(out, v);
+}
+
+fn plain_header(b: &[u8], want: u8) -> Result<Cursor<'_>, String> {
+    let mut c = Cursor { b, i: 0 };
+    if c.u8("EPD")? != EPD_5GMM || c.u8("security header type")? & 0x0F != 0 {
+        return Err("not a plain 5GMM message".into());
+    }
+    let t = c.u8("message type")?;
+    if t != want {
+        return Err(format!(
+            "expected {}, got {}",
+            message_name(want).unwrap_or("?"),
+            message_name(t).unwrap_or("an unknown message")
+        ));
+    }
+    Ok(c)
+}
+
+pub fn authentication_request(ngksi: u8, abba: &[u8], rand: &[u8; 16], autn: &[u8; 16]) -> Vec<u8> {
+    let mut out = vec![EPD_5GMM, 0, AUTHENTICATION_REQUEST, ngksi & 0x0F];
+    out.push(abba.len() as u8);
+    out.extend_from_slice(abba);
+    out.push(0x21);
+    out.extend_from_slice(rand);
+    tlv(&mut out, 0x20, autn);
+    out
+}
+
+pub fn authentication_reject() -> Vec<u8> {
+    vec![EPD_5GMM, 0, AUTHENTICATION_REJECT]
+}
+
+/// The pieces of an Authentication Request a UE needs.
+pub struct AuthenticationRequest {
+    pub ngksi: u8,
+    pub abba: Vec<u8>,
+    pub rand: [u8; 16],
+    pub autn: [u8; 16],
+}
+
+pub fn parse_authentication_request(b: &[u8]) -> Result<AuthenticationRequest, String> {
+    let mut c = plain_header(b, AUTHENTICATION_REQUEST)?;
+    let ngksi = c.u8("ngKSI")? & 0x0F;
+    let abba = c.lv("ABBA")?.to_vec();
+    let mut rand = None;
+    let mut autn = None;
+    for (iei, val) in optional_ies(&mut c, &[(0x21, 16)])? {
+        match iei {
+            0x21 => rand = val.try_into().ok(),
+            0x20 => autn = val.try_into().ok(),
+            _ => {}
+        }
+    }
+    Ok(AuthenticationRequest {
+        ngksi,
+        abba,
+        rand: rand.ok_or("no 16-octet RAND (5G-AKA needs one)")?,
+        autn: autn.ok_or("no 16-octet AUTN (5G-AKA needs one)")?,
+    })
+}
+
+pub fn authentication_response(res_star: &[u8; 16]) -> Vec<u8> {
+    let mut out = vec![EPD_5GMM, 0, AUTHENTICATION_RESPONSE];
+    tlv(&mut out, 0x2d, res_star);
+    out
+}
+
+/// RES* from an Authentication Response; `None` when the parameter is absent or not 16 octets.
+pub fn parse_authentication_response(b: &[u8]) -> Result<Option<[u8; 16]>, String> {
+    let mut c = plain_header(b, AUTHENTICATION_RESPONSE)?;
+    for (iei, val) in optional_ies(&mut c, &[])? {
+        if iei == 0x2d {
+            return Ok(val.try_into().ok());
+        }
+    }
+    Ok(None)
+}
+
+pub fn authentication_failure(cause: u8, auts: Option<&[u8; 14]>) -> Vec<u8> {
+    let mut out = vec![EPD_5GMM, 0, AUTHENTICATION_FAILURE, cause];
+    if let Some(a) = auts {
+        tlv(&mut out, 0x30, a);
+    }
+    out
+}
+
+/// The cause and AUTS of an Authentication Failure.
+pub fn parse_authentication_failure(b: &[u8]) -> Result<(u8, Option<Vec<u8>>), String> {
+    let mut c = plain_header(b, AUTHENTICATION_FAILURE)?;
+    let cause = c.u8("5GMM cause")?;
+    let mut auts = None;
+    for (iei, val) in optional_ies(&mut c, &[])? {
+        if iei == 0x30 {
+            auts = Some(val.to_vec());
+        }
+    }
+    Ok((cause, auts))
+}
+
+/// Security Mode Command (TS 24.501 8.2.25).
+pub fn security_mode_command(
+    ia: u8,
+    ea: u8,
+    ngksi: u8,
+    replayed_ue_security_capability: &[u8],
+    imeisv_request: bool,
+    rinmr: bool,
+) -> Vec<u8> {
+    let mut out = vec![
+        EPD_5GMM,
+        0,
+        SECURITY_MODE_COMMAND,
+        (ea << 4) | (ia & 0x0F),
+        ngksi & 0x0F,
+        replayed_ue_security_capability.len() as u8,
+    ];
+    out.extend_from_slice(replayed_ue_security_capability);
+    if imeisv_request {
+        out.push(0xE1);
+    }
+    if rinmr {
+        // Additional 5G security information: RINMR (bit 2) set, HDP clear.
+        tlv(&mut out, 0x36, &[0x02]);
+    }
+    out
+}
+
+pub struct SecurityModeCommand {
+    pub ia: u8,
+    pub ea: u8,
+    pub ngksi: u8,
+    pub replayed_ue_security_capability: Vec<u8>,
+    pub imeisv_request: bool,
+    pub rinmr: bool,
+}
+
+pub fn parse_security_mode_command(b: &[u8]) -> Result<SecurityModeCommand, String> {
+    let mut c = plain_header(b, SECURITY_MODE_COMMAND)?;
+    let algs = c.u8("selected NAS security algorithms")?;
+    let ngksi = c.u8("ngKSI")? & 0x0F;
+    let caps = c.lv("replayed UE security capabilities")?.to_vec();
+    let mut smc = SecurityModeCommand {
+        ia: algs & 0x0F,
+        ea: algs >> 4,
+        ngksi,
+        replayed_ue_security_capability: caps,
+        imeisv_request: false,
+        rinmr: false,
+    };
+    for (iei, val) in optional_ies(&mut c, &[(0x57, 1)])? {
+        match iei {
+            x if x >> 4 == 0xE => smc.imeisv_request = x & 0x07 == 1,
+            0x36 => smc.rinmr = val.first().map(|o| o & 0x02 != 0).unwrap_or(false),
+            _ => {}
+        }
+    }
+    Ok(smc)
+}
+
+/// Security Mode Complete (TS 24.501 8.2.26).
+pub fn security_mode_complete(imeisv: Option<&[u8]>, nas_container: Option<&[u8]>) -> Vec<u8> {
+    let mut out = vec![EPD_5GMM, 0, SECURITY_MODE_COMPLETE];
+    if let Some(i) = imeisv {
+        tlve(&mut out, 0x77, i);
+    }
+    if let Some(n) = nas_container {
+        tlve(&mut out, 0x71, n);
+    }
+    out
+}
+
+pub struct SecurityModeComplete {
+    pub imeisv: Option<Value>,
+    pub nas_container: Option<Vec<u8>>,
+}
+
+pub fn parse_security_mode_complete(b: &[u8]) -> Result<SecurityModeComplete, String> {
+    let mut c = plain_header(b, SECURITY_MODE_COMPLETE)?;
+    let mut out = SecurityModeComplete {
+        imeisv: None,
+        nas_container: None,
+    };
+    for (iei, val) in optional_ies(&mut c, &[])? {
+        match iei {
+            0x77 => out.imeisv = Some(decode_mobile_identity(val)),
+            0x71 => out.nas_container = Some(val.to_vec()),
+            _ => {}
+        }
+    }
+    Ok(out)
+}
+
+/// What the AMF puts in a Registration Accept.
+pub struct RegistrationAccept {
+    pub guti: Vec<u8>,
+    /// One partial TAI list of type 00: one PLMN, these TACs.
+    pub tai_plmn: super::codec::Plmn,
+    pub tacs: Vec<u32>,
+    pub allowed_nssai: Vec<Snssai>,
+    /// T3512 as a GPRS timer 3 octet, if any.
+    pub t3512: Option<u8>,
+}
+
+/// TACs in one partial TAI list (TS 24.501 9.11.3.9 allows 16).
+pub const MAX_TAI_LIST: usize = 16;
+
+/// Registration Accept (TS 24.501 8.2.7), 3GPP access.
+pub fn registration_accept(a: &RegistrationAccept) -> Result<Vec<u8>, String> {
+    if a.tacs.is_empty() || a.tacs.len() > MAX_TAI_LIST {
+        return Err(format!("the TAI list must hold 1..{MAX_TAI_LIST} TACs"));
+    }
+    if a.allowed_nssai.is_empty() || a.allowed_nssai.len() > 8 {
+        return Err("the allowed NSSAI must hold 1..8 S-NSSAIs".into());
+    }
+    let mut out = vec![EPD_5GMM, 0, REGISTRATION_ACCEPT, 1, 0x01];
+    tlve(&mut out, 0x77, &a.guti);
+    let mut tai = vec![(a.tacs.len() - 1) as u8];
+    tai.extend_from_slice(&a.tai_plmn.octets());
+    for t in &a.tacs {
+        tai.extend_from_slice(&[(t >> 16) as u8, (t >> 8) as u8, *t as u8]);
+    }
+    tlv(&mut out, 0x54, &tai);
+    tlv(&mut out, 0x15, &nssai_octets(&a.allowed_nssai));
+    if let Some(t) = a.t3512 {
+        tlv(&mut out, 0x5E, &[t]);
+    }
+    Ok(out)
+}
+
+/// What a UE takes from a Registration Accept.
+pub struct ParsedRegistrationAccept {
+    pub result: u8,
+    pub guti: Option<Value>,
+    pub tai_list: Vec<Value>,
+    pub allowed_nssai: Vec<Snssai>,
+}
+
+pub fn parse_registration_accept(b: &[u8]) -> Result<ParsedRegistrationAccept, String> {
+    let mut c = plain_header(b, REGISTRATION_ACCEPT)?;
+    let result = c
+        .lv("5GS registration result")?
+        .first()
+        .copied()
+        .unwrap_or(0)
+        & 0x07;
+    let mut out = ParsedRegistrationAccept {
+        result,
+        guti: None,
+        tai_list: Vec::new(),
+        allowed_nssai: Vec::new(),
+    };
+    for (iei, val) in optional_ies(&mut c, &[])? {
+        match iei {
+            0x77 => out.guti = Some(decode_mobile_identity(val)),
+            0x15 => out.allowed_nssai = parse_nssai(val)?,
+            0x54 => out.tai_list = decode_tai_list(val),
+            _ => {}
+        }
+    }
+    Ok(out)
+}
+
+/// Partial TAI lists of types 00, 01 and 10 (TS 24.501 9.11.3.9). At most
+/// [`MAX_TAI_LIST`] TAIs are reported.
+fn decode_tai_list(b: &[u8]) -> Vec<Value> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() && out.len() < MAX_TAI_LIST {
+        let t = (b[i] >> 5) & 0x03;
+        let n = (b[i] & 0x1F) as usize + 1;
+        i += 1;
+        match t {
+            0 => {
+                let Some(p) = b.get(i..i + 3) else { break };
+                let p = plmn(p);
+                i += 3;
+                for _ in 0..n {
+                    let Some(tac) = b.get(i..i + 3) else {
+                        return out;
+                    };
+                    out.push(
+                        json!({"plmn": p, "tac": u32::from_be_bytes([0, tac[0], tac[1], tac[2]])}),
+                    );
+                    i += 3;
+                    if out.len() >= MAX_TAI_LIST {
+                        return out;
+                    }
+                }
+            }
+            1 => {
+                let Some(p) = b.get(i..i + 6) else { break };
+                let first = u32::from_be_bytes([0, p[3], p[4], p[5]]);
+                for k in 0..n.min(MAX_TAI_LIST - out.len()) {
+                    out.push(json!({"plmn": plmn(&p[0..3]), "tac": first + k as u32}));
+                }
+                i += 6;
+            }
+            2 => {
+                // Type 10: n TAIs, each its own PLMN and TAC (Open5GS sends this one).
+                for _ in 0..n {
+                    let Some(p) = b.get(i..i + 6) else { return out };
+                    out.push(json!({"plmn": plmn(&p[0..3]), "tac": u32::from_be_bytes([0, p[3], p[4], p[5]])}));
+                    i += 6;
+                    if out.len() >= MAX_TAI_LIST {
+                        return out;
+                    }
+                }
+            }
+            _ => break,
+        }
+    }
+    out
+}
+
+pub fn registration_complete() -> Vec<u8> {
+    vec![EPD_5GMM, 0, REGISTRATION_COMPLETE]
+}
+
+pub fn registration_reject(cause: u8) -> Vec<u8> {
+    vec![EPD_5GMM, 0, REGISTRATION_REJECT, cause]
+}
+
+pub fn deregistration_accept_ue_originating() -> Vec<u8> {
+    vec![EPD_5GMM, 0, DEREGISTRATION_ACCEPT_UE_ORIGINATING]
+}
+
+/// `(switch_off, mobile identity)` of a UE-originating Deregistration Request.
+pub fn parse_deregistration_request(b: &[u8]) -> Result<(bool, Vec<u8>), String> {
+    let mut c = plain_header(b, DEREGISTRATION_REQUEST_UE_ORIGINATING)?;
+    let o = c.u8("de-registration type")?;
+    Ok(((o & 0x08) != 0, c.lve("5GS mobile identity")?.to_vec()))
+}
+
+/// A UE-originating Deregistration Request (UE side).
+pub fn deregistration_request(ngksi: u8, switch_off: bool, identity: &[u8]) -> Vec<u8> {
+    let mut out = vec![
+        EPD_5GMM,
+        0,
+        DEREGISTRATION_REQUEST_UE_ORIGINATING,
+        ((ngksi & 0x07) << 4) | ((switch_off as u8) << 3) | 0x01,
+    ];
+    lve(&mut out, identity);
+    out
+}
+
+/// A 5GMM Status (either direction).
+pub fn status(cause: u8) -> Vec<u8> {
+    vec![EPD_5GMM, 0, FIVEGMM_STATUS, cause]
+}
+
+/// DL NAS Transport carrying N1 SM information for a PDU session (TS 24.501 8.2.11).
+pub fn dl_nas_transport_sm(psi: u8, sm: &[u8]) -> Vec<u8> {
+    let mut out = vec![EPD_5GMM, 0, DL_NAS_TRANSPORT, PAYLOAD_N1_SM];
+    lve(&mut out, sm);
+    out.push(0x12);
+    out.push(psi);
+    out
+}
+
+/// What a UL or DL NAS Transport carries for a PDU session (TS 24.501 8.2.10, 8.2.11).
+#[derive(Debug, Clone)]
+pub struct NasTransportSm {
+    pub payload_type: u8,
+    pub payload: Vec<u8>,
+    pub pdu_session_id: Option<u8>,
+    pub request_type: Option<u8>,
+    pub s_nssai: Option<Snssai>,
+    pub dnn: Option<String>,
+}
+
+pub fn parse_ul_nas_transport(b: &[u8]) -> Result<NasTransportSm, String> {
+    parse_nas_transport_sm(b, UL_NAS_TRANSPORT)
+}
+
+pub fn parse_dl_nas_transport(b: &[u8]) -> Result<NasTransportSm, String> {
+    parse_nas_transport_sm(b, DL_NAS_TRANSPORT)
+}
+
+fn parse_nas_transport_sm(b: &[u8], t: u8) -> Result<NasTransportSm, String> {
+    let mut c = plain_header(b, t)?;
+    let payload_type = c.u8("payload container type")? & 0x0F;
+    let payload = c.lve("payload container")?.to_vec();
+    let mut out = NasTransportSm {
+        payload_type,
+        payload,
+        pdu_session_id: None,
+        request_type: None,
+        s_nssai: None,
+        dnn: None,
+    };
+    for (iei, val) in optional_ies(&mut c, &[(0x12, 1), (0x59, 1), (0x58, 1)])? {
+        match iei {
+            0x12 => out.pdu_session_id = val.first().copied(),
+            x if x >> 4 == 0x8 => out.request_type = Some(x & 0x07),
+            0x22 => out.s_nssai = Some(Snssai::parse(val)?),
+            0x25 => out.dnn = crate::server::gtp::codec::decode_apn(val),
+            _ => {}
+        }
+    }
+    Ok(out)
+}
+
+/// UL NAS Transport carrying a 5GSM message (UE side).
+pub fn ul_nas_transport_sm(
+    psi: u8,
+    request_type: u8,
+    s_nssai: Option<&Snssai>,
+    dnn: Option<&str>,
+    sm: &[u8],
+) -> Result<Vec<u8>, String> {
+    let mut out = vec![EPD_5GMM, 0, UL_NAS_TRANSPORT, PAYLOAD_N1_SM];
+    lve(&mut out, sm);
+    out.push(0x12);
+    out.push(psi);
+    out.push(0x80 | (request_type & 0x07));
+    if let Some(s) = s_nssai {
+        tlv(&mut out, 0x22, &s.octets());
+    }
+    if let Some(d) = dnn {
+        let apn = crate::server::gtp::codec::encode_apn(d).map_err(|e| e.to_string())?;
+        if apn.len() > 100 {
+            return Err("the DNN is longer than 100 octets".into());
+        }
+        tlv(&mut out, 0x25, &apn);
+    }
+    Ok(out)
+}
+
+/// UE security capability octets to the NGAP UESecurityCapabilities bitmaps (NR encryption, NR
+/// integrity, E-UTRA encryption, E-UTRA integrity): 16 bits each, whose first bit is algorithm 1.
+pub fn ngap_security_capabilities(nas_caps: &[u8]) -> [u16; 4] {
+    let get = |i: usize| nas_caps.get(i).copied().unwrap_or(0);
+    // NAS: bit 8 of each octet is algorithm 0; NGAP leaves algorithm 0 out and starts at 1.
+    let map = |o: u8| ((o << 1) as u16 & 0x00FE) << 8;
+    [map(get(0)), map(get(1)), map(get(2)), map(get(3))]
+}
+
+// ============================================================================
+// Service Request, Service Accept (TS 24.501 8.2.16, 8.2.17, 5.6.1)
+// ============================================================================
+
+/// Service type values (TS 24.501 9.11.3.50).
+pub fn service_type_name(t: u8) -> &'static str {
+    match t {
+        0 => "signalling",
+        1 => "data",
+        2 => "mobile_terminated_services",
+        3 => "emergency_services",
+        4 => "emergency_services_fallback",
+        5 => "high_priority_access",
+        6 => "elevated_signalling",
+        _ => "unused",
+    }
+}
+
+pub const SERVICE_TYPE_SIGNALLING: u8 = 0;
+pub const SERVICE_TYPE_DATA: u8 = 1;
+pub const SERVICE_TYPE_MOBILE_TERMINATED: u8 = 2;
+
+/// The PDU session ids set in a PDU session status / uplink data status bitmap (TS 24.501
+/// 9.11.3.44, 9.11.3.57): bit `n` of the 16-bit value is PSI `n`; PSI 0 is spare.
+pub fn psi_list(bits: u16) -> Vec<u8> {
+    (1..=15u8).filter(|p| bits & (1 << p) != 0).collect()
+}
+
+/// The bitmap of a set of PDU session ids.
+pub fn psi_bits(psis: impl IntoIterator<Item = u8>) -> u16 {
+    psis.into_iter()
+        .filter(|p| (1..=15).contains(p))
+        .fold(0u16, |acc, p| acc | (1 << p))
+}
+
+/// The two value octets of a PSI bitmap: octet 1 holds PSI 7..0, octet 2 PSI 15..8.
+fn psi_octets(bits: u16) -> [u8; 2] {
+    [(bits & 0xFF) as u8, (bits >> 8) as u8]
+}
+
+fn psi_from_octets(v: &[u8]) -> Option<u16> {
+    // The IE may be longer than two octets (spare octets follow); only the first two count.
+    (v.len() >= 2).then(|| u16::from(v[0]) | (u16::from(v[1]) << 8))
+}
+
+/// A 5G-S-TMSI mobile identity (TS 24.501 9.11.3.4, type 4): AMF Set ID, AMF Pointer, 5G-TMSI.
+pub fn s_tmsi_octets(amf_set_id: u16, amf_pointer: u8, tmsi: u32) -> Vec<u8> {
+    let mut out = vec![0xF4];
+    out.push((amf_set_id >> 2) as u8);
+    out.push((((amf_set_id & 0x03) as u8) << 6) | (amf_pointer & 0x3F));
+    out.extend_from_slice(&tmsi.to_be_bytes());
+    out
+}
+
+/// A Service Request as the AMF reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServiceRequest {
+    pub service_type: u8,
+    pub ngksi: u8,
+    pub amf_set_id: u16,
+    pub amf_pointer: u8,
+    pub tmsi: u32,
+    pub uplink_data_status: Option<u16>,
+    pub pdu_session_status: Option<u16>,
+    pub allowed_pdu_session_status: Option<u16>,
+    /// The NAS message container: the whole Service Request, ciphered with the current context
+    /// at the outer message's COUNT, when the UE had non-cleartext IEs to send (TS 24.501 4.4.6).
+    pub nas_container: Option<Vec<u8>>,
+}
+
+/// Service Request (TS 24.501 8.2.16). The ngKSI takes bits 1-4 of the first octet and the
+/// service type bits 5-8 — the half-octet listed first in the message's table takes the low
+/// bits (TS 24.007 11.2.3.1.4), and UERANSIM and Wireshark agree.
+pub fn parse_service_request(b: &[u8]) -> Result<ServiceRequest, String> {
+    let mut c = plain_header(b, SERVICE_REQUEST)?;
+    let o = c.u8("service type and ngKSI")?;
+    let id = c.lve("5G-S-TMSI")?;
+    if id.len() != 7 || id[0] & 0x07 != 4 {
+        return Err("the mobile identity of a Service Request must be a 5G-S-TMSI".into());
+    }
+    let mut r = ServiceRequest {
+        service_type: o >> 4,
+        ngksi: o & 0x07,
+        amf_set_id: (u16::from(id[1]) << 2) | u16::from(id[2] >> 6),
+        amf_pointer: id[2] & 0x3F,
+        tmsi: u32::from_be_bytes([id[3], id[4], id[5], id[6]]),
+        uplink_data_status: None,
+        pdu_session_status: None,
+        allowed_pdu_session_status: None,
+        nas_container: None,
+    };
+    for (iei, val) in optional_ies(&mut c, &[])? {
+        match iei {
+            0x40 => r.uplink_data_status = psi_from_octets(val),
+            0x50 => r.pdu_session_status = psi_from_octets(val),
+            0x25 => r.allowed_pdu_session_status = psi_from_octets(val),
+            0x71 => r.nas_container = Some(val.to_vec()),
+            _ => {}
+        }
+    }
+    Ok(r)
+}
+
+/// Service Request (UE side), plain: the caller protects it.
+pub fn service_request(r: &ServiceRequest) -> Vec<u8> {
+    let mut out = vec![
+        EPD_5GMM,
+        0,
+        SERVICE_REQUEST,
+        ((r.service_type & 0x0F) << 4) | (r.ngksi & 0x07),
+    ];
+    lve(
+        &mut out,
+        &s_tmsi_octets(r.amf_set_id, r.amf_pointer, r.tmsi),
+    );
+    if let Some(u) = r.uplink_data_status {
+        tlv(&mut out, 0x40, &psi_octets(u));
+    }
+    if let Some(p) = r.pdu_session_status {
+        tlv(&mut out, 0x50, &psi_octets(p));
+    }
+    if let Some(p) = r.allowed_pdu_session_status {
+        tlv(&mut out, 0x25, &psi_octets(p));
+    }
+    if let Some(c) = &r.nas_container {
+        tlve(&mut out, 0x71, c);
+    }
+    out
+}
+
+/// A Service Accept as the UE reads it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ServiceAccept {
+    pub pdu_session_status: Option<u16>,
+    pub reactivation_result: Option<u16>,
+}
+
+/// Service Accept (TS 24.501 8.2.17): the PDU sessions the network holds active (so the UE
+/// releases locally any it does not) and which user planes it reactivated.
+pub fn service_accept(a: &ServiceAccept) -> Vec<u8> {
+    let mut out = vec![EPD_5GMM, 0, SERVICE_ACCEPT];
+    if let Some(p) = a.pdu_session_status {
+        tlv(&mut out, 0x50, &psi_octets(p));
+    }
+    if let Some(p) = a.reactivation_result {
+        tlv(&mut out, 0x26, &psi_octets(p));
+    }
+    out
+}
+
+pub fn parse_service_accept(b: &[u8]) -> Result<ServiceAccept, String> {
+    let mut c = plain_header(b, SERVICE_ACCEPT)?;
+    let mut a = ServiceAccept::default();
+    for (iei, val) in optional_ies(&mut c, &[])? {
+        match iei {
+            0x50 => a.pdu_session_status = psi_from_octets(val),
+            0x26 => a.reactivation_result = psi_from_octets(val),
+            _ => {}
+        }
+    }
+    Ok(a)
+}
+
+/// Service Reject with a 5GMM cause.
+pub fn service_reject(cause: u8) -> Vec<u8> {
+    vec![EPD_5GMM, 0, SERVICE_REJECT, cause]
+}
+
+/// 5GMM cause #9, UE identity cannot be derived by the network: what an AMF answers a Service
+/// Request from a 5G-S-TMSI it holds no context for.
+pub const CAUSE_UE_IDENTITY_CANNOT_BE_DERIVED: u8 = 9;

@@ -1021,7 +1021,7 @@ some configurations need is expressed with `startup_dependencies(startup_params)
 9. **`tests/server/mod.rs` — add `pub mod <protocol>;`** (see footgun below)
 
 Client protocols follow the same shape against `client_registry.rs`, `src/client/mod.rs`,
-`tests/client/mod.rs`, and the `Client` trait. Consult `CLIENT_PROTOCOL_FEASIBILITY.md` first.
+`tests/client/mod.rs`, and the `Client` trait. Consult `docs/planning/CLIENT_PROTOCOL_FEASIBILITY.md` first.
 Clients are less finished than servers, but the blanket claim that their `JoinHandle` is never
 stored is **stale** — `register_client_task` now has ~80 of 85 adopters (`bgp`, `ssh_agent` and
 others among them). Check the specific client rather than assuming. Where it does bite, the
@@ -2358,16 +2358,11 @@ Read before assuming a subsystem is sound:
   registered connection task that **aborting does not reach** — that gap is real and stated
   rather than quietly closed.
 - `AppState` is one global `RwLock` over everything — a throughput ceiling, not a deadlock.
-- **The root markdown clutter is gone** — the ~50 one-off session/status reports this entry used
-  to warn about were deleted. Ten files remain and all are durable: `README.md`, `AGENTS.md`,
-  `ARCHITECTURE.md`, `METADATA_EXAMPLES.md`, `CLIENT_PROTOCOL_FEASIBILITY.md`,
-  `LICENSE_ANALYSIS.md`, `SYSTEM_DEPENDENCIES_macOS.md`, `TERMUX_INSTALL.md`,
-  `PROTOCOL_MIGRATION_GUIDE.md`, `IMPROVEMENTS.md`, `PROTOCOL_ROADMAP.md` (Programmes 1 and 2,
-  with the batch table and the rubric) and `PROTOCOL_QUALITY.md` (the plan after Programme 2 —
-  a checkbox tracker of what is left, with measured starting points). **Do not add new
-  status-report files** — that is what let the directory reach 63 in the first place. A tracker
-  with checkboxes that outlives the session is not a status report; a narrative of what one
-  session did is.
+- Keep the repository root focused on `README.md`, `AGENTS.md`, the license and build
+  entry points. User documentation is indexed in `docs/README.md`: installation guides in
+  `docs/guides/`, living backlogs and protocol plans in `docs/planning/`, and superseded
+  designs/reports in `docs/archive/`. Evaluation reports live with their data in
+  `eval-results/`. Keep historical evidence; do not add new session/status reports at root.
 
 ## Git
 

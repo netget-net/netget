@@ -20,7 +20,9 @@ All framing is hand-rolled in `frame.rs`, shared with the client:
 
 ## GRE
 
-`frame::decap` refuses, before anything reaches the model:
+`frame::decap` refuses, before anything reaches the model (the header checks are the shared
+GRE codec, `src/utils/gre.rs`, which the `gre` protocol uses too; the protocol type check is
+this protocol's own):
 
 - a version other than 0 (1 is PPTP's enhanced GRE);
 - RFC 1701's routing, strict-source-route or recursion bits (RFC 2784's "bits 1-5", less K
@@ -68,10 +70,11 @@ silence, with `decision=fail_closed_llm_error` in the log.
 - TCP, IPv6, IP fragmentation, VLAN tags.
 - MAC learning, and flooding to other VTEPs: one answering endpoint, not a switch.
 - Geneve options (skipped on input, none sent).
-- **GRE directly on IP protocol 47.** It needs a raw socket, and privilege is declared per
-  protocol (`PrivilegeRequirement`), so this protocol would have to claim raw sockets for its
-  unprivileged VXLAN, Geneve and GRE-in-UDP modes too. GRE-in-UDP reaches the same Linux
-  gretap driver unprivileged.
+- **GRE directly on IP protocol 47** is the separate `gre` protocol (`src/server/gre/`,
+  `src/client/gre/`). It needs a raw socket, and privilege is declared per protocol
+  (`PrivilegeRequirement`), so building it here would have made this protocol claim raw
+  sockets for its unprivileged VXLAN, Geneve and GRE-in-UDP modes too. Both share the GRE
+  header codec (`src/utils/gre.rs`) and this directory's `frame.rs`.
 - GRE-in-UDP over IPv6, and RFC 8086's congestion-control and checksum-zero rules: what is
   sent is plain UDP with a checksum.
 - Interop with a kernel Geneve peer is unverified here: the test kernel has no geneve module.

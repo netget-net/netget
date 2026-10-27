@@ -1,0 +1,1 @@
+{"entries":[{"name":"docs","kind":"dir","entries":[{"name":"a.md","kind":"file","text":"# A\n"},{"name":"deep","kind":"dir","entries":[{"name":"b","kind":"file","hex":"00ff"}]}]}]}

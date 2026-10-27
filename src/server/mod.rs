@@ -6,6 +6,7 @@ pub mod accept_bounded;
 pub mod command_batch;
 pub mod connection;
 pub mod peer_support;
+pub mod read_queue;
 // server_trait requires async-trait, so only compile when features that provide it are enabled
 pub mod server_trait;
 pub mod socket_helpers;
@@ -35,6 +36,11 @@ pub mod tls_cert_manager;
 pub mod described_disk;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod scsi_common;
+// A file tree the model describes (directories, files, symlinks, content as described_disk
+// extents) with an in-memory overlay for the changes it accepts, served by the FUSE server.
+// Compiled on every Unix so its bounds are tested and fuzzed off Linux too.
+#[cfg(unix)]
+pub mod described_tree;
 
 pub mod tcp;
 pub use tcp::actions::TcpProtocol;
@@ -565,6 +571,14 @@ pub mod mqtt;
 pub mod mqtt_sn;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod nbd;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod nvme_tcp;
+// FUSE: Linux's /dev/fuse through fusermount3; there is no macOS or Windows FUSE NetGet links.
+#[cfg(target_os = "linux")]
+pub mod fuse;
+// HDFS NameNode and DataNode: the namespace is described_tree, which is Unix-only.
+#[cfg(unix)]
+pub mod hdfs;
 #[cfg(not(target_arch = "wasm32"))]
 pub use mqtt::actions::MqttProtocol;
 #[cfg(not(target_arch = "wasm32"))]
@@ -1151,6 +1165,7 @@ pub mod libp2p;
 pub mod lmtp;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod lorawan;
+// Zigbee: an EZSP network co-processor over ASH, reached over TCP.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod lpd;
 #[cfg(not(target_arch = "wasm32"))]
@@ -1203,6 +1218,9 @@ pub mod sunrpc;
 pub mod tr069;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod vxlan;
+// A raw IP protocol-47 socket (root, or CAP_NET_RAW): Unix only.
+#[cfg(unix)]
+pub mod gre;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod webtransport;
 #[cfg(not(target_arch = "wasm32"))]
@@ -1211,6 +1229,8 @@ pub mod wsdiscovery;
 pub mod zenoh;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod zeromq;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod zigbee;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod zipkin;
 

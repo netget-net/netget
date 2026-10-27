@@ -101,11 +101,20 @@ an action error not a panic — the `send_tcp_data` lesson.
   `model_answer` / `model_close` (the model acted), `model_silent` (the model answered with no
   actions — a real answer for a filter, which emits nothing), and
   `fail_closed_overloaded` / `fail_closed_unavailable` (the backend failed).
-- Processing is serial (a pipe is a serial stream): one model call at a time. A reader task
-  (`spawn_server_task`) drains stdin into a bounded channel (`READ_QUEUE_CHUNKS`, 32 reads of
-  at most 8 KiB) while the dispatcher (`register_server_task`) asks the model; a full channel
-  stops the reader and the pipe holds the upstream writer back. A `StdioClaimGuard` in the
-  dispatcher releases the process claim on stop/abort.
+- Processing is serial (a pipe is a serial stream): one model call at a time. A reader drains
+  stdin into a bounded channel (`READ_QUEUE_CHUNKS`, 32 reads of at most 8 KiB) while the
+  dispatcher (`register_server_task`) asks the model; a full channel stops the reader and the
+  pipe holds the upstream writer back. A `StdioClaimGuard` in the dispatcher releases the
+  process claim on stop/abort.
+- **The reader is an OS thread, one per process (`STDIN_FEED`), never a tokio task.** A stdin
+  read blocks and cannot be cancelled; `tokio::io::stdin()` does it on the blocking pool, and
+  dropping a runtime waits for every blocking-pool thread. So a stdio server stopped while its
+  stdin was open and quiet left the process unable to exit — `protocol_startup_smoke_test`
+  finished its sweep and then hung for good whenever its stdin was an open pipe.
+  `a_stopped_stdio_server_does_not_keep_the_process_alive` there runs that case in a child
+  process. The thread is started by the first stdio server and kept, since a second reader
+  would race the first for every chunk; each server holds the receiver while it runs and
+  leaves it, with anything already read, to the next.
 - **Batching** (`BatchingMode::On`): with it off, one read per call; with it on, every read
   waiting (up to `MAX_BATCH_EVENTS`) goes to `call_llm_batch` as one `stdio_input_received`
   each, the newest the trigger. An EOF read in the same sweep is answered after the batch as

@@ -1,0 +1,1 @@
+{"entries":[{"name":"README.txt","kind":"file","text":"hello\n","mode":420,"mtime":1700000000},{"name":"src","kind":"dir"},{"name":"latest","kind":"symlink","target":"README.txt"}]}

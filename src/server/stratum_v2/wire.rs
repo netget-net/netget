@@ -20,6 +20,14 @@ pub const IO_TIMEOUT: Duration = Duration::from_secs(30);
 pub const PROTOCOL_VERSION: u16 = 2;
 /// `SetupConnection.protocol` for the Mining Protocol.
 pub const MINING_PROTOCOL: u8 = 0;
+/// `SetupConnection.protocol` for the Job Declaration Protocol (sv2-spec §6).
+pub const JOB_DECLARATION_PROTOCOL: u8 = 1;
+/// `SetupConnection.protocol` for the Template Distribution Protocol (sv2-spec §7).
+pub const TEMPLATE_DISTRIBUTION_PROTOCOL: u8 = 2;
+/// The one SetupConnection flag the Job Declaration Protocol defines: the client may declare
+/// full templates (DECLARE_TX_DATA). SRI's jd_client v0.8.0 sets it in FULLTEMPLATE mode, and SRI's
+/// JDS refuses a client without it (`missing-declare-tx-data-flag`).
+pub const DECLARE_TX_DATA: u32 = 1 << 0;
 
 /// SetupConnection flags a mining client may send (sv2-spec §5.3.1).
 pub const REQUIRES_STANDARD_JOBS: u32 = 1 << 0;
@@ -62,7 +70,26 @@ pub mod msg {
     pub const SET_NEW_PREV_HASH: u8 = 0x20;
     pub const SET_TARGET: u8 = 0x21;
     pub const SET_CUSTOM_MINING_JOB: u8 = 0x22;
+    pub const SET_CUSTOM_MINING_JOB_SUCCESS: u8 = 0x23;
+    pub const SET_CUSTOM_MINING_JOB_ERROR: u8 = 0x24;
     pub const SET_GROUP_CHANNEL: u8 = 0x25;
+    // Job Declaration Protocol (sv2-spec §6; job_declaration_sv2 10.0, sv2-apps v0.8.0).
+    pub const ALLOCATE_MINING_JOB_TOKEN: u8 = 0x50;
+    pub const ALLOCATE_MINING_JOB_TOKEN_SUCCESS: u8 = 0x51;
+    pub const PROVIDE_MISSING_TRANSACTIONS: u8 = 0x55;
+    pub const PROVIDE_MISSING_TRANSACTIONS_SUCCESS: u8 = 0x56;
+    pub const DECLARE_MINING_JOB: u8 = 0x57;
+    pub const DECLARE_MINING_JOB_SUCCESS: u8 = 0x58;
+    pub const DECLARE_MINING_JOB_ERROR: u8 = 0x59;
+    pub const PUSH_SOLUTION: u8 = 0x60;
+    // Template Distribution Protocol (sv2-spec §7; template_distribution_sv2 7.0).
+    pub const COINBASE_OUTPUT_CONSTRAINTS: u8 = 0x70;
+    pub const NEW_TEMPLATE: u8 = 0x71;
+    pub const TEMPLATE_SET_NEW_PREV_HASH: u8 = 0x72;
+    pub const REQUEST_TRANSACTION_DATA: u8 = 0x73;
+    pub const REQUEST_TRANSACTION_DATA_SUCCESS: u8 = 0x74;
+    pub const REQUEST_TRANSACTION_DATA_ERROR: u8 = 0x75;
+    pub const SUBMIT_SOLUTION: u8 = 0x76;
 }
 
 /// Whether a core message carries the channel_msg bit (sv2-spec §8).
@@ -127,6 +154,12 @@ impl<R: AsyncRead + Unpin> FrameReader<R> {
             cipher,
             max_payload,
         }
+    }
+
+    /// Change the largest payload this side accepts, once the session has said which protocol
+    /// it speaks (one listener can serve more than one).
+    pub fn set_max_payload(&mut self, max_payload: usize) {
+        self.max_payload = max_payload;
     }
 
     /// The next frame; None at a clean end of stream between frames. A header that does not
@@ -285,6 +318,38 @@ impl<'a> Reader<'a> {
         let n = self.u16()? as usize;
         Ok(self.take(n)?.to_vec())
     }
+    pub fn b0_16m(&mut self) -> Result<Vec<u8>> {
+        let n = self.u24()? as usize;
+        Ok(self.take(n)?.to_vec())
+    }
+    /// SEQ0_64K: the declared count is checked against what the payload can still hold before
+    /// anything is allocated for it, so a count of 65535 in a short frame costs nothing.
+    fn seq0_64k<T>(
+        &mut self,
+        min_element: usize,
+        mut item: impl FnMut(&mut Self) -> Result<T>,
+    ) -> Result<Vec<T>> {
+        let n = self.u16()? as usize;
+        ensure!(
+            n.saturating_mul(min_element) <= self.buf.len() - self.pos,
+            "SEQ0_64K declares {n} elements, more than the {} bytes left can hold",
+            self.buf.len() - self.pos
+        );
+        let mut out = Vec::with_capacity(n);
+        for _ in 0..n {
+            out.push(item(self)?);
+        }
+        Ok(out)
+    }
+    pub fn seq0_64k_u256(&mut self) -> Result<Vec<[u8; 32]>> {
+        self.seq0_64k(32, |r| r.u256())
+    }
+    pub fn seq0_64k_u16(&mut self) -> Result<Vec<u16>> {
+        self.seq0_64k(2, |r| r.u16())
+    }
+    pub fn seq0_64k_b0_16m(&mut self) -> Result<Vec<Vec<u8>>> {
+        self.seq0_64k(3, |r| r.b0_16m())
+    }
     pub fn option_u32(&mut self) -> Result<Option<u32>> {
         match self.u8()? {
             0 => Ok(None),
@@ -297,8 +362,7 @@ impl<'a> Reader<'a> {
         (0..n).map(|_| self.u256()).collect()
     }
     pub fn seq0_64k_u32(&mut self) -> Result<Vec<u32>> {
-        let n = self.u16()? as usize;
-        (0..n).map(|_| self.u32()).collect()
+        self.seq0_64k(4, |r| r.u32())
     }
     /// The whole payload must have been read: trailing bytes are a malformed message.
     pub fn finish(&self) -> Result<()> {
@@ -353,6 +417,38 @@ impl Writer {
         let v = &v[..v.len().min(65535)];
         self.u16(v.len() as u16);
         self.0.extend_from_slice(v);
+        self
+    }
+    /// B0_16M; callers keep the length under 2^24.
+    pub fn b0_16m(&mut self, v: &[u8]) -> &mut Self {
+        let v = &v[..v.len().min((1 << 24) - 1)];
+        self.0
+            .extend_from_slice(&(v.len() as u32).to_le_bytes()[..3]);
+        self.0.extend_from_slice(v);
+        self
+    }
+    pub fn seq0_64k_u256(&mut self, v: &[[u8; 32]]) -> &mut Self {
+        let v = &v[..v.len().min(65535)];
+        self.u16(v.len() as u16);
+        for h in v {
+            self.u256(h);
+        }
+        self
+    }
+    pub fn seq0_64k_u16(&mut self, v: &[u16]) -> &mut Self {
+        let v = &v[..v.len().min(65535)];
+        self.u16(v.len() as u16);
+        for n in v {
+            self.u16(*n);
+        }
+        self
+    }
+    pub fn seq0_64k_b0_16m(&mut self, v: &[Vec<u8>]) -> &mut Self {
+        let v = &v[..v.len().min(65535)];
+        self.u16(v.len() as u16);
+        for b in v {
+            self.b0_16m(b);
+        }
         self
     }
     pub fn option_u32(&mut self, v: Option<u32>) -> &mut Self {
@@ -515,9 +611,131 @@ pub enum Message {
         channel_id: u32,
         maximum_target: [u8; 32],
     },
+    /// Work selection (sv2-spec §5.3.18, mining_sv2 12.0): a job the downstream chose and
+    /// declared to a Job Declarator Server, redeemed on an extended channel with the token that
+    /// server issued.
+    SetCustomMiningJob {
+        channel_id: u32,
+        request_id: u32,
+        token: Vec<u8>,
+        version: u32,
+        prev_hash: [u8; 32],
+        min_ntime: u32,
+        nbits: u32,
+        coinbase_tx_version: u32,
+        /// The scriptSig up to the extranonce, including the push opcode that precedes it.
+        coinbase_prefix: Vec<u8>,
+        coinbase_tx_input_n_sequence: u32,
+        /// The output vector, serialised with its count.
+        coinbase_tx_outputs: Vec<u8>,
+        coinbase_tx_locktime: u32,
+        merkle_path: Vec<[u8; 32]>,
+    },
+    SetCustomMiningJobSuccess {
+        channel_id: u32,
+        request_id: u32,
+        job_id: u32,
+    },
+    SetCustomMiningJobError {
+        channel_id: u32,
+        request_id: u32,
+        error_code: Vec<u8>,
+    },
     SetGroupChannel {
         group_channel_id: u32,
         channel_ids: Vec<u32>,
+    },
+    // Job Declaration Protocol.
+    AllocateMiningJobToken {
+        user_identifier: Vec<u8>,
+        request_id: u32,
+    },
+    AllocateMiningJobTokenSuccess {
+        request_id: u32,
+        mining_job_token: Vec<u8>,
+        /// A consensus-serialised output vector (CompactSize count, then the outputs).
+        coinbase_outputs: Vec<u8>,
+    },
+    ProvideMissingTransactions {
+        request_id: u32,
+        unknown_tx_position_list: Vec<u16>,
+    },
+    ProvideMissingTransactionsSuccess {
+        request_id: u32,
+        transaction_list: Vec<Vec<u8>>,
+    },
+    DeclareMiningJob {
+        request_id: u32,
+        mining_job_token: Vec<u8>,
+        version: u32,
+        coinbase_tx_prefix: Vec<u8>,
+        coinbase_tx_suffix: Vec<u8>,
+        wtxid_list: Vec<[u8; 32]>,
+        excess_data: Vec<u8>,
+    },
+    DeclareMiningJobSuccess {
+        request_id: u32,
+        new_mining_job_token: Vec<u8>,
+    },
+    DeclareMiningJobError {
+        request_id: u32,
+        error_code: Vec<u8>,
+        error_details: Vec<u8>,
+    },
+    PushSolution {
+        extranonce: Vec<u8>,
+        prev_hash: [u8; 32],
+        nonce: u32,
+        ntime: u32,
+        nbits: u32,
+        version: u32,
+    },
+    // Template Distribution Protocol.
+    CoinbaseOutputConstraints {
+        max_additional_size: u32,
+        max_additional_sigops: u16,
+    },
+    NewTemplate {
+        template_id: u64,
+        future_template: bool,
+        version: u32,
+        coinbase_tx_version: u32,
+        coinbase_prefix: Vec<u8>,
+        coinbase_tx_input_sequence: u32,
+        coinbase_tx_value_remaining: u64,
+        coinbase_tx_outputs_count: u32,
+        /// The outputs concatenated, without a count (the count is the field above).
+        coinbase_tx_outputs: Vec<u8>,
+        coinbase_tx_locktime: u32,
+        merkle_path: Vec<[u8; 32]>,
+    },
+    /// The Template Distribution Protocol's SetNewPrevHash (0x72), which unlike the Mining
+    /// Protocol's names a template and carries the target.
+    TemplateSetNewPrevHash {
+        template_id: u64,
+        prev_hash: [u8; 32],
+        header_timestamp: u32,
+        nbits: u32,
+        target: [u8; 32],
+    },
+    RequestTransactionData {
+        template_id: u64,
+    },
+    RequestTransactionDataSuccess {
+        template_id: u64,
+        excess_data: Vec<u8>,
+        transaction_list: Vec<Vec<u8>>,
+    },
+    RequestTransactionDataError {
+        template_id: u64,
+        error_code: Vec<u8>,
+    },
+    SubmitSolution {
+        template_id: u64,
+        version: u32,
+        header_timestamp: u32,
+        header_nonce: u32,
+        coinbase_tx: Vec<u8>,
     },
 }
 
@@ -547,7 +765,25 @@ impl Message {
             NewExtendedMiningJob { .. } => msg::NEW_EXTENDED_MINING_JOB,
             SetNewPrevHash { .. } => msg::SET_NEW_PREV_HASH,
             SetTarget { .. } => msg::SET_TARGET,
+            SetCustomMiningJob { .. } => msg::SET_CUSTOM_MINING_JOB,
+            SetCustomMiningJobSuccess { .. } => msg::SET_CUSTOM_MINING_JOB_SUCCESS,
+            SetCustomMiningJobError { .. } => msg::SET_CUSTOM_MINING_JOB_ERROR,
             SetGroupChannel { .. } => msg::SET_GROUP_CHANNEL,
+            AllocateMiningJobToken { .. } => msg::ALLOCATE_MINING_JOB_TOKEN,
+            AllocateMiningJobTokenSuccess { .. } => msg::ALLOCATE_MINING_JOB_TOKEN_SUCCESS,
+            ProvideMissingTransactions { .. } => msg::PROVIDE_MISSING_TRANSACTIONS,
+            ProvideMissingTransactionsSuccess { .. } => msg::PROVIDE_MISSING_TRANSACTIONS_SUCCESS,
+            DeclareMiningJob { .. } => msg::DECLARE_MINING_JOB,
+            DeclareMiningJobSuccess { .. } => msg::DECLARE_MINING_JOB_SUCCESS,
+            DeclareMiningJobError { .. } => msg::DECLARE_MINING_JOB_ERROR,
+            PushSolution { .. } => msg::PUSH_SOLUTION,
+            CoinbaseOutputConstraints { .. } => msg::COINBASE_OUTPUT_CONSTRAINTS,
+            NewTemplate { .. } => msg::NEW_TEMPLATE,
+            TemplateSetNewPrevHash { .. } => msg::TEMPLATE_SET_NEW_PREV_HASH,
+            RequestTransactionData { .. } => msg::REQUEST_TRANSACTION_DATA,
+            RequestTransactionDataSuccess { .. } => msg::REQUEST_TRANSACTION_DATA_SUCCESS,
+            RequestTransactionDataError { .. } => msg::REQUEST_TRANSACTION_DATA_ERROR,
+            SubmitSolution { .. } => msg::SUBMIT_SOLUTION,
         }
     }
 
@@ -784,11 +1020,203 @@ impl Message {
             } => {
                 w.u32(*channel_id).u256(maximum_target);
             }
+            SetCustomMiningJob {
+                channel_id,
+                request_id,
+                token,
+                version,
+                prev_hash,
+                min_ntime,
+                nbits,
+                coinbase_tx_version,
+                coinbase_prefix,
+                coinbase_tx_input_n_sequence,
+                coinbase_tx_outputs,
+                coinbase_tx_locktime,
+                merkle_path,
+            } => {
+                w.u32(*channel_id)
+                    .u32(*request_id)
+                    .short_bytes(token)
+                    .u32(*version)
+                    .u256(prev_hash)
+                    .u32(*min_ntime)
+                    .u32(*nbits)
+                    .u32(*coinbase_tx_version)
+                    .short_bytes(coinbase_prefix)
+                    .u32(*coinbase_tx_input_n_sequence)
+                    .b0_64k(coinbase_tx_outputs)
+                    .u32(*coinbase_tx_locktime)
+                    .seq0_255_u256(merkle_path);
+            }
+            SetCustomMiningJobSuccess {
+                channel_id,
+                request_id,
+                job_id,
+            } => {
+                w.u32(*channel_id).u32(*request_id).u32(*job_id);
+            }
+            SetCustomMiningJobError {
+                channel_id,
+                request_id,
+                error_code,
+            } => {
+                w.u32(*channel_id).u32(*request_id).short_bytes(error_code);
+            }
             SetGroupChannel {
                 group_channel_id,
                 channel_ids,
             } => {
                 w.u32(*group_channel_id).seq0_64k_u32(channel_ids);
+            }
+            AllocateMiningJobToken {
+                user_identifier,
+                request_id,
+            } => {
+                w.short_bytes(user_identifier).u32(*request_id);
+            }
+            AllocateMiningJobTokenSuccess {
+                request_id,
+                mining_job_token,
+                coinbase_outputs,
+            } => {
+                w.u32(*request_id)
+                    .short_bytes(mining_job_token)
+                    .b0_64k(coinbase_outputs);
+            }
+            ProvideMissingTransactions {
+                request_id,
+                unknown_tx_position_list,
+            } => {
+                w.u32(*request_id).seq0_64k_u16(unknown_tx_position_list);
+            }
+            ProvideMissingTransactionsSuccess {
+                request_id,
+                transaction_list,
+            } => {
+                w.u32(*request_id).seq0_64k_b0_16m(transaction_list);
+            }
+            DeclareMiningJob {
+                request_id,
+                mining_job_token,
+                version,
+                coinbase_tx_prefix,
+                coinbase_tx_suffix,
+                wtxid_list,
+                excess_data,
+            } => {
+                w.u32(*request_id)
+                    .short_bytes(mining_job_token)
+                    .u32(*version)
+                    .b0_64k(coinbase_tx_prefix)
+                    .b0_64k(coinbase_tx_suffix)
+                    .seq0_64k_u256(wtxid_list)
+                    .b0_64k(excess_data);
+            }
+            DeclareMiningJobSuccess {
+                request_id,
+                new_mining_job_token,
+            } => {
+                w.u32(*request_id).short_bytes(new_mining_job_token);
+            }
+            DeclareMiningJobError {
+                request_id,
+                error_code,
+                error_details,
+            } => {
+                w.u32(*request_id)
+                    .short_bytes(error_code)
+                    .b0_64k(error_details);
+            }
+            PushSolution {
+                extranonce,
+                prev_hash,
+                nonce,
+                ntime,
+                nbits,
+                version,
+            } => {
+                w.short_bytes(extranonce)
+                    .u256(prev_hash)
+                    .u32(*nonce)
+                    .u32(*ntime)
+                    .u32(*nbits)
+                    .u32(*version);
+            }
+            CoinbaseOutputConstraints {
+                max_additional_size,
+                max_additional_sigops,
+            } => {
+                w.u32(*max_additional_size).u16(*max_additional_sigops);
+            }
+            NewTemplate {
+                template_id,
+                future_template,
+                version,
+                coinbase_tx_version,
+                coinbase_prefix,
+                coinbase_tx_input_sequence,
+                coinbase_tx_value_remaining,
+                coinbase_tx_outputs_count,
+                coinbase_tx_outputs,
+                coinbase_tx_locktime,
+                merkle_path,
+            } => {
+                w.u64(*template_id)
+                    .bool(*future_template)
+                    .u32(*version)
+                    .u32(*coinbase_tx_version)
+                    .short_bytes(coinbase_prefix)
+                    .u32(*coinbase_tx_input_sequence)
+                    .u64(*coinbase_tx_value_remaining)
+                    .u32(*coinbase_tx_outputs_count)
+                    .b0_64k(coinbase_tx_outputs)
+                    .u32(*coinbase_tx_locktime)
+                    .seq0_255_u256(merkle_path);
+            }
+            TemplateSetNewPrevHash {
+                template_id,
+                prev_hash,
+                header_timestamp,
+                nbits,
+                target,
+            } => {
+                w.u64(*template_id)
+                    .u256(prev_hash)
+                    .u32(*header_timestamp)
+                    .u32(*nbits)
+                    .u256(target);
+            }
+            RequestTransactionData { template_id } => {
+                w.u64(*template_id);
+            }
+            RequestTransactionDataSuccess {
+                template_id,
+                excess_data,
+                transaction_list,
+            } => {
+                w.u64(*template_id)
+                    .b0_64k(excess_data)
+                    .seq0_64k_b0_16m(transaction_list);
+            }
+            RequestTransactionDataError {
+                template_id,
+                error_code,
+            } => {
+                w.u64(*template_id).short_bytes(error_code);
+            }
+            SubmitSolution {
+                template_id,
+                version,
+                header_timestamp,
+                header_nonce,
+                coinbase_tx,
+            } => {
+                w.u64(*template_id)
+                    .u32(*version)
+                    .u32(*header_timestamp)
+                    .u32(*header_nonce)
+                    .b0_64k(coinbase_tx);
             }
         }
         let msg_type = self.msg_type();
@@ -946,9 +1374,120 @@ impl Message {
                 channel_id: r.u32()?,
                 maximum_target: r.u256()?,
             },
+            msg::SET_CUSTOM_MINING_JOB => SetCustomMiningJob {
+                channel_id: r.u32()?,
+                request_id: r.u32()?,
+                token: r.b0_255()?,
+                version: r.u32()?,
+                prev_hash: r.u256()?,
+                min_ntime: r.u32()?,
+                nbits: r.u32()?,
+                coinbase_tx_version: r.u32()?,
+                coinbase_prefix: r.b0_255()?,
+                coinbase_tx_input_n_sequence: r.u32()?,
+                coinbase_tx_outputs: r.b0_64k()?,
+                coinbase_tx_locktime: r.u32()?,
+                merkle_path: r.seq0_255_u256()?,
+            },
+            msg::SET_CUSTOM_MINING_JOB_SUCCESS => SetCustomMiningJobSuccess {
+                channel_id: r.u32()?,
+                request_id: r.u32()?,
+                job_id: r.u32()?,
+            },
+            msg::SET_CUSTOM_MINING_JOB_ERROR => SetCustomMiningJobError {
+                channel_id: r.u32()?,
+                request_id: r.u32()?,
+                error_code: r.str0_255()?,
+            },
             msg::SET_GROUP_CHANNEL => SetGroupChannel {
                 group_channel_id: r.u32()?,
                 channel_ids: r.seq0_64k_u32()?,
+            },
+            msg::ALLOCATE_MINING_JOB_TOKEN => AllocateMiningJobToken {
+                user_identifier: r.str0_255()?,
+                request_id: r.u32()?,
+            },
+            msg::ALLOCATE_MINING_JOB_TOKEN_SUCCESS => AllocateMiningJobTokenSuccess {
+                request_id: r.u32()?,
+                mining_job_token: r.b0_255()?,
+                coinbase_outputs: r.b0_64k()?,
+            },
+            msg::PROVIDE_MISSING_TRANSACTIONS => ProvideMissingTransactions {
+                request_id: r.u32()?,
+                unknown_tx_position_list: r.seq0_64k_u16()?,
+            },
+            msg::PROVIDE_MISSING_TRANSACTIONS_SUCCESS => ProvideMissingTransactionsSuccess {
+                request_id: r.u32()?,
+                transaction_list: r.seq0_64k_b0_16m()?,
+            },
+            msg::DECLARE_MINING_JOB => DeclareMiningJob {
+                request_id: r.u32()?,
+                mining_job_token: r.b0_255()?,
+                version: r.u32()?,
+                coinbase_tx_prefix: r.b0_64k()?,
+                coinbase_tx_suffix: r.b0_64k()?,
+                wtxid_list: r.seq0_64k_u256()?,
+                excess_data: r.b0_64k()?,
+            },
+            msg::DECLARE_MINING_JOB_SUCCESS => DeclareMiningJobSuccess {
+                request_id: r.u32()?,
+                new_mining_job_token: r.b0_255()?,
+            },
+            msg::DECLARE_MINING_JOB_ERROR => DeclareMiningJobError {
+                request_id: r.u32()?,
+                error_code: r.str0_255()?,
+                error_details: r.b0_64k()?,
+            },
+            msg::PUSH_SOLUTION => PushSolution {
+                extranonce: r.b0_32()?,
+                prev_hash: r.u256()?,
+                nonce: r.u32()?,
+                ntime: r.u32()?,
+                nbits: r.u32()?,
+                version: r.u32()?,
+            },
+            msg::COINBASE_OUTPUT_CONSTRAINTS => CoinbaseOutputConstraints {
+                max_additional_size: r.u32()?,
+                max_additional_sigops: r.u16()?,
+            },
+            msg::NEW_TEMPLATE => NewTemplate {
+                template_id: r.u64()?,
+                future_template: r.bool()?,
+                version: r.u32()?,
+                coinbase_tx_version: r.u32()?,
+                coinbase_prefix: r.b0_255()?,
+                coinbase_tx_input_sequence: r.u32()?,
+                coinbase_tx_value_remaining: r.u64()?,
+                coinbase_tx_outputs_count: r.u32()?,
+                coinbase_tx_outputs: r.b0_64k()?,
+                coinbase_tx_locktime: r.u32()?,
+                merkle_path: r.seq0_255_u256()?,
+            },
+            msg::TEMPLATE_SET_NEW_PREV_HASH => TemplateSetNewPrevHash {
+                template_id: r.u64()?,
+                prev_hash: r.u256()?,
+                header_timestamp: r.u32()?,
+                nbits: r.u32()?,
+                target: r.u256()?,
+            },
+            msg::REQUEST_TRANSACTION_DATA => RequestTransactionData {
+                template_id: r.u64()?,
+            },
+            msg::REQUEST_TRANSACTION_DATA_SUCCESS => RequestTransactionDataSuccess {
+                template_id: r.u64()?,
+                excess_data: r.b0_64k()?,
+                transaction_list: r.seq0_64k_b0_16m()?,
+            },
+            msg::REQUEST_TRANSACTION_DATA_ERROR => RequestTransactionDataError {
+                template_id: r.u64()?,
+                error_code: r.str0_255()?,
+            },
+            msg::SUBMIT_SOLUTION => SubmitSolution {
+                template_id: r.u64()?,
+                version: r.u32()?,
+                header_timestamp: r.u32()?,
+                header_nonce: r.u32()?,
+                coinbase_tx: r.b0_64k()?,
             },
             other => bail!(
                 "message type 0x{other:02x} ({}) is not handled",
@@ -986,9 +1525,24 @@ pub fn name_of(msg_type: u8) -> &'static str {
         msg::SET_NEW_PREV_HASH => "SetNewPrevHash",
         msg::SET_TARGET => "SetTarget",
         msg::SET_CUSTOM_MINING_JOB => "SetCustomMiningJob",
-        0x23 => "SetCustomMiningJob.Success",
-        0x24 => "SetCustomMiningJob.Error",
+        msg::SET_CUSTOM_MINING_JOB_SUCCESS => "SetCustomMiningJob.Success",
+        msg::SET_CUSTOM_MINING_JOB_ERROR => "SetCustomMiningJob.Error",
         msg::SET_GROUP_CHANNEL => "SetGroupChannel",
+        msg::ALLOCATE_MINING_JOB_TOKEN => "AllocateMiningJobToken",
+        msg::ALLOCATE_MINING_JOB_TOKEN_SUCCESS => "AllocateMiningJobToken.Success",
+        msg::PROVIDE_MISSING_TRANSACTIONS => "ProvideMissingTransactions",
+        msg::PROVIDE_MISSING_TRANSACTIONS_SUCCESS => "ProvideMissingTransactions.Success",
+        msg::DECLARE_MINING_JOB => "DeclareMiningJob",
+        msg::DECLARE_MINING_JOB_SUCCESS => "DeclareMiningJob.Success",
+        msg::DECLARE_MINING_JOB_ERROR => "DeclareMiningJob.Error",
+        msg::PUSH_SOLUTION => "PushSolution",
+        msg::COINBASE_OUTPUT_CONSTRAINTS => "CoinbaseOutputConstraints",
+        msg::NEW_TEMPLATE => "NewTemplate",
+        msg::TEMPLATE_SET_NEW_PREV_HASH => "SetNewPrevHash (Template Distribution)",
+        msg::REQUEST_TRANSACTION_DATA => "RequestTransactionData",
+        msg::REQUEST_TRANSACTION_DATA_SUCCESS => "RequestTransactionData.Success",
+        msg::REQUEST_TRANSACTION_DATA_ERROR => "RequestTransactionData.Error",
+        msg::SUBMIT_SOLUTION => "SubmitSolution",
         _ => "unknown",
     }
 }

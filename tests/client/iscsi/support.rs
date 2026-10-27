@@ -113,6 +113,67 @@ pub fn login_first_policy() -> String {
     )
 }
 
+/// A model that logs in on connect and then takes `steps` (actions, as JSON) one per event, in
+/// order, keeping its place in `state_file` (each event runs the script afresh).
+pub fn stepping_policy(state_file: &std::path::Path, steps: &[Value]) -> String {
+    format!(
+        r#"import json,sys,os
+i=json.load(sys.stdin); t=i['event_type_id']
+S={steps}
+p={path:?}
+a=[]
+if t=='iscsi_connected':
+  a=[{{'type':'iscsi_login'}}]
+else:
+  n=int(open(p).read()) if os.path.exists(p) else 0
+  if n<len(S):
+    a=[S[n]]
+    open(p,'w').write(str(n+1))
+print(json.dumps({{'actions':a}}))"#,
+        steps = Value::Array(steps.to_vec()),
+        path = state_file.display().to_string(),
+    )
+}
+
+/// The task management functions in the order the TMF tests send them, each with a
+/// TEST UNIT READY after the LUN reset to see the unit attention it leaves.
+pub fn tmf_steps(lun: u16) -> Vec<Value> {
+    let f = |name: &str| json!({"type": "iscsi_task_management", "function": name, "lun": lun});
+    vec![
+        json!({"type": "iscsi_test_unit_ready", "lun": lun}),
+        json!({"type": "iscsi_test_unit_ready", "lun": lun}),
+        f("abort_task"),
+        f("abort_task_set"),
+        f("clear_aca"),
+        f("clear_task_set"),
+        f("logical_unit_reset"),
+        json!({"type": "iscsi_test_unit_ready", "lun": lun}),
+        json!({"type": "iscsi_test_unit_ready", "lun": lun}),
+        f("target_warm_reset"),
+        f("target_cold_reset"),
+        json!({"type": "iscsi_logout"}),
+    ]
+}
+
+/// The task management results, waiting until there are `n`: (function, response).
+pub async fn tmf_results(state: &AppState, id: ClientId, n: usize) -> Vec<(String, String)> {
+    wait_event(state, id, "iscsi_task_management_result", n - 1).await;
+    client_events(state, id, "iscsi_task_management_result")
+        .await
+        .iter()
+        .map(|e| {
+            (
+                e["function"].as_str().unwrap_or_default().to_string(),
+                e["response"]
+                    .as_str()
+                    .or(e["error"].as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+            )
+        })
+        .collect()
+}
+
 /// [`SESSION_POLICY`] against another LUN (tgt's LUN 0 is its controller).
 pub fn session_policy(lun: u16) -> String {
     SESSION_POLICY.replace("'lun':0", &format!("'lun':{lun}"))

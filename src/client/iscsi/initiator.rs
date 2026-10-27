@@ -80,6 +80,8 @@ pub struct Session {
     cmd_sn: u32,
     exp_stat_sn: u32,
     next_itt: u32,
+    /// The last SCSI command sent: (ITT, CmdSN), what an ABORT TASK names by default.
+    pub last_task: Option<(u32, u32)>,
 }
 
 impl Drop for Session {
@@ -395,6 +397,7 @@ impl Session {
                             cmd_sn,
                             exp_stat_sn,
                             next_itt: 1,
+                            last_task: None,
                         }),
                     ));
                 }
@@ -536,6 +539,7 @@ impl Session {
         p.set_itt(itt);
         p.set_u32(20, edtl as u32);
         p.set_u32(24, self.cmd_sn);
+        self.last_task = Some((itt, self.cmd_sn));
         self.cmd_sn = self.cmd_sn.wrapping_add(1);
         p.set_u32(28, self.exp_stat_sn);
         p.bhs[32..48].copy_from_slice(&cdb);
@@ -721,6 +725,40 @@ impl Session {
             }
         }
         Ok(out)
+    }
+
+    /// A task management function (RFC 7143 §11.5), sent immediate as every initiator does,
+    /// and the target's response code. `referenced` is the (ITT, CmdSN) an ABORT TASK names;
+    /// the other functions name none.
+    pub async fn task_management(
+        &mut self,
+        function: u8,
+        lun: u16,
+        referenced: Option<(u32, u32)>,
+    ) -> Result<u8> {
+        let itt = self.itt();
+        let mut p = Pdu::new(op::TASK_MGMT_REQUEST);
+        p.set_immediate();
+        p.set_flags(0x80 | (function & 0x7F));
+        p.set_lun(scsi::lun_field(lun));
+        p.set_itt(itt);
+        let (ref_itt, ref_cmd_sn) = referenced.unwrap_or((RESERVED_TAG, self.cmd_sn));
+        p.set_u32(20, ref_itt);
+        p.set_u32(24, self.cmd_sn);
+        p.set_u32(28, self.exp_stat_sn);
+        p.set_u32(32, ref_cmd_sn);
+        self.send(&p).await?;
+        loop {
+            let r = self.next().await?;
+            match r.opcode() {
+                op::TASK_MGMT_RESPONSE if r.itt() == itt => return Ok(r.bhs[2]),
+                op::REJECT if r.data.get(16..20) == Some(&itt.to_be_bytes()[..]) => bail!(
+                    "the target rejected the task management request (reason 0x{:02x})",
+                    r.bhs[2]
+                ),
+                _ => {}
+            }
+        }
     }
 
     /// Log out (close the session) and wait for the target's answer.

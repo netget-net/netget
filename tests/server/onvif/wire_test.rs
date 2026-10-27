@@ -50,7 +50,7 @@ fn subcodes(body: &str) -> Vec<String> {
         .collect()
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_clock_is_anonymous_and_everything_else_needs_a_fresh_digest() {
     let (state, id, port) = start(policy(), credentials()).await;
 
@@ -139,7 +139,7 @@ async fn the_clock_is_anonymous_and_everything_else_needs_a_fresh_digest() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn without_credentials_configured_the_device_is_open() {
     let (state, id, port) = start(policy(), json!({})).await;
     let (status, body) = post(port, wire::request_envelope(None, INFO)).await;
@@ -148,7 +148,7 @@ async fn without_credentials_configured_the_device_is_open() {
     assert_eq!(asked[0]["username"], Value::Null);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn unknown_and_malformed_requests_are_faults() {
     let (state, id, port) = start(policy(), credentials()).await;
     let sign = |body: &str| {
@@ -157,9 +157,11 @@ async fn unknown_and_malformed_requests_are_faults() {
     };
     // Operations NetGet does not serve, authenticated or not.
     for body in [
-        sign("<tds:GetHostname/>"),
-        wire::request_envelope(None, "<tds:SystemReboot/>"),
-        sign("<tptz:ContinuousMove xmlns:tptz=\"http://www.onvif.org/ver20/ptz/wsdl\"/>"),
+        sign("<tds:GetUsers/>"),
+        wire::request_envelope(None, "<tds:SetUser/>"),
+        sign("<tptz:SetHomePosition/>"),
+        sign("<trc:CreateTrack xmlns:trc=\"http://www.onvif.org/ver10/recording/wsdl\"/>"),
+        sign("<tse:FindPTZPosition xmlns:tse=\"http://www.onvif.org/ver10/search/wsdl\"/>"),
     ] {
         let (status, text) = post(port, body).await;
         assert_eq!(status, 500, "{text}");
@@ -171,11 +173,54 @@ async fn unknown_and_malformed_requests_are_faults() {
     }
     let (status, text) = post(
         port,
-        sign("<tds:GetCapabilities><tds:Category>PTZ</tds:Category></tds:GetCapabilities>"),
+        sign("<tds:GetCapabilities><tds:Category>Analytics</tds:Category></tds:GetCapabilities>"),
     )
     .await;
     assert_eq!(status, 500, "{text}");
     assert_eq!(subcodes(&text), vec!["ActionNotSupported", "NoSuchService"]);
+    // Every category the device has, at its path, and no other.
+    let (status, text) = post(
+        port,
+        sign("<tds:GetCapabilities><tds:Category>All</tds:Category></tds:GetCapabilities>"),
+    )
+    .await;
+    assert_eq!(status, 200, "{text}");
+    for path in [
+        "/onvif/device_service",
+        "/onvif/events_service",
+        "/onvif/imaging_service",
+        "/onvif/media_service",
+        "/onvif/ptz_service",
+        // Recording, Search and Replay, in Extension: they have no category of their own.
+        "/onvif/recording_service",
+        "/onvif/search_service",
+        "/onvif/replay_service",
+    ] {
+        assert_eq!(
+            text.matches(&format!("{path}</tt:XAddr>")).count(),
+            1,
+            "{path}: {text}"
+        );
+    }
+    assert_eq!(text.matches("<tt:XAddr>").count(), 8, "{text}");
+    assert!(
+        text.contains("</tt:PTZ><tt:Extension><tt:Recording>"),
+        "{text}"
+    );
+    assert!(!text.contains("<tt:Analytics>"), "{text}");
+    let (status, text) = post(port, sign("<tds:GetServices><tds:IncludeCapability>false</tds:IncludeCapability></tds:GetServices>")).await;
+    assert_eq!(status, 200, "{text}");
+    assert_eq!(
+        text.matches("<tds:Service>").count(),
+        wire::SERVICES.len(),
+        "{text}"
+    );
+    for (ns, path) in wire::SERVICES {
+        assert!(
+            text.contains(&format!("<tds:Namespace>{ns}</tds:Namespace><tds:XAddr>http://127.0.0.1:{port}{path}</tds:XAddr>")),
+            "{ns}: {text}"
+        );
+    }
     let (status, text) = post(
         port,
         sign("<tds:GetCapabilities><tds:Category>Media</tds:Category></tds:GetCapabilities>"),
@@ -183,7 +228,9 @@ async fn unknown_and_malformed_requests_are_faults() {
     .await;
     assert_eq!(status, 200, "{text}");
     assert!(
-        text.contains("/onvif/media_service</tt:XAddr>") && !text.contains("<tt:Device>"),
+        text.contains("/onvif/media_service</tt:XAddr>")
+            && !text.contains("<tt:Device>")
+            && !text.contains("<tt:Extension>"),
         "{text}"
     );
 
@@ -245,7 +292,7 @@ async fn unknown_and_malformed_requests_are_faults() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_model_that_fails_or_answers_wrongly_fails_closed() {
     let nonce = || -> [u8; 16] { rand::random() };
     // No handler and no reachable model: the backend fails.

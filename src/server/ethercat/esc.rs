@@ -402,11 +402,13 @@ impl Esc {
 
     /// SyncManager rules for an access of `len` octets at `addr`.
     fn allowed(&self, addr: usize, len: usize, write: bool) -> bool {
+        // Bounds first: a zero-length access past the end used to be allowed, and the slice
+        // `mem[addr..addr]` with `addr > mem.len()` panics (found by `ethercat_frame`).
+        if addr.checked_add(len).is_none_or(|end| end > self.mem.len()) {
+            return false;
+        }
         if len == 0 {
             return true;
-        }
-        if addr + len > self.mem.len() {
-            return false;
         }
         for i in 0..NUM_SM {
             let s = self.sm(i);

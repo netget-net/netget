@@ -100,6 +100,14 @@ pub async fn connect(
 
 /// Split an association into its reader and its message writer.
 pub fn split(stream: TcpStream, sctp: bool) -> (Reader, Writer) {
+    // Each message at once: without these the kernel holds a message written straight after
+    // another until the peer acknowledges the first (SCTP), or until the first is acknowledged
+    // or a segment fills (Nagle, on the lab TCP transport).
+    if sctp {
+        crate::utils::sctp::set_nodelay(&stream, "M3UA");
+    } else {
+        let _ = stream.set_nodelay(true);
+    }
     let stream = Arc::new(stream);
     (
         Reader {

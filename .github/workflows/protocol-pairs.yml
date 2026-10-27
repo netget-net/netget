@@ -5987,6 +5987,114 @@ jobs:
             --test real_client_evidence_is_run_test \
             -- --test-threads=32
 
+  gre:
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'gre')
+    name: GRE (IP protocol 47) server and client against the Linux kernel's ip_gre (gre and gretap) and scapy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: protocol-pairs-${{ github.job }}
+      - name: Install iproute2, ethtool, ping, arping, nc, scapy and tshark
+        run: |
+          set -euo pipefail
+          echo 'wireshark-common wireshark-common/install-setuid boolean false' | sudo debconf-set-selections
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            iproute2 ethtool iputils-ping iputils-arping netcat-openbsd python3-scapy tshark
+          dpkg-query -W iproute2 iputils-arping netcat-openbsd python3-scapy tshark
+          # NetGet opens a raw IP protocol-47 socket in the test process, and the kernel peer
+          # lives in a network namespace: both need root.
+          sudo -n true
+          # ip_gre for the kernel's gre and gretap links. Ubuntu ships some tunnel modules only
+          # in linux-modules-extra, and the runner's kernel can be ahead of the archive, so that
+          # package is installed only when modprobe cannot find the module.
+          if ! sudo modprobe ip_gre; then
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)"
+            sudo modprobe ip_gre
+          fi
+      - name: Both roles with mandatory independent peers, bounds and fail-closed paths
+        run: |
+          set -euo pipefail
+          # cargo builds as the runner user and runs each test binary as root (a raw socket in
+          # the test process), with the PATH that finds the peers.
+          export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER="sudo -E env PATH=$PATH"
+          for filter in \
+            gre:: \
+            client/gre::; do
+            case "$filter" in
+              client/*) target=client; filter=${filter#client/} ;;
+              *) target=server ;;
+            esac
+            pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
+            cargo test --locked --no-default-features \
+              --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
+            grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
+          done
+      - name: The vxlan suites, which share the GRE codec
+        run: |
+          set -euo pipefail
+          for module in vxlan fou; do
+            if ! sudo modprobe "$module"; then
+              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)"
+              sudo modprobe "$module"
+            fi
+          done
+          for filter in \
+            vxlan:: \
+            client/vxlan::; do
+            case "$filter" in
+              client/*) target=client; filter=${filter#client/} ;;
+              *) target=server ;;
+            esac
+            pair_log="$RUNNER_TEMP/${GITHUB_JOB}-vxlan-${target}-${filter//:/_}.log"
+            cargo test --locked --no-default-features \
+              --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
+            grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
+          done
+      - name: Shared declarations, native startup, privacy and ownership
+        run: |
+          cargo test --locked --no-default-features \
+            --test event_action_declarations_test \
+            --test advertised_actions_test \
+            --test action_descriptions_test \
+            --test startup_examples_validation_test \
+            --test examples \
+            --test startup_param_defaults_test \
+            --test startup_param_drift_test \
+            --test protocol_startup_examples_test \
+            --test startup_params_result_test \
+            --test startup_constructed_input_test \
+            --test management_test \
+            --test management_form_test \
+            --test dual_protocol_test \
+            --test dashboard_wireshark_test \
+            --test client_event_wiring_test \
+            --test event_emit_sites_test \
+            --test task_registration_cancellation_test \
+            --test server_task_registry_test \
+            --test client_stop_releases_socket_test \
+            --test peer_handle_coverage_ratchet_test \
+            --test client_credential_logging_test \
+            --test client_llm_budget_test \
+            --test secret_redaction_test \
+            --test wire_failure_test \
+            --test site_protocol_list_test \
+            --test well_known_port_declaration_test \
+            --test failure_mode_declaration_test \
+            --test decision_tag_ratchet_test \
+            --test max_inbound_bytes_declaration_test \
+            --test max_inbound_bytes_bound_plus_one_test \
+            --test test_suite_hygiene_test \
+            --test real_client_evidence_is_run_test \
+            --test startup_privilege_transport_test \
+            --test connectionless_audit_test \
+            --test history_batching_declaration_test \
+            -- --test-threads=32
+
   rsync:
     if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'rsync')
     name: rsync daemon and client against the stock rsync 3.2.7 client and daemon
@@ -6604,7 +6712,7 @@ jobs:
 
   libp2p:
     if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'libp2p')
-    name: libp2p host and dialler, with IPFS (Bitswap, DHT), against go-libp2p and Kubo
+    name: libp2p host and dialler, with IPFS (Bitswap, DHT, UnixFS DAGs), against go-libp2p, Kubo and Helia
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -6617,7 +6725,12 @@ jobs:
         with:
           go-version: '1.25.x'
           cache: false
-      - name: Build the go-libp2p peer and fetch Kubo (sha256-pinned)
+      # Helia (the second IPFS implementation) runs on Node; its modules are pinned by
+      # tests/server/libp2p/helia/package-lock.json and installed with npm ci.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build the go-libp2p peer, fetch Kubo (sha256-pinned), install Helia (lockfile-pinned)
         run: |
           set -euo pipefail
           python3 tests/server/libp2p/install_peers.py "$RUNNER_TEMP/libp2p-peers" | tee "$RUNNER_TEMP/libp2p-env"
@@ -6634,7 +6747,7 @@ jobs:
             esac
             pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
             cargo test --locked --no-default-features \
-              --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
+              --test "$target" -- "$filter" --test-threads=4 --nocapture 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
       - name: Shared declarations, native startup, privacy and ownership
@@ -8048,9 +8161,9 @@ jobs:
 
   onvif:
     if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'onvif')
-    name: ONVIF device and client against onvif-zeep-async, use-go/onvif and RPOS
+    name: ONVIF device and client against onvif-zeep-async, use-go/onvif, onvif2-zeep, IOTechSystems/onvif, videonext/onvif, RPOS and onvif_simple_server
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -8060,16 +8173,31 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      # IOTechSystems/onvif v1.3.0 needs go 1.25.
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
-          cache-dependency-path: tests/server/onvif/peer/go/go.sum
-      - name: Install onvif-zeep-async 4.3.0, use-go/onvif v0.0.9 and RPOS
+          go-version: '1.25'
+          cache-dependency-path: |
+            tests/server/onvif/peer/go/go.sum
+            tests/server/onvif/peer/go-media2/go.sum
+            tests/server/onvif/peer/go-profile-g/go.sum
+      - name: Install onvif-zeep-async 4.3.0, use-go/onvif v0.0.9, onvif2-zeep 0.3.4, IOTechSystems/onvif v1.3.0, videonext/onvif 56e4dc4, RPOS and onvif_simple_server 40fd108
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends python3-venv
+          # onvif_simple_server builds against libtomcrypt, json-c and zlib, runs as CGI under
+          # lighttpd, and logs to two fixed files in /var/log that the test user must write.
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3-venv build-essential \
+            libtomcrypt-dev libjson-c-dev zlib1g-dev lighttpd tshark
+          tshark --version | head -1
+          sudo install -m 666 /dev/null /var/log/onvif_simple_server.log
+          sudo install -m 666 /dev/null /var/log/onvif_notify_server.log
           python3 tests/server/onvif/install_peers.py "$RUNNER_TEMP/onvif" | sed 's/^export //' >> "$GITHUB_ENV"
+          test -n "$(grep NETGET_ONVIF_SIMPLE_SERVER "$GITHUB_ENV")"
+          test -n "$(grep NETGET_ONVIF_GO_PROFILE_G "$GITHUB_ENV")"
+      # The client's Basic Notification test binds its consumer on the runner's own
+      # non-loopback address (onvif_simple_server refuses loopback consumers); the Notify
+      # never leaves the host.
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -8124,27 +8252,27 @@ jobs:
 
   stratum-v2:
     if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'stratum-v2')
-    name: Stratum V2 pool and mining device against SRI's mining_device, pool_sv2 and Bitcoin Core
+    name: Stratum V2 pool, template provider, job declarator, work selection and the clients against SRI's mining_device, pool_sv2 (and its JDS), jd_client, sv2-tp and Bitcoin Core
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           key: protocol-pairs-${{ github.job }}
-      - name: Cache SRI's pool_sv2 and mining_device (sv2-apps v0.8.0) and Bitcoin Core 31.0
+      - name: Cache SRI's pool_sv2, mining_device and jd_client_sv2 (sv2-apps v0.8.0), Bitcoin Core 31.0 and sv2-tp 1.1.2
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/stratum-v2
           key: stratum-v2-peers-${{ runner.os }}-${{ hashFiles('tests/server/stratum_v2/install_peers.py') }}
-      - name: Build SRI's pool_sv2 and mining_device, fetch Bitcoin Core 31.0
+      - name: Build SRI's pool_sv2, mining_device and jd_client_sv2, fetch Bitcoin Core 31.0 and sv2-tp 1.1.2
         run: |
           set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y -qq capnproto libcapnp-dev
           python3 tests/server/stratum_v2/install_peers.py "$RUNNER_TEMP/stratum-v2" | sed 's/^export //' >> "$GITHUB_ENV"
-      - name: Both roles with mandatory independent peers, bounds and fail-closed paths
+      - name: Every role with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
           for filter in \
@@ -8198,9 +8326,9 @@ jobs:
 
   ngap:
     if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'ngap')
-    name: NGAP AMF and gNB against UERANSIM and Open5GS's AMF over SCTP
+    name: NGAP AMF and gNB against UERANSIM and an Open5GS core over SCTP
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -8210,28 +8338,47 @@ jobs:
       - name: Load the kernel's SCTP module
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          # The Azure kernel ships sctp.ko in linux-modules-extra; if it is absent, modprobe says so.
-          sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)" || true
-          sudo modprobe sctp
+          # modprobe first: the runner's kernel can be ahead of the archive, so a
+          # linux-modules-extra for it may not exist. Install it only when sctp is missing.
+          if ! sudo modprobe sctp; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)"
+            sudo modprobe sctp
+          fi
           test -d /proc/sys/net/sctp
       - name: Cache UERANSIM v3.2.7
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/ngap
           key: ngap-ueransim-${{ runner.os }}-${{ hashFiles('tests/server/ngap/install_peers.py') }}
-      - name: Build UERANSIM, install Open5GS's AMF, let dumpcap capture on loopback
+      - name: Build UERANSIM, install an Open5GS core and MongoDB, grant the capabilities the peers need
         run: |
           set -euo pipefail
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-            cmake g++ libsctp-dev lksctp-tools tshark software-properties-common
-          sudo add-apt-repository -y ppa:open5gs/latest
           sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends open5gs-amf
-          # The package starts its own AMF on 127.0.0.5; the tests start theirs on probed ports.
-          sudo systemctl stop open5gs-amfd || true
+          echo 'wireshark-common wireshark-common/install-setuid boolean false' | sudo debconf-set-selections
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            cmake g++ libsctp-dev lksctp-tools tshark iputils-ping software-properties-common gnupg curl
+          sudo add-apt-repository -y ppa:open5gs/latest
+          curl -fsSL https://www.mongodb.org/static/pgp/server-8.0.asc \
+            | sudo gpg --dearmor -o /usr/share/keyrings/mongodb-server-8.0.gpg
+          echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu noble/mongodb-org/8.0 multiverse" \
+            | sudo tee /etc/apt/sources.list.d/mongodb-org-8.0.list
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            open5gs-amf open5gs-smf open5gs-upf open5gs-nrf open5gs-scp open5gs-ausf open5gs-udm \
+            open5gs-udr open5gs-pcf open5gs-nssf open5gs-bsf mongodb-org-server mongodb-mongosh
+          # The packages start their own core on 127.0.0.x; the tests start theirs on 127.0.20.x
+          # (the full core) and probed ports (the AMF alone).
+          sudo systemctl stop 'open5gs-*' mongod || true
           sudo setcap cap_net_raw,cap_net_admin=eip "$(command -v dumpcap)"
           python3 tests/server/ngap/install_peers.py "$RUNNER_TEMP/ngap" | sed 's/^export //' >> "$GITHUB_ENV"
+          # Open5GS's UPF creates its TUN and checks nothing but the kernel's verdict, so
+          # CAP_NET_ADMIN on the binary is enough for the unprivileged test. nr-ue is different:
+          # UERANSIM refuses to build uesimtun* unless geteuid() is 0, whatever its
+          # capabilities, so the test runs it through `sudo -n` (passwordless on this runner).
+          sudo setcap cap_net_admin+ep "$(readlink -f "$(command -v open5gs-upfd)")"
+          getcap "$(readlink -f "$(command -v open5gs-upfd)")"
+          sudo -n true
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -9414,7 +9561,7 @@ jobs:
         with:
           go-version: '1.24'
           cache: false
-      - name: Install open-iscsi, tgt and tshark; build libiscsi 1.20.3; install gotgt; no daemon may hold port 3260
+      - name: Install open-iscsi, tgt, sg3-utils and tshark; build libiscsi 1.20.3; install gotgt; no daemon may hold port 3260
         run: |
           set -euo pipefail
           echo 'wireshark-common wireshark-common/install-setuid boolean false' | sudo debconf-set-selections
@@ -9423,7 +9570,7 @@ jobs:
           echo exit 101 | sudo tee /usr/sbin/policy-rc.d >/dev/null
           sudo chmod +x /usr/sbin/policy-rc.d
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            open-iscsi tgt tshark build-essential autoconf automake libtool libcunit1-dev
+            open-iscsi tgt sg3-utils tshark build-essential autoconf automake libtool libcunit1-dev
           sudo rm -f /usr/sbin/policy-rc.d
           for s in tgt iscsid open-iscsi; do sudo systemctl stop "$s" 2>/dev/null || true; done
           # The kernel initiator: its transport module and iscsid, which iscsiadm talks to.
@@ -9439,14 +9586,14 @@ jobs:
           sh scripts/test-peers/build-libiscsi.sh "$RUNNER_TEMP/libiscsi" | tail -1 >> "$GITHUB_PATH"
           GOBIN="$RUNNER_TEMP/gotgt" go install github.com/gostor/gotgt@v0.2.2
           echo "NETGET_GOTGT=$RUNNER_TEMP/gotgt/gotgt" >> "$GITHUB_ENV"
-          dpkg-query -W open-iscsi tgt tshark
+          dpkg-query -W open-iscsi tgt sg3-utils tshark
           # tgtd, iscsiadm and the block device the kernel makes need root.
           sudo -n true
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
           command -v iscsi-ls iscsi-inq iscsi-readcapacity16 iscsi-md5sum iscsi-test-cu tshark
-          command -v iscsiadm tgtd tgtadm
+          command -v iscsiadm tgtd tgtadm sg_reset
           test -x "$NETGET_GOTGT"
           # cargo builds as the runner user and runs each test binary as root, with the PATH
           # that finds the peers.
@@ -9501,4 +9648,428 @@ jobs:
             --test startup_privilege_transport_test \
             --test parameter_type_agreement_test \
             --test history_batching_declaration_test \
+            -- --test-threads=32
+  nvme-tcp:
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'nvme-tcp')
+    name: NVMe/TCP target against the Linux kernel host and SPDK, host against the Linux kernel target and SPDK nvmf_tgt, DH-HMAC-CHAP and reservations both ways
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: protocol-pairs-${{ github.job }}
+      - name: Cache the SPDK v26.09 build
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/spdk-peer/spdk
+          key: spdk-v26.09-0bbb7fe-${{ runner.os }}-${{ runner.arch }}-x86-64-v2
+      - name: Install nvme-cli and tshark; load nvme-tcp, nvmet and nvmet-tcp
+        run: |
+          set -euo pipefail
+          echo 'wireshark-common wireshark-common/install-setuid boolean false' | sudo debconf-set-selections
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nvme-cli tshark
+          # The kernel host (nvme-tcp) and target (nvmet, nvmet-tcp). Only reach for
+          # linux-modules-extra when the base modules lack them: a freshly booted runner kernel
+          # can be ahead of the archive, and then that package does not exist.
+          if ! sudo modprobe -a nvme-tcp nvmet nvmet-tcp; then
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+              "linux-modules-extra-$(uname -r)" || true
+            if ! sudo modprobe -a nvme-tcp nvmet nvmet-tcp; then
+              echo "::error::kernel $(uname -r) cannot load nvme-tcp, nvmet and nvmet-tcp, and linux-modules-extra-$(uname -r) did not provide them; the kernel peers this job exists for cannot run"
+              exit 1
+            fi
+          fi
+          mountpoint -q /sys/kernel/config || sudo mount -t configfs none /sys/kernel/config
+          test -e /dev/nvme-fabrics
+          test -d /sys/kernel/config/nvmet
+          dpkg-query -W nvme-cli tshark
+          nvme version
+          # DH-HMAC-CHAP in both kernel roles, and nvmet's persistent reservations (Linux 6.13+,
+          # the namespace's resv_enable attribute): without them the kernel peers of the
+          # authentication and reservation tests cannot run.
+          config="/boot/config-$(uname -r)"
+          for opt in CONFIG_NVME_HOST_AUTH CONFIG_NVME_TARGET_AUTH; do
+            if ! grep -Eq "^$opt=(y|m)" "$config"; then
+              echo "::error::kernel $(uname -r) is built without $opt; the DH-HMAC-CHAP peers cannot run"
+              exit 1
+            fi
+          done
+          echo "$(uname -r): $(grep -E '^CONFIG_NVME_(HOST_|TARGET_)?AUTH=' "$config" | tr '\n' ' ')"
+          nvme gen-dhchap-key -m 1 -l 32 -n nqn.2026-10.net.netget:ci-check | grep -q '^DHHC-1:01:'
+          # SPDK: a second, userspace host (spdk_nvme_identify, spdk_dd, spdk_nvme_perf) and
+          # target (nvmf_tgt), run without hugepages.
+          spdk=$(sh scripts/test-peers/build-spdk.sh "$RUNNER_TEMP/spdk-peer" | tail -1)
+          echo "NETGET_SPDK_DIR=$spdk" >> "$GITHUB_ENV"
+          # nvme connect and configfs need root.
+          sudo -n true
+      - name: Both roles with mandatory independent peers, bounds and fail-closed paths
+        run: |
+          set -euo pipefail
+          command -v nvme tshark
+          test -x "$NETGET_SPDK_DIR/build/bin/nvmf_tgt"
+          # cargo builds as the runner user and runs each test binary as root, with the PATH
+          # that finds the peers.
+          export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER="sudo -E env PATH=$PATH"
+          for filter in \
+            nvme_tcp:: \
+            client/nvme_tcp::; do
+            case "$filter" in
+              client/*) target=client; filter=${filter#client/} ;;
+              *) target=server ;;
+            esac
+            pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
+            cargo test --locked --no-default-features \
+              --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
+            grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
+          done
+      - name: Shared declarations, native startup, privacy and ownership
+        run: |
+          cargo test --locked --no-default-features \
+            --test event_action_declarations_test \
+            --test advertised_actions_test \
+            --test action_descriptions_test \
+            --test startup_examples_validation_test \
+            --test examples \
+            --test startup_param_defaults_test \
+            --test startup_param_drift_test \
+            --test protocol_startup_examples_test \
+            --test startup_params_result_test \
+            --test startup_constructed_input_test \
+            --test management_test \
+            --test management_form_test \
+            --test dual_protocol_test \
+            --test dashboard_wireshark_test \
+            --test client_event_wiring_test \
+            --test event_emit_sites_test \
+            --test task_registration_cancellation_test \
+            --test server_task_registry_test \
+            --test client_stop_releases_socket_test \
+            --test peer_handle_coverage_ratchet_test \
+            --test client_credential_logging_test \
+            --test client_llm_budget_test \
+            --test secret_redaction_test \
+            --test wire_failure_test \
+            --test site_protocol_list_test \
+            --test well_known_port_declaration_test \
+            --test failure_mode_declaration_test \
+            --test decision_tag_ratchet_test \
+            --test max_inbound_bytes_declaration_test \
+            --test max_inbound_bytes_bound_plus_one_test \
+            --test test_suite_hygiene_test \
+            --test real_client_evidence_is_run_test \
+            --test startup_privilege_transport_test \
+            --test parameter_type_agreement_test \
+            --test history_batching_declaration_test \
+            -- --test-threads=32
+
+  fuse:
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'fuse')
+    name: FUSE local filesystem against the Linux kernel's FUSE driver, coreutils, attr, util-linux, Python and pjdfstest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: protocol-pairs-${{ github.job }}
+      - name: Cache the pjdfstest build
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/pjdfstest-peer
+          key: pjdfstest-85a8aea-${{ runner.os }}-${{ runner.arch }}
+      - name: Install fuse3 and pjdfstest; load fuse
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            fuse3 attr util-linux build-essential autoconf automake perl python3 openssl
+          # fuse is in the base modules. Only reach for linux-modules-extra when modprobe
+          # fails: a freshly booted runner kernel can be ahead of the archive, and then that
+          # package does not exist.
+          if [ ! -c /dev/fuse ]; then
+            if ! sudo modprobe fuse; then
+              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+                "linux-modules-extra-$(uname -r)" || true
+              if ! sudo modprobe fuse; then
+                echo "::error::kernel $(uname -r) cannot load fuse; the kernel peer this job exists for cannot run"
+                exit 1
+              fi
+            fi
+          fi
+          test -c /dev/fuse
+          # The runner user mounts through the setuid helper; root needs nothing more.
+          if [ ! -w /dev/fuse ]; then sudo chmod 666 /dev/fuse; fi
+          ls -l /dev/fuse "$(command -v fusermount3)"
+          fusermount3 --version
+          dpkg-query -W fuse3
+          suite=$(sh scripts/test-peers/build-pjdfstest.sh "$RUNNER_TEMP/pjdfstest-peer" | tail -1)
+          echo "NETGET_PJDFSTEST=$suite" >> "$GITHUB_ENV"
+          # pjdfstest switches users and needs root.
+          sudo -n true
+      - name: Tools, bounds and fail-closed paths unprivileged, then everything and pjdfstest as root
+        run: |
+          set -euo pipefail
+          command -v fusermount3 prove python3 setfattr getfattr fallocate
+          test -x "$NETGET_PJDFSTEST/pjdfstest"
+          for filter in \
+            fuse::; do
+            # As the runner user: mounts go through the setuid fusermount3, the path an
+            # operator without root takes. pjdfstest is the one test that needs root.
+            user_log="$RUNNER_TEMP/${GITHUB_JOB}-user.log"
+            cargo test --locked --no-default-features \
+              --test server -- "$filter" --skip pjdfstest --test-threads=4 2>&1 | tee "$user_log"
+            grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$user_log"
+            # As root (cargo builds as the runner user and runs the test binary through sudo).
+            root_log="$RUNNER_TEMP/${GITHUB_JOB}-root.log"
+            CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER="sudo -E env PATH=$PATH" \
+              cargo test --locked --no-default-features \
+              --test server -- "$filter" --test-threads=4 --nocapture 2>&1 | tee "$root_log"
+            grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$root_log"
+            grep -E '^pjdfstest: ' "$root_log"
+          done
+      - name: Shared declarations, native startup, privacy and ownership
+        run: |
+          cargo test --locked --no-default-features \
+            --test event_action_declarations_test \
+            --test advertised_actions_test \
+            --test action_descriptions_test \
+            --test startup_examples_validation_test \
+            --test examples \
+            --test startup_param_defaults_test \
+            --test startup_param_drift_test \
+            --test protocol_startup_examples_test \
+            --test startup_params_result_test \
+            --test startup_constructed_input_test \
+            --test management_test \
+            --test management_form_test \
+            --test dual_protocol_test \
+            --test dashboard_wireshark_test \
+            --test event_emit_sites_test \
+            --test task_registration_cancellation_test \
+            --test server_task_registry_test \
+            --test peer_handle_coverage_ratchet_test \
+            --test secret_redaction_test \
+            --test wire_failure_test \
+            --test site_protocol_list_test \
+            --test well_known_port_declaration_test \
+            --test failure_mode_declaration_test \
+            --test decision_tag_ratchet_test \
+            --test max_inbound_bytes_declaration_test \
+            --test test_suite_hygiene_test \
+            --test real_client_evidence_is_run_test \
+            --test startup_privilege_transport_test \
+            --test parameter_type_agreement_test \
+            --test history_batching_declaration_test \
+            --test control_character_sanitizer_ratchet_test \
+            --test recursive_decoder_depth_test \
+            --test executable_examples_test \
+            --test no_protocol_is_hidden_from_the_model_test \
+            --test detached_task_drift_test \
+            --test tool_classification_test \
+            --test connectionless_audit_test \
+            --test request_only_declaration_test \
+            --test base_stack_test \
+            --test doc_paths_exist_test \
+            --test doc_test_counts_test \
+            -- --test-threads=32
+
+  hdfs:
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'hdfs')
+    name: HDFS NameNode and DataNode against Apache Hadoop 3.5.0's hdfs CLI and colinmarc/hdfs (Go), client against a single-node Hadoop 3.5.0 HDFS
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: false
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: protocol-pairs-${{ github.job }}
+      - name: Cache the Hadoop 3.5.0 distribution
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/hadoop-peers/hadoop-3.5.0.tar.gz
+          key: hadoop-3.5.0
+      - name: Install Apache Hadoop 3.5.0 (SHA-512 pinned), colinmarc/hdfs v2.4.0 and tshark
+        run: |
+          set -euo pipefail
+          sh tests/client/yarn/install_peers.sh "$RUNNER_TEMP/hadoop-peers" | tee "$RUNNER_TEMP/hadoop-env"
+          sed -n 's/^export //p' "$RUNNER_TEMP/hadoop-env" >> "$GITHUB_ENV"
+          GOBIN="$RUNNER_TEMP/go-peers" go install github.com/colinmarc/hdfs/v2/cmd/hdfs@v2.4.0
+          echo "NETGET_GO_HDFS=$RUNNER_TEMP/go-peers/hdfs" >> "$GITHUB_ENV"
+          # colinmarc/hdfs's hdfs command has no append: its library's Client.Append, through
+          # the driver in tests/server/hdfs/goappend (go.sum pins v2.4.0).
+          (cd tests/server/hdfs/goappend && go build -o "$RUNNER_TEMP/go-peers/netget-hdfs-append" .)
+          echo "NETGET_GO_HDFS_APPEND=$RUNNER_TEMP/go-peers/netget-hdfs-append" >> "$GITHUB_ENV"
+          echo 'wireshark-common wireshark-common/install-setuid boolean false' | sudo debconf-set-selections
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tshark
+          dpkg-query -W tshark
+      - name: Server against both clients, client against a real HDFS
+        run: |
+          set -euo pipefail
+          test -x "$NETGET_GO_HDFS"
+          test -x "$NETGET_GO_HDFS_APPEND"
+          test -x "$NETGET_HADOOP_HOME/bin/hdfs"
+          command -v tshark
+          for filter in \
+            hdfs:: \
+            client/hdfs::; do
+            case "$filter" in
+              client/*) target=client; filter=${filter#client/} ;;
+              *) target=server ;;
+            esac
+            pair_log="$RUNNER_TEMP/${GITHUB_JOB}-${target}-${filter//:/_}.log"
+            cargo test --locked --no-default-features \
+              --test "$target" -- "$filter" --test-threads=4 --nocapture 2>&1 | tee "$pair_log"
+            grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
+          done
+      - name: Shared declarations, native startup, privacy and ownership
+        run: |
+          cargo test --locked --no-default-features \
+            --test event_action_declarations_test \
+            --test advertised_actions_test \
+            --test action_descriptions_test \
+            --test startup_examples_validation_test \
+            --test examples \
+            --test startup_param_defaults_test \
+            --test startup_param_drift_test \
+            --test protocol_startup_examples_test \
+            --test startup_params_result_test \
+            --test startup_constructed_input_test \
+            --test management_test \
+            --test management_form_test \
+            --test dual_protocol_test \
+            --test dashboard_wireshark_test \
+            --test client_event_wiring_test \
+            --test event_emit_sites_test \
+            --test task_registration_cancellation_test \
+            --test server_task_registry_test \
+            --test client_stop_releases_socket_test \
+            --test peer_handle_coverage_ratchet_test \
+            --test client_credential_logging_test \
+            --test client_llm_budget_test \
+            --test secret_redaction_test \
+            --test wire_failure_test \
+            --test site_protocol_list_test \
+            --test well_known_port_declaration_test \
+            --test failure_mode_declaration_test \
+            --test decision_tag_ratchet_test \
+            --test max_inbound_bytes_declaration_test \
+            --test max_inbound_bytes_bound_plus_one_test \
+            --test test_suite_hygiene_test \
+            --test real_client_evidence_is_run_test \
+            --test startup_privilege_transport_test \
+            --test parameter_type_agreement_test \
+            --test history_batching_declaration_test \
+            --test control_character_sanitizer_ratchet_test \
+            --test recursive_decoder_depth_test \
+            --test executable_examples_test \
+            --test no_protocol_is_hidden_from_the_model_test \
+            --test detached_task_drift_test \
+            --test tool_classification_test \
+            --test connectionless_audit_test \
+            --test request_only_declaration_test \
+            --test base_stack_test \
+            --test doc_paths_exist_test \
+            --test doc_test_counts_test \
+            --test tcp_server_bounds_ratchet_test \
+            -- --test-threads=32
+
+  zigbee:
+    if: (inputs.suite != 'p2p-news') && (inputs.only == '' || inputs.only == 'zigbee')
+    name: Zigbee co-processor (EZSP 8-17 over ASH, Z-Stack 3.x.0 MT, TCP) against zigpy's bellows 0.46.2 and zigpy-znp 0.14.2 and zigbee-herdsman 11.1.1's ember and zstack adapters
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: protocol-pairs-${{ github.job }}
+      - name: Install bellows and zigpy-znp (zigpy 0.84.0) and zigbee-herdsman, all pinned
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3-venv
+          sh scripts/test-peers/install-zigbee-hosts.sh "$RUNNER_TEMP/zigbee-hosts" | tee "$RUNNER_TEMP/zigbee.env"
+          sed -n 's/^export //p' "$RUNNER_TEMP/zigbee.env" >> "$GITHUB_ENV"
+      - name: The co-processor against both hosts, bounds and fail-closed paths
+        run: |
+          set -euo pipefail
+          test -x "$NETGET_ZIGBEE_BELLOWS_VENV/bin/bellows"
+          "$NETGET_ZIGBEE_BELLOWS_VENV/bin/python" -c "import zigpy_znp"
+          test -f "$NETGET_ZIGBEE_HERDSMAN/node_modules/zigbee-herdsman/package.json"
+          node --version
+          for filter in \
+            zigbee::; do
+            pair_log="$RUNNER_TEMP/${GITHUB_JOB}-server-${filter//:/_}.log"
+            cargo test --locked --no-default-features \
+              --test server -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
+            grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
+          done
+      - name: Shared declarations, native startup, privacy and ownership
+        run: |
+          cargo test --locked --no-default-features \
+            --test event_action_declarations_test \
+            --test advertised_actions_test \
+            --test action_descriptions_test \
+            --test startup_examples_validation_test \
+            --test examples \
+            --test startup_param_defaults_test \
+            --test startup_param_drift_test \
+            --test protocol_startup_examples_test \
+            --test startup_params_result_test \
+            --test startup_constructed_input_test \
+            --test management_test \
+            --test management_form_test \
+            --test dual_protocol_test \
+            --test dashboard_wireshark_test \
+            --test client_event_wiring_test \
+            --test event_emit_sites_test \
+            --test task_registration_cancellation_test \
+            --test server_task_registry_test \
+            --test client_stop_releases_socket_test \
+            --test peer_handle_coverage_ratchet_test \
+            --test client_credential_logging_test \
+            --test client_llm_budget_test \
+            --test secret_redaction_test \
+            --test wire_failure_test \
+            --test site_protocol_list_test \
+            --test well_known_port_declaration_test \
+            --test failure_mode_declaration_test \
+            --test decision_tag_ratchet_test \
+            --test max_inbound_bytes_declaration_test \
+            --test max_inbound_bytes_bound_plus_one_test \
+            --test test_suite_hygiene_test \
+            --test real_client_evidence_is_run_test \
+            --test startup_privilege_transport_test \
+            --test parameter_type_agreement_test \
+            --test history_batching_declaration_test \
+            --test control_character_sanitizer_ratchet_test \
+            --test recursive_decoder_depth_test \
+            --test executable_examples_test \
+            --test no_protocol_is_hidden_from_the_model_test \
+            --test detached_task_drift_test \
+            --test tool_classification_test \
+            --test connectionless_audit_test \
+            --test request_only_declaration_test \
+            --test base_stack_test \
+            --test doc_paths_exist_test \
+            --test doc_test_counts_test \
+            --test tcp_server_bounds_ratchet_test \
             -- --test-threads=32

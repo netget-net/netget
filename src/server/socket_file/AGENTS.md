@@ -83,8 +83,29 @@ Per connection: `ReadHalf` owned by a reader task, `WriteHalf` behind
 `Arc<Mutex<…>>` in the shared map, and an Idle → Processing → Accumulating state
 machine that serialises LLM calls and queues data that arrives mid-call.
 
+**Replies leave in the order the reads arrived.** The machine is
+`crate::server::read_queue::ReadQueue`, shared with `tcp`, and the **reader** makes
+every decision on it, in arrival order and under the connection lock
+(`admit_read`): an `Idle` connection starts the one answering task (`answer`), a
+`Processing` one queues the read. The answering task leaves `Processing` only by
+taking the next payload or going `Idle` under one lock. This server used to spawn a
+task per read that checked the state and set it in two lock acquisitions, so two
+reads could both find the connection `Idle` and be answered at once, a later one
+first; and a read queued between "is the queue empty?" and "go `Idle`" sat unanswered
+until the peer sent something else. `tests/server/socket_file/read_order_test.rs`
+measured that in 100 of 200 runs under load (97 out of order, 3 stranded), and 0 of
+200 since.
+
+A `send_first` server registers the connection `Processing`, so reads that arrive
+while the banner is being composed queue behind it, and the banner task hands them
+over (`next_or_idle`) once the banner is out. The banner used to be composed
+alongside the reader with the connection `Idle`, so the answer to an early write
+could reach the peer ahead of the greeting —
+`read_order_test.rs::socket_file_reads_wait_behind_the_send_first_banner` parks the
+banner on a `manual` rule and showed it every time.
+
 **Batching** (`BatchingMode::On`, the `tcp` shape). The queue remembers where each read ended
-(`queued_chunks`), and `ConnectionData::take_next` decides what the next call answers: with
+(`ReadQueue`), and `next_or_idle` decides what the next call answers: with
 batching on, everything that arrived during the call is one `socket_file_data_received`
 payload; with it off, one read per call, in order. Bytes held by `wait_for_more` are always
 taken whole. `tests/server/socket_file/batching_test.rs` asserts both, control first.
@@ -94,25 +115,25 @@ What queues during a call, and what `wait_for_more` accumulates, are both bounde
 write half is shut, so the peer reads EOF, and the log says `decision=queue_overflow`. The
 connection is closed rather than the queue trimmed, which would hand the model a message it could
 not know was truncated. `wait_for_more` keeps the fragment it was shown: it goes back to the head
-of the queue as one payload (`hold_as_one`), and bytes that arrived during the call complete it
-at once. `tests/server/socket_file/queue_limit_test.rs` sends past the bound during a slow call.
+of the queue as one payload (`ReadQueue::hold_for_more`), and bytes that arrived during the call
+complete it at once, without the connection leaving `Processing`.
+`tests/server/socket_file/queue_limit_test.rs` sends past the bound during a slow call.
 
 `update_connection_stats` is called on every read and every write, so the
 dashboard rail's `↓/↑` counters and `last_activity` reflect the connection. This
 protocol used not to call it at all and every live connection read `0B/0B`.
 
-**Every map lookup after the first is fallible, and none of them may panic.**
-The lock is released between the state read and the merge, so the connection can
-legitimately be gone by the time the merge runs — the peer reset, or another task
-ran `close_this_connection`. That merge used `.unwrap()`, inside a
-`tokio::spawn` that swallows the panic: the bytes vanished, the log said nothing,
-and the server stayed `Running`. It is a `let … else { return }` with a DEBUG
-line naming the connection and the byte count.
+**Every map lookup is fallible, and none of them may panic.** The connection can
+legitimately be gone by the time a read is admitted or an answer looks it up again
+— the peer reset, or another task ran `close_this_connection`. A merge step once
+used `.unwrap()`, inside a `tokio::spawn` that swallows the panic: the bytes
+vanished, the log said nothing, and the server stayed `Running`. Every lookup is a
+`let … else` with a DEBUG line naming the connection and the byte count.
 
 **The connection is registered in the accept loop, before either task is
 spawned.** It used to be registered by the banner task, which raced the reader:
-`handle_data_with_actions` returns silently when the connection is not in the
-map, so a client that wrote immediately after connecting
+a read was dropped silently when the connection was not in the map, so a client
+that wrote immediately after connecting
 (`printf ping | nc -U …`) had its first payload dropped with no response and no
 log line. Verified: before the fix the log stopped at "received 5 bytes"; after
 it, the handler runs.

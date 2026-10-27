@@ -703,15 +703,19 @@ async fn handle_chat(
                 .await
                 .record_call(context.clone(), idx, description)
                 .await;
-            let delay = state
-                .config
-                .lock()
-                .await
-                .rules
-                .get(idx)
-                .and_then(|r| r.delay);
+            let (delay, gate) = {
+                let config = state.config.lock().await;
+                let rule = config.rules.get(idx);
+                (
+                    rule.and_then(|r| r.delay),
+                    rule.and_then(|r| r.gate.clone()),
+                )
+            };
             if let Some(delay) = delay {
                 tokio::time::sleep(delay).await;
+            }
+            if let Some(gate) = gate {
+                gate.wait().await;
             }
             rendered
         }
@@ -894,15 +898,19 @@ async fn handle_generate(
                 .await
                 .record_call(context.clone(), idx, description)
                 .await;
-            let delay = state
-                .config
-                .lock()
-                .await
-                .rules
-                .get(idx)
-                .and_then(|r| r.delay);
+            let (delay, gate) = {
+                let config = state.config.lock().await;
+                let rule = config.rules.get(idx);
+                (
+                    rule.and_then(|r| r.delay),
+                    rule.and_then(|r| r.gate.clone()),
+                )
+            };
             if let Some(delay) = delay {
                 tokio::time::sleep(delay).await;
+            }
+            if let Some(gate) = gate {
+                gate.wait().await;
             }
             rendered
         }

@@ -236,6 +236,7 @@ impl PtyServer {
         // input queue holds the rest, which is what a busy program does to a typist.
         let (chunk_tx, mut chunk_rx) = mpsc::channel::<Vec<u8>>(READ_QUEUE_CHUNKS);
         let reader_master = Arc::clone(&async_master);
+        let reader_state = Arc::clone(&app_state);
         let reader = app_state
             .spawn_server_task(server_id, async move {
                 let mut buffer = vec![0u8; 8192];
@@ -277,6 +278,20 @@ impl PtyServer {
                     if chunk_tx.send(buffer[..n].to_vec()).await.is_err() {
                         break;
                     }
+                    // Counted as it is read, not when the model gets to it: the dashboard's
+                    // received counter should not lag a whole answer behind the terminal. And
+                    // counted once it is queued, so a count that includes it means the
+                    // dispatcher will find it.
+                    reader_state
+                        .update_connection_stats(
+                            server_id,
+                            connection_id,
+                            Some(n as u64),
+                            None,
+                            Some(1),
+                            None,
+                        )
+                        .await;
                 }
             })
             .await;
@@ -338,17 +353,6 @@ impl PtyServer {
                         data.len(),
                         encoding
                     ));
-
-                    app_state
-                        .update_connection_stats(
-                            server_id,
-                            connection_id,
-                            Some(data.len() as u64),
-                            None,
-                            Some(1),
-                            None,
-                        )
-                        .await;
 
                     events.push(Event::new(
                         &PTY_INPUT_RECEIVED_EVENT,

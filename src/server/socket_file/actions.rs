@@ -149,7 +149,7 @@ impl Protocol for SocketFileProtocol {
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
             // Bytes arriving during a call are the next call's payload, whole (batching on) or
-            // one read at a time (off) — `ConnectionData::take_next`, the same shape as `tcp`.
+            // one read at a time (off) — `ReadQueue::next_or_idle`, the same shape as `tcp`.
             .batching(crate::protocol::metadata::BatchingMode::On)
             .build()
     }

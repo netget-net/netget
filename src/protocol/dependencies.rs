@@ -177,6 +177,7 @@ impl ProtocolDependency {
             Self::ToolInPath(name) => {
                 match *name {
                     "protoc" => "Install from: https://github.com/protocolbuffers/protobuf/releases or use package manager".to_string(),
+                    "fusermount3" => "Install with: apt-get install fuse3 (Debian/Ubuntu) or dnf install fuse3 (Fedora)".to_string(),
                     _ => format!("Ensure '{}' is installed and in PATH", name),
                 }
             }

@@ -1,6 +1,7 @@
 //! What the model decides as an ONVIF device: who it says it is, its scopes and network
-//! interfaces, its media profiles and video sources, and the stream and snapshot URIs it hands
-//! out — or a fault refusing any of them. Rust owns the SOAP envelopes, WS-Security, the clock,
+//! interfaces, its media profiles and video sources, the stream and snapshot URIs it hands out,
+//! the recordings it holds (described once) and whether each subscription and recording change
+//! is allowed — or a fault refusing any of them. Rust owns the SOAP envelopes, WS-Security, the clock,
 //! the service addresses and every fault the specification defines.
 use crate::llm::actions::{
     protocol_trait::{ActionResult, Protocol, Server},
@@ -21,6 +22,14 @@ pub const VIDEO_SOURCES: &str = "onvif_video_sources";
 pub const STREAM_URI: &str = "onvif_stream_uri";
 pub const SNAPSHOT_URI: &str = "onvif_snapshot_uri";
 pub const FAULT: &str = "onvif_fault";
+pub const HOSTNAME: &str = "onvif_hostname";
+pub const ACCEPT: &str = "onvif_accept";
+pub const PTZ_POSITION: &str = "onvif_ptz_position";
+pub const FOCUS_POSITION: &str = "onvif_focus_position";
+pub const RAISE_EVENT: &str = "onvif_raise_event";
+pub const RECORDINGS: &str = "onvif_recordings";
+/// A hostname at most, in bytes (RFC 1035).
+pub const MAX_HOSTNAME: usize = 253;
 
 /// A string the model supplies, at most.
 pub const MAX_TEXT: usize = 256;
@@ -117,9 +126,87 @@ fn network_interfaces_action() -> ActionDefinition {
 }
 
 fn profiles_action() -> ActionDefinition {
-    action(PROFILES, "Answer GetProfiles: the media profiles, each a video source encoded one way.",
-        vec![p("profiles", "array", "[{token, name, encoding (H264, JPEG or MPEG4), width, height, framerate?, bitrate (kbit/s)?, quality?, video_source_token?}]", true)],
-        json!({"type": PROFILES, "profiles": [{"token": "main", "name": "Main stream", "encoding": "H264", "width": 1920, "height": 1080, "framerate": 25, "bitrate": 4096, "video_source_token": "video_source"}]}))
+    action(PROFILES, "Answer GetProfiles (Media and Media2 alike, and the Media2 configuration lists): the media profiles, each a video source encoded one way. ptz: true gives a profile the device's pan/tilt/zoom head.",
+        vec![p("profiles", "array", "[{token, name, encoding (H264, JPEG or MPEG4), width, height, framerate?, bitrate (kbit/s)?, quality?, video_source_token?, ptz?}]", true)],
+        json!({"type": PROFILES, "profiles": [{"token": "main", "name": "Main stream", "encoding": "H264", "width": 1920, "height": 1080, "framerate": 25, "bitrate": 4096, "video_source_token": "video_source", "ptz": true}]}))
+}
+
+fn hostname_action() -> ActionDefinition {
+    action(
+        HOSTNAME,
+        "Answer GetHostname: the device's host name (once a client's SetHostname is accepted, the device answers with that itself).",
+        vec![
+            p("name", "string", "The host name, e.g. lobby-cam", true),
+            p("from_dhcp", "boolean", "The name came from DHCP (default false)", false),
+        ],
+        json!({"type": HOSTNAME, "name": "lobby-cam"}),
+    )
+}
+
+fn accept_action() -> ActionDefinition {
+    action(
+        ACCEPT,
+        "Allow the change or request this event describes; the device applies it exactly as requested (refuse with onvif_fault instead).",
+        vec![p(
+            "message",
+            "string",
+            "Optional text the device answers with where the operation has one (SystemReboot's Message)",
+            false,
+        )],
+        json!({"type": ACCEPT}),
+    )
+}
+
+fn ptz_position_action() -> ActionDefinition {
+    action(
+        PTZ_POSITION,
+        "Accept this PTZ move and say where the camera ends up, in the generic spaces: pan and tilt -1..1, zoom 0..1. The event's proposed position is where plain arithmetic puts it.",
+        vec![
+            p("pan", "number", "Where pan ends, -1..1", true),
+            p("tilt", "number", "Where tilt ends, -1..1", true),
+            p("zoom", "number", "Where zoom ends, 0..1", true),
+        ],
+        json!({"type": PTZ_POSITION, "pan": 0.25, "tilt": -0.1, "zoom": 0.5}),
+    )
+}
+
+fn focus_position_action() -> ActionDefinition {
+    action(
+        FOCUS_POSITION,
+        "Accept this focus move and say where focus ends up, 0..1. The event's proposed_position is where plain arithmetic puts it.",
+        vec![p("position", "number", "Focus position, 0..1", true)],
+        json!({"type": FOCUS_POSITION, "position": 0.4}),
+    )
+}
+
+pub fn raise_event_action() -> ActionDefinition {
+    action(
+        RAISE_EVENT,
+        "Raise an ONVIF event: it goes to every pull-point subscription whose filter matches and is remembered as the property's current value. Topics and their items: tns1:VideoSource/MotionAlarm {source: Source, data: State}; tns1:RuleEngine/CellMotionDetector/Motion {source: VideoSourceConfigurationToken, VideoAnalyticsConfigurationToken, Rule; data: IsMotion}; tns1:RuleEngine/TamperDetector/Tamper {same source; data: IsTamper}; tns1:Device/Trigger/DigitalInput {source: InputToken; data: LogicalState}. Boolean data are true/false.",
+        vec![
+            p("topic", "string", "One of the topics above, e.g. tns1:VideoSource/MotionAlarm", true),
+            p("source", "object", "Every source item the topic carries, e.g. {\"Source\": \"video_source\"}", true),
+            p("data", "object", "Every data item the topic carries, e.g. {\"State\": true}", true),
+            p("property_operation", "string", "Changed (default), Initialized or Deleted", false),
+        ],
+        json!({"type": RAISE_EVENT, "topic": "tns1:VideoSource/MotionAlarm", "source": {"Source": "video_source"}, "data": {"State": true}}),
+    )
+}
+
+fn recordings_action() -> ActionDefinition {
+    action(
+        RECORDINGS,
+        "Describe every recording this device holds, once: the device answers every Recording, Search and Replay request from this description and asks again only after a restart. Times are UTC (2026-10-24T08:00:00Z). Recorded events use the topics and items onvif_raise_event takes.",
+        vec![
+            p("recordings", "array", "Up to 32 recordings: [{token, source_id (the video source or profile recorded, default video_source), name?, location?, description?, address?, content? (what it holds), retention_secs?, replay_uri (the RTSP URI a replay of it is served from, e.g. rtsp://192.0.2.10:554/replay/rec_lobby; without one GetReplayUri is refused), tracks: up to 8 [{token, type (Video, Audio or Metadata), description?, from, to}], events: up to 256 [{time, track?, topic, source, data, property_operation?}]}]", true),
+            p("jobs", "array", "Up to 16 recording jobs: [{token, recording_token, mode (Active or Idle, default Active), priority? (a whole number up to 1000, default 1), source_token? (the profile recorded)}]", false),
+        ],
+        json!({"type": RECORDINGS, "recordings": [{"token": "rec_lobby", "source_id": "video_source", "name": "Lobby", "content": "Continuous recording of the lobby",
+            "replay_uri": "rtsp://192.0.2.10:554/replay/rec_lobby",
+            "tracks": [{"token": "VIDEO001", "type": "Video", "from": "2026-10-24T00:00:00Z", "to": "2026-10-25T00:00:00Z"}],
+            "events": [{"time": "2026-10-24T08:15:00Z", "topic": "tns1:VideoSource/MotionAlarm", "source": {"Source": "video_source"}, "data": {"State": true}}]}],
+            "jobs": [{"token": "job_lobby", "recording_token": "rec_lobby", "mode": "Active", "source_token": "main"}]}),
+    )
 }
 
 fn video_sources_action() -> ActionDefinition {
@@ -189,6 +276,16 @@ fn event(
     answer: ActionDefinition,
     extra: Vec<Parameter>,
 ) -> EventType {
+    event_with(id, description, vec![answer], extra)
+}
+
+/// An event the model answers with one of `answers` or with `onvif_fault`.
+fn event_with(
+    id: &str,
+    description: &str,
+    answers: Vec<ActionDefinition>,
+    extra: Vec<Parameter>,
+) -> EventType {
     let mut params = vec![
         p(
             "operation",
@@ -210,10 +307,12 @@ fn event(
         ),
     ];
     params.extend(extra);
-    let example = answer.example.clone();
+    let example = answers[0].example.clone();
+    let mut actions = answers;
+    actions.push(fault_action());
     EventType::new(id, description, example)
         .with_parameters(params)
-        .with_actions(vec![answer, fault_action()])
+        .with_actions(actions)
 }
 
 pub static DEVICE_INFORMATION_EVENT: LazyLock<EventType> = LazyLock::new(|| {
@@ -270,6 +369,12 @@ pub static STREAM_URI_EVENT: LazyLock<EventType> = LazyLock::new(|| {
                 "The transport it asked for: RTSP, HTTP, UDP or TCP",
                 true,
             ),
+            p(
+                "service",
+                "string",
+                "media (ver10) or media2 (ver20; its Protocol is mapped onto stream and protocol)",
+                false,
+            ),
         ],
     )
 });
@@ -278,7 +383,156 @@ pub static SNAPSHOT_URI_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         "onvif_get_snapshot_uri",
         "A client asked where to fetch a snapshot of a profile (GetSnapshotUri).",
         snapshot_uri_action(),
-        vec![p("profile_token", "string", "The profile it wants", true)],
+        vec![
+            p("profile_token", "string", "The profile it wants", true),
+            p(
+                "service",
+                "string",
+                "media (ver10) or media2 (ver20)",
+                false,
+            ),
+        ],
+    )
+});
+pub static HOSTNAME_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    event(
+        "onvif_get_hostname",
+        "A client asked for the device's host name (GetHostname) and no SetHostname has been accepted yet.",
+        hostname_action(),
+        vec![],
+    )
+});
+pub static SET_DATE_TIME_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    event(
+        "onvif_set_system_date_and_time",
+        "A client asks to set the device's clock (SetSystemDateAndTime). Accepted, GetSystemDateAndTime reports it and WS-Security timestamps are checked against it.",
+        accept_action(),
+        vec![
+            p("date_time_type", "string", "How the clock is set: Manual or NTP", true),
+            p("daylight_savings", "boolean", "Daylight saving in effect", true),
+            p("time_zone", "string", "POSIX TZ string, or null to keep the current one", true),
+            p("utc_date_time", "string", "The UTC time asked for (Manual), or null", true),
+            p("current_utc", "string", "The device's UTC clock now", true),
+        ],
+    )
+});
+pub static SET_SCOPES_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    event(
+        "onvif_set_scopes",
+        "A client asks to change the device's configurable scopes (SetScopes replaces them, AddScopes adds, RemoveScopes removes). Accepted, GetScopes reports the change.",
+        accept_action(),
+        vec![
+            p("scopes", "array", "The scope URIs the operation names", true),
+            p("configurable", "array", "The configurable scopes before the change", true),
+        ],
+    )
+});
+pub static SET_HOSTNAME_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    event(
+        "onvif_set_hostname",
+        "A client asks to rename the device (SetHostname). Accepted, GetHostname reports the new name.",
+        accept_action(),
+        vec![p("name", "string", "The host name asked for", true)],
+    )
+});
+pub static REBOOT_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    event(
+        "onvif_system_reboot",
+        "A client asks the device to reboot (SystemReboot). Accepting only answers it; nothing reboots.",
+        accept_action(),
+        vec![],
+    )
+});
+pub static PTZ_MOVE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    event(
+        "onvif_ptz_move",
+        "A client asks the PTZ head to move (ContinuousMove, RelativeMove, AbsoluteMove, GotoPreset, GotoHomePosition). Accept with where it ends up, or refuse with a fault (e.g. InvalidArgVal/InvalidPosition); a refused move changes nothing.",
+        ptz_position_action(),
+        vec![
+            p("profile_token", "string", "The profile the move was sent on", true),
+            p("kind", "string", "continuous, relative, absolute, preset or home", true),
+            p("velocity", "object", "continuous: {pan, tilt, zoom}, each -1..1 or null", false),
+            p("timeout_secs", "number", "continuous: how long the move runs", false),
+            p("translation", "object", "relative: {pan, tilt, zoom} to add", false),
+            p("target", "object", "absolute: {pan, tilt, zoom}; a null axis stays where it is", false),
+            p("preset_token", "string", "preset: the preset's token", false),
+            p("preset_name", "string", "preset: the preset's name", false),
+            p("speed", "object", "{pan, tilt, zoom} speeds 0..1 the client asked for, or nulls", false),
+            p("current", "object", "Where the head is: {pan, tilt, zoom}", true),
+            p("proposed", "object", "Where plain arithmetic puts it: {pan, tilt, zoom}", true),
+        ],
+    )
+});
+pub static SUBSCRIBE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    event_with(
+        "onvif_create_subscription",
+        "A client asks for an event subscription: a pull point (CreatePullPointSubscription), or Basic Notification (Subscribe), where the device POSTs each event to the client's consumer address — already checked against the device's allowlist. Accept it — optionally raising events it should receive with onvif_raise_event — or refuse with a fault.",
+        vec![accept_action(), raise_event_action()],
+        vec![
+            p("subscription", "string", "The new subscription's id", true),
+            p("filter", "array", "The topic expressions it asked for, or null for every topic", true),
+            p("termination_time", "string", "When it ends unless renewed", true),
+            p("consumer", "string", "Subscribe only: the consumer address notifications are POSTed to", false),
+        ],
+    )
+});
+pub static RECORDINGS_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    event(
+        "onvif_describe_recordings",
+        "A client asked about the device's recordings (Recording, Search or Replay) for the first time. Describe them all once with onvif_recordings; the device answers every later request from that description.",
+        recordings_action(),
+        vec![],
+    )
+});
+pub static CREATE_RECORDING_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    event(
+        "onvif_create_recording",
+        "A client asks the device to create a recording (CreateRecording). Accepted, the device adds it with an empty video, audio and metadata track and answers its new token; refused, nothing changes.",
+        accept_action(),
+        vec![
+            p("source", "object", "What it records: {source_id, name, location, description, address}", true),
+            p("content", "string", "What the recording holds, in the client's words", true),
+            p("maximum_retention_secs", "number", "How long the client wants it kept, in seconds (0 is no limit)", true),
+            p("recordings", "array", "The recordings the device holds now: [{token, source_id, content, tracks, events}]", true),
+        ],
+    )
+});
+pub static DELETE_RECORDING_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    event(
+        "onvif_delete_recording",
+        "A client asks the device to delete a recording (DeleteRecording) and the jobs recording into it. Accepted, it is gone from every later answer; refused, nothing changes.",
+        accept_action(),
+        vec![
+            p("recording_token", "string", "The recording to delete", true),
+            p("recordings", "array", "The recordings the device holds now: [{token, source_id, content, tracks, events}]", true),
+        ],
+    )
+});
+pub static SET_IMAGING_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    event(
+        "onvif_set_imaging_settings",
+        "A client asks to change a video source's imaging settings (SetImagingSettings). Accepted, GetImagingSettings reports them.",
+        accept_action(),
+        vec![
+            p("video_source_token", "string", "The video source", true),
+            p("current", "object", "{brightness, color_saturation, contrast, sharpness (0..100), ir_cut_filter, auto_focus_mode}", true),
+            p("requested", "object", "The same, as the client asks them to be", true),
+        ],
+    )
+});
+pub static IMAGING_MOVE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    event(
+        "onvif_imaging_move",
+        "A client asks to move a video source's focus (Imaging Move). Accept with where focus ends up, or refuse with a fault.",
+        focus_position_action(),
+        vec![
+            p("video_source_token", "string", "The video source", true),
+            p("kind", "string", "absolute, relative or continuous", true),
+            p("requested", "object", "{position, speed} / {distance, speed} / {speed}", true),
+            p("current_position", "number", "Where focus is, 0..1", true),
+            p("proposed_position", "number", "Where plain arithmetic puts it", true),
+            p("auto_focus_mode", "string", "The autofocus mode: AUTO or MANUAL", true),
+        ],
     )
 });
 
@@ -388,6 +642,23 @@ fn subcode(v: &Value, key: &str, required: bool) -> Result<()> {
     }
 }
 
+/// A host name as RFC 1123 allows: dot-separated labels of letters, digits and inner hyphens.
+pub fn hostname(name: &str) -> Result<()> {
+    ensure!(
+        !name.is_empty()
+            && name.len() <= MAX_HOSTNAME
+            && name.split('.').all(|l| {
+                !l.is_empty()
+                    && l.len() <= 63
+                    && !l.starts_with('-')
+                    && !l.ends_with('-')
+                    && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+            }),
+        "name must be a host name such as lobby-cam (letters, digits, hyphens; dot-separated labels)"
+    );
+    Ok(())
+}
+
 pub fn check(v: &Value) -> Result<()> {
     match v["type"].as_str().unwrap_or_default() {
         DEVICE_INFORMATION => {
@@ -449,7 +720,35 @@ pub fn check(v: &Value) -> Result<()> {
                 number(pr, "framerate", 1..=240, false)?;
                 number(pr, "bitrate", 1..=1_000_000, false)?;
                 number(pr, "quality", 0..=100, false)?;
+                flag(pr, "ptz")?;
             }
+        }
+        HOSTNAME => {
+            hostname(v["name"].as_str().unwrap_or_default())?;
+            flag(v, "from_dhcp")?;
+        }
+        ACCEPT => {
+            if v.get("message").is_some_and(|m| !m.is_null()) {
+                text(v, "message")?;
+            }
+        }
+        PTZ_POSITION => {
+            super::ptz::Position::from_json(v)
+                .context("pan and tilt are numbers in -1..1 and zoom a number in 0..1")?;
+        }
+        FOCUS_POSITION => {
+            ensure!(
+                v["position"]
+                    .as_f64()
+                    .is_some_and(|p| (0.0..=1.0).contains(&p)),
+                "position is a number in 0..1"
+            );
+        }
+        RAISE_EVENT => {
+            super::events::notification_from_action(v, chrono::Utc::now())?;
+        }
+        RECORDINGS => {
+            super::recording::archive_from_action(v)?;
         }
         VIDEO_SOURCES => {
             for s in list(v, "sources")? {
@@ -493,10 +792,10 @@ impl Protocol for OnvifProtocol {
         ]
     }
     fn description(&self) -> &'static str {
-        "ONVIF device (IP camera): Device and Media services over SOAP 1.2 with WS-Security digest authentication; the model decides the device's identity, profiles and stream URIs"
+        "ONVIF device (IP camera): Device, Media, Media2, PTZ, Events (pull point and Basic Notification push to allowlisted consumers), Imaging, and Profile G Recording, Search and Replay over SOAP 1.2 with WS-Security digest authentication; the model decides the device's identity, profiles and stream URIs, describes its recordings once, accepts or refuses every move, setting, subscription and recording change, and raises its events"
     }
     fn get_async_actions(&self, _: &AppState) -> Vec<ActionDefinition> {
-        Vec::new()
+        vec![raise_event_action()]
     }
     fn get_sync_actions(&self) -> Vec<ActionDefinition> {
         vec![
@@ -507,6 +806,12 @@ impl Protocol for OnvifProtocol {
             video_sources_action(),
             stream_uri_action(),
             snapshot_uri_action(),
+            hostname_action(),
+            recordings_action(),
+            accept_action(),
+            ptz_position_action(),
+            focus_position_action(),
+            raise_event_action(),
             fault_action(),
         ]
     }
@@ -519,6 +824,18 @@ impl Protocol for OnvifProtocol {
             VIDEO_SOURCES_EVENT.clone(),
             STREAM_URI_EVENT.clone(),
             SNAPSHOT_URI_EVENT.clone(),
+            HOSTNAME_EVENT.clone(),
+            SET_DATE_TIME_EVENT.clone(),
+            SET_SCOPES_EVENT.clone(),
+            SET_HOSTNAME_EVENT.clone(),
+            REBOOT_EVENT.clone(),
+            PTZ_MOVE_EVENT.clone(),
+            SUBSCRIBE_EVENT.clone(),
+            SET_IMAGING_EVENT.clone(),
+            IMAGING_MOVE_EVENT.clone(),
+            RECORDINGS_EVENT.clone(),
+            CREATE_RECORDING_EVENT.clone(),
+            DELETE_RECORDING_EVENT.clone(),
         ]
     }
     fn get_startup_parameters(&self) -> Vec<ParameterDefinition> {
@@ -547,6 +864,46 @@ impl Protocol for OnvifProtocol {
                 example: json!(300),
                 default: Some(json!(super::MAX_CLOCK_SKEW.as_secs())),
             },
+            ParameterDefinition {
+                name: "max_pull_timeout_secs".into(),
+                type_hint: "number".into(),
+                description: "The longest a PullMessages request is held waiting for an event, in seconds (1..=60); a longer Timeout is cut to it".into(),
+                required: false,
+                example: json!(60),
+                default: Some(json!(super::events::MAX_PULL_TIMEOUT.as_secs())),
+            },
+            ParameterDefinition {
+                name: "notify_consumers".into(),
+                type_hint: "array".into(),
+                description: "Where Basic Notification (Subscribe) may send events: addresses and CIDR blocks the consumer's IP must fall in, and \"subscriber\" for the subscribing client's own address. A consumer is an http URL with an IP address for its host; anything else is refused before the model is asked".into(),
+                required: false,
+                example: json!(["127.0.0.1", "subscriber"]),
+                default: Some(json!(super::notify::DEFAULT_CONSUMERS)),
+            },
+            ParameterDefinition {
+                name: "notify_allow_https".into(),
+                type_hint: "boolean".into(),
+                description: "Allow https consumer addresses for Basic Notification (otherwise only http is sent to)".into(),
+                required: false,
+                example: json!(true),
+                default: Some(json!(super::notify::ALLOW_HTTPS)),
+            },
+            ParameterDefinition {
+                name: "notify_timeout_secs".into(),
+                type_hint: "number".into(),
+                description: "How long one Notify delivery may take, connecting and answering included, in seconds (1..=30)".into(),
+                required: false,
+                example: json!(5),
+                default: Some(json!(super::notify::NOTIFY_TIMEOUT.as_secs())),
+            },
+            ParameterDefinition {
+                name: "notify_retries".into(),
+                type_hint: "number".into(),
+                description: "How many times a failed Notify is tried again before its notifications are dropped (0..=5)".into(),
+                required: false,
+                example: json!(2),
+                default: Some(json!(super::notify::NOTIFY_RETRIES)),
+            },
         ]
     }
     fn metadata(&self) -> crate::protocol::metadata::ProtocolMetadataV2 {
@@ -554,10 +911,10 @@ impl Protocol for OnvifProtocol {
         ProtocolMetadataV2::builder()
             .state(DevelopmentState::Experimental)
             .privilege_requirement(PrivilegeRequirement::None)
-            .implementation("hyper HTTP/1.1; SOAP 1.2 envelopes read with quick-xml into a bounded namespace-resolved tree (256 KiB, depth 32, 20000 elements, no DOCTYPE) and written escaped. Device service (ver10): GetSystemDateAndTime (always unauthenticated, from the host clock), GetCapabilities and GetServices (pointing at this server), GetDeviceInformation, GetScopes, GetNetworkInterfaces. Media service (ver10): GetProfiles, GetVideoSources, GetStreamUri, GetSnapshotUri. WS-Security UsernameToken PasswordDigest verified in Rust (SHA-1 over nonce, Created and password; Created within max_clock_skew_secs; nonces remembered so none can be replayed); a refusal is env:Sender/ter:NotAuthorized. Any other operation is env:Receiver/ter:ActionNotSupported")
-            .llm_control("The device's identity, scopes and network interfaces, its media profiles and video sources, the stream and snapshot URIs it hands out, and any fault refusing one of those")
-            .e2e_testing("tests/server/onvif: two independent ONVIF clients authenticate with digest and read device information, profiles and stream URIs the model supplied — python onvif-zeep-async 4.3.0 (Home Assistant's library, zeep over ONVIF's own WSDL) and Go use-go/onvif v0.0.9 (encoding/xml, its own digest); raw HTTP for the digest, replay, clock, fault, bound and failed-handler paths")
-            .notes("Experimental: the two clients are real and the tests fail without them, but nothing above the evidence in tests/server/onvif has been reviewed by a person. Only ver10 Device and Media: no Media2 (ver20; neither client's bundled WSDL has it), no PTZ, Imaging, Events or Recording, no Set* operations. One configured user. No HTTP Digest authentication and no TLS. The device does not stream: the URIs it hands out are whatever the model says. WS-Discovery is the separate wsdiscovery protocol; point its xaddrs at this server's /onvif/device_service to be discovered.")
+            .implementation("hyper HTTP/1.1; SOAP 1.2 envelopes read with quick-xml into a bounded namespace-resolved tree (256 KiB, depth 32, 20000 elements, no DOCTYPE) and written escaped, dispatched on the Body element's namespace. Device (ver10): GetSystemDateAndTime (unauthenticated, the device clock), GetCapabilities and GetServices (exactly Device, Media, Media2, PTZ, Events, Imaging, Recording, Search, Replay; the last three in GetCapabilities' Extension), GetDeviceInformation, GetScopes, GetNetworkInterfaces, GetHostname, SetSystemDateAndTime, SetScopes/AddScopes/RemoveScopes, SetHostname, SystemReboot (answers; reboots nothing). Media (ver10) and Media2 (ver20) from one description: profiles, sources, encoder configurations, stream and snapshot URIs. PTZ (ver20): one node in the generic spaces, its configuration, status, continuous/relative/absolute moves, stop, presets (32, names 64 bytes), home. Events (ver10): fixed tns1 topics, pull-point subscriptions (16, at most 1 h, 256 queued each) with topic filters, PullMessages long-polling up to max_pull_timeout_secs, Renew, Unsubscribe, SetSynchronizationPoint; Basic Notification Subscribe with the device POSTing wsnt:Notify to the consumer (an http URL with an IP host inside notify_consumers, loopback by default; 8 push subscriptions, 64 queued each, 16 messages per Notify, notify_timeout_secs per attempt and notify_retries retries, then dropped and logged; no redirects, no proxy, https only with notify_allow_https). Imaging (ver20): settings, options, focus moves, status. Recording, Search and Replay (ver10, Profile G) from one description the model gives once: GetRecordings, GetRecordingConfiguration, GetRecordingJobs, Create/DeleteRecording (model allow/deny; 32 recordings), GetRecordingSummary, GetRecordingInformation, FindRecordings/FindEvents (time ranges either way, scopes, topic filters, IncludeStartState; 8 live searches, 256 results kept, 100 per page, keep-alive cut to 300 s), Get*SearchResults, GetSearchState, EndSearch, GetReplayUri (the RTSP URI the model gave), GetReplayConfiguration. PTZ position and presets, imaging settings, clock, scopes, hostname, subscriptions, recordings and searches are the device's volatile state, in memory for the life of the server. WS-Security UsernameToken PasswordDigest verified in Rust on every service (SHA-1 over nonce, Created and password; Created within max_clock_skew_secs of the device clock; nonces remembered so none can be replayed); a refusal is env:Sender/ter:NotAuthorized. Any other operation is env:Receiver/ter:ActionNotSupported")
+            .llm_control("The device's identity, scopes, hostname and network interfaces, its media profiles (and which have PTZ) and video sources, the stream and snapshot URIs it hands out; whether each PTZ move, focus move, Set* change and subscription is accepted, and where a move ends; the events it raises (onvif_raise_event, at any time or in answer to a subscription; to pull points and push consumers alike); its recordings, tracks, recorded events, jobs and replay URIs (described once), and whether each CreateRecording and DeleteRecording is allowed; and any fault refusing one of those")
+            .e2e_testing("tests/server/onvif: Device and Media ver10, PTZ, Events, Imaging and Set* through python onvif-zeep-async 4.3.0 (Home Assistant's library, zeep over ONVIF's own WSDL; its PullPointManager) and Go use-go/onvif v0.0.9 (its own request types and digest): moves read back through GetStatus, presets, a refused move leaving the position, a long poll woken by a raised event, settings read back. Media2 through python onvif2-zeep 0.3.4 (zeep over the ver20 WSDL) and Go IOTechSystems/onvif v1.3.0. Recording, Search and Replay through onvif-zeep-async (its recording, search and replay WSDLs) and Go videonext/onvif (gowsdl-generated; unsigned, since its digest is computed over the nonce's base64 text and the device refuses it). Basic Notification through onvif-zeep-async's NotificationManager and use-go/onvif's event.Subscribe, each running its own loopback consumer that must receive the Notify with the right topic and data; a consumer outside the allowlist refused. Each test prints the operations its client sent. tshark reads every new service's exchange both ways and the device's Notify POST; raw HTTP for the digest, replay, clock, fault, bound and failed-handler paths")
+            .notes("Experimental: two independent clients drive each service and the tests fail without them, but nothing above the evidence in tests/server/onvif has been reviewed by a person and the pair job has not run the new services in CI. Not implemented: Analytics, DeviceIO, Receiver; recording tracks and jobs changed by clients (CreateTrack, CreateRecordingJob, SetRecordingConfiguration, …), metadata and PTZ-position search, RecordingInformationFilter (XPath; refused), Replay over the device itself (it hands out the model's RTSP URI; NetGet's rtsp server can be that URI); Basic Notification's WS-BaseNotification PauseSubscription/ResumeSubscription and message-content filters; PTZ SetHomePosition, preset tours and configuration changes; Imaging exposure, white balance, wide dynamic range and backlight settings (refused SettingsInvalid); Media2 configuration changes; other Device Set* operations; more than one user; HTTP Digest; TLS. The device does not stream: the URIs it hands out are whatever the model says. WS-Discovery is the separate wsdiscovery protocol; point its xaddrs at this server's /onvif/device_service to be discovered.")
             .request_only("Every message answers a client's HTTP request")
             .answers_on_failure()
             .max_inbound_bytes(super::wire::MAX_REQUEST)
@@ -600,6 +957,33 @@ impl Server for OnvifProtocol {
         Ok(ActionResult::Custom {
             name: action["type"].as_str().unwrap_or_default().to_string(),
             data: action,
+        })
+    }
+
+    /// `onvif_raise_event` reaches the running device's subscriptions; everything else is an
+    /// answer `execute_action` validates.
+    fn execute_action_with_state<'a>(
+        &'a self,
+        action: Value,
+        state: AppState,
+        server_id: Option<crate::state::ServerId>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ActionResult>> + Send + 'a>>
+    {
+        if action["type"].as_str() != Some(RAISE_EVENT) {
+            let result = self.execute_action(action);
+            return Box::pin(async move { result });
+        }
+        Box::pin(async move {
+            let id = server_id.context("onvif_raise_event needs the running ONVIF device")?;
+            let device = state
+                .server_handle::<super::Device>(id)
+                .await
+                .context("this server is not a running ONVIF device")?;
+            let delivered = device.raise(&action)?;
+            Ok(ActionResult::Custom {
+                name: RAISE_EVENT.into(),
+                data: json!({"delivered": delivered}),
+            })
         })
     }
 }

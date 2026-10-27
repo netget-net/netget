@@ -313,7 +313,7 @@ fn query_future(
         }.await;
         let (outcome,event) = match result {
             Ok((message,stream)) => {
-                let records = |records: &[hickory_proto::rr::Record]| records.iter().map(|r|json!({"name":r.name().to_utf8(),"type":r.record_type().to_string(),"class":r.dns_class().to_string(),"ttl":r.ttl(),"data":r.data().map(ToString::to_string)})).collect::<Vec<_>>();
+                let records = |records: &[hickory_proto::rr::Record]| records.iter().map(|r|json!({"name":r.name().to_utf8(),"type":r.record_type().to_string(),"class":r.dns_class().to_string(),"ttl":r.ttl(),"data":r.data().and_then(crate::utils::display::try_display)})).collect::<Vec<_>>();
                 let event = Event::new(&DOQ_RESPONSE_EVENT,json!({"query_id":0,"stream_id":stream,"domain":data["domain"],"query_type":data["query_type"],"response_code":message.response_code().to_string(),"answers":records(message.answers()),"authorities":records(message.name_servers()),"additionals":records(message.additionals())}));
                 (Ok(ClientSendOutcome::Executed{detail:format!("DNS {} ({} answers)",message.response_code(),message.answers().len())}),event)
             }

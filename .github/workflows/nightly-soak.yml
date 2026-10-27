@@ -10,7 +10,7 @@
 # test side in TIME_WAIT for 2·MSL, so two of these running at once exhaust the ephemeral port
 # range and fail with EADDRNOTAVAIL — a kernel bookkeeping limit that looks exactly like a leak.
 #
-# `PROTOCOL_QUALITY.md` is explicit that a soak test nobody runs is worse than none, which is
+# `docs/planning/PROTOCOL_QUALITY.md` is explicit that a soak test nobody runs is worse than none, which is
 # what this file is for. Unlike `nightly-eval.yml` there is no `continue-on-error` here: the
 # eval measures a model and a threshold on it would flap, while this measures a counter and a
 # failure is a defect.

@@ -255,8 +255,6 @@ impl Protocol for VxlanProtocol {
         vec![
             "vxlan",
             "geneve",
-            "gre",
-            "gretap",
             "gre-in-udp",
             "overlay",
             "vtep",
@@ -320,7 +318,7 @@ impl Protocol for VxlanProtocol {
             .implementation("Hand-rolled VXLAN (RFC 7348), Geneve (RFC 8926, options skipped) and Ethernet-over-GRE (RFC 2784/2890 key, checksum and sequence number; carried in UDP per RFC 8086) decapsulation, with Ethernet, ARP, IPv4 (header checksum checked, fragments not reassembled), ICMP echo and UDP (checksums checked and written) for the overlay hosts; replies go back through the tunnel to the sending endpoint, mirroring the request's VNI or GRE key, checksum and sequence flags")
             .llm_control("Which overlay IPs exist and at which MAC (ARP), which hosts answer ping, and what each UDP service replies")
             .e2e_testing("tests/server/vxlan: the Linux kernel's vxlan driver, and its gretap driver over a fou port (GRE key, checksum and sequence numbers on), each in a network namespace (ping and a UDP exchange through the tunnel, the neighbour entry the model's ARP reply created); the pcap oracle (tshark's vxlan, geneve and gre dissectors) over NetGet's frames; GRE refusals (version, protocol type, checksum, key, truncation) before the model")
-            .notes("DELIBERATELY SILENT: an overlay IP with no host is silence, never a reply, because every ARP, echo or UDP reply asserts that a host exists (logged decision=model_silent / fail_closed_*). No TCP, no IPv6 (frames are logged and dropped), no IP fragmentation, no MAC learning or flooding to other VTEPs. GRE is GRE-in-UDP only: GRE directly on IP protocol 47 needs a raw socket and is not implemented. Geneve interop with a kernel peer is unverified here; its framing is checked by tshark.")
+            .notes("DELIBERATELY SILENT: an overlay IP with no host is silence, never a reply, because every ARP, echo or UDP reply asserts that a host exists (logged decision=model_silent / fail_closed_*). No TCP, no IPv6 (frames are logged and dropped), no IP fragmentation, no MAC learning or flooding to other VTEPs. GRE here is GRE-in-UDP only; GRE directly on IP protocol 47 needs a raw socket and is the separate gre protocol, so this one stays unprivileged. Geneve interop with a kernel peer is unverified here; its framing is checked by tshark.")
             .max_inbound_bytes(frame::MAX_DATAGRAM)
             .history(crate::protocol::metadata::HistoryMode::Off)
             .batching(crate::protocol::metadata::BatchingMode::Unsupported)

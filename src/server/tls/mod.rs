@@ -22,6 +22,7 @@ use crate::llm::ollama_client::OllamaClient;
 use crate::llm::ActionResult;
 use crate::logging::emit::Log;
 use crate::protocol::Event;
+use crate::server::read_queue::{Admitted, Held, ReadQueue};
 use crate::server::TlsProtocol;
 use crate::state::app_state::AppState;
 use crate::utils::WireFailure;
@@ -132,7 +133,7 @@ const MAX_CONNECTIONS: usize = crate::server::accept_bounded::DEFAULT_MAX_CONNEC
 
 /// Most application data this server will hold for one connection while an answer is in flight.
 ///
-/// `ConnectionData::queued_data` exists because a peer may keep writing while the model is
+/// `ConnectionData::reads` queues reads because a peer may keep writing while the model is
 /// being asked what to say — the Idle → Processing → Accumulating machine every protocol here
 /// hand-rolls. It had no ceiling, so the peer decided how much memory one connection cost, and
 /// it decided it *while the answer it is waiting for has not arrived*: the window is a whole
@@ -186,61 +187,44 @@ fn llm_error_decision(err: &anyhow::Error) -> &'static str {
     }
 }
 
-/// Connection state for LLM processing
-#[derive(Debug, Clone, PartialEq)]
-enum ConnectionState {
-    Idle,
-    Processing,
-    Accumulating,
-}
-
 /// Per-connection data for LLM handling
 struct ConnectionData {
-    state: ConnectionState,
-    queued_data: Vec<u8>,
-    /// Where each read that was queued ended, oldest first, summing to `queued_data.len()`.
-    /// With batching off the next call answers one read rather than the whole queue.
-    queued_chunks: std::collections::VecDeque<usize>,
+    /// The Idle → Processing → Accumulating machine and the reads waiting behind the answer in
+    /// flight. Every decision on it is made under the connection map's lock; see
+    /// [`crate::server::read_queue`]. The decrypted stream has no message boundaries, so with
+    /// batching on everything that arrived during a call is the next call's payload; off, each
+    /// read (in practice one TLS record) is answered on its own, in order — the `tcp` shape.
+    reads: ReadQueue,
     write_half: Arc<Mutex<tokio::io::WriteHalf<tokio_rustls::server::TlsStream<TcpStream>>>>,
 }
 
-impl ConnectionData {
-    /// Queue a read that arrived while the model was answering. The caller has already
-    /// checked [`MAX_QUEUED_BYTES`].
-    fn queue(&mut self, data: &[u8]) {
-        if !data.is_empty() {
-            self.queued_data.extend_from_slice(data);
-            self.queued_chunks.push_back(data.len());
-        }
-    }
+/// Write `data` and flush it through rustls to the socket.
+///
+/// `write_all` on a `tokio_rustls` stream can return once the plaintext is inside the TLS
+/// session but before the records it became have reached the socket: when the socket would
+/// block, `poll_write` reports the plaintext accepted and leaves the ciphertext buffered in
+/// rustls, to go out with the next write or flush. For the last answer on a busy connection
+/// there is no next write, and the peer waited for the tail of its reply until it gave up —
+/// `tests/server/tls/read_order_test.rs` saw it in 2 of 200 runs under load once replies were
+/// ordered. Flushing is what pushes it out.
+async fn write_flushed<W>(write: &mut W, data: &[u8]) -> std::io::Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    write.write_all(data).await?;
+    write.flush().await
+}
 
-    /// What the next call answers: the whole queue when batching, else the oldest read.
-    ///
-    /// The decrypted stream has no message boundaries, so batching is what TLS always did —
-    /// everything that arrived during a call is the next call's payload. With it off, each
-    /// read the socket delivered (in practice one TLS record each) is answered on its own, in
-    /// order. The same shape as `tcp`.
-    fn take_next(&mut self, batching: bool) -> Vec<u8> {
-        if batching || self.queued_chunks.len() <= 1 {
-            self.queued_chunks.clear();
-            return std::mem::take(&mut self.queued_data);
-        }
-        let n = self
-            .queued_chunks
-            .pop_front()
-            .unwrap_or(self.queued_data.len())
-            .min(self.queued_data.len());
-        self.queued_data.drain(..n).collect()
-    }
-
-    /// Replace the queue with one payload that must stay whole — what `wait_for_more` holds.
-    fn hold_as_one(&mut self, data: Vec<u8>) {
-        self.queued_chunks.clear();
-        if !data.is_empty() {
-            self.queued_chunks.push_back(data.len());
-        }
-        self.queued_data = data;
-    }
+/// What the reader does with one read; see [`TlsServer::admit_read`].
+enum Admission {
+    /// The read starts an answer, with this payload.
+    Start(Bytes),
+    /// The read waits behind the answer in flight; this many bytes are now queued.
+    Queued(usize),
+    /// Queueing the read would take the queue to this many bytes, past [`MAX_QUEUED_BYTES`].
+    Overflow(usize),
+    /// The connection is no longer registered.
+    Gone,
 }
 
 /// TLS server that listens for incoming connections
@@ -369,8 +353,8 @@ impl TlsServer {
                                 let write_half_arc = Arc::new(Mutex::new(write_half));
 
                                 // TLS is the one server here whose read loop runs *concurrently*
-                                // with the answer: `handle_data_with_actions` is spawned and the
-                                // loop goes straight back to reading. So a peer whose record is
+                                // with the answer: `answer` is spawned and the loop goes
+                                // straight back to reading. So a peer whose record is
                                 // parked for a human, or is waiting on the model, sits inside the
                                 // read deadline while that happens — and closing it there would be
                                 // exactly the live-transfer eviction this project learned about
@@ -410,15 +394,14 @@ impl TlsServer {
                                 // Register the connection HERE, before either task is spawned.
                                 //
                                 // This used to be the first thing the banner task did, racing the
-                                // reader task spawned immediately after it, and
-                                // handle_data_with_actions returns silently when the connection
-                                // is not in the map. TLS loses that race almost every time: the
-                                // handshake reads from the socket, so application data sent right
-                                // behind the client's Finished is already buffered inside rustls
-                                // and the reader's first read() returns it without ever waiting on
-                                // the I/O driver. 15 of 16 clients that wrote at handshake
-                                // completion had their request dropped with no response and no log
-                                // line.
+                                // reader task spawned immediately after it, and a read is
+                                // dropped when the connection is not in the map. TLS loses that
+                                // race almost every time: the handshake reads from the socket, so
+                                // application data sent right behind the client's Finished is
+                                // already buffered inside rustls and the reader's first read()
+                                // returns it without ever waiting on the I/O driver. 15 of 16
+                                // clients that wrote at handshake completion had their request
+                                // dropped with no response and no log line.
                                 // A `send_first` server registers it `Processing`:
                                 // `tls_connection_opened` is being answered, and application data
                                 // that arrives meanwhile queues behind it instead of raising a
@@ -427,13 +410,11 @@ impl TlsServer {
                                 connections_clone.lock().await.insert(
                                     connection_id,
                                     ConnectionData {
-                                        state: if send_first {
-                                            ConnectionState::Processing
+                                        reads: if send_first {
+                                            ReadQueue::answering()
                                         } else {
-                                            ConnectionState::Idle
+                                            ReadQueue::idle()
                                         },
-                                        queued_data: Vec::new(),
-                                        queued_chunks: Default::default(),
                                         write_half: write_half_arc.clone(),
                                     },
                                 );
@@ -612,34 +593,69 @@ impl TlsServer {
                                                 }
                                                 Ok(n) => {
                                                     seen_data = true;
+                                                    let data = Bytes::copy_from_slice(&buffer[..n]);
 
-                                                    // Bound the queue **before** these bytes are
-                                                    // handed to anything that would keep them.
-                                                    // The size compared is the one the peer has
-                                                    // already committed to — what is queued plus
-                                                    // what this read delivered — not what is left
-                                                    // over after some part of it has been
-                                                    // subtracted, which is the NATS `HPUB`
-                                                    // mistake the project CLAUDE.md records.
-                                                    let queued_state = {
-                                                        let conns =
-                                                            connections_for_read.lock().await;
-                                                        conns.get(&connection_id).map(|c| {
-                                                            (c.state.clone(), c.queued_data.len())
-                                                        })
-                                                    };
-                                                    if let Some((
-                                                        ConnectionState::Processing,
-                                                        queued,
-                                                    )) = queued_state
+                                                    // Data summary + full payload are FileOnly: the
+                                                    // tls_data_received event template renders the
+                                                    // equivalent lines to the TUI, so streaming the
+                                                    // payload here too would duplicate it and load the
+                                                    // unbounded status channel.
+                                                    let log = Log::new(Some(&status_tx_for_read));
+                                                    if data
+                                                        .iter()
+                                                        .all(|&b| b.is_ascii_graphic() || b.is_ascii_whitespace())
                                                     {
-                                                        if queued.saturating_add(n)
-                                                            > MAX_QUEUED_BYTES
-                                                        {
+                                                        let data_str = String::from_utf8_lossy(&data);
+                                                        let preview = if data_str.len() > 100 {
+                                                            format!("{}...", &data_str[..100])
+                                                        } else {
+                                                            data_str.to_string()
+                                                        };
+                                                        log.debug(format!(
+                                                            "TLS received {} bytes on {}: {}",
+                                                            n, connection_id, preview
+                                                        ));
+                                                        log.trace(format!("TLS data (text): {:?}", data_str));
+                                                    } else {
+                                                        log.debug(format!(
+                                                            "TLS received {} bytes on {} (binary data)",
+                                                            n, connection_id
+                                                        ));
+                                                        log.trace(format!("TLS data (hex): {}", hex::encode(&data)));
+                                                    }
+
+                                                    // Into the connection's state machine here, in the
+                                                    // order the reads arrived: either it starts an
+                                                    // answer, or it waits behind the one in flight.
+                                                    // Deciding that in a task spawned per read let two
+                                                    // tasks race for it — a later read could start its
+                                                    // answer first, or two reads could both find the
+                                                    // connection Idle and be answered at once — and
+                                                    // either way replies went out in the wrong order.
+                                                    let batching = app_state_for_read
+                                                        .server_conversation_settings(server_id)
+                                                        .await
+                                                        .is_some_and(|(_, batching)| batching);
+                                                    let payload = match Self::admit_read(
+                                                        connection_id,
+                                                        &data,
+                                                        batching,
+                                                        &connections_for_read,
+                                                    )
+                                                    .await
+                                                    {
+                                                        Admission::Start(payload) => Some(payload),
+                                                        Admission::Queued(queued) => {
+                                                            log.debug(format!(
+                                                                "Queued {n} bytes for {connection_id} ({queued} queued)"
+                                                            ));
+                                                            None
+                                                        }
+                                                        Admission::Overflow(would_be) => {
                                                             Self::refuse_queued_data_overflow(
                                                                 connection_id,
                                                                 server_id,
-                                                                queued.saturating_add(n),
+                                                                would_be,
                                                                 &mut read_half,
                                                                 &write_half_for_read,
                                                                 &connections_for_read,
@@ -649,15 +665,29 @@ impl TlsServer {
                                                             .await;
                                                             break;
                                                         }
-                                                    }
-
-                                                    let data = Bytes::copy_from_slice(&buffer[..n]);
+                                                        Admission::Gone => {
+                                                            // Never silent. A miss here means the
+                                                            // connection was torn down after the read (peer
+                                                            // reset, or close_this_connection on the
+                                                            // answering task) - legitimate, but
+                                                            // indistinguishable from a registration race,
+                                                            // which is exactly what made the bitcoin
+                                                            // accept-order bug so hard to find.
+                                                            debug!(
+                                                                "TLS connection {} is no longer registered; dropping {} received bytes",
+                                                                connection_id, n
+                                                            );
+                                                            None
+                                                        }
+                                                    };
 
                                                     // Keep the rail's down/up counters and
-                                                    // `last_activity` moving. Nothing else updates
-                                                    // them for TLS, so every connection was drawn
-                                                    // with 0B in both directions however much it
-                                                    // carried.
+                                                    // `last_activity` moving. Nothing else updates them
+                                                    // for TLS, so every connection was drawn with 0B in
+                                                    // both directions however much it carried. Counted
+                                                    // once the read is in the state machine, so a count
+                                                    // that includes it means it is queued or being
+                                                    // answered.
                                                     app_state_for_read
                                                         .update_connection_stats(
                                                             server_id,
@@ -669,63 +699,34 @@ impl TlsServer {
                                                         )
                                                         .await;
 
-                                                    // Data summary + full payload are FileOnly: the
-                                                    // tls_data_received event template renders the
-                                                    // equivalent lines to the TUI, so streaming the
-                                                    // payload here too would duplicate it and load the
-                                                    // unbounded status channel.
-                                                    let log = Log::new(Some(&status_tx_for_read));
-                                                    if data.iter().all(|&b| {
-                                                        b.is_ascii_graphic()
-                                                            || b.is_ascii_whitespace()
-                                                    }) {
-                                                        let data_str =
-                                                            String::from_utf8_lossy(&data);
-                                                        let preview = if data_str.len() > 100 {
-                                                            format!("{}...", &data_str[..100])
-                                                        } else {
-                                                            data_str.to_string()
-                                                        };
-                                                        log.debug(format!(
-                                                            "TLS received {} bytes on {}: {}",
-                                                            n, connection_id, preview
-                                                        ));
-                                                        log.trace(format!(
-                                                            "TLS data (text): {:?}",
-                                                            data_str
-                                                        ));
-                                                    } else {
-                                                        log.debug(format!(
-                                                    "TLS received {} bytes on {} (binary data)",
-                                                    n, connection_id
-                                                ));
-                                                        log.trace(format!(
-                                                            "TLS data (hex): {}",
-                                                            hex::encode(&data)
-                                                        ));
-                                                    }
+                                                    let Some(payload) = payload else {
+                                                        continue;
+                                                    };
 
-                                                    // Handle data in separate task
+                                                    // The answer runs in its own task so the loop can
+                                                    // go back to reading: what arrives meanwhile is
+                                                    // queued behind it by `admit_read`.
                                                     let llm_clone = llm_client_for_read.clone();
                                                     let state_clone = app_state_for_read.clone();
                                                     let status_clone = status_tx_for_read.clone();
                                                     let conns_clone = connections_for_read.clone();
                                                     let protocol_clone = protocol_for_read.clone();
-                                                    // Marked busy *before* the task is spawned, so
-                                                    // there is no window in which the read deadline
-                                                    // could see the connection as idle while an answer
-                                                    // is on its way.
-                                                    activity_for_read.begin_work();
-                                                    let activity_for_handler =
-                                                        Arc::clone(&activity_for_read);
+                                                    // Busy for the whole of the answer — every queued
+                                                    // read it goes on to answer included — and marked
+                                                    // before the task is spawned, so there is no window
+                                                    // in which the read deadline could see the
+                                                    // connection as idle while an answer is on its way.
+                                                    let busy = activity_for_read.busy();
                                                     // Tracked, not detached: stop_server must abort this task too.
                                                     let task_owner = app_state_for_read.clone();
                                                     task_owner
                                                         .spawn_server_task(server_id, async move {
-                                                            Self::handle_data_with_actions(
+                                                            let _busy = busy;
+                                                            Self::answer(
                                                                 connection_id,
                                                                 server_id,
-                                                                data,
+                                                                payload,
+                                                                batching,
                                                                 llm_clone,
                                                                 state_clone,
                                                                 status_clone,
@@ -733,7 +734,6 @@ impl TlsServer {
                                                                 protocol_clone,
                                                             )
                                                             .await;
-                                                            activity_for_handler.end_work();
                                                         })
                                                         .await;
                                                 }
@@ -856,7 +856,7 @@ impl TlsServer {
                     match protocol_result {
                         ActionResult::Output(output_data) => {
                             let mut write = write_half.lock().await;
-                            if let Err(e) = write.write_all(&output_data).await {
+                            if let Err(e) = write_flushed(&mut *write, &output_data).await {
                                 log.error(format!("Failed to send greeting: {}", e));
                             } else {
                                 drop(write);
@@ -953,19 +953,26 @@ impl TlsServer {
 
         let _ = opened.send(());
 
+        // Hand over whatever arrived while the connect event was being answered. Taken and
+        // left `Processing` under one lock, or the reader could find the connection `Idle` in
+        // between and start an answer for a later read ahead of these.
+        let batching = app_state
+            .server_conversation_settings(server_id)
+            .await
+            .is_some_and(|(_, batching)| batching);
         let queued = {
             let mut conns = connections.lock().await;
             let Some(conn) = conns.get_mut(&connection_id) else {
                 return;
             };
-            conn.state = ConnectionState::Idle;
-            !conn.queued_data.is_empty()
+            conn.reads.next_or_idle(batching)
         };
-        if queued {
-            Self::handle_data_with_actions(
+        if let Some(queued) = queued {
+            Self::answer(
                 connection_id,
                 server_id,
-                Bytes::new(),
+                Bytes::from(queued),
+                batching,
                 llm_client,
                 app_state,
                 status_tx,
@@ -1046,99 +1053,58 @@ impl TlsServer {
         let _ = status_tx.send("__UPDATE_UI__".to_string());
     }
 
-    /// Handle data received on a connection with LLM actions
-    async fn handle_data_with_actions(
+    /// Take one read into the connection's state machine, in the order the reader got it.
+    ///
+    /// Called by the reader itself, never from a spawned task: the decision has to be made in
+    /// arrival order and under one lock. When each read's task made it, two reads could both
+    /// find the connection `Idle` and be answered concurrently, and a later read's task could
+    /// run first — its reply then went out ahead of the earlier one's.
+    ///
+    /// The queue is bounded **before** the bytes are kept, against what is queued plus what
+    /// this read delivered — the size the peer has already committed to, not what is left over
+    /// after some part of it has been subtracted, which is the NATS `HPUB` mistake the project
+    /// AGENTS.md records. The check and the queueing share the lock, so the queue cannot pass
+    /// [`MAX_QUEUED_BYTES`] however reads and the answering task interleave.
+    async fn admit_read(
+        connection_id: ConnectionId,
+        data: &[u8],
+        batching: bool,
+        connections: &Mutex<HashMap<ConnectionId, ConnectionData>>,
+    ) -> Admission {
+        let mut conns = connections.lock().await;
+        let Some(conn) = conns.get_mut(&connection_id) else {
+            return Admission::Gone;
+        };
+        if conn.reads.is_answering() {
+            let would_be = conn.reads.queued_len().saturating_add(data.len());
+            if would_be > MAX_QUEUED_BYTES {
+                return Admission::Overflow(would_be);
+            }
+        }
+        match conn.reads.admit(data, batching) {
+            Admitted::Start(payload) => Admission::Start(Bytes::from(payload)),
+            Admitted::Queued(queued) => Admission::Queued(queued),
+        }
+    }
+
+    /// Answer `payload` on a connection [`Self::admit_read`] has moved to `Processing`, then
+    /// everything queued behind it, oldest first, until the queue is empty.
+    ///
+    /// One of these runs per connection at a time: only the move into `Processing` starts one,
+    /// and it leaves `Processing` only when it ends.
+    #[allow(clippy::too_many_arguments)]
+    async fn answer(
         connection_id: ConnectionId,
         server_id: crate::state::ServerId,
-        data: Bytes,
+        payload: Bytes,
+        batching: bool,
         llm_client: OllamaClient,
         app_state: Arc<AppState>,
         status_tx: mpsc::UnboundedSender<String>,
         connections: Arc<Mutex<HashMap<ConnectionId, ConnectionData>>>,
         protocol: Arc<TlsProtocol>,
     ) {
-        // Read per event: batching is hot-changeable.
-        let batching = app_state
-            .server_conversation_settings(server_id)
-            .await
-            .is_some_and(|(_, batching)| batching);
-
-        // Check connection state
-        let current_state = {
-            let conns = connections.lock().await;
-            if let Some(conn_data) = conns.get(&connection_id) {
-                conn_data.state.clone()
-            } else {
-                // Never silent. A miss here means the connection was torn down between the
-                // read and this lookup (peer reset, or close_this_connection on another
-                // task) - legitimate, but indistinguishable from a registration race, which
-                // is exactly what made the bitcoin accept-order bug so hard to find: the
-                // read loop logged "received N bytes" and then nothing at all.
-                debug!(
-                    "TLS connection {} is no longer registered; dropping {} received bytes",
-                    connection_id,
-                    data.len()
-                );
-                return;
-            }
-        };
-
-        // If processing, queue the data — up to the cap, and never past it.
-        //
-        // The reader loop refuses and tears the connection down before it ever hands over data
-        // that would cross [`MAX_QUEUED_BYTES`], so this is the second half of the same bound
-        // rather than a different one: the reader's check reads the queue length a moment
-        // before this runs, and with a handler task in between the two there is a window in
-        // which another read could arrive. Refusing to extend here is what makes the `Vec`
-        // itself unable to exceed the cap, whatever that window does.
-        if current_state == ConnectionState::Processing {
-            let mut refused = None;
-            connections
-                .lock()
-                .await
-                .entry(connection_id)
-                .and_modify(|conn| {
-                    let would_be = conn.queued_data.len().saturating_add(data.len());
-                    if would_be > MAX_QUEUED_BYTES {
-                        refused = Some(would_be);
-                    } else {
-                        conn.queue(&data);
-                    }
-                });
-            match refused {
-                Some(would_be) => Log::new(Some(&status_tx)).warn(format!(
-                    "TLS connection {connection_id} decision=fail_closed_queued_data_overflow: \
-                     dropped {} bytes that would have taken the queue to {would_be}, limit is \
-                     {MAX_QUEUED_BYTES}",
-                    data.len()
-                )),
-                None => Log::new(Some(&status_tx)).debug(format!(
-                    "Queued {} bytes for {}",
-                    data.len(),
-                    connection_id
-                )),
-            }
-            return;
-        }
-
-        // Merge any queued data with new data.
-        //
-        // The lock was released after the state check above, so the reader task
-        // may have removed this connection in the meantime (client disconnected).
-        // Unwrapping here panicked the task on that race, and a panicked task
-        // leaves the server reporting Running.
-        let mut all_data = {
-            let mut conns = connections.lock().await;
-            let Some(conn_data) = conns.get_mut(&connection_id) else {
-                return; // Connection closed while we were waiting for the lock
-            };
-            // Bytes held for `wait_for_more` are one message with whatever completes it, so
-            // they are always taken whole; otherwise batching decides.
-            let take_all = batching || current_state == ConnectionState::Accumulating;
-            conn_data.state = ConnectionState::Processing;
-            conn_data.queue(&data);
-            Bytes::from(conn_data.take_next(take_all))
-        };
+        let mut all_data = payload;
 
         loop {
             // Get write_half for context
@@ -1207,7 +1173,7 @@ impl TlsServer {
                                 acted = true;
                                 let mut write = write_half.lock().await;
                                 let log = Log::new(Some(&status_tx));
-                                if let Err(e) = write.write_all(&output_data).await {
+                                if let Err(e) = write_flushed(&mut *write, &output_data).await {
                                     log.error(format!("Failed to send response: {}", e));
                                 } else {
                                     // Sent-data summary + payload are FileOnly: the
@@ -1289,18 +1255,19 @@ impl TlsServer {
                     // them meant the model never saw the front of the message again. The same
                     // repair as `tcp`.
                     if should_wait {
-                        let (queued_len, arrived_during_call) = {
+                        // Bytes that arrived while the model was thinking *are* the "more" it
+                        // asked for, and parking them would wait for a read that may never come
+                        // — the peer has sent its whole message and is waiting. So
+                        // `hold_for_more` hands the joined payload straight back, still
+                        // `Processing`, in the same step that would otherwise have parked it.
+                        let held = {
                             let mut conns = connections.lock().await;
                             let Some(conn) = conns.get_mut(&connection_id) else {
                                 return;
                             };
-                            let arrived_during_call = !conn.queued_data.is_empty();
-                            let mut merged = all_data.to_vec();
-                            merged.append(&mut conn.queued_data);
-                            conn.hold_as_one(merged);
-                            conn.state = ConnectionState::Accumulating;
-                            (conn.queued_data.len(), arrived_during_call)
+                            conn.reads.hold_for_more(&all_data)
                         };
+                        let queued_len = held.len();
 
                         // Same bound as the Processing queue: a model that answers
                         // `wait_for_more` to everything must not be a way to grow memory
@@ -1323,18 +1290,7 @@ impl TlsServer {
                             return;
                         }
 
-                        // Bytes that arrived while the model was thinking *are* the "more" it
-                        // asked for. Returning here would park them until the next read, which
-                        // may never come — the peer has sent its whole message and is waiting.
-                        if arrived_during_call {
-                            let joined = {
-                                let mut conns = connections.lock().await;
-                                let Some(conn) = conns.get_mut(&connection_id) else {
-                                    return;
-                                };
-                                conn.state = ConnectionState::Processing;
-                                conn.take_next(true)
-                            };
+                        if let Held::Resume(joined) = held {
                             Log::new(Some(&status_tx)).debug(format!(
                                 "wait_for_more on {connection_id}: {} bytes already waiting, \
                                  continuing",
@@ -1367,45 +1323,25 @@ impl TlsServer {
                         return;
                     }
 
-                    // Check for queued data
-                    let has_queued = {
-                        let conns = connections.lock().await;
-                        conns
-                            .get(&connection_id)
-                            .map(|c| !c.queued_data.is_empty())
-                            .unwrap_or(false)
-                    };
-
-                    if has_queued {
-                        // Take the queue and make it the next iteration's payload.
-                        // Leaving it in place re-sent the SAME bytes to the model on
-                        // every pass and never emptied the queue: one response per
-                        // iteration, forever, for a single line of input.
-                        let queued = {
-                            let mut conns = connections.lock().await;
-                            match conns.get_mut(&connection_id) {
-                                Some(conn) => conn.take_next(batching),
-                                None => return,
-                            }
-                        };
-                        if queued.is_empty() {
-                            connections
-                                .lock()
-                                .await
-                                .entry(connection_id)
-                                .and_modify(|conn| conn.state = ConnectionState::Idle);
+                    // Take the queue's next payload, or go Idle when it is empty — under one
+                    // lock. Checked and set separately, a read queued in between (the
+                    // connection still `Processing`) was stranded by the move to `Idle` until
+                    // the peer happened to send something else.
+                    //
+                    // Taken, not peeked: leaving it in place re-sent the SAME bytes to the
+                    // model on every pass and never emptied the queue — one response per
+                    // iteration, forever, for a single line of input.
+                    let queued = {
+                        let mut conns = connections.lock().await;
+                        let Some(conn) = conns.get_mut(&connection_id) else {
                             return;
-                        }
-                        all_data = Bytes::from(queued);
-                    } else {
-                        // Go to Idle state
-                        connections
-                            .lock()
-                            .await
-                            .entry(connection_id)
-                            .and_modify(|conn| conn.state = ConnectionState::Idle);
+                        };
+                        conn.reads.next_or_idle(batching)
+                    };
+                    let Some(queued) = queued else {
                         return;
-                    }
+                    };
+                    all_data = Bytes::from(queued);
                 }
                 Err(e) => {
                     // The full error goes to the log and the status stream; the peer gets a

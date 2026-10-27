@@ -82,7 +82,25 @@ Per-connection state tracking:
 - **Processing**: LLM call active, queue incoming data
 - **Accumulating**: LLM requested more data (WAIT_FOR_MORE action)
 
-Prevents concurrent LLM calls on same connection, ensures data ordering.
+Prevents concurrent LLM calls on same connection, ensures data ordering — because the
+**reader** makes every decision on it, in arrival order and under the connection lock
+(`admit_read`): an `Idle` or `Accumulating` connection starts the one answering task
+(`answer`), a `Processing` one queues the read. The answering task leaves `Processing` only by
+taking the next payload or going `Idle` under one lock. The machine is
+`crate::server::read_queue::ReadQueue`, shared with `tcp`.
+
+This server used to spawn a task per read that read the state under one lock and set it under
+another, so two records could both find the connection `Idle` and be answered at once, a later
+one first, and a record queued between "is the queue empty?" and "go `Idle`" waited for the
+peer's next one. `tests/server/tls/read_order_test.rs` — four verified connections, 300 records
+each, echoed by a static rule — failed in 192 of 200 runs under load (127 with batching off, 65
+on), and in none of 200 since.
+
+Ordering the replies exposed a second defect behind the first: `write_all` on a `tokio_rustls`
+stream can return with the last records still buffered inside rustls (the socket would block,
+and the ciphertext waits for the next write or flush). The last reply on a busy connection then
+never reached the peer — 2 of 200 runs of the same test lost the tail of their echoes. Every
+answer is now written with `write_flushed`, which flushes through rustls to the socket.
 
 ### 6. Data Queueing
 
@@ -94,7 +112,7 @@ If data arrives during LLM processing:
 - Loop continues until queue empty
 
 **Batching** (`BatchingMode::On`, the `tcp` shape). The queue remembers where each read ended
-(`queued_chunks`), and `ConnectionData::take_next` decides what the next call answers: with
+(`ReadQueue`), and `next_or_idle` decides what the next call answers: with
 batching on, everything that arrived during the call is one `tls_data_received` payload; with it
 off, one read (in practice one TLS record) per call, in order. Bytes held by `wait_for_more` are
 always taken whole. `MAX_QUEUED_BYTES` bounds the queue either way.
@@ -197,10 +215,11 @@ Example:
 Use case: HTTP request without complete headers, fragmented protocol messages
 
 The bytes the model was just shown are kept: they go back to the head of the queue as one
-payload (`ConnectionData::hold_as_one`), and the next call is shown them joined with whatever
+payload (`ReadQueue::hold_for_more`), and the next call is shown them joined with whatever
 completes them. If bytes arrived while the model was answering, they are the "more" it asked
 for, and the server goes round again at once with the joined payload rather than waiting for a
-read that may never come. What accumulates is bounded by `MAX_QUEUED_BYTES`; past it the
+read that may never come — without leaving `Processing`, so no read can start a second answer
+in between. What accumulates is bounded by `MAX_QUEUED_BYTES`; past it the
 connection is closed with `decision=fail_closed_queued_data_overflow`. Same repair as `tcp`;
 `tests/server/tls/wait_for_more_test.rs` covers it.
 
@@ -251,8 +270,8 @@ Example:
 
 **Step 3 happens synchronously, before either per-connection task is spawned.** Registering the
 connection in the `connections` map used to be the first thing the banner task did, racing the
-reader task spawned immediately after it, and `handle_data_with_actions` returns silently when
-the connection is not in the map. TLS lost that race almost every time — the handshake reads
+reader task spawned immediately after it, and a read was dropped silently when the connection
+was not in the map. TLS lost that race almost every time — the handshake reads
 from the socket, so application data sent right behind the client's `Finished` is already
 buffered inside rustls and the reader's first `read()` returns it without ever waiting on the
 I/O driver. 15 of 16 clients that wrote at handshake completion had their request dropped with
@@ -538,7 +557,7 @@ them is the general lesson: **a bound that covers two waits is only correct if b
 the same peer.** `PROTOCOL_QUALITY.md`'s three-state test; `src/server/redis/` is the shape
 copied.
 
-**The deadline covers the read and nothing else.** TLS is the one server here whose read loop runs *concurrently* with the answer: `handle_data_with_actions` is spawned and the loop goes straight back to reading, so a record parked for a human sits inside the read deadline while it happens. `ConnectionActivity` is marked busy before the task is spawned and released when it ends, and the read deadline re-arms rather than closing while it is set. The LLM round-trip, and a `manual`
+**The deadline covers the read and nothing else.** TLS is the one server here whose read loop runs *concurrently* with the answer: `answer` is spawned and the loop goes straight back to reading, so a record parked for a human sits inside the read deadline while it happens. `ConnectionActivity` is marked busy before the answering task is spawned and released when it ends — after every record queued behind the first, and the read deadline re-arms rather than closing while it is set. The LLM round-trip, and a `manual`
 rule parking an event for a human (`src/state/intercepts.rs`, 300s by default), are outside
 every deadline here, so an answer that takes minutes can never close the connection it is an
 answer for. That is the `.connectionless()` lesson in the project `AGENTS.md` read in reverse:
@@ -556,7 +575,7 @@ connection is never reported as idle.
 
 ### The queued-data cap, and the alert TLS has but rustls will not send
 
-`ConnectionData::queued_data` is the `Accumulating` half of the Idle → Processing →
+`ConnectionData::reads` is the `Accumulating` half of the Idle → Processing →
 Accumulating machine: a peer may keep writing while the model is being asked what to say, and
 those bytes are held until the answer arrives. It had **no ceiling at all**, so the peer decided
 how much memory a connection cost — during a window whose length it also influences. An LLM
@@ -567,8 +586,8 @@ of it, and no model call: the first record a stranger sends opens the window.
 The cap is checked **in the read loop, before the bytes are handed to anything that keeps
 them**, against `queued + n` — the size the peer has already committed to, not what is left
 after subtracting part of it, which is the NATS `HPUB` mistake the project `AGENTS.md` records.
-`handle_data_with_actions` re-checks at the `extend_from_slice` itself, so the `Vec` cannot
-exceed the cap however the read loop and the handler task interleave.
+The check and the queueing are one decision under the connection lock (`admit_read`), so the
+queue cannot exceed the cap however the read loop and the answering task interleave.
 
 **The alert is `close_notify`, and it is not the alert this deserves.** TLS has a description
 for exactly this condition — `record_overflow(22)` — and rustls 0.23 will not emit it:

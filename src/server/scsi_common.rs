@@ -101,6 +101,27 @@ impl Sense {
     /// could not be carried out.
     pub const COMMUNICATION_FAILURE: Sense = Sense::new(sense_key::ABORTED_COMMAND, 0x08, 0x00);
     pub const NO_SENSE: Sense = Sense::new(sense_key::NO_SENSE, 0x00, 0x00);
+    /// Unit attention after a hard (target) reset: SAM's generic "reset occurred", which is
+    /// what SPC has a device server report when it names no more specific event.
+    pub const RESET_OCCURRED: Sense = Sense::new(sense_key::UNIT_ATTENTION, 0x29, 0x00);
+    /// Unit attention after a power-on event (iSCSI's TARGET COLD RESET is one, RFC 7143
+    /// §11.5.1).
+    pub const POWER_ON_OCCURRED: Sense = Sense::new(sense_key::UNIT_ATTENTION, 0x29, 0x01);
+    /// Unit attention after a LOGICAL UNIT RESET (SAM-5 §6.3.3).
+    pub const BUS_DEVICE_RESET_OCCURRED: Sense = Sense::new(sense_key::UNIT_ATTENTION, 0x29, 0x03);
+    /// Unit attention for an I_T nexus whose tasks another nexus cleared (CLEAR TASK SET).
+    pub const COMMANDS_CLEARED_BY_ANOTHER_INITIATOR: Sense =
+        Sense::new(sense_key::UNIT_ATTENTION, 0x2F, 0x00);
+    /// Unit attention after iSCSI ended tasks itself: a connection closed or failed with
+    /// tasks allegiant to it (RFC 7143 §11.14.5).
+    pub const COMMANDS_CLEARED_BY_ISCSI_EVENT: Sense =
+        Sense::new(sense_key::UNIT_ATTENTION, 0x47, 0x7F);
+    /// iSCSI's "Protocol Service CRC error" (RFC 7143 §11.4.7.2): a write's data failed its
+    /// digest and was not recovered.
+    pub const PROTOCOL_SERVICE_CRC_ERROR: Sense =
+        Sense::new(sense_key::ABORTED_COMMAND, 0x47, 0x05);
+    /// iSCSI's "SNACK rejected" (RFC 7143 §11.4.7.2).
+    pub const SNACK_REJECTED: Sense = Sense::new(sense_key::ABORTED_COMMAND, 0x11, 0x13);
 
     pub fn with_info(mut self, info: u64) -> Self {
         self.info = Some(info);
@@ -226,6 +247,12 @@ pub fn asc_meaning(asc: u8, ascq: u8) -> String {
         (0x28, 0x00) => "NOT READY TO READY CHANGE, MEDIUM MAY HAVE CHANGED",
         (0x29, 0x00) => "POWER ON, RESET, OR BUS DEVICE RESET OCCURRED",
         (0x29, 0x01) => "POWER ON OCCURRED",
+        (0x29, 0x02) => "SCSI BUS RESET OCCURRED",
+        (0x29, 0x03) => "BUS DEVICE RESET FUNCTION OCCURRED",
+        (0x29, 0x07) => "I_T NEXUS LOSS OCCURRED",
+        (0x2F, 0x00) => "COMMANDS CLEARED BY ANOTHER INITIATOR",
+        (0x47, 0x7F) => "SOME COMMANDS CLEARED BY ISCSI PROTOCOL EVENT",
+        (0x11, 0x13) => "READ ERROR - FAILED RETRANSMISSION REQUEST",
         (0x2A, 0x09) => "CAPACITY DATA HAS CHANGED",
         (0x39, 0x00) => "SAVING PARAMETERS NOT SUPPORTED",
         (0x3A, 0x00) => "MEDIUM NOT PRESENT",
@@ -521,6 +548,18 @@ pub fn cdb_len(opcode: u8) -> Option<usize> {
 pub fn decode_read_write(cdb: &[u8]) -> Option<ReadWrite> {
     use opcode::*;
     let op = *cdb.first()?;
+    // The whole form, control byte included: reading only the fields used let a 9-byte
+    // READ(10) through with any transfer length (found by `iscsi_pdu`).
+    let form = match op {
+        READ_6 | WRITE_6 => 6,
+        READ_10 | WRITE_10 => 10,
+        READ_12 | WRITE_12 => 12,
+        READ_16 | WRITE_16 => 16,
+        _ => return None,
+    };
+    if cdb.len() < form {
+        return None;
+    }
     let write = matches!(op, WRITE_6 | WRITE_10 | WRITE_12 | WRITE_16);
     let be = |r: std::ops::Range<usize>| -> Option<u64> {
         Some(

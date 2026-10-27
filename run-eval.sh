@@ -11,7 +11,7 @@
 # sampler seed (--seed, default 42), which makes an identical prompt answer
 # identically; each run's prompt still carries its own ports and ids, so the
 # report measures how often the runs agreed rather than assuming they did.
-# See tests/eval/mod.rs for the design and EVAL_RESULTS.md for the output.
+# See tests/eval/mod.rs for the design and eval-results/EVAL_RESULTS.md for the output.
 #
 # Usage:
 #   ./run-eval.sh                       # every protocol in the default set
@@ -23,7 +23,7 @@
 #   ./run-eval.sh --out /tmp/ipp ipp    # write the two artefacts there, not over the baseline
 #   ./run-eval.sh --list                # what would run, and with what client
 #
-# Output: eval-results/latest.json and EVAL_RESULTS.md, regenerated together
+# Output: eval-results/latest.json and eval-results/EVAL_RESULTS.md, regenerated together
 # (or DIR/latest.json and DIR/EVAL_RESULTS.md with --out DIR).
 
 set -euo pipefail
@@ -219,7 +219,7 @@ set -e
 echo ""
 RESULTS_JSON="${OUT_DIR:-eval-results}/latest.json"
 if [ -f "$RESULTS_JSON" ]; then
-    echo "${GREEN}Results:${NC} ${RESULTS_JSON} and ${OUT_DIR:-.}/EVAL_RESULTS.md"
+    echo "${GREEN}Results:${NC} ${RESULTS_JSON} and ${OUT_DIR:-eval-results}/EVAL_RESULTS.md"
 else
     echo "${RED}No results file was written — the harness did not complete.${NC}" >&2
 fi

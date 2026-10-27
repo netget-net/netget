@@ -20,7 +20,9 @@ mod helpers;
 
 use std::time::Duration;
 
+use helpers::arrival::{wait_until_acknowledged, wait_until_server_received};
 use helpers::mock_builder::MockLlmBuilder;
+use helpers::mock_config::MockGate;
 use helpers::mock_ollama::MockOllamaServer;
 use netget::cli::management::ServerForm;
 use netget::state::app_state::AppState;
@@ -436,16 +438,27 @@ async fn history_and_batching_overrides_apply_and_refuse_cleanly() {
 
 /// Send `first`, then — while the model is still answering it — `second` and `third`, and
 /// return the prompts of every `telnet_message_received` call the model received.
-async fn prompts_for_three_lines(batching: bool) -> Vec<(String, serde_json::Value)> {
+///
+/// `second` is the text of the second line, so a caller can make it long enough to end
+/// exactly where one socket read does.
+///
+/// "While the model is still answering" is made true rather than likely: the answer to `first`
+/// is held on a gate until both later lines have been written. It used to be a 1.5 s delay
+/// started when the mock had seen *any* call — and every telnet connection raises
+/// `telnet_connection_opened` before its first line is read, so under load the test could see
+/// that call, write `second` and `third` before the server had read `first`, and the server
+/// then correctly answered all three in one batch.
+async fn prompts_for_three_lines(batching: bool, second: &str) -> Vec<(String, serde_json::Value)> {
+    let first_answer = MockGate::new();
     let mock = MockOllamaServer::start(
         MockLlmBuilder::new()
-            // The first line is answered slowly, so the next two arrive during the call.
+            // The answer to the first line waits until the next two have been sent.
             .on_event("telnet_message_received")
             .and_event_data_contains("message", "first")
             .respond_with_actions(serde_json::json!([
                 { "type": "send_telnet_line", "line": "got first" }
             ]))
-            .after_delay(Duration::from_millis(1500))
+            .held_until(&first_answer)
             .expect_calls(1)
             .and()
             .on_event("telnet_message_received")
@@ -487,19 +500,31 @@ async fn prompts_for_three_lines(batching: bool) -> Vec<(String, serde_json::Val
     let mut reader = BufReader::new(read_half);
 
     write_half.write_all(b"first\r\n").await.expect("write");
-    // Let the server read `first` and start its (slow) model call before the rest arrives.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while mock.call_count().await == 0 {
+    // Wait for the call answering `first` itself. The connect event's call comes earlier and
+    // proves nothing about where the server is: it is made before the first line is read.
+    // Once the call for `first` is recorded, that line's batch has been collected and the
+    // server is waiting on the model, which cannot answer until the gate opens.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while !mock.recorded_calls().await.iter().any(|c| {
+        c.context.event_type.as_deref() == Some("telnet_message_received")
+            && c.context.event_data["message"] == "first"
+    }) {
         assert!(
             tokio::time::Instant::now() < deadline,
             "the first line never reached the model"
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+    // Typed as two separate lines, both before the answer to `first` exists, and both in the
+    // server's receive buffer before that answer is let go.
     write_half
-        .write_all(b"second\r\nthird\r\n")
+        .write_all(format!("{second}\r\n").as_bytes())
         .await
         .expect("write");
+    write_half.write_all(b"third\r\n").await.expect("write");
+    write_half.flush().await.expect("flush");
+    wait_until_acknowledged(write_half.as_ref()).await;
+    first_answer.release();
     read_until(&mut reader, "got third").await;
 
     let prompts = mock
@@ -516,7 +541,7 @@ async fn prompts_for_three_lines(batching: bool) -> Vec<(String, serde_json::Val
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn lines_typed_during_a_call_are_answered_together() {
     // === Control: batching off. Every line is its own call. ===
-    let separate = prompts_for_three_lines(false).await;
+    let separate = prompts_for_three_lines(false, "second").await;
     assert_eq!(
         separate.len(),
         3,
@@ -527,7 +552,7 @@ async fn lines_typed_during_a_call_are_answered_together() {
     );
 
     // === The claim: the two lines that arrived during the slow call come back as one. ===
-    let batched = prompts_for_three_lines(true).await;
+    let batched = prompts_for_three_lines(true, "second").await;
     assert_eq!(
         batched.len(),
         2,
@@ -555,9 +580,65 @@ async fn lines_typed_during_a_call_are_answered_together() {
     );
 }
 
+/// A line that arrived during the call but is still in the kernel's receive buffer has arrived.
+///
+/// The second line is sized so that it and its CRLF fill exactly one socket read, so after the
+/// first call the server's read returns that line and nothing more: `third` is not in the
+/// reader's own buffer, only in the kernel's. Batching has to read the socket to find it — a
+/// reader that took only what it had already buffered would answer `third` in a call of its own.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_line_still_in_the_kernel_buffer_joins_the_batch() {
+    use netget::server::telnet::READ_CHUNK_BYTES;
+    let second = format!(
+        "second{}",
+        "-".repeat(READ_CHUNK_BYTES - "second\r\n".len())
+    );
+    assert_eq!(second.len() + 2, READ_CHUNK_BYTES);
+
+    let separate = prompts_for_three_lines(false, &second).await;
+    assert_eq!(
+        separate.len(),
+        3,
+        "CONTROL FAILED: with batching off each line must be its own model call; got {}",
+        separate.len()
+    );
+
+    let batched = prompts_for_three_lines(true, &second).await;
+    assert_eq!(
+        batched.len(),
+        2,
+        "the line still in the kernel buffer must join the batch, not wait for a call of its \
+         own; got {} calls: {:#?}",
+        batched.len(),
+        batched
+            .iter()
+            .map(|(_, d)| d["message"]
+                .as_str()
+                .unwrap_or_default()
+                .chars()
+                .take(12)
+                .collect::<String>())
+            .collect::<Vec<_>>()
+    );
+    let (prompt, current) = &batched[1];
+    assert_eq!(
+        current["message"], "third",
+        "the newest line is the batch's trigger"
+    );
+    assert!(
+        prompt.contains("answers all 2 together"),
+        "the model must be told it answers both"
+    );
+}
+
 /// TCP: `first`, then two separate writes while the model answers it. Returns the `data` of
 /// every `tcp_data_received` the model was asked about.
+///
+/// As for telnet, the answer to `first` is held on a gate rather than delayed. The two later
+/// writes are two reads by construction: the server counts a read received once it has queued
+/// it behind the call in flight, so `third` is written only after the count includes `second`.
 async fn tcp_payloads_for_three_writes(batching: bool) -> Vec<String> {
+    let first_answer = MockGate::new();
     let mock = MockOllamaServer::start(
         MockLlmBuilder::new()
             .on_event("tcp_data_received")
@@ -565,7 +646,7 @@ async fn tcp_payloads_for_three_writes(batching: bool) -> Vec<String> {
             .respond_with_actions(serde_json::json!([
                 { "type": "send_tcp_data", "data": "ok first\n", "encoding": "utf8" }
             ]))
-            .after_delay(Duration::from_millis(1500))
+            .held_until(&first_answer)
             .expect_calls(1)
             .and()
             .on_event("tcp_data_received")
@@ -603,18 +684,30 @@ async fn tcp_payloads_for_three_writes(batching: bool) -> Vec<String> {
     let mut reader = BufReader::new(read_half);
 
     write_half.write_all(b"first").await.expect("write");
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while mock.call_count().await == 0 {
+    // The call for `first` itself. (Without `send_first` TCP raises no connect event, so it is
+    // also the first call; waiting for it by its data does not depend on that.)
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while !mock.recorded_calls().await.iter().any(|c| {
+        c.context.event_type.as_deref() == Some("tcp_data_received")
+            && c.context.event_data["data"] == "first"
+    }) {
         assert!(
             tokio::time::Instant::now() < deadline,
             "first never reached the model"
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    // Two reads the server sees separately, both during the slow first call.
+    // Two reads the server takes separately, both queued before the first answer exists.
     write_half.write_all(b"second").await.expect("write");
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    wait_until_server_received(&state, id, ("first".len() + "second".len()) as u64).await;
     write_half.write_all(b"third").await.expect("write");
+    wait_until_server_received(
+        &state,
+        id,
+        ("first".len() + "second".len() + "third".len()) as u64,
+    )
+    .await;
+    first_answer.release();
     read_until(&mut reader, "third").await;
 
     let payloads = mock

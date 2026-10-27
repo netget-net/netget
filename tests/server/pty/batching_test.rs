@@ -7,16 +7,25 @@
 //! above it.
 //!
 //! Driven in-process: the test opens the slave through the server's symlink, as a terminal
-//! program would. The first write is answered slowly; two more are written, 200 ms apart, during
-//! that call. Off is the control and runs first in the same test: three calls, one per write.
-//! On: two calls, the second triggered by `third` with `second` listed as not yet answered.
+//! program would. The answer to the first write is held on a gate; two more are written during
+//! that call, and the gate opens only once the server has read both. Off is the control and
+//! runs first in the same test: three calls, one per write. On: two calls, the second triggered
+//! by `third` with `second` listed as not yet answered.
+//!
+//! Nothing here is timed. The server counts a read received once its reader has queued it for
+//! the dispatcher, so the test writes `second`, waits for the count to include it — the reader
+//! has taken it as a read of its own, because nothing else had been written — and only then
+//! writes `third`. With a pause instead, a busy machine could leave both writes in the PTY
+//! buffer for one read, and the control would see `secondthird`.
 #![cfg(unix)]
 
 use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
 
+use crate::helpers::arrival::wait_until_server_received;
 use crate::helpers::mock_builder::MockLlmBuilder;
+use crate::helpers::mock_config::MockGate;
 use crate::helpers::mock_ollama::MockOllamaServer;
 use netget::cli::management::ServerForm;
 use netget::state::app_state::AppState;
@@ -35,12 +44,14 @@ async fn wait_for_path(path: &Path) {
 /// Write `first`, then `second` and `third` while the model answers it. Returns the prompt and
 /// event data of every `pty_input_received` call the model received.
 async fn calls_for_three_writes(batching: bool) -> Vec<(String, serde_json::Value)> {
+    let first_answer = MockGate::new();
     let mock = MockOllamaServer::start(
         MockLlmBuilder::new()
+            // The answer to `first` waits until the server has read the next two writes.
             .on_event("pty_input_received")
             .and_event_data_contains("data", "first")
             .respond_with_actions(serde_json::json!([]))
-            .after_delay(Duration::from_millis(1500))
+            .held_until(&first_answer)
             .expect_calls(1)
             .and()
             .on_event("pty_input_received")
@@ -79,18 +90,31 @@ async fn calls_for_three_writes(batching: bool) -> Vec<(String, serde_json::Valu
         .open(&path)
         .expect("open the PTY slave");
     writer.write_all(b"first").expect("write");
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while mock.call_count().await == 0 {
+    // The call for `first` itself: once it is recorded, the dispatcher has taken `first` and
+    // is held on the model. (No `send_first`, so there is no earlier `pty_opened` call, but
+    // waiting for the call by its data does not depend on that.)
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while !mock.recorded_calls().await.iter().any(|c| {
+        c.context.event_type.as_deref() == Some("pty_input_received")
+            && c.context.event_data["data"] == "first"
+    }) {
         assert!(
             tokio::time::Instant::now() < deadline,
             "first never reached the model"
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    // Two writes the reader sees separately, both during the slow first call.
+    // Two writes the reader takes as two reads, both queued before the first answer exists.
     writer.write_all(b"second").expect("write");
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    wait_until_server_received(&state, id, ("first".len() + "second".len()) as u64).await;
     writer.write_all(b"third").expect("write");
+    wait_until_server_received(
+        &state,
+        id,
+        ("first".len() + "second".len() + "third".len()) as u64,
+    )
+    .await;
+    first_answer.release();
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
@@ -108,8 +132,8 @@ async fn calls_for_three_writes(batching: bool) -> Vec<(String, serde_json::Valu
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    // Long enough for a stray extra call to show up in the count.
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    // `third` was the last of the 16 bytes the server counted, so the call it reached is the
+    // last call there can be: nothing is left for a stray one.
 
     let calls = mock
         .recorded_calls()
