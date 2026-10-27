@@ -7,13 +7,13 @@ the visitor: connection, incoming requests, and sending a composer reply must no
 
 The landing page shows a left-to-right network diagram: Client → NetGet → LLM / Script /
 Manual. HTML and CSS keep the diagram visible without JavaScript and preserve the direction
-on narrow screens. The client connection carries a few protocol examples and links its count to the full
-protocol table. CLI and MCP entry points above the hub point down into NetGet. Check that count against `python3 scripts/site_protocol_stacks.py --check`
-when updating the diagram. The generated `js/protocol-stacks.js` still comes from both
+on narrow screens. NetGet is centered in the diagram; the client connection shows HTTP,
+TCP, IP and an ellipsis. CLI and MCP each have their own arrow down into NetGet.
+The generated `js/protocol-stacks.js` still comes from both
 registries and their `stack_name()` declarations, including platform-gated protocols;
 deployment refreshes it before hashing the assets. The older `js/protocol-landscape.js`
 stack renderer is no longer loaded by the landing page.
-Without JavaScript, the fixed stacks, protocol links, examples and install commands remain
+Without JavaScript, the diagram, protocol links, examples and install commands remain
 available; Copy/theme buttons are hidden until their handlers are installed. The demo's
 `noscript` preview uses actual desktop/mobile screenshots in `demo/preview*.png`.
 

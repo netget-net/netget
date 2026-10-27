@@ -38,11 +38,13 @@
         </header>
 
         <section class="section" id="how-it-works" aria-label="How NetGet works">
-            <figure class="network-diagram" aria-label="NetGet is invoked via CLI or MCP. A client connects to NetGet over one of 293 protocols. Responses are controlled by an LLM, a script, or manually.">
+            <figure class="network-diagram" aria-label="NetGet is invoked via CLI or MCP. A client connects to NetGet over a network protocol. Responses are controlled by an LLM, a script, or manually.">
                 <div class="network-invocation">
-                    <span class="network-invocation-label">Invoke via</span>
-                    <div class="network-entrypoints"><span>CLI</span><small>or</small><span>MCP</span></div>
-                    <div class="network-down-arrow" aria-hidden="true"></div>
+                    <div class="network-entrypoints">
+                        <div class="network-entrypoint"><span>CLI</span><div class="network-down-arrow" aria-hidden="true"></div></div>
+                        <small>or</small>
+                        <div class="network-entrypoint"><span>MCP</span><div class="network-down-arrow" aria-hidden="true"></div></div>
+                    </div>
                 </div>
                 <div class="network-client">
                     <svg class="network-client-icon" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
@@ -53,10 +55,9 @@
                 </div>
                 <div class="network-wire">
                     <div class="network-protocols" aria-label="Example protocols">
-                        <span>HTTP</span><span>DNS</span><span>SSH</span><span>MQTT</span><span>…</span>
+                        <span>HTTP</span><span>TCP</span><span>IP</span><span>…</span>
                     </div>
                     <div class="network-arrow" aria-hidden="true"></div>
-                    <a class="network-count" href="#protocols">293 protocols</a>
                 </div>
                 <div class="network-hub">
                     <strong>net<span>get</span></strong>
