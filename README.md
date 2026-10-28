@@ -4,14 +4,6 @@
 
 [Website](https://netget.net) · [Browser demo](https://netget.net/demo.html) · [Documentation](https://github.com/netget-net/netget/blob/master/docs/README.md)
 
-```text
-                         CLI     MCP
-                          ↓       ↓
-Client ── HTTP, TCP, IP, … ── NetGet ──┬── LLM
-                                     ├── Script
-                                     └── Human
-```
-
 ## Run
 
 ```bash
