@@ -1708,7 +1708,7 @@ pub(crate) const ALL_KNOWN_PROTOCOLS: &[(&str, &str)] = &[
     ("NBD", "a native build (not the browser)"),
     ("iSCSI", "a native build (not the browser)"),
     ("NVMe-TCP", "a native build (not the browser)"),
-    ("FUSE", "a Linux build (the kernel's FUSE driver through fusermount3; NetGet links no macFUSE or FUSE-T)"),
+    ("FUSE", "a Linux build (the kernel's FUSE driver through fusermount3); elsewhere, mount NetGet's smb, nfs or webdav server with the system's own client"),
     ("HDFS", "a Unix build (macOS or Linux)"),
     ("ManageSieve", "a native build (not the browser)"),
     ("Zenoh", "a native build (not the browser)"),

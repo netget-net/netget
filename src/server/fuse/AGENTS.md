@@ -22,10 +22,20 @@ libfuse uses — so NetGet links no C library and needs no privilege of its own.
 build script selects the pure-Rust mount on Linux and links nothing. It is a dependency of
 `[target.'cfg(target_os = "linux")'.dependencies]` only: on macOS the same build script requires
 macFUSE through pkg-config (or the `macos-no-mount` feature, which cannot mount), so putting it
-anywhere else would make every macOS build depend on a kernel extension. macFUSE and FUSE-T
-would fit the system-library rule only as a new default-off library feature, and neither can be
-installed on the development machine; that is the reason there is no macOS support, not a
-judgement that it is unwanted.
+anywhere else would make every macOS build depend on a kernel extension.
+
+**No macOS support, by decision (28 October 2026).** A FUSE-T backend was built and tested on
+the branch `integration/fuse-macos-local` and deliberately not merged. FUSE-T has no kernel
+part: it serves the mount to macOS's own NFS client over loopback, so a FUSE mount on a Mac is
+an NFS mount, with that client's defects. One of them is a kernel panic (`nfs_vinvalbuf2:
+ubc_msync failed!, error 22`; fuse-t issue #109, Apple FB23527406) that is made far more likely
+by `--namedattr` — the only way to carry extended attributes over it — and that panicked the
+development machine within seconds of enabling it. Without `--namedattr` macOS falls back to
+`._` AppleDouble files that it reads back, so the server would have to keep their bytes. The
+panic stays reachable either way, since the race is in the kernel. A filesystem NetGet controls
+on a Mac is therefore one of the network servers mounted by the operating system's own client —
+`smb` (macOS's SMB client is not the NFS one), `nfs` or `webdav` — and a native mount would be
+Apple's FSKit, through macFUSE's FSKit backend or an extension of NetGet's own.
 
 fuser's own `Session::new` refuses `AutoUnmount` without `allow_other`, which an unprivileged
 user cannot have unless `/etc/fuse.conf` says `user_allow_other`. fusermount3 itself has no such

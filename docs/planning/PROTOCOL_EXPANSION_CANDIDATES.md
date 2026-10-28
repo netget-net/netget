@@ -188,9 +188,9 @@ says. Strike an item when it lands.
 8. ~~ONVIF: Recording, Replay, Search; Basic Notification.~~ Landed 26 October 2026.
 9. ~~NVMe/TCP: DH-HMAC-CHAP, TLS, reservations, Compare/Verify/Copy.~~ Landed 26 October 2026 (TLS not built: rustls has no TLS 1.3 external PSK).
 10. ~~iSCSI: error recovery levels 1 and 2, multiple connections per session, the remaining task management functions.~~ Landed 26 October 2026.
-11. ~~FUSE: hard links, extended attributes, fallocate.~~ Landed 26 October 2026. macOS still needs macFUSE or FUSE-T installed, which waits on the maintainer.
+11. ~~FUSE: hard links, extended attributes, fallocate.~~ Landed 26 October 2026. FUSE stays Linux-only: a FUSE-T backend for macOS was built and not merged (28 October 2026), because FUSE-T mounts through macOS's NFS client and its kernel panic; `src/server/fuse/AGENTS.md` has the reasons.
 
-Every item in this queue has landed. What stays open: the intermittent post-sweep shutdown stall in `protocol_startup_smoke_test` (bounded and instrumented, cause unknown), bitcoin's unbounded queue behind an in-flight answer, FUSE on macOS, and PCoIP.
+Every item in this queue has landed. What stays open: the intermittent post-sweep shutdown stall in `protocol_startup_smoke_test` (bounded and instrumented, cause unknown), bitcoin's unbounded queue behind an in-flight answer, and PCoIP.
 
 PCoIP stays unbuilt: no published wire specification and no open implementation to test against.
 
