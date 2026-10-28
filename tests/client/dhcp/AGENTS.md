@@ -298,7 +298,7 @@ Implement in-process mock DHCP server to avoid privilege requirements
 
 - [DHCP Client Implementation](../../../src/client/dhcp/AGENTS.md)
 - [DHCP Server Implementation](../../../src/server/dhcp/AGENTS.md)
-- [CLIENT_PROTOCOL_FEASIBILITY.md](../../../CLIENT_PROTOCOL_FEASIBILITY.md#dhcp-🟡)
+- [CLIENT_PROTOCOL_FEASIBILITY.md](../../../docs/planning/CLIENT_PROTOCOL_FEASIBILITY.md#dhcp-🟡)
 - [RFC 2131: Dynamic Host Configuration Protocol](https://datatracker.ietf.org/doc/html/rfc2131)
 - [Test Infrastructure Fixes](../../README.md)
 

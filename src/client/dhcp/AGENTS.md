@@ -354,7 +354,7 @@ DHCP client is NOT a good candidate for scripting:
 - [dhcproto Documentation](https://docs.rs/dhcproto/latest/dhcproto/)
 - [DHCP Message Types (IANA)](https://www.iana.org/assignments/bootp-dhcp-parameters/bootp-dhcp-parameters.xhtml)
 - [DHCP Options (IANA)](https://www.iana.org/assignments/bootp-dhcp-parameters/bootp-dhcp-parameters.xhtml#options)
-- [CLIENT_PROTOCOL_FEASIBILITY.md](../../../CLIENT_PROTOCOL_FEASIBILITY.md) - DHCP client feasibility analysis
+- [CLIENT_PROTOCOL_FEASIBILITY.md](../../../docs/planning/CLIENT_PROTOCOL_FEASIBILITY.md) - DHCP client feasibility analysis
 
 ## Command channel (dashboard `[ send ]`)
 
