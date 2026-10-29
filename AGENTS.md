@@ -1233,13 +1233,55 @@ targeted stress runs.** If a test hangs, fix the hang rather than serializing th
 `release.yml` builds every target's binaries on release tags and manual dispatch (macOS with the
 `libpcap`, `bluetooth` and `pcsc` features, whose libraries ship with the OS; Linux and Windows
 with no system-library feature).
-`ci.yml` is the PR/push-to-master gate; `fuzz.yml` remains an on-demand search.
+`ci.yml` runs on pull requests and on demand. **A push to `master` does not start CI.**
+`fuzz.yml` remains an on-demand search.
+
+**Local verification is the evidence for routine work.** Before pushing Rust changes, run
+`cargo fmt --check`, relevant regressions and the affected server/client suites with their
+required independent peers installed. A missing peer or zero matching tests is missing
+evidence. Run clippy over all targets with qualified lint groups:
+
+```bash
+./cargo-isolated.sh clippy --locked --no-default-features \
+  --features mcp-stdio,mcp-http,sqlite,terminal-snapshot --all-targets \
+  -- -D clippy::correctness -D clippy::suspicious
+```
+
+For shared declarations or infrastructure, run the applicable whole-tree ratchets and
+resource/lifecycle regressions from `.github/workflows/ci.yml`. Use `scripts/test_batches.sh`
+for broader top-level sweeps so test executables do not fill the disk. Serialize local builds
+as described below. Compile affected fuzz targets in their separate workspace. For browser
+changes, run the wasm shim tests, `./web/build.sh`, the Node smoke tests, and the applicable
+browser fixture. For site-only work use `site/AGENTS.md` checks. Report the commands and
+results, including failures and checks not exercised; local native checks do not establish
+Windows, Linux-kernel, or browser coverage they did not run.
+
+Keep the normal commit, merge, and push flow. After a direct `master` push, absent CI is
+expected: do not wait for a nonexistent automatic run or treat an older green SHA as evidence
+for the new commit. Pushing does not authorize dispatching workflows.
+
+**Run hosted validation only when the user requests it or as part of explicitly authorized
+release validation.** Do not dispatch after every task to recreate the removed automatic
+workload. The default manual run uses the core PR checks; `extended=true` also selects
+`clippy-wide`, `registry-audit`, and `smb-evidence`. The first two remain advisory and SMB
+remains blocking when selected. For automatic PR checks, inspect the run for the PR's current
+head commit rather than an older green result. For an authorized hosted run, push the intended
+commit, dispatch against its branch or tag, and verify the resulting run's `headSha` equals
+that intended commit before using the result:
+
+```bash
+gh workflow run ci.yml --ref <branch> -f extended=false
+gh run list --workflow ci.yml --event workflow_dispatch --branch <branch> \
+  --json databaseId,headSha,status,conclusion,url
+gh run view <run-id> --json headSha,status,conclusion,url
+```
+
 `protocol-pairs.yml` (the third-party interoperability jobs) runs only by hand or when
 `release.yml` calls it before publishing; it no longer runs on every push or pull request.
 Its `only` input runs a single job by id — `gh workflow run protocol-pairs.yml --ref <branch>
--f only=<job>` — which is how a new or changed pair is checked without the other hundred.
-The jobs marked *manual* below likewise run only on a manual dispatch of `ci.yml`: push
-changes that touch a protocol, then run the workflow (Actions → Run workflow) to get them.
+-f only=<job>` — which is how a requested check validates a new or changed pair without the
+other hundred. The jobs marked *manual* below run only on a requested manual dispatch of
+`ci.yml` with `extended=true`; a default manual dispatch runs the core PR checks.
 
 | Job | Blocking | What it does |
 |---|---|---|
@@ -1255,7 +1297,7 @@ changes that touch a protocol, then run the workflow (Actions → Run workflow) 
 The broad registry audit has separate compilation and execution budgets, a five-minute
 limit per evidence group, and a summary/artifact step that preserves partial results after
 an interrupted evidence step. Each group must run at least one passing test. Its job still
-reports green on test failures, so **a green PR is not evidence the audit passed**: inspect
+reports green on test failures, so **a green workflow is not evidence the audit passed**: inspect
 the evidence summary and step outcome. SMB's Stable evidence has a separate blocking job.
 
 Derive the current job list from `.github/workflows/ci.yml` instead of trusting a remembered
@@ -1269,18 +1311,21 @@ python3 -c "import yaml; d=yaml.safe_load(open('.github/workflows/ci.yml')); \
 **There is no per-feature build check any more, because there are no protocol features.** It
 used to exist because a protocol that compiled only alongside others went unnoticed: `tor` did
 not compile *at any feature set* in September 2026 while every CI run was green. With every
-protocol in every build, `lint` and `test` compile all of them on every push; the system-library
-protocols are compiled by `clippy-wide` and `registry-audit`, which install those libraries.
+protocol in every build, `lint` and `test` compile all of them on PRs or authorized manual runs;
+the system-library protocols are compiled by `clippy-wide` and `registry-audit`, which install
+those libraries.
 
 **Putting a check on a nightly cron is the wrong shape**, and the distinction generalises to
 anything else you are tempted to move off the commit: `fuzz`, `nightly-soak` and
 `nightly-eval` are *searches and measurements*, which return no verdict about any particular
 commit and so suit a nightly cadence. A compile check is a *gate* — it answers yes or no about
-the commit in front of it — so it belongs on the commit.
+the commit in front of it — so it belongs in local validation before pushing and in PR or
+authorized CI checks.
+Removing automatic master runs does not remove that local compilation requirement.
 
 **In fact none of the three is on a cron any more**: `fuzz.yml`, `nightly-soak.yml` and
 `nightly-eval.yml` are all `workflow_dispatch` only, so between dispatches nothing runs them at
-all. Dispatch them by hand after changing the surface they cover. That is the right cadence for
+all. Dispatch them only when requested, after changing the surface they cover. That is the right cadence for
 a search, but it has a cost worth knowing, because `fuzz.yml`'s own header records paying it:
 `coap_message.rs` stopped compiling hours after it was written and stayed broken for weeks,
 while the Stable bar's "a fuzz target exists and has run clean" was being satisfied by a target
@@ -1688,8 +1733,8 @@ for `wasm32-unknown-unknown` (68 features, TCP and UDP; the list is
   `./web/build.sh` writes `site/demo/pkg/` (gitignored, ~17 MB of wasm, 5.7 MB gzipped);
   `deploy.sh` refuses to run without it and uploads the `.wasm` with
   `Content-Type: application/wasm` so browsers can compile it while it streams. Build, run
-  the smoke test, then deploy. CI's `wasm-web` job builds and smoke-tests the bundle on every
-  PR but publishes nothing, like everything else in this repository.
+  the smoke test, then deploy. CI's `wasm-web` job builds and smoke-tests the bundle on PRs or
+  authorized manual runs but publishes nothing, like everything else in this repository.
 
 ## MCP surface
 
@@ -2368,7 +2413,7 @@ Read before assuming a subsystem is sound:
 
 - Never `git stash`. Always merge with `--no-ff`. Never amend, rebase, or squash shared history.
 - **Pushing to `origin` is pre-authorised in this repository — always push.** Do not stop to ask,
-  and do not leave work sitting unpushed: an unpushed branch is invisible to CI, to cloud agents
+  and do not leave work sitting unpushed: an unpushed branch is invisible to requested CI runs, to cloud agents
   (which clone from GitHub, not from this machine), and to everyone else working here. This once
   reached **249 unpushed commits**, which silently made a scheduled cloud routine useless because
   the work it was sent to continue did not exist on the remote.

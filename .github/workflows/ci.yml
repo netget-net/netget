@@ -1,25 +1,18 @@
 name: CI
 
-# PR gate + push-to-master build. Mirrors release.yml's toolchain/caching
-# conventions but never builds --all-features (too slow/heavy for a gate,
-# and pulls in system libs CI runners lack - see CLAUDE.md). Uses a
-# representative protocol subset instead.
+# PR validation and on-demand validation. Pushes to master do not start this workflow.
+# The default manual run uses the same core checks as a PR. Request extended=true for
+# the system-library audits and SMB evidence; protocol pairs have their own selective workflow.
 on:
   pull_request:
-  push:
-    branches: [master]
-  # A manual dispatch runs everything below; pushes and pull requests skip the jobs gated
-  # on `github.event_name == 'workflow_dispatch'` (single-feature, smb-evidence, clippy-wide
-  # and registry-audit), which are too slow to run on every change at this protocol count.
-  # Dispatch against a branch to get them before merging something that touches a protocol.
   workflow_dispatch:
+    inputs:
+      extended:
+        description: Include the system-library audits and SMB evidence
+        type: boolean
+        default: false
 
-# The event name is part of the group on purpose. Without it a dispatched run and a
-# push-to-master run share `ci-CI-refs/heads/master`, and `cancel-in-progress` makes each
-# kill the other, so a push would abort a dispatched run partway through and report
-# nothing. That mattered most when a dispatch was the only way to check 109 of the
-# features; it still keeps a deliberate manual run from being cancelled by unrelated
-# traffic on the same ref.
+# Keep PR traffic separate from deliberately requested manual validation.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
@@ -131,9 +124,9 @@ jobs:
   # act is to redden master on pre-existing style warnings teaches people to ignore it.
   clippy-wide:
     name: Clippy (default features, advisory)
-    # Only on a manual run of this workflow. Its warnings are style rather than defects and it
+    # Only on a manual run with extended=true. Its warnings are style rather than defects and it
     # cannot fail the build. It is the one clippy run over the system-library protocols.
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.extended
     runs-on: ubuntu-22.04
     timeout-minutes: 90
     continue-on-error: true
@@ -312,8 +305,8 @@ jobs:
 
   registry-audit:
     name: Registry-wide audits (--all-features, advisory)
-    # Manual runs only (Actions → Run workflow): too heavy for every push.
-    if: github.event_name == 'workflow_dispatch'
+    # Manual runs with extended=true only: too heavy for routine core validation.
+    if: github.event_name == 'workflow_dispatch' && inputs.extended
     runs-on: ubuntu-22.04
     # The previous 45-minute budget expired during SMB after 45 passing groups.
     # Leave room for cold compilation, every evidence group, and artifact upload.
@@ -1199,8 +1192,8 @@ jobs:
 
   smb-evidence:
     name: SMB stable evidence
-    # Manual runs only (Actions → Run workflow): too heavy for every push.
-    if: github.event_name == 'workflow_dispatch'
+    # Manual runs with extended=true only: too heavy for routine core validation.
+    if: github.event_name == 'workflow_dispatch' && inputs.extended
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
