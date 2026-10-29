@@ -693,10 +693,18 @@ sys.stdout.write(json.dumps({{"actions":a}}))
     let registry = format!("127.0.0.1:{}", server.port);
     tokio::time::sleep(Duration::from_millis(500)).await;
 
+    // An empty Docker config of the test's own. Without it crane reads the operator's
+    // ~/.docker/config.json, and a `credsStore` there (Docker Desktop's "osxkeychain")
+    // makes every invocation run docker-credential-osxkeychain for 127.0.0.1:<port> —
+    // a macOS keychain password prompt per crane call, seven per run.
+    let docker_config = tempfile::tempdir()?;
+    std::fs::write(docker_config.path().join("config.json"), "{}")?;
     let crane = |args: Vec<String>| -> (bool, String, String) {
         let out = Command::new("crane")
             .args(&args)
             .arg("--insecure")
+            .env("HOME", docker_config.path())
+            .env("DOCKER_CONFIG", docker_config.path())
             .output()
             .expect("crane should be runnable");
         (
