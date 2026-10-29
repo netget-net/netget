@@ -275,7 +275,7 @@ print(json.dumps({'actions':a}))"#;
     }
 
     /// Disconnects the subsystem when the test ends, however it ends.
-    pub struct Disconnect(PathBuf);
+    pub struct Disconnect(pub PathBuf);
     impl Drop for Disconnect {
         fn drop(&mut self) {
             let _ = std::process::Command::new(&self.0)
