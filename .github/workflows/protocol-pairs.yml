@@ -10097,9 +10097,20 @@ jobs:
       - name: Kernel target and kernel host over TLS
         run: |
           set -x
-          printf '[debug]\nloglevel=7\ntls=7\nnl=7\n[authenticate]\nkeyrings=.nvme\n' | sudo tee /etc/tlshd.conf
-          sudo systemctl restart tlshd || sudo systemctl start tlshd
-          systemctl status tlshd --no-pager || true
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential autoconf automake libtool pkg-config libgnutls28-dev libkeyutils-dev \
+            libnl-3-dev libnl-genl-3-dev libglib2.0-dev
+          git clone --depth 1 https://github.com/oracle/ktls-utils /tmp/ktls-utils
+          git -C /tmp/ktls-utils log -1 --format='%h %cd %s'
+          (cd /tmp/ktls-utils && ./autogen.sh >/dev/null && ./configure --prefix=/usr/local >/dev/null && make -j4 >/dev/null && sudo make install >/dev/null)
+          ls /usr/local/sbin/ || true
+          /usr/local/sbin/tlshd --help 2>&1 | head -5 || true
+          sudo systemctl stop tlshd || true
+          sudo mkdir -p /etc/tlshd
+          printf '[debug]\nloglevel=7\ntls=7\nnl=7\n[authenticate]\nkeyrings=.nvme\n' | sudo tee /etc/tlshd.conf /etc/tlshd/config
+          sudo bash -c '/usr/local/sbin/tlshd -s > /tmp/tlshd.log 2>&1 &'
+          sleep 1
+          pgrep -a tlshd || true
           H=nqn.2014-08.org.nvmexpress:uuid:$(cat /proc/sys/kernel/random/uuid)
           SUB=nqn.2026-10.net.netget:tls-probe
           KEY=$(nvme gen-tls-key --hmac=1)
@@ -10140,6 +10151,7 @@ jobs:
           sudo nvme disconnect -n "$SUB" || true
           sleep 3
           sudo journalctl -u tlshd --no-pager | tail -60 || true
+          sudo tail -80 /tmp/tlshd.log || true
           sudo dmesg | grep -i -E 'nvme|tls|handshake' | tail -40 || true
           sudo pkill tcpdump || true
           sleep 1
