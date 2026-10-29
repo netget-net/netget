@@ -99,6 +99,44 @@ the I/O Connect did not ask; the target answered COMMAND SEQUENCE ERROR and SPDK
 `AUTH_negotiate failed: sc=12` and dropped the qpair. nvmet runs the exchange on any queue, and so
 does NetGet now (`unidirectional_authentication_with_each_hash_and_the_null_group` pins it).
 
+`spdk_perf_runs_inside_a_tls_secure_channel`: `spdk_nvme_perf -S ssl --psk-path` (a 0600 file
+holding an `NVMeTLSkey-1` key) runs a mixed load inside TLS. SPDK parses the key, derives the
+retained and TLS PSKs and offers a version 0 identity itself; the target logs that identity as
+accepted. A key the target does not hold fails at the handshake (`fail_closed_tls`).
+
+## `tls_psk_test.rs` — the key derivations against libnvme
+
+No network. The vector is libnvme 3.1's from a CI run (nvme-cli built from source): the
+configured key, the version 1 identity `nvme check-tls-key --identity=1` printed, and the TLS PSK
+`nvme keys insert-tls-psk` put in the kernel keyring, read back with `keyctl pipe`. The kernel's
+own host and target connected with that key. Also the interchange text's CRC and length checks,
+and every way the target refuses an identity.
+
+## `tls_test.rs` — the target's secure channel, against NetGet's own TLS host (regression)
+
+Raw PDUs inside a TLS session opened by `netget::server::nvme_tcp::tls::connect`, so the TLS end
+is NetGet's own; what is asserted is the target's behaviour. A whole admin session and Identify
+inside TLS; the discovery log's TREQ (01b) and SECTYPE (2); a Connect under another host
+(CONNECT INVALID HOST) or to another subsystem (INVALID PARAMETERS on SUBNQN) than the identity
+names, neither reaching the model; a plain ICReq, another key under version 1 (digest mismatch)
+and version 0 (handshake failure), and a silent host closed at the 10 s bound; SHA-384
+(TLS_AES_256_GCM_SHA384, which the legacy PSK callbacks cannot carry) under both identity
+versions; a malformed `tls_key` refused at startup. Unix only.
+
+## `kernel_tls_test.rs` — the Linux kernel host over TLS
+
+Linux, as root, in the `nvme-tcp` pair job, with nvme-cli 3.1 and tlshd from ktls-utils 1.5.0
+built by `scripts/test-peers/build-nvme-tls.sh` (`NETGET_NVME_CLI`, tlshd started with
+`keyrings=.nvme`). `nvme gen-tls-key` makes the key; `tls_support::insert` first checks libnvme's
+version 1 identity equals NetGet's (so an old nvme-cli fails saying why — see the target's
+AGENTS.md on Ubuntu 24.04's 2.8), then `nvme keys insert-tls-psk` puts it in `.nvme` for the
+subsystem and the discovery NQN, and widens its permissions so tlshd can search for it (that
+takes possession of the key: the shell links `.nvme` into its session keyring first). `nvme
+discover --tls` and `nvme connect --tls` hand their handshakes to tlshd (GnuTLS); the namespace's
+block device is read with O_DIRECT and compared with the description, and the target logs each
+queue's accepted identity. A host holding another key is refused with the digest mismatch, and
+no Connect reaches the model.
+
 **SPDK found a defect.** Shutting a controller down, SPDK completes its outstanding
 Asynchronous Event Requests itself and reuses their CIDs for the Property Get/Set of CC.SHN; the
 target answered COMMAND ID CONFLICT and SPDK logged "Failed to read the CC register". A held

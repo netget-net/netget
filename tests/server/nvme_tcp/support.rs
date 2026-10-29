@@ -352,8 +352,12 @@ pub fn connect_data(hostid: &[u8; 16], cntlid: u16, subnqn: &str, hostnqn: &str)
 
 /// A raw host over one TCP connection (one queue). Every byte it writes and reads is kept in
 /// order, for the pcap oracle.
+/// What a [`Raw`] connection reads and writes: the TCP socket, or a TLS session over it.
+pub trait Stream: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + Sync {}
+impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + Sync> Stream for T {}
+
 pub struct Raw {
-    pub s: TcpStream,
+    pub s: Box<dyn Stream>,
     pub transcript: Vec<(Dir, Vec<u8>)>,
     pub hdgst: bool,
     pub ddgst: bool,
@@ -365,8 +369,13 @@ impl Raw {
     pub async fn connect(port: u16) -> Raw {
         let s = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
         s.set_nodelay(true).unwrap();
+        Raw::over(s)
+    }
+
+    /// A raw connection over a stream already open, such as a TLS session.
+    pub fn over(s: impl Stream + 'static) -> Raw {
         Raw {
-            s,
+            s: Box::new(s),
             transcript: Vec::new(),
             hdgst: false,
             ddgst: false,

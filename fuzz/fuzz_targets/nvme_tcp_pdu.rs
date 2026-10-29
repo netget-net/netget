@@ -5,7 +5,9 @@
 //! back (Identify Controller and Namespace, the active namespace list, namespace identification
 //! descriptors, the discovery log page and its entries, the SMART / health log), the
 //! DH-HMAC-CHAP messages of Authentication Send and Receive and the `DHHC-1` secret text, the
-//! reservation commands' data and the Reservation Report, and Copy's source ranges.
+//! reservation commands' data and the Reservation Report, Copy's source ranges, and the TLS
+//! secure channel's `NVMeTLSkey-1` key text and the PSK identity a host sends in its ClientHello,
+//! which the target parses before any key has been agreed.
 //!
 //! What parses is checked to stay within its bound: a decoded PDU's data never longer than the
 //! limit it was read under nor than its PLEN claims, a namespace list never more than 1024
@@ -22,7 +24,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use netget::server::nvme_tcp::{auth, nvme, pdu, resv};
+use netget::server::nvme_tcp::{auth, nvme, pdu, resv, tls_psk};
 
 fuzz_target!(|data: &[u8]| {
     let target_side = pdu::Limits::types(&[
@@ -147,6 +149,22 @@ fn structures(d: &[u8]) {
         if let Ok(s) = auth::Secret::parse(text) {
             assert!(matches!(s.len(), 32 | 48 | 64));
             let _ = s.transformed("nqn.2026-10.net.netget:fuzz");
+        }
+        // The TLS key text, and an identity as the target receives it: whatever parses must
+        // name a hash the key could have and print back as itself.
+        if let Ok(k) = tls_psk::ConfiguredKey::parse(text) {
+            assert!(matches!(
+                k.retained("nqn.2026-10.net.netget:fuzz").len(),
+                32 | 48
+            ));
+        }
+        let fixed = tls_psk::ConfiguredKey::parse(&tls_psk::ConfiguredKey::text(&[7; 32], None))
+            .expect("a key of NetGet's own making parses");
+        if let Ok((id, psk)) = tls_psk::target_psk(&fixed, text) {
+            assert_eq!((id.text(), psk.len()), (text.to_string(), 32));
+        }
+        if let Ok(id) = tls_psk::Identity::parse(text) {
+            assert_eq!(id.text(), text, "an identity prints back as it parsed");
         }
     }
     // A Reservation Report as a host reads it: never more entries than REGCTL or the buffer.

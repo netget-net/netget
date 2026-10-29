@@ -365,4 +365,78 @@ print(json.dumps({'actions':a}))"#;
             "nothing failed but SPDK's own I/O qpair teardown: {o}"
         );
     }
+
+    /// spdk_nvme_perf runs its load inside a TLS 1.3 secure channel: SPDK parses the
+    /// interchange key itself (`--psk-path`), derives the retained and TLS PSKs and offers a
+    /// version 0 identity through its OpenSSL socket — none of it NetGet's code. A key NetGet does
+    /// not hold never gets past the handshake.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn spdk_perf_runs_inside_a_tls_secure_channel() {
+        use netget::server::nvme_tcp::auth::Hash;
+        use netget::server::nvme_tcp::tls_psk::ConfiguredKey;
+        use std::os::unix::fs::PermissionsExt;
+        let perf = spdk_bin("spdk_nvme_perf");
+        let dir = tempfile::tempdir().unwrap();
+        let mut raw = [0u8; 32];
+        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut raw);
+        let key = ConfiguredKey::text(&raw, Some(Hash::Sha256));
+        let wrong = ConfiguredKey::text(&[raw[0] ^ 1; 32], Some(Hash::Sha256));
+        // SPDK's file keyring refuses a key file anyone but its owner can read.
+        let write_key = |name: &str, text: &str| {
+            let p = dir.path().join(name);
+            std::fs::write(&p, text).unwrap();
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)).unwrap();
+            p.display().to_string()
+        };
+        let good = write_key("tls.key", &key);
+        let bad = write_key("wrong.key", &wrong);
+        let srv = start_on(
+            "127.0.0.1",
+            0,
+            policy(SPDK_POLICY),
+            Some(serde_json::json!({"tls_key": key})),
+        )
+        .await;
+        for (path, ok) in [(&good, true), (&bad, false)] {
+            let args = [
+                "--no-huge",
+                "-s",
+                "512",
+                "-r",
+                &format!("{} ns:1", trid(srv.port, DISK0)),
+                "-q",
+                "4",
+                "-o",
+                "4096",
+                "-w",
+                "randrw",
+                "-M",
+                "50",
+                "-t",
+                "1",
+                "-S",
+                "ssl",
+                "--psk-path",
+                path,
+            ];
+            let out = run(&perf, &args).await;
+            let o = text(&out);
+            println!("spdk_nvme_perf --psk-path {path}:\n{o}");
+            assert_eq!(out.status.success(), ok, "{o}\n{:#?}", srv.logs());
+            if ok {
+                assert!(o.contains("Total"), "{o}");
+            }
+        }
+        let logs = srv.logs();
+        assert!(
+            logs.iter().any(|l| l.contains(&format!(
+                "operation=tls decision=protocol_accept TLS 1.3 secure channel, PSK identity NVMe0R01 {SPDK_HOST} {DISK0}"
+            ))),
+            "SPDK's version 0 identity was accepted: {logs:#?}"
+        );
+        assert!(
+            logs.iter().any(|l| l.contains("decision=fail_closed_tls")),
+            "the wrong key was refused at the handshake: {logs:#?}"
+        );
+    }
 }

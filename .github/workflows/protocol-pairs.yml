@@ -9705,6 +9705,30 @@ jobs:
           echo "NETGET_SPDK_DIR=$spdk" >> "$GITHUB_ENV"
           # nvme connect and configfs need root.
           sudo -n true
+      - name: Build tlshd and nvme-cli for the kernel's TLS secure channels
+        run: |
+          set -euo pipefail
+          config="/boot/config-$(uname -r)"
+          for opt in CONFIG_NVME_TCP_TLS CONFIG_NVME_TARGET_TCP_TLS CONFIG_NET_HANDSHAKE CONFIG_NVME_KEYRING; do
+            if ! grep -Eq "^$opt=(y|m)" "$config"; then
+              echo "::error::kernel $(uname -r) is built without $opt; the kernel's TLS peers cannot run"
+              exit 1
+            fi
+          done
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            autoconf automake libtool pkg-config libgnutls28-dev libkeyutils-dev libnl-3-dev \
+            libnl-genl-3-dev libglib2.0-dev meson ninja-build libjson-c-dev libssl-dev uuid-dev \
+            keyutils
+          nvme=$(sh scripts/test-peers/build-nvme-tls.sh "$RUNNER_TEMP/nvme-tls-peer" | tail -1)
+          echo "NETGET_NVME_CLI=$nvme" >> "$GITHUB_ENV"
+          # tlshd looks keys up in the kernel's .nvme keyring only when told to; current
+          # releases read /etc/tlshd/config, older ones /etc/tlshd.conf.
+          sudo mkdir -p /etc/tlshd
+          printf '[debug]\nloglevel=1\n[authenticate]\nkeyrings=.nvme\n' \
+            | sudo tee /etc/tlshd.conf /etc/tlshd/config >/dev/null
+          sudo sh -c 'nohup /usr/local/sbin/tlshd -s > /tmp/tlshd.log 2>&1 &'
+          sleep 1
+          pgrep -a tlshd
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -9725,6 +9749,9 @@ jobs:
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
+      - name: tlshd's log
+        if: always()
+        run: sudo cat /tmp/tlshd.log || true
       - name: Shared declarations, native startup, privacy and ownership
         run: |
           cargo test --locked --no-default-features \

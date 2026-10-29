@@ -23,6 +23,9 @@ use tokio::sync::mpsc;
 pub const MAX_FOLLOWUP_DEPTH: usize = 16;
 pub const DEFAULT_HOST_NQN: &str = "nqn.2026-10.net.netget:host";
 pub const DEFAULT_DIGESTS: &str = "none";
+/// The PSK identity version a host offers with `tls_key` when none is named: 1, which carries
+/// the PSK digest (NVMe TCP 1.1) and is what the Linux host offers first.
+pub const DEFAULT_TLS_IDENTITY_VERSION: u8 = 1;
 pub const DEFAULT_KATO_MS: u32 = 30_000;
 /// The KATO range this host asks for.
 pub const MIN_KATO_MS: u32 = 1_000;
@@ -101,12 +104,33 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
         ),
         (None, None) => None,
     };
+    let tls = match get("tls_key")? {
+        None => None,
+        Some(text) => {
+            let key = crate::server::nvme_tcp::tls_psk::ConfiguredKey::parse(&text)
+                .map_err(|e| anyhow::anyhow!("tls_key: {e}"))?;
+            let identity_version = match params
+                .map(|p| p.get_optional_u64("tls_identity_version"))
+                .transpose()?
+                .flatten()
+            {
+                None => DEFAULT_TLS_IDENTITY_VERSION,
+                Some(v @ (0 | 1)) => v as u8,
+                Some(_) => bail!("tls_identity_version is 0 or 1"),
+            };
+            Some(std::sync::Arc::new(host::HostTls {
+                key,
+                identity_version,
+            }))
+        }
+    };
     let config = HostConfig {
         hostnqn: hostnqn.clone(),
         hostid,
         digests,
         kato_ms,
         dhchap,
+        tls,
     };
     let addr = resolve(&ctx.remote_addr).await?;
 
@@ -452,7 +476,7 @@ impl Host<'_> {
 
     /// The discovery controller's log: connect, enable, identify, read the log, shut down.
     async fn discover(&mut self) -> Result<Value> {
-        let mut q = QueueConn::open(self.addr, 0, &self.config).await?;
+        let mut q = QueueConn::open(self.addr, 0, &self.config, nvme::DISCOVERY_NQN).await?;
         self.register(&mut q).await;
         let c = q
             .connect(
@@ -487,6 +511,19 @@ impl Host<'_> {
                     "controller_id": e.cntlid,
                     "admin_queue_size": e.asqsz,
                     "treq": e.treq,
+                    // TREQ's low two bits: 01b required, 10b not required, 00b not specified.
+                    "secure_channel": match e.treq & 0x03 {
+                        0x01 => "required",
+                        0x02 => "not_required",
+                        _ => "not_specified",
+                    },
+                    // TSAS SECTYPE for TCP.
+                    "security": match e.sectype {
+                        0 => "none",
+                        1 => "tls1.2",
+                        2 => "tls1.3",
+                        _ => "unknown",
+                    },
                 })
             })
             .collect();
@@ -556,7 +593,7 @@ impl Host<'_> {
 
     /// Connect an admin queue and an I/O queue. `Ok(Err(status))`: the target refused.
     async fn open_session(&mut self, subnqn: &str) -> Result<Result<Session, String>> {
-        let mut admin = QueueConn::open(self.addr, 0, &self.config).await?;
+        let mut admin = QueueConn::open(self.addr, 0, &self.config, subnqn).await?;
         self.register(&mut admin).await;
         let c = admin
             .connect(
@@ -591,7 +628,7 @@ impl Host<'_> {
         let io_queues = host::set_queue_count(&mut admin, 1).await?;
         anyhow::ensure!(io_queues >= 1, "the controller granted no I/O queue");
         let mqes = (cap & 0xFFFF) as u16;
-        let mut io = QueueConn::open(self.addr, 1, &self.config).await?;
+        let mut io = QueueConn::open(self.addr, 1, &self.config, subnqn).await?;
         self.register(&mut io).await;
         io.in_capsule = (info.ioccsz as usize * 16).saturating_sub(64);
         let c = io

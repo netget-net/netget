@@ -9496,6 +9496,7 @@ dependencies = [
  "feed-rs",
  "flate2",
  "font8x8",
+ "foreign-types",
  "form_urlencoded",
  "fs2",
  "fuser",
@@ -9575,6 +9576,7 @@ dependencies = [
  "once_cell",
  "openidconnect",
  "opensrv-mysql",
+ "openssl",
  "openssl-sys",
  "p256 0.13.2",
  "pavao",
@@ -9657,6 +9659,7 @@ dependencies = [
  "tokio",
  "tokio-modbus",
  "tokio-native-tls",
+ "tokio-openssl",
  "tokio-postgres",
  "tokio-rustls 0.26.4",
  "tokio-socks",
@@ -16088,6 +16091,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbae76ab933c85776efabc971569dd6119c580d8f5d448769dec1764bf796ef2"
 dependencies = [
  "native-tls",
+ "tokio",
+]
+
+[[package]]
+name = "tokio-openssl"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "59df6849caa43bb7567f9a36f863c447d95a11d5903c9cc334ba32576a27eadd"
+dependencies = [
+ "openssl",
+ "openssl-sys",
  "tokio",
 ]
 

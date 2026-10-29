@@ -184,12 +184,52 @@ held, key, host ID). The table lives as long as some controller of the subsystem
 last one goes, its registrations go too, as they would on a target that persists nothing through
 a power loss. The generation counts register, unregister, replace, preempt and clear.
 
+## Secure channels (TLS)
+
+`tls_key` (a configured PSK, `NVMeTLSkey-1:<hh>:<base64 of key ‖ CRC-32>:` — what `nvme
+gen-tls-key` prints) makes every connection open a TLS 1.3 session before its first PDU (NVMe TCP
+Transport 1.1, from TP 8011). The discovery log then says so: TREQ's low bits 01b (required),
+TSAS SECTYPE 2 (TLS 1.3). Unix builds only; elsewhere the parameter refuses to start.
+
+- **Keys** (`tls_psk.rs`, pure): the retained PSK is HKDF-Expand-Label(HKDF-Extract(0,
+  configured), "HostNQN", NQNh) unless `<hh>` is 00; the identity is `NVMe<v>R<hh> <NQNh> <NQNc>`,
+  version 1 ending with the PSK digest (Base64 of HMAC(retained, NQNh ‖ " " ‖ NQNc ‖ " " ‖
+  "NVMe-over-Fabrics")); the TLS PSK is HKDF-Expand-Label(…retained, "nvme-tls-psk", context), the
+  context `"<hh> <digest>"` for version 1 and the identity itself for version 0. Checked against
+  libnvme 3.1's keys in `tests/server/nvme_tcp/tls_psk_test.rs`. Generated PSKs (`G`, secure
+  channel concatenation after DH-HMAC-CHAP) are refused.
+- **TLS** (`tls.rs`, OpenSSL): rustls has no external PSKs, and rust-openssl wraps only the legacy
+  PSK callbacks, which TLS 1.3 takes for SHA-256 keys alone. The target installs
+  `SSL_CTX_set_psk_find_session_callback` (declared in `tls.rs`): it parses the host's identity,
+  derives the TLS PSK and hands OpenSSL a session with that key as its master key and the suite
+  of its hash (SHA-256 → TLS_AES_128_GCM_SHA256, SHA-384 → TLS_AES_256_GCM_SHA384), the only suite
+  either end offers: OpenSSL's target picks the suite before it reads the PSK, and offering both
+  made it pick the SHA-256 one and refuse a SHA-384 key (`tls_test.rs` caught it). No tickets,
+  no certificates: without a key there is nothing to fall back on, which is the fail-closed path.
+  `openssl-sys` is already linked on every Unix build through `git2` and `libssh2`.
+- **Refusals**: an identity that does not parse, names the wrong hash, or carries a digest this
+  key does not give for that host and subsystem gets no session; the handshake fails and the log
+  says which (`operation=tls decision=fail_closed_tls …`). A version 0 identity has no digest, so
+  another key surfaces as the handshake's own failure. A host that sends nothing is closed after
+  `TLS_HANDSHAKE_TIMEOUT` (10 s, the Linux host's own default). None of it reaches the model.
+- **Binding**: any subsystem may be named — which exist is the model's decision at Connect — but
+  the identity a host proved is held against every Connect on that connection: another HOSTNQN is
+  CONNECT INVALID HOST, another SUBNQN is CONNECT INVALID PARAMETERS on SUBNQN, both logged as
+  `protocol_refusal` and neither shown to the model. A discovery Connect needs an identity naming
+  the discovery NQN, as the Linux host's `nvme discover --tls` offers.
+
+**Ubuntu 24.04's nvme-cli cannot make keys for this.** nvme-cli 2.8 with libnvme 1.8 built its
+HKDF info with four `EVP_PKEY_CTX_add1_hkdf_info` calls, and OpenSSL 3.0 replaced the info on each
+call instead of appending, so every retained PSK it derives is HKDF(configured, info = NQNh). The
+kernel connects with whatever key nvme-cli inserted, so two hosts on that release interoperate
+with each other and with nothing that follows the specification — this target, SPDK and current
+libnvme included. Found by reproducing its digest from a CI run byte for byte; the pair job builds
+nvme-cli 3.1 and ktls-utils 1.5.0 (whose tlshd, unlike 0.9's, finds keys on the target side).
+
 ## Not implemented
 
-TLS (TP 8011 secure channels, and so secure channel concatenation: a Negotiate asking for it is
-AUTH_Failure1 CONCAT_MISMATCH) — the rustls the tree uses has no TLS 1.3 external pre-shared
-keys, which NVMe/TCP TLS is built on, and the test VM's kernel would need `tlshd` (ktls-utils),
-which it does not have; authentication of I/O queues; re-authentication requested by the
+Secure channel concatenation (a Negotiate asking for it is AUTH_Failure1 CONCAT_MISMATCH, and a
+generated PSK identity is refused); TLS on non-Unix builds; authentication of I/O queues; re-authentication requested by the
 controller; reservation notifications (log page 80h, Set Features 82h/83h) and persistence
 through power loss; preempt-and-abort aborts nothing (every command completes as it arrives, so
 there is nothing outstanding to abort); fused Compare and Write; ANA, namespace management, Write

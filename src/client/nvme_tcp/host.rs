@@ -14,7 +14,6 @@ use anyhow::{bail, ensure, Context, Result};
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
-use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
@@ -47,7 +46,20 @@ pub struct HostConfig {
     pub kato_ms: u32,
     /// DH-HMAC-CHAP secrets, used when a Connect completes with AUTHREQ.ATR.
     pub dhchap: Option<std::sync::Arc<Dhchap>>,
+    /// The TLS PSK every queue opens a secure channel with before its ICReq.
+    pub tls: Option<std::sync::Arc<HostTls>>,
 }
+
+/// The host's secure channel key and the identity version it offers it under.
+#[derive(Debug)]
+pub struct HostTls {
+    pub key: crate::server::nvme_tcp::tls_psk::ConfiguredKey,
+    pub identity_version: u8,
+}
+
+/// A queue's byte stream: the TCP socket, or a TLS session over it.
+trait Io: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + Sync {}
+impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + Sync> Io for T {}
 
 /// The host's DH-HMAC-CHAP secrets: its own, and the controller's when the host also wants
 /// the controller to prove itself (bidirectional). `Debug` never shows them.
@@ -79,7 +91,7 @@ pub struct QueueConn {
     /// In-capsule data the target takes on this queue (8 KiB on an admin queue; IOCCSZ on an
     /// I/O queue, which the opener sets before Connect).
     pub in_capsule: usize,
-    writer: OwnedWriteHalf,
+    writer: tokio::io::WriteHalf<Box<dyn Io>>,
     pdus: mpsc::Receiver<std::result::Result<Pdu, String>>,
     reader: tokio::task::AbortHandle,
     /// The PDU reader, for the caller to register with the client's tasks.
@@ -121,13 +133,41 @@ fn host_limits(digests: Digests) -> Limits {
 }
 
 impl QueueConn {
-    /// Connect a TCP connection and exchange ICReq/ICResp.
-    pub async fn open(addr: SocketAddr, qid: u16, config: &HostConfig) -> Result<Self> {
-        let mut stream = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(addr))
+    /// Connect a TCP connection, open the secure channel when the host has a TLS key (its PSK
+    /// identity names `subnqn`, which the queue's Connect must then name too), and exchange
+    /// ICReq/ICResp.
+    pub async fn open(
+        addr: SocketAddr,
+        qid: u16,
+        config: &HostConfig,
+        subnqn: &str,
+    ) -> Result<Self> {
+        let tcp = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(addr))
             .await
             .with_context(|| format!("connecting to {addr} timed out"))?
             .with_context(|| format!("connecting to {addr}"))?;
-        let _ = stream.set_nodelay(true);
+        let _ = tcp.set_nodelay(true);
+        let mut stream: Box<dyn Io> = match &config.tls {
+            None => Box::new(tcp),
+            #[cfg(unix)]
+            Some(t) => {
+                let (s, _) = tokio::time::timeout(
+                    crate::server::nvme_tcp::TLS_HANDSHAKE_TIMEOUT,
+                    crate::server::nvme_tcp::tls::connect(
+                        tcp,
+                        &t.key,
+                        &config.hostnqn,
+                        subnqn,
+                        t.identity_version,
+                    ),
+                )
+                .await
+                .with_context(|| format!("no TLS handshake with {addr} within 10 s"))??;
+                Box::new(s)
+            }
+            #[cfg(not(unix))]
+            Some(_) => bail!("tls_key needs a Unix build: NVMe/TCP TLS is OpenSSL's"),
+        };
         let mut ic = Pdu::new(kind::IC_REQ);
         ic.set_u16(8, 0); // PFV
         ic.header[10] = 0; // HPDA
@@ -176,7 +216,7 @@ impl QueueConn {
             maxh2cdata >= 4096,
             "ICResp MAXH2CDATA {maxh2cdata} (at least 4096)"
         );
-        let (mut r, w) = stream.into_split();
+        let (mut r, w) = tokio::io::split(stream);
         let (tx, rx) = mpsc::channel(64);
         let limits = host_limits(digests);
         let reader = tokio::spawn(async move {

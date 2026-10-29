@@ -186,7 +186,7 @@ says. Strike an item when it lands.
 6c. ~~M3UA's SCTP transport does not set `SCTP_NODELAY`.~~ Landed 25 October 2026: `utils::sctp::set_nodelay` is shared by ngap and m3ua (and m3ua's lab TCP transport sets TCP_NODELAY). The startup sweep's runtime shutdown is now bounded and prints every thread's state with each blocked read's file, so the intermittent post-sweep hang (2 CI shards, 2 of ~30 local runs with stdin an open pipe) will name its protocol the next time it happens; the cause is not yet known.
 7. ~~NGAP: PDU session release and modification, Service Request, paging, IPv6 sessions, NIA1/NEA1 and NIA3/NEA3.~~ Landed 25 October 2026.
 8. ~~ONVIF: Recording, Replay, Search; Basic Notification.~~ Landed 26 October 2026.
-9. ~~NVMe/TCP: DH-HMAC-CHAP, TLS, reservations, Compare/Verify/Copy.~~ Landed 26 October 2026 (TLS not built: rustls has no TLS 1.3 external PSK).
+9. ~~NVMe/TCP: DH-HMAC-CHAP, TLS, reservations, Compare/Verify/Copy.~~ Landed 26 October 2026; TLS followed on 29 October 2026 through OpenSSL, since rustls has no TLS 1.3 external PSK (the target and the host, version 0 and 1 identities, against the Linux kernel through tlshd and SPDK in both roles).
 10. ~~iSCSI: error recovery levels 1 and 2, multiple connections per session, the remaining task management functions.~~ Landed 26 October 2026.
 11. ~~FUSE: hard links, extended attributes, fallocate.~~ Landed 26 October 2026. FUSE stays Linux-only: a FUSE-T backend for macOS was built and not merged (28 October 2026), because FUSE-T mounts through macOS's NFS client and its kernel panic; `src/server/fuse/AGENTS.md` has the reasons.
 
