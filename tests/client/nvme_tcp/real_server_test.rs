@@ -676,7 +676,13 @@ print(json.dumps({'actions':[{'type':'nvme_tcp_connect'}] if i['event_type_id']=
         super::super::tls_support::require_tlshd();
         let nvme = super::super::tls_support::nvme();
         let host = host("tls");
-        let t = Nvmet::build_with("tls", &[(1, disk("hello from nvmet"))], &[&host], false, true);
+        let t = Nvmet::build_with(
+            "tls",
+            &[(1, disk("hello from nvmet"))],
+            &[&host],
+            false,
+            true,
+        );
         let key = super::super::tls_support::gen_key(&nvme);
         super::super::tls_support::insert(&nvme, &key, &host, &t.nqn);
         super::super::tls_support::insert(
@@ -708,7 +714,11 @@ print(json.dumps({'actions':[{'type':'nvme_tcp_connect'}] if i['event_type_id']=
             diagnostics(&t)
         );
         let r = results(&state, id, 6).await;
-        assert_eq!(r[1]["data"], "hello from nvmet", "read inside TLS: {}", r[1]);
+        assert_eq!(
+            r[1]["data"], "hello from nvmet",
+            "read inside TLS: {}",
+            r[1]
+        );
         assert_eq!(r[3]["data"], WRITE_TEXT, "written and read back: {}", r[3]);
         wait_event(&state, id, "nvme_tcp_disconnected", 0).await;
     }

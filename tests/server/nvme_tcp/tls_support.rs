@@ -21,7 +21,11 @@ pub fn nvme() -> PathBuf {
     }
     let mut dirs: Vec<PathBuf> =
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect();
-    dirs.extend(["/usr/local/sbin".into(), "/usr/sbin".into(), "/usr/bin".into()]);
+    dirs.extend([
+        "/usr/local/sbin".into(),
+        "/usr/sbin".into(),
+        "/usr/bin".into(),
+    ]);
     dirs.into_iter()
         .map(|d| d.join("nvme"))
         .find(|p| p.is_file())
@@ -59,7 +63,10 @@ pub fn require_tlshd() {
 /// A configured PSK from nvme-cli's own generator, SHA-256.
 pub fn gen_key(nvme: &Path) -> String {
     let (ok, key, err) = run(nvme, &["gen-tls-key", "--hmac=1"]);
-    assert!(ok && key.starts_with("NVMeTLSkey-1:01:"), "nvme gen-tls-key: {key} {err}");
+    assert!(
+        ok && key.starts_with("NVMeTLSkey-1:01:"),
+        "nvme gen-tls-key: {key} {err}"
+    );
     key
 }
 

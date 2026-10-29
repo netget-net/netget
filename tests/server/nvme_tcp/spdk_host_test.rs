@@ -435,8 +435,7 @@ print(json.dumps({'actions':a}))"#;
             "SPDK's version 0 identity was accepted: {logs:#?}"
         );
         assert!(
-            logs.iter()
-                .any(|l| l.contains("decision=fail_closed_tls")),
+            logs.iter().any(|l| l.contains("decision=fail_closed_tls")),
             "the wrong key was refused at the handshake: {logs:#?}"
         );
     }

@@ -60,7 +60,9 @@ async fn pdus_travel_inside_the_secure_channel_and_connect_is_held_to_the_identi
     );
 
     // The discovery log says TLS 1.3 is required: TREQ's low bits 01b, TSAS SECTYPE 2.
-    let mut d = tls_raw(srv.port, KEY, HOST, DISCOVERY, 1).await.expect("TLS");
+    let mut d = tls_raw(srv.port, KEY, HOST, DISCOVERY, 1)
+        .await
+        .expect("TLS");
     d.admin_session(DISCOVERY, HOST, 0).await;
     let (log, c) = d.get_log(0x70, 0, 2048).await;
     assert!(c.ok(), "discovery log: {c:?}");
@@ -96,7 +98,10 @@ async fn pdus_travel_inside_the_secure_channel_and_connect_is_held_to_the_identi
         srv.logs()
     );
     // Neither reached the model: only the one accepted Connect did.
-    assert_eq!(events(&srv.state, srv.id, "nvme_tcp_connect").await.len(), 1);
+    assert_eq!(
+        events(&srv.state, srv.id, "nvme_tcp_connect").await.len(),
+        1
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -139,13 +144,19 @@ async fn a_host_without_the_key_never_reaches_nvme_tcp() {
     .await
     .expect("closed within the bound");
     assert!(matches!(read, Ok(0) | Err(_)));
-    assert!(started.elapsed() >= Duration::from_secs(9), "{:?}", started.elapsed());
+    assert!(
+        started.elapsed() >= Duration::from_secs(9),
+        "{:?}",
+        started.elapsed()
+    );
     assert!(
         logged(&srv, "no TLS handshake within 10 s").await,
         "{:?}",
         srv.logs()
     );
-    assert!(events(&srv.state, srv.id, "nvme_tcp_connect").await.is_empty());
+    assert!(events(&srv.state, srv.id, "nvme_tcp_connect")
+        .await
+        .is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

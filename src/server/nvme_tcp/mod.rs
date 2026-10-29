@@ -19,10 +19,10 @@ pub mod nvme;
 pub mod pdu;
 pub mod resv;
 mod target_auth;
+mod target_io;
 #[cfg(unix)]
 pub mod tls;
 pub mod tls_psk;
-mod target_io;
 
 use crate::llm::action_helper::call_llm;
 use crate::llm::actions::protocol_trait::ActionResult;
@@ -152,7 +152,8 @@ pub fn parse_config(ctx: &SpawnContext) -> Result<(Config, Option<u16>)> {
     if let Some(params) = ctx.startup_params.as_ref() {
         if let Some(text) = params.get_optional_string("tls_key")? {
             tls_key = Some(
-                tls_psk::ConfiguredKey::parse(&text).map_err(|e| anyhow::anyhow!("tls_key: {e}"))?,
+                tls_psk::ConfiguredKey::parse(&text)
+                    .map_err(|e| anyhow::anyhow!("tls_key: {e}"))?,
             );
         }
         if let Some(d) = params.get_optional_string("digests")? {
@@ -502,8 +503,7 @@ async fn accept_loop(
                 let _permit = permit;
                 // With a tls_key the TLS session comes first: the host's first PDU travels
                 // inside it. A host that cannot complete it is closed before any NVMe/TCP.
-                let (stream, tls_identity): (Box<dyn Io>, Option<tls_psk::Identity>) = match tls
-                {
+                let (stream, tls_identity): (Box<dyn Io>, Option<tls_psk::Identity>) = match tls {
                     None => (Box::new(stream), None),
                     #[cfg(unix)]
                     Some(acceptor) => {
@@ -516,7 +516,10 @@ async fn accept_loop(
                                     id,
                                     "tls",
                                     "protocol_accept",
-                                    &format!("TLS 1.3 secure channel, PSK identity {}", identity.text()),
+                                    &format!(
+                                        "TLS 1.3 secure channel, PSK identity {}",
+                                        identity.text()
+                                    ),
                                 );
                                 (Box::new(s), Some(identity))
                             }
@@ -2146,7 +2149,11 @@ impl<'a> Conn<'a> {
                     subnqn: nqn,
                     traddr: a.ip().to_string(),
                     // TSAS SECTYPE: TLS 1.3, or no security.
-                    sectype: if self.target.config.tls_key.is_some() { 2 } else { 0 },
+                    sectype: if self.target.config.tls_key.is_some() {
+                        2
+                    } else {
+                        0
+                    },
                 }
             })
             .collect();

@@ -582,8 +582,12 @@ print(json.dumps({'actions':[{'type':'nvme_tcp_connect'}] if i['event_type_id']=
         // SPDK's file keyring refuses a key anyone but its owner can read.
         std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600)).unwrap();
         let port = free_port().to_string();
-        tgt.must(&["keyring_file_add_key", "key0", &key_path.display().to_string()])
-            .await;
+        tgt.must(&[
+            "keyring_file_add_key",
+            "key0",
+            &key_path.display().to_string(),
+        ])
+        .await;
         tgt.must(&["nvmf_create_transport", "-t", "TCP"]).await;
         tgt.must(&[
             "bdev_aio_create",
@@ -614,8 +618,14 @@ print(json.dumps({'actions':[{'type':'nvme_tcp_connect'}] if i['event_type_id']=
             "--secure-channel",
         ])
         .await;
-        tgt.must(&["nvmf_subsystem_add_host", TLS_NQN, TLS_HOST, "--psk", "key0"])
-            .await;
+        tgt.must(&[
+            "nvmf_subsystem_add_host",
+            TLS_NQN,
+            TLS_HOST,
+            "--psk",
+            "key0",
+        ])
+        .await;
 
         let (state, id) = client(
             format!("127.0.0.1:{port}"),
@@ -633,6 +643,9 @@ print(json.dumps({'actions':[{'type':'nvme_tcp_connect'}] if i['event_type_id']=
         assert_eq!(r[3]["data"], WRITE_TEXT, "{}", r[3]);
         wait_event(&state, id, "nvme_tcp_disconnected", 0).await;
         let back = wait_for(&file, 51200, WRITE_TEXT.as_bytes()).await;
-        assert!(back, "the model's write crossed the channel to nvmf_tgt's backing file");
+        assert!(
+            back,
+            "the model's write crossed the channel to nvmf_tgt's backing file"
+        );
     }
 }

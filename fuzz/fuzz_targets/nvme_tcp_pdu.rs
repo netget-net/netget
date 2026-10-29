@@ -153,7 +153,10 @@ fn structures(d: &[u8]) {
         // The TLS key text, and an identity as the target receives it: whatever parses must
         // name a hash the key could have and print back as itself.
         if let Ok(k) = tls_psk::ConfiguredKey::parse(text) {
-            assert!(matches!(k.retained("nqn.2026-10.net.netget:fuzz").len(), 32 | 48));
+            assert!(matches!(
+                k.retained("nqn.2026-10.net.netget:fuzz").len(),
+                32 | 48
+            ));
         }
         let fixed = tls_psk::ConfiguredKey::parse(&tls_psk::ConfiguredKey::text(&[7; 32], None))
             .expect("a key of NetGet's own making parses");

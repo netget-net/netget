@@ -49,7 +49,16 @@ mod kernel_tls {
         .await;
         let port = srv.port.to_string();
         let common = [
-            "-t", "tcp", "-a", "127.0.0.1", "-s", &port, "-q", TLS_HOST, "-I", TLS_HOSTID,
+            "-t",
+            "tcp",
+            "-a",
+            "127.0.0.1",
+            "-s",
+            &port,
+            "-q",
+            TLS_HOST,
+            "-I",
+            TLS_HOSTID,
             "--tls",
         ];
 
@@ -133,7 +142,17 @@ mod kernel_tls {
         let out = run(
             &nvme,
             &[
-                "connect", "-n", DISK0, "-t", "tcp", "-a", "127.0.0.1", "-s", &port, "-q", host,
+                "connect",
+                "-n",
+                DISK0,
+                "-t",
+                "tcp",
+                "-a",
+                "127.0.0.1",
+                "-s",
+                &port,
+                "-q",
+                host,
                 "--tls",
             ],
         )
@@ -148,6 +167,8 @@ mod kernel_tls {
             "{:#?}",
             srv.logs()
         );
-        assert!(events(&srv.state, srv.id, "nvme_tcp_connect").await.is_empty());
+        assert!(events(&srv.state, srv.id, "nvme_tcp_connect")
+            .await
+            .is_empty());
     }
 }

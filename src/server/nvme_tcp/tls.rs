@@ -220,9 +220,7 @@ impl Acceptor {
         match (result, decided) {
             (_, Some(Err(refusal))) => Err(TargetFailure::Refused(refusal)),
             (Ok(()), Some(Ok(identity))) => Ok((stream, identity)),
-            (Ok(()), None) => Err(TargetFailure::Handshake(
-                "completed without a PSK".into(),
-            )),
+            (Ok(()), None) => Err(TargetFailure::Handshake("completed without a PSK".into())),
             (Err(e), Some(Ok(_))) => Err(TargetFailure::Handshake(e.to_string())),
             (Err(e), None) => Err(TargetFailure::Handshake(format!(
                 "the host offered no PSK ({e})"

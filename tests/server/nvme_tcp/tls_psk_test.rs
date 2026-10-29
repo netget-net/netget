@@ -47,7 +47,11 @@ fn derivations_match_libnvme() {
     assert_eq!(hex(&target), TLS_PSK);
 
     let (v0, _) = host_offer(&key, HOST, SUB, 0);
-    assert_eq!(v0.text(), format!("NVMe0R01 {HOST} {SUB}"), "libnvme's version 0");
+    assert_eq!(
+        v0.text(),
+        format!("NVMe0R01 {HOST} {SUB}"),
+        "libnvme's version 0"
+    );
 }
 
 #[test]
@@ -55,7 +59,10 @@ fn the_interchange_text_round_trips_and_is_checked() {
     let key = ConfiguredKey::parse(KEY).unwrap();
     let raw = [7u8; 48];
     let text = ConfiguredKey::text(&raw, Some(Hash::Sha384));
-    assert!(text.starts_with("NVMeTLSkey-1:02:") && text.len() == 89, "{text}");
+    assert!(
+        text.starts_with("NVMeTLSkey-1:02:") && text.len() == 89,
+        "{text}"
+    );
     assert_eq!(ConfiguredKey::parse(&text).unwrap().hash(), Hash::Sha384);
     assert_eq!(key.hash(), Hash::Sha256);
 
@@ -66,8 +73,16 @@ fn the_interchange_text_round_trips_and_is_checked() {
     // A 48-byte key may not claim SHA-256.
     let lying = ConfiguredKey::text(&raw, Some(Hash::Sha256));
     assert!(ConfiguredKey::parse(&lying).is_err());
-    for refused in ["", "NVMeTLSkey-1:03:AAAA:", "DHHC-1:01:AAAA:", "NVMeTLSkey-1:01"] {
-        assert!(ConfiguredKey::parse(refused).is_err(), "{refused:?} accepted");
+    for refused in [
+        "",
+        "NVMeTLSkey-1:03:AAAA:",
+        "DHHC-1:01:AAAA:",
+        "NVMeTLSkey-1:01",
+    ] {
+        assert!(
+            ConfiguredKey::parse(refused).is_err(),
+            "{refused:?} accepted"
+        );
     }
 }
 
@@ -87,8 +102,8 @@ fn a_target_refuses_identities_it_cannot_serve() {
     assert_eq!(target_psk(&key, &other), Err(Refusal::DigestMismatch));
 
     // A host holding another key computes another digest.
-    let stranger = ConfiguredKey::parse(&ConfiguredKey::text(&[9u8; 32], Some(Hash::Sha256)))
-        .unwrap();
+    let stranger =
+        ConfiguredKey::parse(&ConfiguredKey::text(&[9u8; 32], Some(Hash::Sha256))).unwrap();
     let (theirs, _) = host_offer(&stranger, HOST, SUB, 1);
     assert_eq!(
         target_psk(&key, &theirs.text()),
