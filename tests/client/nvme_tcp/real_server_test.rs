@@ -79,6 +79,18 @@ mod kernel_target {
         /// As [`Nvmet::new`], with persistent reservations enabled on every namespace
         /// (`resv_enable`, which nvmet takes only before a namespace is enabled).
         fn build(tag: &str, files: &[(u32, Vec<u8>)], allow: &[&str], resv: bool) -> Self {
+            Self::build_with(tag, files, allow, resv, false)
+        }
+
+        /// As [`Nvmet::build`], with the port requiring a TLS 1.3 secure channel when `tls`
+        /// (`addr_tsas`, `addr_treq`, which nvmet takes only before a subsystem is linked).
+        fn build_with(
+            tag: &str,
+            files: &[(u32, Vec<u8>)],
+            allow: &[&str],
+            resv: bool,
+            tls: bool,
+        ) -> Self {
             let dir = tempfile::tempdir().unwrap();
             let base = PathBuf::from(CONFIGFS);
             let nqn = format!("nqn.2026-10.org.linux:nvmet-{tag}-{}", std::process::id());
@@ -136,6 +148,10 @@ mod kernel_target {
             write(&port.join("addr_adrfam"), "ipv4");
             write(&port.join("addr_traddr"), "127.0.0.1");
             write(&port.join("addr_trsvcid"), &tcp_port.to_string());
+            if tls {
+                write(&port.join("addr_tsas"), "tls1.3");
+                write(&port.join("addr_treq"), "required");
+            }
             let link = port.join("subsystems").join(&nqn);
             std::os::unix::fs::symlink(&subsys, &link).unwrap();
             me.links.push(link);
@@ -647,5 +663,53 @@ print(json.dumps({'actions':[{'type':'nvme_tcp_connect'}] if i['event_type_id']=
             "{refused}\n{}",
             diagnostics(&t)
         );
+    }
+
+    /// Every queue — the discovery controller's, the admin queue and the I/O queue — opens a
+    /// TLS 1.3 session with nvmet through tlshd before its ICReq, under a version 1 identity
+    /// naming the subsystem it then connects to. nvme-cli makes and inserts the key nvmet
+    /// looks up, and checks first that libnvme derives the identity NetGet does.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_host_runs_the_models_session_over_tls_against_the_kernel_target() {
+        require_root();
+        require_nvmet();
+        super::super::tls_support::require_tlshd();
+        let nvme = super::super::tls_support::nvme();
+        let host = host("tls");
+        let t = Nvmet::build_with("tls", &[(1, disk("hello from nvmet"))], &[&host], false, true);
+        let key = super::super::tls_support::gen_key(&nvme);
+        super::super::tls_support::insert(&nvme, &key, &host, &t.nqn);
+        super::super::tls_support::insert(
+            &nvme,
+            &key,
+            &host,
+            "nqn.2014-08.org.nvmexpress.discovery",
+        );
+        let (state, id) = client(
+            format!("127.0.0.1:{}", t.tcp_port),
+            json!({"host_nqn": host, "tls_key": key}),
+            chain(SESSION_POLICY),
+        )
+        .await
+        .unwrap();
+        let log = wait_event(&state, id, "nvme_tcp_discovery_log", 0).await;
+        let ours = log["entries"]
+            .as_array()
+            .and_then(|a| a.iter().find(|e| e["subsystem_nqn"] == t.nqn.as_str()))
+            .cloned()
+            .unwrap_or_else(|| panic!("nvmet lists the subsystem: {log}\n{}", diagnostics(&t)));
+        assert_eq!(ours["secure_channel"], "required", "{ours}");
+        assert_eq!(ours["security"], "tls1.3", "{ours}");
+        let connected = wait_event(&state, id, "nvme_tcp_connect_result", 0).await;
+        assert_eq!(
+            connected["connected"],
+            true,
+            "{connected}\n{}",
+            diagnostics(&t)
+        );
+        let r = results(&state, id, 6).await;
+        assert_eq!(r[1]["data"], "hello from nvmet", "read inside TLS: {}", r[1]);
+        assert_eq!(r[3]["data"], WRITE_TEXT, "written and read back: {}", r[3]);
+        wait_event(&state, id, "nvme_tcp_disconnected", 0).await;
     }
 }

@@ -61,4 +61,26 @@ three tests can each start one on core 0 at once.
 | `spdk_nvmf_tgt_and_the_host_authenticate_each_other` | `keyring_file_add_key` and `nvmf_subsystem_add_host --dhchap-key --dhchap-ctrlr-key` with secrets from `nvme gen-dhchap-key`: nvmf_tgt picks sha512/ffdhe8192 and both sides prove themselves, then the session, the write in the file; a wrong host secret refused by nvmf_tgt, a controller secret nvmf_tgt does not hold refused by the host |
 | `spdk_nvmf_tgt_compares_verifies_copies_and_reserves` | Compare match and COMPARE FAILURE; nvmf_tgt's own Copy limits read from Identify Namespace (one range, 263 blocks), two copies landing in the file and one range past MSRC refused by nvmf_tgt; Verify, which nvmf_tgt answers INVALID COMMAND OPCODE; register, acquire Exclusive Access - Registrants Only, nvmf_tgt's report, release with the wrong type (INVALID FIELD, as NetGet's target also answers), clear |
 
-Every test fails, never skips, when root, the modules, configfs or SPDK is missing.
+`the_host_runs_a_session_inside_spdks_tls_listener`: `keyring_file_add_key`, a listener with
+`--secure-channel` and `nvmf_subsystem_add_host --psk`, the key NetGet's own random bytes in an
+`NVMeTLSkey-1` 0600 file. nvmf_tgt derives the TLS PSK itself from the version 0 identity the host
+offers (SPDK's own form); the host connects without discovery, and the read and the write cross
+the channel to the file.
+
+## `tls_test.rs` — secure channels against NetGet's own target (regression, not evidence)
+
+Every queue opens its own TLS session: the session test checks the target accepted a version 1
+identity naming the discovery NQN and one naming the subsystem, and that the discovery entry
+reports `secure_channel: required`, `security: tls1.3`. A version 0 identity with a SHA-384 key
+works too; a host holding another key gets `connected: false` with the TLS error and no Connect
+reaches the target's model. Unix only.
+
+`real_server_test.rs` also has `the_host_runs_the_models_session_over_tls_against_the_kernel_target`:
+the nvmet port has `addr_tsas tls1.3` and `addr_treq required` (set before the subsystem is
+linked), nvme-cli 3.1 inserts the key for the subsystem and the discovery NQN
+(`tests/server/nvme_tcp/tls_support.rs`, shared by path), and tlshd runs nvmet's side of every
+handshake. nvmet's discovery log reports TLS required; the model's read and write cross the
+channel.
+
+Every test fails, never skips, when root, the modules, configfs, SPDK, tlshd or nvme-cli is
+missing.

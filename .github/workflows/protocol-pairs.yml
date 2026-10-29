@@ -9705,6 +9705,30 @@ jobs:
           echo "NETGET_SPDK_DIR=$spdk" >> "$GITHUB_ENV"
           # nvme connect and configfs need root.
           sudo -n true
+      - name: Build tlshd and nvme-cli for the kernel's TLS secure channels
+        run: |
+          set -euo pipefail
+          config="/boot/config-$(uname -r)"
+          for opt in CONFIG_NVME_TCP_TLS CONFIG_NVME_TARGET_TCP_TLS CONFIG_NET_HANDSHAKE CONFIG_NVME_KEYRING; do
+            if ! grep -Eq "^$opt=(y|m)" "$config"; then
+              echo "::error::kernel $(uname -r) is built without $opt; the kernel's TLS peers cannot run"
+              exit 1
+            fi
+          done
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            autoconf automake libtool pkg-config libgnutls28-dev libkeyutils-dev libnl-3-dev \
+            libnl-genl-3-dev libglib2.0-dev meson ninja-build libjson-c-dev libssl-dev uuid-dev \
+            keyutils
+          nvme=$(sh scripts/test-peers/build-nvme-tls.sh "$RUNNER_TEMP/nvme-tls-peer" | tail -1)
+          echo "NETGET_NVME_CLI=$nvme" >> "$GITHUB_ENV"
+          # tlshd looks keys up in the kernel's .nvme keyring only when told to; current
+          # releases read /etc/tlshd/config, older ones /etc/tlshd.conf.
+          sudo mkdir -p /etc/tlshd
+          printf '[debug]\nloglevel=1\n[authenticate]\nkeyrings=.nvme\n' \
+            | sudo tee /etc/tlshd.conf /etc/tlshd/config >/dev/null
+          sudo sh -c 'nohup /usr/local/sbin/tlshd -s > /tmp/tlshd.log 2>&1 &'
+          sleep 1
+          pgrep -a tlshd
       - name: Both roles with mandatory independent peers, bounds and fail-closed paths
         run: |
           set -euo pipefail
@@ -9725,6 +9749,9 @@ jobs:
               --test "$target" -- "$filter" --test-threads=4 2>&1 | tee "$pair_log"
             grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored;' "$pair_log"
           done
+      - name: tlshd's log
+        if: always()
+        run: sudo cat /tmp/tlshd.log || true
       - name: Shared declarations, native startup, privacy and ownership
         run: |
           cargo test --locked --no-default-features \
@@ -10073,102 +10100,3 @@ jobs:
             --test doc_test_counts_test \
             --test tcp_server_bounds_ratchet_test \
             -- --test-threads=32
-  nvme-tls-probe:
-    if: inputs.only == 'nvme-tls-probe'
-    name: NVMe/TCP TLS probe (kernel host and target through tlshd)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - name: Kernel and packages
-        run: |
-          set -x
-          uname -r
-          grep -E 'CONFIG_NVME_TCP_TLS|CONFIG_NVME_TARGET_TCP_TLS|CONFIG_NET_HANDSHAKE|CONFIG_TLS=|CONFIG_NVME_KEYRING' "/boot/config-$(uname -r)" || true
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nvme-cli ktls-utils keyutils
-          nvme version
-          dpkg -s ktls-utils | grep -E '^Version'
-          if ! sudo modprobe -a nvme-tcp nvmet nvmet-tcp; then
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)"
-            sudo modprobe -a nvme-tcp nvmet nvmet-tcp
-          fi
-          modinfo nvme-tcp | grep -i -E 'tls|parm' || true
-          sudo cat /proc/keys | grep -i nvme || true
-      - name: Kernel target and kernel host over TLS
-        run: |
-          set -x
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential autoconf automake libtool pkg-config libgnutls28-dev libkeyutils-dev \
-            libnl-3-dev libnl-genl-3-dev libglib2.0-dev
-          git clone --depth 1 https://github.com/oracle/ktls-utils /tmp/ktls-utils
-          git -C /tmp/ktls-utils log -1 --format='%h %cd %s'
-          (cd /tmp/ktls-utils && ./autogen.sh >/dev/null && ./configure --prefix=/usr/local >/dev/null && make -j4 >/dev/null && sudo make install >/dev/null)
-          ls /usr/local/sbin/ || true
-          /usr/local/sbin/tlshd --help 2>&1 | head -5 || true
-          sudo systemctl stop tlshd || true
-          sudo mkdir -p /etc/tlshd
-          printf '[debug]\nloglevel=7\ntls=7\nnl=7\n[authenticate]\nkeyrings=.nvme\n' | sudo tee /etc/tlshd.conf /etc/tlshd/config
-          sudo bash -c '/usr/local/sbin/tlshd -s > /tmp/tlshd.log 2>&1 &'
-          sleep 1
-          pgrep -a tlshd || true
-          H=nqn.2014-08.org.nvmexpress:uuid:$(cat /proc/sys/kernel/random/uuid)
-          SUB=nqn.2026-10.net.netget:tls-probe
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            meson ninja-build libjson-c-dev libssl-dev uuid-dev
-          git clone --depth 1 https://github.com/linux-nvme/nvme-cli /tmp/nvme-cli
-          git -C /tmp/nvme-cli log -1 --format='%h %cd %s'
-          (cd /tmp/nvme-cli && meson setup .build -Ddocs=false >/tmp/meson.log 2>&1 && ninja -C .build >/tmp/ninja.log 2>&1) || { tail -40 /tmp/meson.log /tmp/ninja.log; exit 1; }
-          NV=/tmp/nvme-cli/.build/nvme
-          $NV version
-          KEY=$(nvme gen-tls-key --hmac=1)
-          echo "key: $KEY"
-          echo "host: $H"
-          echo "sub: $SUB"
-          echo "identity-v1: $($NV check-tls-key --keydata="$KEY" --hostnqn="$H" --subsysnqn="$SUB" --identity=1)"
-          echo "identity-v0: $($NV check-tls-key --keydata="$KEY" --hostnqn="$H" --subsysnqn="$SUB" --identity=0)"
-          $NV check-tls-key --help 2>&1 | grep -i -E 'compat|identity' || true
-          $NV keys --help 2>&1 | head -40 || true
-          for c in insert-tls-psk check-tls-psk; do $NV keys $c --help 2>&1 | head -30 || true; done
-          SERIAL=$(sudo $NV keys insert-tls-psk --keydata="$KEY" --hostnqn="$H" --subsysnqn="$SUB" --identity=1 2>&1 | tee /dev/stderr | grep -o -E '[0-9a-f]{8}' | tail -1)
-          [ -n "$SERIAL" ] || SERIAL=$(sudo nvme check-tls-key --keydata="$KEY" --hostnqn="$H" --subsysnqn="$SUB" --identity=1 --insert | awk '/Inserted TLS key/{print $4}')
-          echo "serial: $SERIAL"
-          # nvme-cli 2.8 inserts the key readable only by its possessor; tlshd (ktls-utils 0.9)
-          # searches the .nvme keyring for it on the target side and cannot see it otherwise.
-          # Changing a key's permissions needs possession: link .nvme into this shell's session.
-          NVMEKR=$(sudo awk '$9==".nvme:" {print $1}' /proc/keys)
-          sudo bash -c "keyctl new_session >/dev/null; keyctl link 0x$NVMEKR @s && keyctl setperm 0x$SERIAL 0x3f3f0000"
-          sudo grep -i psk /proc/keys
-          echo "tls-psk: $(sudo keyctl pipe 0x$SERIAL | xxd -p -c 64)"
-          sudo cat /proc/keys | grep -i -E 'nvme|psk' || true
-          truncate -s 64M /tmp/ns.img
-          LOOP=$(sudo losetup --find --show /tmp/ns.img)
-          C=/sys/kernel/config/nvmet
-          sudo mkdir "$C/subsystems/$SUB"
-          echo 1 | sudo tee "$C/subsystems/$SUB/attr_allow_any_host"
-          sudo mkdir "$C/subsystems/$SUB/namespaces/1"
-          echo "$LOOP" | sudo tee "$C/subsystems/$SUB/namespaces/1/device_path"
-          echo 1 | sudo tee "$C/subsystems/$SUB/namespaces/1/enable"
-          sudo mkdir "$C/ports/1"
-          echo tcp | sudo tee "$C/ports/1/addr_trtype"
-          echo ipv4 | sudo tee "$C/ports/1/addr_adrfam"
-          echo 127.0.0.1 | sudo tee "$C/ports/1/addr_traddr"
-          echo 4430 | sudo tee "$C/ports/1/addr_trsvcid"
-          ls "$C/ports/1/"
-          echo tls1.3 | sudo tee "$C/ports/1/addr_tsas" || true
-          echo required | sudo tee "$C/ports/1/addr_treq" || true
-          cat "$C/ports/1/addr_tsas" "$C/ports/1/addr_treq" || true
-          sudo ln -s "$C/subsystems/$SUB" "$C/ports/1/subsystems/$SUB"
-          sudo timeout 30 tcpdump -i lo -w /tmp/tls.pcap port 4430 &
-          sleep 2
-          sudo nvme discover -t tcp -a 127.0.0.1 -s 4430 --hostnqn="$H" --tls || true
-          sudo $NV connect -t tcp -a 127.0.0.1 -s 4430 -n "$SUB" --hostnqn="$H" --tls -v || true
-          sleep 2
-          sudo nvme list || true
-          sudo nvme disconnect -n "$SUB" || true
-          sleep 3
-          sudo journalctl -u tlshd --no-pager | tail -60 || true
-          sudo tail -80 /tmp/tlshd.log || true
-          sudo dmesg | grep -i -E 'nvme|tls|handshake' | tail -40 || true
-          sudo pkill tcpdump || true
-          sleep 1
-          sudo tcpdump -r /tmp/tls.pcap -nn 2>/dev/null | head -20 || true

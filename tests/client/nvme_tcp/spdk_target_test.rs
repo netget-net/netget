@@ -556,4 +556,83 @@ print(json.dumps({'actions':[{'type':'nvme_tcp_connect'}] if i['event_type_id']=
         .await
         .is_ok()
     }
+
+    /// A session inside nvmf_tgt's TLS listener (`--secure-channel`): nvmf_tgt reads the
+    /// interchange key from its own file keyring, derives the retained and TLS PSKs itself and
+    /// looks up the host's version 0 identity — SPDK's own form — through its OpenSSL socket.
+    /// The model's read and write cross the channel and land in the backing file.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_host_runs_a_session_inside_spdks_tls_listener() {
+        use netget::server::nvme_tcp::auth::Hash;
+        use netget::server::nvme_tcp::tls_psk::ConfiguredKey;
+        use std::os::unix::fs::PermissionsExt;
+        const TLS_NQN: &str = "nqn.2026-10.io.spdk:netget-tls-test";
+        const TLS_HOST: &str = "nqn.2026-10.net.netget:host-for-spdk-tls";
+        let tgt = NvmfTgt::start().await;
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("disk.img");
+        let mut d = vec![0u8; 4 * 1024 * 1024];
+        d[..19].copy_from_slice(b"hello from spdk tls");
+        std::fs::write(&file, d).unwrap();
+        let mut raw = [0u8; 32];
+        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut raw);
+        let key = ConfiguredKey::text(&raw, Some(Hash::Sha256));
+        let key_path = dir.path().join("tls.key");
+        std::fs::write(&key_path, &key).unwrap();
+        // SPDK's file keyring refuses a key anyone but its owner can read.
+        std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let port = free_port().to_string();
+        tgt.must(&["keyring_file_add_key", "key0", &key_path.display().to_string()])
+            .await;
+        tgt.must(&["nvmf_create_transport", "-t", "TCP"]).await;
+        tgt.must(&[
+            "bdev_aio_create",
+            &file.display().to_string(),
+            "Aio0",
+            "512",
+        ])
+        .await;
+        tgt.must(&[
+            "nvmf_create_subsystem",
+            TLS_NQN,
+            "-s",
+            "SPDK0003",
+            "-d",
+            "SPDK_TLS",
+        ])
+        .await;
+        tgt.must(&["nvmf_subsystem_add_ns", TLS_NQN, "Aio0"]).await;
+        tgt.must(&[
+            "nvmf_subsystem_add_listener",
+            TLS_NQN,
+            "-t",
+            "tcp",
+            "-a",
+            "127.0.0.1",
+            "-s",
+            &port,
+            "--secure-channel",
+        ])
+        .await;
+        tgt.must(&["nvmf_subsystem_add_host", TLS_NQN, TLS_HOST, "--psk", "key0"])
+            .await;
+
+        let (state, id) = client(
+            format!("127.0.0.1:{port}"),
+            json!({"host_nqn": TLS_HOST, "subsystem_nqn": TLS_NQN, "tls_key": key,
+                   "tls_identity_version": 0}),
+            chain(&connect_first_policy()),
+        )
+        .await
+        .unwrap();
+        let connected = wait_event(&state, id, "nvme_tcp_connect_result", 0).await;
+        assert_eq!(connected["connected"], true, "{connected}\n{}", tgt.logs());
+        assert_eq!(connected["controller"]["serial"], "SPDK0003");
+        let r = results(&state, id, 6).await;
+        assert_eq!(r[1]["data"], "hello from spdk tls", "{}", r[1]);
+        assert_eq!(r[3]["data"], WRITE_TEXT, "{}", r[3]);
+        wait_event(&state, id, "nvme_tcp_disconnected", 0).await;
+        let back = wait_for(&file, 51200, WRITE_TEXT.as_bytes()).await;
+        assert!(back, "the model's write crossed the channel to nvmf_tgt's backing file");
+    }
 }

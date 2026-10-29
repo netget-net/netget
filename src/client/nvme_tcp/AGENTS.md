@@ -29,6 +29,17 @@ TLS), is refused the same way. The secrets are startup parameters `src/utils/red
 parsed (`DHHC-1`, CRC-32 checked) before anything connects, and never in an event; a controller
 secret without a host secret refuses to start.
 
+**TLS.** With `tls_key` (an `NVMeTLSkey-1` configured PSK) every queue — the discovery
+controller's, the admin queue and each I/O queue — opens a TLS 1.3 session before its ICReq,
+offering a retained PSK identity for this host and the subsystem that queue then connects to
+(`tls_identity_version`, 1 by default: the version carrying the PSK digest, which the Linux host
+offers first; 0 is SPDK's form). The keys and the OpenSSL callbacks are the target's
+(`src/server/nvme_tcp/tls_psk.rs` and `tls.rs`, see its AGENTS.md); the handshake is bounded by
+the same 10 s. A target that does not hold the key fails the handshake, and the connect result is
+`connected: false` with the TLS error. Discovery entries say what each port requires:
+`secure_channel` (TREQ: required, not_required, not_specified) and `security` (TSAS SECTYPE: none,
+tls1.2, tls1.3). Unix builds only.
+
 One controller at a time; a second `nvme_tcp_connect` is refused until `nvme_tcp_disconnect`.
 Keep Alive goes out on the admin queue every third of KATO (`keep_alive_ms`, default 30 s),
 also while the model is thinking. A queue the target closes or ends with C2HTermReq, or a Keep

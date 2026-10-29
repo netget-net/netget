@@ -19,6 +19,9 @@ pub mod nvme;
 pub mod pdu;
 pub mod resv;
 mod target_auth;
+#[cfg(unix)]
+pub mod tls;
+pub mod tls_psk;
 mod target_io;
 
 use crate::llm::action_helper::call_llm;
@@ -43,7 +46,6 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 use tokio::sync::watch;
 
 /// The ICReq must arrive within this long of the connection opening.
@@ -137,13 +139,22 @@ pub struct Config {
     /// The NVMe/TCP port discovery entries point at when the model names no address.
     pub io_port: u16,
     pub auth: Option<Arc<AuthConfig>>,
+    /// The configured PSK every connection must open a TLS 1.3 secure channel with, when set;
+    /// the discovery log then says TLS is required.
+    pub tls_key: Option<tls_psk::ConfiguredKey>,
 }
 
 pub fn parse_config(ctx: &SpawnContext) -> Result<(Config, Option<u16>)> {
     let mut digests = DigestPolicy::Either;
     let mut discovery_port = None;
     let mut auth = None;
+    let mut tls_key = None;
     if let Some(params) = ctx.startup_params.as_ref() {
+        if let Some(text) = params.get_optional_string("tls_key")? {
+            tls_key = Some(
+                tls_psk::ConfiguredKey::parse(&text).map_err(|e| anyhow::anyhow!("tls_key: {e}"))?,
+            );
+        }
         if let Some(d) = params.get_optional_string("digests")? {
             digests = DigestPolicy::parse(&d).context("digests is either, crc32c or none")?;
         }
@@ -192,6 +203,7 @@ pub fn parse_config(ctx: &SpawnContext) -> Result<(Config, Option<u16>)> {
             digests,
             io_port: 0,
             auth,
+            tls_key,
         },
         discovery_port,
     ))
@@ -372,6 +384,21 @@ impl Target {
     }
 }
 
+#[cfg(unix)]
+type TlsAcceptor = tls::Acceptor;
+/// No TLS outside Unix: `tls_key` is refused at startup there, so none is ever built.
+#[cfg(not(unix))]
+#[derive(Clone)]
+enum TlsAcceptor {}
+
+/// How long a host has to complete the TLS handshake: the Linux host's own default
+/// (`nvme_tcp.tls_handshake_timeout`, 10 seconds).
+pub const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// A connection's byte stream: the TCP socket, or a TLS session over it.
+trait Io: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + Sync {}
+impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + Sync> Io for T {}
+
 pub async fn spawn(ctx: SpawnContext) -> Result<SocketAddr> {
     let (mut config, discovery_port) = parse_config(&ctx)?;
     let listener = tokio::net::TcpListener::bind(ctx.legacy_listen_addr()).await?;
@@ -386,6 +413,15 @@ pub async fn spawn(ctx: SpawnContext) -> Result<SocketAddr> {
             Some(l)
         }
         None => None,
+    };
+    let tls: Option<TlsAcceptor> = match &config.tls_key {
+        None => None,
+        #[cfg(unix)]
+        Some(key) => Some(
+            tls::Acceptor::new(key.clone()).context("setting up TLS for the configured tls_key")?,
+        ),
+        #[cfg(not(unix))]
+        Some(_) => anyhow::bail!("tls_key needs a Unix build: NVMe/TCP TLS is OpenSSL's"),
     };
     let target = Arc::new(Target::new(config));
     let shared = Arc::new(ctx.clone());
@@ -403,6 +439,7 @@ pub async fn spawn(ctx: SpawnContext) -> Result<SocketAddr> {
             shared.clone(),
             target.clone(),
             limiter.clone(),
+            tls.clone(),
         ));
         ctx.state.register_server_task(ctx.server_id, accept).await;
     }
@@ -414,6 +451,7 @@ async fn accept_loop(
     shared: Arc<SpawnContext>,
     target: Arc<Target>,
     limiter: ConnectionLimiter,
+    tls: Option<TlsAcceptor>,
 ) {
     let server_id = shared.server_id;
     let Ok(listening) = listener.local_addr() else {
@@ -457,11 +495,56 @@ async fn accept_loop(
             .await;
         let child = shared.clone();
         let target = target.clone();
+        let tls = tls.clone();
         shared
             .state
             .spawn_server_task(server_id, async move {
                 let _permit = permit;
-                let mut c = Conn::new(&child, target, id, peer, local, stream);
+                // With a tls_key the TLS session comes first: the host's first PDU travels
+                // inside it. A host that cannot complete it is closed before any NVMe/TCP.
+                let (stream, tls_identity): (Box<dyn Io>, Option<tls_psk::Identity>) = match tls
+                {
+                    None => (Box::new(stream), None),
+                    #[cfg(unix)]
+                    Some(acceptor) => {
+                        match tokio::time::timeout(TLS_HANDSHAKE_TIMEOUT, acceptor.accept(stream))
+                            .await
+                        {
+                            Ok(Ok((s, identity))) => {
+                                outcome(
+                                    &child,
+                                    id,
+                                    "tls",
+                                    "protocol_accept",
+                                    &format!("TLS 1.3 secure channel, PSK identity {}", identity.text()),
+                                );
+                                (Box::new(s), Some(identity))
+                            }
+                            Ok(Err(e)) => {
+                                outcome(&child, id, "tls", "fail_closed_tls", &e.to_string());
+                                closed(&child, server_id, id).await;
+                                return;
+                            }
+                            Err(_) => {
+                                outcome(
+                                    &child,
+                                    id,
+                                    "tls",
+                                    "fail_closed_tls",
+                                    &format!(
+                                        "no TLS handshake within {} s",
+                                        TLS_HANDSHAKE_TIMEOUT.as_secs()
+                                    ),
+                                );
+                                closed(&child, server_id, id).await;
+                                return;
+                            }
+                        }
+                    }
+                    #[cfg(not(unix))]
+                    Some(never) => match never {},
+                };
+                let mut c = Conn::new(&child, target, id, peer, local, stream, tls_identity);
                 if let Err(e) = c.run().await {
                     Log::new(Some(&child.status_tx))
                         .debug(format!("NVMe/TCP connection {id}: {e:#}"));
@@ -470,14 +553,17 @@ async fn accept_loop(
                 // connection close, so a queue reconnecting at once finds its QID free.
                 c.finish();
                 let _ = c.stream.shutdown().await;
-                child
-                    .state
-                    .update_connection_status(server_id, id, ConnectionStatus::Closed)
-                    .await;
-                let _ = child.status_tx.send("__UPDATE_UI__".into());
+                closed(&child, server_id, id).await;
             })
             .await;
     }
+}
+
+async fn closed(ctx: &SpawnContext, server_id: crate::state::ServerId, id: ConnectionId) {
+    ctx.state
+        .update_connection_status(server_id, id, ConnectionStatus::Closed)
+        .await;
+    let _ = ctx.status_tx.send("__UPDATE_UI__".into());
 }
 
 /// Log how a decision went, in the `decision=` vocabulary every server shares.
@@ -615,7 +701,10 @@ struct Conn<'a> {
     id: ConnectionId,
     peer: SocketAddr,
     local: SocketAddr,
-    stream: TcpStream,
+    stream: Box<dyn Io>,
+    /// The identity the host proved in the TLS handshake; every Connect on this connection
+    /// must name its host and subsystem.
+    tls_identity: Option<tls_psk::Identity>,
     digests: Digests,
     /// The host's PDU data alignment (HPDA) for C2HData.
     hpda: u8,
@@ -647,7 +736,8 @@ impl<'a> Conn<'a> {
         id: ConnectionId,
         peer: SocketAddr,
         local: SocketAddr,
-        stream: TcpStream,
+        stream: Box<dyn Io>,
+        tls_identity: Option<tls_psk::Identity>,
     ) -> Self {
         Self {
             ctx,
@@ -656,6 +746,7 @@ impl<'a> Conn<'a> {
             peer,
             local,
             stream,
+            tls_identity,
             digests: Digests::default(),
             hpda: 0,
             queue: None,
@@ -1396,6 +1487,35 @@ impl<'a> Conn<'a> {
                 return Ok(invalid(*at, true));
             }
         };
+        // A secure channel belongs to the host and subsystem its PSK identity names: a host
+        // that proved one key may not connect as another host, or to a subsystem it holds no
+        // key for.
+        if let Some(identity) = &self.tls_identity {
+            if identity.hostnqn != hostnqn {
+                refuse(
+                    self,
+                    format!(
+                        "Connect as {hostnqn} on a secure channel established for {}",
+                        identity.hostnqn
+                    ),
+                );
+                return Ok(Done::Status(
+                    Status::CONNECT_INVALID_HOST,
+                    nvme::invalid_parameter(nvme::connect::DATA_HOSTNQN, true),
+                    0,
+                ));
+            }
+            if identity.subnqn != subnqn {
+                refuse(
+                    self,
+                    format!(
+                        "Connect to {subnqn} on a secure channel established for {}",
+                        identity.subnqn
+                    ),
+                );
+                return Ok(invalid(nvme::connect::DATA_SUBNQN, true));
+            }
+        }
         if req.sqsize == 0 || req.sqsize > MQES || (req.qid == 0 && req.sqsize < MIN_ADMIN_SQSIZE) {
             refuse(self, format!("SQSIZE {} for queue {}", req.sqsize, req.qid));
             return Ok(invalid(nvme::connect::SQSIZE, false));
@@ -2016,15 +2136,17 @@ impl<'a> Conn<'a> {
                         nvme::ADRFAM_IPV6
                     },
                     subtype: nvme::SUBTYPE_NVME,
-                    // Secure channel not specified; disabling SQ flow control is supported.
-                    treq: 0x04,
+                    // Disabling SQ flow control is supported, and TLS is required exactly when
+                    // a key is configured (TREQ 01b) — otherwise not specified (00b).
+                    treq: 0x04 | u8::from(self.target.config.tls_key.is_some()),
                     portid: PORT_ID,
                     cntlid: nvme::CNTLID_DYNAMIC,
                     asqsz: MIN_ADMIN_SQSIZE + 1,
                     trsvcid: a.port().to_string(),
                     subnqn: nqn,
                     traddr: a.ip().to_string(),
-                    sectype: 0,
+                    // TSAS SECTYPE: TLS 1.3, or no security.
+                    sectype: if self.target.config.tls_key.is_some() { 2 } else { 0 },
                 }
             })
             .collect();

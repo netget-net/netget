@@ -362,7 +362,8 @@ pub static DISCOVERY_LOG_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             "entries",
             "array",
             "[{subsystem_nqn, transport, address_family, address, port, subsystem_type, \
-             port_id, controller_id, admin_queue_size, treq}]",
+             port_id, controller_id, admin_queue_size, treq, secure_channel (required, \
+             not_required or not_specified), security (none, tls1.2 or tls1.3)}]",
             true,
         ),
         p(
@@ -831,6 +832,24 @@ impl Protocol for NvmeTcpClientProtocol {
                  controller prove itself (bidirectional) and refuses one that cannot",
                 json!("DHHC-1:00:<base64 of a 32, 48 or 64 byte key and its CRC-32>:"),
             ),
+            string_param(
+                "tls_key",
+                "A configured TLS PSK (NVMeTLSkey-1:<hh>:<base64>:, as nvme gen-tls-key prints \
+                 it): every queue opens a TLS 1.3 secure channel with it before its first PDU, \
+                 offering a retained PSK identity for this host and the subsystem it connects \
+                 to. Unix builds only",
+                json!("NVMeTLSkey-1:01:<base64 of a 32 or 48 byte key and its CRC-32>:"),
+            ),
+            ParameterDefinition {
+                name: "tls_identity_version".into(),
+                type_hint: "number".into(),
+                description: "The PSK identity offered with tls_key: 1 (NVMe TCP 1.1, ending with \
+                              the PSK digest) or 0 (NVMe TCP 1.0c)"
+                    .into(),
+                required: false,
+                example: json!(1),
+                default: Some(json!(super::DEFAULT_TLS_IDENTITY_VERSION)),
+            },
             ParameterDefinition {
                 name: "keep_alive_ms".into(),
                 type_hint: "number".into(),
@@ -848,10 +867,10 @@ impl Protocol for NvmeTcpClientProtocol {
         ProtocolMetadataV2::builder()
             .state(DevelopmentState::Experimental)
             .privilege_requirement(PrivilegeRequirement::None)
-            .implementation("Hand-written NVMe/TCP host (src/client/nvme_tcp/host.rs) over the target's PDU, NVMe, DH-HMAC-CHAP and reservation modules: ICReq/ICResp with optional CRC32C digests, Connect of an admin queue and one I/O queue, DH-HMAC-CHAP after a Connect that sets AUTHREQ.ATR (every hash and group offered, one way, or both ways with a controller secret whose R2 is checked before Success2), CAP/VS/CC/CSTS bring-up and CC.SHN shutdown, Identify (controller, namespace with its Copy limits and reservation types, active namespace list, identification descriptors), Set Features (number of queues), Get Log Page (discovery with offsets and a generation check, SMART / health, error, firmware slot, changed namespaces), Keep Alive on a timer, Read, Write (in-capsule or R2T-solicited H2CData within MAXH2CDATA), Write Zeroes, Flush, Compare, Verify, Copy (format 0) and Reservation Register/Acquire/Release/Report (extended), C2HData checked for offset and length and SUCCESS honoured")
+            .implementation("Hand-written NVMe/TCP host (src/client/nvme_tcp/host.rs) over the target's PDU, NVMe, DH-HMAC-CHAP and reservation modules: ICReq/ICResp with optional CRC32C digests, Connect of an admin queue and one I/O queue, DH-HMAC-CHAP after a Connect that sets AUTHREQ.ATR (every hash and group offered, one way, or both ways with a controller secret whose R2 is checked before Success2), CAP/VS/CC/CSTS bring-up and CC.SHN shutdown, Identify (controller, namespace with its Copy limits and reservation types, active namespace list, identification descriptors), Set Features (number of queues), Get Log Page (discovery with offsets and a generation check, SMART / health, error, firmware slot, changed namespaces), Keep Alive on a timer, Read, Write (in-capsule or R2T-solicited H2CData within MAXH2CDATA), Write Zeroes, Flush, Compare, Verify, Copy (format 0) and Reservation Register/Acquire/Release/Report (extended), C2HData checked for offset and length and SUCCESS honoured; TLS 1.3 secure channels with tls_key on every queue (the target's tls_psk.rs and tls.rs: OpenSSL's use-session callback, version 1 or 0 identities; Unix builds), and each discovery entry's TREQ and SECTYPE reported")
             .llm_control("When to read the discovery log, which subsystem to connect to, and which commands to run on which namespaces, with what data: reads, writes, compares, verifies, copies and reservation registrations, acquisitions, releases and reports")
             .e2e_testing("tests/client/nvme_tcp: NetGet's own target for the shapes and the fail-closed paths (DH-HMAC-CHAP and the new actions in auth_commands_test.rs); the Linux kernel target (nvmet-tcp configured through configfs, as root, including DH-HMAC-CHAP through the host's dhchap_key/dhchap_ctrl_key/dhchap_hash/dhchap_dhgroup and reservations on a resv_enable namespace) in real_server_test.rs and SPDK's nvmf_tgt (configured through rpc.py, an AIO bdev over a file, including DH-HMAC-CHAP through keyring_file_add_key and nvmf_subsystem_add_host, Compare, Copy and reservations) in spdk_target_test.rs, each read back from the file it serves, all in the nvme-tcp pair job")
-            .notes("Experimental: two independent targets (the Linux kernel's nvmet-tcp and SPDK v26.09's nvmf_tgt) pass, DH-HMAC-CHAP both ways and reservations included, measured on a Linux 7.2 aarch64 kernel; in CI they run only in the nvme-tcp pair job, which had not run when this landed. Compare and Copy have only nvmf_tgt as an independent target (nvmet implements neither) and Verify none (both answer INVALID COMMAND OPCODE). One admin and one I/O queue, one command at a time, no TLS. A read, write or compare moves at most 8 KiB; a Copy names at most 128 ranges; read data is shown as text only when it is text, hex otherwise. A handler chain stops after 16 follow-ups. The discovery log is read up to 1024 entries; a reservation report up to 4 KiB (63 registrants).")
+            .notes("Experimental: two independent targets (the Linux kernel's nvmet-tcp and SPDK v26.09's nvmf_tgt) pass, DH-HMAC-CHAP both ways and reservations included, measured on a Linux 7.2 aarch64 kernel; in CI they run only in the nvme-tcp pair job, which had not run when this landed. Compare and Copy have only nvmf_tgt as an independent target (nvmet implements neither) and Verify none (both answer INVALID COMMAND OPCODE). One admin and one I/O queue, one command at a time, no TLS. A read, write or compare moves at most 8 KiB; a Copy names at most 128 ranges; read data is shown as text only when it is text, hex otherwise. A handler chain stops after 16 follow-ups. The discovery log is read up to 1024 entries; a reservation report up to 4 KiB (63 registrants). TLS has the Linux nvmet-tcp target through tlshd and SPDK's nvmf_tgt --secure-channel in the nvme-tcp pair job.")
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
             .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()

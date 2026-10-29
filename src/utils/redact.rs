@@ -15,6 +15,8 @@ use serde_json::Value;
 /// Substrings of a key name that mark its value as a credential.
 pub const SENSITIVE_KEY_PARTS: &[&str] = &[
     "secret",
+    // NVMe/TCP's configured TLS PSK, named after nvme-cli's --tls_key.
+    "tls_key",
     "password",
     "passphrase",
     "passwd",
