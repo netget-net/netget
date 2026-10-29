@@ -10073,3 +10073,67 @@ jobs:
             --test doc_test_counts_test \
             --test tcp_server_bounds_ratchet_test \
             -- --test-threads=32
+  nvme-tls-probe:
+    if: inputs.only == 'nvme-tls-probe'
+    name: NVMe/TCP TLS probe (kernel host and target through tlshd)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Kernel and packages
+        run: |
+          set -x
+          uname -r
+          grep -E 'CONFIG_NVME_TCP_TLS|CONFIG_NVME_TARGET_TCP_TLS|CONFIG_NET_HANDSHAKE|CONFIG_TLS=|CONFIG_NVME_KEYRING' "/boot/config-$(uname -r)" || true
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nvme-cli ktls-utils keyutils
+          nvme version
+          dpkg -s ktls-utils | grep -E '^Version'
+          if ! sudo modprobe -a nvme-tcp nvmet nvmet-tcp; then
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)"
+            sudo modprobe -a nvme-tcp nvmet nvmet-tcp
+          fi
+          modinfo nvme-tcp | grep -i -E 'tls|parm' || true
+          sudo cat /proc/keys | grep -i nvme || true
+      - name: Kernel target and kernel host over TLS
+        run: |
+          set -x
+          printf '[debug]\nloglevel=7\ntls=7\nnl=7\n[authenticate]\nkeyrings=.nvme\n' | sudo tee /etc/tlshd.conf
+          sudo systemctl restart tlshd || sudo systemctl start tlshd
+          systemctl status tlshd --no-pager || true
+          H=nqn.2014-08.org.nvmexpress:uuid:$(cat /proc/sys/kernel/random/uuid)
+          SUB=nqn.2026-10.net.netget:tls-probe
+          KEY=$(nvme gen-tls-key --hmac=1)
+          echo "key: $KEY"
+          sudo nvme check-tls-key --keydata="$KEY" --hostnqn="$H" --subsysnqn="$SUB" --identity=1 --insert || sudo nvme check-tls-key --keydata="$KEY" --hostnqn="$H" --subsysnqn="$SUB" --insert
+          sudo cat /proc/keys | grep -i -E 'nvme|psk' || true
+          truncate -s 64M /tmp/ns.img
+          LOOP=$(sudo losetup --find --show /tmp/ns.img)
+          C=/sys/kernel/config/nvmet
+          sudo mkdir "$C/subsystems/$SUB"
+          echo 1 | sudo tee "$C/subsystems/$SUB/attr_allow_any_host"
+          sudo mkdir "$C/subsystems/$SUB/namespaces/1"
+          echo "$LOOP" | sudo tee "$C/subsystems/$SUB/namespaces/1/device_path"
+          echo 1 | sudo tee "$C/subsystems/$SUB/namespaces/1/enable"
+          sudo mkdir "$C/ports/1"
+          echo tcp | sudo tee "$C/ports/1/addr_trtype"
+          echo ipv4 | sudo tee "$C/ports/1/addr_adrfam"
+          echo 127.0.0.1 | sudo tee "$C/ports/1/addr_traddr"
+          echo 4430 | sudo tee "$C/ports/1/addr_trsvcid"
+          ls "$C/ports/1/"
+          echo tls1.3 | sudo tee "$C/ports/1/addr_tsas" || true
+          echo required | sudo tee "$C/ports/1/addr_treq" || true
+          cat "$C/ports/1/addr_tsas" "$C/ports/1/addr_treq" || true
+          sudo ln -s "$C/subsystems/$SUB" "$C/ports/1/subsystems/$SUB"
+          sudo timeout 30 tcpdump -i lo -w /tmp/tls.pcap port 4430 &
+          sleep 2
+          sudo nvme discover -t tcp -a 127.0.0.1 -s 4430 --hostnqn="$H" --tls || true
+          sudo nvme connect -t tcp -a 127.0.0.1 -s 4430 -n "$SUB" --hostnqn="$H" --tls -v || true
+          sleep 2
+          sudo nvme list || true
+          sudo nvme disconnect -n "$SUB" || true
+          sleep 3
+          sudo journalctl -u tlshd --no-pager | tail -60 || true
+          sudo dmesg | grep -i -E 'nvme|tls|handshake' | tail -40 || true
+          sudo pkill tcpdump || true
+          sleep 1
+          sudo tcpdump -r /tmp/tls.pcap -nn 2>/dev/null | head -20 || true
