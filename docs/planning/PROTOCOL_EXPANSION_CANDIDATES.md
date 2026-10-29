@@ -190,7 +190,7 @@ says. Strike an item when it lands.
 10. ~~iSCSI: error recovery levels 1 and 2, multiple connections per session, the remaining task management functions.~~ Landed 26 October 2026.
 11. ~~FUSE: hard links, extended attributes, fallocate.~~ Landed 26 October 2026. FUSE stays Linux-only: a FUSE-T backend for macOS was built and not merged (28 October 2026), because FUSE-T mounts through macOS's NFS client and its kernel panic; `src/server/fuse/AGENTS.md` has the reasons.
 
-Every item in this queue has landed. What stays open: the intermittent post-sweep shutdown stall in `protocol_startup_smoke_test` (bounded and instrumented, cause unknown), bitcoin's unbounded queue behind an in-flight answer, and PCoIP.
+Every item in this queue has landed. What stays open: the intermittent post-sweep shutdown stall in `protocol_startup_smoke_test` (bounded and instrumented, cause unknown) and PCoIP. Bitcoin's queue behind an in-flight answer is bounded since 29 October 2026 (`MAX_QUEUED_BYTES`, two maximum messages; past it the connection closes with `decision=fail_closed_queue_overflow`).
 
 PCoIP stays unbuilt: no published wire specification and no open implementation to test against.
 

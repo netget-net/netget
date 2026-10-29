@@ -46,6 +46,14 @@ exactly 32 bytes (`ClientSendOutcome::Sent { bytes_sent: 32 }`), that `bytes_sen
 model's own verb is `close_this_connection`) half-closes, yields EOF, and releases the peer
 handle.
 
+### `queue_limit_test.rs` — one in-process test, **0 LLM calls**
+
+`a_peer_that_queues_past_the_cap_behind_an_answer_is_closed`. The opened event is parked on a
+`manual` rule, so an answer is in flight for as long as the test likes, and the peer queues
+pings behind it. Control first: a quarter of `MAX_QUEUED_BYTES` is queued, the opened event is
+answered with nothing, and the first `pong` (nonce 0) comes back. Then past the cap: the peer
+reads EOF and no `pong`. Without the bound the second half is answered like the first.
+
 ## Running
 
 ```bash

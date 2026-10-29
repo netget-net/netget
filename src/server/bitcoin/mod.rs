@@ -44,6 +44,27 @@ struct ConnectionData {
 /// the constant the parser actually enforces instead of repeating the number.
 pub const MAX_MESSAGE_BYTES: usize = 4_000_000;
 
+/// The most a connection may queue behind the message being answered.
+///
+/// Everything a peer sends while a message is answered — by the model, a script, or a person
+/// behind a `manual` rule — waits in the connection's queue, so without a ceiling a peer
+/// streaming for the length of one answer decides how much memory its connection costs. Two of
+/// the largest message Core sends leaves room for one whole message pipelined behind another
+/// still arriving; past it the peer is not waiting for answers, and the connection is closed
+/// (`decision=fail_closed_queue_overflow`) rather than the queue trimmed, which would cut a
+/// message in half.
+pub const MAX_QUEUED_BYTES: usize = 2 * MAX_MESSAGE_BYTES;
+
+/// What [`BitcoinServer::admit_read`] decided about one read.
+enum ReadDecision {
+    /// The read starts an answer, which parses these bytes.
+    Answer(Vec<u8>),
+    /// The read waits behind the answer in flight, or its connection has already gone.
+    Wait,
+    /// The queue passed [`MAX_QUEUED_BYTES`] and the connection was closed; stop reading.
+    Closed,
+}
+
 /// How long to wait for a peer's first bytes after it connects.
 ///
 /// Bitcoin Core's own number for the same thing: `DEFAULT_PEER_CONNECT_TIMEOUT` is 60 seconds,
@@ -365,15 +386,19 @@ impl BitcoinServer {
                                             // and answered first, or two reads could both find
                                             // the connection Idle and be parsed apart, each
                                             // half of a message on its own.
-                                            let Some(payload) = Self::admit_read(
+                                            let payload = match Self::admit_read(
                                                 connection_id,
+                                                server_id,
                                                 data,
                                                 &connections_clone,
+                                                &app_state_clone,
                                                 &status_tx_clone,
                                             )
                                             .await
-                                            else {
-                                                continue;
+                                            {
+                                                ReadDecision::Answer(payload) => payload,
+                                                ReadDecision::Wait => continue,
+                                                ReadDecision::Closed => break,
                                             };
 
                                             // The answer runs in its own task so the loop can
@@ -620,8 +645,10 @@ impl BitcoinServer {
 
     /// Take one read into the connection's state machine, in the order the reader got it.
     ///
-    /// Returns the bytes the answer this read starts should parse, or `None` when they wait
-    /// behind the answer already in flight (or the connection has gone). Called by the reader
+    /// Returns the bytes the answer this read starts should parse, [`ReadDecision::Wait`] when
+    /// they wait behind the answer already in flight (or the connection has gone), or
+    /// [`ReadDecision::Closed`] when waiting would take the queue past [`MAX_QUEUED_BYTES`] and
+    /// the connection has been closed for it. Called by the reader
     /// itself, never from a spawned task: the decision has to be made in arrival order and under
     /// one lock. When each read's task made it, two reads could both find the connection `Idle`
     /// and be parsed and answered at once, and a later read's task could run first — its `pong`
@@ -629,10 +656,12 @@ impl BitcoinServer {
     /// two halves.
     async fn admit_read(
         connection_id: ConnectionId,
+        server_id: crate::state::ServerId,
         data: &[u8],
-        connections: &Mutex<HashMap<ConnectionId, ConnectionData>>,
+        connections: &Arc<Mutex<HashMap<ConnectionId, ConnectionData>>>,
+        app_state: &Arc<AppState>,
         status_tx: &mpsc::UnboundedSender<String>,
-    ) -> Option<Vec<u8>> {
+    ) -> ReadDecision {
         let mut conns = connections.lock().await;
         let Some(conn) = conns.get_mut(&connection_id) else {
             // Never silent. A miss here means the connection was torn down after the read
@@ -645,27 +674,40 @@ impl BitcoinServer {
                 connection_id,
                 data.len()
             );
-            return None;
+            return ReadDecision::Wait;
         };
         // Framed messages: the answer always takes everything waiting, held fragment first.
-        match conn.reads.admit(data, true) {
-            Admitted::Start(payload) => Some(payload),
-            Admitted::Queued(queued) => {
-                drop(conns);
-                debug!(
-                    "Queued {} bytes for Bitcoin connection {} ({} queued)",
-                    data.len(),
-                    connection_id,
-                    queued
-                );
-                let _ = status_tx.send(format!(
-                    "⏸ Queued {} bytes for {}",
-                    data.len(),
-                    connection_id
-                ));
-                None
-            }
+        let (queued, write_half) = match conn.reads.admit(data, true) {
+            Admitted::Start(payload) => return ReadDecision::Answer(payload),
+            Admitted::Queued(queued) => (queued, conn.write_half.clone()),
+        };
+        drop(conns);
+        if queued > MAX_QUEUED_BYTES {
+            // Nothing on the wire explains it: P2P has no message for a disconnect, and Core
+            // itself just drops a peer. Shutting the write half makes the peer read EOF now
+            // rather than wait on answers that are never coming.
+            Log::new(Some(status_tx)).warn(format!(
+                "Bitcoin connection {connection_id} queued {queued} bytes behind the message \
+                 being answered (limit {MAX_QUEUED_BYTES}); closing \
+                 decision=fail_closed_queue_overflow"
+            ));
+            let _ = write_half.lock().await.shutdown().await;
+            Self::teardown_connection(connections, app_state, server_id, connection_id).await;
+            let _ = status_tx.send("__UPDATE_UI__".to_string());
+            return ReadDecision::Closed;
         }
+        debug!(
+            "Queued {} bytes for Bitcoin connection {} ({} queued)",
+            data.len(),
+            connection_id,
+            queued
+        );
+        let _ = status_tx.send(format!(
+            "⏸ Queued {} bytes for {}",
+            data.len(),
+            connection_id
+        ));
+        ReadDecision::Wait
     }
 
     /// Parse and answer `payload` on a connection [`Self::admit_read`] has moved to
