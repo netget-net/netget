@@ -10113,9 +10113,21 @@ jobs:
           pgrep -a tlshd || true
           H=nqn.2014-08.org.nvmexpress:uuid:$(cat /proc/sys/kernel/random/uuid)
           SUB=nqn.2026-10.net.netget:tls-probe
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            meson ninja-build libjson-c-dev libssl-dev uuid-dev
+          git clone --depth 1 https://github.com/linux-nvme/nvme-cli /tmp/nvme-cli
+          git -C /tmp/nvme-cli log -1 --format='%h %cd %s'
+          (cd /tmp/nvme-cli && meson setup .build -Ddocs=false >/tmp/meson.log 2>&1 && ninja -C .build >/tmp/ninja.log 2>&1) || { tail -40 /tmp/meson.log /tmp/ninja.log; exit 1; }
+          NV=/tmp/nvme-cli/.build/nvme
+          $NV version
           KEY=$(nvme gen-tls-key --hmac=1)
           echo "key: $KEY"
-          SERIAL=$(sudo nvme check-tls-key --keydata="$KEY" --hostnqn="$H" --subsysnqn="$SUB" --identity=1 --insert | awk '/Inserted TLS key/{print $4}')
+          echo "host: $H"
+          echo "sub: $SUB"
+          echo "identity-v1: $($NV check-tls-key --keydata="$KEY" --hostnqn="$H" --subsysnqn="$SUB" --identity=1)"
+          echo "identity-v0: $($NV check-tls-key --keydata="$KEY" --hostnqn="$H" --subsysnqn="$SUB" --identity=0)"
+          $NV check-tls-key --help 2>&1 | grep -i -E 'compat|identity' || true
+          SERIAL=$(sudo $NV check-tls-key --keydata="$KEY" --hostnqn="$H" --subsysnqn="$SUB" --identity=1 --insert | awk '/Inserted TLS key/{print $4}')
           echo "serial: $SERIAL"
           # nvme-cli 2.8 inserts the key readable only by its possessor; tlshd (ktls-utils 0.9)
           # searches the .nvme keyring for it on the target side and cannot see it otherwise.
@@ -10123,6 +10135,7 @@ jobs:
           NVMEKR=$(sudo awk '$9==".nvme:" {print $1}' /proc/keys)
           sudo bash -c "keyctl new_session >/dev/null; keyctl link 0x$NVMEKR @s && keyctl setperm 0x$SERIAL 0x3f3f0000"
           sudo grep -i psk /proc/keys
+          echo "tls-psk: $(sudo keyctl pipe 0x$SERIAL | xxd -p -c 64)"
           sudo cat /proc/keys | grep -i -E 'nvme|psk' || true
           truncate -s 64M /tmp/ns.img
           LOOP=$(sudo losetup --find --show /tmp/ns.img)
@@ -10145,7 +10158,7 @@ jobs:
           sudo timeout 30 tcpdump -i lo -w /tmp/tls.pcap port 4430 &
           sleep 2
           sudo nvme discover -t tcp -a 127.0.0.1 -s 4430 --hostnqn="$H" --tls || true
-          sudo nvme connect -t tcp -a 127.0.0.1 -s 4430 -n "$SUB" --hostnqn="$H" --tls -v || true
+          sudo $NV connect -t tcp -a 127.0.0.1 -s 4430 -n "$SUB" --hostnqn="$H" --tls -v || true
           sleep 2
           sudo nvme list || true
           sudo nvme disconnect -n "$SUB" || true
