@@ -10127,7 +10127,10 @@ jobs:
           echo "identity-v1: $($NV check-tls-key --keydata="$KEY" --hostnqn="$H" --subsysnqn="$SUB" --identity=1)"
           echo "identity-v0: $($NV check-tls-key --keydata="$KEY" --hostnqn="$H" --subsysnqn="$SUB" --identity=0)"
           $NV check-tls-key --help 2>&1 | grep -i -E 'compat|identity' || true
-          SERIAL=$(sudo $NV check-tls-key --keydata="$KEY" --hostnqn="$H" --subsysnqn="$SUB" --identity=1 --insert | awk '/Inserted TLS key/{print $4}')
+          $NV keys --help 2>&1 | head -40 || true
+          for c in insert-tls-psk check-tls-psk; do $NV keys $c --help 2>&1 | head -30 || true; done
+          SERIAL=$(sudo $NV keys insert-tls-psk --keydata="$KEY" --hostnqn="$H" --subsysnqn="$SUB" --identity=1 2>&1 | tee /dev/stderr | grep -o -E '[0-9a-f]{8}' | tail -1)
+          [ -n "$SERIAL" ] || SERIAL=$(sudo nvme check-tls-key --keydata="$KEY" --hostnqn="$H" --subsysnqn="$SUB" --identity=1 --insert | awk '/Inserted TLS key/{print $4}')
           echo "serial: $SERIAL"
           # nvme-cli 2.8 inserts the key readable only by its possessor; tlshd (ktls-utils 0.9)
           # searches the .nvme keyring for it on the target side and cannot see it otherwise.
