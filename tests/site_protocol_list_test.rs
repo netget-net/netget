@@ -11,7 +11,8 @@
 //!
 //! The same number is the headline: every "<N> Protocols" / "<N> network protocols" /
 //! "<N> protocol features" on the page and in the README must be exactly the count of
-//! protocols, and a rounded-down "150+" is a failure that names the line to fix.
+//! protocols, and a rounded-down "150+" is a failure that names the line to fix. The page's
+//! Protocols heading must state it; the README need not state a count at all.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -174,10 +175,10 @@ fn count_claims(text: &str) -> Vec<(usize, String, usize, bool)> {
     claims
 }
 
-/// The headline count is stated on the page's Protocols heading and twice in the README (its
-/// opening sentence and its feature list), and each must be the exact number of protocol
-/// features, not a rounded-down "150+". The redesigned page's meta, og and hero text state no
-/// count, so they are not required to.
+/// The headline count is stated on the page's Protocols heading, and every count on the page or
+/// in the README must be the exact number of protocol features, not a rounded-down "150+". The
+/// redesigned page's meta, og and hero text and the shortened README state no count, so they are
+/// not required to.
 #[test]
 fn every_headline_count_is_the_exact_number() {
     let n = protocol_features().len();
@@ -187,8 +188,9 @@ fn every_headline_count_is_the_exact_number() {
         let text = fs::read_to_string(file).expect(file);
         let claims = count_claims(&text);
         assert!(
-            !claims.is_empty(),
-            "{file} states no protocol count at all; the scan in this test has gone blind"
+            file != "site/index.html" || !claims.is_empty(),
+            "{file} states no protocol count at all; the Protocols heading lost its number or \
+             the scan in this test has gone blind"
         );
         for (line, claim, count, plus) in claims {
             seen += 1;
@@ -201,8 +203,8 @@ fn every_headline_count_is_the_exact_number() {
         }
     }
     assert!(
-        seen >= 3,
-        "expected the count in at least three places (the Protocols heading, the README's opening sentence and feature list), found {seen}"
+        seen >= 1,
+        "expected the count on the page's Protocols heading, found {seen}"
     );
     assert!(
         problems.is_empty(),
