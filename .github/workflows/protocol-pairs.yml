@@ -10104,7 +10104,11 @@ jobs:
           SUB=nqn.2026-10.net.netget:tls-probe
           KEY=$(nvme gen-tls-key --hmac=1)
           echo "key: $KEY"
-          sudo nvme check-tls-key --keydata="$KEY" --hostnqn="$H" --subsysnqn="$SUB" --identity=1 --insert || sudo nvme check-tls-key --keydata="$KEY" --hostnqn="$H" --subsysnqn="$SUB" --insert
+          SERIAL=$(sudo nvme check-tls-key --keydata="$KEY" --hostnqn="$H" --subsysnqn="$SUB" --identity=1 --insert | awk '/Inserted TLS key/{print $4}')
+          echo "serial: $SERIAL"
+          # nvme-cli 2.8 inserts the key readable only by its possessor; tlshd (ktls-utils 0.9)
+          # searches the .nvme keyring for it on the target side and cannot see it otherwise.
+          sudo keyctl setperm "0x$SERIAL" 0x3f3f0000
           sudo cat /proc/keys | grep -i -E 'nvme|psk' || true
           truncate -s 64M /tmp/ns.img
           LOOP=$(sudo losetup --find --show /tmp/ns.img)
