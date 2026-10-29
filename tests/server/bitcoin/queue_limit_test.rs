@@ -126,7 +126,11 @@ async fn first_answer_after_queueing(queue: usize) -> Option<u64> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
         let server = state.get_server(id).await.expect("server");
-        let conn = server.connections.values().next().expect("connection tracked");
+        let conn = server
+            .connections
+            .values()
+            .next()
+            .expect("connection tracked");
         if conn.status == ConnectionStatus::Closed || conn.bytes_received as usize >= sent {
             break;
         }
@@ -143,28 +147,30 @@ async fn first_answer_after_queueing(queue: usize) -> Option<u64> {
     let _ = state.resolve_intercept(opened.id, vec![]).await;
 
     let mut header = [0u8; 24];
-    let first = match tokio::time::timeout(Duration::from_secs(30), read_half.read_exact(&mut header))
-        .await
-        .expect("neither an answer nor EOF within 30 s")
-    {
-        Err(_) => None,
-        Ok(_) => {
-            let len = u32::from_le_bytes([header[16], header[17], header[18], header[19]]) as usize;
-            let mut full = header.to_vec();
-            full.resize(24 + len, 0);
-            read_half
-                .read_exact(&mut full[24..])
-                .await
-                .expect("read payload");
-            match RawNetworkMessage::consensus_decode(&mut Cursor::new(full))
-                .expect("decode message")
-                .payload()
-            {
-                NetworkMessage::Pong(n) => Some(*n),
-                other => panic!("expected a pong, got {other:?}"),
+    let first =
+        match tokio::time::timeout(Duration::from_secs(30), read_half.read_exact(&mut header))
+            .await
+            .expect("neither an answer nor EOF within 30 s")
+        {
+            Err(_) => None,
+            Ok(_) => {
+                let len =
+                    u32::from_le_bytes([header[16], header[17], header[18], header[19]]) as usize;
+                let mut full = header.to_vec();
+                full.resize(24 + len, 0);
+                read_half
+                    .read_exact(&mut full[24..])
+                    .await
+                    .expect("read payload");
+                match RawNetworkMessage::consensus_decode(&mut Cursor::new(full))
+                    .expect("decode message")
+                    .payload()
+                {
+                    NetworkMessage::Pong(n) => Some(*n),
+                    other => panic!("expected a pong, got {other:?}"),
+                }
             }
-        }
-    };
+        };
     drop(write_half);
     let _ = state.remove_server(id).await;
     first
