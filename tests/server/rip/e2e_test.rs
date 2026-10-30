@@ -226,7 +226,7 @@ mod e2e_rip {
         server.wait_for_mocks(30).await;
         server.verify_mocks().await?;
 
-        server.stop().await;
+        server.stop().await?;
         Ok(())
     }
 
@@ -338,7 +338,7 @@ mod e2e_rip {
         server.wait_for_mocks(30).await;
         server.verify_mocks().await?;
 
-        server.stop().await;
+        server.stop().await?;
         Ok(())
     }
 
@@ -458,7 +458,7 @@ mod e2e_rip {
         server.wait_for_mocks(30).await;
         server.verify_mocks().await?;
 
-        server.stop().await;
+        server.stop().await?;
         Ok(())
     }
 }

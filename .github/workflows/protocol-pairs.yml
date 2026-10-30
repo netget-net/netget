@@ -7026,9 +7026,22 @@ jobs:
   p2p-news:
     if: inputs.only == '' || inputs.only == 'p2p-news'
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 90
+    env:
+      CARGO_BUILD_JOBS: '2'
     steps:
       - uses: actions/checkout@v4
+      # The final all-target lint check has the same memory needs as core CI.
+      - name: Make room for peer release validation
+        run: |
+          sudo swapoff -a || true
+          sudo fallocate -l 16G /mnt/netget-swap
+          sudo chmod 600 /mnt/netget-swap
+          sudo mkswap /mnt/netget-swap
+          sudo swapon /mnt/netget-swap
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          free -h
+          df -h / /mnt
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-python@v5
         with:
@@ -7045,8 +7058,6 @@ jobs:
           NETGET_PEER_BOOTSTRAP_PYTHON=python tests/peers/bootstrap-p2p.sh "$RUNNER_TEMP/p2p-peers" | tee "$RUNNER_TEMP/p2p-bootstrap.log"
           sed -n 's/^export \([^=]*\)=\(.*\)$/\1=\2/p' "$RUNNER_TEMP/p2p-bootstrap.log" >> "$GITHUB_ENV"
       - name: Verify role pairs, metadata, site and action catalogs
-        env:
-          CARGO_BUILD_JOBS: 4
         run: |
           # Match protocol module boundaries: bare `adc` also selects radclient and
           # broadcasts tests, whose independent peers are installed by other jobs.
