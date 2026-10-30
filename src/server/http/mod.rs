@@ -418,6 +418,13 @@ async fn handle_http_request_with_llm_actions(
     filter: Arc<crate::server::http_common::handler::RequestFilter>,
     connection_permit: Arc<crate::server::accept_bounded::ConnectionPermit>,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
+    let started = crate::utils::clock::Instant::now();
+    info!(
+        server_id = server_id.as_u32(),
+        connection_id = connection_id.as_u32(),
+        stage = "request_received",
+        "HTTP request lifecycle"
+    );
     // Count the inbound message before doing anything else, so a request that is
     // filtered out or upgraded still refreshes last_activity.
     app_state
@@ -456,6 +463,13 @@ async fn handle_http_request_with_llm_actions(
         )
         .await;
 
+    info!(
+        server_id = server_id.as_u32(),
+        connection_id = connection_id.as_u32(),
+        stage = "response_ready",
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "HTTP request lifecycle"
+    );
     response
 }
 
@@ -624,34 +638,9 @@ async fn handle_http_request_inner(
         return Ok(resp);
     }
 
-    // Parse query parameters into structured object
-    let query = if let Some(ref qs) = query_string {
-        let mut params = serde_json::Map::new();
-        for pair in qs.split('&') {
-            if let Some((key, value)) = pair.split_once('=') {
-                // URL decode the key and value
-                let decoded_key =
-                    urlencoding::decode(key).unwrap_or(std::borrow::Cow::Borrowed(key));
-                let decoded_value =
-                    urlencoding::decode(value).unwrap_or(std::borrow::Cow::Borrowed(value));
-                params.insert(
-                    decoded_key.to_string(),
-                    serde_json::Value::String(decoded_value.to_string()),
-                );
-            } else {
-                // Handle keys without values
-                let decoded_key =
-                    urlencoding::decode(pair).unwrap_or(std::borrow::Cow::Borrowed(pair));
-                params.insert(
-                    decoded_key.to_string(),
-                    serde_json::Value::String(String::new()),
-                );
-            }
-        }
-        serde_json::Value::Object(params)
-    } else {
-        serde_json::Value::Object(serde_json::Map::new())
-    };
+    // HTML form submissions use application/x-www-form-urlencoded: '+' means a
+    // space, while %2B remains a literal plus. Keep the raw query_string too.
+    let query = crate::server::http_common::handler::parse_query(query_string.as_deref());
 
     // Create HTTP request event with path, query_string, and parsed query.
     //

@@ -168,6 +168,7 @@ pub struct ConversationHandler {
 
     /// Structured metadata for a single network event, retained across all retries.
     bridge_event: Option<crate::llm::bridge::BridgeEventContext>,
+    agent_context: Option<serde_json::Value>,
 
     /// Conversation-local policy retained once credential parameters are offered.
     private_payloads: bool,
@@ -227,11 +228,19 @@ impl ConversationHandler {
             use_native_tools: false,
             offered_actions: Vec::new(),
             bridge_event: None,
+            agent_context: None,
             private_payloads: false,
             max_history_messages: DEFAULT_MAX_HISTORY_MESSAGES,
             max_history_chars: DEFAULT_MAX_HISTORY_CHARS,
             trim_generation: 0,
         }
+    }
+
+    /// Explicit network context for agent consumers; native model prompts are unchanged.
+    pub fn with_agent_context(mut self, mut context: serde_json::Value) -> Self {
+        context["event_token"] = serde_json::json!(self.conversation_id);
+        self.agent_context = Some(context);
+        self
     }
 
     /// Attach the event for a bridge host without making it recover context from prompt text.
@@ -1739,48 +1748,58 @@ impl ConversationHandler {
                     "{}".to_string()
                 }
             } else {
-                // Prompt-based fallback: concatenate messages into single prompt
-                let mut full_prompt = String::new();
-                for msg in &self.messages {
-                    match msg.role.as_str() {
-                        "system" => {
-                            full_prompt.push_str(&msg.content);
-                            full_prompt.push_str("\n\n");
-                        }
-                        "user" => {
-                            full_prompt.push_str(&msg.content);
-                            full_prompt.push_str("\n\n");
-                        }
-                        "assistant" => {
-                            // Neutral on purpose. On a network event the earlier turns are replies
-                            // that were rejected — nothing in them ran — and the old "Actions you
-                            // have executed" told the model its rejected action had already gone
-                            // out, contradicting the retry message that follows. Where tools are
-                            // offered an earlier turn may have run tools, so "rejected" would be
-                            // just as wrong; the message after each turn says which it was.
-                            full_prompt.push_str("Your previous response:\n");
-                            full_prompt.push_str(&msg.content);
-                            full_prompt.push_str("\n\n");
-                        }
-                        _ => {}
-                    }
-                }
-
                 // Call generate API with concatenated prompt
                 // We rely on prompt engineering for JSON responses rather than format enforcement,
                 // as some models (e.g., gpt-oss) don't support Ollama's JSON format mode
-                let generate_response = self
-                    .client
-                    .generate_offering_with_event(
-                        &self.model,
-                        &full_prompt,
-                        None,
-                        &self.offered_actions,
-                        self.bridge_event.as_ref(),
-                        self.private_payloads,
-                    )
-                    .await
-                    .context("Generate API call failed")?;
+                let generate_response = if self.client.backend_type() == "agent" {
+                    self.client
+                        .generate_agent_request(
+                            &self.model,
+                            self.messages.clone(),
+                            &self.offered_actions,
+                            self.agent_context.clone(),
+                        )
+                        .await
+                } else {
+                    // Prompt-based fallback: concatenate messages into single prompt
+                    let mut full_prompt = String::new();
+                    for msg in &self.messages {
+                        match msg.role.as_str() {
+                            "system" => {
+                                full_prompt.push_str(&msg.content);
+                                full_prompt.push_str("\n\n");
+                            }
+                            "user" => {
+                                full_prompt.push_str(&msg.content);
+                                full_prompt.push_str("\n\n");
+                            }
+                            "assistant" => {
+                                // Neutral on purpose. On a network event the earlier turns are replies
+                                // that were rejected — nothing in them ran — and the old "Actions you
+                                // have executed" told the model its rejected action had already gone
+                                // out, contradicting the retry message that follows. Where tools are
+                                // offered an earlier turn may have run tools, so "rejected" would be
+                                // just as wrong; the message after each turn says which it was.
+                                full_prompt.push_str("Your previous response:\n");
+                                full_prompt.push_str(&msg.content);
+                                full_prompt.push_str("\n\n");
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    self.client
+                        .generate_offering_with_event(
+                            &self.model,
+                            &full_prompt,
+                            None,
+                            &self.offered_actions,
+                            self.bridge_event.as_ref(),
+                            self.private_payloads,
+                        )
+                        .await
+                }
+                .context("Generate API call failed")?;
 
                 // Record token usage
                 permit

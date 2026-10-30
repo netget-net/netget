@@ -107,7 +107,10 @@ OllamaClient (3 backends)
 | `stop_all` | Stop all servers | Iterate + remove all |
 | `get_next_llm_request` | (agent mode) Fetch next queued LLM request; optional long-poll | `LlmRequestQueue::wait_and_claim()` |
 | `answer_llm_request` | (agent mode) Answer a queued request with action JSON | `LlmRequestQueue::answer()` |
-| `list_llm_requests` | (agent mode) List outstanding queued requests | `LlmRequestQueue::list()` |
+| `list_llm_requests` | (agent mode) List outstanding requests with event/connection summaries | `LlmRequestQueue::list()` |
+| `get_llm_request` / `release_llm_request` | (agent mode) Recover or release a claim | `LlmRequestQueue::get()` / `release()` |
+| `answer_and_get_next_llm_request` | (agent mode) Answer then wait in one call | Answer + claim |
+| `get_agent_status` | (agent mode) Listener activity and recent timings | `LlmRequestQueue::status()` |
 
 ## Protocol documentation (`docs.rs`)
 
@@ -367,14 +370,64 @@ server produced to the queue automatically. A placeholder model (`"agent"`) is
 pre-seeded so `ensure_model_selected` never reaches out to Ollama's `/api/tags`.
 
 Agent workflow:
-1. `get_next_llm_request { wait_seconds? }` — claim the next request (optionally
-   long-poll). Returns the request id, the prompt (server instruction + triggering
-   event), and the **available actions** — the agent must answer using only those.
-2. `answer_llm_request { request_id, actions }` — `actions` is a JSON array of NetGet
-   action objects (`{"type": "...", ...}`), the same shape `get_access_log` shows.
-   Answered actions become native tool calls fed through the normal
-   `ConversationHandler` pipeline, so validation/execution is unchanged.
-3. `list_llm_requests` — outstanding requests, for monitoring.
+1. `get_next_llm_request { wait_seconds?, lease_seconds?, include_prompt? }` claims
+   the next request. It returns `structuredContent` plus a compact JSON text view:
+   `request_id`, `context` (instance instruction, handler instruction, memory,
+   connection history and explicit event data), deadline, offered action schemas,
+   `claim_token` and lease expiry. Network events do not repeat the general model
+   prompt. `include_prompt: true` retrieves the original messages; non-event calls
+   retain their messages automatically. Validator corrections survive in `continuation`.
+2. `answer_llm_request { request_id, claim_token?, actions }` hands actions to the
+   protocol. New clients should echo the token; omitting it preserves old clients.
+   A token from an expired/reassigned claim cannot answer or release the new claim.
+3. `answer_and_get_next_llm_request` accepts the answer fields plus the get-next
+   fields. It commits the answer first, then waits for the next event in one call.
+4. `get_llm_request { request_id, include_prompt? }` retrieves even a claimed request
+   after an interrupted tool result. `release_llm_request { request_id, claim_token? }`
+   makes it immediately available again. Claims default to 60 seconds, configurable
+   from 1 to 300; a long poll also wakes when an existing claim expires. Request
+   deadlines still apply independently. Tokens differ across process restarts.
+   `renew_llm_request { request_id, claim_token, lease_seconds? }` keeps an active
+   claim alive; an expired claim cannot be renewed.
+5. `list_llm_requests` includes owner/connection identifiers, protocol, event,
+   HTTP method/path and deadlines. `get_agent_status` reports waiting consumers,
+   claimed work, recent listener activity and the last 64 terminal request timings.
+
+Every producer holds a queue cleanup guard. When a browser disconnects, a server
+stops or the model future is otherwise cancelled, dropping that guard removes its
+request immediately. A cancelled long poll also releases its listener count. A
+claim whose tool response was lost is recovered by id, release, or lease expiry.
+
+`get_agent_status` reports monotonic queue wait, agent wait and total wait, with
+wall timestamps and instance/event identifiers for correlation. `answered` means
+handed to the protocol, not delivered to a peer. HTTP separately logs
+`request_received` and `response_ready` (handler completion, not proof of network
+delivery). Lifecycle logs contain identifiers/timings, never event payloads.
+
+### Supported listener client
+
+With `mcp-http` compiled, `netget --agent-connect http://127.0.0.1:18040/mcp`
+connects to an existing `netget --mcp-http 18040 --llm-agent` process. Create the
+protocol server using the normal `start_server` MCP tool. The listener uses rmcp's
+HTTP/SSE transport, keeps the session open, reconnects after transport/server
+failure, and accepts `NETGET_MCP_TOKEN` for authenticated endpoints. Loopback
+connections bypass environment proxies. TLS verification remains enabled.
+
+Stdout is JSON lines: `{"type":"request","request":{...}}`. Write one answer line
+on stdin: `{"request_id":1,"claim_token":"<echo from request>","actions":[{"type":"send_http_response","status":200,
+"headers":{"Content-Type":"text/html"},"body":"<h1>Hello</h1>"}]}`. The listener
+requires the host to echo the current claim token, rejecting delayed answers even
+when numeric ids are reused after a restart. It renews its 60-second lease every
+20 seconds while composing. If the client disappears, another listener can recover
+its work after the lease. Status is on stderr; malformed
+answers can be corrected without abandoning the request. Answers are acknowledged
+before polling again; stdin EOF and Ctrl+C stop the client, releasing a current
+claim. Input lines are capped at 16 MiB. An unacknowledged answer is checked against
+its claim on reconnection, so a restarted server's reused numeric id cannot receive
+an old answer.
+
+The host must actively consume and answer these events. A persistent connection
+alone cannot wake a chat agent after its host has ended the agent's turn.
 
 Two notification paths (the agent picks either):
 - **Long-poll** (reliable default): `get_next_llm_request(wait_seconds)` blocks

@@ -154,9 +154,9 @@ pub struct StartServerParams {
     #[serde(default, deserialize_with = "deserialize_option_u16_flexible")]
     pub port: Option<u16>,
     /// Natural language instruction for the LLM that handles each request.
-    /// This is the LLM FALLBACK path: every request/event triggers a (slow,
-    /// billable) model call. Use it only when responses genuinely require
-    /// reasoning or vary unpredictably. For deterministic behavior (echo,
+    /// This is the reasoning path: every event calls the configured backend
+    /// (a model, or the calling agent with --llm-agent). Use instruction when
+    /// each response should be authored from the incoming request. For deterministic behavior (echo,
     /// fixed/canned responses, simple routing, high throughput) prefer
     /// `event_handlers` with a script or static handler instead — see below.
     #[serde(default)]
@@ -443,6 +443,12 @@ pub struct GetNextLlmRequestParams {
     /// (0 = return right away). Capped at 120 to stay under the client's tool-call timeout.
     #[serde(default, deserialize_with = "deserialize_option_u32_flexible")]
     pub wait_seconds: Option<u32>,
+    /// Claim lease in seconds (1-300, default 60). Expired claims can be recovered.
+    #[serde(default)]
+    pub lease_seconds: Option<u32>,
+    /// Include the original model prompt for diagnostics (default false).
+    #[serde(default)]
+    pub include_prompt: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -453,6 +459,57 @@ pub struct AnswerLlmRequestParams {
     /// NetGet actions to execute, as a JSON array. Each object has a `type` field
     /// naming the action plus its parameters (same shape shown by get_access_log).
     pub actions: Vec<serde_json::Value>,
+    /// Echo the claim token to reject an answer from an expired/reassigned claim.
+    /// Omitted only for compatibility with older clients.
+    #[serde(default)]
+    pub claim_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetLlmRequestParams {
+    #[serde(deserialize_with = "deserialize_u64_flexible")]
+    pub request_id: u64,
+    #[serde(default)]
+    pub include_prompt: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ReleaseLlmRequestParams {
+    #[serde(deserialize_with = "deserialize_u64_flexible")]
+    pub request_id: u64,
+    #[serde(default)]
+    pub claim_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RenewLlmRequestParams {
+    #[serde(deserialize_with = "deserialize_u64_flexible")]
+    pub request_id: u64,
+    pub claim_token: String,
+    #[serde(default)]
+    pub lease_seconds: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct AnswerAndNextParams {
+    #[serde(flatten)]
+    pub answer: AnswerLlmRequestParams,
+    #[serde(flatten)]
+    pub next: GetNextLlmRequestParams,
+}
+
+fn agent_request_result(
+    request: &crate::llm::agent_queue::PendingLlmRequest,
+    include_prompt: bool,
+) -> CallToolResult {
+    let value = request.view(include_prompt);
+    let mut result = CallToolResult::success(vec![Content::text(format!(
+        "## LLM request #{}\n\n{}",
+        request.id,
+        serde_json::to_string(&value).expect("JSON value")
+    ))]);
+    result.structured_content = Some(value);
+    result
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1172,6 +1229,13 @@ impl NetGetMcpService {
             servers.len(),
         );
 
+        if let Some(queue) = &self.state.agent_queue {
+            let status = queue.status();
+            result.push_str(&format!(
+                "\n- **Agent listener**: {} ({} waiting, {} claimed)\n",
+                status["state"], status["waiting_consumers"], status["claimed"]
+            ));
+        }
         if !servers.is_empty() {
             result.push_str("\n### Servers\n");
             for server in &servers {
@@ -2026,7 +2090,7 @@ impl NetGetMcpService {
     }
 
     #[tool(
-        description = "Agent-LLM mode only (netget --llm-agent): fetch the next queued LLM request for a protocol server so YOU (the calling agent) can answer it in place of a model. Optionally long-poll with wait_seconds. Returns the request id, the prompt (server instruction + the triggering event), and the actions you may use. Reply by calling answer_llm_request with that id and a JSON array of actions. Returns '(no pending requests)' if none arrive within the wait."
+        description = "Agent-LLM mode only (netget --llm-agent): fetch the next queued LLM request for a protocol server so YOU (the calling agent) can answer it in place of a model. Optionally long-poll with wait_seconds. Returns a compact structured event, instance instructions/memory/history, deadline, offered actions and claim token. Set include_prompt to retrieve the full prompt. Reply by calling answer_llm_request with that id and a JSON array of actions. Returns '(no pending requests)' if none arrive within the wait."
     )]
     async fn get_next_llm_request(
         &self,
@@ -2038,46 +2102,29 @@ impl NetGetMcpService {
             )]));
         };
 
-        // Cap the long-poll to stay comfortably under typical MCP client tool-call timeouts.
-        let wait = params.wait_seconds.unwrap_or(0).min(120);
-        let req = queue
-            .wait_and_claim(std::time::Duration::from_secs(wait as u64))
+        let request = queue
+            .wait_and_claim_with_lease(
+                std::time::Duration::from_secs(params.wait_seconds.unwrap_or(0).min(120) as u64),
+                std::time::Duration::from_secs(
+                    params.lease_seconds.unwrap_or(60).clamp(1, 300) as u64
+                ),
+            )
             .await;
-
-        let Some(req) = req else {
-            return Ok(CallToolResult::success(vec![Content::text(
-                "(no pending requests)",
-            )]));
-        };
-
-        // Render the prompt (system + user messages) and the available actions.
-        let mut prompt = String::new();
-        for m in &req.messages {
-            prompt.push_str(&format!("### {}\n{}\n\n", m.role, m.content));
-        }
-
-        let actions_json =
-            serde_json::to_string_pretty(&req.tools).unwrap_or_else(|_| "[]".to_string());
-
-        let now_ms = crate::utils::clock::SystemTime::now()
-            .duration_since(crate::utils::clock::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-        let age = now_ms.saturating_sub(req.created_unix_ms) / 1000;
-
-        let result = format!(
-            "## LLM request #{}\n\n\
-             - **Queued**: {}s ago\n\n\
-             ### Prompt\n{}\n\
-             ### Available actions (tool schemas)\n```json\n{}\n```\n\n\
-             To answer, call `answer_llm_request` with:\n\
-             ```json\n{{ \"request_id\": {}, \"actions\": [ /* one or more action objects */ ] }}\n```\n\
-             Each action object needs a `type` field naming the action, plus its parameters. \
-             See `get_access_log` for worked examples of the action JSON a protocol expects.",
-            req.id, age, prompt, actions_json, req.id,
-        );
-
-        Ok(CallToolResult::success(vec![Content::text(result)]))
+        Ok(match request {
+            Some(request) => agent_request_result(&request, params.include_prompt),
+            None => {
+                let mut result =
+                    CallToolResult::success(vec![Content::text("(no pending requests)")]);
+                let mut status = queue.status();
+                status
+                    .as_object_mut()
+                    .expect("status object")
+                    .remove("recent_requests");
+                result.structured_content =
+                    Some(serde_json::json!({"request": null, "agent": status}));
+                result
+            }
+        })
     }
 
     #[tool(
@@ -2093,11 +2140,20 @@ impl NetGetMcpService {
             )]));
         };
 
-        match queue.answer(params.request_id, params.actions) {
-            Ok(()) => Ok(CallToolResult::success(vec![Content::text(format!(
-                "Answered LLM request #{}.",
-                params.request_id
-            ))])),
+        match queue.answer_with_claim(
+            params.request_id,
+            params.claim_token.as_deref(),
+            params.actions,
+        ) {
+            Ok(()) => {
+                let mut result = CallToolResult::success(vec![Content::text(format!(
+                    "Answered LLM request #{}.",
+                    params.request_id
+                ))]);
+                result.structured_content =
+                    Some(serde_json::json!({"answered_request_id":params.request_id}));
+                Ok(result)
+            }
             Err(e) => Ok(CallToolResult::error(vec![Content::text(e.to_string())])),
         }
     }
@@ -2112,29 +2168,119 @@ impl NetGetMcpService {
             )]));
         };
 
-        let pending = queue.list();
-        if pending.is_empty() {
-            return Ok(CallToolResult::success(vec![Content::text(
-                "No outstanding LLM requests.",
+        let summaries = queue.summaries();
+        let empty = summaries.is_empty();
+        let value = serde_json::json!({"requests":summaries});
+        let mut result = CallToolResult::success(vec![Content::text(if empty {
+            "No outstanding LLM requests.".into()
+        } else {
+            serde_json::to_string(&value).expect("JSON value")
+        })]);
+        result.structured_content = Some(value);
+        Ok(result)
+    }
+
+    #[tool(
+        description = "Agent mode: retrieve an outstanding request by id, including a claimed request after an interrupted tool call. Does not change its claim. Set include_prompt for full diagnostics."
+    )]
+    async fn get_llm_request(
+        &self,
+        Parameters(params): Parameters<GetLlmRequestParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let Some(queue) = &self.state.agent_queue else {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Agent-LLM mode is not enabled.",
             )]));
-        }
+        };
+        Ok(match queue.get(params.request_id) {
+            Ok(request) => agent_request_result(&request, params.include_prompt),
+            Err(error) => CallToolResult::error(vec![Content::text(error.to_string())]),
+        })
+    }
 
-        let now_ms = crate::utils::clock::SystemTime::now()
-            .duration_since(crate::utils::clock::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
+    #[tool(
+        description = "Agent mode: release a claimed request so a listener can recover it immediately. Echo claim_token to prevent releasing a reassigned claim."
+    )]
+    async fn release_llm_request(
+        &self,
+        Parameters(params): Parameters<ReleaseLlmRequestParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let Some(queue) = &self.state.agent_queue else {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Agent-LLM mode is not enabled.",
+            )]));
+        };
+        Ok(
+            match queue.release(params.request_id, params.claim_token.as_deref()) {
+                Ok(()) => CallToolResult::success(vec![Content::text(format!(
+                    "Released LLM request #{}.",
+                    params.request_id
+                ))]),
+                Err(error) => CallToolResult::error(vec![Content::text(error.to_string())]),
+            },
+        )
+    }
 
-        let mut out = String::from("## Outstanding LLM requests\n\n");
-        for r in &pending {
-            let age = now_ms.saturating_sub(r.created_unix_ms) / 1000;
-            out.push_str(&format!(
-                "- **#{}** — {} — queued {}s ago\n",
-                r.id,
-                if r.claimed { "claimed" } else { "pending" },
-                age
-            ));
+    #[tool(
+        description = "Agent mode: renew an active claim while composing an answer. Requires its current token; an expired or reassigned claim cannot be renewed."
+    )]
+    async fn renew_llm_request(
+        &self,
+        Parameters(params): Parameters<RenewLlmRequestParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let Some(queue) = &self.state.agent_queue else {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Agent-LLM mode is not enabled.",
+            )]));
+        };
+        Ok(
+            match queue.renew(
+                params.request_id,
+                &params.claim_token,
+                std::time::Duration::from_secs(
+                    params.lease_seconds.unwrap_or(60).clamp(1, 300) as u64
+                ),
+            ) {
+                Ok(value) => {
+                    let mut result =
+                        CallToolResult::success(vec![Content::text(value.to_string())]);
+                    result.structured_content = Some(value);
+                    result
+                }
+                Err(error) => CallToolResult::error(vec![Content::text(error.to_string())]),
+            },
+        )
+    }
+
+    #[tool(
+        description = "Agent mode: answer a request and immediately wait for the next one in a single tool call. The answer is committed before waiting. If this call is interrupted, use get_llm_request or wait for the claim lease to recover the next request."
+    )]
+    async fn answer_and_get_next_llm_request(
+        &self,
+        Parameters(params): Parameters<AnswerAndNextParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = self.answer_llm_request(Parameters(params.answer)).await?;
+        if result.is_error == Some(true) {
+            return Ok(result);
         }
-        Ok(CallToolResult::success(vec![Content::text(out)]))
+        self.get_next_llm_request(Parameters(params.next)).await
+    }
+
+    #[tool(
+        description = "Agent mode: listener activity (waiting, answering, idle or disconnected), queue depth, and the most recent 64 request timings. Answered means handed to the protocol, not confirmed delivered to the peer."
+    )]
+    async fn get_agent_status(&self) -> Result<CallToolResult, McpError> {
+        let Some(queue) = &self.state.agent_queue else {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Agent-LLM mode is not enabled.",
+            )]));
+        };
+        let value = queue.status();
+        let mut result = CallToolResult::success(vec![Content::text(
+            serde_json::to_string(&value).expect("JSON value"),
+        )]);
+        result.structured_content = Some(value);
+        Ok(result)
     }
 }
 
@@ -2238,14 +2384,20 @@ impl ServerHandler for NetGetMcpService {
                  each matching event for YOU: list_intercepts shows them, answer_intercept \
                  answers (an empty array acknowledges without replying), fail_intercept \
                  refuses with the protocol's fail-closed reply.\n\n\
-                 AGENT-LLM MODE (when netget was started with --llm-agent): there is no \
-                 model — YOU answer the LLM calls. When a server needs a reasoned \
-                 response it queues a request; fetch it with get_next_llm_request \
-                 (optionally long-poll via wait_seconds), then reply with \
-                 answer_llm_request(request_id, actions). If --llm-agent-pipe was set, a \
-                 line with the new request id is written to that FIFO on each enqueue so \
-                 you can block-read it instead of polling. Unanswered requests error out \
-                 after the configured timeout. list_llm_requests shows what is outstanding.",
+                 AGENT-LLM MODE (when netget was started with --llm-agent): YOU answer \
+                 the requests. For live simulation, set the instance instruction and omit \
+                 static/script handlers. Keep get_next_llm_request(wait_seconds) active while \
+                 the user browses. It returns compact structured context, offered actions, \
+                 deadline and claim_token; echo that token with request_id and actions to \
+                 answer_llm_request, or use answer_and_get_next_llm_request to answer and \
+                 keep listening in one call. Renew long claims with renew_llm_request. \
+                 get_llm_request retrieves a claimed request after an interruption; \
+                 release_llm_request makes it available again, and leases expire automatically. \
+                 get_agent_status distinguishes waiting/claimed work from an idle/disconnected \
+                 listener and shows recent timings. list_llm_requests includes request summaries. \
+                 The supported --agent-connect client exchanges JSON lines and reconnects. \
+                 NetGet cannot wake a host agent after its turn ends. FIFO notification is \
+                 also available with --llm-agent-pipe. Unanswered requests reach their deadline.",
             )
     }
 

@@ -3,7 +3,7 @@
 ## File
 
 `tests/mcp_stdio_test.rs` (top-level integration binary, gated on
-`#[cfg(all(feature = "mcp-stdio", feature = "tcp"))]`).
+`#[cfg(feature = "mcp-stdio")]`).
 
 ## Approach
 
@@ -43,13 +43,13 @@ The non-agent tests only read the protocol registry / app state.
 ## Running
 
 ```bash
-./cargo-isolated.sh test --no-default-features --features mcp-stdio,tcp \
+./cargo-isolated.sh test --no-default-features --features mcp-stdio \
     --test mcp_stdio_test -- --test-threads=100
 ```
 
 ## Expected runtime
 
-< 1 second after compilation (no network, no LLM).
+A few seconds after compilation (no network, no LLM).
 
 ## Not covered here
 
@@ -58,3 +58,14 @@ The non-agent tests only read the protocol registry / app state.
   real binary on an ephemeral port and drives `initialize` over HTTP, including the
   admission policy (rebound `Host`, foreign `Origin`, missing bearer token, oversized
   body); `tests/mcp_http_guard_test.rs` pins the policy itself without a socket.
+
+## Agent serving regressions
+
+`agent_http_events_are_compact_recoverable_and_cancelled_with_the_browser` exercises
+real HTTP requests through MCP: explicit context, the offered response schema,
+compact versus full prompt bytes, GET form query decoding, retrieval/release,
+stale token rejection, answer-and-next, and browser-disconnect cleanup.
+`agent_queue_recovery_test` verifies lease wakeups, cancelled producers/listeners,
+request timings and form decoding. `agent_listener_cli_test` starts real NetGet
+and listener processes, proves TCP reply bytes, restarts the MCP server, proves
+reconnection and token uniqueness, and checks prompt exit on stdin EOF.

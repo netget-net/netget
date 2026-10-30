@@ -191,6 +191,18 @@ pub async fn call_llm_with_actions(
         truncated_desc,
     );
 
+    if llm_client.backend_type() == "agent" {
+        if let Some(server) = state.get_server(server_id).await {
+            conversation = conversation.with_agent_context(serde_json::json!({
+                "server_id":server_id.as_u32(), "connection_id":connection_id.map(|id|id.as_u32()),
+                "protocol":server.protocol_name, "instruction":server.instruction,
+                "memory":server.memory, "event_type":event_type_id, "data":context_json,
+                "handler_instruction":handler_instruction,
+                "history":state.render_server_history(server_id, connection_id).await,
+            }));
+        }
+    }
+
     // Add event trigger as a user message
     let event_trigger =
         PromptBuilder::build_event_trigger_message(event_description, context_json.clone());
@@ -863,7 +875,19 @@ async fn call_llm_inner(
     } else {
         format!("{}\n{}", render_unanswered(earlier, event), event_trigger)
     };
-    let event_trigger = match state.render_server_history(server_id, connection_id).await {
+    let history = state.render_server_history(server_id, connection_id).await;
+    if llm_client.backend_type() == "agent" {
+        if let Some(server) = state.get_server(server_id).await {
+            conversation = conversation.with_agent_context(serde_json::json!({
+                "server_id":server_id.as_u32(), "connection_id":connection_id.map(|id|id.as_u32()),
+                "protocol":protocol.protocol_name(), "event_type":event.id(), "data":event.data,
+                "instruction":server.instruction, "memory":server.memory,
+                "handler_instruction":handler_instruction, "history":history,
+                "earlier_events":earlier.iter().map(|e|serde_json::json!({"event_type":e.id(),"data":e.data})).collect::<Vec<_>>(),
+            }));
+        }
+    }
+    let event_trigger = match history {
         Some(history) => format!("{}\n{}", history, event_trigger),
         None => event_trigger,
     };
@@ -1242,6 +1266,21 @@ async fn call_llm_for_client_inner(
                 .map(|ev| ev.id().to_string())
                 .unwrap_or_else(|| "Client instructions".into()),
         );
+    }
+
+    if llm_client.backend_type() == "agent" {
+        let cid = crate::state::ClientId::from_string(&client_id);
+        let history = match cid {
+            Some(cid) => state.render_client_history(cid).await,
+            None => None,
+        };
+        conversation = conversation.with_agent_context(serde_json::json!({
+            "client_id":cid.map(|id|id.as_u32()), "protocol":protocol.protocol_name(),
+            "event_type":event.map(|e|e.id()).unwrap_or("client_start"), "data":event.map(|e|&e.data),
+            "instruction":instruction, "memory":memory,
+            "history":history,
+            "earlier_events":earlier.iter().map(|e|serde_json::json!({"event_type":e.id(),"data":e.data})).collect::<Vec<_>>(),
+        }));
     }
 
     // Add user message

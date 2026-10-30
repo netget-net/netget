@@ -82,6 +82,16 @@ fn create_llm_client_inner(args: &Args) -> Result<OllamaClient> {
 pub async fn run() -> Result<()> {
     let args = Args::parse();
 
+    if let Some(endpoint) = &args.agent_connect {
+        #[cfg(feature = "mcp-http")]
+        {
+            setup::init_logging(&args, false)?;
+            return crate::mcp_stdio::agent_client::run(endpoint, args.resolve_mcp_token()).await;
+        }
+        #[cfg(not(feature = "mcp-http"))]
+        anyhow::bail!("--agent-connect requires the mcp-http feature ({endpoint})");
+    }
+
     // Handle --simple-list flag (list available simple protocols and exit)
     if args.simple_list {
         use crate::protocol::EASY_REGISTRY;
