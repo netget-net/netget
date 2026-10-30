@@ -45,6 +45,17 @@ Add this to your MCP client's configuration:
 
 Use `list_protocols` and `get_protocol_docs` for the protocols, actions, and maturity available in your build. Protocol support varies by platform and implementation.
 
+## Answer network requests as the agent
+
+Run `netget --mcp-http 18040 --llm-agent` and create a protocol server with the
+`start_server` MCP tool. Each request waits for the calling agent to answer it.
+Compact events, claim recovery, and timings are available through the agent MCP tools.
+
+For hosts that consume JSON lines, `netget --agent-connect http://127.0.0.1:18040/mcp`
+maintains the connection and reconnects after interruptions. It writes requests to
+stdout and accepts `{"request_id":1,"claim_token":"<from request>","actions":[...]}` answers on stdin.
+See the [agent workflow and listener contract](src/mcp_stdio/AGENTS.md#agent-llm-backend---llm-agent).
+
 ## Build and explore
 
 Install from Rust with `cargo install --locked netget-tool`; the command is `netget`. See [installation and development docs](https://github.com/netget-net/netget/blob/master/docs/README.md) for system libraries, source builds, testing, and historical plans.

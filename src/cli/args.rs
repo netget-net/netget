@@ -565,6 +565,11 @@ pub struct Args {
     )]
     pub docs: bool,
 
+    /// Connect an agent to a running --mcp-http --llm-agent process. Emits compact
+    /// requests as JSON lines on stdout and reads answers as JSON lines on stdin.
+    #[clap(long = "agent-connect", value_name = "MCP_URL", conflicts_with_all = ["mcp_stdio", "mcp_http", "server_protocol", "client_protocol", "simple_protocol", "load_file", "llm_agent"])]
+    pub agent_connect: Option<String>,
+
     /// Run as MCP STDIO server (for Claude Desktop/Code integration)
     #[clap(
         long = "mcp",

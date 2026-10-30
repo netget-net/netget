@@ -555,8 +555,8 @@ pub struct ChatRequest {
     pub tools: Vec<serde_json::Value>,
     /// Model name (e.g., "qwen3-coder:30b")
     pub model: String,
-    /// The actions the prompt offers. Only the bridge backend sends these anywhere (see
-    /// `crate::llm::bridge::BridgeRequest::actions`); the HTTP backends ignore them.
+    /// The actions the prompt offers. Bridge and agent-queue backends send these
+    /// as structured catalogs; native Ollama/OpenAI HTTP requests ignore this field.
     pub offered_actions: Vec<crate::llm::actions::ActionDefinition>,
 }
 
@@ -1637,8 +1637,8 @@ impl OllamaClient {
     }
 
     /// [`Self::generate_with_format`] for a prompt that offers actions. `offered` is the
-    /// list the prompt describes; only the bridge backend passes it on (a person answering
-    /// by hand gets a form built from it), and the HTTP backends send exactly what
+    /// list the prompt describes; bridge and agent-queue backends pass it on as
+    /// structured metadata, and the HTTP backends send exactly what
     /// `generate_with_format` sends. `private_payloads` also covers credentials
     /// retained in earlier conversation turns when the offered list is narrowed.
     pub(crate) async fn generate_offering(
@@ -1900,8 +1900,18 @@ impl OllamaClient {
 
             LlmBackend::Queue { queue, timeout } => {
                 // No model: enqueue the prompt and await the agent's action JSON.
-                let (id, rx) =
-                    queue.submit(model.to_string(), vec![Message::user(prompt)], Vec::new());
+                let (id, rx) = queue.submit_with_context(
+                    model.to_string(),
+                    vec![Message::user(prompt)],
+                    Vec::new(),
+                    offered
+                        .iter()
+                        .map(crate::llm::bridge::offered_action)
+                        .collect(),
+                    event.map(|event| serde_json::json!({"event":event})),
+                    Some(*timeout),
+                );
+                let _cleanup = queue.guard(id);
                 let actions = match tokio::time::timeout(*timeout, rx).await {
                     Ok(Ok(actions)) => actions,
                     Ok(Err(_)) => {
@@ -2096,21 +2106,67 @@ impl OllamaClient {
         Ok(chat_response)
     }
 
-    /// Agent-queue backend: enqueue the request and await the calling MCP agent's
-    /// answer. The answer (a NetGet action JSON array) is wrapped as
-    /// `{"actions":[...]}` in the response content — the same shape the test mock
-    /// Ollama server produces — so `ActionResponse::from_str` parses it downstream.
+    /// Send explicit event context and the offered action catalog to an external agent.
+    pub(crate) async fn generate_agent_request(
+        &self,
+        model: &str,
+        messages: Vec<Message>,
+        offered: &[crate::llm::actions::ActionDefinition],
+        context: Option<serde_json::Value>,
+    ) -> Result<GenerateResponse> {
+        let LlmBackend::Queue { queue, timeout } = &self.backend else {
+            anyhow::bail!("agent backend is not selected");
+        };
+        let (id, rx) = queue.submit_with_context(
+            model.to_string(),
+            messages,
+            Vec::new(),
+            offered
+                .iter()
+                .map(crate::llm::bridge::offered_action)
+                .collect(),
+            context,
+            Some(*timeout),
+        );
+        let _cleanup = queue.guard(id);
+        let actions = match tokio::time::timeout(*timeout, rx).await {
+            Ok(Ok(actions)) => actions,
+            Ok(Err(_)) => {
+                queue.expire(id);
+                anyhow::bail!("agent-queue: request #{id} was dropped");
+            }
+            Err(_) => {
+                queue.expire(id);
+                anyhow::bail!("agent-queue: request #{id} timed out after {timeout:?}");
+            }
+        };
+        Ok(GenerateResponse {
+            text: serde_json::json!({"actions":actions}).to_string(),
+            token_usage: TokenUsage::default(),
+        })
+    }
+
+    /// Native-tool agent requests retain their messages, tools and offered action
+    /// catalog. Answered action objects become tool calls for the normal validator.
     async fn chat_with_tools_queue(
         &self,
         queue: std::sync::Arc<crate::llm::agent_queue::LlmRequestQueue>,
         timeout: std::time::Duration,
         request: &ChatRequest,
     ) -> Result<ChatResponse> {
-        let (id, rx) = queue.submit(
+        let (id, rx) = queue.submit_with_context(
             request.model.clone(),
             request.messages.clone(),
             request.tools.clone(),
+            request
+                .offered_actions
+                .iter()
+                .map(crate::llm::bridge::offered_action)
+                .collect(),
+            None,
+            Some(timeout),
         );
+        let _cleanup = queue.guard(id);
         self.log().debug(format!(
             "agent-queue: enqueued LLM request #{} ({} tools), awaiting agent answer (timeout {:?})",
             id,

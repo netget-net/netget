@@ -57,7 +57,7 @@ libsmbclient = ["dep:pavao"]  # SMB client
 # Optional capabilities.
 # The rmcp `client` feature is enabled so the in-process MCP smoke tests can drive the server.
 mcp-stdio = ["dep:rmcp", "dep:schemars", "rmcp/client"]  # MCP STDIO server mode for Claude Desktop/Code integration
-mcp-http = ["dep:rmcp", "dep:schemars", "rmcp/client", "rmcp/transport-streamable-http-server"]  # MCP HTTP/SSE server mode for remote/web MCP clients
+mcp-http = ["dep:rmcp", "dep:schemars", "rmcp/client", "rmcp/transport-streamable-http-server", "rmcp/transport-streamable-http-client-reqwest", "dep:reqwest-mcp"]  # MCP HTTP/SSE server mode for remote/web MCP clients
 embedded-llm = ["dep:llama-cpp-2", "dep:hf-hub"]  # Embedded LLM inference via llama.cpp (needs cmake and a C++ compiler)
 sqlite = ["dep:rusqlite"]  # SQLite databases the model can create at runtime
 gpu = ["dep:gfxinfo"]  # GPU stats in the dashboard (not on macOS, see AGENTS.md)
@@ -85,6 +85,8 @@ textwrap = "0.16"
 # HTTP client for Ollama
 des = { version = "0.8" }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "http2"] }
+# rmcp 1.2 uses reqwest 0.13; use that same client for its supported agent listener.
+reqwest-mcp = { package = "reqwest", version = "0.13.2", optional = true, default-features = false, features = ["json", "stream", "rustls-no-provider"] }
 
 # Ollama Rust client
 

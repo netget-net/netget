@@ -701,3 +701,169 @@ async fn client_tools_manage_a_real_connection() {
 
     client.cancel().await.expect("shutdown");
 }
+
+/// The browser workflow needs compact events, recoverable claims and cancellation,
+/// with the full prompt retained only on request.
+#[tokio::test]
+async fn agent_http_events_are_compact_recoverable_and_cancelled_with_the_browser() {
+    use serde_json::json;
+    use std::time::Duration;
+    let client = connect_args(&["netget", "--llm-agent"]).await;
+    let instruction = "Invent a cooking recipe page for each requested recipe.";
+    let started = call(&client,"start_server",json!({"protocol":"http","port":0,"instruction":instruction,"initial_memory":"kitchen: Everyday Spoon"})).await;
+    assert_ne!(started.is_error, Some(true), "{}", text_of(&started));
+    let servers = call(&client, "list_servers", json!({})).await;
+    let port = parse_number_after(&text_of(&servers), "port ") as u16;
+    let browser = tokio::spawn(async move {
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(format!(
+                "http://127.0.0.1:{port}/recipes/cake?q=Banana+chocolate+cake&literal=%2B"
+            ))
+            .send()
+            .await
+            .unwrap()
+    });
+    let next = call(&client, "get_next_llm_request", json!({"wait_seconds":5})).await;
+    let request = next.structured_content.as_ref().expect("structured event");
+    let id = request["request_id"].as_u64().unwrap();
+    let token = request["claim_token"].clone();
+    assert!(request.get("messages").is_none());
+    assert_eq!(request["context"]["instruction"], instruction);
+    assert_eq!(request["context"]["memory"], "kitchen: Everyday Spoon");
+    assert_eq!(request["context"]["data"]["path"], "/recipes/cake");
+    assert_eq!(
+        request["context"]["data"]["query"]["q"],
+        "Banana chocolate cake"
+    );
+    assert_eq!(request["context"]["data"]["query"]["literal"], "+");
+    let actions = request["available_actions"].as_array().unwrap();
+    let response_action = actions
+        .iter()
+        .find(|a| a["name"] == "send_http_response")
+        .expect("real offered action catalog");
+    assert!(response_action
+        .pointer("/schema/properties/status")
+        .is_some());
+    let recovered = call(
+        &client,
+        "get_llm_request",
+        json!({"request_id":id,"include_prompt":true}),
+    )
+    .await;
+    let verbose = recovered.structured_content.as_ref().unwrap();
+    assert_eq!(verbose["claim_token"], token);
+    assert!(verbose["messages"].is_array());
+    let prompt_bytes: usize = verbose["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|message| message["content"].as_str().unwrap().len())
+        .sum();
+    println!(
+        "agent handoff bytes: compact={}, original_prompt_text={}",
+        request.to_string().len(),
+        prompt_bytes
+    );
+    assert!(
+        request.to_string().len() < prompt_bytes,
+        "the compact handoff must be smaller than the original prompt text"
+    );
+
+    println!(
+        "agent event bytes: compact={}, with_prompt={}",
+        request.to_string().len(),
+        verbose.to_string().len()
+    );
+    assert!(
+        request.to_string().len() < verbose.to_string().len() / 2,
+        "compact={}, verbose={}",
+        request.to_string().len(),
+        verbose.to_string().len()
+    );
+    let listed = call(&client, "list_llm_requests", json!({})).await;
+    assert_eq!(
+        listed.structured_content.unwrap()["requests"][0]["path"],
+        "/recipes/cake"
+    );
+    let released = call(
+        &client,
+        "release_llm_request",
+        json!({"request_id":id,"claim_token":token}),
+    )
+    .await;
+    assert_ne!(released.is_error, Some(true));
+    let claimed = call(&client, "get_next_llm_request", json!({}))
+        .await
+        .structured_content
+        .unwrap();
+    assert_ne!(claimed["claim_token"], token);
+    let renewed = call(
+        &client,
+        "renew_llm_request",
+        json!({"request_id":id,"claim_token":claimed["claim_token"],"lease_seconds":120}),
+    )
+    .await;
+    assert_ne!(renewed.is_error, Some(true));
+    assert!(
+        renewed.structured_content.as_ref().unwrap()["claim_expires_unix_ms"]
+            .as_u64()
+            .unwrap()
+            > claimed["claim_expires_unix_ms"].as_u64().unwrap()
+    );
+
+    let stale = call(
+        &client,
+        "answer_llm_request",
+        json!({"request_id":id,"claim_token":token,"actions":[]}),
+    )
+    .await;
+    assert_eq!(stale.is_error, Some(true));
+    // Queue a second browser request before answering the first. The combined
+    // operation must deliver the first answer and return the second request.
+    let mut socket = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    socket
+        .write_all(b"GET /recipes/next HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .await
+        .unwrap();
+    let next=call(&client,"answer_and_get_next_llm_request",json!({"request_id":id,"claim_token":claimed["claim_token"],"actions":[{"type":"send_http_response","status":200,"headers":{"Content-Type":"text/html","Cache-Control":"no-store"},"body":"<h1>Fresh cake</h1>"}],"wait_seconds":5})).await;
+    assert_ne!(next.is_error, Some(true), "{}", text_of(&next));
+    let second = next.structured_content.unwrap();
+    assert_eq!(second["context"]["data"]["path"], "/recipes/next");
+    let response = browser.await.unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.text().await.unwrap(), "<h1>Fresh cake</h1>");
+    drop(socket);
+    let second_id = second["request_id"].as_u64().unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let current = call(&client, "list_llm_requests", json!({}))
+                .await
+                .structured_content
+                .unwrap();
+            if !current["requests"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["request_id"] == second_id)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("browser disconnect must remove its pending request");
+    let status = call(&client, "get_agent_status", json!({}))
+        .await
+        .structured_content
+        .unwrap();
+    assert!(status["recent_requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r["request_id"] == second_id && r["outcome"] == "cancelled"));
+    client.cancel().await.unwrap();
+}

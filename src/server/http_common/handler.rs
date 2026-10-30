@@ -833,3 +833,18 @@ pub fn request_handling_startup_parameters() -> Vec<crate::llm::actions::Paramet
         },
     ]
 }
+
+/// Form-style URL query decoding used by browser GET forms. Duplicate keys keep
+/// the last value, matching the existing event object's contract.
+pub fn parse_query(query: Option<&str>) -> serde_json::Value {
+    let params: serde_json::Map<String, serde_json::Value> =
+        url::form_urlencoded::parse(query.unwrap_or("").as_bytes())
+            .map(|(key, value)| {
+                (
+                    key.into_owned(),
+                    serde_json::Value::String(value.into_owned()),
+                )
+            })
+            .collect();
+    serde_json::Value::Object(params)
+}
