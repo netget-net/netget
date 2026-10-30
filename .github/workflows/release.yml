@@ -23,6 +23,8 @@ jobs:
   build:
     name: build (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
+    env:
+      CARGO_BUILD_JOBS: '2'
     strategy:
       fail-fast: false
       matrix:
@@ -62,6 +64,20 @@ jobs:
             ext: zip
     steps:
       - uses: actions/checkout@v4
+
+      # The monolithic crate needs the same memory headroom as the heavy CI jobs.
+      # Without swap Linux runners can shut down during release code generation.
+      - name: Make room for release compilation
+        if: runner.os == 'Linux'
+        run: |
+          sudo swapoff -a || true
+          sudo fallocate -l 16G /mnt/netget-swap
+          sudo chmod 600 /mnt/netget-swap
+          sudo mkswap /mnt/netget-swap
+          sudo swapon /mnt/netget-swap
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          free -h
+          df -h / /mnt
 
       - name: Assert tag matches Cargo.toml version
         if: github.ref_type == 'tag'
