@@ -56,6 +56,26 @@ maintains the connection and reconnects after interruptions. It writes requests 
 stdout and accepts `{"request_id":1,"claim_token":"<from request>","actions":[...]}` answers on stdin.
 See the [agent workflow and listener contract](src/mcp_stdio/AGENTS.md#agent-llm-backend---llm-agent).
 
+`netget --mcp --llm-agent` also advertises the draft **SEP-3415 Events extension**
+(`io.modelcontextprotocol/events`): `events/list`, cursor-based `events/poll`, and
+`events/stream` notifications over stdio. Clients choose their delivery mode;
+webhooks are not supported. Subscriptions can watch pending agent requests, manual
+intercepts and recorded access-log entries. Existing claim and answer tools remain
+the control path.
+
+The same stdio server advertises **Claude Code Channels**. During Claude's research
+preview, add `--llm-agent` to the MCP server's arguments above to have the calling
+agent answer network requests, then enable the server named `netget` with:
+
+```sh
+claude --dangerously-load-development-channels server:netget
+```
+
+Channel opt-in and organization policy are controlled by Claude Code. NetGet emits
+actionable request notifications, and the agent answers through its MCP tools.
+See the [event contract](src/mcp_stdio/AGENTS.md#events-extension-and-claude-code-channels)
+for schemas, replay limits and protocol compatibility.
+
 ## Build and explore
 
 Install from Rust with `cargo install --locked netget-tool`; the command is `netget`. See [installation and development docs](https://github.com/netget-net/netget/blob/master/docs/README.md) for system libraries, source builds, testing, and historical plans.

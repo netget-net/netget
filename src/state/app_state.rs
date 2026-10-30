@@ -330,6 +330,7 @@ pub struct DueFeedback {
 pub struct AppState {
     inner: Arc<RwLock<AppStateInner>>,
     pub llm_activity: super::llm_activity::LlmActivityTracker,
+    pub event_journal: Arc<crate::events::journal::EventJournal>,
 }
 
 struct AppStateInner {
@@ -612,6 +613,7 @@ impl AppState {
 
         Self {
             llm_activity: super::llm_activity::LlmActivityTracker::default(),
+            event_journal: Arc::new(crate::events::journal::EventJournal::default()),
             inner: Arc::new(RwLock::new(AppStateInner {
                 mode: Mode::Idle,
                 servers: HashMap::new(),
@@ -991,6 +993,16 @@ impl AppState {
                 timeout_secs,
                 reply_tx: Some(reply_tx),
             });
+        let entry = inner.pending_intercepts.last().expect("just parked");
+        let (server_id, client_id) = match owner {
+            crate::state::intercepts::InterceptOwner::Server(id) => (Some(id.as_u32()), None),
+            crate::state::intercepts::InterceptOwner::Client(id) => (None, Some(id.as_u32())),
+        };
+        self.event_journal.publish(crate::events::journal::INTERCEPT_PENDING, serde_json::json!({
+            "intercept_id": id, "server_id": server_id, "client_id": client_id,
+            "connection_id": connection_id, "event_type": event_type,
+            "deadline_unix_ms": entry.created_unix_ms.saturating_add(timeout_secs.saturating_mul(1000)),
+        }));
         (id, reply_rx)
     }
 
@@ -3303,6 +3315,13 @@ impl AppState {
         while inner.access_logs.len() > ACCESS_LOG_CAPACITY {
             inner.access_logs.pop_front();
         }
+        self.event_journal.publish(
+            crate::events::journal::ACCESS_RECORDED,
+            serde_json::json!({
+                "access_log_id": id, "server_id": server_id, "client_id": client_id,
+                "protocol": protocol, "connection_id": connection_id, "event_type": event_type,
+            }),
+        );
         id
     }
 

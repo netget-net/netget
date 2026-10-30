@@ -10,7 +10,10 @@ pub mod control;
 pub mod docs;
 #[cfg(feature = "mcp-stdio")]
 pub mod drain;
+pub mod events;
 pub mod http_guard;
+#[cfg(feature = "mcp-stdio")]
+pub mod stdio;
 pub mod tools;
 
 use anyhow::Result;
@@ -22,8 +25,6 @@ use crate::settings::Settings;
 /// Main entry point for MCP STDIO server mode
 #[cfg(feature = "mcp-stdio")]
 pub async fn run_mcp_stdio(args: &Args, settings: Settings) -> Result<()> {
-    use rmcp::ServiceExt;
-
     // Logging goes to stderr only (stdout = JSON-RPC)
     // The CLI setup already handles this for non-interactive mode
 
@@ -35,14 +36,7 @@ pub async fn run_mcp_stdio(args: &Args, settings: Settings) -> Result<()> {
     // Serve over stdin/stdout. rmcp's own stdio transport, wrapped so that a request still
     // being handled when stdin closes is answered before the server stops (see `drain`).
     let (stdin, stdout) = rmcp::transport::stdio();
-    let server = service
-        .serve(drain::drain_on_eof_transport(stdin, stdout))
-        .await?;
-
-    info!("MCP STDIO server initialized, waiting for requests...");
-
-    // Wait for the server to complete: stdin closed and every request answered, or shutdown.
-    server.waiting().await?;
+    stdio::serve(service, stdin, stdout).await?;
 
     info!("MCP STDIO server shut down");
     Ok(())

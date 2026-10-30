@@ -9,3 +9,4 @@ pub mod types;
 pub use errors::ActionExecutionError;
 pub use handler::EventHandler;
 pub use types::{AppEvent, HttpResponse, UserCommand};
+pub mod journal;
