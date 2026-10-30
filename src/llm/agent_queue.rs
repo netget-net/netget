@@ -107,6 +107,7 @@ pub struct LlmRequestQueue {
     inner: Mutex<Inner>,
     notify: Notify,
     pipe_path: Option<PathBuf>,
+    events: Arc<crate::events::journal::EventJournal>,
 }
 
 /// Drop cleanup runs even when hyper cancels the producer future on browser disconnect.
@@ -133,6 +134,15 @@ impl Drop for ListenerGuard<'_> {
 
 impl LlmRequestQueue {
     pub fn new(pipe_path: Option<PathBuf>) -> Self {
+        Self::with_events(
+            pipe_path,
+            Arc::new(crate::events::journal::EventJournal::default()),
+        )
+    }
+    pub fn with_events(
+        pipe_path: Option<PathBuf>,
+        events: Arc<crate::events::journal::EventJournal>,
+    ) -> Self {
         Self {
             inner: Mutex::new(Inner {
                 order: VecDeque::new(),
@@ -147,6 +157,7 @@ impl LlmRequestQueue {
             }),
             notify: Notify::new(),
             pipe_path,
+            events,
         }
     }
     pub fn pipe_path(&self) -> Option<&PathBuf> {
@@ -214,6 +225,21 @@ impl LlmRequestQueue {
                 },
             );
             inner.order.push_back(id);
+            let request = &inner.entries[&id].request;
+            let mut data = json!({"request_id":id,"deadline_unix_ms":request.deadline_unix_ms});
+            for key in [
+                "server_id",
+                "client_id",
+                "connection_id",
+                "protocol",
+                "event_type",
+            ] {
+                if let Some(value) = request.context.as_ref().and_then(|c| c.get(key)) {
+                    data[key] = value.clone();
+                }
+            }
+            self.events
+                .publish(crate::events::journal::LLM_PENDING, data);
             id
         };
         info!(

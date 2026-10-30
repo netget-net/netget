@@ -69,3 +69,16 @@ stale token rejection, answer-and-next, and browser-disconnect cleanup.
 request timings and form decoding. `agent_listener_cli_test` starts real NetGet
 and listener processes, proves TCP reply bytes, restarts the MCP server, proves
 reconnection and token uniqueness, and checks prompt exit on stdin EOF.
+
+## Events and Channels
+
+`mcp_events_stdio_test` drives newline-delimited JSON-RPC through the binary's
+dual-era stdio serving path rather than relying on the SDK client's protocol
+models. Modern discovery, request metadata, complete results and retained legacy
+tools are checked alongside SEP-3415 poll/bootstrap, filtering, pagination, replay
+gaps, heartbeats, concurrent streams, cancellation, the subscription cap and EOF.
+Events and both legacy/scoped-modern Channels share stable event IDs. Real TCP
+peers receive answers authored through the existing claim/answer and intercept
+tools after a push notification; no model or polling loop is involved. A subprocess
+test verifies that the actual binary accepts a modern connection and exits on EOF
+even with an open stream. The quiet-stream heartbeat test takes 30 seconds.

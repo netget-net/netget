@@ -63,12 +63,20 @@ OllamaClient (3 backends)
 `netget --mcp` (alias `--mcp-stdio`) triggers `mcp_stdio::run_mcp_stdio()`:
 1. Creates `NetGetMcpService` with AppState and tool router
 2. Serves via `rmcp::transport::stdio()` (stdin/stdout), wrapped in `drain::DrainOnEof`
-3. Waits until the client disconnects (stdin EOF) **and every request already received has been
+3. Detects modern per-request metadata / `server/discover` and uses rmcp's
+   `serve_directly` entry point for MCP `2026-07-28`; legacy clients retain rmcp's
+   normal `initialize` handshake. The adapter in `stdio.rs` checks modern metadata
+   and adds `resultType` while preserving the SDK's framing, tool dispatch and cancellation.
+   Its envelope decoder preserves `_meta` on parameterless requests such as `ping`,
+   which rmcp 1.2's legacy `RequestNoParam` deserializer otherwise discards.
+4. Waits until the client disconnects (stdin EOF) **and every ordinary request already received has been
    answered**, bounded by `drain::DRAIN_LIMIT` (300s). rmcp's serve loop stops the moment its
    input ends and drops the response of a handler still running, so a caller that writes its
    requests and closes stdin (a shell pipeline, a one-shot script) used to get the answer to
    `initialize` and nothing after it. `tests/mcp_stdio_eof_test.rs` pins it, with a control
    showing the unwrapped transport still loses the answer.
+   Open `events/stream` subscriptions do not delay EOF draining; cancellation also
+   removes an ordinary request from the drain count.
 
 `netget --mcp-http PORT` triggers `mcp_stdio::run_mcp_http()`:
 1. Builds `SharedState` once via `NetGetMcpService::create_shared_state()`
@@ -427,9 +435,10 @@ its claim on reconnection, so a restarted server's reused numeric id cannot rece
 an old answer.
 
 The host must actively consume and answer these events. A persistent connection
-alone cannot wake a chat agent after its host has ended the agent's turn.
+alone cannot wake a chat agent after its host has ended the agent's turn. Hosts
+supporting the Events extension or Claude Code Channels below can react to push.
 
-Two notification paths (the agent picks either):
+Legacy notification paths (also available alongside the extension below):
 - **Long-poll** (reliable default): `get_next_llm_request(wait_seconds)` blocks
   server-side (rmcp runs each request in its own task, so it never blocks other
   tools). `wait_seconds` is capped at 120 to stay under client tool-call timeouts.
@@ -447,6 +456,89 @@ Two notification paths (the agent picks either):
 Note: the answer must use an action offered for that event. Using an action the
 event does not expose (e.g. `close_connection` on `tcp_data_received`) triggers
 NetGet's unknown-action retry, which enqueues a *second* request.
+
+## Events extension and Claude Code Channels
+
+The implementation pins **SEP-3415 revision `b08e4f9dd684f39d846d94089487fbeb28e666f5`**:
+<https://github.com/modelcontextprotocol/modelcontextprotocol/pull/3415>.
+The older working-group design sketch differs: the SEP requires protocol
+`2026-07-28`, puts `io.modelcontextprotocol/events: {}` under
+`capabilities.extensions`, and adds `resultType: "complete"` to results. Modern
+stdio clients use `server/discover` and per-request `_meta` fields
+`io.modelcontextprotocol/protocolVersion`, `io.modelcontextprotocol/clientInfo`
+and `io.modelcontextprotocol/clientCapabilities`; they do not initialize. Legacy
+clients still initialize and can use the same event methods as a compatibility
+backport. No list-change capability is advertised: the event catalog is static.
+
+`events/list` advertises these event types and their input/payload schemas:
+
+| Event | Source | Read/control tools |
+|---|---|---|
+| `llm.request.pending` | Agent backend queue submission, with `--llm-agent` | `get_next_llm_request` to claim, `get_llm_request` to inspect, `answer_llm_request` to answer |
+| `intercept.pending` | A `manual` handler parks a request | `list_intercepts`, `answer_intercept`, `fail_intercept` |
+| `access_log.recorded` | Central server/client access-log insertion | `get_access_log` |
+
+Each descriptor supports exact optional identifier filters (`request_id`,
+`intercept_id` or `access_log_id`, plus `server_id`, `client_id`, `connection_id`),
+`event_type`, and `protocol` where available. Unknown keys or wrong types fail
+`InvalidParams`. Payloads contain identifiers and deadlines, never full prompts,
+wire bodies, memory or claim tokens. Retrieve authoritative state through the tools:
+an observed request may already have been claimed, answered or expired. The queue
+and intercept code retain their existing validation and answer semantics.
+
+**Polling**: `events/poll {name, arguments?, cursor?, maxAgeMs?, maxEvents?}`.
+A missing/null cursor starts at now with an empty batch and a fresh cursor.
+Responses carry `events`, `cursor`, `truncated`, `hasMore` and `nextPollMs` (1000).
+The default batch is 100, capped at 1000. Drain `hasMore` immediately. Polling is
+a protocol request, not a tool call, and never claims work.
+
+**Stdio push**: `events/stream {name, arguments?, cursor?, maxAgeMs?}` stays open.
+`notifications/events/active` confirms the start position, followed by
+`notifications/events/event`. Every message carries the parent JSON-RPC request
+id at `params._meta["io.modelcontextprotocol/subscriptionId"]`. Quiet streams
+send `notifications/events/heartbeat` every 30 seconds, carrying the checked
+cursor. Cancel with `notifications/cancelled {requestId}`. Each session permits
+64 concurrent streams, separate from ordinary tool calls; cancellation and EOF
+release them. Clients must exempt streams from ordinary request timeouts.
+
+The shared journal (`events/journal.rs`) retains the latest **1024 occurrences**
+across all event types, in memory. Stable process-unique event IDs support
+deduplication across deliveries. Cursors advance over nonmatching events too.
+Retention overflow, a previous process's cursor, a cursor ahead of the current
+position, or `maxAgeMs` skipping history sets `truncated: true`. A push gap sends
+a new `active` before continuing. Malformed cursors are `InvalidParams`.
+State and history do not survive restart; clients can reconcile through the tools.
+
+**Claude Code Channels**: stdio also advertises
+`experimental: {"claude/channel": {}}`. After legacy initialization, actionable
+`llm.request.pending` and `intercept.pending` occurrences are emitted as
+`notifications/claude/channel {content, meta}`. `content` is the JSON occurrence;
+`meta` contains string `event` and `event_id` values. Modern clients can opt in
+with `experimental["claude/channel"]` in the per-request client capabilities of a
+`subscriptions/listen {notifications:{}}` request. Its first notification is
+`notifications/subscriptions/acknowledged`; channel messages carry the parent
+subscription ID in `_meta`, and cancellation/EOF end that stream. Declaring the
+capability on an ordinary modern tool request does not subscribe to channels.
+Access logs are available through Events but do not flood the agent channel.
+If a slow channel consumer falls behind retained history, a JSON `events.gap`
+observation carries `truncated: true`; reconcile pending work through the tools.
+Claude Code's own per-session opt-in decides whether it consumes the channel;
+server advertisement alone cannot enable it. During research preview a configured
+bare server uses `claude --dangerously-load-development-channels server:netget`.
+The development flag is interactive-only; organization policy still applies.
+There is no channel delivery acknowledgment. Choose one delivery mechanism, or
+deduplicate by `eventId` if consuming more than one. Nothing is auto-claimed.
+
+No webhooks are advertised or implemented. `events/subscribe` / `events/unsubscribe`
+return `Unsupported` (`-32026`, deliveryMode=webhook). Unknown events use `NotFound`
+(`-32023`), and the stream cap uses `ResourceExhausted` (`-32025`).
+HTTP sessions retain the old transport and only advertise poll delivery in their
+event descriptors; modern negotiation and push/Channels are specific to stdio.
+
+`tests/mcp_events_stdio_test.rs` uses actual JSON-RPC lines through the binary's
+stdio serving path, independent of rmcp's client models. It checks discovery,
+advertisement, poll/replay/filter/gap behavior, concurrent streams, heartbeats,
+cancellation/EOF, and real TCP replies driven by Events and Channels.
 
 ## Logging
 
@@ -470,11 +562,11 @@ pinned separately in `tests/mcp_stop_cleanup_test.rs`, and the hand-driving tool
 
 ```bash
 # Build
-cargo build --features mcp-stdio,tcp,http,dns          # STDIO
-cargo build --features mcp-http,tcp,http,dns           # HTTP
+cargo build --no-default-features --features mcp-stdio,sqlite  # STDIO
+cargo build --no-default-features --features mcp-http,sqlite   # HTTP
 
 # Smoke tests
-./cargo-isolated.sh test --no-default-features --features mcp-stdio,tcp \
+./cargo-isolated.sh test --no-default-features --features mcp-stdio,sqlite \
     --test mcp_stdio_test -- --test-threads=100
 
 # Claude Desktop config (claude_desktop_config.json):

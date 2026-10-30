@@ -136,7 +136,20 @@ where
                 None => {
                     if let Some(message) = self.inner.receive().await {
                         if let JsonRpcMessage::Request(request) = &message {
-                            self.outstanding.insert(request.id.clone());
+                            // Subscription streams are cancelled on disconnect; they must
+                            // not hold EOF open for the ordinary request drain deadline.
+                            if !matches!(&request.request, rmcp::model::ClientRequest::CustomRequest(r) if matches!(r.method.as_str(), "events/stream" | "subscriptions/listen"))
+                            {
+                                self.outstanding.insert(request.id.clone());
+                            }
+                        }
+                        if let JsonRpcMessage::Notification(notification) = &message {
+                            if let rmcp::model::ClientNotification::CancelledNotification(
+                                cancelled,
+                            ) = &notification.notification
+                            {
+                                self.outstanding.answer(&cancelled.params.request_id);
+                            }
                         }
                         return Some(message);
                     }
