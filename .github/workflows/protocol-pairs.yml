@@ -7048,7 +7048,10 @@ jobs:
         env:
           CARGO_BUILD_JOBS: 4
         run: |
-          cargo test --locked --no-default-features --test server --test client -- adc dc_peer soulseek gnutella nntp --test-threads=8
+          # Match protocol module boundaries: bare `adc` also selects radclient and
+          # broadcasts tests, whose independent peers are installed by other jobs.
+          cargo test --locked --no-default-features --test server --test client -- \
+            ::adc:: ::adc_peer:: ::dc_peer:: ::soulseek:: ::soulseek_peer:: ::gnutella:: ::nntp:: --test-threads=8
           cargo test --locked --no-default-features --test site_protocol_list_test --test protocol_startup_examples_test --test dual_protocol_test --test event_action_declarations_test --test protocol_name_resolution_test --test advertised_actions_test --test rustls_provider_gate_test
           cargo clippy --locked --no-default-features --all-targets -- -D clippy::correctness -D clippy::suspicious -D unused_must_use
 
