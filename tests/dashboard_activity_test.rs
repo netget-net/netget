@@ -81,6 +81,7 @@ fn entry(id: u64, conn: Option<u32>) -> AccessLogEntry {
         event_type: "http_request".into(),
         request: serde_json::json!({"path": "/"}),
         response: vec![serde_json::json!({"type": "send_http_response"})],
+        answered_by: None,
     }
 }
 

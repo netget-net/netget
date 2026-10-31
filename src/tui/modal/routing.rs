@@ -113,6 +113,9 @@ pub struct HandlerDraft {
     pub actions: Vec<serde_json::Value>,
     /// Manual handler: seconds to wait for the operator, as typed.
     pub timeout_secs: String,
+    /// The rule's `match` conditions, carried through an edit unchanged (the editor has no
+    /// field for them; `export_rules` writes them).
+    pub data_match: Option<serde_json::Map<String, serde_json::Value>>,
     pub focus: DraftFocus,
     pub selected_action: usize,
     pub editing: Option<String>,
@@ -221,6 +224,7 @@ impl HandlerDraft {
             resident: false,
             actions: Vec::new(),
             timeout_secs: crate::scripting::DEFAULT_MANUAL_TIMEOUT_SECS.to_string(),
+            data_match: None,
             focus: DraftFocus::Kind,
             selected_action: 0,
             editing: None,
@@ -234,6 +238,7 @@ impl HandlerDraft {
             EventPattern::Specific(s) => s.clone(),
             EventPattern::Wildcard => "*".to_string(),
         };
+        draft.data_match = handler.data_match.clone();
         match &handler.handler {
             EventHandlerType::Llm { instruction } => {
                 draft.kind = HandlerKind::Llm;
@@ -314,6 +319,7 @@ impl HandlerDraft {
         handler.validate()?;
         Ok(EventHandler {
             event_pattern: pattern,
+            data_match: self.data_match.clone(),
             handler,
         })
     }
@@ -534,10 +540,7 @@ impl RoutingModel {
         self.handlers
             .iter()
             .map(|h| {
-                let pattern = match &h.event_pattern {
-                    EventPattern::Specific(s) => s.clone(),
-                    EventPattern::Wildcard => "*".to_string(),
-                };
+                let pattern = h.describe();
                 let body = match &h.handler {
                     EventHandlerType::Llm { instruction } => {
                         format!("LLM — {}", crate::utils::truncate_for_log(instruction, 50))

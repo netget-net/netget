@@ -51,6 +51,121 @@ enum LlmBackend {
     },
 }
 
+/// The backend's own error text out of an error response body: Ollama's `{"error": "…"}`,
+/// OpenAI's `{"error": {"message": "…"}}`, or the body itself when it is neither.
+#[cfg(not(target_arch = "wasm32"))]
+fn backend_error_text(body: &str) -> String {
+    let parsed = serde_json::from_str::<serde_json::Value>(body).ok();
+    let text = parsed.as_ref().and_then(|v| {
+        v.pointer("/error/message")
+            .or_else(|| v.get("error"))
+            .and_then(|e| e.as_str())
+            .map(str::to_string)
+    });
+    let text = text.unwrap_or_else(|| body.trim().to_string());
+    if text.is_empty() {
+        "no error text".to_string()
+    } else {
+        crate::utils::truncate_for_log(&text, 300).to_string()
+    }
+}
+
+/// Classify a non-success HTTP answer from the backend.
+///
+/// Ollama answers 404 on `/api/generate` and `/api/chat` for exactly one reason, a model it
+/// does not have (`model "x" not found, try pulling it first`). An OpenAI-compatible server
+/// can answer 404 for a wrong path too, so there it counts as a missing model only when the
+/// backend's text says so.
+#[cfg(not(target_arch = "wasm32"))]
+fn backend_status_error(
+    backend: &'static str,
+    endpoint: &str,
+    model: &str,
+    status: u16,
+    detail: String,
+) -> crate::llm::LlmBackendError {
+    use crate::llm::BackendFailureKind as K;
+    let lower = detail.to_lowercase();
+    let model_missing = if backend == crate::llm::backend_error::OLLAMA {
+        status == 404 || (lower.contains("model") && lower.contains("not found"))
+    } else {
+        (status == 404 || status == 400)
+            && lower.contains("model")
+            && (lower.contains("not found")
+                || lower.contains("does not exist")
+                || lower.contains("model_not_found"))
+    };
+    let kind = if model_missing {
+        K::ModelNotInstalled
+    } else {
+        match status {
+            401 | 403 => K::AuthRejected,
+            429 => K::RateLimited,
+            status => K::Refused { status },
+        }
+    };
+    crate::llm::LlmBackendError::new(kind, backend, endpoint, model, detail)
+}
+
+/// Read an error response and classify it. A body that cannot be read still yields the status.
+#[cfg(not(target_arch = "wasm32"))]
+async fn backend_response_error(
+    backend: &'static str,
+    endpoint: &str,
+    model: &str,
+    response: reqwest::Response,
+) -> crate::llm::LlmBackendError {
+    let status = response.status().as_u16();
+    let detail = match crate::client::http_fetch::read_response_text(response, 1024 * 1024).await {
+        Ok(body) => backend_error_text(&body),
+        Err(e) => format!("(error body unreadable: {e})"),
+    };
+    backend_status_error(backend, endpoint, model, status, detail)
+}
+
+/// A request that produced no HTTP response at all.
+#[cfg(not(target_arch = "wasm32"))]
+fn backend_send_error(
+    backend: &'static str,
+    endpoint: &str,
+    model: &str,
+    error: reqwest::Error,
+) -> crate::llm::LlmBackendError {
+    use std::error::Error as _;
+    // reqwest's Display is "error sending request for url (…)"; the reason is in the source.
+    let mut detail = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        detail.push_str(": ");
+        detail.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    crate::llm::LlmBackendError::new(
+        crate::llm::BackendFailureKind::Unreachable,
+        backend,
+        endpoint,
+        model,
+        detail,
+    )
+}
+
+/// A request that got no answer within the request timeout.
+#[cfg(not(target_arch = "wasm32"))]
+fn backend_timeout_error(
+    backend: &'static str,
+    endpoint: &str,
+    model: &str,
+    timeout: std::time::Duration,
+) -> crate::llm::LlmBackendError {
+    crate::llm::LlmBackendError::new(
+        crate::llm::BackendFailureKind::TimedOut,
+        backend,
+        endpoint,
+        model,
+        format!("{:?}", timeout),
+    )
+}
+
 /// Strip markdown code fences (```json ... ``` or ``` ... ```) from text
 /// This helps handle cases where the LLM wraps JSON responses in markdown formatting
 /// Handles multiple trailing backticks (e.g., ```\n```)
@@ -1237,12 +1352,9 @@ impl OllamaClient {
     pub fn backend_url(&self) -> String {
         match &self.backend {
             #[cfg(not(target_arch = "wasm32"))]
-            LlmBackend::Ollama(ollama, _) => {
-                // ollama-rs doesn't expose the URL directly, reconstruct from known state
-                // The URL was parsed in new(), but we can't easily get it back.
-                // For display purposes, use a best-effort approach.
-                format!("{}", ollama.uri())
-            }
+            // The whole URL — scheme, host and port. `Ollama::uri()` is the host alone, which
+            // cannot be queried and names the wrong thing when two Ollamas share a host.
+            LlmBackend::Ollama(ollama, _) => ollama.url_str().trim_end_matches('/').to_string(),
             #[cfg(not(target_arch = "wasm32"))]
             LlmBackend::OpenAI { base_url, .. } => base_url.clone(),
             LlmBackend::Queue { .. } => "(calling agent)".to_string(),
@@ -1559,6 +1671,20 @@ impl OllamaClient {
         }
     }
 
+    /// Say a backend refusal out loud where it happens: ERROR to the log and the status
+    /// stream, and onto [`crate::state::AppState`] so `get_status` can show it. A missing
+    /// model is answered in milliseconds, so without this the only trace was a per-request
+    /// failure entry that did not say why.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn report_backend_failure(&self, failure: crate::llm::LlmBackendError) -> anyhow::Error {
+        self.log()
+            .error(format!("LLM backend failure: {}", failure));
+        if let Some(state) = &self.app_state {
+            state.note_llm_backend_failure(failure.to_string());
+        }
+        anyhow::Error::new(failure)
+    }
+
     /// Feed the original outcome into its request permit, then hide private diagnostics.
     fn record_backend_outcome<T>(
         &self,
@@ -1569,6 +1695,10 @@ impl OllamaClient {
         let hide_error = |e: anyhow::Error| {
             if !private_payloads {
                 e
+            } else if let Some(backend) = crate::llm::LlmBackendError::find(&e) {
+                // Kind, model and endpoint are not the request's to hide; the backend's own
+                // words might echo it.
+                anyhow::Error::new(backend.without_detail())
             } else if is_transport_failure(&e) {
                 anyhow::anyhow!(
                     "LLM connection failure for credential-bearing request; details hidden"
@@ -1581,6 +1711,11 @@ impl OllamaClient {
             return result.map_err(hide_error);
         };
 
+        if result.is_ok() {
+            if let Some(state) = &self.app_state {
+                state.clear_llm_backend_failure();
+            }
+        }
         match &result {
             Ok(_) => permit.record_success(),
             Err(e) if is_transport_failure(e) => {
@@ -1721,45 +1856,25 @@ impl OllamaClient {
                     body["format"] = serde_json::json!("json");
                 }
 
-                let url = format!("{}/api/generate", ollama.url_str().trim_end_matches('/'));
+                let endpoint = ollama.url_str().trim_end_matches('/').to_string();
+                let url = format!("{}/api/generate", endpoint);
                 let http_client = http_client.clone();
+                let backend = crate::llm::backend_error::OLLAMA;
 
                 let http_response = tokio::time::timeout(
                     self.request_timeout,
                     http_client.post(&url).json(&body).send(),
                 )
                 .await
-                .with_context(|| format!("Ollama API call timed out after {:?}.\n   Please check:\n   1. Ollama is running (https://ollama.ai)\n   2. Model is loaded and ready\n   3. Use `/model` to list and select a model", self.request_timeout))?
-                .map_err(|e| {
-                    let error_str = e.to_string().to_lowercase();
-                    if error_str.contains("connection") || error_str.contains("refused") || error_str.contains("connect") {
-                        anyhow::anyhow!(
-                            "✗  Cannot connect to Ollama.\n   Please ensure:\n   1. Ollama is running: https://ollama.ai\n   2. Ollama is listening on http://localhost:11434\n   3. Use `/model` command to list and select a model\n\n   Original error: {}", e
-                        )
-                    } else {
-                        anyhow::anyhow!("✗  Ollama request failed: {}\n   Use `/model` to check available models", e)
-                    }
-                })?;
+                .map_err(|_| {
+                    backend_timeout_error(backend, &endpoint, model, self.request_timeout)
+                })?
+                .map_err(|e| backend_send_error(backend, &endpoint, model, e))?;
 
-                let status = http_response.status();
-                if !status.is_success() {
-                    let body =
-                        crate::client::http_fetch::read_response_text(http_response, 1024 * 1024)
-                            .await?;
-                    let msg = serde_json::from_str::<serde_json::Value>(&body)
-                        .ok()
-                        .and_then(|v| {
-                            v.get("error")
-                                .and_then(|e| e.as_str())
-                                .map(|s| s.to_string())
-                        })
-                        .unwrap_or(body);
-                    if status.as_u16() == 404 || msg.to_lowercase().contains("not found") {
-                        anyhow::bail!(
-                            "✗  Model not found in Ollama.\n   Please:\n   1. Pull the model: ollama pull {}\n   2. Or use `/model` to select a different model\n\n   Original error: {}", model, msg
-                        );
-                    }
-                    anyhow::bail!("✗  Ollama request failed ({}): {}\n   Use `/model` to check available models", status, msg);
+                if !http_response.status().is_success() {
+                    let failure =
+                        backend_response_error(backend, &endpoint, model, http_response).await;
+                    return Err(self.report_backend_failure(failure));
                 }
 
                 let acc = self
@@ -1813,38 +1928,28 @@ impl OllamaClient {
                         .send(),
                 )
                 .await
-                .with_context(|| {
-                    format!("OpenAI API call timed out after {:?}", self.request_timeout)
+                .map_err(|_| {
+                    backend_timeout_error(
+                        crate::llm::backend_error::OPENAI,
+                        base_url,
+                        model,
+                        self.request_timeout,
+                    )
                 })?
-                .context("OpenAI API request failed")?;
+                .map_err(|e| {
+                    backend_send_error(crate::llm::backend_error::OPENAI, base_url, model, e)
+                })?;
 
-                let status = http_response.status();
-                if !status.is_success() {
+                if !http_response.status().is_success() {
                     // Error responses are a single JSON object, not an SSE stream.
-                    let response_body: serde_json::Value =
-                        crate::client::http_fetch::read_response_json(http_response, 1024 * 1024)
-                            .await?;
-                    let error_msg = response_body
-                        .pointer("/error/message")
-                        .and_then(|m| m.as_str())
-                        .unwrap_or("Unknown error");
-
-                    match status.as_u16() {
-                        401 => anyhow::bail!(
-                            "✗  Authentication failed. Check your API key.\n   Error: {}",
-                            error_msg
-                        ),
-                        404 => anyhow::bail!(
-                            "✗  Model '{}' not found.\n   Error: {}",
-                            model,
-                            error_msg
-                        ),
-                        429 => anyhow::bail!(
-                            "✗  Rate limited by API provider.\n   Error: {}",
-                            error_msg
-                        ),
-                        _ => anyhow::bail!("✗  OpenAI API error ({}): {}", status, error_msg),
-                    }
+                    let failure = backend_response_error(
+                        crate::llm::backend_error::OPENAI,
+                        base_url,
+                        model,
+                        http_response,
+                    )
+                    .await;
+                    return Err(self.report_backend_failure(failure));
                 }
 
                 let acc = self
@@ -2270,7 +2375,9 @@ impl OllamaClient {
 
         // ollama-rs doesn't expose a chat-with-tools API, so we call the endpoint via reqwest.
         // Preserve the client's full base URL (scheme, host, port, path prefix).
-        let url = format!("{}/api/chat", ollama.url_str().trim_end_matches('/'));
+        let endpoint = ollama.url_str().trim_end_matches('/').to_string();
+        let url = format!("{}/api/chat", endpoint);
+        let backend = crate::llm::backend_error::OLLAMA;
 
         let http_client = http_client.clone();
         let http_response = tokio::time::timeout(
@@ -2278,27 +2385,15 @@ impl OllamaClient {
             http_client.post(&url).json(&body).send(),
         )
         .await
-        .with_context(|| {
-            format!(
-                "Ollama chat API call timed out after {:?}",
-                self.request_timeout
-            )
+        .map_err(|_| {
+            backend_timeout_error(backend, &endpoint, &request.model, self.request_timeout)
         })?
-        .context("Ollama chat API request failed")?;
+        .map_err(|e| backend_send_error(backend, &endpoint, &request.model, e))?;
 
-        let status = http_response.status();
-        if !status.is_success() {
-            let body =
-                crate::client::http_fetch::read_response_text(http_response, 1024 * 1024).await?;
-            let error_msg = serde_json::from_str::<serde_json::Value>(&body)
-                .ok()
-                .and_then(|v| {
-                    v.get("error")
-                        .and_then(|e| e.as_str())
-                        .map(|s| s.to_string())
-                })
-                .unwrap_or_else(|| "Unknown error".to_string());
-            anyhow::bail!("Ollama chat API error ({}): {}", status, error_msg);
+        if !http_response.status().is_success() {
+            let failure =
+                backend_response_error(backend, &endpoint, &request.model, http_response).await;
+            return Err(self.report_backend_failure(failure));
         }
 
         let acc = self
@@ -2402,19 +2497,33 @@ impl OllamaClient {
                 .send(),
         )
         .await
-        .context("OpenAI chat API call timed out after 120 seconds")?
-        .context("OpenAI chat API request failed")?;
+        .map_err(|_| {
+            backend_timeout_error(
+                crate::llm::backend_error::OPENAI,
+                base_url,
+                &request.model,
+                self.request_timeout,
+            )
+        })?
+        .map_err(|e| {
+            backend_send_error(
+                crate::llm::backend_error::OPENAI,
+                base_url,
+                &request.model,
+                e,
+            )
+        })?;
 
-        let status = http_response.status();
-        if !status.is_success() {
+        if !http_response.status().is_success() {
             // Error responses are a single JSON object, not an SSE stream.
-            let response_body: serde_json::Value =
-                crate::client::http_fetch::read_response_json(http_response, 1024 * 1024).await?;
-            let error_msg = response_body
-                .pointer("/error/message")
-                .and_then(|m| m.as_str())
-                .unwrap_or("Unknown error");
-            anyhow::bail!("OpenAI chat API error ({}): {}", status, error_msg);
+            let failure = backend_response_error(
+                crate::llm::backend_error::OPENAI,
+                base_url,
+                &request.model,
+                http_response,
+            )
+            .await;
+            return Err(self.report_backend_failure(failure));
         }
 
         let acc = self

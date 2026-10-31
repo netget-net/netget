@@ -69,6 +69,24 @@ where
     }
 }
 
+/// Deserialize Option<u64> from either a number or a string
+fn deserialize_option_u64_flexible<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum NumOrString {
+        Number(u64),
+        String(String),
+    }
+    match Option::<NumOrString>::deserialize(deserializer)? {
+        Some(NumOrString::Number(n)) => Ok(Some(n)),
+        Some(NumOrString::String(s)) => s.parse().map(Some).map_err(serde::de::Error::custom),
+        None => Ok(None),
+    }
+}
+
 /// Deserialize Option<u32> from either a number or a string
 fn deserialize_option_u32_flexible<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
 where
@@ -171,8 +189,10 @@ pub struct StartServerParams {
     /// deterministic — a script/static handler runs in-process (instant, free,
     /// deterministic), while `instruction` pays a model round-trip per request.
     ///
-    /// Array of objects: { "event_pattern": "<event id>" | "*", "handler": {...} }
-    /// matched in order, first match wins. `handler` is one of:
+    /// Array of objects: { "event_pattern": "<event id>" | "*", "match": {...}?, "handler": {...} }
+    /// matched in order, first match wins. The optional `match` narrows a rule to events
+    /// whose fields equal the given values, e.g. {"method":"GET","path":"/a"} (keys are
+    /// field paths such as `headers.host`; a missing field reads as null). `handler` is one of:
     ///   - {"type":"script","language":"python"|"javascript","code":"..."} — runs
     ///     the script per event. The event is JSON on stdin: read the payload via
     ///     data['event'][<field>] and print {"actions":[ ... ]} to stdout. Field
@@ -234,6 +254,18 @@ pub struct StartServerParams {
     /// where the protocol answers each event as it arrives. Applied in place on update.
     #[serde(default)]
     pub batching: Option<bool>,
+    /// Memoise the model's answers: for this many seconds, an event identical to one the model
+    /// already answered (ignoring per-request ids such as a DNS query_id or a JSON-RPC id,
+    /// which the replay echoes back) is answered with the same actions and no model call. 0
+    /// turns it off; omitted leaves it as it is (off on start). Failed answers, answers that
+    /// changed memory or tasks, and credential-bearing events are never memoised. Hot-applied.
+    #[serde(default, deserialize_with = "deserialize_option_u64_flexible")]
+    pub memoize_ttl_secs: Option<u64>,
+    /// Share memoised answers between connections even when the instance shows the model each
+    /// connection's history (so an answer could depend on the connection). Off by default;
+    /// with history off answers are shared anyway. Needs memoize_ttl_secs.
+    #[serde(default)]
+    pub memoize_across_connections: Option<bool>,
     /// Server-scoped scheduled LLM tasks, removed when the server stops. Array of
     /// objects: {"task_id":"...", "recurring":true, "interval_secs":60,
     /// "instruction":"..."} for a repeating task, or {"task_id":"...",
@@ -287,6 +319,18 @@ pub struct StartClientParams {
     /// where the protocol answers each event as it arrives. Applied in place on update.
     #[serde(default)]
     pub batching: Option<bool>,
+    /// Memoise the model's answers: for this many seconds, an event identical to one the model
+    /// already answered (ignoring per-request ids such as a DNS query_id or a JSON-RPC id,
+    /// which the replay echoes back) is answered with the same actions and no model call. 0
+    /// turns it off; omitted leaves it as it is (off on start). Failed answers, answers that
+    /// changed memory or tasks, and credential-bearing events are never memoised. Hot-applied.
+    #[serde(default, deserialize_with = "deserialize_option_u64_flexible")]
+    pub memoize_ttl_secs: Option<u64>,
+    /// Share memoised answers between connections even when the instance shows the model each
+    /// connection's history (so an answer could depend on the connection). Off by default;
+    /// with history off answers are shared anyway. Needs memoize_ttl_secs.
+    #[serde(default)]
+    pub memoize_across_connections: Option<bool>,
     /// Client-scoped scheduled LLM tasks. Same shape as start_server's:
     /// {"task_id":"...", "recurring":true, "interval_secs":60, "instruction":"..."}
     /// or {"task_id":"...", "recurring":false, "delay_secs":10, "instruction":"..."}.
@@ -349,6 +393,28 @@ pub struct GetAccessLogParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct ExportRulesParams {
+    /// The server whose recorded model answers to turn into rules. Give this or client_id.
+    #[serde(default, deserialize_with = "deserialize_option_u32_flexible")]
+    pub server_id: Option<u32>,
+    /// The client whose recorded model answers to turn into rules. Give this or server_id.
+    #[serde(default, deserialize_with = "deserialize_option_u32_flexible")]
+    pub client_id: Option<u32>,
+    /// Hot-apply the resulting table to the running instance (connections preserved), so
+    /// the traffic already recorded is answered with no model call from now on.
+    #[serde(default)]
+    pub apply: bool,
+    /// What answers events no derived rule matches: "keep" (default: the instance's own
+    /// `*` rule, if any), "llm" (the model), or "manual" (a person at the dashboard).
+    #[serde(default)]
+    pub fallback: Option<String>,
+    /// Also write the instance, with the resulting table as its event_handlers, to this
+    /// `.netget` file; `netget --load <file>` then replays the traffic without a model.
+    #[serde(default)]
+    pub save_to: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct UpdateServerInstructionParams {
     /// Server ID
     #[serde(deserialize_with = "deserialize_u32_flexible")]
@@ -395,6 +461,18 @@ pub struct UpdateServerParams {
     /// where the protocol answers each event as it arrives. Applied in place on update.
     #[serde(default)]
     pub batching: Option<bool>,
+    /// Memoise the model's answers: for this many seconds, an event identical to one the model
+    /// already answered (ignoring per-request ids such as a DNS query_id or a JSON-RPC id,
+    /// which the replay echoes back) is answered with the same actions and no model call. 0
+    /// turns it off; omitted leaves it as it is (off on start). Failed answers, answers that
+    /// changed memory or tasks, and credential-bearing events are never memoised. Hot-applied.
+    #[serde(default, deserialize_with = "deserialize_option_u64_flexible")]
+    pub memoize_ttl_secs: Option<u64>,
+    /// Share memoised answers between connections even when the instance shows the model each
+    /// connection's history (so an answer could depend on the connection). Off by default;
+    /// with history off answers are shared anyway. Needs memoize_ttl_secs.
+    #[serde(default)]
+    pub memoize_across_connections: Option<bool>,
     /// Scheduled tasks to add (hot-applied). Same shape as start_server's.
     #[serde(default)]
     pub scheduled_tasks: Option<Vec<serde_json::Value>>,
@@ -434,6 +512,18 @@ pub struct UpdateClientParams {
     /// where the protocol answers each event as it arrives. Applied in place on update.
     #[serde(default)]
     pub batching: Option<bool>,
+    /// Memoise the model's answers: for this many seconds, an event identical to one the model
+    /// already answered (ignoring per-request ids such as a DNS query_id or a JSON-RPC id,
+    /// which the replay echoes back) is answered with the same actions and no model call. 0
+    /// turns it off; omitted leaves it as it is (off on start). Failed answers, answers that
+    /// changed memory or tasks, and credential-bearing events are never memoised. Hot-applied.
+    #[serde(default, deserialize_with = "deserialize_option_u64_flexible")]
+    pub memoize_ttl_secs: Option<u64>,
+    /// Share memoised answers between connections even when the instance shows the model each
+    /// connection's history (so an answer could depend on the connection). Off by default;
+    /// with history off answers are shared anyway. Needs memoize_ttl_secs.
+    #[serde(default)]
+    pub memoize_across_connections: Option<bool>,
     /// Scheduled tasks to add (hot-applied).
     #[serde(default)]
     pub scheduled_tasks: Option<Vec<serde_json::Value>>,
@@ -870,7 +960,18 @@ impl NetGetMcpService {
                 settings.model.clone()
             }
         });
-        if let Some(model) = configured_model {
+        // Validate it against the endpoint before anything uses it. A configured model the
+        // endpoint does not have used to be stored as-is and reported by `get_status` as the
+        // model, while every request failed against it in milliseconds.
+        let resolved =
+            crate::llm::model_selection::resolve_configured_model(&llm_client, configured_model)
+                .await;
+        if let Some(notice) = &resolved.notice {
+            tracing::warn!("Model: {}", notice);
+            let _ = status_tx.send(format!("[WARN] Model: {}", notice));
+        }
+        app_state.set_model_notice(resolved.notice);
+        if let Some(model) = resolved.model {
             app_state.set_ollama_model(Some(model)).await;
         }
 
@@ -1028,6 +1129,14 @@ impl NetGetMcpService {
                 ))]));
             }
         };
+        let memo = match crate::llm::answer_reuse::resolve_memo_settings(
+            params.memoize_ttl_secs,
+            params.memoize_across_connections,
+            None,
+        ) {
+            Ok(memo) => memo.flatten(),
+            Err(e) => return Ok(CallToolResult::error(vec![Content::text(e.to_string())])),
+        };
 
         let (status_tx, mut status_rx) = mpsc::unbounded_channel();
         let server_id = match crate::cli::server_startup::start_server_from_action(
@@ -1060,6 +1169,9 @@ impl NetGetMcpService {
                 ))]));
             }
         };
+        if memo.is_some() {
+            self.state.app_state.set_server_memo(server_id, memo).await;
+        }
 
         // Collect startup status messages
         let mut messages = Vec::new();
@@ -1221,22 +1333,53 @@ impl NetGetMcpService {
     )]
     async fn get_status(&self) -> Result<CallToolResult, McpError> {
         let servers = self.state.app_state.get_all_servers().await;
-        let model = self
-            .state
-            .app_state
-            .get_ollama_model()
-            .await
-            .unwrap_or_else(|| "(auto-select)".to_string());
+        let model = self.state.app_state.get_ollama_model().await;
+        let client = &self.state.llm_client;
+        let endpoint = crate::llm::model_selection::describe_endpoint(client);
 
         let mut result = format!(
             "## NetGet Status\n\n\
-             - **Model**: {}\n\
-             - **LLM backend**: {}\n\
-             - **Running servers**: {}\n",
-            model,
-            self.state.llm_client.backend_type(),
-            servers.len(),
+             - **Model**: {}\n",
+            model
+                .as_deref()
+                .unwrap_or("(none yet: auto-selected at the first request)"),
         );
+        // Whether the endpoint actually has it — asked now, not assumed.
+        if let Some(model) = &model {
+            use crate::llm::model_selection::{check_model, summarize_models, ModelAvailability};
+            let check = match check_model(client, model).await {
+                ModelAvailability::Installed => format!("installed at {}", endpoint),
+                ModelAvailability::NotInstalled { installed } => format!(
+                    "NOT INSTALLED: '{}' is not installed at {} (installed: {}). Requests \
+                     using it fail; choose an installed model with set_model",
+                    model,
+                    endpoint,
+                    summarize_models(&installed)
+                ),
+                ModelAvailability::Unknown { reason } => {
+                    format!("could not check at {}: {}", endpoint, reason)
+                }
+                ModelAvailability::NotApplicable => format!(
+                    "not applicable: the {} backend answers whatever the model name",
+                    client.backend_type()
+                ),
+            };
+            result.push_str(&format!("- **Model check**: {}\n", check));
+        }
+        let health = self.state.app_state.model_health();
+        if let Some(notice) = &health.notice {
+            result.push_str(&format!("- **Model note**: {}\n", notice));
+        }
+        if let Some(failure) = &health.last_backend_failure {
+            result.push_str(&format!("- **Last LLM backend failure**: {}\n", failure));
+        }
+        result.push_str(&format!(
+            "- **LLM backend**: {} ({})\n\
+             - **Running servers**: {}\n",
+            client.backend_type(),
+            client.backend_url().trim_end_matches('/'),
+            servers.len(),
+        ));
 
         if let Some(queue) = &self.state.agent_queue {
             let status = queue.status();
@@ -1261,19 +1404,58 @@ impl NetGetMcpService {
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
-    #[tool(description = "Change the default LLM model used for new servers/clients")]
+    #[tool(
+        description = "Change the LLM model every server and client uses. Refused when the Ollama endpoint does not have the model installed (the error lists the installed ones); an OpenAI-compatible endpoint's list is advisory, so an unlisted name is accepted with a warning."
+    )]
     async fn set_model(
         &self,
         Parameters(params): Parameters<SetModelParams>,
     ) -> Result<CallToolResult, McpError> {
+        use crate::llm::model_selection::{check_model, summarize_models, ModelAvailability};
+        let model = params.model.trim().to_string();
+        if model.is_empty() {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "set_model needs a model name",
+            )]));
+        }
+        let client = &self.state.llm_client;
+        let endpoint = crate::llm::model_selection::describe_endpoint(client);
+        let warning = match check_model(client, &model).await {
+            ModelAvailability::Installed | ModelAvailability::NotApplicable => None,
+            ModelAvailability::NotInstalled { installed } if client.backend_type() == "ollama" => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Model not changed: '{}' is not installed at {}. Installed models: {}. \
+                     Install it with `ollama pull {}`, or choose one of those.",
+                    model,
+                    endpoint,
+                    summarize_models(&installed),
+                    model
+                ))]));
+            }
+            ModelAvailability::NotInstalled { installed } => Some(format!(
+                "Warning: {} does not list '{}' (it lists: {}); requests fail if it does not \
+                 serve that name.",
+                endpoint,
+                model,
+                summarize_models(&installed)
+            )),
+            ModelAvailability::Unknown { reason } => Some(format!(
+                "Warning: could not check the models at {} ({}); '{}' is unverified.",
+                endpoint, reason, model
+            )),
+        };
         self.state
             .app_state
-            .set_ollama_model(Some(params.model.clone()))
+            .set_ollama_model(Some(model.clone()))
             .await;
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Model changed to: {}",
-            params.model
-        ))]))
+        self.state.app_state.set_model_notice(warning.clone());
+        self.state.app_state.clear_llm_backend_failure();
+        let mut text = format!("Model changed to: {}", model);
+        if let Some(warning) = warning {
+            text.push('\n');
+            text.push_str(&warning);
+        }
+        Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
     #[tool(
@@ -1373,6 +1555,8 @@ impl NetGetMcpService {
             feedback_instructions: params.feedback_instructions,
             history: params.history,
             batching: params.batching,
+            memoize_ttl_secs: params.memoize_ttl_secs,
+            memoize_across_connections: params.memoize_across_connections,
         };
 
         let (status_tx, _status_rx) = mpsc::unbounded_channel();
@@ -1424,6 +1608,8 @@ impl NetGetMcpService {
             feedback_instructions: params.feedback_instructions,
             history: params.history,
             batching: params.batching,
+            memoize_ttl_secs: params.memoize_ttl_secs,
+            memoize_across_connections: params.memoize_across_connections,
         };
 
         let (status_tx, _status_rx) = mpsc::unbounded_channel();
@@ -1473,7 +1659,7 @@ impl NetGetMcpService {
                 (None, None) => "unknown".to_string(),
             };
             out.push_str(&format!(
-                "- **#{}** [{}s ago] {} ({}) — {} — {} → {}\n",
+                "- **#{}** [{}s ago] {} ({}) — {} — {} → {}{}\n",
                 e.id,
                 age,
                 owner,
@@ -1481,6 +1667,10 @@ impl NetGetMcpService {
                 e.event_type,
                 summarize_request(&e.request),
                 summarize_response(&e.response),
+                e.answered_by
+                    .as_deref()
+                    .map(|by| format!(" (answered by {by})"))
+                    .unwrap_or_default(),
             ));
         }
         out.push_str("\nUse `get_access_log` with an id for the full request and response.");
@@ -1516,6 +1706,7 @@ impl NetGetMcpService {
                      - **Owner**: {} ({})\n\
                      - **Connection**: {}\n\
                      - **Event**: {}\n\
+                     - **Answered by**: {}\n\
                      - **When**: {}s ago (unix_ms {})\n\n\
                      ### Request\n```json\n{}\n```\n\n\
                      ### Response (actions)\n```json\n{}\n```\n",
@@ -1526,6 +1717,7 @@ impl NetGetMcpService {
                         .map(|c| c.to_string())
                         .unwrap_or_else(|| "(connectionless)".to_string()),
                     e.event_type,
+                    e.answered_by.as_deref().unwrap_or("(not recorded)"),
                     age,
                     e.unix_ms,
                     request,
@@ -1538,6 +1730,81 @@ impl NetGetMcpService {
                 params.id
             ))])),
         }
+    }
+
+    #[tool(
+        description = "Record with the model, replay without it: turn a server's or client's model-authored answers (from its access log) into deterministic event_handlers. Answers are grouped by event type and keyed on the event fields that explain why they differ (an HTTP method and path, a DNS name and type), with per-request ids (DNS query_id, JSON-RPC id, IMAP tag) echoed through {{event.field}} references. Every rule is replayed against the events it was derived from before it is offered. Where the recorded answers differ with nothing to tell them apart, or did more than reply, the tool says so and leaves those events to the fallback. Returns the event_handlers JSON; apply=true hot-applies it, save_to writes a .netget file that --load replays."
+    )]
+    async fn export_rules(
+        &self,
+        Parameters(params): Parameters<ExportRulesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let owner = match (params.server_id, params.client_id) {
+            (Some(id), None) => crate::state::AccessLogOwner::Server(id),
+            (None, Some(id)) => crate::state::AccessLogOwner::Client(id),
+            _ => {
+                return Ok(CallToolResult::error(vec![Content::text(
+                    "Give exactly one of server_id or client_id.",
+                )]))
+            }
+        };
+        let fallback = match crate::llm::rule_export::Fallback::parse(
+            params.fallback.as_deref().unwrap_or(""),
+        ) {
+            Ok(f) => f,
+            Err(e) => return Ok(CallToolResult::error(vec![Content::text(e.to_string())])),
+        };
+        let app_state = &self.state.app_state;
+        let export = match crate::llm::rule_export::export_rules(app_state, owner, fallback).await {
+            Ok(export) => export,
+            Err(e) => return Ok(CallToolResult::error(vec![Content::text(e.to_string())])),
+        };
+        let mut out = crate::llm::rule_export::describe_export(&export);
+        if let Some(path) = params.save_to.as_deref() {
+            match crate::utils::save_load::save_with_handlers(
+                app_state,
+                owner,
+                &export.event_handlers,
+                path,
+            )
+            .await
+            {
+                Ok(written) => out.push_str(&format!(
+                    "Saved to {} (replay with `netget --load {}`).\n",
+                    written.display(),
+                    written.display()
+                )),
+                Err(e) => {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "{out}Saving failed: {e:#}"
+                    ))]))
+                }
+            }
+        }
+        if params.apply {
+            app_state
+                .set_llm_client(self.state.llm_client.clone())
+                .await;
+            match crate::llm::rule_export::apply_export(
+                app_state,
+                owner,
+                &export,
+                self.state.llm_client.clone(),
+            )
+            .await
+            {
+                Ok(outcome) => out.push_str(&format!("Applied: {}\n", outcome.summary)),
+                Err(e) => {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "{out}Applying failed: {e}"
+                    ))]))
+                }
+            }
+        }
+        let table = serde_json::to_string_pretty(&export.event_handlers)
+            .unwrap_or_else(|_| "[]".to_string());
+        out.push_str(&format!("\nevent_handlers:\n```json\n{table}\n```\n"));
+        Ok(CallToolResult::success(vec![Content::text(out)]))
     }
 
     #[tool(description = "Stop all running servers and connections")]
@@ -1577,6 +1844,14 @@ impl NetGetMcpService {
                     e
                 ))]));
             }
+        };
+        let memo = match crate::llm::answer_reuse::resolve_memo_settings(
+            params.memoize_ttl_secs,
+            params.memoize_across_connections,
+            None,
+        ) {
+            Ok(memo) => memo.flatten(),
+            Err(e) => return Ok(CallToolResult::error(vec![Content::text(e.to_string())])),
         };
 
         // Drive the new client with NetGet's configured LLM client, exactly as
@@ -1619,6 +1894,9 @@ impl NetGetMcpService {
                 ))]));
             }
         };
+        if memo.is_some() {
+            self.state.app_state.set_client_memo(client_id, memo).await;
+        }
 
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Client #{} ({}) connected to {}.",

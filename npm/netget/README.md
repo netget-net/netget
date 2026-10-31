@@ -1,6 +1,6 @@
 # @smotana/netget
 
-LLM-controlled network protocol server & client — 240 protocol features (HTTP, DNS, SSH, MySQL, Redis, OPC UA, BACnet/IP, DNP3, IEC 104, EtherNet/IP, S7comm, NMDC/ADC peer transfers, Soulseek, Gnutella, NNTP, …) driven by an LLM, with a built-in [MCP](https://modelcontextprotocol.io) server mode.
+LLM-controlled network protocol servers & clients — about 290 servers and 250 clients across 310 protocols (HTTP, DNS, SSH, MySQL, Redis, OPC UA, BACnet/IP, DNP3, IEC 104, EtherNet/IP, S7comm, NMDC/ADC peer transfers, Soulseek, Gnutella, NNTP, …) driven by an LLM, with a built-in [MCP](https://modelcontextprotocol.io) server mode.
 
 This package is a small launcher that runs the platform-native `netget` binary. The binary itself is installed via a platform-specific optional dependency (e.g. `@smotana/netget-darwin-arm64`); if that is unavailable, the launcher downloads the matching binary from [GitHub Releases](https://github.com/netget-net/netget/releases) into your user cache.
 
@@ -45,7 +45,7 @@ npx @smotana/netget
 
 ## Notes
 
-- Prebuilt binaries need no system library, so on Linux and Windows they leave out the protocols that link one (packet capture, Bluetooth LE, the NFC client, USB devices, the SMB client); macOS ships those libraries and its binaries include them. For every protocol everywhere: `cargo install --locked netget-tool` (see https://github.com/netget-net/netget).
+- The binaries this package installs need no system library on Linux or Windows, so there they leave out the protocols that link one (packet capture, Bluetooth LE, the NFC client); macOS ships those libraries and its binaries include them. On glibc Linux the GitHub release also has `-full` archives with those protocols (they need `libpcap0.8 libdbus-1-3 libpcsclite1`); point `NETGET_BINARY` at one to use it through this launcher. No prebuilt binary carries the USB virtual devices or the SMB client. For every protocol: `cargo install --locked netget-tool`. Per-platform details: https://github.com/netget-net/netget/blob/master/docs/guides/INSTALL.md
 - Fallback downloads require the release's `SHA256SUMS`; the matching SHA-256 is
   verified while streaming before extracting the expected executable. Missing or
   ambiguous manifests and mismatches fail closed. Older releases without a manifest

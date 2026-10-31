@@ -127,6 +127,35 @@ pub enum ScriptingMode {
 }
 
 impl ScriptingMode {
+    /// Every scripting mode, in the order the CLI help lists them.
+    pub const ALL: [ScriptingMode; 6] = [
+        Self::On,
+        Self::Off,
+        Self::Python,
+        Self::JavaScript,
+        Self::Go,
+        Self::Perl,
+    ];
+
+    /// Every spelling a scripting mode may be written in — `-e`/`--env` on the command line
+    /// and `scripting_mode` in the settings file both read through [`ScriptingMode::parse`],
+    /// which accepts exactly these (case-insensitively). One table, so a value one surface
+    /// writes is a value the other reads.
+    pub const SPELLINGS: &'static [(&'static str, ScriptingMode)] = &[
+        ("on", Self::On),
+        ("auto", Self::On),
+        ("off", Self::Off),
+        ("llm", Self::Off),
+        ("python", Self::Python),
+        ("py", Self::Python),
+        ("javascript", Self::JavaScript),
+        ("js", Self::JavaScript),
+        ("node", Self::JavaScript),
+        ("go", Self::Go),
+        ("golang", Self::Go),
+        ("perl", Self::Perl),
+    ];
+
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::On => "On",
@@ -136,6 +165,44 @@ impl ScriptingMode {
             Self::Go => "Go",
             Self::Perl => "Perl",
         }
+    }
+
+    /// The canonical spelling: what the settings file stores, and the first entry for this
+    /// mode in [`Self::SPELLINGS`].
+    pub fn config_name(&self) -> &'static str {
+        match self {
+            Self::On => "on",
+            Self::Off => "off",
+            Self::Python => "python",
+            Self::JavaScript => "javascript",
+            Self::Go => "go",
+            Self::Perl => "perl",
+        }
+    }
+
+    /// Parse any spelling in [`Self::SPELLINGS`], ignoring case and surrounding whitespace.
+    /// The error names the value and lists every accepted spelling.
+    pub fn parse(value: &str) -> Result<Self, String> {
+        let wanted = value.trim().to_lowercase();
+        Self::SPELLINGS
+            .iter()
+            .find(|(name, _)| *name == wanted)
+            .map(|(_, mode)| *mode)
+            .ok_or_else(|| {
+                format!(
+                    "Invalid scripting environment: '{}'\n\
+                     Valid options: on (auto), off (llm), python (py), javascript (js, node), go (golang), perl",
+                    value
+                )
+            })
+    }
+}
+
+impl std::str::FromStr for ScriptingMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s)
     }
 }
 
@@ -283,6 +350,23 @@ pub struct AccessLogEntry {
     /// handler/LLM *produced* — execution happens later inside the client's
     /// connection loop, which does not report back here.
     pub response: Vec<serde_json::Value>,
+    /// What answered the event, where the recording site knows: one of the
+    /// [`answered_by`] values. Absent for entries recorded by a protocol's own
+    /// bookkeeping rather than by the shared model/handler path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answered_by: Option<String>,
+}
+
+/// The values [`AccessLogEntry::answered_by`] takes.
+pub mod answered_by {
+    /// The model authored the answer (a model call was made for this event).
+    pub const MODEL: &str = "model";
+    /// A memoised model answer was replayed; no model call was made.
+    pub const CACHE: &str = "cache";
+    /// An `event_handlers` rule answered: a script, a static rule or a person (manual).
+    pub const RULE: &str = "rule";
+    /// An easy-protocol layer answered.
+    pub const EASY: &str = "easy";
 }
 
 impl AccessLogEntry {
@@ -331,6 +415,21 @@ pub struct AppState {
     inner: Arc<RwLock<AppStateInner>>,
     pub llm_activity: super::llm_activity::LlmActivityTracker,
     pub event_journal: Arc<crate::events::journal::EventJournal>,
+    /// What is known to be wrong with the model or its backend, for `get_status`. Kept
+    /// outside `inner` so the transport can record it synchronously on every request
+    /// without taking the state lock.
+    model_health: Arc<std::sync::Mutex<ModelHealth>>,
+}
+
+/// What `get_status` says about the model beyond its name.
+#[derive(Debug, Clone, Default)]
+pub struct ModelHealth {
+    /// How the model in use was chosen, when that is not simply "as configured" — a configured
+    /// model the endpoint does not have, replaced by an installed one.
+    pub notice: Option<String>,
+    /// The most recent backend failure (model not installed, endpoint unreachable), cleared by
+    /// the next request the backend answers.
+    pub last_backend_failure: Option<String>,
 }
 
 struct AppStateInner {
@@ -613,6 +712,7 @@ impl AppState {
 
         Self {
             llm_activity: super::llm_activity::LlmActivityTracker::default(),
+            model_health: Default::default(),
             event_journal: Arc::new(crate::events::journal::EventJournal::default()),
             inner: Arc::new(RwLock::new(AppStateInner {
                 mode: Mode::Idle,
@@ -1472,6 +1572,48 @@ impl AppState {
     /// Set the Ollama model name
     pub async fn set_ollama_model(&self, model: Option<String>) {
         self.inner.write().await.ollama_model = model;
+    }
+
+    /// Set the model only if none is set; returns whether it was set.
+    pub async fn set_ollama_model_if_unset(&self, model: String) -> bool {
+        let mut inner = self.inner.write().await;
+        if inner.ollama_model.is_some() {
+            return false;
+        }
+        inner.ollama_model = Some(model);
+        true
+    }
+
+    /// What is known to be wrong with the model or its backend.
+    pub fn model_health(&self) -> ModelHealth {
+        self.model_health
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Record how the model in use was chosen (or `None` once it is simply the configured one).
+    pub fn set_model_notice(&self, notice: Option<String>) {
+        self.model_health
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .notice = notice;
+    }
+
+    /// Record a backend failure (see [`crate::llm::LlmBackendError`]).
+    pub fn note_llm_backend_failure(&self, failure: String) {
+        self.model_health
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .last_backend_failure = Some(failure);
+    }
+
+    /// The backend answered a request: whatever failed before is no longer current.
+    pub fn clear_llm_backend_failure(&self) {
+        let mut health = self.model_health.lock().unwrap_or_else(|e| e.into_inner());
+        if health.last_backend_failure.is_some() {
+            health.last_backend_failure = None;
+        }
     }
 
     /// Get the scripting environment information
@@ -3217,6 +3359,34 @@ impl AppState {
             request,
             response,
             true,
+            None,
+        )
+        .await
+    }
+
+    /// [`Self::record_access_log`], saying what answered the event (an [`answered_by`] value).
+    /// The shared model and handler paths use this, so `export_rules` can tell a model-authored
+    /// answer from one a rule or a replay produced.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn record_access_log_answered(
+        &self,
+        owner: AccessLogOwner,
+        protocol: &str,
+        connection_id: Option<u32>,
+        event_type: &str,
+        request: serde_json::Value,
+        response: Vec<serde_json::Value>,
+        answered_by: &str,
+    ) -> u64 {
+        self.record_access_log_inner(
+            owner,
+            protocol,
+            connection_id,
+            event_type,
+            request,
+            response,
+            true,
+            Some(answered_by),
         )
         .await
     }
@@ -3241,6 +3411,7 @@ impl AppState {
             request,
             response,
             false,
+            None,
         )
         .await
     }
@@ -3255,6 +3426,7 @@ impl AppState {
         request: serde_json::Value,
         response: Vec<serde_json::Value>,
         history: bool,
+        answered_by: Option<&str>,
     ) -> u64 {
         let unix_ms = crate::utils::clock::SystemTime::now()
             .duration_since(crate::utils::clock::UNIX_EPOCH)
@@ -3311,6 +3483,7 @@ impl AppState {
             event_type: event_type.to_string(),
             request,
             response,
+            answered_by: answered_by.map(str::to_string),
         });
         while inner.access_logs.len() > ACCESS_LOG_CAPACITY {
             inner.access_logs.pop_front();
@@ -3385,6 +3558,66 @@ impl AppState {
                 for history in server.exchange_history.values_mut() {
                     history.trim(history_entries);
                 }
+            }
+        }
+    }
+
+    /// A server's memoisation, with what a cache key needs, or `None` when it is off (or the
+    /// server is gone). See [`crate::llm::answer_reuse`].
+    pub async fn server_memo(
+        &self,
+        server_id: ServerId,
+    ) -> Option<crate::llm::answer_reuse::MemoHandle> {
+        let inner = self.inner.read().await;
+        let server = inner.servers.get(&server_id)?;
+        server.memo.settings()?;
+        Some(crate::llm::answer_reuse::MemoHandle {
+            memo: server.memo.clone(),
+            history_entries: server.history_entries,
+            context: format!("{}\u{1f}{}", server.instruction, server.memory),
+        })
+    }
+
+    /// See [`Self::server_memo`].
+    pub async fn client_memo(
+        &self,
+        client_id: ClientId,
+    ) -> Option<crate::llm::answer_reuse::MemoHandle> {
+        let inner = self.inner.read().await;
+        let client = inner.clients.get(&client_id)?;
+        client.memo.settings()?;
+        Some(crate::llm::answer_reuse::MemoHandle {
+            memo: client.memo.clone(),
+            history_entries: client.history_entries,
+            context: format!("{}\u{1f}{}", client.instruction, client.memory),
+        })
+    }
+
+    /// Set a server's memoisation (`None` turns it off). A changed setting starts an empty
+    /// cache; setting the same one again keeps the answers already memoised.
+    pub async fn set_server_memo(
+        &self,
+        server_id: ServerId,
+        settings: Option<crate::llm::answer_reuse::MemoSettings>,
+    ) {
+        let mut inner = self.inner.write().await;
+        if let Some(server) = inner.servers.get_mut(&server_id) {
+            if server.memo.settings() != settings {
+                server.memo = crate::llm::answer_reuse::Memo::new(settings);
+            }
+        }
+    }
+
+    /// See [`Self::set_server_memo`].
+    pub async fn set_client_memo(
+        &self,
+        client_id: ClientId,
+        settings: Option<crate::llm::answer_reuse::MemoSettings>,
+    ) {
+        let mut inner = self.inner.write().await;
+        if let Some(client) = inner.clients.get_mut(&client_id) {
+            if client.memo.settings() != settings {
+                client.memo = crate::llm::answer_reuse::Memo::new(settings);
             }
         }
     }

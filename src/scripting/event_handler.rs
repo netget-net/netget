@@ -278,35 +278,155 @@ impl EventHandlerType {
 
 /// Event handler configuration - maps event patterns to handlers
 ///
-/// `deny_unknown_fields` is load-bearing. There are exactly two keys here, and there is no
-/// data-based matching: a rule matches on the event id alone. An `event_data_contains` key
-/// -- an entirely reasonable thing to assume exists, and something an LLM writing handlers
-/// will invent -- used to be accepted and silently ignored, so every rule registered
-/// against one event id matched every occurrence and first-match-wins picked the first.
-/// The config looked like it discriminated between requests and simply did not.
+/// `deny_unknown_fields` is load-bearing. An `event_data_contains` key -- an entirely
+/// reasonable thing to assume exists, and something an LLM writing handlers will invent --
+/// used to be accepted and silently ignored, so every rule registered against one event id
+/// matched every occurrence and first-match-wins picked the first. The config looked like it
+/// discriminated between requests and simply did not.
+///
+/// Data-based matching is the optional `match` key: an object from event-field paths to the
+/// values those fields must equal (see [`EventHandler::matches_event`]). A rule without it
+/// matches on the event id alone.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EventHandler {
     /// Pattern to match events
     pub event_pattern: EventPattern,
 
+    /// Conditions on the event's data, all of which must hold for the rule to match.
+    ///
+    /// Keys are field paths in the `{{event.…}}` spelling without the `event.` root —
+    /// `method`, `headers.host`, `questions.0.name` — and values are the JSON each field must
+    /// equal exactly (`"GET"`, `5`, `false`, `{}`). A field the event does not carry reads as
+    /// `null`. `None` (the key absent) matches every event of the pattern.
+    #[serde(default, rename = "match", skip_serializing_if = "Option::is_none")]
+    pub data_match: Option<serde_json::Map<String, Value>>,
+
     /// Handler to use for matched events
     pub handler: EventHandlerType,
 }
+
+/// The most conditions one rule's `match` may hold.
+pub const MAX_MATCH_CONDITIONS: usize = 32;
 
 impl EventHandler {
     /// Create a new event handler
     pub fn new(event_pattern: EventPattern, handler: EventHandlerType) -> Self {
         Self {
             event_pattern,
+            data_match: None,
             handler,
         }
     }
 
-    /// Check if this handler matches the given event type ID
+    /// The same rule, matching only events whose data satisfies `conditions`.
+    pub fn with_match(mut self, conditions: serde_json::Map<String, Value>) -> Self {
+        self.data_match = if conditions.is_empty() {
+            None
+        } else {
+            Some(conditions)
+        };
+        self
+    }
+
+    /// Whether this rule's pattern names `event_type_id`, whatever its `match` says.
+    ///
+    /// The answer to "could this rule answer such an event", which is what a caller with no
+    /// event data in hand is asking. To route an actual event use [`Self::matches_event`].
     pub fn matches(&self, event_type_id: &str) -> bool {
         self.event_pattern.matches(event_type_id)
     }
+
+    /// The pattern as an operator reads it: the event id (or `*`), then any `match`
+    /// conditions — `http_request [method=GET path=/a]`.
+    pub fn describe(&self) -> String {
+        let pattern = match &self.event_pattern {
+            EventPattern::Specific(id) => id.clone(),
+            EventPattern::Wildcard => "*".to_string(),
+        };
+        match &self.data_match {
+            None => pattern,
+            Some(conditions) => {
+                let parts: Vec<String> = conditions
+                    .iter()
+                    .map(|(path, value)| match value {
+                        Value::String(text) => format!("{path}={text}"),
+                        other => format!("{path}={other}"),
+                    })
+                    .collect();
+                format!("{pattern} [{}]", parts.join(" "))
+            }
+        }
+    }
+
+    /// Whether this rule answers this event: the pattern names it and every `match`
+    /// condition holds against `event_data`.
+    pub fn matches_event(&self, event_type_id: &str, event_data: Option<&Value>) -> bool {
+        if !self.event_pattern.matches(event_type_id) {
+            return false;
+        }
+        match &self.data_match {
+            None => true,
+            Some(conditions) => conditions
+                .iter()
+                .all(|(path, expected)| match_field(event_data, path) == expected),
+        }
+    }
+}
+
+const NULL: Value = Value::Null;
+
+/// Resolve a `match` path against event data. A missing field, a non-numeric index into an
+/// array, or a path through a scalar all read as `null`.
+pub fn match_field<'a>(event_data: Option<&'a Value>, path: &str) -> &'a Value {
+    let Some(mut current) = event_data else {
+        return &NULL;
+    };
+    for segment in path.split('.') {
+        let next = match current {
+            Value::Object(map) => map.get(segment),
+            Value::Array(items) => segment.parse::<usize>().ok().and_then(|i| items.get(i)),
+            _ => None,
+        };
+        match next {
+            Some(value) => current = value,
+            None => return &NULL,
+        }
+    }
+    current
+}
+
+/// Check a rule's `match` object: at most [`MAX_MATCH_CONDITIONS`] conditions, every path a
+/// run of non-empty segments, and every value within the interpolation budget. The error
+/// names what is wrong.
+pub fn validate_data_match(conditions: &serde_json::Map<String, Value>) -> Result<(), String> {
+    if conditions.len() > MAX_MATCH_CONDITIONS {
+        return Err(format!(
+            "'match' has {} conditions; a rule may hold at most {}",
+            conditions.len(),
+            MAX_MATCH_CONDITIONS
+        ));
+    }
+    for (path, expected) in conditions {
+        let path_ok = !path.is_empty()
+            && path
+                .split('.')
+                .all(|segment| !segment.is_empty() && segment.trim() == segment);
+        if !path_ok || path == REF_ROOT || path.starts_with(REF_ROOT_DOT) {
+            return Err(format!(
+                "'match' key {:?} is not a field path: write it like `method`, `headers.host` \
+                 or `questions.0.name` (no `event.` prefix, no empty segments)",
+                path
+            ));
+        }
+        if check_tree(expected).is_err() {
+            return Err(format!(
+                "'match' value for {:?} exceeds the 8 MiB, 65536-node or 64-level budget",
+                path
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Configuration for all event handlers
@@ -329,11 +449,28 @@ impl EventHandlerConfig {
         self.handlers.push(handler);
     }
 
-    /// Find the first handler that matches the given event type ID
+    /// The first handler whose pattern names `event_type_id`, ignoring `match` conditions.
+    ///
+    /// This answers "is there a rule that may answer this kind of event", for callers with no
+    /// event in hand (a protocol deciding whether to consult the routing at all, the batching
+    /// check). It errs towards yes: a rule whose `match` the actual event fails is still
+    /// reported. Dispatch uses [`Self::find_handler_for`].
     pub fn find_handler(&self, event_type_id: &str) -> Option<&EventHandlerType> {
         self.handlers
             .iter()
             .find(|h| h.matches(event_type_id))
+            .map(|h| &h.handler)
+    }
+
+    /// The first handler that answers this event, `match` conditions included.
+    pub fn find_handler_for(
+        &self,
+        event_type_id: &str,
+        event_data: Option<&Value>,
+    ) -> Option<&EventHandlerType> {
+        self.handlers
+            .iter()
+            .find(|h| h.matches_event(event_type_id, event_data))
             .map(|h| &h.handler)
     }
 

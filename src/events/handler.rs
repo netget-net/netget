@@ -600,12 +600,7 @@ impl EventHandler {
 
         // Get model, ensuring one is selected
         let current_model = self.state.get_ollama_model().await;
-        let model = match crate::llm::ensure_model_selected(
-            current_model.clone(),
-            &self.state.get_ollama_url().await,
-        )
-        .await
-        {
+        let model = match crate::llm::model_selection::ensure_state_model(&self.state).await {
             Ok(m) => m,
             Err(e) => {
                 return Err(anyhow::anyhow!("Failed to ensure model is selected: {}", e));
@@ -1729,6 +1724,8 @@ impl EventHandler {
                     feedback_instructions,
                     history,
                     batching,
+                    memoize_ttl_secs: None,
+                    memoize_across_connections: None,
                 };
                 match management::update_server(
                     &self.state,
@@ -1771,6 +1768,8 @@ impl EventHandler {
                     feedback_instructions,
                     history,
                     batching,
+                    memoize_ttl_secs: None,
+                    memoize_across_connections: None,
                 };
                 match management::update_client(
                     &self.state,
@@ -1937,6 +1936,23 @@ impl EventHandler {
         let mut config = EventHandlerConfig::new();
 
         for handler_json in handlers_json {
+            // A key this parser does not read would be ignored, and an ignored
+            // `event_data_contains` (or a misspelt `match`) makes a rule meant for some events
+            // answer all of them. Refuse it, as the serde form of `EventHandler` does.
+            if let Some(object) = handler_json.as_object() {
+                if let Some(unknown) = object
+                    .keys()
+                    .find(|key| !matches!(key.as_str(), "event_pattern" | "match" | "handler"))
+                {
+                    anyhow::bail!(
+                        "Unknown key '{}' in an event handler; a handler has `event_pattern`, \
+                         an optional `match` (event field paths to the values they must equal) \
+                         and `handler`",
+                        unknown
+                    );
+                }
+            }
+
             // Parse event_pattern field
             let event_pattern = if let Some(pattern_str) =
                 handler_json.get("event_pattern").and_then(|v| v.as_str())
@@ -2056,7 +2072,32 @@ impl EventHandler {
                 validate_static_action_names(&event_pattern, actions)?;
             }
 
-            config.add_handler(EventHandler::new(event_pattern, handler_type));
+            // Optional conditions on the event's data (`{"method": "GET", "path": "/a"}`).
+            let data_match = match handler_json.get("match") {
+                None | Some(serde_json::Value::Null) => serde_json::Map::new(),
+                Some(serde_json::Value::Object(conditions)) => {
+                    crate::scripting::event_handler::validate_data_match(conditions).map_err(
+                        |e| {
+                            anyhow::anyhow!(
+                                "Invalid event handler for {}: {}",
+                                describe_pattern(&event_pattern),
+                                e
+                            )
+                        },
+                    )?;
+                    conditions.clone()
+                }
+                Some(other) => anyhow::bail!(
+                    "Invalid event handler for {}: 'match' must be an object from event field \
+                     paths to the values they must equal, e.g. {{\"method\": \"GET\", \"path\": \
+                     \"/a\"}}; got {}",
+                    describe_pattern(&event_pattern),
+                    other
+                ),
+            };
+
+            config
+                .add_handler(EventHandler::new(event_pattern, handler_type).with_match(data_match));
         }
 
         Ok(config)
