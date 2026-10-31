@@ -956,6 +956,7 @@ impl Session {
                 "parameters": values::value_to_json(params),
                 "mode": if read { "read" } else { "write" },
                 "in_transaction": in_tx,
+                "answer_with": actions::query_answer_with(query),
             });
             if let Some(db) = &db {
                 data["database"] = serde_json::json!(db);
