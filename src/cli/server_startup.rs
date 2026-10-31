@@ -681,6 +681,7 @@ pub async fn start_server_from_action(
         batching,
         exchange_history: Default::default(),
         connection_memory: Default::default(),
+        memo: Default::default(),
     };
 
     let server_id = state.add_server(server).await;

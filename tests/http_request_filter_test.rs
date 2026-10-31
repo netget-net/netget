@@ -205,8 +205,9 @@ fn build_response_uses_default_when_model_produced_nothing() {
     .unwrap();
     assert_eq!(with_default.status(), 404);
 
-    // No results + no default -> historical empty 200 (unchanged behavior).
+    // No results + no default -> refused with a 500: nothing answered the request, so
+    // nothing may claim it succeeded.
     let (tx2, _rx2) = tokio::sync::mpsc::unbounded_channel();
     let without = build_response(Vec::new(), "HTTP", "GET", "/", &tx2, None).unwrap();
-    assert_eq!(without.status(), 200);
+    assert_eq!(without.status(), 500);
 }

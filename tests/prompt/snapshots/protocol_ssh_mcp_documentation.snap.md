@@ -22,7 +22,7 @@ Secure shell server for remote access
 - `protocol` (string, **required**) — `"ssh"`
 - `port` (number) — listen port. <normalized: resolved against this host's privilege and bound ports>
 - `host` (string) — bind address. Default `"127.0.0.1"`.
-- `event_handlers` (array) — **preferred**. Deterministic, in-process, no LLM call. Each entry is `{"event_pattern": "<event id>" | "*", "handler": {…}}`, matched in order, first match wins. `handler` is one of `{"type":"script","language":"python"|"javascript","code":"…"}`, `{"type":"static","actions":[…]}`, or `{"type":"llm","instruction":"…"}`. A script receives the event as JSON on stdin (fields under `data['event']`) and must print `{"actions":[…]}` to stdout. Use the event ids and field names listed below.
+- `event_handlers` (array) — **preferred**. Deterministic, in-process, no LLM call. Each entry is `{"event_pattern": "<event id>" | "*", "handler": {…}}`, matched in order, first match wins; an optional `"match": {"method": "GET", "path": "/a"}` narrows a rule to events whose fields equal those values (keys are field paths like `headers.host`). `handler` is one of `{"type":"script","language":"python"|"javascript","code":"…"}`, `{"type":"static","actions":[…]}`, or `{"type":"llm","instruction":"…"}`. A script receives the event as JSON on stdin (fields under `data['event']`) and must print `{"actions":[…]}` to stdout. Use the event ids and field names listed below.
 - `instruction` (string) — natural-language fallback. Costs one model call per event; use only when the response genuinely needs reasoning.
 - `startup_params` (object) — this protocol declares none.
 - `initial_memory` (string) — seeds the server's LLM memory before the first event.
@@ -30,6 +30,7 @@ Secure shell server for remote access
 - `scheduled_tasks` (array) — server-scoped recurring/delayed LLM tasks. Each entry: `{"task_id":"…","recurring":true,"interval_secs":60,"instruction":"…"}` (or `"recurring":false` with `"delay_secs"`). Removed when the server stops.
 - `history` (number) — earlier exchanges on the same connection the model is shown with each event; 0 turns it off. Omit for the default above.
 - `batching` (boolean) — deliver events that arrive during a call together afterwards. Omit for the default above.
+- `memoize_ttl_secs` (number) — memoise the model's answers: for this many seconds an event identical to one the model already answered (ignoring per-request ids such as a DNS `query_id`, which the replay echoes back) gets the same actions with no model call, recorded in the access log as answered by `cache`. Off unless set; 0 turns it off. Failures, answers that change memory or tasks, and credential-bearing events are never memoised. With `history` on, answers are kept per connection unless `memoize_across_connections` is true. To replay recorded traffic with no model at all, use the `export_rules` tool instead.
 
 ### Events (`ssh_auth`, `ssh_banner`, `ssh_shell_command`, `sftp_operation`) — valid values for `event_pattern`
 
@@ -297,6 +298,7 @@ SSH commands and pinned SFTP v3 stat, directory listing and UTF-8 file reads
 - `scheduled_tasks` (array) — client-scoped recurring/delayed LLM tasks, same shape as for `start_server`.
 - `history` (number) — earlier exchanges on the same connection the model is shown with each event; 0 turns it off. Omit for the default above.
 - `batching` (boolean) — deliver events that arrive during a call together afterwards. Omit for the default above.
+- `memoize_ttl_secs` (number) — memoise the model's answers: for this many seconds an event identical to one the model already answered (ignoring per-request ids such as a DNS `query_id`, which the replay echoes back) gets the same actions with no model call, recorded in the access log as answered by `cache`. Off unless set; 0 turns it off. Failures, answers that change memory or tasks, and credential-bearing events are never memoised. With `history` on, answers are kept per connection unless `memoize_across_connections` is true. To replay recorded traffic with no model at all, use the `export_rules` tool instead.
 
 ### Events (`ssh_connected`, `ssh_output_received`, `ssh_sftp_result`, `ssh_operation_failed`) — valid values for `event_pattern`
 

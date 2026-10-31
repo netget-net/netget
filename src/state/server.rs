@@ -322,6 +322,9 @@ pub struct ServerInstance {
     /// one peer's name is never read out to the next. Kept beside `ConnectionState` for the
     /// same reason as [`Self::exchange_history`].
     pub connection_memory: HashMap<ConnectionId, String>,
+    /// Memoisation of the model's answers: off unless the instance turns it on. Cloning the
+    /// instance shares the cache. See [`crate::llm::answer_reuse`].
+    pub memo: crate::llm::answer_reuse::Memo,
 }
 
 /// Longest accepted `append_to_log` output name.
@@ -392,6 +395,7 @@ impl ServerInstance {
             batching: false,
             exchange_history: HashMap::new(),
             connection_memory: HashMap::new(),
+            memo: Default::default(),
         }
     }
 

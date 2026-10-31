@@ -230,6 +230,8 @@ fn form_from_example(example: &serde_json::Value) -> Result<ServerForm, String> 
         feedback_instructions,
         history,
         batching,
+        memoize_ttl_secs: None,
+        memoize_across_connections: None,
     })
 }
 

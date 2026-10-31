@@ -332,3 +332,103 @@ async fn one_peers_name_is_not_read_out_to_the_next() {
     }
     let _ = state.remove_server(sid).await;
 }
+
+fn live_connection(id: u32) -> netget::state::server::ConnectionState {
+    use netget::state::server::{ConnectionState, ConnectionStatus, ProtocolConnectionInfo};
+    ConnectionState {
+        id: ConnectionId::new(id),
+        remote_addr: format!("127.0.0.1:{}", 40000 + id).parse().unwrap(),
+        local_addr: "127.0.0.1:9999".parse().unwrap(),
+        bytes_sent: 0,
+        bytes_received: 0,
+        packets_sent: 0,
+        packets_received: 0,
+        last_activity: std::time::Instant::now(),
+        status: ConnectionStatus::Active,
+        status_changed_at: std::time::Instant::now(),
+        protocol_info: ProtocolConnectionInfo::new(json!({})),
+    }
+}
+
+/// A memoised answer is keyed on what the model saw, and that includes what it kept about the
+/// peer: an answer given while it knew one peer's name is not replayed to another peer, even
+/// with the cache shared across connections.
+#[tokio::test]
+async fn the_memo_key_includes_the_connections_own_memory() {
+    let state = AppState::new();
+    let sid = state
+        .add_server(netget::state::server::ServerInstance::new(
+            ServerId::new(0),
+            0,
+            "Telnet".to_string(),
+            "greet the peer by name".to_string(),
+        ))
+        .await;
+    state
+        .add_connection_to_server(sid, live_connection(1))
+        .await;
+    state
+        .add_connection_to_server(sid, live_connection(2))
+        .await;
+    state
+        .set_server_memo(
+            sid,
+            Some(netget::llm::answer_reuse::MemoSettings {
+                ttl_secs: 60,
+                across_connections: true,
+            }),
+        )
+        .await;
+    let key = |conn: u32| {
+        let state = state.clone();
+        async move {
+            state
+                .server_memo(sid, Some(ConnectionId::new(conn)))
+                .await
+                .expect("memo on")
+                .key_for(
+                    "telnet_message_received",
+                    &json!({"message": "hi"}),
+                    Some(conn),
+                    None,
+                )
+                .expect("memoisable")
+        }
+    };
+    // Control: with no connection memory the two connections share one key.
+    assert_eq!(key(1).await, key(2).await);
+    state
+        .update_connection_memory(sid, ConnectionId::new(1), |_| "user_name: Zed".to_string())
+        .await
+        .expect("live connection");
+    assert_ne!(
+        key(1).await,
+        key(2).await,
+        "conn 1's answer would be replayed to conn 2"
+    );
+}
+
+#[test]
+fn writing_connection_memory_is_not_a_replayable_answer() {
+    use netget::llm::answer_reuse::replayable_actions;
+    for memory in [
+        "set_connection_memory",
+        "append_connection_memory",
+        "append_memory",
+    ] {
+        assert!(
+            !replayable_actions(&[
+                json!({"type": "send_telnet_line", "line": "hi"}),
+                json!({"type": memory, "value": "user_name: Zed"}),
+            ]),
+            "{memory} is a side effect of answering once, not part of the reply"
+        );
+    }
+    // The operator note is part of an answer under either name.
+    for note in ["notify_operator", "show_message"] {
+        assert!(replayable_actions(&[
+            json!({"type": "send_telnet_line", "line": "hi"}),
+            json!({"type": note, "message": "x"}),
+        ]));
+    }
+}
