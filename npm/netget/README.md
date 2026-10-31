@@ -45,7 +45,7 @@ npx @smotana/netget
 
 ## Notes
 
-- The macOS and glibc Linux binaries include packet capture (ARP, DataLink, LLDP, CDP, STP, EAPOL, IS-IS), Bluetooth LE and the NFC client. On Linux those link libpcap, libdbus-1 and libpcsclite, which must be installed (Debian/Ubuntu: `apt-get install libpcap0.8 libdbus-1-3 libpcsclite1`); the static musl binary (picked automatically on Alpine) and the Windows binary need no system library and leave those protocols out. No prebuilt binary carries the USB virtual devices or the SMB client. For every protocol: `cargo install --locked netget-tool`. Per-platform details: https://github.com/netget-net/netget/blob/master/docs/guides/INSTALL.md
+- The binaries this package installs need no system library on Linux or Windows, so there they leave out the protocols that link one (packet capture, Bluetooth LE, the NFC client); macOS ships those libraries and its binaries include them. On glibc Linux the GitHub release also has `-full` archives with those protocols (they need `libpcap0.8 libdbus-1-3 libpcsclite1`); point `NETGET_BINARY` at one to use it through this launcher. No prebuilt binary carries the USB virtual devices or the SMB client. For every protocol: `cargo install --locked netget-tool`. Per-platform details: https://github.com/netget-net/netget/blob/master/docs/guides/INSTALL.md
 - Fallback downloads require the release's `SHA256SUMS`; the matching SHA-256 is
   verified while streaming before extracting the expected executable. Missing or
   ambiguous manifests and mismatches fail closed. Older releases without a manifest

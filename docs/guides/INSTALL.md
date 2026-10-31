@@ -2,10 +2,10 @@
 
 | Path | Command | What you get |
 |---|---|---|
-| npm (recommended) | `npx -y @smotana/netget` or `npm install -g @smotana/netget` | The release binary for your platform (table below) |
-| GitHub release | download `netget-<target>.tar.gz` / `.zip` from [Releases](https://github.com/netget-net/netget/releases) | The same binaries; `SHA256SUMS` lists their checksums |
+| npm (recommended) | `npx -y @smotana/netget` or `npm install -g @smotana/netget` | The plain release binary for your platform (table below) |
+| GitHub release | download `netget-<target>.tar.gz` / `.zip` from [Releases](https://github.com/netget-net/netget/releases) | The same binaries, plus the Linux `-full` archives; `SHA256SUMS` lists their checksums |
 | Cargo | `cargo install --locked netget-tool` | Every protocol, built from source ([system libraries](BUILDING.md)) |
-| Docker | `docker build -t netget .` in a checkout | The glibc Linux release feature set; see [Docker](#docker) |
+| Docker | `docker build -t netget .` in a checkout | The `-full` glibc Linux feature set; see [Docker](#docker) |
 | Homebrew | not published yet | `packaging/homebrew/netget.rb` is a draft formula for a future tap |
 
 The crate is `netget-tool` (crates.io's `netget` is an unrelated project); the command is
@@ -20,8 +20,10 @@ model's SQLite databases. They differ only in the protocols that link a system l
 |---|---|---|---|---|---|
 | `netget-aarch64-apple-darwin` | `@smotana/netget-darwin-arm64` | yes | yes | yes | nothing beyond macOS |
 | `netget-x86_64-apple-darwin` | `@smotana/netget-darwin-x64` | yes | yes | yes | nothing beyond macOS |
-| `netget-x86_64-unknown-linux-gnu` | `@smotana/netget-linux-x64` | yes | yes | yes | glibc ≥ 2.35, zlib, libpcap, libdbus-1, libpcsclite |
-| `netget-aarch64-unknown-linux-gnu` | `@smotana/netget-linux-arm64` | yes | yes | yes | glibc ≥ 2.35, zlib, libpcap, libdbus-1, libpcsclite |
+| `netget-x86_64-unknown-linux-gnu` | `@smotana/netget-linux-x64` | no | no | no | glibc ≥ 2.35, zlib |
+| `netget-aarch64-unknown-linux-gnu` | `@smotana/netget-linux-arm64` | no | no | no | glibc ≥ 2.35, zlib |
+| `netget-x86_64-unknown-linux-gnu-full` | — (release download only) | yes | yes | yes | glibc ≥ 2.35, zlib, libpcap, libdbus-1, libpcsclite |
+| `netget-aarch64-unknown-linux-gnu-full` | — (release download only) | yes | yes | yes | glibc ≥ 2.35, zlib, libpcap, libdbus-1, libpcsclite |
 | `netget-x86_64-unknown-linux-musl` | `@smotana/netget-linux-x64-musl` | no | no | no | nothing (static) |
 | `netget-x86_64-pc-windows-msvc` | `@smotana/netget-win32-x64` | no | no | no | nothing |
 
@@ -39,28 +41,32 @@ Unix-only protocols (pty, Unix sockets, raw sockets). `cargo install --locked ne
 builds all of them where the platform allows; `netget --mcp` → `list_protocols` names what a
 given binary has.
 
-The glibc Linux libraries, by distribution:
+On Linux, packet capture, Bluetooth LE and the NFC client are only in the `-full` archives
+(published from the first release after v0.3.9).
+The plain archives — the ones npm installs — link nothing beyond glibc and zlib, so
+`npx @smotana/netget` starts on a minimal system or container. To get those protocols, install
+their libraries and use the `-full` binary:
 
 ```bash
 sudo apt-get install libpcap0.8 libdbus-1-3 libpcsclite1     # Debian / Ubuntu
 sudo dnf install libpcap dbus-libs pcsc-lite-libs            # Fedora
 sudo pacman -S --needed libpcap dbus pcsclite                # Arch
+
+# then, e.g. on x86_64 (verify against the release's SHA256SUMS):
+curl -LO https://github.com/netget-net/netget/releases/latest/download/netget-x86_64-unknown-linux-gnu-full.tar.gz
+tar xzf netget-x86_64-unknown-linux-gnu-full.tar.gz      # the bare `netget` binary
 ```
 
-Without them the glibc binary does not start (`error while loading shared libraries`). On a
-minimal x86_64 system or container where installing them is not an option, use the static musl
-binary instead: download `netget-x86_64-unknown-linux-musl.tar.gz` from the release and run it
-directly, or set `NETGET_BINARY` to it so `npx @smotana/netget` uses it. (The
-`@smotana/netget-linux-x64-musl` npm package declares `libc: musl`, so npm installs it only on
-musl systems such as Alpine, where the launcher picks it automatically.)
+Run it directly, or set `NETGET_BINARY` to it so `npx @smotana/netget` uses it. Without those
+libraries the `-full` binary does not start (`error while loading shared libraries`).
 
 The packet-capture protocols need raw-socket privileges at run time (root, or `CAP_NET_RAW` and
 `CAP_NET_ADMIN` on Linux); NetGet refuses to start them otherwise and says why.
 
 ## Docker
 
-The repository's `Dockerfile` builds the glibc Linux release feature set on Debian bookworm and
-runs it as an unprivileged user. No image is published; build it yourself:
+The repository's `Dockerfile` builds the `-full` glibc Linux feature set on Debian bookworm
+(the image installs the three libraries it links) and runs it as an unprivileged user. No image is published; build it yourself:
 
 ```bash
 docker build -t netget .

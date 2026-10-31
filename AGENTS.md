@@ -1235,10 +1235,13 @@ targeted stress runs.** If a test hangs, fix the hang rather than serializing th
 
 ### CI reality
 
-`release.yml` builds every target's binaries on release tags and manual dispatch: macOS and the
-two glibc Linux targets with the `libpcap`, `bluetooth` and `pcsc` features (macOS ships those
-libraries; the Linux jobs install the `-dev` packages and a step asserts the binary links exactly
-the documented runtime libraries), musl and Windows with no system-library feature.
+`release.yml` builds every target's binaries on release tags and manual dispatch: macOS with the
+`libpcap`, `bluetooth` and `pcsc` features (their libraries ship with the OS); plain glibc Linux,
+musl and Windows with no system-library feature (these are what npm ships, so they must start on
+a minimal system); and separate glibc Linux `-full` archives with those three features, built
+after installing the `-dev` packages. A step asserts each glibc binary's linked libraries: the
+plain ones nothing beyond glibc and zlib, the `-full` ones exactly those plus libpcap, libdbus-1
+and libpcsclite.
 `docs/guides/INSTALL.md` is the per-artifact table users read; keep it, the matrix and the
 `Dockerfile` in step.
 `ci.yml` runs on pull requests and on demand. **A push to `master` does not start CI.**

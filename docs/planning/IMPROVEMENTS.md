@@ -107,8 +107,9 @@ with `send_first`) are fixed and live in the [Fixed](#fixed) table, not here.
 5. **The `easy` layer (item 35)** — still present (`src/easy/http`). Finish or delete.
 6. **`REQUIRE_DOCS_FOR_OPEN_ACTIONS` (item 29)** — a hardcoded `false` guarding a gate nobody
    enables; make it a runtime setting or delete it and its state.
-7. **Linux release with libpcap, Bluetooth and PC/SC (item 54)** — the release jobs are changed
-   and documented; nothing has run them yet. Confirm on the next tagged release.
+7. **Linux `-full` release archives with libpcap, Bluetooth and PC/SC (item 54)** — added
+   beside the unchanged plain ones and documented; nothing has run them yet. Confirm on the
+   next tagged release.
 
 8. **Logging long tail.** 111 of 153 server `mod.rs` files use the `Log` facade
     (`src/logging/emit.rs`); 42 still hand-roll dual logging. Derive with
@@ -494,17 +495,19 @@ Gate both behind the existing flag. Note the flag is process-global — `is_serv
 returns `!documented_server_protocols.is_empty()` (`src/state/app_state.rs:728`) — so it fires
 once per process regardless of which protocol is being started.
 
-### 54. ARP and DataLink still cannot ship on Linux **[release change made 31 Oct 2026; unverified on runners]**
+### 54. ARP and DataLink still cannot ship on Linux **[`-full` Linux archives added 31 Oct 2026; unverified on runners]**
 
-> The glibc Linux release jobs (`x86_64-unknown-linux-gnu` on `ubuntu-22.04`,
-> `aarch64-unknown-linux-gnu` on the native `ubuntu-22.04-arm` runner) now install
-> `libpcap-dev libdbus-1-dev libpcsclite-dev` and build with `libpcap,bluetooth,pcsc`, and a
-> step asserts the binary's `NEEDED` libraries are exactly glibc, zlib and those three. The
-> binaries therefore need `libpcap0.8 libdbus-1-3 libpcsclite1` at run time;
-> `docs/guides/INSTALL.md` and the release notes (`.github/release-notes-platforms.md`) say so,
-> and point minimal systems at the static musl binary, which (with Windows) still has none of
-> these protocols. Open until a tagged release has run the jobs. The text below is the original
-> finding.
+> The plain glibc Linux archives are unchanged: no system-library feature, linking nothing
+> beyond glibc and zlib, because they are what the npm packages ship and a new runtime library
+> would stop `npx @smotana/netget` starting on minimal systems. Two additional archives,
+> `netget-x86_64-unknown-linux-gnu-full` and `netget-aarch64-unknown-linux-gnu-full` (native
+> `ubuntu-22.04` / `ubuntu-22.04-arm` runners), install `libpcap-dev libdbus-1-dev
+> libpcsclite-dev` and build with `libpcap,bluetooth,pcsc`. A step checks every glibc binary's
+> `NEEDED` set: the plain ones may link nothing new, the `-full` ones must link exactly libpcap,
+> libdbus-1 and libpcsclite on top. `docs/guides/INSTALL.md` and the release notes
+> (`.github/release-notes-platforms.md`) say which protocols are only in `-full` and which
+> packages they need. Open until a tagged release has run the jobs. The text below is the
+> original finding.
 
 `748fccca` added `arp` to `dist-darwin` and `icmp` to `dist`, which fixed macOS. But `arp` and
 `datalink` remain absent from `dist` itself, so the Linux release binaries still cannot start

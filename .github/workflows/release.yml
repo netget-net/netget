@@ -21,7 +21,7 @@ jobs:
       contents: read
 
   build:
-    name: build (${{ matrix.target }})
+    name: build (${{ matrix.key }})
     runs-on: ${{ matrix.runner }}
     env:
       CARGO_BUILD_JOBS: '2'
@@ -29,12 +29,14 @@ jobs:
       fail-fast: false
       matrix:
         # Every protocol a target can build is compiled in; `features` adds the capabilities
-        # and the system-library protocols. macOS ships libpcap, PC/SC and CoreBluetooth. The
-        # glibc Linux binaries link libpcap, libdbus-1 and libpcsclite (installed below, and
-        # needed at run time — docs/guides/INSTALL.md lists the packages). The musl and
-        # Windows binaries need no system library: those protocols are absent there.
-        # `libusb` and `libsmbclient` are in no release binary. Keep this in step with the
-        # table in docs/guides/INSTALL.md and with the Dockerfile.
+        # and the system-library protocols. macOS ships libpcap, PC/SC and CoreBluetooth, so
+        # its binaries carry those protocols. The plain Linux and Windows binaries need no
+        # system library at run time — they are what the npm packages ship, and must stay that
+        # way so `npx @smotana/netget` starts on a minimal system. The glibc Linux `-full`
+        # archives (`suffix: -full`) add libpcap, bluetooth and pcsc and need libpcap,
+        # libdbus-1 and libpcsclite installed. `libusb` and `libsmbclient` are in no release
+        # binary. Keep this in step with docs/guides/INSTALL.md, the release-notes table and
+        # the Dockerfile.
         include:
           - target: aarch64-apple-darwin
             runner: macos-14
@@ -48,15 +50,27 @@ jobs:
             ext: tar.gz
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-22.04
+            features: mcp-stdio,mcp-http,sqlite,vendored-openssl
+            key: linux-x64
+            ext: tar.gz
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04-arm
+            features: mcp-stdio,mcp-http,sqlite,vendored-openssl
+            key: linux-arm64
+            ext: tar.gz
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
             features: mcp-stdio,mcp-http,sqlite,vendored-openssl,libpcap,bluetooth,pcsc
             system_libs: true
-            key: linux-x64
+            suffix: -full
+            key: linux-x64-full
             ext: tar.gz
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-22.04-arm # native arm64 runner, so the arm64 -dev packages are native too
             features: mcp-stdio,mcp-http,sqlite,vendored-openssl,libpcap,bluetooth,pcsc
             system_libs: true
-            key: linux-arm64
+            suffix: -full
+            key: linux-arm64-full
             ext: tar.gz
           - target: x86_64-unknown-linux-musl
             runner: ubuntu-22.04
@@ -118,7 +132,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}
+          key: ${{ matrix.key }}
 
       - name: Select native Perl for vendored OpenSSL
         if: runner.os == 'Windows'
@@ -154,24 +168,31 @@ jobs:
             esac
           done < <(awk 'NR > 1 { print $1 }' "$report")
 
-      # The glibc binaries may need exactly the libraries docs/guides/INSTALL.md tells users to
-      # install: glibc, zlib, and the three system libraries. Each of those three must be
-      # present (so the features really are compiled in), and anything else is a new runtime
-      # dependency nobody has documented.
+      # Each glibc binary may link exactly what docs/guides/INSTALL.md promises. Both flavours
+      # may need glibc and zlib. A plain binary must link nothing else — it is what npm ships,
+      # and a new library there would stop `npx @smotana/netget` starting on minimal systems.
+      # A `-full` binary must additionally link all three of libpcap, libdbus-1 and libpcsclite
+      # (so its features really are compiled in) and nothing beyond them.
       - name: Verify Linux runtime libraries
-        if: matrix.system_libs
+        if: endsWith(matrix.target, '-linux-gnu')
         shell: bash
         run: |
           bin="target/${{ matrix.target }}/release/netget"
+          full="${{ matrix.system_libs && 'true' || 'false' }}"
           needed=$(readelf -d "$bin" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p' | sort)
+          echo "full=$full"
           echo "$needed"
-          for lib in libpcap.so.0.8 libdbus-1.so.3 libpcsclite.so.1; do
-            grep -qx "$lib" <<< "$needed" || { echo "$lib is not linked: the feature that needs it did not build" >&2; exit 1; }
-          done
+          extra="libpcap.so.0.8 libdbus-1.so.3 libpcsclite.so.1"
+          if [ "$full" = true ]; then
+            for lib in $extra; do
+              grep -qx "$lib" <<< "$needed" || { echo "$lib is not linked: the feature that needs it did not build" >&2; exit 1; }
+            done
+          fi
           while IFS= read -r lib; do
             case "$lib" in
               ld-linux-x86-64.so.2|ld-linux-aarch64.so.1|libc.so.6|libm.so.6|libgcc_s.so.1|libpthread.so.0|libdl.so.2|librt.so.1|libz.so.1) ;;
-              libpcap.so.0.8|libdbus-1.so.3|libpcsclite.so.1) ;;
+              libpcap.so.0.8|libdbus-1.so.3|libpcsclite.so.1)
+                [ "$full" = true ] || { echo "$lib is linked by the plain binary, which npm ships and must need no system library" >&2; exit 1; } ;;
               *) echo "Unexpected runtime library: $lib (document it in docs/guides/INSTALL.md and allow it here)" >&2; exit 1 ;;
             esac
           done <<< "$needed"
@@ -181,7 +202,7 @@ jobs:
         run: |
           bin=netget
           [ "${{ matrix.key }}" = "win32-x64" ] && bin=netget.exe
-          archive="netget-${{ matrix.target }}.${{ matrix.ext }}"
+          archive="netget-${{ matrix.target }}${{ matrix.suffix }}.${{ matrix.ext }}"
           mkdir -p out
           # Archive the bare binary at the archive root (cd in, like tar -C),
           # so both the npm platform packages and the launcher's extraction

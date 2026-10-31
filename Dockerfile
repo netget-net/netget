@@ -1,7 +1,9 @@
 # syntax=docker/dockerfile:1
 #
-# NetGet in a container: the Linux release feature set (the same as the glibc release
-# binaries in .github/workflows/release.yml), on Debian bookworm.
+# NetGet in a container: the feature set of the glibc Linux `-full` release archives
+# (.github/workflows/release.yml), on Debian bookworm. The runtime stage installs the three
+# libraries that set links, so unlike the plain archives npm ships it carries packet capture,
+# Bluetooth LE and the NFC client.
 #
 #   docker build -t netget .
 #   docker run --rm -p 18040:18040 -e NETGET_MCP_TOKEN="$(openssl rand -hex 32)" netget
@@ -46,7 +48,7 @@ RUN apt-get update \
 WORKDIR /src
 COPY . .
 
-# Keep in step with the glibc Linux entries of release.yml's build matrix.
+# Keep in step with the `-full` glibc Linux entries of release.yml's build matrix.
 ARG NETGET_FEATURES=mcp-stdio,mcp-http,sqlite,vendored-openssl,libpcap,bluetooth,pcsc
 ENV CARGO_BUILD_JOBS=2 \
     CARGO_INCREMENTAL=0 \

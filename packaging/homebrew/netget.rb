@@ -4,7 +4,7 @@
 # (e.g. netget-net/homebrew-tap, so users run `brew install netget-net/tap/netget`) is the
 # maintainer's call.
 #
-# It installs the prebuilt macOS (and glibc Linux) binary from the GitHub release rather than
+# It installs the prebuilt macOS (and plain glibc Linux) binary from the GitHub release rather than
 # building from source: a source build compiles ~540 protocol implementations and needs cmake,
 # libclang and samba. The release archives hold the bare `netget` binary at their root
 # (.github/workflows/release.yml, "Package"), and each has a `.sha256` beside it plus a
@@ -35,13 +35,10 @@ class Netget < Formula
   end
 
   on_linux do
-    # The glibc Linux archives link libpcap, D-Bus and PC/SC from the next release on
-    # (docs/guides/INSTALL.md); v0.3.9's link none of them, so these dependencies are what the
-    # formula needs once `version` moves past 0.3.9.
-    depends_on "dbus"
-    depends_on "libpcap"
-    depends_on "pcsc-lite"
-
+    # The plain glibc archives, which link nothing beyond glibc and zlib (the same binaries npm
+    # ships). From the release after v0.3.9 there are also `-full` archives
+    # (netget-<target>-full.tar.gz) carrying packet capture, Bluetooth LE and the NFC client;
+    # switching to them would need `depends_on "dbus"`, `"libpcap"` and `"pcsc-lite"`.
     on_arm do
       url "https://github.com/netget-net/netget/releases/download/v#{version}/netget-aarch64-unknown-linux-gnu.tar.gz"
       sha256 "996faa133c16f1653d85e45486ca83e6d06c850930f7485db8cded27b1d68f01"

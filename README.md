@@ -19,7 +19,7 @@ npm install -g @smotana/netget
 netget
 ```
 
-Release archives, `cargo install`, Docker, and which protocols each platform's binary carries (the glibc Linux binaries need libpcap, libdbus-1 and libpcsclite at run time) are in the [install guide](docs/guides/INSTALL.md).
+Release archives, `cargo install`, Docker, and which protocols each platform's binary carries (on Linux, packet capture, Bluetooth LE and NFC are in the separate `-full` archives) are in the [install guide](docs/guides/INSTALL.md).
 
 For LLM responses, use Ollama or an OpenAI-compatible endpoint. Manual, static, and scripted responses run without a model.
 
