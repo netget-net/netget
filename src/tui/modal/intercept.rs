@@ -5,7 +5,7 @@
 //! shows what arrived and offers exactly three things to do:
 //!
 //! - **Compose answer…** opens the same composer the `[ send ]` rows use —
-//!   pick one of the protocol's actions from a list, fill its parameters as
+//!   pick one of the event's own answers from a list, fill its parameters as
 //!   fields (booleans toggle), and send. Raw JSON is one button away for the
 //!   rare shape the fields cannot express, never the starting point.
 //! - **Answer with nothing** delivers zero actions: acknowledge, say nothing.
@@ -29,7 +29,8 @@ pub struct InterceptModel {
     pub event_type: String,
     pub description: String,
     pub event_data: Option<serde_json::Value>,
-    /// The protocol's action vocabulary — what the composer offers.
+    /// The actions this event may be answered with — what the composer offers
+    /// (`crate::state::intercepts::server_answer_actions` / `client_answer_actions`).
     pub vocabulary: Vec<ActionDefinition>,
     pub error: Option<String>,
     /// Index into [`Self::buttons`].

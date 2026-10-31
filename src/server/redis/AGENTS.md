@@ -214,6 +214,14 @@ Real Redis never nests a *request* at all (`Protocol error: expected '$', got
   once, so a `close_this_connection` issued alongside a reply still flushes.
 - No per-connection state machine: commands on one connection are handled
   strictly sequentially by the read loop, so concurrent LLM calls cannot happen.
+- **The socket is watched while a command is answered.** An answer can take minutes (a model
+  call, or a `manual` rule parking the command for a person), so the loop keeps reading
+  while it waits. Bytes that arrive are kept — bounded with the frame buffer by
+  `MAX_PENDING_FRAME_BYTES` — and decoded, in order, before the next read. EOF marks the
+  outbox closing (nothing further is written or counted as sent) and the connection closed
+  in `AppState`, which withdraws a parked request for it, so a hung-up `redis-cli` cannot be
+  "answered" into a dead socket. Real Redis likewise frees a client on read EOF.
+  `tests/mcp_handler_and_intercept_scope_test.rs` drives both halves.
 
 ### Dashboard injection (`[ message this peer ]` / `[ disconnect this peer ]`)
 

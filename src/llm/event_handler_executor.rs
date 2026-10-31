@@ -299,9 +299,11 @@ async fn await_manual_answer(
             Ok(actions)
         }
         Ok(Err(_)) => {
-            // Sender dropped: the operator dismissed it (fail closed, now).
+            // Sender dropped: the operator refused it, or its connection / instance ended and
+            // `AppState` withdrew it (the reason is logged there). Fail closed, now.
             anyhow::bail!(
-                "manual handler: the operator dismissed request #{id} for event '{event_type_id}'"
+                "manual handler: request #{id} for event '{event_type_id}' was withdrawn \
+                 unanswered (refused by the operator, or its connection closed)"
             )
         }
         Err(_) => {

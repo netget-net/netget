@@ -14,9 +14,10 @@
 //! - **client**: [`client_llm_action_set`] — async ∪ sync, the union the model is shown
 //!   (clients have one LLM entry point, so their split is vestigial; see that function).
 //! - **server peer**: the server protocol's sync ∪ async actions.
-//! - **parked request**: the firing event's own actions ∪ the protocol's sync actions (plus,
-//!   for a client, its whole set) — the same catalog a static handler for that event is
-//!   validated against at startup, plus the common actions every protocol accepts.
+//! - **parked request**: what the model would be offered for the same event — a server
+//!   event's own declared actions (the protocol's sync set only where the event declares
+//!   none), a client's async ∪ sync ∪ the event's — plus the common actions every protocol
+//!   accepts. See `crate::state::intercepts::server_answer_actions`.
 
 use crate::llm::actions::client_trait::client_llm_action_set;
 use crate::llm::actions::ActionDefinition;
@@ -59,6 +60,11 @@ pub fn peer_vocabulary(
 
 /// The protocol a parked request belongs to, and the actions it may be answered with.
 ///
+/// The set is [`crate::state::intercepts::server_answer_actions`] /
+/// [`crate::state::intercepts::client_answer_actions`] — what the model would be offered for
+/// the same event — so `list_intercepts` offers, `answer_intercept` accepts and the dashboard's
+/// composer lists one and the same vocabulary.
+///
 /// `Err` when the owning instance is gone (the request is then no longer answerable anyway).
 pub async fn intercept_vocabulary(
     state: &AppState,
@@ -70,16 +76,13 @@ pub async fn intercept_vocabulary(
                 .get_server(server_id)
                 .await
                 .ok_or_else(|| format!("server #{} no longer exists", server_id.as_u32()))?;
-            let protocol = crate::protocol::server_registry::registry()
+            crate::protocol::server_registry::registry()
                 .resolve(&server.protocol_name)
                 .map_err(|e| e.to_string())?;
-            let mut actions: Vec<ActionDefinition> = protocol
-                .get_event_types()
-                .into_iter()
-                .find(|e| e.id == view.event_type)
-                .map(|e| e.actions)
-                .unwrap_or_default();
-            union_into(&mut actions, protocol.get_sync_actions());
+            let actions = crate::state::intercepts::server_answer_actions(
+                &server.protocol_name,
+                &view.event_type,
+            );
             Ok((server.protocol_name, actions))
         }
         InterceptOwner::Client(client_id) => {
@@ -87,23 +90,19 @@ pub async fn intercept_vocabulary(
                 .get_client(client_id)
                 .await
                 .ok_or_else(|| format!("client #{} no longer exists", client_id.as_u32()))?;
-            let protocol =
-                crate::cli::client_startup::resolve_client_protocol(&client.protocol_name)
-                    .and_then(|name| crate::protocol::CLIENT_REGISTRY.get(&name))
-                    .ok_or_else(|| {
-                        format!(
-                            "client protocol '{}' is not compiled in",
-                            client.protocol_name
-                        )
-                    })?;
-            let mut actions = client_llm_action_set(protocol.as_ref(), state, None);
-            let event_actions = protocol
-                .get_event_types()
-                .into_iter()
-                .find(|e| e.id == view.event_type)
-                .map(|e| e.actions)
-                .unwrap_or_default();
-            union_into(&mut actions, event_actions);
+            crate::cli::client_startup::resolve_client_protocol(&client.protocol_name)
+                .and_then(|name| crate::protocol::CLIENT_REGISTRY.get(&name))
+                .ok_or_else(|| {
+                    format!(
+                        "client protocol '{}' is not compiled in",
+                        client.protocol_name
+                    )
+                })?;
+            let actions = crate::state::intercepts::client_answer_actions(
+                &client.protocol_name,
+                state,
+                &view.event_type,
+            );
             Ok((client.protocol_name, actions))
         }
     }

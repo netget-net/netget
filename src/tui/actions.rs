@@ -205,7 +205,16 @@ pub fn open_intercept(app: &mut DashboardApp, key: UiKey, intercept_id: u64, sta
         ));
         return;
     };
-    let (_events, vocabulary) = crate::tui::modal::routing::vocabulary(key, &protocol, state);
+    // What the model would be offered for this event, and what `answer_intercept` accepts —
+    // the event's own answers, not the protocol's whole vocabulary.
+    let vocabulary = match key {
+        UiKey::Server(_) => {
+            crate::state::intercepts::server_answer_actions(&protocol, &view.event_type)
+        }
+        UiKey::Client(_) => {
+            crate::state::intercepts::client_answer_actions(&protocol, state, &view.event_type)
+        }
+    };
     app.modals.push(Modal::Intercept(Box::new(InterceptModel {
         id: view.id,
         owner: key,
