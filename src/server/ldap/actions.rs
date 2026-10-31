@@ -773,11 +773,51 @@ pub static CLOSE_CONNECTION_ACTION: LazyLock<ActionDefinition> =
 // Event Type Constants
 // ============================================================================
 
+/// The `answer_with` field of `ldap_bind`: what this bind is decided on.
+///
+/// Told "accept anonymous connections. A search under dc=example,dc=com finds one person …",
+/// llama3.1:8b answered `ldapsearch -x`'s anonymous bind with `success: false` "anonymous bind
+/// not allowed" in every run of `ldap/single-person` and `ldap/two-people` (real-model eval,
+/// seed 42): the event showed an empty `dn` and `password` and nothing said that this *is* the
+/// anonymous connection the instructions accept. The request names the kind of bind and says
+/// that what a search finds is decided when the search arrives.
+pub fn bind_answer_with(dn: &str, password: &str, auth_type: &str) -> String {
+    let later = "Searches and other operations arrive afterwards as their own events; what \
+                 they find is decided then, never here";
+    if auth_type != "simple" {
+        return format!(
+            "a {auth_type} bind, which this server cannot verify: ldap_bind_response with \
+             success false. {later}"
+        );
+    }
+    if dn.is_empty() && password.is_empty() {
+        format!(
+            "this is an anonymous bind (no DN, no password). Answer ldap_bind_response with \
+             success true, unless your instructions refuse anonymous connections - when they \
+             say to accept or allow anonymous connections, or say nothing about logging in, it \
+             succeeds. {later}"
+        )
+    } else if password.is_empty() {
+        format!(
+            "a bind as \"{dn}\" with no password (an unauthenticated bind). Answer \
+             ldap_bind_response with success true only if your instructions accept anonymous \
+             or unauthenticated connections; otherwise success false. {later}"
+        )
+    } else {
+        format!(
+            "a bind as \"{dn}\" with a password. Answer ldap_bind_response with success true \
+             unless your instructions refuse this DN or give it a different password; then \
+             success false. {later}"
+        )
+    }
+}
+
 /// LDAP bind event - triggered when client attempts to authenticate
 pub static LDAP_BIND_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "ldap_bind",
-        "LDAP bind (authentication) request received",
+        "LDAP bind (authentication) request received. Answer only the bind: the client's \
+         search or other operation follows on this same connection as its own event.",
         json!({
             "type": "ldap_bind_response",
             "message_id": 1,
@@ -825,11 +865,27 @@ pub static LDAP_BIND_EVENT: LazyLock<EventType> = LazyLock::new(|| {
                 .to_string(),
             required: true,
         },
+        Parameter {
+            name: "anonymous".to_string(),
+            type_hint: "boolean".to_string(),
+            description: "True for an anonymous simple bind: no DN and no password".to_string(),
+            required: true,
+        },
+        Parameter {
+            name: "answer_with".to_string(),
+            type_hint: "string".to_string(),
+            description: "What this bind is decided on: the kind of bind and what the \
+                          instructions say about it - never what a later search finds"
+                .to_string(),
+            required: true,
+        },
     ])
-    .with_actions(vec![
-        LDAP_BIND_RESPONSE_ACTION.clone(),
-        CLOSE_CONNECTION_ACTION.clone(),
-    ])
+    // Only the BindResponse. Offered close_connection beside it, llama3.1:8b answered an
+    // anonymous bind with ldap_bind_response *and* close_connection four runs in five
+    // (real-model eval, `ldap/single-person`), hanging up on ldapsearch before the search it
+    // had already pipelined. A refused bind is ldap_bind_response with success false; the
+    // client closes after it.
+    .with_actions(vec![LDAP_BIND_RESPONSE_ACTION.clone()])
     .with_log_template(
         LogTemplate::new()
             .with_info("LDAP BIND {client_ip} dn={dn}")
