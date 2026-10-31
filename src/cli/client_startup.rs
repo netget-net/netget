@@ -314,8 +314,11 @@ pub async fn start_client_from_action(
     // is still nothing to strand.
     let event_handler_config = match event_handlers {
         Some(handlers) if !handlers.is_empty() => Some(
-            crate::events::handler::EventHandler::parse_event_handlers(handlers)
-                .map_err(|e| anyhow::anyhow!("Invalid event_handlers for {}: {}", protocol, e))?,
+            crate::events::handler::EventHandler::parse_event_handlers_for(
+                handlers,
+                crate::events::handler::HandlerOwner::Client(protocol_impl.protocol_name()),
+            )
+            .map_err(|e| anyhow::anyhow!("Invalid event_handlers for {}: {}", protocol, e))?,
         ),
         _ => None,
     };
