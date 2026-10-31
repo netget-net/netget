@@ -6,6 +6,7 @@
 pub mod action_helper;
 pub mod actions; // Centralized helper for LLM calls
 pub mod agent_queue; // Agent-answered LLM request queue (MCP --llm-agent mode)
+pub mod backend_error; // Backend failures (model not installed, unreachable) vs bad model output
 pub mod bridge; // Requests handed to a host (the browser page) that owns the model
 pub mod circuit_breaker; // Fail-fast guard for an unreachable LLM backend
 pub mod conversation; // Conversation-based LLM interaction
@@ -73,6 +74,9 @@ pub use agent_queue::{LlmRequestQueue, PendingLlmRequest};
 
 // Host-answered LLM requests (the browser build)
 pub use bridge::{BridgeReply, BridgeRequest, BridgeRequestKind, LlmBridge};
+
+// Backend failures, kept apart from bad model output
+pub use backend_error::{describe_llm_failure, BackendFailureKind, LlmBackendError};
 
 // LLM backend circuit breaker
 pub use circuit_breaker::{

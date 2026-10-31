@@ -54,11 +54,12 @@ pub async fn resolve_startup_model(
                     info!("✓  Using configured model: {}", model);
                     vec![]
                 } else {
-                    info!(
-                        "⚠  Configured model '{}' not found, auto-selected: {}",
-                        config_model, model
+                    let line = format!(
+                        "⚠  Configured model '{}' is not installed at Ollama {}; using '{}' instead",
+                        config_model, base_url, model
                     );
-                    vec![]
+                    warn!("{}", line);
+                    vec![line]
                 }
             } else {
                 vec![

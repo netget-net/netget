@@ -181,6 +181,9 @@ pub fn contains_credentials(value: &Value) -> bool {
 pub fn hide_error_details(error: anyhow::Error) -> anyhow::Error {
     if let Some(category) = error.downcast_ref::<crate::llm::rate_limiter::RateLimitError>() {
         anyhow::Error::new(*category)
+    } else if let Some(backend) = crate::llm::LlmBackendError::find(&error) {
+        // Model, endpoint and failure kind are the operator's, not the request's.
+        anyhow::Error::new(backend.without_detail())
     } else {
         anyhow::anyhow!("credential-bearing request failed; diagnostics hidden")
     }

@@ -80,12 +80,9 @@ impl Easy for HttpEasyProtocol {
             let prompt = http_easy_prompt_for_event(&event, user_instruction.as_deref())?;
 
             // The model the rest of NetGet uses, chosen against the configured endpoint.
-            let model = crate::llm::ensure_model_selected(
-                app_state.get_ollama_model().await,
-                &app_state.get_ollama_url().await,
-            )
-            .await
-            .context("Failed to ensure model is selected")?;
+            let model = crate::llm::model_selection::ensure_state_model(&app_state)
+                .await
+                .context("Failed to ensure model is selected")?;
 
             // A network event: wait for a permit within the configured bounds, like every
             // other model call a peer can cause, and count its tokens against the budget.

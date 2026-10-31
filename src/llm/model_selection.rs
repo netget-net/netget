@@ -173,7 +173,8 @@ pub async fn select_or_validate_model(
 
     // If a model is configured, validate it exists
     if let Some(ref model_name) = configured_model {
-        let model_exists = models.iter().any(|m| m.name == *model_name);
+        let names: Vec<String> = models.iter().map(|m| m.name.clone()).collect();
+        let model_exists = model_is_listed(model_name, &names);
 
         if !model_exists {
             let available_models = models
@@ -183,8 +184,8 @@ pub async fn select_or_validate_model(
                 .join(", ");
 
             let error_msg = format!(
-                "✗  Configured model '{}' not found in Ollama.\n   Available models: {}\n   Use `/model` to select a different model.",
-                model_name, available_models
+                "✗  Configured model '{}' is not installed at Ollama {}.\n   Installed models: {}\n   Use `/model` to select a different model.",
+                model_name, ollama_url, available_models
             );
 
             if interactive {
@@ -272,5 +273,204 @@ pub async fn ensure_model_selected(
             )
         }
         Err(e) => Err(e),
+    }
+}
+
+/// Whether `model` is one of `names` the way the backend resolves a model name: exactly, or —
+/// for an untagged name — as `<name>:latest`, which is what Ollama completes it to.
+pub fn model_is_listed(model: &str, names: &[String]) -> bool {
+    let model = model.trim();
+    names.iter().any(|name| {
+        name == model || (!model.contains(':') && name.strip_suffix(":latest") == Some(model))
+    })
+}
+
+/// How long a model listing may take before it is reported as "could not check". The listing
+/// sits on `get_status`, `set_model` and MCP startup, none of which should wait on a request
+/// timeout meant for generation.
+pub const MODEL_LISTING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// What the backend says about one model.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModelAvailability {
+    /// The endpoint lists it.
+    Installed,
+    /// The endpoint lists models and this is not one of them.
+    NotInstalled { installed: Vec<String> },
+    /// The endpoint could not be asked (unreachable, or it does not list models).
+    Unknown { reason: String },
+    /// The backend has no models of its own to check against: the calling agent
+    /// (`--llm-agent`) or the browser host bridge answers whatever the name.
+    NotApplicable,
+}
+
+/// The models `client`'s endpoint lists, with their sizes where the backend reports them
+/// (Ollama does, OpenAI-compatible endpoints do not). `None` for a backend with no models of
+/// its own to list (the agent queue, the host bridge).
+pub async fn listed_models(client: &crate::llm::OllamaClient) -> Option<Result<Vec<ModelInfo>>> {
+    match client.backend_type() {
+        "ollama" => {
+            let endpoint = client.backend_url();
+            Some(query_available_models(endpoint.trim_end_matches('/')).await)
+        }
+        "openai" => Some(
+            match tokio::time::timeout(MODEL_LISTING_TIMEOUT, client.list_models()).await {
+                Ok(Ok(names)) => Ok(names
+                    .into_iter()
+                    .map(|name| ModelInfo {
+                        name,
+                        size: 0,
+                        modified_at: String::new(),
+                    })
+                    .collect()),
+                Ok(Err(e)) => Err(e),
+                Err(_) => Err(anyhow::anyhow!(
+                    "listing models timed out after {:?}",
+                    MODEL_LISTING_TIMEOUT
+                )),
+            },
+        ),
+        _ => None,
+    }
+}
+
+/// `"Ollama http://host:11434"` / `"OpenAI-compatible endpoint https://…"`, for messages.
+pub fn describe_endpoint(client: &crate::llm::OllamaClient) -> String {
+    let backend = match client.backend_type() {
+        "ollama" => crate::llm::backend_error::OLLAMA,
+        "openai" => crate::llm::backend_error::OPENAI,
+        other => other,
+    };
+    format!("{} {}", backend, client.backend_url().trim_end_matches('/'))
+}
+
+/// Ask `client`'s endpoint whether it has `model`.
+pub async fn check_model(client: &crate::llm::OllamaClient, model: &str) -> ModelAvailability {
+    match listed_models(client).await {
+        None => ModelAvailability::NotApplicable,
+        Some(Err(e)) => ModelAvailability::Unknown {
+            reason: format!("{e:#}"),
+        },
+        Some(Ok(models)) => {
+            let installed: Vec<String> = models.into_iter().map(|m| m.name).collect();
+            if model_is_listed(model, &installed) {
+                ModelAvailability::Installed
+            } else {
+                ModelAvailability::NotInstalled { installed }
+            }
+        }
+    }
+}
+
+/// A short list of model names for a message: all of them up to ten, then a count.
+pub fn summarize_models(names: &[String]) -> String {
+    if names.is_empty() {
+        return "none".to_string();
+    }
+    const SHOWN: usize = 10;
+    let mut out = names
+        .iter()
+        .take(SHOWN)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    if names.len() > SHOWN {
+        out.push_str(&format!(" and {} more", names.len() - SHOWN));
+    }
+    out
+}
+
+/// The model a headless process (MCP) should use, and what to say about how it was chosen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedModel {
+    /// The model to store in `AppState` (`None` = auto-select at the first request).
+    pub model: Option<String>,
+    /// Said in the log and in `get_status` whenever the model in use is not simply the
+    /// configured one, or could not be verified.
+    pub notice: Option<String>,
+}
+
+/// Validate a configured model against `client`'s endpoint before anything uses it.
+///
+/// - Listed, or no model configured, or a backend with no models of its own: unchanged.
+/// - Ollama lists models and this is not one: the best installed model is used instead —
+///   the same choice the interactive dashboard makes — and the notice names both and the
+///   endpoint. Using the configured name anyway would fail every request in milliseconds.
+/// - An OpenAI-compatible endpoint lists models and this is not one: kept, with a notice.
+///   Such endpoints often accept names they do not list (aliases, routed models), and they
+///   report no sizes to choose a replacement by.
+/// - The endpoint cannot be asked: kept, with a notice that it is unverified, so a backend
+///   that comes up after NetGet still gets the model the operator chose.
+pub async fn resolve_configured_model(
+    client: &crate::llm::OllamaClient,
+    configured: Option<String>,
+) -> ResolvedModel {
+    let Some(model) = configured else {
+        return ResolvedModel {
+            model: None,
+            notice: None,
+        };
+    };
+    let endpoint = describe_endpoint(client);
+    let unchanged = |notice: Option<String>| ResolvedModel {
+        model: Some(model.clone()),
+        notice,
+    };
+    match listed_models(client).await {
+        None => unchanged(None),
+        Some(Err(e)) => unchanged(Some(format!(
+            "could not list the models at {endpoint} ({e:#}); using the configured model \
+             '{model}' unverified"
+        ))),
+        Some(Ok(models)) => {
+            let names: Vec<String> = models.iter().map(|m| m.name.clone()).collect();
+            if model_is_listed(&model, &names) {
+                return unchanged(None);
+            }
+            if client.backend_type() != "ollama" {
+                return unchanged(Some(format!(
+                    "the configured model '{model}' is not listed by {endpoint} (it lists: {}); \
+                     using it anyway — requests fail if the endpoint does not serve it",
+                    summarize_models(&names)
+                )));
+            }
+            match select_best_model(&models) {
+                Some(best) => ResolvedModel {
+                    notice: Some(format!(
+                        "the configured model '{model}' is not installed at {endpoint} \
+                         (installed: {}); using '{best}' instead",
+                        summarize_models(&names)
+                    )),
+                    model: Some(best),
+                },
+                None => unchanged(Some(format!(
+                    "the configured model '{model}' is not installed at {endpoint}, which has \
+                     no models installed; every request will fail until one is pulled"
+                ))),
+            }
+        }
+    }
+}
+
+/// The model for an LLM call, auto-selected and **stored** when none is set.
+///
+/// [`ensure_model_selected`] returns the auto-selected model without recording it, so every
+/// request re-asked the endpoint and `get_status` kept saying "(auto-select)" while requests
+/// went to a model it never named. This records the choice in `state` the first time it is
+/// made, with a notice saying how it was made.
+pub async fn ensure_state_model(state: &crate::state::AppState) -> Result<String> {
+    if let Some(model) = state.get_ollama_model().await {
+        return Ok(model);
+    }
+    let endpoint = state.get_ollama_url().await;
+    let model = ensure_model_selected(None, &endpoint).await?;
+    if state.set_ollama_model_if_unset(model.clone()).await {
+        state.set_model_notice(Some(format!(
+            "no model was configured; auto-selected '{model}' (largest installed) at {endpoint}"
+        )));
+        Ok(model)
+    } else {
+        // Someone set one meanwhile (set_model, another request's auto-selection): use theirs.
+        Ok(state.get_ollama_model().await.unwrap_or(model))
     }
 }
