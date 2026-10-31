@@ -17,9 +17,9 @@ pub struct HttpResponseData {
 /// Execute HTTP response action (shared by HTTP/1.1 and HTTP/2).
 ///
 /// Deliberately lenient about the shapes models actually emit, because a
-/// rejected action is not visible to the client: `execute_actions()` only logs a
-/// warning and drops it, and the request then falls through to the default
-/// empty `200`. Concretely:
+/// rejected action never reaches the client: `execute_actions()` only logs a
+/// warning and drops it, and the request then falls through to the server's
+/// `default_response` or, without one, a fail-closed `500`. Concretely:
 ///
 /// - `status` may be a number or a numeric string (`200` or `"200"`), and must
 ///   be a real HTTP status (100-599) — a bogus value is an error here rather
