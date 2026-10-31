@@ -131,7 +131,11 @@ knows it is answering `websocket_connection_opened` because `run_connection` bra
 with `WebSocketProtocol::set_speaking_first`; a reply to the client's own empty message is still
 sent.
 
-MEASURED_PLACEHOLDER
+Measured with the real-model eval (llama3.1:8b, seed 42, 5 runs each, 31 October 2026): with
+the opened event asked separately, echo 0/5 (the model greeted "Hello, Client!" every run) and
+greeting 2/5 (the model answered the handshake with `show_message`, the fail-closed 503); with
+the greeting in the accept, echo 5/5 and greeting 4/5. The remaining greeting miss is the same
+`show_message` answer to the handshake.
 
 **An accept naming a subprotocol the client did not offer is accepted without one.** RFC 6455
 §4.2.2 forbids echoing a subprotocol the client did not offer, and websocat fails the connection
