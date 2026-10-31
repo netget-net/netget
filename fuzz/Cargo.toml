@@ -423,3 +423,10 @@ path = "fuzz_targets/gre_packet.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "mysql_stmt_execute"
+path = "fuzz_targets/mysql_stmt_execute.rs"
+test = false
+doc = false
+bench = false
