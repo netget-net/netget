@@ -28,9 +28,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Every protocol a target can build is compiled in; `features` adds the capabilities.
-        # macOS ships libpcap, PC/SC and CoreBluetooth, so its binaries carry those protocols
-        # too. Linux and Windows release binaries need no system library at run time.
+        # Every protocol a target can build is compiled in; `features` adds the capabilities
+        # and the system-library protocols. macOS ships libpcap, PC/SC and CoreBluetooth. The
+        # glibc Linux binaries link libpcap, libdbus-1 and libpcsclite (installed below, and
+        # needed at run time — docs/guides/INSTALL.md lists the packages). The musl and
+        # Windows binaries need no system library: those protocols are absent there.
+        # `libusb` and `libsmbclient` are in no release binary. Keep this in step with the
+        # table in docs/guides/INSTALL.md and with the Dockerfile.
         include:
           - target: aarch64-apple-darwin
             runner: macos-14
@@ -44,12 +48,14 @@ jobs:
             ext: tar.gz
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-22.04
-            features: mcp-stdio,mcp-http,sqlite,vendored-openssl
+            features: mcp-stdio,mcp-http,sqlite,vendored-openssl,libpcap,bluetooth,pcsc
+            system_libs: true
             key: linux-x64
             ext: tar.gz
           - target: aarch64-unknown-linux-gnu
-            runner: ubuntu-22.04-arm
-            features: mcp-stdio,mcp-http,sqlite,vendored-openssl
+            runner: ubuntu-22.04-arm # native arm64 runner, so the arm64 -dev packages are native too
+            features: mcp-stdio,mcp-http,sqlite,vendored-openssl,libpcap,bluetooth,pcsc
+            system_libs: true
             key: linux-arm64
             ext: tar.gz
           - target: x86_64-unknown-linux-musl
@@ -102,6 +108,14 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
+      # Headers and link libraries for the `libpcap`, `bluetooth` (BlueZ over D-Bus) and `pcsc`
+      # features. Both glibc targets build on a native runner, so no cross packages are needed.
+      - name: Install system libraries (libpcap, D-Bus, PC/SC)
+        if: matrix.system_libs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libpcap-dev libdbus-1-dev libpcsclite-dev
+
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
@@ -139,6 +153,28 @@ jobs:
               *) echo "Unexpected non-system runtime library: $library" >&2; exit 1 ;;
             esac
           done < <(awk 'NR > 1 { print $1 }' "$report")
+
+      # The glibc binaries may need exactly the libraries docs/guides/INSTALL.md tells users to
+      # install: glibc, zlib, and the three system libraries. Each of those three must be
+      # present (so the features really are compiled in), and anything else is a new runtime
+      # dependency nobody has documented.
+      - name: Verify Linux runtime libraries
+        if: matrix.system_libs
+        shell: bash
+        run: |
+          bin="target/${{ matrix.target }}/release/netget"
+          needed=$(readelf -d "$bin" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p' | sort)
+          echo "$needed"
+          for lib in libpcap.so.0.8 libdbus-1.so.3 libpcsclite.so.1; do
+            grep -qx "$lib" <<< "$needed" || { echo "$lib is not linked: the feature that needs it did not build" >&2; exit 1; }
+          done
+          while IFS= read -r lib; do
+            case "$lib" in
+              ld-linux-x86-64.so.2|ld-linux-aarch64.so.1|libc.so.6|libm.so.6|libgcc_s.so.1|libpthread.so.0|libdl.so.2|librt.so.1|libz.so.1) ;;
+              libpcap.so.0.8|libdbus-1.so.3|libpcsclite.so.1) ;;
+              *) echo "Unexpected runtime library: $lib (document it in docs/guides/INSTALL.md and allow it here)" >&2; exit 1 ;;
+            esac
+          done <<< "$needed"
 
       - name: Package
         shell: bash
@@ -191,6 +227,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "$GITHUB_REF_NAME" \
+            --notes "$(cat .github/release-notes-platforms.md)" \
             --generate-notes \
             artifacts/*
 

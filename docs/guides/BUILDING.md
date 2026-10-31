@@ -1,7 +1,8 @@
 # Building NetGet
 
-For a prebuilt binary, use `npx -y @smotana/netget` or download a
-[release](https://github.com/netget-net/netget/releases).
+For a prebuilt binary, use `npx -y @smotana/netget` (or `npm install -g @smotana/netget`) or
+download a [release](https://github.com/netget-net/netget/releases); [INSTALL.md](INSTALL.md)
+says which protocols each one carries. A source build is how to get the rest.
 
 ## System libraries
 

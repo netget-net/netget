@@ -1,7 +1,8 @@
 # NetGet — LLM-Controlled Network Protocol Server & Client
 
-Rust CLI where an LLM (Ollama or any OpenAI-compatible endpoint) drives ~116 network
-protocols as servers and ~90 as clients. NetGet owns the network stack; the LLM decides
+Rust CLI where an LLM (Ollama or any OpenAI-compatible endpoint) drives ~290 network
+protocols as servers and ~250 as clients (about 310 distinct protocols; `list_protocols` is the
+count). NetGet owns the network stack; the LLM decides
 what to say on the wire, either by reasoning per-request or via deterministic handlers.
 
 Three ways to run it: interactive TUI (default), headless (`--mcp` / `--mcp-http`, see
@@ -1234,9 +1235,12 @@ targeted stress runs.** If a test hangs, fix the hang rather than serializing th
 
 ### CI reality
 
-`release.yml` builds every target's binaries on release tags and manual dispatch (macOS with the
-`libpcap`, `bluetooth` and `pcsc` features, whose libraries ship with the OS; Linux and Windows
-with no system-library feature).
+`release.yml` builds every target's binaries on release tags and manual dispatch: macOS and the
+two glibc Linux targets with the `libpcap`, `bluetooth` and `pcsc` features (macOS ships those
+libraries; the Linux jobs install the `-dev` packages and a step asserts the binary links exactly
+the documented runtime libraries), musl and Windows with no system-library feature.
+`docs/guides/INSTALL.md` is the per-artifact table users read; keep it, the matrix and the
+`Dockerfile` in step.
 `ci.yml` runs on pull requests and on demand. **A push to `master` does not start CI.**
 `fuzz.yml` remains an on-demand search.
 

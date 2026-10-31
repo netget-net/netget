@@ -1,0 +1,49 @@
+# The image is built from the sources Cargo needs: Cargo.toml, Cargo.lock, build.rs, src/,
+# prompts/, proto/, the workspace members in crates/ and the patched vendor/hyper.
+# Everything else is excluded so the context stays small and no local state leaks in.
+
+# Build output and caches
+target/
+target-*/
+**/target/
+/dist/
+/site/demo/pkg/
+
+# Local state, logs and run artefacts NetGet or the tests write into the working directory
+/tmp/
+/logs/
+*.log
+*.log.*
+*.sock
+*.db
+/test-results/
+/pki/
+/.mcp.json
+/paseo.json
+
+# Version control, editors and agent worktrees
+.git/
+.gitignore
+.github/
+.claude/
+.worktrees/
+/worktrees/
+.vscode/
+.idea/
+.DS_Store
+**/__pycache__/
+
+# Not needed to build the binary
+/fuzz/
+/tests/
+/examples/
+/docs/
+/site/
+/web/
+/npm/
+/eval-results/
+/audit/
+/scripts/
+/packaging/
+/Dockerfile
+/.dockerignore

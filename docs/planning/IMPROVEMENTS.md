@@ -92,8 +92,10 @@ fixes whose end-to-end validation still needs hardware — see item 2 below.
 
 ### Still open
 
-Re-derived from source on 26 September 2026. Seven items in "Open — actionable" below were
-already fixed and are now marked so in their headings (7, 9, 16, 32, 39, 42, 50).
+Re-derived from source on 26 September 2026, and again on 31 October 2026. Seven items in
+"Open — actionable" below were already fixed and are now marked so in their headings (7, 9, 16,
+32, 39, 42, 50). Items 20b (startup ignores the dependency system) and 78 (connect events only
+with `send_first`) are fixed and live in the [Fixed](#fixed) table, not here.
 
 1. **`bluetooth_ble_beacon` on real Linux hardware.** *(Implemented, unverified.)* The BlueZ
    path has never been compiled or run on Linux; first use is bring-up via the `#[ignore]`d test
@@ -103,20 +105,16 @@ already fixed and are now marked so in their headings (7, 9, 16, 32, 39, 42, 50)
 3. **`pgwire` malformed-query panic (item 77)** — upstream; kills one connection task only.
 4. **`AppState` is one `RwLock` over everything (item 23)** — a throughput ceiling.
 5. **The `easy` layer (item 35)** — still present (`src/easy/http`). Finish or delete.
-6. **Startup does not consult the dependency system (item 20b)** — **fixed 26 Sep 2026**: all
-   four `start_*` paths refuse a definitively-missing library or tool; see the item.
-7. **`REQUIRE_DOCS_FOR_OPEN_ACTIONS` (item 29)** — a hardcoded `false` guarding a gate nobody
+6. **`REQUIRE_DOCS_FOR_OPEN_ACTIONS` (item 29)** — a hardcoded `false` guarding a gate nobody
    enables; make it a runtime setting or delete it and its state.
-8. **ARP and DataLink are absent from the Linux `dist` set (item 54).**
-9. **Connect events fire only with `send_first` (item 78)** — **fixed 26 Sep 2026**
-   (`527e07f3`) for `tcp`, `telnet` and `tls`; `socket_file`, `pty` and `stdio` still gate theirs
-   on `send_first`. See the item.
+7. **Linux release with libpcap, Bluetooth and PC/SC (item 54)** — the release jobs are changed
+   and documented; nothing has run them yet. Confirm on the next tagged release.
 
-10. **Logging long tail.** 111 of 153 server `mod.rs` files use the `Log` facade
+8. **Logging long tail.** 111 of 153 server `mod.rs` files use the `Log` facade
     (`src/logging/emit.rs`); 42 still hand-roll dual logging. Derive with
     `grep -L 'Log::new\|crate::logging::Log' src/server/*/mod.rs`.
 
-11. **RTP failed the startup smoke test once in CI, and passes otherwise (item 82).** See below.
+9. **RTP failed the startup smoke test once in CI, and passes otherwise (item 82).** See below.
 
 ### Patterns worth auditing for
 
@@ -496,7 +494,17 @@ Gate both behind the existing flag. Note the flag is process-global — `is_serv
 returns `!documented_server_protocols.is_empty()` (`src/state/app_state.rs:728`) — so it fires
 once per process regardless of which protocol is being started.
 
-### 54. ARP and DataLink still cannot ship on Linux **[verified]**
+### 54. ARP and DataLink still cannot ship on Linux **[release change made 31 Oct 2026; unverified on runners]**
+
+> The glibc Linux release jobs (`x86_64-unknown-linux-gnu` on `ubuntu-22.04`,
+> `aarch64-unknown-linux-gnu` on the native `ubuntu-22.04-arm` runner) now install
+> `libpcap-dev libdbus-1-dev libpcsclite-dev` and build with `libpcap,bluetooth,pcsc`, and a
+> step asserts the binary's `NEEDED` libraries are exactly glibc, zlib and those three. The
+> binaries therefore need `libpcap0.8 libdbus-1-3 libpcsclite1` at run time;
+> `docs/guides/INSTALL.md` and the release notes (`.github/release-notes-platforms.md`) say so,
+> and point minimal systems at the static musl binary, which (with Windows) still has none of
+> these protocols. Open until a tagged release has run the jobs. The text below is the original
+> finding.
 
 `748fccca` added `arp` to `dist-darwin` and `icmp` to `dist`, which fixed macOS. But `arp` and
 `datalink` remain absent from `dist` itself, so the Linux release binaries still cannot start
