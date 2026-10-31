@@ -1,0 +1,19 @@
+[package]
+name = "netget-fixture"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/netget-net/netget"
+homepage = "https://netget.net"
+description = "Start a NetGet process from a test, wait until every server it was asked for is listening, and get the bound addresses back. Kills the process when dropped."
+# Not published: use it as a path or git dependency.
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# Only for reading the --ready-file report and writing inline configurations. The helper
+# deliberately does not depend on NetGet itself, which is a large crate: it drives the
+# `netget` binary, the same one a user runs.
+serde_json = "1.0"
