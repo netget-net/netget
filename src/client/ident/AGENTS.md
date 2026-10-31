@@ -114,29 +114,22 @@ therefore the single encoder, shared by the LLM path and by injected dashboard c
 is also why the command loop is bespoke rather than
 `command_support::handle_stream_client_command` (that generic arm cannot run a `Custom` result).
 
-### The vocabulary is declared once but attached twice, and that is not duplication
+### The vocabulary is declared once
 
-`client_action_set()` is the only list. It is returned by `get_async_actions()` **and** attached
-to all four event types with `with_actions(...)`, because two different readers consume two
-different things:
+`client_action_set()` is the only list. It is returned by `get_async_actions()` and also
+attached to all four event types with `with_actions(...)`, so each event's own entry in the
+prompt and in `get_protocol_docs` names the verbs that answer it. Both consumers of a client's
+vocabulary take the union, so neither depends on the attachment:
 
 * `client_llm_action_set` (`src/llm/actions/client_trait.rs`) unions async ∪ sync ∪ the firing
   event's actions and deduplicates by name, so the model sees each verb once. A client has one
   LLM entry point and cannot express a narrowing, which is why `get_sync_actions()` is empty
   here rather than a second copy of the list.
-* `validate_static_action_names` (`src/events/handler.rs`) builds its catalogue from
-  `get_sync_actions()` **plus the matching event types' actions**, and never from the async
-  list.
-
-**Without the `with_actions` attachment, a correct static routing rule is rejected at
-creation.** `{"type": "static", "actions": [{"type": "send_ident_query", …}]}` on
-`ident_connected` comes back as *"Unknown action … Valid actions for Ident: append_memory,
-append_to_log, …"* — a list of common actions only. This is a general trap for any client that
-follows the "do not duplicate into both methods" rule: **`whois` has it right now**, and its own
-`get_startup_examples()` static-mode example (`query_whois` in a static handler) cannot be
-created. The clients that work around it — `tcp` and ~40 others — do so by duplicating their
-whole list into `get_sync_actions()`. Attaching to the events is the cheaper fix and is what
-`EventType::actions` is documented for.
+* `validate_static_action_names` (`src/events/handler.rs`) validates a client handler against
+  `client_action_names_for_pattern` — the same union plus the matching event types' actions —
+  so `{"type": "static", "actions": [{"type": "send_ident_query", …}]}` on `ident_connected`
+  is accepted at creation. `tests/static_handler_action_catalog_test.rs` pins the rule for
+  async-only client verbs (TCP's `disconnect`, WHOIS's `query_whois`).
 
 ## Failure behavior
 

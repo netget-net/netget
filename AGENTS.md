@@ -201,13 +201,17 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
     checked at a second site that could never fire — is a comment, and was removed.
 
   **Nine protocols now have two clients and still fail conditions 2 or 3**, which is worth knowing
-  before picking the next one: `doh`, `dot`, `etcd`, `grpc`, `postgresql` and `websocket` have
-  neither a pcap-oracle test nor a fuzz target; `mongodb` has a fuzz target
-  (`fuzz_targets/bson_document.rs`) and no oracle; `mqtt` and `kafka` have the oracle and no
-  fuzz target. (`redis` was in that last group until `fuzz_targets/resp_frame.rs` landed in
-  September 2026.) A fuzz target with a depth-bomb corpus is the cheaper of the two to
-  add. Derive this rather than trusting it — and note that fuzz targets are named after the
-  *decoder*, not the protocol, so read each target's `use` lines rather than grepping its name:
+  before picking the next one: `etcd`, `grpc`, `postgresql` and `websocket` have neither a
+  pcap-oracle test nor a fuzz target; `doh` and `dot` have a fuzz target and no oracle —
+  `fuzz_targets/dns_message.rs` fuzzes `hickory_proto`'s `Message::from_vec`, which both servers
+  call inline on every request, and its corpus carries a `compression_pointer_loop`, DNS's
+  depth bomb; `mongodb` has a fuzz target (`fuzz_targets/bson_document.rs`) and no oracle;
+  `mqtt` and `kafka` have the oracle and no fuzz target. (`redis` was in that last group until
+  `fuzz_targets/resp_frame.rs` landed in September 2026.) A fuzz target with a depth-bomb
+  corpus is the cheaper of the two to add. Derive this rather than trusting it — and note that
+  fuzz targets are named after the *decoder*, not the protocol, so read each target's `use`
+  lines rather than grepping its name (`dns_message.rs` covers three protocols, none of them
+  in its file name but `dns`):
 
   ```bash
   grep -rln pcap_oracle tests/server/<p>/ ; grep -ln "<p>\|<decoder crate>" fuzz/fuzz_targets/*.rs
@@ -1741,8 +1745,8 @@ for `wasm32-unknown-unknown` (68 features, TCP and UDP; the list is
 `--mcp` (stdio) and `--mcp-http PORT` expose tools sharing the TUI's code paths. See
 `src/mcp_stdio/AGENTS.md`.
 
-**Five of the six gaps this section used to list have been fixed, and it kept claiming them.**
-Re-verified September 2026 against `src/mcp_stdio/`:
+**All six gaps this section used to list have been fixed, and it kept claiming them.**
+Re-verified against `src/mcp_stdio/` (September 2026) and `src/events/handler.rs` (October 2026):
 
 | Former gap | Status |
 |---|---|
@@ -1751,6 +1755,7 @@ Re-verified September 2026 against `src/mcp_stdio/`:
 | `send_first` accepted as `_send_first` and ignored on every path | **Fixed** — `params.send_first` is passed and folded into `startup_params`, though only where the protocol declares it |
 | `get_protocol_docs` returns TUI docs describing an uninvokable API | **Fixed** — `docs.rs` is MCP-shaped and mentions neither `open_server` nor `base_stack` |
 | `stop_server`/`stop_all` skip `cleanup_server_tasks()` | **Fixed** — teardown moved inside `AppState::remove_server`, pinned by `tests/mcp_stop_cleanup_test.rs` |
+| Unknown action names in `event_handlers` accepted at startup | **Fixed** — `EventHandler::parse_event_handlers` runs `validate_static_action_names` on every static handler before anything is registered (`start_server`, `start_client`, `update_*`, `open_server`/`open_client`), and the error names the valid actions; pinned by `tests/static_handler_action_catalog_test.rs` |
 
 **Everything the dashboard's buttons do is a tool too** — `send_to_client`, `send_to_peer`,
 `disconnect_peer`, `list_intercepts`, `answer_intercept` (`[]` = answer with nothing) and
@@ -1759,11 +1764,12 @@ it to a running loop; `server_status` lists connection ids and which accept `sen
 There is no `dismiss_intercept` tool on purpose: dismissing *is* failing closed. Details in
 `src/mcp_stdio/AGENTS.md` ("Driving by hand").
 
-**Two remain:**
+**What is not checked at creation, and what is by design:**
 
-- **Unknown action names in `event_handlers` are still accepted at startup** — only the
-  handler's *shape* is validated. They are no longer silent at runtime, though:
-  `executor.rs` logs at ERROR and records a failure.
+- **A script handler's actions are only known when it runs**, so they cannot be validated up
+  front, and a static handler on an event id no compiled protocol declares has no catalogue to
+  check against and is accepted. Neither is silent at runtime: `executor.rs` logs an unknown
+  action at ERROR and records a failure.
 - **No state persists across process restarts**, which is by design.
 
 **The lesson is about this file, not about MCP.** A "current gaps" list is the part of any

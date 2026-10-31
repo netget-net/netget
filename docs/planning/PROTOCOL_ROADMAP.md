@@ -1135,10 +1135,12 @@ Do not delete unrelated worktrees, artifacts, logs, source, Cargo caches or runn
 
 - [x] **29. IPFIX** — B/M-L; proposed feature `ipfix`. [Specification/reference](https://www.rfc-editor.org/info/rfc7011/).
   - Scope: Collector/exporter, templates, typed data records, domain/sequence tracking and template lifecycle.
-  - [ ] Server or listening/collector role implemented and registered.
-  - [ ] Client or connecting/exporter role implemented and registered.
-  - [ ] Independent interoperability, negative/lifecycle tests and feature build pass.
-  - [ ] Documentation, honest metadata and integrated commit recorded.
+  - [x] Server or listening/collector role implemented and registered.
+  - [x] Client or connecting/exporter role implemented and registered.
+  - [x] Independent interoperability, negative/lifecycle tests and feature build pass.
+  - [x] Documentation, honest metadata and integrated commit recorded.
+
+  - Validation: see Batch 7 below — 28 checks (20 collector, eight exporter) against unmodified Python ipfix 0.9.7 and the official GoFlow2 2.2.7. Source `69eb9b8c`. Experimental; no complete RFC, reliable-delivery, TLS, flow-store, fuzz or pcap claim.
 
 - [x] **30. sFlow v5** — B/M; proposed feature `sflow`. [Specification/reference](https://sflow.org/developers/specifications.php).
   - Scope: Collector/agent, flow/counter samples, sampling metadata and extensible bounded records.
