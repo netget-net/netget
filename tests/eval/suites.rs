@@ -63,6 +63,8 @@ pub fn all_cases() -> Vec<EvalCase> {
     cases.extend(sip());
     cases.extend(websocket());
     cases.extend(nostr());
+    cases.extend(lmtp());
+    cases.extend(rsync());
     cases
 }
 
@@ -1934,6 +1936,86 @@ fn nostr() -> Vec<EvalCase> {
             "This relay is for notes about films. Accept them.",
             nak_publish("Stalker is a masterpiece of slow cinema"),
             Expect::contains(&["success"]),
+        ),
+    ]
+}
+
+// ---------------------------------------------------------------------------
+// LMTP — CPython's smtplib.LMTP, standard library. LHLO is answered by NetGet;
+// the model decides each RCPT and the per-recipient outcome after DATA. The
+// probe prints each reply code, and only sends DATA after an accepted RCPT.
+// ---------------------------------------------------------------------------
+
+const LMTP_PROBE: &str = r#"import sys, smtplib
+port, rcpt = int(sys.argv[1]), sys.argv[2]
+try:
+    s = smtplib.LMTP('127.0.0.1', port, timeout=230)
+    code, _ = s.ehlo()
+    print('LHLO', code)
+    code, msg = s.mail('eval@sender.test')
+    print('MAIL', code, msg.decode('utf-8', 'replace'))
+    code, msg = s.rcpt(rcpt)
+    print('RCPT', code, msg.decode('utf-8', 'replace'))
+    if code < 300:
+        code, msg = s.data('Subject: NetGet eval\r\n\r\nHello.\r\n')
+        print('DATA', code, msg.decode('utf-8', 'replace'))
+    s.quit()
+except Exception as e:
+    print(type(e).__name__, e)
+"#;
+
+fn lmtp_probe(rcpt: &str) -> Probe {
+    Probe::client("python3", &["-c", LMTP_PROBE, "{PORT}", rcpt]).until_exit()
+}
+
+fn lmtp() -> Vec<EvalCase> {
+    const MAILBOXES: &str = "Only the mailbox alice@example.com exists here; refuse every other \
+                             recipient.";
+    vec![
+        EvalCase::new(
+            "lmtp/deliver-local",
+            "lmtp",
+            MAILBOXES,
+            lmtp_probe("alice@example.com"),
+            Expect::default().matching(r"(?m)^RCPT 25[01]\b(?s:.*)^DATA 250\b"),
+        ),
+        EvalCase::new(
+            "lmtp/refuse-unknown",
+            "lmtp",
+            MAILBOXES,
+            lmtp_probe("bob@example.com"),
+            Expect::default().matching(r"(?m)^RCPT 5\d\d\b"),
+        ),
+    ]
+}
+
+// ---------------------------------------------------------------------------
+// rsync — the stock rsync client in daemon mode (rsync://). `rsync rsync://host/`
+// lists modules; `rsync rsync://host/module/` lists what the module holds. Both
+// exit when the listing is done; the timeouts only bound a dead server.
+// ---------------------------------------------------------------------------
+
+fn rsync_probe(url_path: &str) -> Probe {
+    let url = format!("rsync://127.0.0.1:{{PORT}}/{url_path}");
+    Probe::client("rsync", &["--contimeout=230", "--timeout=230", &url]).until_exit()
+}
+
+fn rsync() -> Vec<EvalCase> {
+    vec![
+        EvalCase::new(
+            "rsync/list-modules",
+            "rsync",
+            "Offer two modules: backups, described as Nightly backups, and media, described as \
+             Photo library.",
+            rsync_probe(""),
+            Expect::contains(&["backups", "Nightly backups", "media", "Photo library"]),
+        ),
+        EvalCase::new(
+            "rsync/list-files",
+            "rsync",
+            "The module docs holds two files, readme.txt and notes.md.",
+            rsync_probe("docs/"),
+            Expect::contains(&["readme.txt", "notes.md"]),
         ),
     ]
 }
