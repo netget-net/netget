@@ -13,8 +13,10 @@ mode the hash-slot routing and `CLUSTER` introspection (`cluster.rs`, slot arith
 allowed, whether a published message is delivered and what the publisher is told, what the
 server publishes on its own, and which node owns which slots.
 
-**State**: Beta — **two** independent clients, sharing no code with each other or
-with the `redis-protocol` crate the server parses with:
+**State**: Stable, against the six conditions in the root `AGENTS.md` — see "Maturity: the
+six conditions" at the foot of this file, which says which surface the rating covers. The
+clients share no code with each other or with the `redis-protocol` crate the server parses
+with:
 
 - **redis-rs** (Rust) in `tests/server/redis/e2e_test.rs`: six tests, one per
   RESP2 reply type, each deserialised into the Rust type the test asked for.
@@ -26,10 +28,7 @@ with the `redis-protocol` crate the server parses with:
   — and because it is one ordered list, a reply landing against the wrong command
   fails as a mismatched line rather than passing as a same-typed value. It
   hard-fails when the binary is absent.
-
-Not Stable: Stable additionally wants spec compliance and scripting support
-reviewed, which has not been done. (This file used to say Experimental while
-`actions.rs` said Beta — the code was right.)
+- **redis-py** 5 for RESP3 and pub/sub, where it is the second (or third) parser.
 **Port**: 6379 by default. **Privilege**: `None` (6379 > 1024).
 **Stack**: `ETH>IP>TCP>Redis`. **Spec**: RESP2.
 
@@ -52,10 +51,10 @@ reviewed, which has not been done. (This file used to say Experimental while
 | Field | Notes |
 |---|---|
 | `command` | the frame flattened to a single space-separated string, e.g. `SET mykey hello` |
+| `protocol` | `2` or `3`, what the connection negotiated with `HELLO` |
 
-That string is all the model gets — arguments are not split out, and there is no
-argument-count or key field. A command whose argument contains a space is
-indistinguishable from two arguments.
+Arguments are not split out, and there is no argument-count or key field. A command whose
+argument contains a space is indistinguishable from two arguments.
 
 **Actions** (all sync; there are no async actions):
 
@@ -143,20 +142,29 @@ length-prefixed, so it can carry any bytes, newlines included.
   skipped (no Redis action returns `Custom` any more; the arm exists so a
   regression is loud); if nothing else was produced the no-response error above
   is sent.
+Every `decision=` tag above for a plain command, and its wire form, is asserted by
+`tests/server/redis/failure_decision_test.rs` — the tags are written to the status stream as
+well as `netget.log`, so the test reads them there.
+
 - **Undecodable RESP** → the connection is closed.
 - **Arrays nested deeper than 32** (`utils::resp::MAX_RESP_DEPTH`) →
   `-ERR Protocol error: nesting too deep`, half-close, logged
   `decision=fail_closed_resp_too_deep`. Refused as soon as the 33rd level opens,
   whether or not the rest of the frame has arrived. See "RESP nesting" below.
-- **A declared length that can never complete** — `*N` past 2^20 values
-  (`MAX_RESP_ELEMENTS`, also the cap on all values in one frame), or `$N` past
-  `MAX_PENDING_FRAME_BYTES` → `-ERR Protocol error: invalid multibulk length` /
-  `invalid bulk length` on the header line, half-close, logged
-  `decision=fail_closed_resp_too_long`.
-- **Incomplete frame larger than 64 MB** (`MAX_PENDING_FRAME_BYTES`) → an error
-  is sent and the connection closed. Without this cap a client announcing
-  `$2000000000\r\n` and stalling would grow the per-connection buffer without
-  bound.
+- **A declared length that can never complete** — `*N` that would take the frame past
+  2^20 values (`MAX_RESP_ELEMENTS` counts every value in the frame, the arrays themselves
+  included, so the outer array of a command may promise 2^20 − 1), or `$N` past
+  `MAX_BULK_LEN` (`MAX_PENDING_FRAME_BYTES` less the 17 bytes of the least framing a request
+  can have, so the largest `$N` accepted is one that can still fit) →
+  `-ERR Protocol error: invalid multibulk length` / `invalid bulk length` on the header line,
+  half-close, logged `decision=fail_closed_resp_too_long`.
+- **A frame larger than 64 MiB** (`MAX_PENDING_FRAME_BYTES`) → `-ERR Protocol error: invalid
+  multibulk length`, half-close, logged `decision=fail_closed_frame_too_large`. Refused as
+  soon as its unfinished part passes the cap, or when it completes if its last byte arrived in
+  the read that completed it; measured after the complete frames in front of it have been
+  handled, so a pipelined command behind a large frame is not counted against it. A frame of
+  exactly 64 MiB is answered. Without the cap a client announcing a long frame and stalling
+  would grow the per-connection buffer without bound.
 
 All three refusals are fixed strings — nothing from the peer's bytes or an
 internal error reaches the wire.
@@ -178,6 +186,16 @@ recursion, no allocation — and the read loop decodes only what it reports
 unchecked, as `nom_take(2)` does), so it never refuses a frame `decode` would
 accept within the bounds. `Malformed` closes the connection without decoding,
 as an undecodable frame always has.
+
+**The scan resumes; it does not restart.** The read loop keeps one
+`utils::resp::RespScanner` per connection, which remembers the value boundary an unfinished
+frame stopped at, how far that value's line has been searched for CRLF, and a bulk string's
+end once its header is read. Scanning each read from the start of the frame made an
+unfinished frame cost the sum of its prefixes: a simple string has no length prefix, so a peer
+trickling a 64 MiB line in 4 KiB reads bought ~16 000 walks of up to 64 MiB each — minutes of
+one tokio worker per connection, from 256 unauthenticated ones, before the frame cap was
+reached. Resumed, each byte is looked at once. The fuzz target checks that a resumed scan
+reaches the same verdict as a one-shot one on every split.
 
 A declared length was **not** an allocation bomb on its own: `nom` 7.1.3's
 `count` caps its initial `Vec::with_capacity` at 64 KiB. What it did do was
@@ -350,9 +368,10 @@ different view is redirected by it.
 
 - **RESP3 attributes** (`|`), streamed strings and aggregates, and client-side caching
   (`CLIENT TRACKING`).
-- **Inline commands** (`PING\r\n` typed into `nc`) — only RESP arrays decode;
-  anything else closes the connection. `redis-cli` and `redis-rs` always send
-  RESP arrays, so this only affects hand-typed sessions.
+- **Inline commands** (`PING\r\n` typed into `nc`) — a first byte that is not a RESP type
+  byte closes the connection. A bare RESP value that is not an array (`+PING\r\n`) does decode,
+  and reaches the model as the decoder's debug text of the value rather than as a command.
+  `redis-cli` and `redis-rs` always send RESP arrays, so this only affects hand-typed sessions.
 - **AUTH / SELECT / MULTI / EXEC / WATCH** — reach the model as ordinary
   commands with no special handling. There is no auth gate.
 - **Blocking commands** (`BLPOP`), **Lua** (`EVAL`), **replication**, **persistence**,
@@ -403,7 +422,7 @@ its targets and exit having run nothing — it does not fail, so it silently loo
 like a pass. Filter after `--` instead:
 
 ```bash
-./cargo-isolated.sh test --no-default-features --features redis \
+./cargo-isolated.sh test --no-default-features --features mcp-stdio,sqlite \
     --test server -- server::redis --test-threads=100
 ```
 

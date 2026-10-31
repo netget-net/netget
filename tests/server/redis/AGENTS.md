@@ -1,16 +1,20 @@
 # Redis Protocol E2E Tests
 
-Twelve files, all declared in `tests/server/redis/mod.rs`.
+Sixteen files, all declared in `tests/server/redis/mod.rs`.
 
 | File | Tests | What it proves | LLM calls |
 |---|---|---|---|
-| `connection_bounds_test.rs` | 3 | Both read deadlines, from a raw socket | 0 |
+| `connection_bounds_test.rs` | 4 | Both read deadlines, and the 256-connection cap (refusal text, slot returned on close), from raw sockets | 0 |
+| `frame_bounds_test.rs` | 5 | The 64 MiB frame cap, `MAX_BULK_LEN`, `MAX_RESP_ELEMENTS` and `MAX_REPLY_DEPTH` at their boundaries, and that an unfinished frame is scanned once | 0 |
+| `failure_decision_test.rs` | 2 | Each failure case's wire form and its `decision=` tag: model refusal, empty answer, failed backend (`-ERR`), saturated backend (`-LOADING`) | 0 |
+| `pcap_oracle_test.rs` | 2 | Every RESP2 success-path reply shape, Rust's own replies and cluster replies, read by Wireshark's `resp` dissector, values included | 0 |
+| `verb_coverage_test.rs` | 3 | Sharded pub/sub, `UNSUBSCRIBE`/`PUNSUBSCRIBE`, `RESET`, subscribed-mode `PING` and cluster introspection/refusals through redis-cli, redis-rs and redis-py | 0 |
 | `e2e_test.rs` | 6 | Every RESP2 reply type, through `redis-rs` | 13 |
 | `real_client_test.rs` | 1 | A whole session through the real `redis-cli` binary | 8 |
 | `resp_framing_test.rs` | 3 | Model output cannot split a frame; `stop_server` stops sessions | 0 |
 | `llm_failure_test.rs` | 1 | The RESP error a client sees when the backend fails | 1 |
 | `peer_inject_test.rs` | 1 | Dashboard injection reaches the socket | 0 |
-| `resp3_test.rs` | 2 | `HELLO 3` and every RESP3 type through redis-cli `-3` and redis-py 5, the RESP2 downgrades, a push, and credentials in `HELLO` | 0 |
+| `resp3_test.rs` | 3 | `HELLO 3` and every RESP3 type through redis-cli `-3`, redis-py 5 and redis-rs (the big number's second reader), the RESP2 downgrades, a push, and credentials in `HELLO` | 0 |
 | `resp_depth_test.rs` | 4 | A RESP nesting bomb or an impossible declared length is refused before the decoder, and the process survives | 0 |
 | `pubsub_test.rs` | 2 | Pub/sub through redis-cli (RESP2 and `-3`) and redis-rs (RESP2 `PubSub`, RESP3 push sender) | 0 |
 | `pubsub_bounds_test.rs` | 6 | Subscribed mode, every pub/sub bound, the slow-consumer disconnect, fail-closed subscribe/publish | 0 |
@@ -24,7 +28,7 @@ makes cargo list its targets and exit having run nothing — and it exits 0, so 
 looks like a pass. Filter after `--`:
 
 ```bash
-./cargo-isolated.sh test --no-default-features --features redis \
+./cargo-isolated.sh test --no-default-features --features mcp-stdio,sqlite \
     --test server -- server::redis --test-threads=100
 ```
 
