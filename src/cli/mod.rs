@@ -111,6 +111,8 @@ pub async fn run() -> Result<()> {
         return Ok(());
     }
 
+    prepare_ready_file(&args)?;
+
     // Handle --simple <protocol> flag (start simple protocol in non-interactive mode)
     if let Some(ref protocol) = args.simple_protocol {
         return run_simple_protocol(protocol, &args).await;
@@ -222,6 +224,11 @@ pub async fn run() -> Result<()> {
     } else if let Some(prompt) = prompt {
         // Non-interactive mode - we have a prompt
         non_interactive::run_non_interactive(prompt, &args, settings).await
+    } else if args.ready_file.is_some() {
+        anyhow::bail!(
+            "--ready-file applies to a non-interactive run (--load, --server, --client or a \
+             prompt); the interactive dashboard never writes it"
+        );
     } else if args.is_interactive() {
         // Interactive TUI mode - no prompt and terminal is available
         debug!("Entering interactive TUI mode");
@@ -380,6 +387,39 @@ pub async fn run() -> Result<()> {
     }
 }
 
+/// Validate `--ready-file` and remove a stale report before anything starts.
+///
+/// The file's appearance is the readiness signal, so one left behind by an earlier run at the
+/// same path would read as "ready" before this run has bound anything. Removing it here, before
+/// any instance starts, makes the signal mean this run. The modes that never write it refuse
+/// the flag rather than leave a fixture waiting on a file that cannot appear.
+#[cfg(not(target_arch = "wasm32"))]
+fn prepare_ready_file(args: &Args) -> Result<()> {
+    let Some(path) = &args.ready_file else {
+        return Ok(());
+    };
+    if args.mcp_stdio || args.mcp_http.is_some() || args.simple_protocol.is_some() {
+        anyhow::bail!(
+            "--ready-file applies to a non-interactive run (--load, --server, --client or a \
+             prompt); MCP and --simple modes never write it"
+        );
+    }
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_file() => std::fs::remove_file(path).map_err(|e| {
+            anyhow::anyhow!(
+                "--ready-file {}: cannot remove the stale report: {e}",
+                path.display()
+            )
+        }),
+        Ok(_) => anyhow::bail!(
+            "--ready-file {} exists and is not a regular file",
+            path.display()
+        ),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => anyhow::bail!("--ready-file {}: {e}", path.display()),
+    }
+}
+
 /// Connect a client in non-interactive mode (`--client <PROTOCOL> --connect <ADDR>`)
 ///
 /// The deterministic counterpart to the `open_client` LLM action: starting a
@@ -502,6 +542,7 @@ async fn run_client(protocol: &str, args: &Args) -> Result<()> {
         canonical,
         remote_addr
     );
+    limits.announce_ready(&state).await?;
 
     // Set up Ctrl+C handler
     let shutdown = Arc::new(Mutex::new(false));
