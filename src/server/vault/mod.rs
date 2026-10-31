@@ -387,16 +387,30 @@ async fn handle_request(req: Request<Incoming>, ctx: RequestContext) -> Response
             );
         }
         Route::ReadData { mount, path } => {
-            let mut d = json!({"mount": mount, "path": path, "what": "data"});
+            let answer_with = actions::read_answer_with(&mount, &path, "data");
+            let mut d = json!({
+                "mount": mount,
+                "path": path,
+                "what": "data",
+                "answer_with": answer_with,
+            });
             if let Some(v) = version_query {
                 d["version"] = json!(v);
             }
             (&actions::VAULT_READ_EVENT, d)
         }
-        Route::ReadMetadata { mount, path } => (
-            &actions::VAULT_READ_EVENT,
-            json!({"mount": mount, "path": path, "what": "metadata"}),
-        ),
+        Route::ReadMetadata { mount, path } => {
+            let answer_with = actions::read_answer_with(&mount, &path, "metadata");
+            (
+                &actions::VAULT_READ_EVENT,
+                json!({
+                    "mount": mount,
+                    "path": path,
+                    "what": "metadata",
+                    "answer_with": answer_with,
+                }),
+            )
+        }
         Route::List { mount, path } => (
             &actions::VAULT_LIST_EVENT,
             json!({"mount": mount, "path": path}),
@@ -456,7 +470,7 @@ async fn handle_request(req: Request<Incoming>, ctx: RequestContext) -> Response
                 let crate::llm::ActionResult::Custom { name, data } = result else {
                     continue;
                 };
-                if name == "send_vault_error" {
+                if name == "send_vault_error" || name == "send_vault_not_found" {
                     match api::render_error(&data) {
                         Ok((status, errors)) => {
                             info!(
