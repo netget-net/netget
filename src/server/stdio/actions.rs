@@ -377,7 +377,8 @@ fn responder_actions() -> Vec<ActionDefinition> {
 pub static STDIO_STARTED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "stdio_started",
-        "stdin has been claimed (emit an initial banner/prompt on stdout if desired)",
+        "stdin has been claimed and nothing has been read yet. Raised only when the server \
+         was started with send_first: emit the initial banner or prompt on stdout now.",
         json!({
             "type": "write_stdout",
             "data": "ready\n"

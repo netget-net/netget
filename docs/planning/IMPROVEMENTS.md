@@ -180,7 +180,7 @@ Delete an entry once its context is no longer useful.
 | 29/50 — dead documentation gate | (earlier) | One gate remains, behind a documented compile-time `false`; the second is gone |
 | 32 — validator accepted a superset | `272acbc0` | `advertised_user_input_actions()` narrows to what the prompt rendered, mirroring the network-event path |
 | 39 — doc gate broke mocked tests | (earlier) | The retry no longer fires; 35 tests recovered from the `#[ignore]` it caused |
-| 78 — connect events fired only with `send_first` | `527e07f3`, then narrowed | `telnet_connection_opened` is raised for every connection, answered by a zero-action rule on dashboard servers via `EventType::raised_on_every_connection()`. `tcp_connection_opened` and `tls_connection_opened` stay gated on `send_first`, and their event and parameter descriptions now say so: raising them everywhere cost a model call per connection and cut the real-model eval's `tcp` score from 15/15 to 10/15. |
+| 78 — connect events fired only with `send_first` | `527e07f3`, then narrowed | `telnet_connection_opened` is raised for every connection, answered by a zero-action rule on dashboard servers via `EventType::raised_on_every_connection()`. `tcp_connection_opened` and `tls_connection_opened` stay gated on `send_first`, and their event and parameter descriptions now say so: raising them everywhere cost a model call per connection and cut the real-model eval's `tcp` score from 15/15 to 10/15. `socket_file`, `pty` and `stdio` are gated the same way and their `send_first` and connect-event descriptions say so too. |
 | 47 — tests passing while broken | `1b7f26e5`, `180c01ac`, `f0c7e42c` | NTP now requires the client to succeed; three assertion-free tests no longer count as coverage; the FIDO2 test awaits the future it was only constructing |
 | 76 — transport-level-only asserts | `1e989ba5` | nfs/ipp/vnc/webdav decode and assert real protocol output |
 | — 43 stale blanket `#[ignore]`s | `025ff3f5`, `2e3c8fbc`, `8009299b` | svn/whois/USB/bitcoin/sip/tls running; arp/igmp ignored for the real privilege reason |
@@ -555,8 +555,9 @@ decided it: generic TCP is client-speaks-first, so raising the event everywhere 
 call per connection, and in the seeded real-model eval llama3.1:8b answered the empty connect
 event with an unrequested greeting, taking `tcp` from 15/15 to 10/15. `send_first` means the peer
 is owed a greeting: reads are held until the connect event is answered, a silent answer is
-`decision=model_silent`, and a failed one closes. **Still gated, unchanged:** `socket_file`, `pty`
-and `stdio`.
+`decision=model_silent`, and a failed one closes. `socket_file`, `pty` and `stdio` are gated on
+`send_first` the same way, and their `send_first` parameter and connect-event descriptions say
+that `send_first` is the only way the event is raised.
 
 `src/server/tcp/actions.rs:490` describes the event as *"New TCP connection established (send
 initial greeting/banner if needed)"* and ships a `response_example` that sends a `220 Welcome`
