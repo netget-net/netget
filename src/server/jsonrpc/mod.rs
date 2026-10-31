@@ -677,7 +677,7 @@ async fn call_llm_for_method(
     // than re-executing (which used to render each log template twice and record
     // the pre-id-fill action in the access log). Crucially we *scan* instead of
     // taking raw_actions.first(): raw_actions includes common actions, so a
-    // perfectly reasonable response that leads with show_message or update_memory
+    // perfectly reasonable response that leads with notify_operator or update_memory
     // used to be rejected as a "non-JSON-RPC action" and turned into -32603. The
     // protocol's own documentation and its notification test both used that shape.
     let response = llm_result

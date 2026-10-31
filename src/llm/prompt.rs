@@ -430,6 +430,10 @@ Check the action definition in "Available Actions" for required parameters and p
         let open_actions_enabled = filtered_actions
             .iter()
             .any(|a| a.name == "open_server" || a.name == "open_client");
+        // The memory section explains connection memory only where it is offered.
+        let connection_memory_actions = filtered_actions
+            .iter()
+            .any(|a| a.name == "set_connection_memory");
 
         // Try to use template first
         let template_name = if server_id.is_some() {
@@ -587,6 +591,7 @@ Check the action definition in "Available Actions" for required parameters and p
             .field("include_base_stacks", include_base_stacks)
             .field("scripting_enabled", scripting_offered)
             .field("open_actions_enabled", open_actions_enabled)
+            .field("connection_memory_actions", connection_memory_actions)
             .optional_field("handler_mode_preference", handler_mode_preference)
             .field("servers", &servers_data)
             .field("clients", &clients_data)
@@ -1013,14 +1018,15 @@ Check the action definition in "Available Actions" for required parameters and p
     /// is offered only what its executor can actually carry out:
     ///
     /// - **Global**: the operator's management vocabulary (open/close/update servers and
-    ///   clients, schedule/cancel tasks, databases, `show_message`) plus every tool. Not
+    ///   clients, schedule/cancel tasks, databases, `notify_operator`) plus every tool. Not
     ///   `set_memory`, `append_memory`, `append_to_log` or `update_instruction`: with no
     ///   instance in scope those fall through to "the first server", an arbitrary target.
-    /// - **Server #N**: memory, `show_message`, `append_to_log`, and — when at least one live
+    /// - **Server #N**: memory, `notify_operator`, `append_to_log`, and — when at least one live
     ///   connection registered a peer handle — the protocol's actions, each with a required
     ///   `connection_id` naming which connection runs it.
-    /// - **Connection conn-M on server #N**: the same, aimed at that connection.
-    /// - **Client #N**: memory, `show_message`, and the client's protocol actions when its
+    /// - **Connection conn-M on server #N**: the same, aimed at that connection, plus that
+    ///   connection's own memory (`set_connection_memory` / `append_connection_memory`).
+    /// - **Client #N**: memory, `notify_operator`, and the client's protocol actions when its
     ///   loop accepts injected commands. Not `append_to_log`, which writes to a server log.
     ///
     /// Protocol actions are executed *inside* the instance (`AppState::send_to_peer` /
@@ -1103,6 +1109,8 @@ Check the action definition in "Available Actions" for required parameters and p
             }
             TaskScope::Connection(sid, cid) => {
                 actions = get_network_event_common_actions();
+                actions.push(crate::llm::actions::common::set_connection_memory_action());
+                actions.push(crate::llm::actions::common::append_connection_memory_action());
                 let peers = Self::task_peer_connections(state, *sid, Some(cid.as_u32())).await;
                 match Self::task_peer_vocabulary(state, *sid).await {
                     Err(reason) => set.protocol_unavailable = Some(reason),
@@ -1432,15 +1440,21 @@ Check the action definition in "Available Actions" for required parameters and p
             .collect();
 
         // The Required Format example must be an action this task is actually offered:
-        // a protocol action if there is one, else show_message, else the first offered.
+        // a protocol action if there is one, else notify_operator, else the first offered.
         let example_action = actions
             .iter()
             .filter(|a| !a.is_tool())
             .find(|a| set.protocol_actions.contains(&a.name))
-            .or_else(|| actions.iter().find(|a| a.name == "show_message"))
+            .or_else(|| {
+                actions
+                    .iter()
+                    .find(|a| a.name == crate::llm::actions::common::NOTIFY_OPERATOR)
+            })
             .or_else(|| actions.iter().find(|a| !a.is_tool()))
             .map(|a| a.example.to_string())
-            .unwrap_or_else(|| "{\"type\": \"show_message\", \"message\": \"done\"}".to_string());
+            .unwrap_or_else(|| {
+                "{\"type\": \"notify_operator\", \"message\": \"done\"}".to_string()
+            });
         let example_tool = actions
             .iter()
             .find(|a| a.is_tool())

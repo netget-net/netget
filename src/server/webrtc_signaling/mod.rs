@@ -1062,7 +1062,7 @@ impl WebRtcSignalingServer {
                     .join("; ")
             ));
         } else {
-            // Actions ran and none of them addressed this peer — `show_message` and friends.
+            // Actions ran and none of them addressed this peer — `notify_operator` and friends.
             log.warn(format!(
                 "{} decision=model_silent: the answer produced no signaling frame",
                 subject

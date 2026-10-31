@@ -401,6 +401,22 @@ async fn call_llm_for_client_inner(
                     .collect(),
             )
             .await;
+    } else if let (Some(cid), None) = (ClientId::from_string(&client_id), event) {
+        // The call that starts the instruction had no event, so nothing recorded it, and the
+        // model answering the first reply could not see that it had already begun.
+        let done: Vec<serde_json::Value> = result
+            .actions
+            .iter()
+            .map(|action| access_log_action(action, private_payloads, &offered_actions))
+            .collect();
+        state
+            .record_client_history(
+                cid,
+                crate::state::exchange_history::CLIENT_STARTED_EVENT,
+                &serde_json::json!({}),
+                &done,
+            )
+            .await;
     }
 
     Ok(result)

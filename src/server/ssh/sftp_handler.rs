@@ -95,7 +95,7 @@ const BACKEND_FAILURE_STATUS: StatusCode = StatusCode::Failure;
 ///
 /// A named action that is not one of the SFTP replies counts as silence too — the fallback in
 /// `llm_sftp_operation` hands back the first action when none of them is an SFTP reply, so a
-/// lone `show_message` would otherwise be read as an answer and defaulted in exactly the same
+/// lone `notify_operator` would otherwise be read as an answer and defaulted in exactly the same
 /// way. A bare object with no `type` is still accepted: that is the shape a script handler
 /// returns, and its fields are the answer.
 fn sftp_no_answer(response: &serde_json::Value) -> bool {
@@ -228,7 +228,7 @@ impl LlmSftpHandler {
                 }
 
                 // SFTP expects exactly one reply per request. Prefer the first action that is
-                // actually an SFTP reply, so a leading show_message/set_memory does not get
+                // actually an SFTP reply, so a leading notify_operator/set_memory does not get
                 // mistaken for the answer. Fall back to the first action for handlers that
                 // return a bare object with no "type".
                 let reply = execution_result

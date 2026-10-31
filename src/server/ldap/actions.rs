@@ -1121,7 +1121,7 @@ pub static LDAP_UNBIND_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "ldap_unbind",
         "LDAP unbind (disconnect) request received",
-        json!({"type": "show_message", "message": "LDAP client disconnected"}),
+        json!({"type": "notify_operator", "message": "LDAP client disconnected"}),
     )
     .with_parameters(vec![Parameter {
         name: "bind_dn".to_string(),

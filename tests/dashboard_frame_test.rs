@@ -79,6 +79,7 @@ fn populated() -> RailSnapshot {
             bytes_sent: 45_678,
             active: true,
             can_message: false,
+            memory_len: 0,
         }],
         recent: Vec::new(),
         requests,
