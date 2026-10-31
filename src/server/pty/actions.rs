@@ -356,7 +356,8 @@ pub static WRITE_PTY_OUTPUT_ACTION: LazyLock<ActionDefinition> =
 pub static PTY_OPENED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "pty_opened",
-        "Pseudo-terminal is ready (send an initial banner/prompt if desired)",
+        "The pseudo-terminal is ready and nothing has been typed yet. Raised only when the \
+         server was started with send_first: print the initial banner or prompt now.",
         json!({
             "type": "write_pty_output",
             "data": "netget$ "

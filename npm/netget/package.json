@@ -1,7 +1,7 @@
 {
   "name": "@smotana/netget",
   "version": "0.0.0-dev",
-  "description": "LLM-controlled network protocol server & client (240 protocol features) with an MCP server mode. Launcher that runs the platform-native netget binary.",
+  "description": "LLM-controlled network protocol servers & clients (~290 servers, ~250 clients) with an MCP server mode. Launcher that runs the platform-native netget binary.",
   "license": "AGPL-3.0-or-later",
   "repository": {
     "type": "git",

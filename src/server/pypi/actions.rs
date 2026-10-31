@@ -61,10 +61,11 @@ impl Protocol for PypiProtocol {
                  pages carry the anchors and #sha256= fragments pip parses, and that a \
                  project the index does not serve comes back 404 rather than a 200 carrying \
                  the index. One step drives the real `pip index versions` and asserts it \
-                 reached the index and named the project - but it SKIPS LOUDLY when pip is \
-                 absent rather than failing, so it is not evidence and PyPI is rated as if \
-                 it did not exist. No third-party client has installed a distribution from \
-                 this server: that needs a real wheel, which the model cannot author",
+                 reached the index and named the project, and it fails rather than skips \
+                 when pip is absent. That is one client, and `pip index versions` proves \
+                 pip fetched and parsed a project page, not that it can install from it: \
+                 no third-party client has installed a distribution from this server, \
+                 because that needs a real wheel, which the model cannot author",
             )
             .max_inbound_bytes(crate::server::http_common::MAX_REQUEST_BODY_BYTES)
             .request_only(
