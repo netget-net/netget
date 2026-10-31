@@ -852,8 +852,36 @@ in `metadata()` and `tests/history_batching_declaration_test.rs` requires:
 
 Both are overridable per instance everywhere an instance is started or updated (`history` /
 `batching` on `ServerForm`/`ClientForm`, `open_*`/`update_*`, MCP, `--history`/`--batching`,
-the dashboard form) and hot-applied. Memory is separate: it is what the model chooses to keep
-and outlives the connection; history is what happened and ends with it.
+the dashboard form) and hot-applied. Memory is separate: it is what the model chooses to keep;
+history is what happened and ends with the connection.
+
+**Memory has two scopes, and the difference is a privacy boundary.** `set_memory` /
+`append_memory` write the instance's memory, one string every connection's prompt reads and
+that outlives them all — data the model stored, counters, settings. `set_connection_memory` /
+`append_connection_memory` write `ServerInstance::connection_memory`, shown above one
+connection's events only (`AppState::render_connection_memory`) and dropped when it closes;
+they are offered on a server event that arrived on a connection of a non-connectionless
+protocol, and refused anywhere else rather than redirected to shared memory. They exist because
+a telnet BBS (llama3.1:8b, 31 October 2026) wrote `user_name: Zed` into shared memory, so the
+next peer would have been greeted as Zed. A line written `key: value` replaces the earlier line
+with that key in either scope (`common::append_memory_lines`), so the same fact appended twice
+reads once. `tests/connection_memory_test.rs` drives two telnet peers through the bridge.
+
+**A client's history is worded as progress, and its first turn is in it.** A client's
+instruction is a script the model is asked about again on every reply; shown bare beside each
+reply, with history worded as a server's "answered with", llama3.1:8b re-sent "PING, then GET
+mykey" on every reply (6 of 8 seeded runs, up to 27 PINGs). The client prompt frames the
+instruction as the plan under way, `ExchangeHistory::render_for_client` lists each entry as
+"you did:", and the initial call with no event is recorded as `client_started`
+(`tests/client_session_progress_test.rs`).
+
+**`notify_operator` is a note on the operator's screen and is never offered beside a wire
+answer.** It was `show_message`, and offered beside `send_telnet_line` it was taken for the
+reply: a BBS greeting went to the operator and the peer saw nothing. `show_message` is still
+accepted everywhere an action is read (model answers, handlers, `.netget` files) and rewritten
+to the current name; a server event that offers protocol actions leaves it out of the list
+(`common::network_event_common_actions_for`), though a model that names it anyway is executed,
+not retried (`tests/notify_operator_test.rs`).
 
 **Actions**: protocols implement `ProtocolActions` (`src/llm/actions/protocol_trait.rs`) with
 async actions (user-triggered) and sync actions (network-event-triggered), in

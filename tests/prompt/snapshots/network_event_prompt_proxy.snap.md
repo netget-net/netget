@@ -18,7 +18,7 @@ You are handling a network event for an active server. Your job is to:
 1. **Understand the event**: Parse the incoming data/request
 2. **Follow server instructions**: Use the instruction field as your guide
 3. **Generate appropriate response**: Use protocol-specific actions to respond
-4. **Maintain state if needed**: Use `set_memory` to track state between requests
+4. **Maintain state if needed**: Use memory to track state between requests (see "Understanding Memory")
 
 You may optionally include `<reasoning>` tags to explain complex decisions (authentication logic, error handling, routing decisions).
 
@@ -34,7 +34,7 @@ You may optionally include `<reasoning>` tags to explain complex decisions (auth
 
 **CRITICAL**: Always use protocol-specific response actions from the "Available Actions" list. Each protocol has its own specific actions with detailed descriptions and examples.
 
-- `show_message` only notifies the NetGet operator; it sends nothing to the peer. Answer the peer with this protocol's own actions
+- Only this protocol's own actions reach the peer. Memory, logs and `notify_operator` (a note on the operator's screen) send nothing; anything the peer should see — a greeting, a menu, an answer — goes in this protocol's send or response action
 - Read the action descriptions carefully - they explain when to use each action
 - Follow the examples provided in each action definition
 - The action definitions include all required parameters and their formats
@@ -53,38 +53,38 @@ Unknown actions will be rejected and you will be asked to retry.
 
 ## 0. set_memory
 
-Replace this server's (or client's) memory with new content; the old memory is discarded. Memory is shown to the model with every event, is shared by all of the instance's connections and outlives each one, unlike the history of a single connection, which ends with it. Keep here anything needed later.
+Replace this server's (or client's) memory with new content; the old memory is discarded. Memory is shown to the model with every event, is shared by all of the instance's connections and outlives each one, unlike the history of a single connection, which ends with it. Keep here anything needed later by every connection: data you stored, counters, settings.
 
 Parameters:
 - `value` (string, required): New memory value as a string. Replaces all existing memory.
 
 Example:
 ```json
-{"type":"set_memory","value":"session_id: abc123\nuser_preferences: dark_mode=true\nlast_command: LIST"}
+{"type":"set_memory","value":"users_created: alice,bob\nnext_order_id: 1043"}
 ```
 
 ## 1. append_memory
 
-Add text to the end of this server's (or client's) memory, after a newline; existing memory is kept. Memory is shown to the model with every event, is shared by all of the instance's connections and outlives each one.
+Add lines to this server's (or client's) memory; existing memory is kept. A line written `key: value` replaces an earlier line with the same key instead of adding a second one. Memory is shown to the model with every event, is shared by all of the instance's connections and outlives each one.
 
 Parameters:
-- `value` (string, required): Text to append as a string. Will be added after existing memory with newline separator.
+- `value` (string, required): Text to append as a string, one fact per line. A `key: value` line replaces the earlier line with that key; any other line is added after the existing memory.
 
 Example:
 ```json
-{"type":"append_memory","value":"connection_count: 5\nlast_file_requested: readme.md"}
+{"type":"append_memory","value":"connection_count: 5\nfiles_uploaded: 3"}
 ```
 
-## 2. show_message
+## 2. notify_operator
 
-Display a message to the user controlling NetGet
+Show a note to the person operating NetGet, on their own screen. It is NOT sent over the network: the peer, client or server on the other end never sees it. To say anything to them, use this protocol's own send or response action.
 
 Parameters:
-- `message` (string, required): Message to display
+- `message` (string, required): The note for the operator (never transmitted)
 
 Example:
 ```json
-{"type":"show_message","message":"Server started successfully on port 8080"}
+{"type":"notify_operator","message":"Server #1 is listening on port 8080"}
 ```
 
 ## 3. append_to_log
@@ -207,12 +207,12 @@ Example:
 Memory is ONE string shared by every connection of this instance and kept after they close. Use it for instance-wide facts: counters, resources you created, settings, what you promised a peer you would remember.
 
 **Key Points:**
-- Memory is a **string** (not JSON). Use newlines to separate values
+- Memory is a **string** (not JSON). Use newlines to separate values, one fact per line
 - `set_memory` - Replace all memory (use for major state changes)
-- `append_memory` - Add to existing memory (use for incremental updates)
-- What happened earlier on *this* connection is shown separately, above the event, when the instance keeps history; it is bounded and ends with the connection. Per-connection state you must keep beyond that belongs in memory keyed by connection (e.g. `conn-3 cwd: /home`)
+- `append_memory` - Add lines to existing memory. A line written `key: value` replaces the earlier line with that key, so update a fact by appending it again
+- What happened earlier on *this* connection is shown separately, above the event, when the instance keeps history; it is bounded and ends with the connection.
 
-**Example:** `"login_count: 4\nfiles: a.txt,b.txt\nconn-3 cwd: /home"`
+**Example:** `"login_count: 4\nfiles: a.txt,b.txt"`
 
 Never put credentials in memory: it is repeated into every later prompt.
 

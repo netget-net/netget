@@ -233,7 +233,7 @@ HTTP headers are case-insensitive, but LLM may use different casing:
 ### 3. Logging Test Leniency
 
 `test_http_simple_get_with_logging` doesn't fail if log file isn't created. This is intentional - the LLM might
-interpret "log to file" differently (e.g., log to stderr, use show_message, etc.).
+interpret "log to file" differently (e.g., log to stderr, use notify_operator, etc.).
 
 **Rationale**: File logging is a secondary feature. Core HTTP functionality is more critical.
 

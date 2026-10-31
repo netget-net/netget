@@ -194,7 +194,7 @@ The action objects that answer an event — what you, a script (inside `{"action
 
 ### `send_http_response`
 
-Respond to the HTTP request that triggered this event. This is the ONLY action that produces an HTTP response - do NOT use generic 'send_data' or 'show_message' for that. ALWAYS emit exactly one send_http_response for every request — never return an empty action list, or the client gets a blank page. HONOR THE CLIENT'S `Accept` REQUEST HEADER (in the event's headers.accept): return a `Content-Type` the client accepts, and a body in that format. If Accept is `text/html`, return HTML; `application/json`, return JSON; `text/plain`, return text. If the client asks ONLY for a type you cannot produce — most commonly an image (`Accept: image/*`, e.g. a browser fetching /favicon.ico) or any other binary type — respond `404` (or `204`) rather than sending text mislabeled as an image: the body is UTF-8 text only, so binary payloads (images, gzip, protobuf) cannot be produced at all. The response is sent complete, in one piece, as soon as you return; there is no way to stream or chunk it, to send it in parts, or to keep the request open.
+Respond to the HTTP request that triggered this event. This is the ONLY action that produces an HTTP response - do NOT use generic 'send_data' or 'notify_operator' for that. ALWAYS emit exactly one send_http_response for every request — never return an empty action list, or the client gets a blank page. HONOR THE CLIENT'S `Accept` REQUEST HEADER (in the event's headers.accept): return a `Content-Type` the client accepts, and a body in that format. If Accept is `text/html`, return HTML; `application/json`, return JSON; `text/plain`, return text. If the client asks ONLY for a type you cannot produce — most commonly an image (`Accept: image/*`, e.g. a browser fetching /favicon.ico) or any other binary type — respond `404` (or `204`) rather than sending text mislabeled as an image: the body is UTF-8 text only, so binary payloads (images, gzip, protobuf) cannot be produced at all. The response is sent complete, in one piece, as soon as you return; there is no way to stream or chunk it, to send it in parts, or to keep the request open.
 
 Parameters:
 
@@ -262,7 +262,7 @@ Example handler response:
 {
   "actions": [
     {
-      "type": "show_message",
+      "type": "notify_operator",
       "message": "Handled http_connected"
     }
   ]
@@ -281,7 +281,7 @@ Example handler response:
 {
   "actions": [
     {
-      "type": "show_message",
+      "type": "notify_operator",
       "message": "Handled http_response_received"
     }
   ]
