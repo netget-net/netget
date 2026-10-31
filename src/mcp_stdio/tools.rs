@@ -895,7 +895,9 @@ impl NetGetMcpService {
         // The receiver belongs to the same service lifetime as its producers.
         let status_drain = tokio::spawn(async move {
             while let Some(msg) = status_rx.recv().await {
-                eprintln!("[NETGET] {}", msg);
+                if !crate::utils::is_status_control_line(&msg) {
+                    eprintln!("[NETGET] {}", msg);
+                }
             }
         });
         let state = Arc::new(SharedState {
@@ -1061,10 +1063,13 @@ impl NetGetMcpService {
             }
         };
 
-        // Collect startup status messages
+        // Collect startup status messages. Control sentinels (`__UPDATE_UI__`, a protocol
+        // asking the dashboard to repaint) share the stream and are not for the caller.
         let mut messages = Vec::new();
         while let Ok(msg) = status_rx.try_recv() {
-            messages.push(msg);
+            if !crate::utils::is_status_control_line(&msg) {
+                messages.push(msg);
+            }
         }
 
         let result = format!(
