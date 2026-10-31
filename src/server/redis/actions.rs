@@ -238,14 +238,15 @@ impl Protocol for RedisProtocol {
         use crate::llm::actions::StartupExamples;
         use serde_json::json;
 
-        // Deterministic RESP replies keyed off the command verb. The 'command'
-        // event field is the full command line, so split off the first word.
+        // Deterministic RESP replies keyed off the command verb. 'args' is the
+        // command as the client framed it, one entry per argument, so a quoted
+        // value with spaces stays one argument.
         let script = r#"import json, sys
 data = json.load(sys.stdin)
 event = data["event"]
 if data["event_type_id"] == "redis_command":
-    parts = event.get("command", "").split()
-    verb = parts[0].upper() if parts else ""
+    args = event.get("args", [])
+    verb = args[0].upper() if args else ""
     if verb == "PING":
         actions = [{"type": "redis_simple_string", "value": "PONG"}]
     elif verb == "SET":
@@ -1073,7 +1074,19 @@ pub static REDIS_COMMAND_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         Parameter {
             name: "command".to_string(),
             type_hint: "string".to_string(),
-            description: "The Redis command string sent by the client".to_string(),
+            description: "The command as one space-joined line, e.g. \"SET k a b c\". For display and quick matching only: argument boundaries are lost (SET k \"a b c\" and SET k a b c read the same) - use 'args' for the exact arguments".to_string(),
+            required: true,
+        },
+        Parameter {
+            name: "args".to_string(),
+            type_hint: "array".to_string(),
+            description: "The command exactly as the client sent it, one string per argument, command name first: SET k \"a b c\" arrives as [\"SET\", \"k\", \"a b c\"]. An argument that is not valid UTF-8 is given as lowercase hex (two digits per byte) and its index is listed in 'hex_args'; every other argument is literal text, even if it looks like hex".to_string(),
+            required: true,
+        },
+        Parameter {
+            name: "hex_args".to_string(),
+            type_hint: "array".to_string(),
+            description: "Indices into 'args' (0-based) of the arguments given as hex because they are not valid UTF-8. Usually empty".to_string(),
             required: true,
         },
         Parameter {

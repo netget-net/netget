@@ -237,3 +237,109 @@ async fn redis_cli_completes_a_session_against_the_redis_server() -> E2EResult<(
     server.stop().await?;
     Ok(())
 }
+
+/// `redis_command` carries the command as the client framed it, in `args`.
+///
+/// `command` is the space-joined line, so `SET k "a b c"` and `SET k a b c` read the same
+/// there. redis-cli parses quoting itself and puts each argument in its own bulk string; the
+/// mock echoes `args` and `hex_args` back as an array, so what redis-cli prints is what the
+/// event held. The third command carries a byte that is not UTF-8 (`\xff`, which redis-cli
+/// decodes inside double quotes), so that argument arrives hex-encoded and is named in
+/// `hex_args`.
+///
+/// LLM calls: 1 startup + 3 commands, plus whatever the installed redis-cli sends of its own.
+#[tokio::test]
+async fn redis_cli_arguments_reach_the_event_with_their_boundaries() -> E2EResult<()> {
+    let version = require_redis_cli().await?;
+    println!("\n=== E2E: redis_command args through redis-cli ({version}) ===");
+
+    let config =
+        NetGetConfig::new("Listen on port {AVAILABLE_PORT} via Redis.").with_mock(|mock| {
+            mock.on_instruction_containing("Redis")
+                .respond_with_actions(serde_json::json!([{
+                    "type": "open_server",
+                    "port": 0,
+                    "base_stack": "Redis",
+                    "instruction": "Echo each command's arguments"
+                }]))
+                .expect_calls(1)
+                .and()
+                .on_event("redis_command")
+                .respond_with_actions_from_event(|event| {
+                    let mut values: Vec<serde_json::Value> = event
+                        .get("args")
+                        .and_then(|a| a.as_array())
+                        .cloned()
+                        .unwrap_or_default();
+                    values.push(serde_json::Value::String(format!(
+                        "hex_args={}",
+                        event
+                            .get("hex_args")
+                            .map(|h| h.to_string())
+                            .unwrap_or_default()
+                    )));
+                    serde_json::json!([{"type": "redis_array", "values": values}])
+                })
+                // At least the three commands; redis-cli versions differ in what they send of
+                // their own first (see the session test above).
+                .expect_at_least(3)
+                .expect_at_most(10)
+                .and()
+        });
+
+    let server = timeout(
+        Duration::from_secs(60),
+        helpers::start_netget_server(config),
+    )
+    .await
+    .map_err(|_| "netget startup timed out")??;
+
+    let out = redis_cli_session(
+        server.port,
+        "SET k \"a b c\"\nSET k a b c\nSET bin \"a\\xffb\"\n",
+    )
+    .await?;
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    println!("redis-cli stdout:\n{stdout}\nredis-cli stderr:\n{stderr}");
+    assert!(
+        out.status.success(),
+        "redis-cli exited {}.\nstdout:\n{stdout}\nstderr:\n{stderr}",
+        out.status
+    );
+
+    let actual: Vec<&str> = stdout
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    let expected = vec![
+        // The quoted value is one argument...
+        "1) \"SET\"",
+        "2) \"k\"",
+        "3) \"a b c\"",
+        "4) \"hex_args=[]\"",
+        // ...and the unquoted one is three.
+        "1) \"SET\"",
+        "2) \"k\"",
+        "3) \"a\"",
+        "4) \"b\"",
+        "5) \"c\"",
+        "6) \"hex_args=[]\"",
+        // A non-UTF-8 argument is hex, and says so.
+        "1) \"SET\"",
+        "2) \"bin\"",
+        "3) \"61ff62\"",
+        "4) \"hex_args=[2]\"",
+    ];
+    assert_eq!(
+        actual, expected,
+        "the redis_command event did not carry the arguments as redis-cli framed them.\n\
+         full output:\n{stdout}"
+    );
+
+    server.wait_for_mocks(30).await;
+    server.verify_mocks().await?;
+    server.stop().await?;
+    Ok(())
+}
