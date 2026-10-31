@@ -1351,7 +1351,7 @@ impl NetGetMcpService {
         self.state.app_state.clear_llm_backend_failure();
         let mut text = format!("Model changed to: {}", model);
         if let Some(warning) = warning {
-            text.push_str("\n");
+            text.push('\n');
             text.push_str(&warning);
         }
         Ok(CallToolResult::success(vec![Content::text(text)]))
