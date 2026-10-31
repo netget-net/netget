@@ -7,7 +7,9 @@
 //! `packet_limit` puts that number where the bytes are: see [`packet_limit::MAX_PACKET_BYTES`].
 pub mod actions;
 pub mod caching_sha2;
+pub mod command_tap;
 pub mod packet_limit;
+pub mod stmt_params;
 
 use crate::llm::action_helper::call_llm;
 use crate::llm::actions::protocol_trait::ActionResult;
@@ -100,8 +102,8 @@ const MAX_PLACEHOLDERS: usize = 1024;
 ///
 /// They have to outlive the writer's borrow, so they cannot be built per statement; the
 /// contents are identical for every statement anyway — real MySQL names each parameter `?`
-/// and types it as a string, and nothing reads either field because `on_execute` does not
-/// decode parameter values.
+/// and types it as a string. Clients bind their own types at EXECUTE, which is what
+/// `stmt_params` decodes, so neither field is read back.
 static PLACEHOLDER_COLUMNS: std::sync::LazyLock<Vec<Column>> = std::sync::LazyLock::new(|| {
     (0..MAX_PLACEHOLDERS)
         .map(|_| Column {
@@ -245,8 +247,12 @@ impl MysqlServer {
                             // be refused before the payload behind it is read. See
                             // `packet_limit`.
                             let trip = Arc::new(packet_limit::PacketLimitTrip::default());
+                            let reader = packet_limit::PacketLimitReader::new(reader, trip.clone());
+                            // Above the limiter, so a refused packet never reaches it: a copy
+                            // of each prepared-statement command, for `on_execute` to decode
+                            // with a parser that cannot panic. See `command_tap`.
                             let mut reader =
-                                packet_limit::PacketLimitReader::new(reader, trip.clone());
+                                command_tap::CommandTapReader::new(reader, handler.command_tap());
                             // `run_on` takes the writer **by value**, and its `W` is only
                             // `AsyncWrite + Send + Unpin` — which `&mut WriteHalf` satisfies.
                             // That is the seam: lending the write half rather than giving it
@@ -273,7 +279,7 @@ impl MysqlServer {
                                     connection_id,
                                     addr,
                                     &trip,
-                                    reader.into_inner(),
+                                    reader.into_inner().into_inner(),
                                     &mut writer,
                                     &status_tx_conn,
                                 )
@@ -387,12 +393,33 @@ pub struct MysqlHandler {
     /// MySQL protocol handler for action execution
     protocol: Arc<MysqlProtocol>,
     /// Prepared statements
-    prepared_statements: Arc<Mutex<std::collections::HashMap<u32, String>>>,
+    prepared_statements: Arc<Mutex<std::collections::HashMap<u32, PreparedStatement>>>,
     /// Next statement ID
     next_stmt_id: Arc<Mutex<u32>>,
     /// How `authenticate` asks the writer beneath `opensrv-mysql` for the one packet a
     /// `caching_sha2_password` client waits for. See [`caching_sha2`].
     fast_auth: Arc<caching_sha2::FastAuthGate>,
+    /// Copies of the prepared-statement commands, taken beneath `opensrv-mysql`. See
+    /// [`command_tap`].
+    command_tap: Arc<command_tap::CommandTap>,
+}
+
+/// What this server keeps for one prepared statement: the text the model is shown, and what
+/// the wire protocol needs to decode its executes.
+#[derive(Debug, Clone)]
+struct PreparedStatement {
+    sql: String,
+    /// Byte offsets of each `?` placeholder in `sql`; their count is what PREPARE told the
+    /// client, and so how it frames every EXECUTE.
+    placeholders: Vec<usize>,
+    /// The parameter types the last execute bound, for an execute that does not rebind them.
+    bound_types: Option<Vec<stmt_params::ParamType>>,
+    /// `COM_STMT_SEND_LONG_DATA` received since the last execute, by parameter index.
+    long_data: std::collections::HashMap<u16, stmt_params::LongData>,
+    /// Long data named a parameter the statement does not have. `mysqld` reports that at the
+    /// next execute rather than when the long data arrives (that command has no reply), and so
+    /// does this.
+    long_data_out_of_range: bool,
 }
 
 impl MysqlHandler {
@@ -421,7 +448,13 @@ impl MysqlHandler {
             prepared_statements: Arc::new(Mutex::new(std::collections::HashMap::new())),
             next_stmt_id: Arc::new(Mutex::new(1)),
             fast_auth: Arc::new(caching_sha2::FastAuthGate::default()),
+            command_tap: Arc::new(command_tap::CommandTap::default()),
         }
+    }
+
+    /// The queue the reader beneath `opensrv-mysql` fills for `on_execute`.
+    pub fn command_tap(&self) -> Arc<command_tap::CommandTap> {
+        self.command_tap.clone()
     }
 
     /// The gate this handler will arm from `authenticate`, for the writer that answers it.
@@ -502,21 +535,24 @@ impl<W: tokio::io::AsyncWrite + Send + Unpin> AsyncMysqlShim<W> for MysqlHandler
                 )
                 .await;
         }
-        stmts.insert(stmt_id, query.to_string());
-        drop(stmts);
-
         // Reply with the statement ID and the number of `?` placeholders the statement has.
         //
         // The count is not cosmetic: the client stores it and uses it to frame
-        // COM_STMT_EXECUTE. Replying `&[]` unconditionally — as this did — told every client
-        // the statement took no parameters, so `conn.exec("… WHERE id = ?", (42,))` was
-        // rejected client-side and never reached the wire at all. The parameter *values* are
-        // still not substituted (the model sees the `?`), and `on_execute` deliberately does
-        // not iterate `ParamParser`: opensrv-mysql's `params.rs` panics on several malformed
-        // COM_STMT_EXECUTE shapes, including an explicit `panic!("bad column type")` on a
-        // client-chosen byte, so reading them would trade a limitation for a remotely
-        // reachable panic.
-        let placeholders = count_placeholders(query);
+        // COM_STMT_EXECUTE, and `stmt_params` decodes that packet by the same count.
+        let offsets = placeholder_offsets(query);
+        let placeholders = offsets.len();
+        stmts.insert(
+            stmt_id,
+            PreparedStatement {
+                sql: query.to_string(),
+                placeholders: offsets,
+                bound_types: None,
+                long_data: std::collections::HashMap::new(),
+                long_data_out_of_range: false,
+            },
+        );
+        drop(stmts);
+
         if placeholders > MAX_PLACEHOLDERS {
             warn!(
                 "MySQL connection {}: statement declares {} placeholders, more than the {} \
@@ -539,6 +575,11 @@ impl<W: tokio::io::AsyncWrite + Send + Unpin> AsyncMysqlShim<W> for MysqlHandler
             .await
     }
 
+    /// Execute a prepared statement, with its parameter values decoded by `stmt_params`.
+    ///
+    /// `ParamParser` is never iterated: `opensrv-mysql`'s iterator panics on malformed input
+    /// (`stmt_params` lists the lines). The packet it would have read was copied beneath the
+    /// crate by `command_tap`, and is decoded here by a parser that refuses instead.
     async fn on_execute<'a>(
         &'a mut self,
         stmt_id: u32,
@@ -547,14 +588,118 @@ impl<W: tokio::io::AsyncWrite + Send + Unpin> AsyncMysqlShim<W> for MysqlHandler
     ) -> io::Result<()> {
         Log::new(Some(&self.status_tx)).debug(format!("MySQL EXECUTE statement {}", stmt_id));
 
-        // Get the prepared statement
-        let stmts = self.prepared_statements.lock().await;
-        let query = stmts.get(&stmt_id).cloned();
-        drop(stmts);
+        let capture = self.command_tap.take_execute(stmt_id);
 
-        if let Some(query) = query {
-            // Treat as a regular query
-            self.handle_query(&query, results).await
+        // Apply the long data and resets that preceded this execute, then take a snapshot of
+        // the statement and clear its long data — `mysqld` and the crate both discard long
+        // data once an execute has used it.
+        let stmt = {
+            let mut stmts = self.prepared_statements.lock().await;
+            for item in &capture.preceding {
+                match item {
+                    command_tap::Captured::LongData {
+                        stmt_id: id,
+                        param,
+                        prefix,
+                        len,
+                    } => {
+                        if let Some(s) = stmts.get_mut(id) {
+                            if usize::from(*param) >= s.placeholders.len() {
+                                s.long_data_out_of_range = true;
+                            } else {
+                                s.long_data.entry(*param).or_default().append(prefix, *len);
+                            }
+                        }
+                    }
+                    command_tap::Captured::Reset { stmt_id: id } => {
+                        if let Some(s) = stmts.get_mut(id) {
+                            s.long_data.clear();
+                            s.long_data_out_of_range = false;
+                        }
+                    }
+                    command_tap::Captured::Execute(_) => {}
+                }
+            }
+            stmts.get_mut(&stmt_id).map(|s| {
+                let snapshot = s.clone();
+                s.long_data.clear();
+                s.long_data_out_of_range = false;
+                snapshot
+            })
+        };
+
+        if let Some(stmt) = stmt {
+            if capture.discarded > 0 {
+                error!(
+                    "MySQL connection {}: {} captured EXECUTE packet(s) ahead of statement {} \
+                     named another statement; discarded",
+                    self.connection_id, capture.discarded, stmt_id
+                );
+            }
+            if stmt.long_data_out_of_range {
+                warn!(
+                    "MySQL connection {} decision=fail_closed_long_data_index: long data for \
+                     statement {} named a parameter it does not have",
+                    self.connection_id, stmt_id
+                );
+                return results
+                    .error(
+                        ErrorKind::ER_WRONG_ARGUMENTS,
+                        b"Incorrect arguments to mysqld_stmt_send_long_data",
+                    )
+                    .await;
+            }
+            let Some(payload) = capture.payload else {
+                // The crate parsed an execute the tap did not capture. Nothing a client does
+                // reaches this except overflowing the tap's queue; refuse rather than run the
+                // statement without its values.
+                error!(
+                    "MySQL connection {} decision=fail_closed_no_capture: no captured packet \
+                     for EXECUTE of statement {} (queue overflowed: {})",
+                    self.connection_id, stmt_id, capture.overflowed
+                );
+                let message = crate::utils::WireFailure::Unavailable.prefixed_text();
+                return results
+                    .error(ErrorKind::ER_UNKNOWN_ERROR, message.as_bytes())
+                    .await;
+            };
+
+            let decoded = stmt_params::parse_execute(
+                &payload,
+                stmt.placeholders.len(),
+                stmt.bound_types.as_deref(),
+                &stmt.long_data,
+            );
+            match decoded {
+                Ok(req) => {
+                    if let Some(types) = &req.new_types {
+                        let mut stmts = self.prepared_statements.lock().await;
+                        if let Some(s) = stmts.get_mut(&stmt_id) {
+                            s.bound_types = Some(types.clone());
+                        }
+                    }
+                    let bound = BoundParams {
+                        params: stmt_params::params_json(&req),
+                        rendered: stmt_params::render_query(&stmt.sql, &stmt.placeholders, &req),
+                    };
+                    self.handle_statement(&stmt.sql, Some(bound), results).await
+                }
+                Err(e) => {
+                    // The peer gets MySQL's own code and text for a packet it framed wrongly;
+                    // what was wrong with it goes to the log.
+                    Log::new(Some(&self.status_tx)).warn(format!(
+                        "MySQL connection {} decision=fail_closed_malformed_execute: statement \
+                         {}: {}",
+                        self.connection_id, stmt_id, e
+                    ));
+                    results
+                        .error(
+                            ErrorKind::ER_MALFORMED_PACKET,
+                            b"Malformed communication packet.",
+                        )
+                        .await
+                }
+            }
         } else {
             // The handle is unknown or already closed. Answering OK told the driver its
             // EXECUTE succeeded and affected zero rows, so a client reusing a stale handle —
@@ -593,7 +738,7 @@ impl<W: tokio::io::AsyncWrite + Send + Unpin> AsyncMysqlShim<W> for MysqlHandler
         // TUI at INFO when call_llm dispatches it (see actions.rs).
         Log::new(Some(&self.status_tx)).debug(format!("MySQL QUERY: {}", query));
 
-        self.handle_query(query, results).await
+        self.handle_statement(query, None, results).await
     }
 
     async fn on_init<'a>(
@@ -638,9 +783,12 @@ impl MysqlHandler {
         }
     }
 
-    async fn handle_query<'a, W: tokio::io::AsyncWrite + Send + Unpin>(
+    /// Ask the model to answer one statement: a `COM_QUERY`, or a `COM_STMT_EXECUTE` with the
+    /// parameter values it bound.
+    async fn handle_statement<'a, W: tokio::io::AsyncWrite + Send + Unpin>(
         &'a mut self,
         query: &str,
+        bound: Option<BoundParams>,
         results: QueryResultWriter<'a, W>,
     ) -> io::Result<()> {
         trace!("Calling LLM for MySQL query: {}", query);
@@ -654,6 +802,10 @@ impl MysqlHandler {
         let mut event_data = serde_json::json!({ "query": query });
         if let Some(hint) = actions::answer_with_for_query(query) {
             event_data["answer_with"] = serde_json::json!(hint);
+        }
+        if let Some(bound) = bound {
+            event_data["params"] = bound.params;
+            event_data["query_rendered"] = serde_json::json!(bound.rendered);
         }
         let event = Event::new(&MYSQL_QUERY_EVENT, event_data);
 
@@ -913,7 +1065,20 @@ fn mysql_error_kind(code: u16) -> ErrorKind {
     }
 }
 
-/// Count the `?` parameter placeholders in a SQL statement.
+/// The parameter values a `COM_STMT_EXECUTE` bound, as the event shows them.
+struct BoundParams {
+    /// `stmt_params::params_json`.
+    params: serde_json::Value,
+    /// `stmt_params::render_query`.
+    rendered: String,
+}
+
+/// Count the `?` parameter placeholders in a SQL statement. See [`placeholder_offsets`].
+pub fn count_placeholders(sql: &str) -> usize {
+    placeholder_offsets(sql).len()
+}
+
+/// The byte offset of every `?` parameter placeholder in a SQL statement.
 ///
 /// A `?` inside a string literal, a quoted identifier or a comment is data, not a
 /// placeholder, so those regions are skipped. MySQL's lexical rules:
@@ -927,9 +1092,9 @@ fn mysql_error_kind(code: u16) -> ErrorKind {
 ///
 /// Exposed for `tests/server/mysql/prepared_statement_test.rs`; the project keeps unit tests
 /// out of `src/`.
-pub fn count_placeholders(sql: &str) -> usize {
+pub fn placeholder_offsets(sql: &str) -> Vec<usize> {
     let bytes = sql.as_bytes();
-    let mut count = 0usize;
+    let mut offsets = Vec::new();
     let mut i = 0usize;
 
     while i < bytes.len() {
@@ -981,14 +1146,14 @@ pub fn count_placeholders(sql: &str) -> usize {
                 }
             }
             b'?' => {
-                count += 1;
+                offsets.push(i);
                 i += 1;
             }
             _ => i += 1,
         }
     }
 
-    count
+    offsets
 }
 
 /// Turn a successfully-written response into a connection teardown when the LLM asked for
