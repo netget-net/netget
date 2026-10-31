@@ -74,7 +74,7 @@ grep -n "_EVENT," src/server/websocket/mod.rs   # the emit side
 | Event | When | Actions offered |
 |---|---|---|
 | `websocket_handshake` | every well-formed upgrade request, **before** any 101 | `accept_websocket`, `reject_websocket` |
-| `websocket_connection_opened` | immediately after the 101 is written | send text/binary/ping, close |
+| `websocket_connection_opened` | after the 101, **only** when a rule answered the handshake or a rule is set for this event (see below) | send text/binary/ping, close |
 | `websocket_text_message` | a reassembled text message | send text/binary/ping, close, `wait_for_websocket_data` |
 | `websocket_binary_message` | a reassembled binary message | same |
 | `websocket_ping` | a ping control frame (the pong is already on its way) | send text/binary/ping, close |
@@ -86,24 +86,40 @@ below — that is what they are for.
 
 **`websocket_handshake` carries `answer_with`** (`actions::handshake_answer_with`): whether the
 client offered any subprotocol, that none is normal and never a reason to refuse, the offered
-list when there is one, and that `reject_websocket` needs a reason from the instructions. It
-exists because, with instructions that said nothing about the handshake ("echo every message",
-"greet every client"), llama3.1:8b answered websocat's upgrade — which offers no subprotocol —
-with the example's `"subprotocol": "chat"` five runs in five, and with `reject_websocket` 403 "no
-subprotocols offered" five runs in five (real-model eval, seed 42). The action and event examples
-accept without a subprotocol. The hint also says a greeting belongs to the opened connection,
-never to the handshake: told to greet every client, the model answered the handshake with
-`show_message` and no accept, which is the fail-closed 503.
+list when there is one, that `reject_websocket` needs a reason from the instructions, and that a
+greeting goes in the accept. It exists because, with instructions that said nothing about the
+handshake ("echo every message", "greet every client"), llama3.1:8b answered websocat's upgrade —
+which offers no subprotocol — with the example's `"subprotocol": "chat"` five runs in five, and
+with `reject_websocket` 403 "no subprotocols offered" five runs in five (real-model eval, seed
+42). The action and event examples accept without a subprotocol.
 
-**`websocket_connection_opened` and `websocket_text_message` carry `answer_with` too**
-(`actions::OPENED_ANSWER_WITH`, `actions::TEXT_MESSAGE_ANSWER_WITH`). Speaking first is the
-instruction's call: the opened event says to send something only when the instructions say to
-greet on connect, with their exact words, and otherwise to return no action. With the old
-`{"event":"welcome"}` example the model greeted on every connection — an echo server announced
-itself, which also ended the eval's echo probe before the echo arrived — and a server told to
-greet with "Welcome to NetGet Eval" sent the example's `{"event":"welcome"}` instead. The text
+**Speaking first is decided in the accept.** `accept_websocket` takes an optional `greeting`:
+the text, word for word, sent as the first message once the connection is open, and only when
+the instructions say to greet on connect. An empty or absent greeting sends nothing; a greeting
+that is not a string is refused. When the **model** answered the handshake (no rule matches
+`websocket_handshake`, or an `llm` rule does) and no rule is set for
+`websocket_connection_opened`, that event is **not raised**: the model has already decided, and
+asking again costs a second model call per connection for nothing (`mod.rs::raise_opened_event`).
+A handshake answered by a static, script or manual rule has decided nothing about speaking first,
+so `websocket_connection_opened` is raised exactly as before, and a rule set for the opened event
+itself is always honoured.
+
+The reason is measured. Asked on a separate `websocket_connection_opened`, the model greeted every
+connection whatever the instructions said — an echo server sent "Hello, Client!" five runs in
+five, which also ended the eval's echo probe before the echo arrived — and told to greet, it
+answered the *handshake* with `show_message` and the greeting three runs in five, which is the
+fail-closed 503: the greeting had nowhere to go but the first event it saw. Hints on the opened
+event (say nothing unless told; a `stay_silent` action; a `greet_client`/`wait_for_client` pair)
+were each replayed against the captured prompt (seeds 42-46) and each still greeted four or five
+times in five. With the greeting a field of the accept, the same prompts greeted with the
+instruction's words five in five and the echo server left it empty three in five.
+
+**`websocket_connection_opened` and `websocket_text_message` carry `answer_with`**
+(`actions::OPENED_ANSWER_WITH`, `actions::TEXT_MESSAGE_ANSWER_WITH`). Where the opened event is
+raised to a model (a rule routes it there), it says to send something only when the instructions
+say to greet on connect, with their exact words, and otherwise to return no action. The text
 message hint says an echo's text is the message's own `text`. `send_websocket_text`'s example is
-now a placeholder (`"<the message, word for word>"`).
+a placeholder (`"<the message, word for word>"`).
 
 **An empty text message on connection open is dropped** (WARN `decision=empty_greeting_dropped`).
 Told to stay silent on connect, the model answers `send_websocket_text` with `"text": ""` rather
@@ -115,13 +131,7 @@ knows it is answering `websocket_connection_opened` because `run_connection` bra
 with `WebSocketProtocol::set_speaking_first`; a reply to the client's own empty message is still
 sent.
 
-Measured with the real-model eval (5 runs each, seed 42): echo 0/5 and greeting 0/5 before;
-subprotocol drop + handshake hint → echo 0/5 (an empty greeting, or the model greeting on every
-connection with the old `{"event":"welcome"}` example), greeting 0/5 (`show_message` answering
-the handshake); + opened/message hints and placeholder examples → echo 0/5, greeting 2/5 and then
-4/5 once the handshake hint gave the accept as a literal action; + the empty-greeting drop → echo
-5/5, greeting 3/5. The greeting misses are the model answering the handshake with `show_message`
-or with nothing, which is the fail-closed 503.
+MEASURED_PLACEHOLDER
 
 **An accept naming a subprotocol the client did not offer is accepted without one.** RFC 6455
 §4.2.2 forbids echoing a subprotocol the client did not offer, and websocat fails the connection
@@ -131,10 +141,10 @@ offered, and the connection opens with a 101 that carries no `Sec-WebSocket-Prot
 the whole action instead made every such accept the fail-closed 503, because the network path
 does not re-prompt the model with the executor's error.
 
-**Every connection costs two model calls before the first message** (`websocket_handshake`, then
-`websocket_connection_opened`). For a deterministic endpoint use script or static handlers, which
-cost none — that is how `tests/server/websocket/e2e_test.rs` runs a whole conversation on a
-single `open_server` call.
+**Every connection costs one model call before the first message** (`websocket_handshake`, which
+also carries the greeting), or two when a rule routes `websocket_connection_opened` to the model.
+For a deterministic endpoint use script or static handlers, which cost none — that is how
+`tests/server/websocket/e2e_test.rs` runs a whole conversation on a single `open_server` call.
 
 ## Data format — symmetric in both directions
 
