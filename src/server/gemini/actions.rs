@@ -295,6 +295,31 @@ impl Server for GeminiProtocol {
                     let text = item.get("text").and_then(Value::as_str).unwrap_or("");
                     let url = item.get("url").and_then(Value::as_str);
                     let alt = item.get("alt").and_then(Value::as_str);
+                    // A text line carrying a url is a paragraph and its link, not a paragraph
+                    // whose url is thrown away. Told "serve a home page titled Welcome to the
+                    // NetGet capsule, with a link to /about", llama3.1:8b wrote the link as
+                    // {"type": "text", "text": "…", "url": "/about", "alt": "Learn more"} in
+                    // two runs of five (real-model eval, seed 42), and the page went out with
+                    // no link at all. The text stays a text line; the link follows it,
+                    // labelled with `alt` when there is one.
+                    if kind == "text" {
+                        if let Some(url) = url.filter(|u| !u.trim().is_empty()) {
+                            let label = alt.filter(|a| !a.trim().is_empty());
+                            if label.is_some() && !text.is_empty() {
+                                lines.push(wire::GemtextLine::Text(text.to_string()));
+                            }
+                            lines.push(
+                                wire::GemtextLine::from_parts(
+                                    "link",
+                                    label.unwrap_or(text),
+                                    Some(url),
+                                    None,
+                                )
+                                .map_err(|e| anyhow!("{e}"))?,
+                            );
+                            continue;
+                        }
+                    }
                     lines.push(
                         wire::GemtextLine::from_parts(kind, text, url, alt)
                             .map_err(|e| anyhow!("{e}"))?,

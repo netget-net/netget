@@ -102,6 +102,12 @@ shipped one (its miss is a 20 page titled "Page not found").
   line (newlines → spaces). Quotes and preformatted blocks keep their lines; inside a block, a
   line beginning with ` ``` ` gets a leading space so it cannot close the block. Link URLs may not
   contain whitespace. `lang` is written only if it is a BCP 47 list.
+* **A `text` line carrying a `url` keeps its link.** It is rendered as the text line and then a
+  link line to that URL, labelled with the line's `alt` (or, with no `alt`, the text alone becomes
+  the link's label). Told "serve a home page titled Welcome to the NetGet capsule, with a link to
+  /about", llama3.1:8b wrote the link as `{"type": "text", "text": "…", "url": "/about", "alt":
+  "Learn more"}` in two runs of five (real-model eval, seed 42), and the page went out with the URL
+  silently dropped.
 * **One response per connection.** If the model produced several, the first is sent and the rest
   are logged.
 
