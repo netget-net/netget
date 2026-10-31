@@ -625,6 +625,8 @@ impl FormModel {
             history: self.history_value()?,
             batching: self.batching_value(),
             capture: None,
+            memoize_ttl_secs: None,
+            memoize_across_connections: None,
         })
     }
 
@@ -641,6 +643,8 @@ impl FormModel {
             history: self.history_value()?,
             batching: self.batching_value(),
             capture: None,
+            memoize_ttl_secs: None,
+            memoize_across_connections: None,
         })
     }
 

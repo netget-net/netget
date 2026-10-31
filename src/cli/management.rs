@@ -81,6 +81,15 @@ pub struct ServerForm {
     /// (relative paths are in the capture directory), `false` stops it. Applied in place.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capture: Option<crate::capture::CaptureSpec>,
+    /// Memoise the model's answers: replay its answer to an identical event (less per-request
+    /// ids) for this many seconds instead of asking again. `0` turns it off; omitted leaves it
+    /// as it is (off on create). Applied in place. See [`crate::llm::answer_reuse`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memoize_ttl_secs: Option<u64>,
+    /// Share memoised answers between connections even though the instance shows the model
+    /// each connection's history. Needs memoisation on. Applied in place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memoize_across_connections: Option<bool>,
 }
 
 /// The management form for a client instance. Mirrors [`ServerForm`] against the
@@ -120,6 +129,14 @@ pub struct ClientForm {
     /// (relative paths are in the capture directory), `false` stops it. Applied in place.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capture: Option<crate::capture::CaptureSpec>,
+    /// Memoise the model's answers for this many seconds; `0` turns it off. See
+    /// [`ServerForm::memoize_ttl_secs`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memoize_ttl_secs: Option<u64>,
+    /// A client is one connection, so this only matters as the stored setting; see
+    /// [`ServerForm::memoize_across_connections`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memoize_across_connections: Option<bool>,
 }
 
 /// Outcome of an update: which instance it now is, and whether applying it
@@ -242,13 +259,19 @@ impl ServerForm {
         if let Some(spec) = &self.capture {
             state.capture.preflight(spec, from_action)?;
         }
+        let memo = crate::llm::answer_reuse::resolve_memo_settings(
+            self.memoize_ttl_secs,
+            self.memoize_across_connections,
+            None,
+        )?
+        .flatten();
         let instruction = self.instruction.clone().unwrap_or_else(|| {
             format!(
                 "You are a {} server. Handle requests appropriately.",
                 self.protocol
             )
         });
-        crate::cli::server_startup::start_server_from_action(
+        let id = crate::cli::server_startup::start_server_from_action(
             state,
             self.mac_address,
             self.interface,
@@ -272,7 +295,11 @@ impl ServerForm {
             },
             status_tx,
         )
-        .await
+        .await?;
+        if memo.is_some() {
+            state.set_server_memo(id, memo).await;
+        }
+        Ok(id)
     }
 }
 
@@ -316,13 +343,19 @@ impl ClientForm {
         if let Some(spec) = &self.capture {
             state.capture.preflight(spec, from_action)?;
         }
+        let memo = crate::llm::answer_reuse::resolve_memo_settings(
+            self.memoize_ttl_secs,
+            self.memoize_across_connections,
+            None,
+        )?
+        .flatten();
         let instruction = self.instruction.clone().unwrap_or_else(|| {
             format!(
                 "You are a {} client connected to {}. Handle responses appropriately.",
                 self.protocol, remote_addr
             )
         });
-        crate::cli::client_startup::start_client_from_action(
+        let id = crate::cli::client_startup::start_client_from_action(
             state,
             &self.protocol,
             &remote_addr,
@@ -343,7 +376,11 @@ impl ClientForm {
             llm_client,
             Some(status_tx),
         )
-        .await
+        .await?;
+        if memo.is_some() {
+            state.set_client_memo(id, memo).await;
+        }
+        Ok(id)
     }
 }
 
@@ -492,6 +529,11 @@ pub async fn update_server(
         batching: form.batching.or(Some(current.batching)),
     }
     .resolve(&protocol_impl.metadata(), &current.protocol_name)?;
+    let memo_change = crate::llm::answer_reuse::resolve_memo_settings(
+        form.memoize_ttl_secs,
+        form.memoize_across_connections,
+        current.memo.settings(),
+    )?;
 
     if let Some(spec) = &form.capture {
         state.capture.preflight(spec, false)?;
@@ -584,6 +626,10 @@ pub async fn update_server(
             )
             .await?;
         }
+        // The setting survives the rebind; the memoised answers do not.
+        state
+            .set_server_memo(new_id, memo_change.unwrap_or(current.memo.settings()))
+            .await;
 
         let summary = format!(
             "Server #{} restarted as #{} (changed: {}); live connections were dropped.",
@@ -651,6 +697,10 @@ pub async fn update_server(
         if form.batching.is_some() {
             changed.push("batching");
         }
+    }
+    if let Some(memo) = memo_change {
+        state.set_server_memo(server_id, memo).await;
+        changed.push("memoize");
     }
     if let Some(tasks) = form.scheduled_tasks {
         let n = tasks.len();
@@ -747,6 +797,11 @@ pub async fn update_client(
         batching: form.batching.or(Some(current.batching)),
     }
     .resolve(&protocol_impl.metadata(), &current.protocol_name)?;
+    let memo_change = crate::llm::answer_reuse::resolve_memo_settings(
+        form.memoize_ttl_secs,
+        form.memoize_across_connections,
+        current.memo.settings(),
+    )?;
 
     if let Some(spec) = &form.capture {
         state.capture.preflight(spec, false)?;
@@ -826,6 +881,9 @@ pub async fn update_client(
             )
             .await?;
         }
+        state
+            .set_client_memo(new_id, memo_change.unwrap_or(current.memo.settings()))
+            .await;
 
         let summary = format!(
             "Client #{} reconnected as #{} (changed: {}).",
@@ -892,6 +950,10 @@ pub async fn update_client(
         if form.batching.is_some() {
             changed.push("batching");
         }
+    }
+    if let Some(memo) = memo_change {
+        state.set_client_memo(client_id, memo).await;
+        changed.push("memoize");
     }
     if let Some(tasks) = form.scheduled_tasks {
         let n = tasks.len();

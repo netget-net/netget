@@ -425,7 +425,7 @@ async fn tcp_client_capture_records_its_side_from_the_first_byte() {
     }
     .create(
         &state,
-        netget::llm::OllamaClient::new("http://127.0.0.1:1".into()),
+        netget::llm::OllamaClient::new("http://127.0.0.1:1".to_string()),
         status_sink(),
     )
     .await

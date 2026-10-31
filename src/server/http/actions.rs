@@ -237,7 +237,7 @@ fn send_http_response_action() -> ActionDefinition {
         description: "Respond to the HTTP request that triggered this event. This is the ONLY \
             action that produces an HTTP response - do NOT use generic 'send_data' or \
             'show_message' for that. ALWAYS emit exactly one send_http_response for every request \
-            — never return an empty action list, or the client gets a blank page. \
+            — never return an empty action list, or the client gets a 500 error. \
             HONOR THE CLIENT'S `Accept` REQUEST HEADER (in the event's headers.accept): return a \
             `Content-Type` the client accepts, and a body in that format. If Accept is \
             `text/html`, return HTML; `application/json`, return JSON; `text/plain`, return text. \

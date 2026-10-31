@@ -32,7 +32,7 @@
 
 use anyhow::Result;
 use tokio::sync::mpsc;
-use tracing::{error, warn};
+use tracing::{debug, error, warn};
 
 use crate::llm::actions::client_trait::Client;
 use crate::llm::ollama_client::OllamaClient;
@@ -279,7 +279,7 @@ async fn call_llm_for_client_inner(
                     }
                 }
                 state
-                    .record_access_log(
+                    .record_access_log_answered(
                         crate::state::AccessLogOwner::Client(cid.as_u32()),
                         protocol.protocol_name(),
                         None,
@@ -291,6 +291,7 @@ async fn call_llm_for_client_inner(
                                 access_log_action(action, private_payloads, &offered_actions)
                             })
                             .collect(),
+                        crate::state::app_state::answered_by::RULE,
                     )
                     .await;
                 let _ = status_tx.send("__UPDATE_UI__".to_string());
@@ -319,6 +320,52 @@ async fn call_llm_for_client_inner(
                 ));
                 return Err(e);
             }
+        }
+    }
+
+    // A memoised answer, when the client memoises: the model's answer to an identical event
+    // within the TTL, re-rendered for this one, before any budget is spent. Never for a batch
+    // or a credential-bearing event.
+    let memo = match (ClientId::from_string(&client_id), event) {
+        (Some(cid), Some(_)) if earlier.is_empty() && !private_payloads => {
+            state.client_memo(cid).await
+        }
+        _ => None,
+    };
+    let memo_key = match (&memo, event) {
+        (Some(memo), Some(ev)) => {
+            memo.key_for(ev.id(), &ev.data, None, handler_instruction.as_deref())
+        }
+        _ => None,
+    };
+    if let (Some(memo), Some(key), Some(ev), Some(cid)) =
+        (&memo, &memo_key, event, ClientId::from_string(&client_id))
+    {
+        if let Some(actions) = memo.memo.get(key, &ev.data) {
+            debug!(
+                "Answered client {} event '{}' from the memo (no model call)",
+                client_id,
+                ev.id()
+            );
+            state
+                .record_access_log_answered(
+                    crate::state::AccessLogOwner::Client(cid.as_u32()),
+                    protocol.protocol_name(),
+                    None,
+                    ev.id(),
+                    ev.data.clone(),
+                    actions
+                        .iter()
+                        .map(|action| access_log_action(action, private_payloads, &offered_actions))
+                        .collect(),
+                    crate::state::app_state::answered_by::CACHE,
+                )
+                .await;
+            let _ = status_tx.send("__UPDATE_UI__".to_string());
+            return Ok(ClientLlmResult {
+                actions,
+                memory_updates: None,
+            });
         }
     }
 
@@ -375,7 +422,7 @@ async fn call_llm_for_client_inner(
         // they were answered together with it — as on the server side.
         for earlier_event in earlier {
             state
-                .record_access_log(
+                .record_access_log_answered(
                     crate::state::AccessLogOwner::Client(cid.as_u32()),
                     protocol.protocol_name(),
                     None,
@@ -384,11 +431,12 @@ async fn call_llm_for_client_inner(
                     vec![serde_json::json!({
                         "type": crate::state::exchange_history::ANSWERED_WITH_NEXT
                     })],
+                    crate::state::app_state::answered_by::MODEL,
                 )
                 .await;
         }
         state
-            .record_access_log(
+            .record_access_log_answered(
                 crate::state::AccessLogOwner::Client(cid.as_u32()),
                 protocol.protocol_name(),
                 None,
@@ -399,8 +447,17 @@ async fn call_llm_for_client_inner(
                     .iter()
                     .map(|action| access_log_action(action, private_payloads, &offered_actions))
                     .collect(),
+                crate::state::app_state::answered_by::MODEL,
             )
             .await;
+    }
+
+    // Memoise the model's answer. An answer that also changed the client's memory is not
+    // kept: replaying it would answer without making that change.
+    if let (Some(memo), Some(key), Some(ev)) = (memo, memo_key, event) {
+        if result.memory_updates.is_none() {
+            memo.memo.put(key, &ev.data, &result.actions);
+        }
     }
 
     Ok(result)
