@@ -7,6 +7,7 @@ use crate::llm::ollama_client::OllamaClient;
 use crate::protocol::Event;
 use crate::server::connection::ConnectionId;
 use crate::state::app_state::AppState;
+use crate::utils::task_guard::AbortOnDrop;
 use crate::{console_debug, console_error};
 use actions::{PostgresqlProtocol, POSTGRESQL_QUERY_EVENT};
 use anyhow::Result;
@@ -196,9 +197,15 @@ impl PostgresqlServer {
                             // `connectionless`, so the idle sweep never collected it either.
                             // The entry now closes on every path, and the panic is reported
                             // rather than swallowed by `tokio::spawn`.
-                            let inner = tokio::spawn(async move {
+                            //
+                            // Both helper tasks are held in `AbortOnDrop`. This task is the one
+                            // registered with the server, so `stop_server` aborts *it*; the
+                            // abort drops whatever it is awaiting, and a dropped `JoinHandle`
+                            // detaches its task rather than ending it. Without the guard the
+                            // pgwire session outlived the stop, still holding the peer's socket.
+                            let mut inner = AbortOnDrop(tokio::spawn(async move {
                                 process_socket(stream, None, handler_factory).await
-                            });
+                            }));
 
                             // Idle bound. pgwire's loop is not ours, so this watches the
                             // handler's own `ConnectionActivity` instead — and that type
@@ -209,10 +216,10 @@ impl PostgresqlServer {
                             //
                             // The connection is dropped rather than sent a FATAL 57P05: pgwire
                             // owns the socket and exposes no way to write into it from here.
-                            let abort_handle = inner.abort_handle();
+                            let abort_handle = inner.0.abort_handle();
                             let watchdog_activity = Arc::clone(&activity);
                             let watchdog_status = conn_status_tx.clone();
-                            let watchdog = tokio::spawn(async move {
+                            let _watchdog = AbortOnDrop(tokio::spawn(async move {
                                 crate::server::accept_bounded::watch_idle(
                                     watchdog_activity,
                                     IDLE_SESSION_TIMEOUT,
@@ -225,10 +232,9 @@ impl PostgresqlServer {
                                     IDLE_SESSION_TIMEOUT.as_secs()
                                 );
                                 abort_handle.abort();
-                            });
+                            }));
 
-                            let joined = inner.await;
-                            watchdog.abort();
+                            let joined = (&mut inner.0).await;
                             match joined {
                                 Ok(Ok(())) => {}
                                 Ok(Err(e)) if e.kind() == std::io::ErrorKind::InvalidData => {

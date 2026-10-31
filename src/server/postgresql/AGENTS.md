@@ -149,20 +149,31 @@ Two consequences worth keeping:
   released the port on `stop_server` while leaving every in-flight session
   running.
 - `process_socket` runs inside a nested `tokio::spawn` whose `JoinError` is
-  inspected. A panic in `tokio::spawn` is otherwise swallowed, and pgwire can be
-  panicked from the wire (see below), so the panic used to unwind straight past
+  inspected. A panic in `tokio::spawn` is otherwise swallowed, so a panic in
+  pgwire or in the handler used to unwind straight past
   `close_connection_on_server`: the row stayed `Active` for a socket that was
   gone, and PostgreSQL is not `connectionless`, so the 10-second idle sweep never
-  collected it either. The entry now closes on every path and the panic is logged
+  collected it either. The entry now closes on every path and a panic is logged
   `decision=connection_aborted_decoder_panic`.
-- **pgwire itself can be panicked by a malformed frame** (IMPROVEMENTS #77): its
-  `decode_packet` bounds a declared message length only from above and hands
-  `decode_fn` the whole remaining buffer, so `get_cstring` can `split_to(rem + 1)`
-  on a message with no NUL — six bytes after a valid startup handshake. The fix
-  belongs upstream; pgwire owns the socket loop and takes a concrete `TcpStream`,
-  so nothing here can bound the frame without proxying the connection. The
-  containment above is what NetGet can do, and
-  `tests/server/postgresql/decoder_panic_test.rs` pins it.
+- That nested task and the idle watchdog are held in `utils::task_guard::AbortOnDrop`.
+  The registered connection task is what `stop_server` aborts; the abort drops the
+  `JoinHandle` it was awaiting, and a dropped `JoinHandle` detaches its task, so
+  without the guard a stopped server's sessions kept their sockets.
+  `tests/stop_server_stops_connections_test.rs::stopping_a_postgresql_server_disconnects_a_handshaken_peer`
+  asserts it from the peer's side.
+- **Malformed frontend messages are refused, not panicked on** (IMPROVEMENTS #77).
+  Upstream pgwire 0.35's `decode_packet` bounds a declared message length only
+  from above and hands the body decoder the whole remaining buffer, so a Query
+  with no NUL (six bytes after the handshake), a Close or Describe with no body,
+  or a Bind whose parameter runs past the message panicked the connection task.
+  NetGet builds `vendor/pgwire` (README there), which isolates each message,
+  reads with checked getters, and answers `FATAL 08P01`; `process_socket` then
+  returns `InvalidData` and the connection is logged
+  `decision=refused_malformed_message`. `tests/vendored_pgwire_patch_test.rs`
+  drives every shape against the decoder and
+  `tests/server/postgresql/decoder_panic_test.rs` asserts the ErrorResponse from
+  the wire. A `[patch]` does not reach the crate as published to crates.io, so
+  the panic containment above stays.
 - `record_stats` keeps `update_connection_stats` current. pgwire never exposes the
   raw byte streams, so the counters are application-visible payload sizes at the
   handler boundary, not exact wire bytes — before this, nothing on this protocol
@@ -202,8 +213,9 @@ Five files, all declared in `tests/server/postgresql/mod.rs`:
   `client.query` and `client.prepare`, asserting an `int4` arrives as a real
   `i32`, that a prepared statement's RowDescription matches its DataRows, and
   that the extended path fails closed rather than returning no rows.
-- `decoder_panic_test.rs` — the pgwire decoder panic is contained and the
-  connection row closes; a query moves the connection counters off zero.
+- `decoder_panic_test.rs` — a malformed Query is answered `FATAL 08P01`, the
+  connection row closes and the server keeps serving; a query moves the
+  connection counters off zero.
 - `llm_failure_test.rs` — the SQLSTATE a driver sees when the backend fails.
 
 `--test` names a *target*, so it is `--test server -- postgresql`; the older
