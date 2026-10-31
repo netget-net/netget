@@ -6,7 +6,7 @@ Twelve files, all declared in `tests/server/redis/mod.rs`.
 |---|---|---|---|
 | `connection_bounds_test.rs` | 3 | Both read deadlines, from a raw socket | 0 |
 | `e2e_test.rs` | 6 | Every RESP2 reply type, through `redis-rs` | 13 |
-| `real_client_test.rs` | 1 | A whole session through the real `redis-cli` binary | 8 |
+| `real_client_test.rs` | 2 | A whole session through the real `redis-cli` binary; `redis_command`'s `args` keep a quoted multi-word argument whole, split the unquoted one, and hex-encode a non-UTF-8 one (named in `hex_args`) | 8 + 4 |
 | `resp_framing_test.rs` | 3 | Model output cannot split a frame; `stop_server` stops sessions | 0 |
 | `llm_failure_test.rs` | 1 | The RESP error a client sees when the backend fails | 1 |
 | `peer_inject_test.rs` | 1 | Dashboard injection reaches the socket | 0 |

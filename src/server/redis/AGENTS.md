@@ -51,11 +51,19 @@ reviewed, which has not been done. (This file used to say Experimental while
 
 | Field | Notes |
 |---|---|
-| `command` | the frame flattened to a single space-separated string, e.g. `SET mykey hello` |
+| `command` | the frame flattened to a single space-separated string, e.g. `SET mykey hello` — for display, log templates and quick matching |
+| `args` | the frame's arguments, one string each, command name first: `SET k "a b c"` is `["SET", "k", "a b c"]` |
+| `hex_args` | indices into `args` of the arguments given as lowercase hex because they are not valid UTF-8; usually `[]` |
+| `protocol` | the connection's RESP version, `2` or `3` |
 
-That string is all the model gets — arguments are not split out, and there is no
-argument-count or key field. A command whose argument contains a space is
-indistinguishable from two arguments.
+`command` cannot carry argument boundaries — `SET k "a b c"` and `SET k a b c` join to the
+same string — so anything that needs the arguments reads `args`. A RESP bulk string is
+binary-safe and a JSON string is not, so an argument that is not valid UTF-8 is hex-encoded
+and its index listed in `hex_args`; every other argument is its literal text, even one that
+happens to look like hex. The encoding is stated per argument rather than guessed, the rule
+TCP's `encoding` field follows (`mod.rs::command_event_data`). In `command` such an argument
+is lossily decoded (U+FFFD). There is still no key or argument-count field: the model reads
+both off `args`.
 
 **Actions** (all sync; there are no async actions):
 

@@ -59,8 +59,9 @@ notes below it are the parts that are easy to get wrong.
 |---|---|---|
 | Model emitted a parseable `send_http_response` | that response | INFO `decision=model_answer` |
 | Model emitted none, `default_response` **is** configured | that default | WARN `decision=model_silent fallback=default_response` |
-| Model emitted none, no `default_response` | **`200` with an empty body** | WARN `decision=model_silent fallback=blank_200` |
-| Model's action was refused by the executor | the same fallback as above | ERROR `decision=model_bad_action fallback=…` |
+| Model emitted none, no `default_response` | `500`, body = category | WARN `decision=fail_closed_no_action` |
+| Model's action was refused by the executor, `default_response` configured | that default | ERROR `decision=model_bad_action fallback=default_response` |
+| Model's action was refused by the executor, no `default_response` | `500`, body = category | ERROR `decision=fail_closed_bad_action` |
 | Backend saturated | `503` + `Retry-After: 1`, body = category | ERROR `decision=fail_closed_llm_overloaded` |
 | Backend failed | `500`, body = category | ERROR `decision=fail_closed_llm_error` |
 | Body over `MAX_REQUEST_BODY_BYTES` | `413`, no LLM call | `decision=refused_body_too_large` |
@@ -71,19 +72,26 @@ notes below it are the parts that are easy to get wrong.
   becomes `503` + `Retry-After` rather than `500` so a client backs off instead of recording a
   permanent fault. This is the behaviour root `AGENTS.md` tells other protocols to copy;
   `tests/server/http/failure_semantics_test.rs` pins it.
-- **`decision=model_silent fallback=blank_200` is a fail-open, and it is stated rather than
-  fixed.** When the model produces no `send_http_response` and the server has no
-  `default_response`, `build_response` answers `200 OK` with an empty body — so an unreachable
-  model, a model that answered nothing, and a model that deliberately answered `200` all reach
-  the peer identically. Tagging it `fail_closed_*` would be a lie (the peer got an OK), so the
-  log says whose silence it was and which fallback spoke in its place.
-  `tests/server/http/decision_tag_test.rs` asserts the current wire behaviour so that changing
-  it is deliberate, not incidental.
-- **`decision=model_bad_action` is an invented token**, for the same reason: the sanctioned
-  `fail_closed_bad_action` promises the peer was refused, and here the peer is given an
-  affirmative response anyway. A rejected action (e.g. a status outside 100-599) is dropped with
-  a warning by `execute_actions()` and the request falls through to the fallback; this is why
-  the executor is lenient about status/body shapes, see `http_common/AGENTS.md`.
+- **A model that produced no response is refused, never answered `200`.** With no
+  `send_http_response` and no `default_response`, `build_response` answers `500` with the
+  `WireFailure::Unavailable` category (`netget: request could not be processed`). An empty
+  `200` would make a model that said nothing — whether it chose to, or an executor refused its
+  action — indistinguishable from a model that deliberately answered an empty success, and a
+  client would record an unanswered request as completed. `500` rather than `503`, because
+  `503` + `Retry-After` means "overloaded, retry", and retrying a request the model declines
+  just asks it again; `500` is also what HTTP/2 (`h2_server.rs`) and OpenAPI answer a silent
+  model with. The manual handler's "Answer with nothing" and a static handler with no actions
+  reach the peer the same way, since neither produces a response. Set `default_response` (e.g.
+  a 404 page) to give such requests a deliberate answer instead.
+- **`default_response` is the one thing that may stand in for the model.** It is the
+  operator's answer for exactly this case, so it is sent as configured and the log says whose
+  silence it was: `decision=model_silent fallback=default_response`, or
+  `decision=model_bad_action fallback=default_response` when the model answered with an action
+  the executor refused (e.g. a status outside 100-599, dropped with a warning by
+  `execute_actions()`). Those are not `fail_closed_*` tokens because the peer got the
+  operator's response rather than a refusal. The executor is lenient about status/body shapes
+  for this reason, see `http_common/AGENTS.md`.
+  `tests/server/http/decision_tag_test.rs` covers all four outcomes from the wire.
 - The `send_http_response` action and `http_request` event descriptions tell the model to
   always answer and to honor the client's `Accept` header (a matching `Content-Type`; 404 for
   an image/binary it cannot produce), and the `request_filter` param is recommended so
@@ -202,10 +210,12 @@ problems are logged at `error!` and pushed to the status stream as
 - `tests/server/http/failure_semantics_test.rs` — 3 scenarios: 500 on backend failure,
   no internal detail in the failure body, and 413 (with no LLM call) for a body over the
   size cap.
-- `tests/server/http/decision_tag_test.rs` — 2 scenarios: a backend failure is tagged
-  `decision=fail_closed_llm_error` (and not as model silence), and a model that answers with
-  no action reaches the peer as an empty `200` tagged
-  `decision=model_silent fallback=blank_200` — the fail-open, pinned.
+- `tests/server/http/decision_tag_test.rs` — 4 scenarios: a backend failure is tagged
+  `decision=fail_closed_llm_error` (and not as model silence); a model that answers with no
+  action is refused `500` with `decision=fail_closed_no_action`; a model whose action the
+  executor refuses is refused `500` with `decision=fail_closed_bad_action`; and with
+  `default_response` configured a silent model gets that response, tagged
+  `decision=model_silent fallback=default_response`.
 - `tests/server/http/e2e_scheduled_tasks_test.rs` — scheduled-task coverage.
 - `tests/http_request_filter_test.rs` — pure filter unit tests.
 
