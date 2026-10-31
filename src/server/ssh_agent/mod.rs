@@ -132,6 +132,22 @@ struct ConnectionData {
     write_half: Arc<Mutex<tokio::io::WriteHalf<UnixStream>>>,
 }
 
+/// Unlinks the socket node this server bound when the accept loop ends — including when the
+/// task is aborted by `stop_server`, because aborting drops the task future and this guard
+/// with it.
+///
+/// Without it a stopped agent left its node on disk (`./netget-ssh-agent.sock` by default, in
+/// whatever directory NetGet ran from), so `SSH_AUTH_SOCK` pointing at it got ECONNREFUSED —
+/// "the agent is down" — rather than ENOENT. The node is always one this server created: the
+/// bind is preceded by a guarded unlink that refuses anything that is not a socket.
+struct SocketCleanup(PathBuf);
+
+impl Drop for SocketCleanup {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 /// SSH Agent server that listens for incoming connections
 pub struct SshAgentServer;
 
@@ -185,8 +201,11 @@ impl SshAgentServer {
 
         // Spawn accept loop
         let task_registrar = app_state.clone();
+        let cleanup = SocketCleanup(socket_path.clone());
         let limiter = crate::server::accept_bounded::ConnectionLimiter::new(MAX_CONNECTIONS);
         let accept_handle = tokio::spawn(async move {
+            // Moved in so it drops (and unlinks) when the loop ends or the task is aborted.
+            let _cleanup = cleanup;
             loop {
                 match crate::server::accept_bounded::accept_bounded_unix(
                     &listener,

@@ -37,11 +37,12 @@ keys and performs signing operations for SSH clients.
 - `connection_bounds_test.rs` - the connection cap and both read deadlines, from the peer's
   end of the socket. In-process (`ServerForm` + `AppState`) and model-free: the LLM endpoint is
   a dead port and every rule is static or manual, so 0 calls. The read bounds are set short
-  through `first_byte_timeout_secs` / `idle_timeout_secs`. Four tests: a silent peer reads EOF
+  through `first_byte_timeout_secs` / `idle_timeout_secs`. Five tests: a silent peer reads EOF
   at the first-byte bound; after one static-answered request the idle bound governs (the
   first-byte one is set 60s, the wrong way round); a request parked for a human keeps its
   connection far past both bounds; 256 sockets fill the cap, the 257th reads EOF at once, and
-  closing one frees exactly one slot. Removing the read deadline failed the first two and
+  closing one frees exactly one slot; and `remove_server` unlinks the socket node (removing
+  the `SocketCleanup` guard leaves it on disk). Removing the read deadline failed the first two and
   raising the cap to 100 000 failed the fourth. The parked test has no guard to remove —
   requests are answered inline, so the read is simply not polled — and is a regression pin
   against the deadline being moved outward. It also pins `default_binding()`: before it, this
