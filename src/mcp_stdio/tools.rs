@@ -234,6 +234,16 @@ pub struct StartServerParams {
     /// where the protocol answers each event as it arrives. Applied in place on update.
     #[serde(default)]
     pub batching: Option<bool>,
+    /// Record this server's traffic to a pcap file, readable with `wireshark -r` / `tshark -r`
+    /// (NetGet owns the socket, so no capture privilege is needed). `true` writes
+    /// `netget-server-<id>-<protocol>.pcap` in the capture directory (`--capture <dir>`, else
+    /// the working directory); a string names the file (relative paths are in the capture
+    /// directory); `false` stops. Applied in place on update_server, without dropping
+    /// connections. server_status reports the file, packet counts and drops. Only some
+    /// protocols feed it (tcp, telnet, http, redis, dns, udp); for the rest server_status
+    /// says `adopted: false` and the file stays empty.
+    #[serde(default)]
+    pub capture: Option<serde_json::Value>,
     /// Server-scoped scheduled LLM tasks, removed when the server stops. Array of
     /// objects: {"task_id":"...", "recurring":true, "interval_secs":60,
     /// "instruction":"..."} for a repeating task, or {"task_id":"...",
@@ -292,6 +302,15 @@ pub struct StartClientParams {
     /// or {"task_id":"...", "recurring":false, "delay_secs":10, "instruction":"..."}.
     #[serde(default)]
     pub scheduled_tasks: Option<Vec<serde_json::Value>>,
+    /// Record this client's traffic to a pcap file, readable with `wireshark -r` / `tshark -r`
+    /// (NetGet owns the socket, so no capture privilege is needed). `true` writes
+    /// `netget-client-<id>-<protocol>.pcap` in the capture directory (`--capture <dir>`, else
+    /// the working directory); a string names the file (relative paths are in the capture
+    /// directory); `false` records nothing. client_status reports the file, packet counts
+    /// and drops. Only some protocols feed it (tcp); for the rest client_status says
+    /// `adopted: false` and the file stays empty.
+    #[serde(default)]
+    pub capture: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -395,6 +414,16 @@ pub struct UpdateServerParams {
     /// where the protocol answers each event as it arrives. Applied in place on update.
     #[serde(default)]
     pub batching: Option<bool>,
+    /// Record this server's traffic to a pcap file, readable with `wireshark -r` / `tshark -r`
+    /// (NetGet owns the socket, so no capture privilege is needed). `true` writes
+    /// `netget-server-<id>-<protocol>.pcap` in the capture directory (`--capture <dir>`, else
+    /// the working directory); a string names the file (relative paths are in the capture
+    /// directory); `false` stops. Applied in place on update_server, without dropping
+    /// connections. server_status reports the file, packet counts and drops. Only some
+    /// protocols feed it (tcp, telnet, http, redis, dns, udp); for the rest server_status
+    /// says `adopted: false` and the file stays empty.
+    #[serde(default)]
+    pub capture: Option<serde_json::Value>,
     /// Scheduled tasks to add (hot-applied). Same shape as start_server's.
     #[serde(default)]
     pub scheduled_tasks: Option<Vec<serde_json::Value>>,
@@ -434,6 +463,15 @@ pub struct UpdateClientParams {
     /// where the protocol answers each event as it arrives. Applied in place on update.
     #[serde(default)]
     pub batching: Option<bool>,
+    /// Record this client's traffic to a pcap file, readable with `wireshark -r` / `tshark -r`
+    /// (NetGet owns the socket, so no capture privilege is needed). `true` writes
+    /// `netget-client-<id>-<protocol>.pcap` in the capture directory (`--capture <dir>`, else
+    /// the working directory); a string names the file (relative paths are in the capture
+    /// directory); `false` stops. Applied in place on update_client, without reconnecting. client_status reports the file, packet counts and drops. Only some
+    /// protocols feed it (tcp); for the rest client_status
+    /// says `adopted: false` and the file stays empty.
+    #[serde(default)]
+    pub capture: Option<serde_json::Value>,
     /// Scheduled tasks to add (hot-applied).
     #[serde(default)]
     pub scheduled_tasks: Option<Vec<serde_json::Value>>,
@@ -776,6 +814,9 @@ impl NetGetMcpService {
         app_state
             .set_min_stability(args.parse_min_stability()?)
             .await;
+        app_state
+            .capture
+            .set_capture_all_dir(args.capture.clone())?;
 
         app_state
             .configure_rate_limiter(args.build_rate_limiter_config())
@@ -1029,6 +1070,11 @@ impl NetGetMcpService {
             }
         };
 
+        let capture = match parse_capture(params.capture.as_ref(), &self.state.app_state) {
+            Ok(c) => c,
+            Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
+        };
+
         let (status_tx, mut status_rx) = mpsc::unbounded_channel();
         let server_id = match crate::cli::server_startup::start_server_from_action(
             &self.state.app_state,
@@ -1048,7 +1094,8 @@ impl NetGetMcpService {
                 history: params.history,
                 batching: params.batching,
             },
-            status_tx, // status_tx
+            crate::capture::CaptureRequest::operator(capture),
+            status_tx.clone(), // status_tx
         )
         .await
         {
@@ -1067,11 +1114,20 @@ impl NetGetMcpService {
             messages.push(msg);
         }
 
+        let capturing = self
+            .state
+            .app_state
+            .capture
+            .status(crate::capture::CaptureOwner::Server(server_id))
+            .filter(|c| !messages.iter().any(|m| m.contains(&c.path)))
+            .map(|c| format!("\nCapturing to {}", c.path))
+            .unwrap_or_default();
         let result = format!(
-            "Server #{} ({}) started.\n{}",
+            "Server #{} ({}) started.\n{}{}",
             server_id.as_u32(),
             params.protocol,
-            messages.join("\n")
+            messages.join("\n"),
+            capturing
         );
 
         Ok(CallToolResult::success(vec![Content::text(result)]))
@@ -1169,6 +1225,10 @@ impl NetGetMcpService {
                     },
                 );
                 let mut result = result;
+                result.push_str(&capture_line(
+                    &self.state.app_state,
+                    crate::capture::CaptureOwner::Server(server_id),
+                ));
 
                 // Connections, with the id send_to_peer / disconnect_peer take and whether
                 // each accepts them (only protocols that register a peer handle do).
@@ -1336,7 +1396,7 @@ impl NetGetMcpService {
     }
 
     #[tool(
-        description = "Update a RUNNING server in place, by its id, instead of starting a second one. Supply only the fields to change. instruction / event_handlers / initial_memory / feedback_instructions / scheduled_tasks / history / batching are hot-applied WITHOUT dropping connections; port / host / startup_params require a clean stop+start (connections dropped, server gets a NEW id). Unknown id and invalid startup_params error cleanly and leave the running server untouched. Prefer this over start_server when a server already exists."
+        description = "Update a RUNNING server in place, by its id, instead of starting a second one. Supply only the fields to change. instruction / event_handlers / initial_memory / feedback_instructions / scheduled_tasks / history / batching / capture are hot-applied WITHOUT dropping connections; port / host / startup_params require a clean stop+start (connections dropped, server gets a NEW id). Unknown id and invalid startup_params error cleanly and leave the running server untouched. Prefer this over start_server when a server already exists."
     )]
     async fn update_server(
         &self,
@@ -1358,6 +1418,17 @@ impl NetGetMcpService {
             }
         };
 
+        let capture = match params
+            .capture
+            .as_ref()
+            .filter(|v| !v.is_null())
+            .map(crate::capture::CaptureSpec::from_value)
+            .transpose()
+        {
+            Ok(c) => c,
+            Err(e) => return Ok(CallToolResult::error(vec![Content::text(e.to_string())])),
+        };
+
         let form = crate::cli::management::ServerForm {
             protocol: String::new(),
             port: params.port,
@@ -1373,6 +1444,7 @@ impl NetGetMcpService {
             feedback_instructions: params.feedback_instructions,
             history: params.history,
             batching: params.batching,
+            capture,
         };
 
         let (status_tx, _status_rx) = mpsc::unbounded_channel();
@@ -1392,7 +1464,7 @@ impl NetGetMcpService {
     }
 
     #[tool(
-        description = "Update a RUNNING client in place, by its id, instead of connecting a second one. Supply only the fields to change. instruction / event_handlers / initial_memory / feedback_instructions / scheduled_tasks / history / batching are hot-applied; remote_addr / startup_params trigger a reconnect (new id). Unknown id and invalid startup_params error cleanly and leave the running client untouched."
+        description = "Update a RUNNING client in place, by its id, instead of connecting a second one. Supply only the fields to change. instruction / event_handlers / initial_memory / feedback_instructions / scheduled_tasks / history / batching / capture are hot-applied; remote_addr / startup_params trigger a reconnect (new id). Unknown id and invalid startup_params error cleanly and leave the running client untouched."
     )]
     async fn update_client(
         &self,
@@ -1413,6 +1485,17 @@ impl NetGetMcpService {
             }
         };
 
+        let capture = match params
+            .capture
+            .as_ref()
+            .filter(|v| !v.is_null())
+            .map(crate::capture::CaptureSpec::from_value)
+            .transpose()
+        {
+            Ok(c) => c,
+            Err(e) => return Ok(CallToolResult::error(vec![Content::text(e.to_string())])),
+        };
+
         let form = crate::cli::management::ClientForm {
             protocol: String::new(),
             remote_addr: params.remote_addr,
@@ -1424,6 +1507,7 @@ impl NetGetMcpService {
             feedback_instructions: params.feedback_instructions,
             history: params.history,
             batching: params.batching,
+            capture,
         };
 
         let (status_tx, _status_rx) = mpsc::unbounded_channel();
@@ -1591,6 +1675,10 @@ impl NetGetMcpService {
             "MCP: Connecting {} client to {}",
             params.protocol, params.remote_addr
         );
+        let capture = match parse_capture(params.capture.as_ref(), &self.state.app_state) {
+            Ok(c) => c,
+            Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
+        };
 
         let client_id = match crate::cli::client_startup::start_client_from_action(
             &self.state.app_state,
@@ -1606,6 +1694,7 @@ impl NetGetMcpService {
                 history: params.history,
                 batching: params.batching,
             },
+            crate::capture::CaptureRequest::operator(capture),
             self.state.llm_client.clone(),
             None, // status_tx: MCP has no status stream, drain to tracing
         )
@@ -1619,12 +1708,20 @@ impl NetGetMcpService {
                 ))]));
             }
         };
+        let capturing = self
+            .state
+            .app_state
+            .capture
+            .status(crate::capture::CaptureOwner::Client(client_id))
+            .map(|c| format!("\nCapturing to {}", c.path))
+            .unwrap_or_default();
 
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "Client #{} ({}) connected to {}.",
+            "Client #{} ({}) connected to {}.{}",
             client_id.as_u32(),
             params.protocol,
-            params.remote_addr
+            params.remote_addr,
+            capturing
         ))]))
     }
 
@@ -1720,6 +1817,10 @@ impl NetGetMcpService {
                         &client.memory
                     },
                 );
+                result.push_str(&capture_line(
+                    &self.state.app_state,
+                    crate::capture::CaptureOwner::Client(client_id),
+                ));
 
                 if let Some(conn) = &client.connection {
                     result.push_str(&format!(
@@ -2541,6 +2642,49 @@ impl ServerHandler for NetGetMcpService {
 /// Kept as raw JSON on the wire because `ServerTaskDefinition` does not derive
 /// `JsonSchema`; a bad entry is reported to the caller rather than silently
 /// dropped.
+/// The `server_status` / `client_status` line describing an instance's capture.
+fn capture_line(
+    state: &crate::state::app_state::AppState,
+    owner: crate::capture::CaptureOwner,
+) -> String {
+    match state.capture.status(owner) {
+        None => "- **Capture**: off\n".to_string(),
+        Some(c) => {
+            let mut line = format!(
+                "- **Capture**: {} — {} packet(s), {} payload byte(s), {} dropped, {} rotation(s)",
+                c.path, c.packets, c.bytes, c.dropped, c.rotations
+            );
+            if !c.adopted {
+                line.push_str(
+                    " — this protocol does not feed packet capture, so the file stays empty",
+                );
+            }
+            if let Some(e) = &c.error {
+                line.push_str(&format!(" — write error: {e}"));
+            }
+            line.push('\n');
+            line
+        }
+    }
+}
+
+/// Read a tool's `capture` argument and refuse, before anything starts, one that cannot be
+/// written.
+fn parse_capture(
+    value: Option<&serde_json::Value>,
+    state: &crate::state::app_state::AppState,
+) -> Result<Option<crate::capture::CaptureSpec>, String> {
+    let Some(value) = value.filter(|v| !v.is_null()) else {
+        return Ok(None);
+    };
+    let spec = crate::capture::CaptureSpec::from_value(value).map_err(|e| e.to_string())?;
+    state
+        .capture
+        .preflight(&spec, false)
+        .map_err(|e| e.to_string())?;
+    Ok(Some(spec))
+}
+
 fn parse_scheduled_tasks(
     tasks: Option<Vec<serde_json::Value>>,
 ) -> Result<Option<Vec<crate::llm::actions::common::ServerTaskDefinition>>, String> {

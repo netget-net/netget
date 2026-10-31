@@ -239,7 +239,7 @@ second one, and route through `cli::management::update_server` / `update_client`
 the TUI's management UI uses). Supply only the fields to change.
 
 - **Hot-applied without dropping connections/reconnecting**: `instruction`, `event_handlers`,
-  `initial_memory`, `feedback_instructions`, `scheduled_tasks`.
+  `initial_memory`, `feedback_instructions`, `scheduled_tasks`, `history`, `batching`, `capture`.
 - **Requires a clean stop+start / reconnect** (connections dropped, the entity gets a **new id**):
   `port` / `host` for a server, `remote_addr` for a client, and `startup_params` for either.
 - An unknown id and invalid `startup_params` **error cleanly and leave the running entity
@@ -249,6 +249,18 @@ the TUI's management UI uses). Supply only the fields to change.
 Both tools re-sync `AppState`'s LLM client before applying, in case the update restarts the
 entity. Prefer `update_server` over a second `start_server` when a server already exists;
 `update_server_instruction` remains as the narrow "just the instruction" tool.
+
+## Packet capture (`capture`)
+
+`start_server`, `start_client`, `update_server` and `update_client` take `capture`: `true`
+(`netget-<server|client>-<id>-<protocol>.pcap` in the capture directory — `--capture <dir>`, else
+the working directory), a file path (relative paths land in the capture directory), or `false`
+to stop. It is validated before anything starts (a missing directory, or an existing file that
+is not a pcap, is refused; NetGet never overwrites one), begins before the protocol binds or
+connects, and is hot on update. A restart forced by another field keeps the capture, appending to
+the same file. `server_status` / `client_status` print a `Capture` line — path, packets, payload
+bytes, drops, rotations — and say so when the protocol does not feed capture (its file stays
+empty); see `src/capture/mod.rs` for which do. Stopping the instance closes the file.
 
 ## Server teardown and state reaping
 

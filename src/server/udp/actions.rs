@@ -20,6 +20,8 @@ pub struct UdpProtocol {
     /// `None` for the registry's copy (`UdpProtocol::new()`), which only describes actions and
     /// events. `send_to_address` needs it and says so when it is missing.
     socket: Option<Arc<UdpSocket>>,
+    /// Packet capture for what `send_to_address` puts on that socket.
+    tap: Option<crate::capture::udp::UdpTap>,
 }
 
 impl Default for UdpProtocol {
@@ -30,12 +32,16 @@ impl Default for UdpProtocol {
 
 impl UdpProtocol {
     pub fn new() -> Self {
-        Self { socket: None }
+        Self {
+            socket: None,
+            tap: None,
+        }
     }
 
-    pub fn with_socket(socket: Arc<UdpSocket>) -> Self {
+    pub fn with_socket(socket: Arc<UdpSocket>, tap: crate::capture::udp::UdpTap) -> Self {
         Self {
             socket: Some(socket),
+            tap: Some(tap),
         }
     }
 }
@@ -264,6 +270,9 @@ impl UdpProtocol {
 
         match socket.try_send_to(&payload, addr) {
             Ok(sent) => {
+                if let Some(tap) = &self.tap {
+                    tap.outbound(addr, &payload[..sent]);
+                }
                 tracing::debug!("UDP send_to_address: {} bytes to {}", sent, addr);
                 Ok(ActionResult::NoAction)
             }

@@ -558,6 +558,14 @@ pub struct Args {
     )]
     pub batching: Option<bool>,
 
+    /// Record every instance's traffic to pcap files in this directory
+    #[clap(
+        long = "capture",
+        value_name = "DIR",
+        help = "Record every server and client this process starts to a pcap file in DIR (created if missing), named netget-<server|client>-<id>-<protocol>.pcap — open it with `wireshark -r` / `tshark -r`. NetGet owns the sockets, so no capture privilege is needed; the IP/TCP/UDP headers are synthesised from each connection's addresses. Only some protocols feed it (servers: tcp, telnet, http, redis, dns, udp; clients: tcp). DIR is also where `capture: true` and a relative `capture` path on one instance go."
+    )]
+    pub capture: Option<std::path::PathBuf>,
+
     /// Print documentation for every protocol and exit
     #[clap(
         long = "docs",

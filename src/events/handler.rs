@@ -873,6 +873,7 @@ impl EventHandler {
                 feedback_instructions,
                 history,
                 batching,
+                capture,
             } => {
                 // Documentation gate (off by default, see REQUIRE_DOCS_FOR_OPEN_ACTIONS):
                 // when enabled, the first open_server of the process fetches the
@@ -981,6 +982,7 @@ impl EventHandler {
                     scheduled_tasks,
                     feedback_instructions,
                     crate::protocol::metadata::ConversationOverrides { history, batching },
+                    crate::capture::CaptureRequest::action(capture),
                     status_tx.clone(),
                 )
                 .await
@@ -1334,6 +1336,7 @@ impl EventHandler {
                 feedback_instructions,
                 history,
                 batching,
+                capture,
             } => {
                 // Documentation gate (off by default, see REQUIRE_DOCS_FOR_OPEN_ACTIONS):
                 // when enabled, the first open_client of the process fetches the
@@ -1522,6 +1525,22 @@ impl EventHandler {
                     client_id.as_u32(),
                     remote_addr
                 ));
+
+                // Capture starts before the client connects, so its handshake is in the file.
+                if let Err(e) = self
+                    .state
+                    .capture
+                    .begin(
+                        crate::capture::CaptureOwner::Client(client_id),
+                        &protocol,
+                        &crate::capture::CaptureRequest::action(capture),
+                    )
+                    .await
+                {
+                    self.state.remove_client(client_id).await;
+                    let _ = status_tx.send(format!("[ERROR] {e}"));
+                    return Err(ActionExecutionError::Fatal(e));
+                }
 
                 // Start the client connection
                 let llm_client = self.llm.clone();
@@ -1729,6 +1748,9 @@ impl EventHandler {
                     feedback_instructions,
                     history,
                     batching,
+                    // The model cannot start a capture on a running instance: a path from it
+                    // is not the operator's choice of where to write.
+                    capture: None,
                 };
                 match management::update_server(
                     &self.state,
@@ -1771,6 +1793,9 @@ impl EventHandler {
                     feedback_instructions,
                     history,
                     batching,
+                    // The model cannot start a capture on a running instance: a path from it
+                    // is not the operator's choice of where to write.
+                    capture: None,
                 };
                 match management::update_client(
                     &self.state,
@@ -2628,6 +2653,7 @@ impl EventHandler {
                         feedback_instructions,
                         history,
                         batching,
+                        capture,
                     } => {
                         // Create status channel for server startup messages
                         // Messages will be logged via tracing macros in the spawn method
@@ -2649,6 +2675,7 @@ impl EventHandler {
                             scheduled_tasks,
                             feedback_instructions,
                             crate::protocol::metadata::ConversationOverrides { history, batching },
+                            crate::capture::CaptureRequest::action(capture),
                             status_tx,
                         )
                         .await
@@ -2687,6 +2714,7 @@ impl EventHandler {
                         feedback_instructions,
                         history,
                         batching,
+                        capture,
                     } => {
                         // Execute open_client action via client startup
                         use crate::cli::client_startup;
@@ -2702,6 +2730,7 @@ impl EventHandler {
                             scheduled_tasks,
                             feedback_instructions,
                             crate::protocol::metadata::ConversationOverrides { history, batching },
+                            crate::capture::CaptureRequest::action(capture),
                             self.llm.clone(),
                             None, // status_tx: /load path, drain to tracing
                         )

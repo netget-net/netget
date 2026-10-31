@@ -222,6 +222,17 @@ impl HttpServer {
                                     return;
                                 }
 
+                                // From here the socket is read and written only through the
+                                // capture wrapper (`src/capture/`). The peek above consumed
+                                // nothing, so the request is still all there to be recorded.
+                                // Under TLS the wrapper sits beneath it and records the
+                                // ciphertext, as a capture on the wire would.
+                                let stream = crate::capture::tcp::CapturedStream::server(
+                                    &app_state_clone,
+                                    server_id,
+                                    stream,
+                                );
+
                                 // Survives this task: an h2c upgrade moves the connection to a
                                 // separate task, and the slot must stay taken while it runs.
                                 let permit = std::sync::Arc::new(permit);

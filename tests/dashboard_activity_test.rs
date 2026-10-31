@@ -16,6 +16,7 @@ fn server(id: u32, status: ServerStatus) -> ServerRow {
     ServerRow {
         history_entries: 0,
         batching: false,
+        capture: None,
         id: ServerId::new(id),
         protocol: "HTTP".into(),
         port: 8080,
@@ -40,6 +41,7 @@ fn client(id: u32, status: ClientStatus) -> ClientRow {
     ClientRow {
         history_entries: 0,
         batching: false,
+        capture: None,
         id: ClientId::new(id),
         protocol: "telnet".into(),
         remote_addr: "127.0.0.1:2323".into(),

@@ -198,6 +198,7 @@ fn form_from_example(example: &serde_json::Value) -> Result<ServerForm, String> 
         feedback_instructions,
         history,
         batching,
+        capture: _,
     } = action
     else {
         return Err("parses as some action other than open_server".to_string());

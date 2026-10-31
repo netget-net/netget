@@ -122,6 +122,9 @@ where
     }
 }
 
+/// An accepted connection, as packet capture sees it.
+type CapturedTcp = crate::capture::tcp::CapturedStream<TcpStream>;
+
 /// Per-connection data for LLM handling
 struct ConnectionData {
     /// The Idle → Processing → Accumulating machine and the reads waiting behind the answer in
@@ -129,7 +132,7 @@ struct ConnectionData {
     /// [`crate::server::read_queue`].
     reads: ReadQueue,
     memory: String,
-    write_half: Arc<Mutex<tokio::io::WriteHalf<TcpStream>>>,
+    write_half: Arc<Mutex<tokio::io::WriteHalf<CapturedTcp>>>,
 }
 
 /// TCP server that listens for incoming connections
@@ -182,7 +185,11 @@ impl TcpServer {
                         let local_addr_conn = stream.local_addr().unwrap_or(local_addr);
                         info!("Accepted connection {} from {}", connection_id, remote_addr);
 
-                        // Split stream
+                        // Split stream. Wrapped first, so packet capture sees every byte
+                        // either half carries (`src/capture/`).
+                        let stream = crate::capture::tcp::CapturedStream::server(
+                            &app_state, server_id, stream,
+                        );
                         let (read_half, write_half) = tokio::io::split(stream);
                         let write_half_arc = Arc::new(Mutex::new(write_half));
 
@@ -600,7 +607,7 @@ impl TcpServer {
         app_state: Arc<AppState>,
         status_tx: mpsc::UnboundedSender<String>,
         connections: Arc<Mutex<HashMap<ConnectionId, ConnectionData>>>,
-        write_half: Arc<Mutex<tokio::io::WriteHalf<TcpStream>>>,
+        write_half: Arc<Mutex<tokio::io::WriteHalf<CapturedTcp>>>,
         protocol: Arc<TcpProtocol>,
     ) {
         let log = Log::new(Some(&status_tx));

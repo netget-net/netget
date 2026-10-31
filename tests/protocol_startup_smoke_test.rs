@@ -435,6 +435,7 @@ async fn probe_protocol(
             None,               // scheduled_tasks
             None,               // feedback_instructions
             Default::default(), // history / batching overrides
+            netget::capture::CaptureRequest::default(),
             status_tx,
         )
         .await
@@ -1270,6 +1271,7 @@ fn stdio_child_starts_and_stops_a_stdio_server() {
             None,
             None,
             Default::default(),
+            netget::capture::CaptureRequest::default(),
             status_tx,
         )
         .await

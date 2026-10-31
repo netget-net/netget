@@ -501,78 +501,12 @@ impl PcapOracle {
             Framing::Ethernet | Framing::IpProto(_) => None,
         });
 
-        let mut cmd = Command::new("tshark");
-        cmd.arg("-r")
-            .arg(&path)
-            // No name resolution: a test must not perform a DNS lookup, and
-            // resolution is the slowest thing tshark does.
-            .arg("-n");
-        if let Some(d) = &decode_as {
-            cmd.arg("-d").arg(d);
-        }
-        cmd.args([
-            "-T",
-            "fields",
-            "-E",
-            "separator=/t",
-            "-e",
-            "frame.number",
-            "-e",
-            "frame.protocols",
-            "-e",
-            "_ws.expert.severity",
-            "-e",
-            "_ws.expert.message",
-        ]);
-
-        let out = cmd.output().map_err(|e| format!("running tshark: {e}"))?;
-        if !out.status.success() {
-            return Err(format!(
-                "tshark exited {:?}: {}",
-                out.status.code(),
-                String::from_utf8_lossy(&out.stderr).trim()
-            ));
-        }
-
-        let text = String::from_utf8_lossy(&out.stdout).into_owned();
-        let mut packets = Vec::new();
-        for line in text.lines() {
-            if line.trim().is_empty() {
-                continue;
-            }
-            let cols: Vec<&str> = line.split('\t').collect();
-            let number: u32 = cols.first().unwrap_or(&"0").parse().unwrap_or(0);
-            let protocols = cols.get(1).unwrap_or(&"").to_string();
-            // Severities are numeric, so splitting on the aggregator comma is
-            // unambiguous. Messages may themselves contain commas, so they are
-            // zipped positionally and used only for the human-readable report.
-            let sevs: Vec<u32> = cols
-                .get(2)
-                .unwrap_or(&"")
-                .split(',')
-                .filter(|s| !s.is_empty())
-                .filter_map(|s| s.trim().parse().ok())
-                .collect();
-            let raw_msgs = cols.get(3).unwrap_or(&"").to_string();
-            let msgs: Vec<String> = if sevs.len() <= 1 {
-                vec![raw_msgs.clone()]
-            } else {
-                raw_msgs.split(',').map(|s| s.trim().to_string()).collect()
-            };
-            let experts = sevs
-                .iter()
-                .enumerate()
-                .map(|(i, s)| (*s, msgs.get(i).cloned().unwrap_or_default()))
-                .collect();
-            packets.push(PacketVerdict {
-                number,
-                protocols,
-                experts,
-                dir: dirs
-                    .get((number as usize).saturating_sub(1))
-                    .copied()
-                    .flatten(),
-            });
+        let mut packets = dissect_file(&path, decode_as.as_deref())?;
+        for p in &mut packets {
+            p.dir = dirs
+                .get((p.number as usize).saturating_sub(1))
+                .copied()
+                .flatten();
         }
 
         let mut failures = Vec::new();
@@ -966,6 +900,109 @@ impl PcapOracle {
 // ---------------------------------------------------------------------------
 // Framing primitives
 // ---------------------------------------------------------------------------
+
+/// Dissect a pcap file that already exists — one NetGet wrote itself, say — with the same
+/// tshark invocation [`PcapOracle::check`] uses, and return every packet's protocol chain and
+/// expert info. `dir` is `None` on every packet: a file has no notion of which side the test
+/// was on. The caller decides what counts as a failure; [`expert_failures`] is the oracle's own
+/// rule.
+pub fn dissect_file(
+    path: &std::path::Path,
+    decode_as: Option<&str>,
+) -> Result<Vec<PacketVerdict>, String> {
+    require_tshark();
+    let mut cmd = Command::new("tshark");
+    cmd.arg("-r")
+        .arg(&path)
+        // No name resolution: a test must not perform a DNS lookup, and
+        // resolution is the slowest thing tshark does.
+        .arg("-n");
+    if let Some(d) = decode_as {
+        cmd.arg("-d").arg(d);
+    }
+    cmd.args([
+        "-T",
+        "fields",
+        "-E",
+        "separator=/t",
+        "-e",
+        "frame.number",
+        "-e",
+        "frame.protocols",
+        "-e",
+        "_ws.expert.severity",
+        "-e",
+        "_ws.expert.message",
+    ]);
+
+    let out = cmd.output().map_err(|e| format!("running tshark: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "tshark exited {:?}: {}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    let mut packets = Vec::new();
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let cols: Vec<&str> = line.split('\t').collect();
+        let number: u32 = cols.first().unwrap_or(&"0").parse().unwrap_or(0);
+        let protocols = cols.get(1).unwrap_or(&"").to_string();
+        // Severities are numeric, so splitting on the aggregator comma is
+        // unambiguous. Messages may themselves contain commas, so they are
+        // zipped positionally and used only for the human-readable report.
+        let sevs: Vec<u32> = cols
+            .get(2)
+            .unwrap_or(&"")
+            .split(',')
+            .filter(|s| !s.is_empty())
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        let raw_msgs = cols.get(3).unwrap_or(&"").to_string();
+        let msgs: Vec<String> = if sevs.len() <= 1 {
+            vec![raw_msgs.clone()]
+        } else {
+            raw_msgs.split(',').map(|s| s.trim().to_string()).collect()
+        };
+        let experts = sevs
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (*s, msgs.get(i).cloned().unwrap_or_default()))
+            .collect();
+        packets.push(PacketVerdict {
+            number,
+            protocols,
+            experts,
+            dir: None,
+        });
+    }
+    Ok(packets)
+}
+
+/// The oracle's first failure rule, for a file read with [`dissect_file`]: every expert info at
+/// Warn severity or above.
+pub fn expert_failures(packets: &[PacketVerdict]) -> Vec<String> {
+    let mut failures = Vec::new();
+    for p in packets {
+        for (sev, msg) in &p.experts {
+            if *sev >= SEV_WARN {
+                failures.push(format!(
+                    "packet #{} ({}): Expert Info [{}] {}",
+                    p.number,
+                    p.protocols,
+                    severity_name(*sev),
+                    if msg.is_empty() { "(no message)" } else { msg }
+                ));
+            }
+        }
+    }
+    failures
+}
 
 fn ethernet(dst: [u8; 6], src: [u8; 6], ethertype: u16, payload: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(14 + payload.len());

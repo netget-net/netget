@@ -271,6 +271,7 @@ fn the_button_is_a_wireshark_action_on_servers_and_clients() {
     let server = ServerRow {
         history_entries: 0,
         batching: false,
+        capture: None,
         id: ServerId::new(1),
         protocol: "HTTP".into(),
         port: 8080,
@@ -297,6 +298,7 @@ fn the_button_is_a_wireshark_action_on_servers_and_clients() {
     let client = ClientRow {
         history_entries: 0,
         batching: false,
+        capture: None,
         id: ClientId::new(1),
         protocol: "telnet".into(),
         remote_addr: "127.0.0.1:2323".into(),
@@ -516,4 +518,53 @@ fn a_hostile_interface_name_cannot_run_anything_when_the_line_is_pasted() {
         !line.contains("-i lo$(") && !line.contains("\"lo$("),
         "{line}"
     );
+}
+
+/// While NetGet writes the instance's own pcap, the modal leads with `wireshark -r` on that
+/// file (with the decode-as the live command uses); a running instance without one is told how
+/// to turn it on; the form, whose instance does not exist yet, shows neither.
+#[test]
+fn the_modal_offers_netgets_own_capture_file() {
+    let status = netget::capture::CaptureStatus {
+        path: "/tmp/netget-server-3-http.pcap".into(),
+        packets: 12,
+        bytes: 900,
+        dropped: 0,
+        rotations: 0,
+        max_file_bytes: netget::capture::DEFAULT_MAX_FILE_BYTES,
+        error: None,
+        adopted: true,
+    };
+    let mut plan = CapturePlan::build(server("http", "127.0.0.1", 8080), Platform::MacOs);
+    assert_eq!(
+        plan.recorded_command(),
+        None,
+        "the form has no file to open"
+    );
+    let form_lines = plan.lines();
+
+    plan.recorded = Some(Some(status));
+    assert_eq!(
+        plan.recorded_command().as_deref(),
+        Some("wireshark -r /tmp/netget-server-3-http.pcap -d tcp.port==8080,http")
+    );
+    let lines = plan.lines();
+    let first_value = lines.iter().find_map(|l| match l {
+        PlanLine::Value(v) => Some(v.clone()),
+        _ => None,
+    });
+    assert_eq!(
+        first_value.as_deref(),
+        plan.recorded_command().as_deref(),
+        "the file comes before the live recipe"
+    );
+
+    plan.recorded = Some(None);
+    let lines = plan.lines();
+    assert!(lines
+        .iter()
+        .any(|l| matches!(l, PlanLine::Note(n) if n.contains("capture: true"))));
+    assert!(!form_lines
+        .iter()
+        .any(|l| matches!(l, PlanLine::Note(n) if n.contains("capture: true"))));
 }

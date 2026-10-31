@@ -624,6 +624,7 @@ impl FormModel {
             feedback_instructions: self.value_of(&FieldTarget::FeedbackInstructions),
             history: self.history_value()?,
             batching: self.batching_value(),
+            capture: None,
         })
     }
 
@@ -639,6 +640,7 @@ impl FormModel {
             feedback_instructions: self.value_of(&FieldTarget::FeedbackInstructions),
             history: self.history_value()?,
             batching: self.batching_value(),
+            capture: None,
         })
     }
 
