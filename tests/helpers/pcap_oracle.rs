@@ -913,7 +913,7 @@ pub fn dissect_file(
     require_tshark();
     let mut cmd = Command::new("tshark");
     cmd.arg("-r")
-        .arg(&path)
+        .arg(path)
         // No name resolution: a test must not perform a DNS lookup, and
         // resolution is the slowest thing tshark does.
         .arg("-n");
