@@ -146,12 +146,7 @@ async fn execute_single_task(
     let prompt = PromptBuilder::build_task_execution_prompt(&state, &task, &set).await;
 
     // Get current model, ensuring one is selected
-    let model = match crate::llm::ensure_model_selected(
-        state.get_ollama_model().await,
-        &state.get_ollama_url().await,
-    )
-    .await
-    {
+    let model = match crate::llm::model_selection::ensure_state_model(&state).await {
         Ok(m) => m,
         Err(e) => {
             let error_msg = format!("Model selection failed: {}", e);

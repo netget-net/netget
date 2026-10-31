@@ -354,6 +354,10 @@ impl std::error::Error for BreakerOpen {}
 /// the transport works, so those must not trip the breaker — otherwise a typo'd model name
 /// would take the whole LLM path offline for a cooldown.
 pub fn is_transport_failure(error: &anyhow::Error) -> bool {
+    // The transport classifies its own failures; read the classification, not the wording.
+    if let Some(backend) = crate::llm::LlmBackendError::find(error) {
+        return backend.is_transport();
+    }
     let text = error
         .chain()
         .map(|cause| cause.to_string())

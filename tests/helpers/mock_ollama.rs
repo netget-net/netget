@@ -36,6 +36,9 @@ pub struct MockOllamaServer {
     tags_hits: Arc<AtomicUsize>,
     /// Top-level request fields other than the prompt/messages, per request, in order.
     request_fields: RecordedFields,
+    /// The models this endpoint has installed, when a test said so (see
+    /// [`MockOllamaServer::set_installed_models`]).
+    installed_models: InstalledModels,
     /// Shutdown signal
     _shutdown_tx: oneshot::Sender<()>,
 }
@@ -132,6 +135,38 @@ struct ServerState {
     tags_hits: Arc<AtomicUsize>,
     /// `(endpoint, fields)` for every `/api/chat` and `/api/generate` request.
     request_fields: RecordedFields,
+    /// `None`: the default tag list, and every model name is answered. `Some`: exactly these
+    /// are listed, and a request naming any other is answered as real Ollama answers it.
+    installed_models: InstalledModels,
+}
+
+type InstalledModels = Arc<std::sync::Mutex<Option<Vec<String>>>>;
+
+/// Real Ollama's answer to `/api/generate` or `/api/chat` for a model it does not have:
+/// 404 with `{"error":"model \"<name>\" not found, try pulling it first"}`. `None` when the
+/// test configured no installed list, or the model is on it (exactly, or untagged as
+/// `<name>:latest`).
+fn missing_model_response(state: &ServerState, model: &str) -> Option<Response> {
+    let installed = state
+        .installed_models
+        .lock()
+        .expect("installed_models poisoned")
+        .clone()?;
+    let listed = installed.iter().any(|name| {
+        name == model || (!model.contains(':') && name.strip_suffix(":latest") == Some(model))
+    });
+    if listed {
+        return None;
+    }
+    Some(
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": format!("model \"{}\" not found, try pulling it first", model)
+            })),
+        )
+            .into_response(),
+    )
 }
 
 /// `(endpoint, top-level fields other than the prompt/messages)` per request.
@@ -365,10 +400,12 @@ impl MockOllamaServer {
         let config = Arc::new(Mutex::new(config));
         let tags_hits = Arc::new(AtomicUsize::new(0));
         let request_fields: RecordedFields = Default::default();
+        let installed_models: InstalledModels = Default::default();
         let state = ServerState {
             config: config.clone(),
             tags_hits: tags_hits.clone(),
             request_fields: request_fields.clone(),
+            installed_models: installed_models.clone(),
         };
 
         // Build router with Ollama-compatible endpoints
@@ -415,6 +452,7 @@ impl MockOllamaServer {
             config,
             tags_hits,
             request_fields,
+            installed_models,
             _shutdown_tx,
         })
     }
@@ -422,6 +460,17 @@ impl MockOllamaServer {
     /// Get the base URL for this server
     pub fn base_url(&self) -> String {
         format!("http://127.0.0.1:{}", self.port)
+    }
+
+    /// Behave like an Ollama with exactly `models` installed: `/api/tags` lists them, and a
+    /// generate or chat request naming any other model is answered 404 with Ollama's own
+    /// "not found" error (and still recorded in [`Self::recorded_request_fields`]).
+    pub fn set_installed_models(&self, models: &[&str]) {
+        *self
+            .installed_models
+            .lock()
+            .expect("installed_models poisoned") =
+            Some(models.iter().map(|m| m.to_string()).collect());
     }
 
     /// How many `/api/tags` requests reached this endpoint.
@@ -582,6 +631,9 @@ async fn handle_chat(
         &request.format,
         &request.extra,
     );
+    if let Some(response) = missing_model_response(&state, &request.model) {
+        return response;
+    }
     debug!(
         "🔧 Mock Ollama received chat request: model={}, messages={}",
         request.model,
@@ -821,6 +873,9 @@ async fn handle_generate(
         &request.format,
         &request.extra,
     );
+    if let Some(response) = missing_model_response(&state, &request.model) {
+        return response;
+    }
     debug!(
         "🔧 Mock Ollama received generate request: model={}, prompt_len={}",
         request.model,
@@ -961,11 +1016,22 @@ async fn handle_tags(State(state): State<ServerState>) -> Response {
     // --model against this list at startup and refuses to run otherwise.
     // "qwen3.8:27b-mlx" is the test-helper default (tests/helpers/netget.rs);
     // "qwen3-coder:30b" is kept for tests that pass it explicitly.
+    let configured = state
+        .installed_models
+        .lock()
+        .expect("installed_models poisoned")
+        .clone();
+    let names = configured.unwrap_or_else(|| {
+        ["qwen3.8:27b-mlx", "qwen3-coder:30b"]
+            .into_iter()
+            .map(str::to_string)
+            .collect()
+    });
     let response = OllamaTagsResponse {
-        models: ["qwen3.8:27b-mlx", "qwen3-coder:30b"]
+        models: names
             .into_iter()
             .map(|name| OllamaModel {
-                name: name.to_string(),
+                name,
                 modified_at: chrono::Utc::now().to_rfc3339(),
                 size: 1000000,
             })

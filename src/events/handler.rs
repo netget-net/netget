@@ -600,12 +600,7 @@ impl EventHandler {
 
         // Get model, ensuring one is selected
         let current_model = self.state.get_ollama_model().await;
-        let model = match crate::llm::ensure_model_selected(
-            current_model.clone(),
-            &self.state.get_ollama_url().await,
-        )
-        .await
-        {
+        let model = match crate::llm::model_selection::ensure_state_model(&self.state).await {
             Ok(m) => m,
             Err(e) => {
                 return Err(anyhow::anyhow!("Failed to ensure model is selected: {}", e));
