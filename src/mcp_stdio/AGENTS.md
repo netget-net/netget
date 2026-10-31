@@ -104,8 +104,8 @@ OllamaClient (3 backends)
 | `list_intercepts` | Requests parked by a `manual` handler, with what they may be answered with and time left | `AppState::list_intercepts()` |
 | `answer_intercept` | Answer a parked request with actions, or with `[]` ("say nothing") | `AppState::resolve_intercept()` |
 | `fail_intercept` | Refuse a parked request now — the peer gets the fail-closed reply | `AppState::dismiss_intercept()` |
-| `get_status` | Overall NetGet status | AppState model + server count |
-| `set_model` | Change LLM model | `AppState::set_ollama_model()` |
+| `get_status` | Overall NetGet status: the model in use, whether the endpoint has it (asked live), how it was chosen, the last backend failure | `llm::model_selection::check_model()` + `AppState::model_health()` |
+| `set_model` | Change LLM model; refused when Ollama does not have it, warned when an OpenAI-compatible endpoint does not list it | `llm::model_selection::check_model()` + `AppState::set_ollama_model()` |
 | `get_protocol_docs` | MCP-shaped protocol documentation | `mcp_stdio::docs::render_protocol_docs()` |
 | `update_server_instruction` | Update just a running server's instruction | `AppState::with_server_mut()` |
 | `update_server` | Update a running server in place by id (supply only changed fields) — see below | `cli::management::update_server()` |
@@ -392,6 +392,25 @@ All of those are wired now, plus the model falling back to the saved setting and
 web-search degrading to `Off` (MCP has no terminal to prompt on, same as the
 non-interactive runner). `tests/mcp_startup_config_test.rs` asserts each one from the
 service's `app_state()`, so a new flag that skips this path fails a test.
+
+**The configured model is checked against the endpoint before it is stored**
+(`llm::model_selection::resolve_configured_model`). Ollama lists its models, so a configured
+model it does not have is replaced by the largest installed one — the dashboard's choice — and
+the replacement is a `Model note` in `get_status` naming the missing model and the endpoint.
+An OpenAI-compatible endpoint's list is advisory (aliases and routed names are often served
+unlisted), so there an unlisted model is kept with a note; an endpoint that cannot be asked
+keeps the configured model, noted as unverified. `--llm-agent` is not checked: the calling
+agent answers whatever the model name. With no model configured nothing is asked at startup;
+the first request auto-selects one and stores it (`ensure_state_model`), so `get_status` names
+the model requests actually use. `tests/llm_model_not_installed_test.rs` covers startup,
+`set_model` and a request meeting Ollama's 404.
+
+**A backend failure is not a bad answer.** The transport raises `llm::LlmBackendError`
+(model not installed, unreachable, timed out, key rejected, refused with a status) naming the
+model and the endpoint. The conversation layer does not retry it and does not wrap it in
+"failed to generate valid response after retries" (`backend_error::LlmContextExt`); the
+access-log failure entry, the ERROR log line and `get_status`'s `Last LLM backend failure`
+all carry its text. The peer still gets only a `WireFailure` category.
 
 ## LLM Backend
 

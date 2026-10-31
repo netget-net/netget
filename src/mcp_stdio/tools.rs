@@ -960,7 +960,18 @@ impl NetGetMcpService {
                 settings.model.clone()
             }
         });
-        if let Some(model) = configured_model {
+        // Validate it against the endpoint before anything uses it. A configured model the
+        // endpoint does not have used to be stored as-is and reported by `get_status` as the
+        // model, while every request failed against it in milliseconds.
+        let resolved =
+            crate::llm::model_selection::resolve_configured_model(&llm_client, configured_model)
+                .await;
+        if let Some(notice) = &resolved.notice {
+            tracing::warn!("Model: {}", notice);
+            let _ = status_tx.send(format!("[WARN] Model: {}", notice));
+        }
+        app_state.set_model_notice(resolved.notice);
+        if let Some(model) = resolved.model {
             app_state.set_ollama_model(Some(model)).await;
         }
 
@@ -1322,22 +1333,53 @@ impl NetGetMcpService {
     )]
     async fn get_status(&self) -> Result<CallToolResult, McpError> {
         let servers = self.state.app_state.get_all_servers().await;
-        let model = self
-            .state
-            .app_state
-            .get_ollama_model()
-            .await
-            .unwrap_or_else(|| "(auto-select)".to_string());
+        let model = self.state.app_state.get_ollama_model().await;
+        let client = &self.state.llm_client;
+        let endpoint = crate::llm::model_selection::describe_endpoint(client);
 
         let mut result = format!(
             "## NetGet Status\n\n\
-             - **Model**: {}\n\
-             - **LLM backend**: {}\n\
-             - **Running servers**: {}\n",
-            model,
-            self.state.llm_client.backend_type(),
-            servers.len(),
+             - **Model**: {}\n",
+            model
+                .as_deref()
+                .unwrap_or("(none yet: auto-selected at the first request)"),
         );
+        // Whether the endpoint actually has it — asked now, not assumed.
+        if let Some(model) = &model {
+            use crate::llm::model_selection::{check_model, summarize_models, ModelAvailability};
+            let check = match check_model(client, model).await {
+                ModelAvailability::Installed => format!("installed at {}", endpoint),
+                ModelAvailability::NotInstalled { installed } => format!(
+                    "NOT INSTALLED: '{}' is not installed at {} (installed: {}). Requests \
+                     using it fail; choose an installed model with set_model",
+                    model,
+                    endpoint,
+                    summarize_models(&installed)
+                ),
+                ModelAvailability::Unknown { reason } => {
+                    format!("could not check at {}: {}", endpoint, reason)
+                }
+                ModelAvailability::NotApplicable => format!(
+                    "not applicable: the {} backend answers whatever the model name",
+                    client.backend_type()
+                ),
+            };
+            result.push_str(&format!("- **Model check**: {}\n", check));
+        }
+        let health = self.state.app_state.model_health();
+        if let Some(notice) = &health.notice {
+            result.push_str(&format!("- **Model note**: {}\n", notice));
+        }
+        if let Some(failure) = &health.last_backend_failure {
+            result.push_str(&format!("- **Last LLM backend failure**: {}\n", failure));
+        }
+        result.push_str(&format!(
+            "- **LLM backend**: {} ({})\n\
+             - **Running servers**: {}\n",
+            client.backend_type(),
+            client.backend_url().trim_end_matches('/'),
+            servers.len(),
+        ));
 
         if let Some(queue) = &self.state.agent_queue {
             let status = queue.status();
@@ -1362,19 +1404,58 @@ impl NetGetMcpService {
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
-    #[tool(description = "Change the default LLM model used for new servers/clients")]
+    #[tool(
+        description = "Change the LLM model every server and client uses. Refused when the Ollama endpoint does not have the model installed (the error lists the installed ones); an OpenAI-compatible endpoint's list is advisory, so an unlisted name is accepted with a warning."
+    )]
     async fn set_model(
         &self,
         Parameters(params): Parameters<SetModelParams>,
     ) -> Result<CallToolResult, McpError> {
+        use crate::llm::model_selection::{check_model, summarize_models, ModelAvailability};
+        let model = params.model.trim().to_string();
+        if model.is_empty() {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "set_model needs a model name",
+            )]));
+        }
+        let client = &self.state.llm_client;
+        let endpoint = crate::llm::model_selection::describe_endpoint(client);
+        let warning = match check_model(client, &model).await {
+            ModelAvailability::Installed | ModelAvailability::NotApplicable => None,
+            ModelAvailability::NotInstalled { installed } if client.backend_type() == "ollama" => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Model not changed: '{}' is not installed at {}. Installed models: {}. \
+                     Install it with `ollama pull {}`, or choose one of those.",
+                    model,
+                    endpoint,
+                    summarize_models(&installed),
+                    model
+                ))]));
+            }
+            ModelAvailability::NotInstalled { installed } => Some(format!(
+                "Warning: {} does not list '{}' (it lists: {}); requests fail if it does not \
+                 serve that name.",
+                endpoint,
+                model,
+                summarize_models(&installed)
+            )),
+            ModelAvailability::Unknown { reason } => Some(format!(
+                "Warning: could not check the models at {} ({}); '{}' is unverified.",
+                endpoint, reason, model
+            )),
+        };
         self.state
             .app_state
-            .set_ollama_model(Some(params.model.clone()))
+            .set_ollama_model(Some(model.clone()))
             .await;
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Model changed to: {}",
-            params.model
-        ))]))
+        self.state.app_state.set_model_notice(warning.clone());
+        self.state.app_state.clear_llm_backend_failure();
+        let mut text = format!("Model changed to: {}", model);
+        if let Some(warning) = warning {
+            text.push('\n');
+            text.push_str(&warning);
+        }
+        Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
     #[tool(

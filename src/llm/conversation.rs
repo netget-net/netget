@@ -7,6 +7,7 @@
 //! 4. Works for both user input and network events
 
 use crate::llm::actions::{execute_tool, ActionDefinition, ActionResponse, ToolAction, ToolResult};
+use crate::llm::backend_error::LlmContextExt;
 use crate::llm::conversation_state::ConversationState;
 use crate::llm::ollama_client::{ChatRequest, ChatResponse, Message, OllamaClient};
 use crate::llm::{RateLimiter, RequestSource};
@@ -795,7 +796,7 @@ impl ConversationHandler {
             let (original_response, cleaned_response) = self
                 .generate_with_retry()
                 .await
-                .context("✗  LLM failed to generate valid response after retries.")?;
+                .llm_context("✗  LLM failed to generate valid response after retries.")?;
 
             // Add assistant's response to conversation history (with reasoning preserved)
             let assistant_idx = self.messages.len();
@@ -1721,7 +1722,7 @@ impl ConversationHandler {
                     .client
                     .chat_with_tools(&chat_request, self.private_payloads)
                     .await
-                    .context("Chat API call failed")?;
+                    .llm_context("Chat API call failed")?;
 
                 // Record token usage
                 permit
@@ -1799,7 +1800,7 @@ impl ConversationHandler {
                         )
                         .await
                 }
-                .context("Generate API call failed")?;
+                .llm_context("Generate API call failed")?;
 
                 // Record token usage
                 permit

@@ -127,6 +127,35 @@ pub enum ScriptingMode {
 }
 
 impl ScriptingMode {
+    /// Every scripting mode, in the order the CLI help lists them.
+    pub const ALL: [ScriptingMode; 6] = [
+        Self::On,
+        Self::Off,
+        Self::Python,
+        Self::JavaScript,
+        Self::Go,
+        Self::Perl,
+    ];
+
+    /// Every spelling a scripting mode may be written in — `-e`/`--env` on the command line
+    /// and `scripting_mode` in the settings file both read through [`ScriptingMode::parse`],
+    /// which accepts exactly these (case-insensitively). One table, so a value one surface
+    /// writes is a value the other reads.
+    pub const SPELLINGS: &'static [(&'static str, ScriptingMode)] = &[
+        ("on", Self::On),
+        ("auto", Self::On),
+        ("off", Self::Off),
+        ("llm", Self::Off),
+        ("python", Self::Python),
+        ("py", Self::Python),
+        ("javascript", Self::JavaScript),
+        ("js", Self::JavaScript),
+        ("node", Self::JavaScript),
+        ("go", Self::Go),
+        ("golang", Self::Go),
+        ("perl", Self::Perl),
+    ];
+
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::On => "On",
@@ -136,6 +165,44 @@ impl ScriptingMode {
             Self::Go => "Go",
             Self::Perl => "Perl",
         }
+    }
+
+    /// The canonical spelling: what the settings file stores, and the first entry for this
+    /// mode in [`Self::SPELLINGS`].
+    pub fn config_name(&self) -> &'static str {
+        match self {
+            Self::On => "on",
+            Self::Off => "off",
+            Self::Python => "python",
+            Self::JavaScript => "javascript",
+            Self::Go => "go",
+            Self::Perl => "perl",
+        }
+    }
+
+    /// Parse any spelling in [`Self::SPELLINGS`], ignoring case and surrounding whitespace.
+    /// The error names the value and lists every accepted spelling.
+    pub fn parse(value: &str) -> Result<Self, String> {
+        let wanted = value.trim().to_lowercase();
+        Self::SPELLINGS
+            .iter()
+            .find(|(name, _)| *name == wanted)
+            .map(|(_, mode)| *mode)
+            .ok_or_else(|| {
+                format!(
+                    "Invalid scripting environment: '{}'\n\
+                     Valid options: on (auto), off (llm), python (py), javascript (js, node), go (golang), perl",
+                    value
+                )
+            })
+    }
+}
+
+impl std::str::FromStr for ScriptingMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s)
     }
 }
 
@@ -348,6 +415,21 @@ pub struct AppState {
     inner: Arc<RwLock<AppStateInner>>,
     pub llm_activity: super::llm_activity::LlmActivityTracker,
     pub event_journal: Arc<crate::events::journal::EventJournal>,
+    /// What is known to be wrong with the model or its backend, for `get_status`. Kept
+    /// outside `inner` so the transport can record it synchronously on every request
+    /// without taking the state lock.
+    model_health: Arc<std::sync::Mutex<ModelHealth>>,
+}
+
+/// What `get_status` says about the model beyond its name.
+#[derive(Debug, Clone, Default)]
+pub struct ModelHealth {
+    /// How the model in use was chosen, when that is not simply "as configured" — a configured
+    /// model the endpoint does not have, replaced by an installed one.
+    pub notice: Option<String>,
+    /// The most recent backend failure (model not installed, endpoint unreachable), cleared by
+    /// the next request the backend answers.
+    pub last_backend_failure: Option<String>,
 }
 
 struct AppStateInner {
@@ -630,6 +712,7 @@ impl AppState {
 
         Self {
             llm_activity: super::llm_activity::LlmActivityTracker::default(),
+            model_health: Default::default(),
             event_journal: Arc::new(crate::events::journal::EventJournal::default()),
             inner: Arc::new(RwLock::new(AppStateInner {
                 mode: Mode::Idle,
@@ -1489,6 +1572,48 @@ impl AppState {
     /// Set the Ollama model name
     pub async fn set_ollama_model(&self, model: Option<String>) {
         self.inner.write().await.ollama_model = model;
+    }
+
+    /// Set the model only if none is set; returns whether it was set.
+    pub async fn set_ollama_model_if_unset(&self, model: String) -> bool {
+        let mut inner = self.inner.write().await;
+        if inner.ollama_model.is_some() {
+            return false;
+        }
+        inner.ollama_model = Some(model);
+        true
+    }
+
+    /// What is known to be wrong with the model or its backend.
+    pub fn model_health(&self) -> ModelHealth {
+        self.model_health
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Record how the model in use was chosen (or `None` once it is simply the configured one).
+    pub fn set_model_notice(&self, notice: Option<String>) {
+        self.model_health
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .notice = notice;
+    }
+
+    /// Record a backend failure (see [`crate::llm::LlmBackendError`]).
+    pub fn note_llm_backend_failure(&self, failure: String) {
+        self.model_health
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .last_backend_failure = Some(failure);
+    }
+
+    /// The backend answered a request: whatever failed before is no longer current.
+    pub fn clear_llm_backend_failure(&self) {
+        let mut health = self.model_health.lock().unwrap_or_else(|e| e.into_inner());
+        if health.last_backend_failure.is_some() {
+            health.last_backend_failure = None;
+        }
     }
 
     /// Get the scripting environment information
