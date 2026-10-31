@@ -52,7 +52,9 @@ fn nested(kind: u8, depth: usize) -> Vec<u8> {
 #[test]
 fn depth_bombs_are_refused_before_serde_cbor_recurses() {
     for kind in *b"amt" {
-        for depth in [MAX_CTAP2_CBOR_DEPTH + 1, 100, 127, 10_000] {
+        // Deepest first: with the scan removed, the first case must reach serde_cbor's own
+        // 128-level recursion and overflow this thread, not fail politely at depth 9.
+        for depth in [10_000, 127, 100, MAX_CTAP2_CBOR_DEPTH + 1] {
             let bomb = nested(kind, depth);
             let result = on_small_stack(move || decode_bounded(&bomb).map(|_| ()));
             assert!(
