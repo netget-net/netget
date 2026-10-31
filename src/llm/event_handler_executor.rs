@@ -169,8 +169,8 @@ async fn try_execute_event_handler_inner(
         return Ok(EventHandlerResult::FallbackToLlm { instruction: None });
     };
 
-    // Find matching handler for this event type
-    let Some(handler_type) = config.find_handler(event_type_id) else {
+    // Find the first rule that answers this event (pattern and any `match` conditions).
+    let Some(handler_type) = config.find_handler_for(event_type_id, event_data.as_ref()) else {
         // No matching handler - use LLM
         debug!("No handler matches event '{}', using LLM", event_type_id);
         return Ok(EventHandlerResult::FallbackToLlm { instruction: None });
@@ -423,7 +423,7 @@ async fn try_execute_client_event_handler_inner(
         return Ok(ClientEventHandlerResult::FallbackToLlm { instruction: None });
     };
 
-    let Some(handler_type) = config.find_handler(event_type_id) else {
+    let Some(handler_type) = config.find_handler_for(event_type_id, event_data.as_ref()) else {
         debug!(
             "No client handler matches event '{}', using LLM",
             event_type_id

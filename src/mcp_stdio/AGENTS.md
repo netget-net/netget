@@ -112,6 +112,7 @@ OllamaClient (3 backends)
 | `update_client` | Update a running client in place by id (supply only changed fields) — see below | `cli::management::update_client()` |
 | `list_access_logs` | Recent request/response entries (newest first) | `AppState::list_access_logs()` |
 | `get_access_log` | Full request + response for one entry by id | `AppState::get_access_log()` |
+| `export_rules` | Turn an instance's model-authored answers into `event_handlers`; optionally apply them and/or write a `.netget` file — see below | `llm::rule_export::export_rules()` |
 | `stop_all` | Stop all servers | Iterate + remove all |
 | `get_next_llm_request` | (agent mode) Fetch next queued LLM request; optional long-poll | `LlmRequestQueue::wait_and_claim()` |
 | `answer_llm_request` | (agent mode) Answer a queued request with action JSON | `LlmRequestQueue::answer()` |
@@ -250,6 +251,52 @@ Both tools re-sync `AppState`'s LLM client before applying, in case the update r
 entity. Prefer `update_server` over a second `start_server` when a server already exists;
 `update_server_instruction` remains as the narrow "just the instruction" tool.
 
+`memoize_ttl_secs` / `memoize_across_connections` (on `start_server`, `start_client`,
+`update_server`, `update_client`) are hot-applied too; a changed setting starts an empty cache,
+and the setting (not the cached answers) survives a restart. See "Reusing the model's answers".
+
+## Reusing the model's answers (`export_rules`, memoisation)
+
+Both features live in `src/llm/answer_reuse.rs` (shared) and `src/llm/rule_export.rs`, and
+both read `AccessLogEntry::answered_by` — `"model"`, `"cache"`, `"rule"` or `"easy"` — which
+the shared paths (`action_helper::call_llm`, `llm_budget::call_llm_for_client`) record.
+Entries a protocol logs itself carry none and are ignored by both.
+
+**`export_rules { server_id | client_id, apply?, fallback?, save_to? }`** derives static rules
+from the instance's `model`/`cache` entries ("record with the model, replay without it"):
+
+- per event type, the fewest event fields that explain why the answers differ become each
+  rule's `match` (an HTTP method + path, a DNS name), plus every other field that was constant
+  and that the recording never showed to be irrelevant — so a rule is narrower rather than
+  wrong;
+- per-request fields (`answer_reuse::PER_REQUEST_FIELDS`: `query_id`, `id`, `tag`, `xid`,
+  `client_port`, …, top-level only) are never conditions, and where an answer echoes one it
+  becomes a `{{event.<field>}}` reference;
+- every rule is validated by `parse_event_handlers` and replayed against each recorded event it
+  covers before it is offered; groups the model answered differently with nothing to tell them
+  apart are listed as undetermined, and answers that failed, carried credentials, answered a
+  batch, or also wrote memory/tasks/logs are listed as skipped;
+- the returned table is the derived rules, then the instance's other rules, then the fallback:
+  `keep` (default — the instance's own `*` rule), `llm`, or `manual`. `apply: true` hot-applies
+  it through `management::update_server`/`update_client`; `save_to` writes the instance with that
+  table as a `.netget` file (`save_load::save_with_handlers`) that `--load` replays.
+
+Rule matching gained an optional `match` object on each handler (field path → exact JSON
+value; a missing field reads as `null`), validated in `parse_event_handlers` and used by
+`EventHandlerConfig::find_handler_for`. `find_handler(id)` still ignores it, which is the
+"might a rule answer this kind of event" question protocols ask without an event in hand.
+
+**Memoisation** (`memoize_ttl_secs`, off by default) answers an event identical to one the
+model answered within the TTL — same type, same data less per-request fields, same instruction,
+memory and per-event handler instruction — with the stored actions re-rendered for the new
+event, and logs it `answered_by: "cache"`. Rules and scripts still run first; a batch, a
+credential-bearing event, a failed answer, an empty answer, or one that wrote memory/tasks is
+never stored or replayed. With `history` on, answers are per connection unless
+`memoize_across_connections` is set. 256 answers per instance, oldest dropped.
+
+Tests: `tests/answer_reuse_test.rs` (HTTP and DNS record → export → apply → replay with zero
+model calls, the `.netget` round trip, memoisation hits/expiry/failures/connection scope).
+
 ## Server teardown and state reaping
 
 `stop_server` / `stop_all` go through `AppState::remove_server()`, which owns the
@@ -309,8 +356,9 @@ the action JSON the LLM produced (e.g. `send_http_response`). Recording happens
 centrally in `action_helper::call_llm` after the event is handled, so it works for
 every protocol without per-protocol wiring.
 
-- `list_access_logs { limit? }` — newest-first summaries (id, age, owner, protocol, request→response).
-- `get_access_log { id }` — full request and response JSON for one entry.
+- `list_access_logs { limit? }` — newest-first summaries (id, age, owner, protocol, request→response,
+  and what answered it where recorded).
+- `get_access_log { id }` — full request and response JSON for one entry, with `answered_by`.
 
 **Clients record too, and entries carry an owner.** `AccessLogEntry` has
 `server_id: Option<u32>` and `client_id: Option<u32>`, exactly one set, both

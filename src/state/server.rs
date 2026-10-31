@@ -316,6 +316,9 @@ pub struct ServerInstance {
     /// kept beside rather than inside `ConnectionState` for the reason `connection_opened_at`
     /// is, and dropped by `remove_connection` like it.
     pub exchange_history: HashMap<ConnectionId, crate::state::exchange_history::ExchangeHistory>,
+    /// Memoisation of the model's answers: off unless the instance turns it on. Cloning the
+    /// instance shares the cache. See [`crate::llm::answer_reuse`].
+    pub memo: crate::llm::answer_reuse::Memo,
 }
 
 /// Longest accepted `append_to_log` output name.
@@ -385,6 +388,7 @@ impl ServerInstance {
             history_entries: 0,
             batching: false,
             exchange_history: HashMap::new(),
+            memo: Default::default(),
         }
     }
 

@@ -283,6 +283,23 @@ pub struct AccessLogEntry {
     /// handler/LLM *produced* — execution happens later inside the client's
     /// connection loop, which does not report back here.
     pub response: Vec<serde_json::Value>,
+    /// What answered the event, where the recording site knows: one of the
+    /// [`answered_by`] values. Absent for entries recorded by a protocol's own
+    /// bookkeeping rather than by the shared model/handler path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answered_by: Option<String>,
+}
+
+/// The values [`AccessLogEntry::answered_by`] takes.
+pub mod answered_by {
+    /// The model authored the answer (a model call was made for this event).
+    pub const MODEL: &str = "model";
+    /// A memoised model answer was replayed; no model call was made.
+    pub const CACHE: &str = "cache";
+    /// An `event_handlers` rule answered: a script, a static rule or a person (manual).
+    pub const RULE: &str = "rule";
+    /// An easy-protocol layer answered.
+    pub const EASY: &str = "easy";
 }
 
 impl AccessLogEntry {
@@ -3217,6 +3234,34 @@ impl AppState {
             request,
             response,
             true,
+            None,
+        )
+        .await
+    }
+
+    /// [`Self::record_access_log`], saying what answered the event (an [`answered_by`] value).
+    /// The shared model and handler paths use this, so `export_rules` can tell a model-authored
+    /// answer from one a rule or a replay produced.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn record_access_log_answered(
+        &self,
+        owner: AccessLogOwner,
+        protocol: &str,
+        connection_id: Option<u32>,
+        event_type: &str,
+        request: serde_json::Value,
+        response: Vec<serde_json::Value>,
+        answered_by: &str,
+    ) -> u64 {
+        self.record_access_log_inner(
+            owner,
+            protocol,
+            connection_id,
+            event_type,
+            request,
+            response,
+            true,
+            Some(answered_by),
         )
         .await
     }
@@ -3241,6 +3286,7 @@ impl AppState {
             request,
             response,
             false,
+            None,
         )
         .await
     }
@@ -3255,6 +3301,7 @@ impl AppState {
         request: serde_json::Value,
         response: Vec<serde_json::Value>,
         history: bool,
+        answered_by: Option<&str>,
     ) -> u64 {
         let unix_ms = crate::utils::clock::SystemTime::now()
             .duration_since(crate::utils::clock::UNIX_EPOCH)
@@ -3311,6 +3358,7 @@ impl AppState {
             event_type: event_type.to_string(),
             request,
             response,
+            answered_by: answered_by.map(str::to_string),
         });
         while inner.access_logs.len() > ACCESS_LOG_CAPACITY {
             inner.access_logs.pop_front();
@@ -3385,6 +3433,66 @@ impl AppState {
                 for history in server.exchange_history.values_mut() {
                     history.trim(history_entries);
                 }
+            }
+        }
+    }
+
+    /// A server's memoisation, with what a cache key needs, or `None` when it is off (or the
+    /// server is gone). See [`crate::llm::answer_reuse`].
+    pub async fn server_memo(
+        &self,
+        server_id: ServerId,
+    ) -> Option<crate::llm::answer_reuse::MemoHandle> {
+        let inner = self.inner.read().await;
+        let server = inner.servers.get(&server_id)?;
+        server.memo.settings()?;
+        Some(crate::llm::answer_reuse::MemoHandle {
+            memo: server.memo.clone(),
+            history_entries: server.history_entries,
+            context: format!("{}\u{1f}{}", server.instruction, server.memory),
+        })
+    }
+
+    /// See [`Self::server_memo`].
+    pub async fn client_memo(
+        &self,
+        client_id: ClientId,
+    ) -> Option<crate::llm::answer_reuse::MemoHandle> {
+        let inner = self.inner.read().await;
+        let client = inner.clients.get(&client_id)?;
+        client.memo.settings()?;
+        Some(crate::llm::answer_reuse::MemoHandle {
+            memo: client.memo.clone(),
+            history_entries: client.history_entries,
+            context: format!("{}\u{1f}{}", client.instruction, client.memory),
+        })
+    }
+
+    /// Set a server's memoisation (`None` turns it off). A changed setting starts an empty
+    /// cache; setting the same one again keeps the answers already memoised.
+    pub async fn set_server_memo(
+        &self,
+        server_id: ServerId,
+        settings: Option<crate::llm::answer_reuse::MemoSettings>,
+    ) {
+        let mut inner = self.inner.write().await;
+        if let Some(server) = inner.servers.get_mut(&server_id) {
+            if server.memo.settings() != settings {
+                server.memo = crate::llm::answer_reuse::Memo::new(settings);
+            }
+        }
+    }
+
+    /// See [`Self::set_server_memo`].
+    pub async fn set_client_memo(
+        &self,
+        client_id: ClientId,
+        settings: Option<crate::llm::answer_reuse::MemoSettings>,
+    ) {
+        let mut inner = self.inner.write().await;
+        if let Some(client) = inner.clients.get_mut(&client_id) {
+            if client.memo.settings() != settings {
+                client.memo = crate::llm::answer_reuse::Memo::new(settings);
             }
         }
     }

@@ -61,10 +61,7 @@ pub fn driver_of(routing: Option<&EventHandlerConfig>) -> Driver {
     let Some(config) = routing else {
         return Driver::Llm;
     };
-    let wildcard = config
-        .handlers
-        .iter()
-        .find(|h| matches!(h.event_pattern, EventPattern::Wildcard));
+    let wildcard = config.handlers.iter().find(|h| is_fallback(h));
     match wildcard.map(|h| &h.handler) {
         None => Driver::Llm,
         Some(EventHandlerType::Manual { .. }) => Driver::Manual,
@@ -76,15 +73,16 @@ pub fn driver_of(routing: Option<&EventHandlerConfig>) -> Driver {
     }
 }
 
+/// Whether a rule is the table's fallback: `*` with no `match` conditions. A `*` rule with
+/// conditions answers only some events, so it is a specific rule like any other.
+fn is_fallback(handler: &crate::scripting::event_handler::EventHandler) -> bool {
+    matches!(handler.event_pattern, EventPattern::Wildcard) && handler.data_match.is_none()
+}
+
 /// How many specific (non-wildcard) rules the table holds.
 pub fn specific_rule_count(routing: Option<&EventHandlerConfig>) -> usize {
     routing
-        .map(|c| {
-            c.handlers
-                .iter()
-                .filter(|h| !matches!(h.event_pattern, EventPattern::Wildcard))
-                .count()
-        })
+        .map(|c| c.handlers.iter().filter(|h| !is_fallback(h)).count())
         .unwrap_or(0)
 }
 
@@ -99,7 +97,7 @@ pub fn handlers_with_driver(routing: Option<&EventHandlerConfig>, driver: Driver
         .map(|c| {
             c.handlers
                 .iter()
-                .filter(|h| !matches!(h.event_pattern, EventPattern::Wildcard))
+                .filter(|h| !is_fallback(h))
                 .filter_map(|h| serde_json::to_value(h).ok())
                 .collect()
         })

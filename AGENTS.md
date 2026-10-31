@@ -883,6 +883,18 @@ async actions (user-triggered) and sync actions (network-event-triggered), in
 Scripts and static handlers are the right default for deterministic behavior (echo, canned
 responses, routing). Reserve the LLM for responses that genuinely require reasoning.
 
+A rule may narrow itself with `"match": {"method": "GET", "path": "/a"}` — event-field paths to
+exact values, all of which must hold (`EventHandler::matches_event`). **Two ways to stop paying
+for answers the model already gave** (`src/llm/answer_reuse.rs`, `src/llm/rule_export.rs`; MCP
+details in `src/mcp_stdio/AGENTS.md`): the `export_rules` tool turns an instance's access-log
+entries with `answered_by: "model"` into static rules keyed on the fields that explain the
+answers, echoing per-request ids (`query_id`, `id`, `tag`, …) through `{{event.…}}`, replaying
+each rule against its recordings before offering it, and reporting rather than guessing where
+answers differ for no recorded reason; and `memoize_ttl_secs` (off by default) replays the
+model's answer to an identical event within a TTL, logged as answered by `cache`, never across
+connections where history makes the answer connection-specific unless
+`memoize_across_connections` is set. `tests/answer_reuse_test.rs` counts the model calls.
+
 A caveat manual handlers exposed: several clients handle their `*_connected` event inline in
 `connect()` before returning, so a parked connect event delays creation until answered — the
 command channel must therefore register **before** that call (`tcp` and `telnet` do), or

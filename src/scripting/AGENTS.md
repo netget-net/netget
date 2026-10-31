@@ -60,7 +60,7 @@ it costs no model call, is reproducible, and returns in milliseconds.
 | `executor.rs` | Spawns the interpreter, feeds stdin, drains stdout/stderr, enforces the timeout |
 | `manager.rs` | Routes an event to a script when the config handles that context; falls back to LLM |
 | `types.rs` | `ScriptLanguage`, `ScriptConfig`, `ScriptSource`, `ScriptInput`, `ScriptResponse`, response parsing |
-| `event_handler.rs` | `EventHandler` / `EventHandlerType` (`llm` \| `script` \| `static`) and pattern matching |
+| `event_handler.rs` | `EventHandler` / `EventHandlerType` (`llm` \| `script` \| `static` \| `manual`), pattern matching, and the optional `match` conditions on event fields (`matches_event`, `find_handler_for`) |
 | `environment.rs` | Startup detection of which interpreters are installed |
 | `resident.rs` | Long-lived (persistent) script processes — opt-in `"resident": true`, keeps in-process state across events |
 | `highlight.rs` | Syntax highlighting of script source for the TUI |
