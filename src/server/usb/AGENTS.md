@@ -137,6 +137,13 @@ Two details are load-bearing in each server: the receiving `select!` arm carries
 peer that never imported resolves the receiver with `Err` and is correctly recorded as never
 having attached.
 
+A third: the session task the `select!` awaits is held in `utils::task_guard::AbortOnDrop` and
+awaited as `usbip_task.0`. The connection task is the one `stop_server` aborts, and aborting it
+drops the session's `JoinHandle`, which detaches the session rather than ending it, so without
+the guard a stopped server's USB/IP sessions kept their sockets.
+`tests/stop_server_stops_connections_test.rs::stopping_a_usb_server_disconnects_a_live_peer`
+(built with `libusb`) asserts it from the peer's side for all six servers.
+
 `tests/server/usb_keyboard/attach_on_import_test.rs` measures the cost directly — three silent
 connects and a devlist cost **zero** model calls, one `OP_REQ_IMPORT` costs **one** — and
 `tests/usb_accept_and_attach_ratchet_test.rs` holds both properties across all six servers by
