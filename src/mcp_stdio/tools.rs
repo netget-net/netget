@@ -663,6 +663,25 @@ fn spawn_state_reaper(
     })
 }
 
+/// A server's instruction as `list_servers` / `server_status` report it.
+///
+/// A server started with no instruction runs on NetGet's default text
+/// ([`crate::state::server::default_server_instruction`]); it is reported as that, not as
+/// something the operator wrote — a handlers-only server would otherwise appear to have been
+/// given an instruction nobody gave it.
+fn describe_server_instruction(server: &crate::state::server::ServerInstance) -> String {
+    if server.instruction.is_empty() {
+        "(none)".to_string()
+    } else if server.instruction_is_default() {
+        format!(
+            "(none given — NetGet's default applies: \"{}\")",
+            server.instruction
+        )
+    } else {
+        server.instruction.clone()
+    }
+}
+
 /// How often the MCP-mode scheduled-task ticker fires. Matches the 1s cadence the
 /// TUI event loop and the non-interactive `run_server` runner use for their task
 /// timers, so a task's declared `interval_secs`/`delay_secs` are honoured to the
@@ -1001,12 +1020,9 @@ impl NetGetMcpService {
         &self,
         Parameters(params): Parameters<StartServerParams>,
     ) -> Result<CallToolResult, McpError> {
-        let instruction = params.instruction.unwrap_or_else(|| {
-            format!(
-                "You are a {} server. Handle requests appropriately.",
-                params.protocol
-            )
-        });
+        let instruction = params
+            .instruction
+            .unwrap_or_else(|| crate::state::server::default_server_instruction(&params.protocol));
 
         // Drive the new server with NetGet's configured LLM client (Ollama/OpenAI from CLI args)
         self.state
@@ -1126,11 +1142,7 @@ impl NetGetMcpService {
                 server.protocol_name,
                 bound_port(server),
                 server.status,
-                if server.instruction.is_empty() {
-                    "(none)"
-                } else {
-                    &server.instruction
-                },
+                describe_server_instruction(server),
                 if server.memory.is_empty() {
                     "(empty)"
                 } else {
@@ -1162,11 +1174,7 @@ impl NetGetMcpService {
                     server.protocol_name,
                     bound_port(&server),
                     server.status,
-                    if server.instruction.is_empty() {
-                        "(none)"
-                    } else {
-                        &server.instruction
-                    },
+                    describe_server_instruction(&server),
                     if server.memory.is_empty() {
                         "(empty)"
                     } else {
@@ -1656,7 +1664,7 @@ impl NetGetMcpService {
     }
 
     #[tool(
-        description = "List all clients with their protocol, remote address, status and instruction"
+        description = "List all clients with their protocol, remote address, status and instruction. Live clients are listed first; disconnected or failed clients follow under their own heading — they are kept so they can be reconnected by id, and stop_client removes one."
     )]
     async fn list_clients(&self) -> Result<CallToolResult, McpError> {
         let clients = self.state.app_state.get_all_clients().await;
@@ -1670,25 +1678,51 @@ impl NetGetMcpService {
         let mut clients = clients;
         clients.sort_by_key(|c| c.id.as_u32());
 
-        let mut result = String::from("## Clients\n\n");
-        for client in &clients {
-            result.push_str(&format!(
-                "- **Client #{}**: {} -> {} ({})\n  Instruction: {}\n  Memory: {}\n\n",
-                client.id.as_u32(),
-                client.protocol_name,
-                client.remote_addr,
-                client.status,
-                if client.instruction.is_empty() {
-                    "(none)"
-                } else {
-                    &client.instruction
-                },
-                if client.memory.is_empty() {
-                    "(empty)"
-                } else {
-                    &client.memory
-                },
-            ));
+        // A client that hung up keeps its row on purpose — the model's `reconnect_client`
+        // and the dashboard's card both reconnect it by id, and `disconnect_client` is "hang
+        // up", not "remove". It is listed apart, so a finished client is not mistaken for a
+        // live one; stop_client removes it.
+        let (ended, live): (Vec<_>, Vec<_>) = clients.iter().partition(|c| {
+            matches!(
+                c.status,
+                crate::state::client::ClientStatus::Disconnected
+                    | crate::state::client::ClientStatus::Error(_)
+            )
+        });
+
+        let mut result = String::new();
+        let sections = [
+            ("## Clients\n\n", live),
+            (
+                "## Disconnected clients\n\nKept so they can be reconnected by id; \
+                 stop_client removes one.\n\n",
+                ended,
+            ),
+        ];
+        for (heading, clients) in sections {
+            if clients.is_empty() {
+                continue;
+            }
+            result.push_str(heading);
+            for client in clients {
+                result.push_str(&format!(
+                    "- **Client #{}**: {} -> {} ({})\n  Instruction: {}\n  Memory: {}\n\n",
+                    client.id.as_u32(),
+                    client.protocol_name,
+                    client.remote_addr,
+                    client.status,
+                    if client.instruction.is_empty() {
+                        "(none)"
+                    } else {
+                        &client.instruction
+                    },
+                    if client.memory.is_empty() {
+                        "(empty)"
+                    } else {
+                        &client.memory
+                    },
+                ));
+            }
         }
 
         Ok(CallToolResult::success(vec![Content::text(result)]))

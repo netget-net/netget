@@ -209,12 +209,10 @@ impl ServerForm {
         status_tx: mpsc::UnboundedSender<String>,
     ) -> Result<ServerId> {
         crate::protocol::StartupParams::preflight_owned(&mut self.startup_params)?;
-        let instruction = self.instruction.clone().unwrap_or_else(|| {
-            format!(
-                "You are a {} server. Handle requests appropriately.",
-                self.protocol
-            )
-        });
+        let instruction = self
+            .instruction
+            .clone()
+            .unwrap_or_else(|| crate::state::server::default_server_instruction(&self.protocol));
         crate::cli::server_startup::start_server_from_action(
             state,
             self.mac_address,
