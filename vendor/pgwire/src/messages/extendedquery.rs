@@ -50,11 +50,11 @@ impl Message for Parse {
     ) -> PgWireResult<Self> {
         let name = codec::get_cstring(buf);
         let query = codec::get_cstring(buf).unwrap_or_else(|| "".to_owned());
-        let type_oid_count = buf.get_u16();
+        let type_oid_count = buf.try_get_u16()?;
 
         let mut type_oids = Vec::with_capacity(type_oid_count as usize);
         for _ in 0..type_oid_count {
-            type_oids.push(buf.get_u32());
+            type_oids.push(buf.try_get_u32()?);
         }
 
         Ok(Parse {
@@ -137,7 +137,7 @@ impl Message for Close {
         _: usize,
         _ctx: &DecodeContext,
     ) -> PgWireResult<Self> {
-        let target_type = buf.get_u8();
+        let target_type = buf.try_get_u8()?;
         let name = codec::get_cstring(buf);
 
         Ok(Close { target_type, name })
@@ -254,30 +254,33 @@ impl Message for Bind {
         let portal_name = codec::get_cstring(buf);
         let statement_name = codec::get_cstring(buf);
 
-        let parameter_format_code_len = buf.get_u16();
+        let parameter_format_code_len = buf.try_get_u16()?;
         let mut parameter_format_codes = Vec::with_capacity(parameter_format_code_len as usize);
 
         for _ in 0..parameter_format_code_len {
-            parameter_format_codes.push(buf.get_i16());
+            parameter_format_codes.push(buf.try_get_i16()?);
         }
 
-        let parameter_len = buf.get_u16();
+        let parameter_len = buf.try_get_u16()?;
         let mut parameters = Vec::with_capacity(parameter_len as usize);
         for _ in 0..parameter_len {
-            let data_len = buf.get_i32();
+            let data_len = buf.try_get_i32()?;
 
             if data_len >= 0 {
-                parameters.push(Some(buf.split_to(data_len as usize).freeze()));
+                parameters.push(Some(codec::split_declared(buf, data_len as usize)?.freeze()));
             } else {
                 parameters.push(None);
             }
         }
 
-        let result_column_format_code_len = buf.get_i16();
+        // NetGet patch (vendor/pgwire/README.md): read unsigned, as upstream 0.42
+        // does. As an i16, -1 became `usize::MAX` in `Vec::with_capacity` below
+        // and panicked with "capacity overflow".
+        let result_column_format_code_len = buf.try_get_u16()?;
         let mut result_column_format_codes =
             Vec::with_capacity(result_column_format_code_len as usize);
         for _ in 0..result_column_format_code_len {
-            result_column_format_codes.push(buf.get_i16());
+            result_column_format_codes.push(buf.try_get_i16()?);
         }
 
         Ok(Bind {
@@ -362,7 +365,7 @@ impl Message for Describe {
         _: usize,
         _ctx: &DecodeContext,
     ) -> PgWireResult<Self> {
-        let target_type = buf.get_u8();
+        let target_type = buf.try_get_u8()?;
         let name = codec::get_cstring(buf);
 
         Ok(Describe { target_type, name })
@@ -401,7 +404,7 @@ impl Message for Execute {
         _ctx: &DecodeContext,
     ) -> PgWireResult<Self> {
         let name = codec::get_cstring(buf);
-        let max_rows = buf.get_i32();
+        let max_rows = buf.try_get_i32()?;
 
         Ok(Execute { name, max_rows })
     }

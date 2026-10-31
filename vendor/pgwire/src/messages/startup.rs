@@ -678,11 +678,11 @@ impl Message for SASLInitialResponse {
         _ctx: &DecodeContext,
     ) -> PgWireResult<Self> {
         let auth_method = codec::get_cstring(buf).unwrap_or_else(|| "".to_owned());
-        let data_len = buf.get_i32();
+        let data_len = buf.try_get_i32()?;
         let data = if data_len == -1 {
             None
         } else {
-            Some(buf.split_to(data_len as usize).freeze())
+            Some(codec::split_declared(buf, data_len as usize)?.freeze())
         };
 
         Ok(SASLInitialResponse { auth_method, data })

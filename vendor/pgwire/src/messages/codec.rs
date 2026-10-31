@@ -21,6 +21,13 @@ pub(crate) fn get_cstring(buf: &mut BytesMut) -> Option<String> {
         i += 1;
     }
 
+    // NetGet patch (vendor/pgwire/README.md): no NUL before the end of the
+    // message. `split_to(i + 1)` would be one past the end and panic; leave the
+    // bytes unconsumed instead, so the message's end check refuses it.
+    if i == buf.remaining() {
+        return None;
+    }
+
     // i+1: include the '\0'
     // move cursor to the end of cstring
     let string_buf = buf.split_to(i + 1);
@@ -73,13 +80,63 @@ where
             return Err(PgWireError::MessageTooLarge(msg_len, max_size));
         }
 
+        // NetGet patch (vendor/pgwire/README.md): the length counts itself, so
+        // anything under 4 cannot be a message, and `msg_len - 4` in a body
+        // decoder would underflow.
+        if msg_len < 4 {
+            return Err(PgWireError::InvalidMessageFormat(
+                "declared message length is shorter than the length field",
+            ));
+        }
+
         if buf.remaining() >= msg_len + offset {
-            buf.advance(offset + 4);
-            return decode_fn(buf, msg_len).map(|r| Some(r));
+            // NetGet patch (vendor/pgwire/README.md): hand the body decoder this
+            // message and nothing after it. Upstream passes the whole remaining
+            // buffer, so a decoder could read into the next message, or past
+            // the end of the buffer and panic.
+            let mut message = buf.split_to(offset + msg_len);
+            message.advance(offset + 4);
+            return decode_fn(&mut message, msg_len).map(|r| Some(r));
         }
     }
 
     Ok(None)
+}
+
+/// NetGet patch (vendor/pgwire/README.md): [`decode_packet`] for a message a
+/// client sends, which must also be consumed exactly. PostgreSQL itself
+/// refuses a message with bytes left over ("invalid message format"); this is
+/// also what catches a string that runs to the end of the message without its
+/// NUL, which [`get_cstring`] leaves unconsumed.
+pub(crate) fn decode_frontend_packet<T, F>(
+    buf: &mut BytesMut,
+    offset: usize,
+    max_size: usize,
+    decode_fn: F,
+) -> PgWireResult<Option<T>>
+where
+    F: Fn(&mut BytesMut, usize) -> PgWireResult<T>,
+{
+    decode_packet(buf, offset, max_size, |body, msg_len| {
+        let decoded = decode_fn(body, msg_len)?;
+        if body.has_remaining() {
+            return Err(PgWireError::InvalidMessageFormat(
+                "message has bytes left over after its last field",
+            ));
+        }
+        Ok(decoded)
+    })
+}
+
+/// NetGet patch (vendor/pgwire/README.md): `split_to(len)` for a length the
+/// peer declared, refused rather than panicking when the message is shorter.
+pub(crate) fn split_declared(buf: &mut BytesMut, len: usize) -> PgWireResult<BytesMut> {
+    if len > buf.remaining() {
+        return Err(PgWireError::InvalidMessageFormat(
+            "declared field length runs past the end of the message",
+        ));
+    }
+    Ok(buf.split_to(len))
 }
 
 // pub(crate) fn get_and_ensure_message_type(buf: &mut BytesMut, t: u8) -> PgWireResult<()> {

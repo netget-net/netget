@@ -126,6 +126,19 @@ pub trait Message: Sized {
     }
 }
 
+/// NetGet patch (vendor/pgwire/README.md): decode a message a client sent.
+///
+/// The same framing as [`Message::decode`], plus the check PostgreSQL makes on
+/// every frontend message: the body must be consumed exactly. A malformed
+/// message is a `PgWireError::InvalidMessageFormat`, never a panic and never a
+/// read into the message after it.
+fn decode_frontend<M: Message>(buf: &mut BytesMut, ctx: &DecodeContext) -> PgWireResult<Option<M>> {
+    let offset = M::message_type().is_some().into();
+    codec::decode_frontend_packet(buf, offset, M::max_message_length(), |buf, full_len| {
+        M::decode_body(buf, full_len, ctx)
+    })
+}
+
 /// Cancel message
 pub mod cancel;
 mod codec;
@@ -268,7 +281,7 @@ impl PgWireFrontendMessage {
                     cancel::CancelRequest::decode(buf, ctx)
                         .map(|opt| opt.map(PgWireFrontendMessage::CancelRequest))
                 } else {
-                    startup::Startup::decode(buf, ctx).map(|v| v.map(Self::Startup))
+                    decode_frontend::<startup::Startup>(buf, ctx).map(|v| v.map(Self::Startup))
                 }
             } else {
                 Ok(None)
@@ -280,48 +293,48 @@ impl PgWireFrontendMessage {
                 // Password, SASLInitialResponse, SASLResponse can only be
                 // decoded under certain context
                 startup::MESSAGE_TYPE_BYTE_PASSWORD_MESSAGE_FAMILY => {
-                    startup::PasswordMessageFamily::decode(buf, ctx)
+                    decode_frontend::<startup::PasswordMessageFamily>(buf, ctx)
                         .map(|v| v.map(Self::PasswordMessageFamily))
                 }
 
                 simplequery::MESSAGE_TYPE_BYTE_QUERY => {
-                    simplequery::Query::decode(buf, ctx).map(|v| v.map(Self::Query))
+                    decode_frontend::<simplequery::Query>(buf, ctx).map(|v| v.map(Self::Query))
                 }
 
                 extendedquery::MESSAGE_TYPE_BYTE_PARSE => {
-                    extendedquery::Parse::decode(buf, ctx).map(|v| v.map(Self::Parse))
+                    decode_frontend::<extendedquery::Parse>(buf, ctx).map(|v| v.map(Self::Parse))
                 }
                 extendedquery::MESSAGE_TYPE_BYTE_BIND => {
-                    extendedquery::Bind::decode(buf, ctx).map(|v| v.map(Self::Bind))
+                    decode_frontend::<extendedquery::Bind>(buf, ctx).map(|v| v.map(Self::Bind))
                 }
                 extendedquery::MESSAGE_TYPE_BYTE_CLOSE => {
-                    extendedquery::Close::decode(buf, ctx).map(|v| v.map(Self::Close))
+                    decode_frontend::<extendedquery::Close>(buf, ctx).map(|v| v.map(Self::Close))
                 }
                 extendedquery::MESSAGE_TYPE_BYTE_DESCRIBE => {
-                    extendedquery::Describe::decode(buf, ctx).map(|v| v.map(Self::Describe))
+                    decode_frontend::<extendedquery::Describe>(buf, ctx).map(|v| v.map(Self::Describe))
                 }
                 extendedquery::MESSAGE_TYPE_BYTE_EXECUTE => {
-                    extendedquery::Execute::decode(buf, ctx).map(|v| v.map(Self::Execute))
+                    decode_frontend::<extendedquery::Execute>(buf, ctx).map(|v| v.map(Self::Execute))
                 }
                 extendedquery::MESSAGE_TYPE_BYTE_FLUSH => {
-                    extendedquery::Flush::decode(buf, ctx).map(|v| v.map(Self::Flush))
+                    decode_frontend::<extendedquery::Flush>(buf, ctx).map(|v| v.map(Self::Flush))
                 }
                 extendedquery::MESSAGE_TYPE_BYTE_SYNC => {
-                    extendedquery::Sync::decode(buf, ctx).map(|v| v.map(Self::Sync))
+                    decode_frontend::<extendedquery::Sync>(buf, ctx).map(|v| v.map(Self::Sync))
                 }
 
                 terminate::MESSAGE_TYPE_BYTE_TERMINATE => {
-                    terminate::Terminate::decode(buf, ctx).map(|v| v.map(Self::Terminate))
+                    decode_frontend::<terminate::Terminate>(buf, ctx).map(|v| v.map(Self::Terminate))
                 }
 
                 copy::MESSAGE_TYPE_BYTE_COPY_DATA => {
-                    copy::CopyData::decode(buf, ctx).map(|v| v.map(Self::CopyData))
+                    decode_frontend::<copy::CopyData>(buf, ctx).map(|v| v.map(Self::CopyData))
                 }
                 copy::MESSAGE_TYPE_BYTE_COPY_FAIL => {
-                    copy::CopyFail::decode(buf, ctx).map(|v| v.map(Self::CopyFail))
+                    decode_frontend::<copy::CopyFail>(buf, ctx).map(|v| v.map(Self::CopyFail))
                 }
                 copy::MESSAGE_TYPE_BYTE_COPY_DONE => {
-                    copy::CopyDone::decode(buf, ctx).map(|v| v.map(Self::CopyDone))
+                    decode_frontend::<copy::CopyDone>(buf, ctx).map(|v| v.map(Self::CopyDone))
                 }
                 _ => Err(PgWireError::InvalidMessageType(first_byte)),
             }

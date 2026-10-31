@@ -16,6 +16,10 @@ pub enum PgWireError {
     InvalidMessageType(u8),
     #[error("Invalid message length, expected max {0}, actual: {1}")]
     MessageTooLarge(usize, usize),
+    // NetGet patch (vendor/pgwire/README.md): a message whose fields do not
+    // fit its declared length. Upstream panicked on these.
+    #[error("Invalid message format: {0}")]
+    InvalidMessageFormat(&'static str),
     #[error("Invalid target type, received {0}")]
     InvalidTargetType(u8),
     #[error("Invalid transaction status, received {0}")]
@@ -69,6 +73,14 @@ pub enum PgWireError {
 impl From<PgWireError> for IOError {
     fn from(e: PgWireError) -> Self {
         IOError::other(e)
+    }
+}
+
+// NetGet patch (vendor/pgwire/README.md): a fixed-width field read past the end
+// of its message, through `Buf::try_get_*`, is a malformed message.
+impl From<bytes::TryGetError> for PgWireError {
+    fn from(_: bytes::TryGetError) -> Self {
+        PgWireError::InvalidMessageFormat("a field runs past the end of the message")
     }
 }
 
@@ -253,6 +265,9 @@ impl From<PgWireError> for ErrorInfo {
                 ErrorInfo::new("FATAL".to_owned(), "08P01".to_owned(), error.to_string())
             }
             PgWireError::MessageTooLarge(..) => {
+                ErrorInfo::new("FATAL".to_owned(), "08P01".to_owned(), error.to_string())
+            }
+            PgWireError::InvalidMessageFormat(_) => {
                 ErrorInfo::new("FATAL".to_owned(), "08P01".to_owned(), error.to_string())
             }
             PgWireError::InvalidTransactionStatus(_) => {

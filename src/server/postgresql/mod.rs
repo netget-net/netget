@@ -182,14 +182,12 @@ impl PostgresqlServer {
                             // `process_socket` runs in a task of its own so a **panic** inside
                             // pgwire is contained rather than lost.
                             //
-                            // pgwire 0.35's `decode_packet` bounds a message's declared length
-                            // only from above and then hands `decode_fn` the whole remaining
-                            // buffer, so `get_cstring` can call `split_to(remaining + 1)` and
-                            // panic on a message carrying no NUL — six bytes after a valid
-                            // startup handshake are enough (IMPROVEMENTS #77). The fix belongs
-                            // upstream: pgwire owns the socket loop and takes a concrete
-                            // `TcpStream`, so nothing here can bound the frame without
-                            // proxying the connection.
+                            // Upstream pgwire 0.35 panics decoding a malformed frontend message
+                            // (a Query with no NUL, six bytes after the handshake; IMPROVEMENTS
+                            // #77). The copy in `vendor/pgwire` answers those FATAL 08P01 and
+                            // returns `InvalidData` instead, but a `[patch]` does not reach the
+                            // crate as published to crates.io, and any other panic in pgwire or
+                            // in our handler would take the same path.
                             //
                             // What NetGet can do is not lose the connection's bookkeeping to
                             // it. The panic used to unwind straight past
@@ -233,6 +231,19 @@ impl PostgresqlServer {
                             watchdog.abort();
                             match joined {
                                 Ok(Ok(())) => {}
+                                Ok(Err(e)) if e.kind() == std::io::ErrorKind::InvalidData => {
+                                    // The vendored pgwire refused a message that does not
+                                    // decode and has already answered it FATAL 08P01.
+                                    error!(
+                                        "PostgreSQL connection {} decision=refused_malformed_message: {}",
+                                        connection_id, e
+                                    );
+                                    let _ = conn_status_tx.send(format!(
+                                        "[WARN] PostgreSQL connection {} closed: the peer sent a \
+                                         malformed message ({})",
+                                        connection_id, e
+                                    ));
+                                }
                                 Ok(Err(e)) => {
                                     error!("PostgreSQL connection error: {:?}", e);
                                 }

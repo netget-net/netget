@@ -694,3 +694,12 @@ panic = "abort"
 # browser build is affected, so the published crate uses upstream hyper. NetGet's security
 # patches to other crates live in published forks (github.com/netget-net), not here.
 hyper = { path = "vendor/hyper" }
+# pgwire 0.35.0 panics decoding a malformed frontend message (a Query with no NUL, a Bind
+# whose parameter length runs past the message, a Close with no body, ...): its framer
+# hands each body decoder the whole receive buffer and the decoders read with panicking
+# getters. This copy isolates each message, reads with checked getters, and answers a
+# malformed one FATAL 08P01 (vendor/pgwire/README.md). Like hyper above, a [patch] does not
+# reach the crate as published to crates.io; there the panic is still contained to the one
+# connection by src/server/postgresql/mod.rs. tests/vendored_pgwire_patch_test.rs fails when
+# Cargo.lock stops building this copy.
+pgwire = { path = "vendor/pgwire" }

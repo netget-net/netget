@@ -590,6 +590,22 @@ where
                 error_handler.on_error(socket, &mut e);
                 process_error(socket, e, is_extended_query).await?;
             }
+        } else if let Some(Err(e)) = msg {
+            // NetGet patch (vendor/pgwire/README.md): a message that does not
+            // decode is answered the way PostgreSQL answers it, FATAL 08P01,
+            // and the reason is returned to the caller rather than ending the
+            // session as if the peer had hung up. The framer cannot resync
+            // after a malformed length, so the connection closes either way.
+            if let PgWireError::IoError(_) = e {
+                break;
+            }
+            let reason = e.to_string();
+            let error_info: ErrorInfo = e.into();
+            let _ = socket
+                .send(PgWireBackendMessage::ErrorResponse(error_info.into()))
+                .await;
+            let _ = socket.close().await;
+            return Err(io::Error::new(io::ErrorKind::InvalidData, reason));
         } else {
             break;
         }
