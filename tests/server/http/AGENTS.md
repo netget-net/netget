@@ -26,9 +26,10 @@ application scenarios.
 - `failure_semantics_test.rs` (4 tests): 1 LLM call each — only the startup instruction is
   mocked, and every `http_request` is deliberately left unmatched so the mock answers HTTP
   500 and netget reports a backend failure
-- `decision_tag_test.rs` (2 tests): 1 LLM call for the backend-failure test (startup only,
-  the event is deliberately unmatched) and 2 for the fail-open test (startup + one
-  `http_request` answered with an empty action list)
+- `decision_tag_test.rs` (4 tests): 1 LLM call for the backend-failure test (startup only,
+  the event is deliberately unmatched), 2 each for the silent-model and `default_response`
+  tests (startup + one `http_request` answered with an empty action list), and 2–6 for the
+  refused-action test (startup + the refused answer, which the LLM layer may retry)
 - **Total: 20 LLM calls** (above 10 target, but necessary for comprehensive HTTP testing)
 
 **Optimization Opportunity**: Could consolidate into 2-3 comprehensive servers:
@@ -194,22 +195,23 @@ backend failure.
 
 ### 11. Decision tags (`decision_tag_test.rs`)
 
-Every request now ends in exactly one `decision=` line, and these two pin the pair that used
-to be indistinguishable.
+Every request ends in exactly one `decision=` line, and these four tell the ways a request
+can end without a model-written response apart, on the wire and in the log.
 
 - `test_http_backend_failure_is_tagged_fail_closed` — the mock answers the startup
   instruction and nothing else, so `call_llm` returns `Err`. Asserts `500` on the wire and
-  `decision=fail_closed_llm_error` in the log, **and** that no `decision=model_silent` line
-  appears: a dead backend must not read as the model choosing to say nothing.
-- `test_http_model_silence_answers_200_and_is_tagged_as_a_fail_open` — the model *is*
-  reached and answers `{"actions": []}`. Asserts the **current, fail-open** wire behaviour
-  (an empty `200`) so that changing it is deliberate, and that the log says
-  `decision=model_silent fallback=blank_200` — which names both whose silence it was and
-  which fallback answered the peer in its place.
-
-The second test is the one to read before touching `build_response`: an unreachable model, a
-model that answered nothing, and a model that deliberately answered `200` all reach the peer
-identically today.
+  `decision=fail_closed_llm_error` in the log, **and** that no silent-model line appears: a
+  dead backend must not read as the model choosing to say nothing.
+- `test_http_model_silence_fails_closed_with_500` — the model *is* reached and answers
+  `{"actions": []}` to a `POST /todos`. Asserts `500` with exactly the category body and
+  `decision=fail_closed_no_action`. This is the regression test for the empty `200` a silent
+  model used to get.
+- `test_http_refused_action_fails_closed_with_500` — the model answers a
+  `send_http_response` with no `status`, which the executor refuses. Asserts `500`, that the
+  refused body never reaches the peer, and `decision=fail_closed_bad_action`.
+- `test_http_model_silence_uses_the_configured_default_response` — the same silent model on
+  a server started with `default_response` gets that response (`404 nothing here`) and
+  `decision=model_silent fallback=default_response`.
 
 ## Known Issues
 

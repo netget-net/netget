@@ -57,7 +57,9 @@ is retained but is no longer what provides ordering.
 2. `UnixListener::bind` — failure propagates with `?`, so `server_startup` reports `Error`
    rather than a phantom `Running`.
 3. The accept-loop `JoinHandle` is registered with `AppState::register_server_task()`, so
-   `stop_server` aborts it and releases the socket.
+   `stop_server` aborts it and releases the socket. The task owns a `SocketCleanup` guard, so
+   aborting it also unlinks the socket node: a stopped agent leaves no
+   `./netget-ssh-agent.sock` behind for `SSH_AUTH_SOCK` to hit ECONNREFUSED on.
 4. Per connection: split the stream, register it in `ServerInstance` **and in the server's own
    connection map**, then spawn the `ssh_agent_connection_opened` task and the reader task.
 

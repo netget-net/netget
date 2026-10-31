@@ -30,6 +30,7 @@ fn entry(id: u64, conn: Option<u32>) -> AccessLogEntry {
         event_type: "tcp_data_received".into(),
         request: serde_json::json!({"data": format!("payload-{id}")}),
         response: vec![serde_json::json!({"type": "send_tcp_data", "data": "pong"})],
+        answered_by: None,
     }
 }
 
@@ -48,6 +49,7 @@ fn wildcard(handler: EventHandlerType) -> EventHandlerConfig {
     EventHandlerConfig {
         handlers: vec![EventHandler {
             event_pattern: EventPattern::Wildcard,
+            data_match: None,
             handler,
         }],
     }
@@ -56,6 +58,7 @@ fn wildcard(handler: EventHandlerType) -> EventHandlerConfig {
 fn specific(id: &str) -> EventHandler {
     EventHandler {
         event_pattern: EventPattern::Specific(id.to_string()),
+        data_match: None,
         handler: EventHandlerType::Static {
             actions: vec![serde_json::json!({"type": "send_tcp_data", "data": "hi"})],
         },
@@ -907,6 +910,7 @@ fn a_client_connection_shows_its_conversation_with_a_send_button() {
             event_type: "telnet_data_received".into(),
             request: serde_json::json!({"text": "login: "}),
             response: vec![serde_json::json!({"type": "send_text", "text": "admin"})],
+            answered_by: None,
         },
         AccessLogEntry {
             id: 2,
@@ -918,6 +922,7 @@ fn a_client_connection_shows_its_conversation_with_a_send_button() {
             event_type: "injected_action".into(),
             request: serde_json::json!({"type": "send_command", "command": "ls"}),
             response: vec![serde_json::json!({"Sent": {"bytes_sent": 3}})],
+            answered_by: None,
         },
     ];
     let key = UiKey::Client(ClientId::new(4));

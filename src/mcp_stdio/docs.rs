@@ -188,7 +188,9 @@ pub async fn render_protocol_docs(protocol: &str, state: &AppState) -> Option<St
         out.push_str(
             "- `event_handlers` (array) — **preferred**. Deterministic, in-process, no LLM \
              call. Each entry is `{\"event_pattern\": \"<event id>\" | \"*\", \"handler\": {…}}`, \
-             matched in order, first match wins. `handler` is one of `{\"type\":\"script\",\
+             matched in order, first match wins; an optional `\"match\": {\"method\": \"GET\", \
+             \"path\": \"/a\"}` narrows a rule to events whose fields equal those values \
+             (keys are field paths like `headers.host`). `handler` is one of `{\"type\":\"script\",\
              \"language\":\"python\"|\"javascript\",\"code\":\"…\"}`, \
              `{\"type\":\"static\",\"actions\":[…]}`, or `{\"type\":\"llm\",\"instruction\":\"…\"}`. \
              A script receives the event as JSON on stdin (fields under `data['event']`) and \
@@ -245,6 +247,16 @@ pub async fn render_protocol_docs(protocol: &str, state: &AppState) -> Option<St
         out.push_str(
             "- `batching` (boolean) — deliver events that arrive during a call together \
              afterwards. Omit for the default above.\n",
+        );
+        out.push_str(
+            "- `memoize_ttl_secs` (number) — memoise the model's answers: for this many \
+             seconds an event identical to one the model already answered (ignoring per-request \
+             ids such as a DNS `query_id`, which the replay echoes back) gets the same actions \
+             with no model call, recorded in the access log as answered by `cache`. Off unless \
+             set; 0 turns it off. Failures, answers that change memory or tasks, and \
+             credential-bearing events are never memoised. With `history` on, answers are kept \
+             per connection unless `memoize_across_connections` is true. To replay recorded \
+             traffic with no model at all, use the `export_rules` tool instead.\n",
         );
         out.push('\n');
 
@@ -380,6 +392,16 @@ pub async fn render_protocol_docs(protocol: &str, state: &AppState) -> Option<St
         out.push_str(
             "- `batching` (boolean) — deliver events that arrive during a call together \
              afterwards. Omit for the default above.\n",
+        );
+        out.push_str(
+            "- `memoize_ttl_secs` (number) — memoise the model's answers: for this many \
+             seconds an event identical to one the model already answered (ignoring per-request \
+             ids such as a DNS `query_id`, which the replay echoes back) gets the same actions \
+             with no model call, recorded in the access log as answered by `cache`. Off unless \
+             set; 0 turns it off. Failures, answers that change memory or tasks, and \
+             credential-bearing events are never memoised. With `history` on, answers are kept \
+             per connection unless `memoize_across_connections` is true. To replay recorded \
+             traffic with no model at all, use the `export_rules` tool instead.\n",
         );
         out.push('\n');
 
