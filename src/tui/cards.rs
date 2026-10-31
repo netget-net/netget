@@ -38,6 +38,9 @@ pub enum InstanceAction {
     DeleteRule(usize),
     /// Move one rule earlier (-1) or later (+1) and apply.
     MoveRule(usize, i8),
+    /// Turn the instance's model-authored answers into rules and apply them
+    /// (`llm::rule_export`), keeping the instance's own fallback.
+    ExportRules,
     /// Cycle MANUAL → LLM → SILENT and apply.
     CycleDriver,
     /// Connect a client of the counterpart protocol to this server.
@@ -667,13 +670,12 @@ fn rule_rows(instance: InstanceRef<'_>, state: &CardState, rows: &mut Vec<Row>) 
     let mut has_wildcard = false;
     if let Some(config) = instance.routing() {
         for (index, handler) in config.handlers.iter().enumerate() {
-            let pattern = match &handler.event_pattern {
-                EventPattern::Specific(s) => s.clone(),
-                EventPattern::Wildcard => {
-                    has_wildcard = true;
-                    "*".to_string()
-                }
-            };
+            if matches!(handler.event_pattern, EventPattern::Wildcard)
+                && handler.data_match.is_none()
+            {
+                has_wildcard = true;
+            }
+            let pattern = handler.describe();
             let (kind, tone, detail) = match &handler.handler {
                 EventHandlerType::Llm { instruction } => (
                     "LLM",
@@ -746,6 +748,10 @@ fn rule_rows(instance: InstanceRef<'_>, state: &CardState, rows: &mut Vec<Row>) 
     let mut add = Row::new(Some(key), 2);
     add.buttons
         .push(Button::on(InstanceAction::AddRule, "+ add rule"));
+    add.buttons.push(Button::on(
+        InstanceAction::ExportRules,
+        "rules from model answers",
+    ));
     rows.push(add);
 }
 

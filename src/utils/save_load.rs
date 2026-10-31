@@ -228,6 +228,42 @@ pub async fn save_client(state: &AppState, client_id: ClientId, filename: &str) 
     save_actions(actions, filename).await
 }
 
+/// Save one server or client to a `.netget` file with `event_handlers` replaced by
+/// `handlers` — the table `export_rules` builds — so `--load` starts it answering from those
+/// rules. Everything else is saved as [`save_server`] / [`save_client`] would save it.
+pub async fn save_with_handlers(
+    state: &AppState,
+    owner: crate::state::AccessLogOwner,
+    handlers: &[Value],
+    filename: &str,
+) -> Result<PathBuf> {
+    let (mut action, scope) = match owner {
+        crate::state::AccessLogOwner::Server(id) => {
+            let server = state
+                .get_server(ServerId::new(id))
+                .await
+                .context("Server not found")?;
+            (
+                server_to_action(&server),
+                crate::state::task::TaskScope::Server(server.id),
+            )
+        }
+        crate::state::AccessLogOwner::Client(id) => {
+            let client = state
+                .get_client(ClientId::new(id))
+                .await
+                .context("Client not found")?;
+            (
+                client_to_action(&client),
+                crate::state::task::TaskScope::Client(client.id),
+            )
+        }
+    };
+    action["event_handlers"] = Value::Array(handlers.to_vec());
+    attach_tasks(&mut action, &state.get_all_tasks().await, &scope)?;
+    save_actions(vec![action], filename).await
+}
+
 /// Save an array of actions to a file
 async fn save_actions(actions: Vec<Value>, filename: &str) -> Result<PathBuf> {
     let filename = normalize_filename(filename);

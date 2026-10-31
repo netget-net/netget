@@ -50,6 +50,7 @@ pub async fn run(app: &mut DashboardApp, key: UiKey, action: InstanceAction, sta
                 None
             }
         }),
+        InstanceAction::ExportRules => export_rules(app, key, state),
         InstanceAction::CycleDriver => cycle_driver(app, key, state),
         InstanceAction::ConnectClient => {
             if let UiKey::Server(id) = key {
@@ -296,6 +297,35 @@ fn spawn_routing_apply(
     tokio::spawn(async move {
         let message = match model.apply(&state, llm, &status_tx).await {
             Ok(summary) => summary,
+            Err(e) => format!("✗ {e}"),
+        };
+        let _ = ui_tx.send(UiMsg::Chat(message));
+    });
+}
+
+/// Derive rules from the instance's model-authored answers and apply them in front of its
+/// existing rules, keeping its fallback. What was derived, left undetermined or skipped goes
+/// into the stream.
+fn export_rules(app: &mut DashboardApp, key: UiKey, state: &AppState) {
+    use crate::llm::rule_export::{apply_export, describe_export, export_rules, Fallback};
+    let owner = match key {
+        UiKey::Server(id) => crate::state::AccessLogOwner::Server(id.as_u32()),
+        UiKey::Client(id) => crate::state::AccessLogOwner::Client(id.as_u32()),
+    };
+    app.push_system(format!(
+        "{}: deriving rules from the model's answers…",
+        key.describe()
+    ));
+    let llm = app.llm_client.clone();
+    let ui_tx = app.ui_tx.clone();
+    let state = state.clone();
+    tokio::spawn(async move {
+        let message = match export_rules(&state, owner, Fallback::Keep).await {
+            Ok(export) if export.derived.rules.is_empty() => describe_export(&export),
+            Ok(export) => match apply_export(&state, owner, &export, llm).await {
+                Ok(outcome) => format!("{}{}", describe_export(&export), outcome.summary),
+                Err(e) => format!("{}✗ {e}", describe_export(&export)),
+            },
             Err(e) => format!("✗ {e}"),
         };
         let _ = ui_tx.send(UiMsg::Chat(message));

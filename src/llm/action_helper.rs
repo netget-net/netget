@@ -349,6 +349,7 @@ async fn record_event_access_log(
     protocol: &dyn Server,
     event: &Event,
     result: &ExecutionResult,
+    answered_by: &str,
 ) {
     if let Some(summary) = result.failure_summary() {
         error!(
@@ -362,7 +363,7 @@ async fn record_event_access_log(
     }
 
     state
-        .record_access_log(
+        .record_access_log_answered(
             crate::state::AccessLogOwner::Server(server_id.as_u32()),
             protocol.protocol_name(),
             connection_id.map(|c| c.as_u32()),
@@ -372,6 +373,7 @@ async fn record_event_access_log(
                 // The original actions/results remain available to the protocol executor.
                 vec![serde_json::json!({"type":"private_handler_result", "action_count":result.raw_actions.len(), "failed_actions":result.failures.len()})]
             } else { result.access_log_actions() },
+            answered_by,
         )
         .await;
 }
@@ -696,8 +698,16 @@ async fn call_llm_inner(
                 if !private_payloads {
                     log_ctx.log_complete(event_status_tx, &result.protocol_results);
                 }
-                record_event_access_log(state, server_id, connection_id, protocol, event, &result)
-                    .await;
+                record_event_access_log(
+                    state,
+                    server_id,
+                    connection_id,
+                    protocol,
+                    event,
+                    &result,
+                    crate::state::app_state::answered_by::EASY,
+                )
+                .await;
                 return Ok(result);
             }
         }
@@ -721,14 +731,69 @@ async fn call_llm_inner(
             if !private_payloads {
                 log_ctx.log_complete(event_status_tx, &result.protocol_results);
             }
-            record_event_access_log(state, server_id, connection_id, protocol, event, &result)
-                .await;
+            record_event_access_log(
+                state,
+                server_id,
+                connection_id,
+                protocol,
+                event,
+                &result,
+                crate::state::app_state::answered_by::RULE,
+            )
+            .await;
             return Ok(result);
         }
         crate::llm::event_handler_executor::EventHandlerResult::FallbackToLlm { instruction } => {
             // No handler, or an explicit `{"type":"llm","instruction":"…"}` handler whose
             // instruction must be added to this event's prompt.
             handler_instruction = instruction;
+        }
+    }
+
+    // MEMOISED ANSWER, when the instance memoises: the model's answer to an identical event
+    // within the TTL, re-rendered for this one. Never for a batch (one answer covers several
+    // events) or a credential-bearing event.
+    let memo = if earlier.is_empty() && !private_payloads {
+        state.server_memo(server_id).await
+    } else {
+        None
+    };
+    let memo_key = memo.as_ref().and_then(|memo| {
+        memo.key_for(
+            event.id(),
+            &event.data,
+            connection_id.map(|c| c.as_u32()),
+            handler_instruction.as_deref(),
+        )
+    });
+    if let (Some(memo), Some(key)) = (&memo, &memo_key) {
+        if let Some(actions) = memo.memo.get(key, &event.data) {
+            let result = execute_actions(actions, state, Some(protocol), Some(server_id), None)
+                .await
+                .context("Failed to execute memoised actions")?;
+            if !result.failures.is_empty() {
+                // A replay that failed is not kept: the next identical event asks the model.
+                memo.memo.forget(key);
+            }
+            debug!(
+                "Answered '{}' on server #{} from the memo (no model call)",
+                event.id(),
+                server_id.as_u32()
+            );
+            if !private_payloads {
+                log_ctx.log_complete(event_status_tx, &result.protocol_results);
+            }
+            record_event_access_log(
+                state,
+                server_id,
+                connection_id,
+                protocol,
+                event,
+                &result,
+                crate::state::app_state::answered_by::CACHE,
+            )
+            .await;
+            return Ok(result);
         }
     }
 
@@ -930,7 +995,7 @@ async fn call_llm_inner(
     // answered together with it.
     for earlier_event in earlier {
         state
-            .record_access_log(
+            .record_access_log_answered(
                 crate::state::AccessLogOwner::Server(server_id.as_u32()),
                 protocol.protocol_name(),
                 connection_id.map(|c| c.as_u32()),
@@ -939,10 +1004,27 @@ async fn call_llm_inner(
                 vec![serde_json::json!({
                     "type": crate::state::exchange_history::ANSWERED_WITH_NEXT
                 })],
+                crate::state::app_state::answered_by::MODEL,
             )
             .await;
     }
-    record_event_access_log(state, server_id, connection_id, protocol, event, &result).await;
+    record_event_access_log(
+        state,
+        server_id,
+        connection_id,
+        protocol,
+        event,
+        &result,
+        crate::state::app_state::answered_by::MODEL,
+    )
+    .await;
+
+    // Memoise the answer only when every action ran: a failure is never replayed.
+    if let (Some(memo), Some(key)) = (memo, memo_key) {
+        if result.failures.is_empty() {
+            memo.memo.put(key, &event.data, &result.raw_actions);
+        }
+    }
 
     Ok(result)
 }

@@ -41,6 +41,7 @@ fn manual() -> EventHandlerConfig {
     EventHandlerConfig {
         handlers: vec![EventHandler {
             event_pattern: EventPattern::Wildcard,
+            data_match: None,
             handler: EventHandlerType::Manual { timeout_secs: 300 },
         }],
     }
@@ -58,6 +59,7 @@ fn populated() -> RailSnapshot {
             event_type: "http_request".into(),
             request: serde_json::json!({"method": "GET", "path": format!("/{id}")}),
             response: vec![serde_json::json!({"type": "send_http_response", "status": 200})],
+            answered_by: None,
         })
         .collect();
     let server = ServerRow {
@@ -912,6 +914,7 @@ fn peer_escape_sequences_are_not_painted_as_terminal_cells() {
         event_type: "telnet_line_received".into(),
         request: serde_json::json!({"message": HOSTILE, "connection_id": "conn-7"}),
         response: vec![serde_json::json!({"type": "send_telnet_line", "text": HOSTILE})],
+        answered_by: None,
     });
     app.absorb_snapshot(snapshot);
     app.activity.push_log(
@@ -973,6 +976,7 @@ fn intercept_payload_controls_are_not_painted_as_terminal_cells() {
                 event_type: "telnet_line_received".into(),
                 request: payload.clone(),
                 response: vec![serde_json::json!({"type": "send_telnet_line", "text": HOSTILE})],
+                answered_by: None,
             }),
             scroll: 0,
         },
