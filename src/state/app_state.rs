@@ -1175,6 +1175,20 @@ impl AppState {
         inner.pending_intercepts.len() != before
     }
 
+    /// Why a parked request for `owner` / `connection_id` can no longer be answered, if its
+    /// connection or instance has ended (`None` while it is live). The dispatcher asks this
+    /// when its request is withdrawn, to tell a refusal from a hang-up.
+    pub async fn intercept_target_ended(
+        &self,
+        owner: crate::state::intercepts::InterceptOwner,
+        connection_id: Option<u32>,
+    ) -> Option<String> {
+        self.inner
+            .read()
+            .await
+            .intercept_target_gone(owner, connection_id)
+    }
+
     /// Drop a parked entry without answering (the dispatcher cleans up after
     /// its own timeout so the list never shows a question nobody is waiting on).
     pub async fn remove_intercept(&self, id: u64) {
