@@ -1879,6 +1879,13 @@ fn websocket() -> Vec<EvalCase> {
 // received and verified, then exits at EOSE; `nak event` signs with the key
 // given, publishes and prints "success" or the relay's refusal. nak prints
 // "connecting to ..." on stderr before the exchange, so completion is its exit.
+//
+// nak 0.21 reads an event (for `event`) or a filter (for `req`) from stdin
+// whenever stdin is not a terminal, and the probe's stdin is always a pipe. An
+// empty pipe gives it nothing to send: `nak event` exits 0 having published
+// nothing and `nak req` closes after connecting, so every run scores
+// event_never_reached_model. `{}` on stdin is an empty template that the flags
+// fill in, which is what a terminal gets.
 // ---------------------------------------------------------------------------
 
 /// The key the eval's notes are signed with. Any valid secp256k1 secret works;
@@ -1897,6 +1904,7 @@ fn nak_publish(content: &str) -> Probe {
             "ws://127.0.0.1:{PORT}",
         ],
     )
+    .stdin("{}\n")
     .until_exit()
 }
 
@@ -1907,7 +1915,9 @@ fn nostr() -> Vec<EvalCase> {
             "nostr",
             "When someone subscribes to short text notes, give them two notes: \
              Stalker is a masterpiece, and Solaris is slower but worth it.",
-            Probe::client("nak", &["req", "-k", "1", "ws://127.0.0.1:{PORT}"]).until_exit(),
+            Probe::client("nak", &["req", "-k", "1", "ws://127.0.0.1:{PORT}"])
+                .stdin("{}\n")
+                .until_exit(),
             Expect::contains(&["Stalker is a masterpiece", "Solaris is slower but worth it"]),
         ),
         EvalCase::new(
