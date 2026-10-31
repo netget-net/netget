@@ -867,13 +867,17 @@ next peer would have been greeted as Zed. A line written `key: value` replaces t
 with that key in either scope (`common::append_memory_lines`), so the same fact appended twice
 reads once. `tests/connection_memory_test.rs` drives two telnet peers through the bridge.
 
-**A client's history is worded as progress, and its first turn is in it.** A client's
-instruction is a script the model is asked about again on every reply; shown bare beside each
-reply, with history worded as a server's "answered with", llama3.1:8b re-sent "PING, then GET
-mykey" on every reply (6 of 8 seeded runs, up to 27 PINGs). The client prompt frames the
-instruction as the plan under way, `ExchangeHistory::render_for_client` lists each entry as
-"you did:", and the initial call with no event is recorded as `client_started`
-(`tests/client_session_progress_test.rs`).
+**A client's history is worded as progress, and its first turn is in it — but that does not
+stop a small model restarting a script.** `ExchangeHistory::render_for_client` lists each entry
+as "you did:" under a header saying all of it is done, and the initial call with no event is
+recorded as `client_started` (`tests/client_session_progress_test.rs`). Measured 31 October
+2026 with llama3.1:8b, a redis client told "Send PING, then GET mykey, then stop sending
+commands" re-sent the script on replies in 6 of 8 seeded runs before and 6 of 8 after, with both
+commands listed as sent directly above the reply. A paragraph in the client system prompt
+framing the instruction as a plan under way made it worse (the connect event, which has no
+history, came back empty or as an echoed transcript in 5 of 8) and was removed. A scripted
+client should be a script or static handler (`--client-handlers`); a structural answer for the
+model path is still open.
 
 **`notify_operator` is a note on the operator's screen and is never offered beside a wire
 answer.** It was `show_message`, and offered beside `send_telnet_line` it was taken for the

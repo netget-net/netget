@@ -145,15 +145,11 @@ async fn the_reply_to_the_first_command_shows_what_the_client_already_sent() {
         }
     });
 
-    // The connect event: the instruction is presented as the plan for the session.
+    // The connect event: the instruction, and no history yet.
     let connect = next_request(&mut rx).await;
     let system = prompt_of(&connect);
     assert!(system.contains(instruction), "{system}");
-    assert!(
-        system.contains("not a new request on each event")
-            && system.contains("Never repeat a step that is already done"),
-        "the instruction is framed as a plan under way:\n{system}"
-    );
+    assert!(!system.contains("Earlier in this session"), "{system}");
     answer(
         connect,
         json!([
@@ -173,6 +169,7 @@ async fn the_reply_to_the_first_command_shows_what_the_client_already_sent() {
     assert!(
         user.contains("Earlier in this session")
             && user.contains("do not send it again")
+            && user.contains("not a new request on each event")
             && user.contains("#1 redis_connected"),
         "the session so far is shown as done:\n{user}"
     );

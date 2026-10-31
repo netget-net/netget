@@ -1205,17 +1205,14 @@ async fn call_llm_for_client_inner(
     // response envelope, no "one response", no way to say "nothing now". A model that wrote two
     // JSON objects lost the second without an error, because the parser takes the first.
     //
-    // The instruction is asked about again on every event, so it is framed as a plan already
-    // under way rather than a request: presented bare beside each reply, it read as "start
-    // now", and llama3.1:8b re-sent the whole script on every reply (see
-    // `ExchangeHistory::render_for_client`, which shows what was already done).
+    // The instruction is asked about again on every event; what says how far it has got is the
+    // history block above the event (`ExchangeHistory::render_for_client`), not this prompt.
+    // A paragraph here framing the instruction as a plan under way was measured and removed:
+    // with llama3.1:8b it made the connect event — which has no history yet — come back as an
+    // echoed transcript or no actions at all in 5 of 8 seeded runs, where the bare
+    // instruction had started the script in 8 of 8.
     let system_prompt = format!(
-        "You are controlling a network client ({}). Your instruction: {}\n\
-         That instruction was given once, when the client started. It is the plan for the whole \
-         session, not a new request on each event. Above each event you are shown what has \
-         already happened in this session and what you already did. Never repeat a step that \
-         is already done: do the next step that is not, and once every step is done answer \
-         {{\"actions\": []}} (or disconnect, if the instruction says to finish).\n\n\
+        "You are controlling a network client ({}). Your instruction: {}\n\n\
          # Response Format\n\
          Return ONE JSON object {{\"actions\": [ ... ]}} holding every action to perform now, in \
          order. Return {{\"actions\": []}} to do nothing now{}. JSON only — no prose, no code \
@@ -1261,24 +1258,9 @@ async fn call_llm_for_client_inner(
 
     // What has already happened on this client's session, ahead of what it is answering now.
     // Rendered with no `Event:`/`Data:` labels, so the current event stays the only one.
-    //
-    // With history on and nothing recorded yet, say so: told "never repeat a step that is
-    // already done" with no record beneath it, llama3.1:8b answered a redis client's connect
-    // event with no actions at all, as though the script had already run.
     let user_message = match crate::state::ClientId::from_string(&client_id) {
         Some(cid) => match state.render_client_history(cid).await {
             Some(history) => format!("{}\n{}", history, user_message),
-            None if state
-                .client_conversation_settings(cid)
-                .await
-                .is_some_and(|(entries, _)| entries > 0) =>
-            {
-                format!(
-                    "Nothing has happened in this session yet: start your instruction from its \
-                     first step.\n{}",
-                    user_message
-                )
-            }
             None => user_message,
         },
         None => user_message,

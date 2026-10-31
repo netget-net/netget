@@ -117,11 +117,12 @@ impl ExchangeHistory {
     /// [`Self::render`] for a client, which reads its history as progress through its own
     /// instruction rather than as requests it answered.
     ///
-    /// A client's instruction is a script ("send PING, then GET mykey, then stop"), and the
-    /// model is asked again on every reply. Shown the instruction, the server-side header and
-    /// "answered with", llama3.1:8b read each reply as the cue to start over and re-sent PING
-    /// and GET up to 27 times before it stopped (6 of 8 seeded runs repeated). Each entry here
-    /// says what the client did, and the header says that all of it is done.
+    /// A client's instruction is a script ("send PING, then GET mykey, then stop") and the
+    /// model is asked again on every reply, so its record is worded as what the client did and
+    /// the header says all of it is done. That is the accurate wording, not a cure: llama3.1:8b
+    /// re-sends the script on replies with or without it (6 of 8 seeded runs before, 6 of 8
+    /// after, 31 October 2026), with both commands listed as already sent directly above the
+    /// reply it was answering.
     pub fn render_for_client(&self, limit: u16) -> Option<String> {
         self.render_with(limit, Perspective::Client)
     }
@@ -163,7 +164,9 @@ impl ExchangeHistory {
             }
             Perspective::Client => {
                 ". All of it is done: every action listed was already sent, so do not send it \
-                 again. Continue your instruction from where this leaves off.\n"
+                 again. Your instruction is the plan for the whole session, not a new request \
+                 on each event: continue it from where this leaves off, and once every step of \
+                 it is done answer with no actions (or disconnect, if it says to finish).\n"
             }
         });
         for entry in chosen {

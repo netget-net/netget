@@ -832,7 +832,6 @@ async fn execute_script_handler(
 /// Actions with no references are passed through untouched. An unresolvable reference is a
 /// hard error rather than a silent `null`, so a typo'd field name cannot look like it works.
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
 async fn execute_static_handler(
     state: &AppState,
     server_id: ServerId,
