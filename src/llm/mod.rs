@@ -6,6 +6,7 @@
 pub mod action_helper;
 pub mod actions; // Centralized helper for LLM calls
 pub mod agent_queue; // Agent-answered LLM request queue (MCP --llm-agent mode)
+pub mod answer_reuse; // Memoisation and record -> rules: reusing the model's answers
 pub mod bridge; // Requests handed to a host (the browser page) that owns the model
 pub mod circuit_breaker; // Fail-fast guard for an unreachable LLM backend
 pub mod conversation; // Conversation-based LLM interaction
@@ -20,6 +21,7 @@ pub mod prompt;
 pub mod rate_limiter; // Rate limiting for LLM calls (concurrency + token throttling)
 pub mod reference_parser; // XML reference parser for large content blocks
 pub mod response_handler;
+pub mod rule_export; // Turning the access log's model answers into event_handlers
 pub mod template_engine; // Handlebars template engine // Model selection utilities // Keep the old client module for reference
 
 // Embedded LLM inference (feature-gated)

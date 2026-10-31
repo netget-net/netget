@@ -689,22 +689,16 @@ async fn handle_http_request_inner(
             }
 
             // `build_response` decides this protocol's terminal outcome, and it decides it
-            // silently. It lives in `src/server/http_common/handler.rs`, shared with
-            // ipp/openapi/…, so the tag has to be applied here at the call site instead.
+            // silently. It lives in `src/server/http_common/handler.rs`, so the tag is applied
+            // here at the call site instead.
             //
             // `produced_http_response` is `build_response`'s own predicate, exported so this
             // line cannot drift from the bytes that actually go out: a tag claiming the model
             // answered while the peer received the fallback would be worse than no tag. When
-            // it is false the model produced no usable `send_http_response`, and the server
-            // answers anyway — with the configured `default_response` if there is one, and
-            // otherwise with a blank **200**.
-            //
-            // **That last branch is a fail-open**, recorded here rather than repaired in
-            // this pass: an unreachable model, a model that answered with nothing, and a
-            // model that deliberately answered `200 OK` are three different things that all
-            // reach the peer as `200 OK` with an empty body. `decision=fail_closed_*` would
-            // be a lie on that path, so the silence is tagged as the model's and the
-            // fallback that was actually used is named in the same line.
+            // it is false the model produced no usable `send_http_response`, and the peer gets
+            // the configured `default_response` if there is one — a deliberate answer the
+            // operator wrote for this case — and otherwise a `500`: nothing answered the
+            // request, so nothing may claim it succeeded.
             let produced_response = crate::server::http_common::handler::produced_http_response(
                 &execution_result.protocol_results,
             );
@@ -715,11 +709,6 @@ async fn handle_http_request_inner(
                 .collect::<Vec<_>>()
                 .join("; ");
             let has_default_response = filter.default_response_parts().is_some();
-            let fallback = if has_default_response {
-                "default_response"
-            } else {
-                "blank_200"
-            };
             let subject = format!(
                 "HTTP {} {} (connection {})",
                 request_data.method, request_data.uri, connection_id
@@ -728,12 +717,21 @@ async fn handle_http_request_inner(
             if produced_response {
                 log.info(format!("{} decision=model_answer", subject));
             } else if !failure_summary.is_empty() {
-                log.error(format!(
-                    "{} decision=model_bad_action fallback={}: the model answered but its \
-                     action(s) could not be executed ({}), and the peer is still given an \
-                     affirmative response",
-                    subject, fallback, failure_summary
-                ));
+                if has_default_response {
+                    log.error(format!(
+                        "{} decision=model_bad_action fallback=default_response: the model \
+                         answered but its action(s) could not be executed ({}), so the server's \
+                         configured default_response was sent",
+                        subject, failure_summary
+                    ));
+                } else {
+                    log.error(format!(
+                        "{} decision=fail_closed_bad_action -> 500: the model answered but its \
+                         action(s) could not be executed ({}) and no default_response is \
+                         configured",
+                        subject, failure_summary
+                    ));
+                }
             } else if has_default_response {
                 log.warn(format!(
                     "{} decision=model_silent fallback=default_response: the model produced no \
@@ -742,9 +740,8 @@ async fn handle_http_request_inner(
                 ));
             } else {
                 log.warn(format!(
-                    "{} decision=model_silent fallback=blank_200: the model produced no \
-                     send_http_response and no default_response is configured, so the peer is \
-                     answered 200 with an empty body (fail-open)",
+                    "{} decision=fail_closed_no_action -> 500: the model produced no \
+                     send_http_response and no default_response is configured",
                     subject
                 ));
             }
