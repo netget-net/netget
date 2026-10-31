@@ -127,6 +127,35 @@ pub enum ScriptingMode {
 }
 
 impl ScriptingMode {
+    /// Every scripting mode, in the order the CLI help lists them.
+    pub const ALL: [ScriptingMode; 6] = [
+        Self::On,
+        Self::Off,
+        Self::Python,
+        Self::JavaScript,
+        Self::Go,
+        Self::Perl,
+    ];
+
+    /// Every spelling a scripting mode may be written in — `-e`/`--env` on the command line
+    /// and `scripting_mode` in the settings file both read through [`ScriptingMode::parse`],
+    /// which accepts exactly these (case-insensitively). One table, so a value one surface
+    /// writes is a value the other reads.
+    pub const SPELLINGS: &'static [(&'static str, ScriptingMode)] = &[
+        ("on", Self::On),
+        ("auto", Self::On),
+        ("off", Self::Off),
+        ("llm", Self::Off),
+        ("python", Self::Python),
+        ("py", Self::Python),
+        ("javascript", Self::JavaScript),
+        ("js", Self::JavaScript),
+        ("node", Self::JavaScript),
+        ("go", Self::Go),
+        ("golang", Self::Go),
+        ("perl", Self::Perl),
+    ];
+
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::On => "On",
@@ -136,6 +165,44 @@ impl ScriptingMode {
             Self::Go => "Go",
             Self::Perl => "Perl",
         }
+    }
+
+    /// The canonical spelling: what the settings file stores, and the first entry for this
+    /// mode in [`Self::SPELLINGS`].
+    pub fn config_name(&self) -> &'static str {
+        match self {
+            Self::On => "on",
+            Self::Off => "off",
+            Self::Python => "python",
+            Self::JavaScript => "javascript",
+            Self::Go => "go",
+            Self::Perl => "perl",
+        }
+    }
+
+    /// Parse any spelling in [`Self::SPELLINGS`], ignoring case and surrounding whitespace.
+    /// The error names the value and lists every accepted spelling.
+    pub fn parse(value: &str) -> Result<Self, String> {
+        let wanted = value.trim().to_lowercase();
+        Self::SPELLINGS
+            .iter()
+            .find(|(name, _)| *name == wanted)
+            .map(|(_, mode)| *mode)
+            .ok_or_else(|| {
+                format!(
+                    "Invalid scripting environment: '{}'\n\
+                     Valid options: on (auto), off (llm), python (py), javascript (js, node), go (golang), perl",
+                    value
+                )
+            })
+    }
+}
+
+impl std::str::FromStr for ScriptingMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s)
     }
 }
 
