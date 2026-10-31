@@ -192,8 +192,10 @@ async fn a_frame_of_exactly_the_buffer_cap_is_answered_and_one_byte_more_is_not(
     // last byte arrives in the read that completes the frame, so this is the case a check on
     // the *unfinished* buffer alone cannot see.
     let first = MAX_PENDING_FRAME_BYTES / 2;
-    let overhead = bulks(&[first, 0]).len() - first;
-    let over = bulks(&[first, MAX_PENDING_FRAME_BYTES + 1 - overhead - first]);
+    // `*2\r\n` and the first bulk string, then `$<L>\r\n<L bytes>\r\n` with L's eight digits.
+    let ahead = bulks(&[first]).len();
+    let second = MAX_PENDING_FRAME_BYTES + 1 - ahead - (1 + 8 + 2 + 2);
+    let over = bulks(&[first, second]);
     assert_eq!(over.len(), MAX_PENDING_FRAME_BYTES + 1);
     let (out, closed) = exchange(port, over, Duration::from_secs(60)).await;
     assert_eq!(
