@@ -15,7 +15,6 @@ use crate::state::app_state::AppState;
 use crate::state::ServerId;
 use actions::DOH_QUERY_EVENT;
 use anyhow::{Context, Result};
-use hickory_proto::op::Message as DnsMessage;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
 use hyper::server::conn::http2;
@@ -539,7 +538,7 @@ impl DohServer {
             .await;
 
         // Parse DNS query
-        let dns_message = match DnsMessage::from_vec(&dns_bytes) {
+        let dns_message = match crate::utils::dns_screen::decode_dns_message(&dns_bytes) {
             Ok(msg) => msg,
             Err(e) => {
                 Log::new(Some(&status_tx)).warn(format!("Failed to parse DoH DNS message: {}", e));
