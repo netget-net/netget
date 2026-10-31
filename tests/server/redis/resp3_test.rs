@@ -323,3 +323,75 @@ async fn redis_py_negotiates_resp3_with_credentials_and_parses_every_type() {
     );
     assert_eq!(r["resp2 NG.PROTO"], 2, "{r}");
 }
+
+/// A third RESP3 parser, and the second for the big number: redis-cli 7.0 cannot render one
+/// ("Unknown reply type: 13"), so without redis-rs that type rested on redis-py alone.
+/// redis-rs negotiates with `HELLO 3 AUTH` from the URL's credentials and reads each reply into
+/// its own `Value` variant, so a type byte the server got wrong is a wrong variant here.
+#[tokio::test]
+async fn redis_rs_reads_every_resp3_type_including_the_big_number() {
+    use redis::{Value, VerbatimFormat};
+
+    let (_state, port) = redis_server().await;
+    let client = redis::Client::open(
+        format!("redis://ada:lovelace@127.0.0.1:{port}/?protocol=resp3").as_str(),
+    )
+    .unwrap();
+    let mut con = client
+        .get_multiplexed_async_connection()
+        .await
+        .expect("redis-rs negotiated RESP3 with credentials");
+    let mut get = async |name: &str| -> Value {
+        redis::cmd(name)
+            .query_async(&mut con)
+            .await
+            .unwrap_or_else(|e| panic!("{name}: {e}"))
+    };
+
+    match get("NG.BIG").await {
+        Value::BigNumber(n) => {
+            assert_eq!(n.to_string(), "3492890328409238509324850943850943825024385")
+        }
+        other => panic!("NG.BIG is not a RESP3 big number to redis-rs: {other:?}"),
+    }
+    match get("NG.MAP").await {
+        Value::Map(entries) => {
+            assert_eq!(entries.len(), 6, "{entries:?}");
+            assert_eq!(
+                entries[1],
+                (Value::BulkString(b"visits".to_vec()), Value::Int(3))
+            );
+            assert_eq!(
+                entries[2],
+                (Value::BulkString(b"ratio".to_vec()), Value::Double(0.5))
+            );
+            assert_eq!(
+                entries[3],
+                (Value::BulkString(b"admin".to_vec()), Value::Boolean(true))
+            );
+            assert_eq!(
+                entries[5],
+                (Value::BulkString(b"none".to_vec()), Value::Nil)
+            );
+        }
+        other => panic!("NG.MAP is not a RESP3 map to redis-rs: {other:?}"),
+    }
+    assert_eq!(
+        get("NG.SET").await,
+        Value::Set(vec![
+            Value::BulkString(b"red".to_vec()),
+            Value::BulkString(b"green".to_vec())
+        ])
+    );
+    assert_eq!(get("NG.DOUBLE").await, Value::Double(3.25));
+    assert_eq!(get("NG.BOOL").await, Value::Boolean(true));
+    assert_eq!(
+        get("NG.VERBATIM").await,
+        Value::VerbatimString {
+            format: VerbatimFormat::Text,
+            text: "# Server".to_string()
+        }
+    );
+    assert_eq!(get("NG.NULL").await, Value::Nil);
+    assert_eq!(get("NG.PROTO").await, Value::Int(3));
+}

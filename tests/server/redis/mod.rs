@@ -1,8 +1,11 @@
 mod cluster_test;
 mod connection_bounds_test;
 mod e2e_test;
+mod failure_decision_test;
+mod frame_bounds_test;
 mod keys_oracle_test;
 mod llm_failure_test;
+mod pcap_oracle_test;
 mod peer_inject_test;
 mod pubsub_bounds_test;
 mod pubsub_test;
@@ -10,3 +13,4 @@ mod real_client_test;
 mod resp3_test;
 mod resp_depth_test;
 mod resp_framing_test;
+mod verb_coverage_test;

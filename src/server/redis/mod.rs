@@ -13,7 +13,7 @@ use crate::protocol::Event;
 use crate::server::connection::ConnectionId;
 use crate::state::app_state::AppState;
 use crate::utils::redis_keys::{key_hash_slot, slot_keys};
-use crate::utils::resp::{scan_resp2_frame, RespLength, RespLimits, RespScan};
+use crate::utils::resp::{RespLength, RespLimits, RespScan, RespScanner};
 use actions::{
     encode_error, encode_integer, RedisProtocol, ACCEPT_SUBSCRIPTION, DELIVER_MESSAGE,
     REDIS_COMMAND_EVENT, REDIS_PUBLISH_EVENT, REDIS_SUBSCRIBE_EVENT,
@@ -31,19 +31,25 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tracing::{debug, error, trace, warn};
 
-/// Maximum bytes we will buffer for a single, still-incomplete RESP frame.
+/// The largest RESP frame one request may be, in bytes. A frame past it is refused and the
+/// connection closed — as soon as its unfinished part passes the cap, or, if its last byte
+/// arrives in the read that completes it, when it completes.
 ///
-/// `decode()` returns `Ok(None)` while a frame is incomplete, so without this cap a client
-/// that announces a huge bulk string (`$2000000000\r\n`) and then stalls would make the
-/// connection buffer grow without bound. Real Redis caps a bulk string at 512 MB; 64 MB is
-/// far more than any LLM-authored command needs.
+/// A frame is buffered until it is complete, so without this cap a client that announces a
+/// long frame and then stalls would make the connection buffer grow without bound. Real Redis
+/// caps a bulk string at 512 MB; 64 MiB is far more than any LLM-authored command needs.
 pub const MAX_PENDING_FRAME_BYTES: usize = 64 * 1024 * 1024;
 
+/// The largest `$N` a frame may declare: the most payload one request can carry inside
+/// [`MAX_PENDING_FRAME_BYTES`] with the least framing a request can have around it — `*1\r\n`,
+/// `$N\r\n` with N's eight digits, and the payload's own `\r\n`, 17 bytes. A larger `$N` can
+/// never complete, so it is refused on its header line instead of after the peer has filled
+/// the buffer; one this size or smaller is waited for.
+pub const MAX_BULK_LEN: usize = MAX_PENDING_FRAME_BYTES - 17;
+
 /// What a frame may declare before `decode` is allowed to see it: [`crate::utils::resp`]'s
-/// depth and element bounds, and a bulk string no longer than the buffer that must hold it —
-/// a `$N` past [`MAX_PENDING_FRAME_BYTES`] can never complete, so it is refused on its header
-/// line instead of after the peer has filled 64 MiB.
-const RESP_LIMITS: RespLimits = RespLimits::with_max_bulk_len(MAX_PENDING_FRAME_BYTES);
+/// depth and element bounds, and [`MAX_BULK_LEN`].
+const RESP_LIMITS: RespLimits = RespLimits::with_max_bulk_len(MAX_BULK_LEN);
 
 /// How long to wait for the first byte of the first command from a peer that has only
 /// connected.
@@ -96,7 +102,7 @@ const IDLE_BETWEEN_COMMANDS_TIMEOUT: std::time::Duration = std::time::Duration::
 ///
 /// [`accept_bounded::DEFAULT_MAX_CONNECTIONS`]; nothing about RESP makes a connection more or
 /// less expensive than the default assumes.
-const MAX_CONNECTIONS: usize = crate::server::accept_bounded::DEFAULT_MAX_CONNECTIONS;
+pub const MAX_CONNECTIONS: usize = crate::server::accept_bounded::DEFAULT_MAX_CONNECTIONS;
 
 /// What a peer over [`MAX_CONNECTIONS`] is told before the socket closes.
 ///
@@ -554,6 +560,7 @@ impl RedisHandler {
         };
 
         let mut buffer = Vec::new();
+        let mut scanner = RespScanner::new();
         let mut answered_one = false;
 
         loop {
@@ -622,24 +629,21 @@ impl RedisHandler {
                     .await;
             }
 
-            if buffer.len() > MAX_PENDING_FRAME_BYTES {
-                conn.log.error(format!(
-                    "Redis client {} exceeded the {} byte frame buffer limit without completing a frame; closing",
-                    self.connection_id, MAX_PENDING_FRAME_BYTES
-                ));
-                self.refuse(&conn, "ERR Protocol error: invalid multibulk length")
-                    .await;
-                return Ok(());
-            }
-
             // Try to decode RESP frames
             let mut offset = 0;
             while offset < buffer.len() {
                 // The frame's shape is walked iteratively before `decode` sees it, because
                 // `decode` recurses once per nested array with no limit and a stack overflow
                 // aborts the whole process (`src/utils/resp.rs`). Only a frame the scan has
-                // seen end is decoded.
-                match scan_resp2_frame(&buffer[offset..], &RESP_LIMITS) {
+                // seen end is decoded. The scanner resumes where the previous read left it, so
+                // an unfinished frame's bytes are walked once rather than once per read.
+                match scanner.scan(&buffer[offset..], &RESP_LIMITS) {
+                    RespScan::Complete { consumed } if consumed > MAX_PENDING_FRAME_BYTES => {
+                        // Its last byte arrived in the read that completed it, so the check on
+                        // the unfinished remainder below never saw it pass the cap.
+                        self.refuse_oversized_frame(&conn).await;
+                        return Ok(());
+                    }
                     RespScan::Complete { .. } => {}
                     RespScan::Incomplete => break,
                     RespScan::TooDeep { limit } => {
@@ -706,7 +710,27 @@ impl RedisHandler {
 
             // Remove processed bytes from buffer
             buffer.drain(..offset);
+
+            // What is left is one unfinished frame. It is measured after the complete frames in
+            // front of it have been handled, so a pipelined command arriving behind a frame
+            // near the cap is never counted against it.
+            if buffer.len() > MAX_PENDING_FRAME_BYTES {
+                self.refuse_oversized_frame(&conn).await;
+                return Ok(());
+            }
         }
+    }
+
+    /// The refusal for a frame larger than [`MAX_PENDING_FRAME_BYTES`]. Without it a client
+    /// announcing a long frame and stalling would grow the connection's buffer without bound.
+    async fn refuse_oversized_frame(&self, conn: &Conn<'_>) {
+        conn.log.error(format!(
+            "Redis connection {} decision=fail_closed_frame_too_large: frame exceeds the {} byte \
+             buffer limit; refusing and closing",
+            self.connection_id, MAX_PENDING_FRAME_BYTES
+        ));
+        self.refuse(conn, "ERR Protocol error: invalid multibulk length")
+            .await;
     }
 
     /// One decoded command, from routing to the reply.
@@ -862,12 +886,19 @@ impl RedisHandler {
             // until its own timeout. `decision=` tags mirror `src/server/radius/`: on the wire
             // a refusal, an outage and a model that answered with nothing usable all look like
             // "-ERR something", so only the log can tell them apart.
-            warn!(
+            conn.log.warn(format!(
                 "Redis connection {} decision=fail_closed_no_action command='{}': \
                  no response action produced, replying with an error",
                 self.connection_id, command_for_log
-            );
+            ));
             response = encode_error("ERR no response produced for this command");
+        } else if !answer.failed && response.starts_with(b"-") {
+            // The model refused the command with `redis_error`. The peer sees `-…` exactly as
+            // it does for an outage; the log is where the two differ.
+            conn.log.info(format!(
+                "Redis connection {} decision=model_reject command='{}'",
+                self.connection_id, command_for_log
+            ));
         }
         if !response.is_empty() {
             self.write_reply(conn, response).await?;

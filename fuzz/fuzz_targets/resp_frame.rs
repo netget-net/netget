@@ -2,7 +2,7 @@
 //! `redis_protocol::resp2::decode`, which recurses once per nested array with no depth limit.
 //! It stands between the first bytes of an unauthenticated Redis connection and that decoder.
 //!
-//! Four properties are asserted, and the third is the one the guard exists for:
+//! Five properties are asserted, and the third is the one the guard exists for:
 //!
 //! 1. The guard never panics and never recurses, whatever bytes it is given.
 //! 2. It is deterministic — the same bytes produce the same verdict twice.
@@ -13,6 +13,12 @@
 //!    The guard's module doc claims it follows the decoder's grammar exactly; this is the
 //!    check on that claim. Both verdicts are only reached with nesting inside the bound, so
 //!    decoding them here is safe.
+//! 5. **Fed in pieces, a `RespScanner` reaches the same verdict.** The Redis server scans a
+//!    frame as it arrives and resumes where the last read stopped rather than starting again,
+//!    which is what keeps an unfinished frame from costing the sum of its prefixes. Resuming
+//!    is only safe if it can never change the answer, so the input is fed in steps of one to
+//!    eight bytes and the first verdict that is not `Incomplete` must be the one-shot verdict
+//!    on the whole input.
 //!
 //! `TooDeep` and `TooLong` are never decoded: those are the inputs the guard is there to keep
 //! away from the decoder.
@@ -20,11 +26,11 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use netget::utils::resp::{scan_resp2_frame, RespLimits, RespScan};
+use netget::utils::resp::{scan_resp2_frame, RespLimits, RespScan, RespScanner};
 use redis_protocol::resp2::decode::decode;
 
-/// The Redis server's own limits (`MAX_PENDING_FRAME_BYTES` is 64 MiB).
-const LIMITS: RespLimits = RespLimits::with_max_bulk_len(64 * 1024 * 1024);
+/// The Redis server's own limits.
+const LIMITS: RespLimits = RespLimits::with_max_bulk_len(netget::server::redis::MAX_BULK_LEN);
 
 fuzz_target!(|data: &[u8]| {
     let verdict = scan_resp2_frame(data, &LIMITS);
@@ -33,6 +39,23 @@ fuzz_target!(|data: &[u8]| {
         verdict,
         scan_resp2_frame(data, &LIMITS),
         "scan_resp2_frame disagreed with itself"
+    );
+
+    // Once a prefix is decided, no longer input can change the verdict, so the first decided
+    // prefix must agree with the whole.
+    let step = usize::from(data.first().copied().unwrap_or(0) % 8) + 1;
+    let mut scanner = RespScanner::new();
+    let mut end = 0;
+    let resumed = loop {
+        end = (end + step).min(data.len());
+        let v = scanner.scan(&data[..end], &LIMITS);
+        if v != RespScan::Incomplete || end == data.len() {
+            break v;
+        }
+    };
+    assert_eq!(
+        resumed, verdict,
+        "a scanner resumed across {step}-byte reads disagreed with a one-shot scan"
     );
 
     match verdict {
