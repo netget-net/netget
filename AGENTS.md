@@ -552,10 +552,10 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
     rather than an extra LLM call; and nginx's echo quoting the previous response back made a
     looser rule answer both responses until the follow-up depth cap stopped the loop.
 
-  **Seventeen as of 15 October 2026 (17 Beta — re-derive with `--side client`).**
+  **Eighteen as of 31 October 2026 (18 Beta — re-derive with `--side client`).**
   Since the thirteen below: `kafka`, `dns` and `rdp` arrived Beta with the protocol-expansion
-  pairs, `spark` against a real Apache Spark's live driver UI and History Server, and `yarn`
-  against a real Hadoop ResourceManager and NodeManager. `ssh` went
+  pairs, `spark` against a real Apache Spark's live driver UI and History Server, `yarn`
+  against a real Hadoop ResourceManager and NodeManager, and `ngap`. `ssh` went
   the other way on 2 October 2026: its SFTP operations shipped without a second independent SFTP
   server, pcap oracle or fuzz target, and its `metadata()` says so.
 
@@ -615,6 +615,21 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
   as a binary peer, since the helper, not the test file, is what spawns it. Re-derived
   26 September 2026 after the promotions above: Beta 9, Experimental 89 — 55 self-served, 9
   wrong peer, 25 with no peer, and none left in either "real peer" group.
+
+  **It also follows a peer whose program is computed rather than spelled**, which it did not
+  until 31 October 2026, and the miss was large: `hdfs` (`RealServer::builder(&hdfs, …)` with
+  `hdfs = home.join("bin/hdfs")` under `NETGET_HADOOP_HOME`), `pfcp` (`Command::new(peer)` with
+  `peer` read from `NETGET_PFCP_GO_PEER`) and `devp2p` (geth and reth started inside
+  `tests/helpers/ethereum.rs`) were reported as having no peer while each hard-fails without
+  one. `program_names` follows the spawn argument back through `let` bindings to a literal in a
+  naming position (a `.join` path, a lookup helper's argument, an environment variable or its
+  fallback) and never invents a name; an environment variable naming a runtime or a directory
+  (`*_PYTHON`, `*_HOME`) is not a peer. For a client, a `RealServer::builder` inside a
+  `tests/helpers/` module the test uses counts too — a helper's `Command::new` does not, since
+  `pcap_oracle` runs tshark. `smb` is not this case: its only real-peer tests are `#[ignore]`d
+  and expect an externally run Samba, so "no peer" is right. Re-derived 31 October 2026: Beta
+  18, Experimental 222 — 75 with a real peer whose evidence runs (32 of them newly seen), 1
+  unreachable, 21 wrong peer, 53 self-served, 72 with no peer.
 - **Experimental** — LLM-authored or newly implemented, not fully reviewed. The overwhelming
   majority (107 of the 158 `src/server/*/actions.rs` the script below walks, re-derived
   16 September 2026). Note the script
