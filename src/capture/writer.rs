@@ -5,6 +5,11 @@
 //! blocking the connection that produced it. TCP sequence numbers still advance over a
 //! dropped segment, so Wireshark reports the gap ("previous segment not captured") instead
 //! of reassembling a stream that never happened.
+//!
+//! The browser build has no file system, so there `CaptureWriter::open` refuses and the
+//! writing half of this module is never reached; it still compiles, so the protocols that
+//! record into a capture need no `cfg` of their own.
+#![cfg_attr(target_arch = "wasm32", allow(dead_code, unused_imports))]
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
