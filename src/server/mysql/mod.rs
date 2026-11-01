@@ -250,7 +250,10 @@ impl MysqlServer {
                             let reader = packet_limit::PacketLimitReader::new(reader, trip.clone());
                             // Above the limiter, so a refused packet never reaches it: a copy
                             // of each prepared-statement command, for `on_execute` to decode
-                            // with a parser that cannot panic. See `command_tap`.
+                            // with a parser that cannot panic. It must stay the reader the
+                            // crate reads from directly, because it is also what keeps every
+                            // read inside one packet, and the crate's reader parses pipelined
+                            // packets out of freed memory otherwise. See `command_tap`.
                             let mut reader =
                                 command_tap::CommandTapReader::new(reader, handler.command_tap());
                             // `run_on` takes the writer **by value**, and its `W` is only

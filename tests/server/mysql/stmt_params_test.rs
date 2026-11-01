@@ -501,3 +501,141 @@ async fn a_fragmented_execute_is_captured_whole() {
     assert_eq!(got.len(), body.len() - 1);
     assert_eq!(&got[..], &body[1..]);
 }
+
+// ---------------------------------------------------------------------------------------------
+// opensrv-mysql beneath the tap: one packet per read
+// ---------------------------------------------------------------------------------------------
+
+struct ProbeShim;
+
+#[async_trait::async_trait]
+impl<W: tokio::io::AsyncWrite + Send + Unpin> opensrv_mysql::AsyncMysqlShim<W> for ProbeShim {
+    type Error = std::io::Error;
+
+    async fn on_prepare<'a>(
+        &'a mut self,
+        _query: &'a str,
+        info: opensrv_mysql::StatementMetaWriter<'a, W>,
+    ) -> std::io::Result<()> {
+        static PARAMS: std::sync::LazyLock<Vec<opensrv_mysql::Column>> =
+            std::sync::LazyLock::new(|| {
+                (0..2)
+                    .map(|_| opensrv_mysql::Column {
+                        table: String::new(),
+                        column: "?".into(),
+                        coltype: opensrv_mysql::ColumnType::MYSQL_TYPE_VAR_STRING,
+                        colflags: opensrv_mysql::ColumnFlags::empty(),
+                    })
+                    .collect()
+            });
+        info.reply(1, &PARAMS[..], &[]).await
+    }
+
+    async fn on_execute<'a>(
+        &'a mut self,
+        _id: u32,
+        _params: opensrv_mysql::ParamParser<'a>,
+        results: opensrv_mysql::QueryResultWriter<'a, W>,
+    ) -> std::io::Result<()> {
+        results
+            .completed(opensrv_mysql::OkResponse {
+                affected_rows: 9,
+                ..Default::default()
+            })
+            .await
+    }
+
+    async fn on_close(&mut self, _stmt: u32) {}
+
+    async fn on_query<'a>(
+        &'a mut self,
+        _query: &'a str,
+        results: opensrv_mysql::QueryResultWriter<'a, W>,
+    ) -> std::io::Result<()> {
+        results
+            .completed(opensrv_mysql::OkResponse::default())
+            .await
+    }
+}
+
+async fn probe_read<R: tokio::io::AsyncRead + Unpin>(r: &mut R) -> Option<(u8, Vec<u8>)> {
+    let mut h = [0u8; 4];
+    tokio::time::timeout(std::time::Duration::from_millis(500), r.read_exact(&mut h))
+        .await
+        .ok()?
+        .ok()?;
+    let n = u32::from_le_bytes([h[0], h[1], h[2], 0]) as usize;
+    let mut p = vec![0u8; n];
+    r.read_exact(&mut p).await.ok()?;
+    Some((h[3], p))
+}
+
+/// Drive a bare `opensrv-mysql` server over an in-memory pipe, the way the MySQL server does:
+/// with `CommandTapReader` directly beneath it.
+///
+/// The client writes two `COM_STMT_SEND_LONG_DATA` chunks back to back, which lands them in
+/// one read for a reader that does not split them. `opensrv-mysql`'s `PacketReader` then
+/// parses the first from a buffer it has just freed (see `command_tap`'s module docs); here
+/// that came back as a stray OK packet for a command that has no reply, after which every
+/// reply was one behind. Through the tap no read crosses a packet boundary, so the chunks get
+/// no reply at all and the execute after them gets its own.
+#[tokio::test]
+async fn pipelined_commands_reach_opensrv_one_packet_per_read() {
+    use tokio::io::AsyncWriteExt;
+    let (client, server) = tokio::io::duplex(1 << 16);
+    let (sr, sw) = tokio::io::split(server);
+    let sr = CommandTapReader::new(sr, Arc::new(CommandTap::default()));
+    tokio::spawn(opensrv_mysql::AsyncMysqlIntermediary::run_on(
+        ProbeShim, sr, sw,
+    ));
+    let (mut cr, mut cw) = tokio::io::split(client);
+
+    probe_read(&mut cr).await.expect("greeting");
+    let caps: u32 = 0x1 | 0x200 | 0x2000 | 0x8000 | 0x8_0000 | 0x100_0000;
+    let mut resp = caps.to_le_bytes().to_vec();
+    resp.extend_from_slice(&(16u32 << 20).to_le_bytes());
+    resp.push(33);
+    resp.extend_from_slice(&[0u8; 23]);
+    // The plugin opensrv's default shim offers, so it sends no AuthSwitchRequest.
+    resp.extend_from_slice(b"root\0\0mysql_native_password\0");
+    cw.write_all(&packet(1, &resp)).await.unwrap();
+    assert_eq!(
+        probe_read(&mut cr).await.map(|r| r.1[0]),
+        Some(0x00),
+        "auth OK"
+    );
+
+    cw.write_all(&packet(0, b"\x16SELECT ?, ?")).await.unwrap();
+    for what in ["prepare OK", "parameter 1", "parameter 2"] {
+        probe_read(&mut cr).await.expect(what);
+    }
+
+    let exec_head = b"\x17\x01\x00\x00\x00\x00\x01\x00\x00\x00\x00\x01\x08\x00\xfd\x00";
+    let mut exec = exec_head.to_vec();
+    exec.extend_from_slice(&7i64.to_le_bytes());
+    exec.extend_from_slice(b"\x03bob");
+    cw.write_all(&packet(0, &exec)).await.unwrap();
+    assert_eq!(
+        probe_read(&mut cr).await.map(|r| r.1),
+        Some(vec![0, 9, 0, 0, 0, 0, 0]),
+        "the first execute's own OK"
+    );
+
+    // Two long-data chunks and the execute that uses them, in a single write.
+    let mut burst = packet(0, b"\x18\x01\x00\x00\x00\x01\x00hello");
+    burst.extend(packet(0, b"\x18\x01\x00\x00\x00\x01\x00world"));
+    let mut exec = exec_head.to_vec();
+    exec.extend_from_slice(&9i64.to_le_bytes());
+    burst.extend(packet(0, &exec));
+    cw.write_all(&burst).await.unwrap();
+
+    let mut replies = Vec::new();
+    while let Some(r) = probe_read(&mut cr).await {
+        replies.push(r);
+    }
+    assert_eq!(
+        replies,
+        vec![(1, vec![0, 9, 0, 0, 0, 0, 0])],
+        "long data has no reply; only the execute is answered"
+    );
+}

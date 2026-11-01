@@ -30,6 +30,24 @@
 //! The shim then checks the statement id of what it pops against the one the crate gave it,
 //! and refuses rather than decode a packet that is not the one being executed.
 //!
+//! # One packet per read
+//!
+//! The reader also hands the crate **at most the rest of one packet per read** — the header,
+//! then the payload — and this is a memory-safety fix, not a convenience.
+//! `opensrv-mysql` 0.7.0's `PacketReader::next_async` (`src/packet_reader.rs:131-141`) builds
+//! the slice it parses from `self.bytes` with `slice::from_raw_parts`, and when that read
+//! held more than one packet it runs `self.bytes = rest.to_vec()` before returning the parsed
+//! packet. The assignment frees the buffer the returned packet still points into, so the
+//! first of two pipelined commands is parsed from freed memory. Measured here: a client
+//! sending two `COM_STMT_SEND_LONG_DATA` chunks back to back (as `mysql_async` does) got a
+//! stray OK packet — the allocator had overwritten the freed bytes, the first chunk no longer
+//! parsed, and the crate answered its parse failure with OK — which desynchronised every
+//! reply after it. `COM_STMT_CLOSE` followed by the next command, which a client's statement
+//! cache does routinely, is the same shape. With no read crossing a packet boundary the
+//! remainder is always empty when a packet completes and that branch never runs.
+//! `stmt_params_test.rs::pipelined_commands_reach_opensrv_one_packet_per_read` drives the
+//! crate directly to show it.
+//!
 //! # Bounds
 //!
 //! An execute is copied whole, so its size is bounded by `packet_limit::MAX_PACKET_BYTES`,
@@ -177,7 +195,12 @@ pub struct CommandTapReader<R> {
     /// Whether the next header starts a new logical packet.
     at_packet_start: bool,
     capture: Capture,
+    /// Where each read lands before it is handed up; at most [`MAX_READ_CHUNK`] bytes.
+    scratch: Vec<u8>,
 }
+
+/// Largest single read handed to `opensrv-mysql`.
+const MAX_READ_CHUNK: usize = 64 * 1024;
 
 impl<R> CommandTapReader<R> {
     pub fn new(inner: R, tap: Arc<CommandTap>) -> Self {
@@ -190,6 +213,7 @@ impl<R> CommandTapReader<R> {
             continues: false,
             at_packet_start: true,
             capture: Capture::Skip,
+            scratch: Vec::new(),
         }
     }
 
@@ -314,17 +338,33 @@ impl<R: AsyncRead + Unpin> AsyncRead for CommandTapReader<R> {
         buf: &mut ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
         let this = self.get_mut();
-        let before = buf.filled().len();
-        let res = Pin::new(&mut this.inner).poll_read(cx, buf);
+        // Never more than the rest of the current packet (its header, or its payload): see
+        // "One packet per read" in the module docs.
+        let want = if this.payload_remaining > 0 {
+            this.payload_remaining
+        } else {
+            4 - this.header_len
+        };
+        let limit = want.min(buf.remaining()).min(MAX_READ_CHUNK);
+        if limit == 0 {
+            return Pin::new(&mut this.inner).poll_read(cx, buf);
+        }
+        // Taken out of `self` for the duration, so `observe` can borrow `self` mutably while
+        // the bytes it reads are still in hand.
+        let mut scratch = std::mem::take(&mut this.scratch);
+        if scratch.len() < limit {
+            scratch.resize(limit, 0);
+        }
+        let mut sub = ReadBuf::new(&mut scratch[..limit]);
+        let res = Pin::new(&mut this.inner).poll_read(cx, &mut sub);
+        let n = sub.filled().len();
         if let Poll::Ready(Ok(())) = res {
-            let filled = buf.filled().len();
-            if filled > before {
-                // Copied because `observe` needs `&mut self` while `buf` is borrowed; one
-                // read's worth, bounded by the caller's buffer.
-                let fresh = buf.filled()[before..filled].to_vec();
-                this.observe(&fresh);
+            if n > 0 {
+                buf.put_slice(&scratch[..n]);
+                this.observe(&scratch[..n]);
             }
         }
+        this.scratch = scratch;
         res
     }
 }
