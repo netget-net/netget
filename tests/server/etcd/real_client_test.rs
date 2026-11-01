@@ -173,7 +173,13 @@ async fn etcdctl_completes_put_get_prefix_and_delete() -> E2EResult<()> {
 
     let server = start_netget_server(etcdctl_server()).await?;
     crate::helpers::wait_for_server_listening(&server, Duration::from_secs(30)).await?;
-    let port = server.port;
+    // Every etcdctl process reaches the server through a recording relay, so the pcap oracle
+    // at the end reads each HTTP/2 connection exactly as it crossed.
+    let (relay, streams) = crate::helpers::recording_relay::tcp_relay(
+        format!("127.0.0.1:{}", server.port).parse().unwrap(),
+    )
+    .await;
+    let port = relay.port();
 
     // --- put: the RPC that could not complete at all -----------------------
     //
@@ -246,6 +252,26 @@ async fn etcdctl_completes_put_get_prefix_and_delete() -> E2EResult<()> {
         "1",
         "etcdctl prints the deleted count; the handler said 1"
     );
+
+    // --- the pcap oracle over every connection ------------------------------
+    //
+    // Wireshark's `http2` dissector, with its `grpc` sub-dissector, reads the preface, both
+    // SETTINGS exchanges, HPACK-compressed headers, the length-prefixed messages and the
+    // trailers — independently of grpc-go and of hyper. It has no `rpc.proto`, so it checks
+    // each protobuf message's wire structure rather than its field names.
+    let connections = crate::helpers::recording_relay::recorded(&streams);
+    assert!(
+        connections.len() >= 6,
+        "six etcdctl commands should have crossed the relay, saw {} connections",
+        connections.len()
+    );
+    for chunks in &connections {
+        crate::helpers::recording_relay::replay(
+            crate::helpers::pcap_oracle::PcapOracle::tcp("etcd").also_named("grpc"),
+            chunks,
+        )
+        .assert_clean();
+    }
 
     server.wait_for_mocks(30).await;
     server.verify_mocks().await?;
