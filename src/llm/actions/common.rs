@@ -242,6 +242,10 @@ pub enum CommonAction {
         /// Batch events arriving during a call; omitted = protocol default
         #[serde(default)]
         batching: Option<bool>,
+        /// Packet capture (`src/capture/`): `true`, `false`, or a file name in the capture
+        /// directory. Read from `.netget` files; deliberately not offered to the model.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        capture: Option<crate::capture::CaptureSpec>,
     },
 
     /// Close a specific server
@@ -279,6 +283,10 @@ pub enum CommonAction {
         /// Batch events arriving during a call; omitted = protocol default
         #[serde(default)]
         batching: Option<bool>,
+        /// Packet capture (`src/capture/`): `true`, `false`, or a file name in the capture
+        /// directory. Read from `.netget` files; deliberately not offered to the model.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        capture: Option<crate::capture::CaptureSpec>,
     },
 
     /// Close a specific client

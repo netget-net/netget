@@ -76,6 +76,11 @@ pub struct ServerForm {
     /// ([`crate::protocol::metadata::BatchingMode`]). Applied in place.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub batching: Option<bool>,
+    /// Packet capture (`src/capture/`): `true` writes the instance's traffic to
+    /// `netget-<kind>-<id>-<protocol>.pcap` in the capture directory, a string names the file
+    /// (relative paths are in the capture directory), `false` stops it. Applied in place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture: Option<crate::capture::CaptureSpec>,
     /// Memoise the model's answers: replay its answer to an identical event (less per-request
     /// ids) for this many seconds instead of asking again. `0` turns it off; omitted leaves it
     /// as it is (off on create). Applied in place. See [`crate::llm::answer_reuse`].
@@ -119,6 +124,11 @@ pub struct ClientForm {
     /// ([`crate::protocol::metadata::BatchingMode`]). Applied in place.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub batching: Option<bool>,
+    /// Packet capture (`src/capture/`): `true` writes the instance's traffic to
+    /// `netget-<kind>-<id>-<protocol>.pcap` in the capture directory, a string names the file
+    /// (relative paths are in the capture directory), `false` stops it. Applied in place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture: Option<crate::capture::CaptureSpec>,
     /// Memoise the model's answers for this many seconds; `0` turns it off. See
     /// [`ServerForm::memoize_ttl_secs`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -221,11 +231,34 @@ impl ServerForm {
     /// Create a brand new server from this form. Thin wrapper over the shared
     /// `start_server_from_action` executor — no logic is duplicated.
     pub async fn create(
-        mut self,
+        self,
         state: &AppState,
         status_tx: mpsc::UnboundedSender<String>,
     ) -> Result<ServerId> {
+        self.create_with_origin(state, status_tx, false).await
+    }
+
+    /// [`ServerForm::create`] for a form that came from an action — a replayed `.netget`
+    /// session, which the model can emit too — whose `capture` may only name a file in the
+    /// capture directory.
+    pub async fn create_from_action(
+        self,
+        state: &AppState,
+        status_tx: mpsc::UnboundedSender<String>,
+    ) -> Result<ServerId> {
+        self.create_with_origin(state, status_tx, true).await
+    }
+
+    async fn create_with_origin(
+        mut self,
+        state: &AppState,
+        status_tx: mpsc::UnboundedSender<String>,
+        from_action: bool,
+    ) -> Result<ServerId> {
         crate::protocol::StartupParams::preflight_owned(&mut self.startup_params)?;
+        if let Some(spec) = &self.capture {
+            state.capture.preflight(spec, from_action)?;
+        }
         let memo = crate::llm::answer_reuse::resolve_memo_settings(
             self.memoize_ttl_secs,
             self.memoize_across_connections,
@@ -256,6 +289,10 @@ impl ServerForm {
                 history: self.history,
                 batching: self.batching,
             },
+            crate::capture::CaptureRequest {
+                spec: self.capture,
+                from_action,
+            },
             status_tx,
         )
         .await?;
@@ -270,16 +307,42 @@ impl ClientForm {
     /// Create a brand new client from this form. Thin wrapper over the shared
     /// `start_client_from_action` executor.
     pub async fn create(
+        self,
+        state: &AppState,
+        llm_client: OllamaClient,
+        status_tx: mpsc::UnboundedSender<String>,
+    ) -> Result<ClientId> {
+        self.create_with_origin(state, llm_client, status_tx, false)
+            .await
+    }
+
+    /// [`ClientForm::create`] for a form that came from an action; see
+    /// [`ServerForm::create_from_action`].
+    pub async fn create_from_action(
+        self,
+        state: &AppState,
+        llm_client: OllamaClient,
+        status_tx: mpsc::UnboundedSender<String>,
+    ) -> Result<ClientId> {
+        self.create_with_origin(state, llm_client, status_tx, true)
+            .await
+    }
+
+    async fn create_with_origin(
         mut self,
         state: &AppState,
         llm_client: OllamaClient,
         status_tx: mpsc::UnboundedSender<String>,
+        from_action: bool,
     ) -> Result<ClientId> {
         crate::protocol::StartupParams::preflight_owned(&mut self.startup_params)?;
         let remote_addr = self
             .remote_addr
             .clone()
             .ok_or_else(|| anyhow::anyhow!("remote_addr is required to open a client"))?;
+        if let Some(spec) = &self.capture {
+            state.capture.preflight(spec, from_action)?;
+        }
         let memo = crate::llm::answer_reuse::resolve_memo_settings(
             self.memoize_ttl_secs,
             self.memoize_across_connections,
@@ -306,6 +369,10 @@ impl ClientForm {
                 history: self.history,
                 batching: self.batching,
             },
+            crate::capture::CaptureRequest {
+                spec: self.capture,
+                from_action,
+            },
             llm_client,
             Some(status_tx),
         )
@@ -315,6 +382,42 @@ impl ClientForm {
         }
         Ok(id)
     }
+}
+
+/// Apply `spec` to a running instance; the `changed` entry for the update summary.
+async fn apply_capture_update(
+    state: &AppState,
+    owner: crate::capture::CaptureOwner,
+    protocol: &str,
+    spec: &crate::capture::CaptureSpec,
+    status_tx: &mpsc::UnboundedSender<String>,
+) -> Result<()> {
+    match state.capture.apply(owner, protocol, spec, false).await? {
+        Some(path) => {
+            let _ = status_tx.send(format!("[INFO] Capturing to {}", path.display()));
+        }
+        None => {
+            let _ = status_tx.send("[INFO] Capture stopped".to_string());
+        }
+    }
+    Ok(())
+}
+
+/// Keep a capture across a restart that did not say what to do with capture: the new
+/// instance appends to the file the old one was writing.
+async fn carry_capture(
+    state: &AppState,
+    previous: Option<crate::capture::CaptureStatus>,
+    owner: crate::capture::CaptureOwner,
+    protocol: &str,
+) -> Result<()> {
+    if let Some(prev) = previous {
+        state
+            .capture
+            .start(owner, protocol, std::path::Path::new(&prev.path), true)
+            .await?;
+    }
+    Ok(())
 }
 
 /// Merge a partial `overlay` object into `base`, overlay keys winning. Returns
@@ -432,6 +535,11 @@ pub async fn update_server(
         current.memo.settings(),
     )?;
 
+    if let Some(spec) = &form.capture {
+        state.capture.preflight(spec, false)?;
+    }
+    let server_capture = crate::capture::CaptureOwner::Server(server_id);
+
     if server_needs_restart(&form) {
         // === Restart path: clean stop + start with merged config ===
         let mut changed = Vec::new();
@@ -478,6 +586,7 @@ pub async fn update_server(
         let port = form.port.or(Some(current.port));
 
         // Release the old socket and its tasks, then start fresh.
+        let previous_capture = state.capture.status(server_capture);
         state.remove_server(server_id).await;
         let _ = status_tx.send(format!(
             "[SERVER] Restarting server #{} ({}) to apply {}",
@@ -504,9 +613,19 @@ pub async fn update_server(
                 history: Some(history_entries),
                 batching: Some(batching),
             },
+            crate::capture::CaptureRequest::operator(form.capture.clone()),
             status_tx.clone(),
         )
         .await?;
+        if form.capture.is_none() {
+            carry_capture(
+                state,
+                previous_capture,
+                crate::capture::CaptureOwner::Server(new_id),
+                &current.protocol_name,
+            )
+            .await?;
+        }
         // The setting survives the rebind; the memoised answers do not.
         state
             .set_server_memo(new_id, memo_change.unwrap_or(current.memo.settings()))
@@ -556,6 +675,17 @@ pub async fn update_server(
             })
             .await;
         changed.push("feedback_instructions");
+    }
+    if let Some(spec) = &form.capture {
+        apply_capture_update(
+            state,
+            server_capture,
+            &current.protocol_name,
+            spec,
+            &status_tx,
+        )
+        .await?;
+        changed.push("capture");
     }
     if form.history.is_some() || form.batching.is_some() {
         state
@@ -673,6 +803,11 @@ pub async fn update_client(
         current.memo.settings(),
     )?;
 
+    if let Some(spec) = &form.capture {
+        state.capture.preflight(spec, false)?;
+    }
+    let client_capture = crate::capture::CaptureOwner::Client(client_id);
+
     if client_needs_restart(&form) {
         let mut changed = Vec::new();
         if form.remote_addr.is_some() {
@@ -709,6 +844,7 @@ pub async fn update_client(
             .or(current.feedback_instructions.clone());
 
         // Release the old client (aborts its tasks / socket) then reconnect.
+        let previous_capture = state.capture.status(client_capture);
         state.remove_client(client_id).await;
         let _ = status_tx.send(format!(
             "[CLIENT] Reconnecting client #{} ({}) to apply {}",
@@ -731,10 +867,20 @@ pub async fn update_client(
                 history: Some(history_entries),
                 batching: Some(batching),
             },
+            crate::capture::CaptureRequest::operator(form.capture.clone()),
             llm_client,
             Some(status_tx.clone()),
         )
         .await?;
+        if form.capture.is_none() {
+            carry_capture(
+                state,
+                previous_capture,
+                crate::capture::CaptureOwner::Client(new_id),
+                &current.protocol_name,
+            )
+            .await?;
+        }
         state
             .set_client_memo(new_id, memo_change.unwrap_or(current.memo.settings()))
             .await;
@@ -782,6 +928,17 @@ pub async fn update_client(
             })
             .await;
         changed.push("feedback_instructions");
+    }
+    if let Some(spec) = &form.capture {
+        apply_capture_update(
+            state,
+            client_capture,
+            &current.protocol_name,
+            spec,
+            &status_tx,
+        )
+        .await?;
+        changed.push("capture");
     }
     if form.history.is_some() || form.batching.is_some() {
         state

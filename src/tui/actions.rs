@@ -650,11 +650,13 @@ async fn open_composer(
 fn open_wireshark(app: &mut DashboardApp, key: UiKey) {
     use crate::tui::wireshark::{CapturePlan, CaptureTarget, Platform, Role};
 
+    let recorded;
     let target = match key {
         UiKey::Server(id) => {
             let Some(row) = app.server_row(id) else {
                 return;
             };
+            recorded = row.capture.clone();
             let bound: Option<std::net::SocketAddr> =
                 row.local_addr.as_deref().and_then(|a| a.parse().ok());
             let param = |name: &str| -> Option<String> {
@@ -676,10 +678,12 @@ fn open_wireshark(app: &mut DashboardApp, key: UiKey) {
             let Some(row) = app.client_row(id) else {
                 return;
             };
+            recorded = row.capture.clone();
             CaptureTarget::client(&row.protocol, Some(&row.remote_addr))
         }
     };
-    let plan = CapturePlan::build(target, Platform::current());
+    let mut plan = CapturePlan::build(target, Platform::current());
+    plan.recorded = Some(recorded);
     app.modals.push(Modal::Wireshark {
         plan: Box::new(plan),
         scroll: 0,

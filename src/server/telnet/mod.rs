@@ -391,6 +391,12 @@ impl TelnetServer {
                             // Held for the life of the connection: releasing it here would cap
                             // the accept rate rather than the number of live connections.
                             let _permit = permit;
+                            // Wrapped before the split so packet capture sees both halves.
+                            let stream = crate::capture::tcp::CapturedStream::server(
+                                &state_clone,
+                                server_id,
+                                stream,
+                            );
                             let (read_half, write_half) = tokio::io::split(stream);
                             let write_half_arc = Arc::new(tokio::sync::Mutex::new(write_half));
 

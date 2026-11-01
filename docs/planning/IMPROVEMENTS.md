@@ -564,7 +564,7 @@ libpcap at link time, which is the original reason for the exclusion; the option
 it, dynamically loading it, or documenting the gap in the release notes rather than leaving
 users to discover it.
 
-### 77. pgwire panics the PostgreSQL connection on a malformed simple query **[verified]**
+### 77. pgwire panics the PostgreSQL connection on a malformed simple query **[verified, fixed in this repository's builds: `vendor/pgwire` answers FATAL 08P01; upstream issue not yet filed; crates.io builds still contain it per connection]**
 
 `pgwire` 0.35's `decode_packet` (`codec.rs:62-83`) bounds the declared message length only
 from *above*, then hands `decode_fn` the entire remaining buffer rather than a slice limited
@@ -588,8 +588,16 @@ server stayed up and accepted a further connection. So this is not in the class 
 server-killers; it is a malformed message producing a panic instead of a clean protocol error.
 Still worth fixing, because a panicking connection is a silent one.
 
-The fix belongs upstream — `pgwire` owns the socket loop, so NetGet cannot bound the frame
-without wrapping the stream. Report it there. `opensrv-mysql`'s `params.rs` cluster (five
+`pgwire` owns the socket loop, so NetGet cannot bound the frame without wrapping the stream;
+the fix is in the crate. `vendor/pgwire` (README there) is 0.35.0 with each message isolated
+before its body decoder runs, checked reads in every frontend decoder, PostgreSQL's
+end-of-message check, and `FATAL 08P01` on the wire instead of a panic. Upgrading was checked
+first and does not help: 0.42.1 fixes `get_cstring` alone, and `Bind`/`Close`/`Describe` still
+panic on short bodies there. `tests/vendored_pgwire_patch_test.rs` drives every shape found;
+`tests/server/postgresql/decoder_panic_test.rs` asserts the ErrorResponse from the wire. It
+should still be reported upstream, and a `[patch]` does not reach `cargo install`, where the
+containment in `src/server/postgresql/mod.rs` remains what stands between the panic and the
+server. `opensrv-mysql`'s `params.rs` cluster (five
 malformed `COM_STMT_EXECUTE` shapes, including an explicit `panic!("bad column type")` on a
 client-chosen byte) and `kafka-protocol`'s unbounded element counts are the same shape and are
 documented in the panic audit.

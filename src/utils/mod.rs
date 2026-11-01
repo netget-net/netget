@@ -2,6 +2,7 @@
 
 pub mod bencode;
 pub mod bson_depth;
+pub mod cbor_depth;
 pub mod clock;
 pub mod display;
 pub mod dns_screen;

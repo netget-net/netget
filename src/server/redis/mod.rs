@@ -357,7 +357,9 @@ struct ModelAnswer {
 struct Conn<'a> {
     protocol: Arc<RedisProtocol>,
     outbox: Outbox,
-    write_half: Arc<tokio::sync::Mutex<tokio::io::WriteHalf<TcpStream>>>,
+    write_half: Arc<
+        tokio::sync::Mutex<tokio::io::WriteHalf<crate::capture::tcp::CapturedStream<TcpStream>>>,
+    >,
     log: Log<'a>,
     /// The one-shot `ASKING` flag of cluster mode.
     asking: bool,
@@ -441,7 +443,11 @@ impl RedisHandler {
     async fn writer_task(
         mut out: OutboxReceiver,
         outbox: Outbox,
-        write_half: Arc<tokio::sync::Mutex<tokio::io::WriteHalf<TcpStream>>>,
+        write_half: Arc<
+            tokio::sync::Mutex<
+                tokio::io::WriteHalf<crate::capture::tcp::CapturedStream<TcpStream>>,
+            >,
+        >,
         app_state: Arc<AppState>,
         server_id: Option<crate::state::ServerId>,
         connection_id: ConnectionId,
@@ -500,6 +506,11 @@ impl RedisHandler {
 
         // The write half is shared with the peer command task below, so the dashboard can
         // write into this connection while the read loop is parked in `read()`.
+        // Wrapped before the split so packet capture sees both halves (`src/capture/`).
+        let stream = match self.server_id {
+            Some(id) => crate::capture::tcp::CapturedStream::server(&self.app_state, id, stream),
+            None => crate::capture::tcp::CapturedStream::uncaptured(stream),
+        };
         let (mut read_half, write_half) = tokio::io::split(stream);
         let write_half = Arc::new(tokio::sync::Mutex::new(write_half));
 

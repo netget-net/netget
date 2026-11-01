@@ -75,6 +75,7 @@ async fn start_with_no_llm(protocol: &str) -> Started {
         None,               // scheduled_tasks
         None,               // feedback_instructions
         Default::default(), // history / batching overrides
+        netget::capture::CaptureRequest::default(),
         status_tx,
     )
     .await

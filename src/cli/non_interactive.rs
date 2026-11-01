@@ -160,6 +160,7 @@ pub async fn run_non_interactive(
         .unwrap_or_else(|| "http://localhost:11434".to_string());
     let state = AppState::new_with_options(args.include_disabled_protocols, base_url);
     state.set_min_stability(args.parse_min_stability()?).await;
+    state.capture.set_capture_all_dir(args.capture.clone())?;
 
     // Configure rate limiter from CLI args
     let rate_limiter_config = args.build_rate_limiter_config();
@@ -525,6 +526,7 @@ pub async fn run_with_actions(
         .unwrap_or_else(|| "http://localhost:11434".to_string());
     let state = AppState::new_with_options(args.include_disabled_protocols, base_url);
     state.set_min_stability(args.parse_min_stability()?).await;
+    state.capture.set_capture_all_dir(args.capture.clone())?;
 
     // Configure rate limiter from CLI args
     let rate_limiter_config = args.build_rate_limiter_config();
@@ -618,6 +620,7 @@ pub async fn run_with_actions(
                     feedback_instructions,
                     history,
                     batching,
+                    capture,
                 } => {
                     // Execute open_server action
                     match server_startup::start_server_from_action(
@@ -635,6 +638,7 @@ pub async fn run_with_actions(
                         scheduled_tasks,
                         feedback_instructions,
                         crate::protocol::metadata::ConversationOverrides { history, batching },
+                        crate::capture::CaptureRequest::action(capture),
                         status_tx.clone(),
                     )
                     .await
@@ -674,6 +678,7 @@ pub async fn run_with_actions(
                     feedback_instructions,
                     history,
                     batching,
+                    capture,
                 } => {
                     // Execute open_client action
                     match client_startup::start_client_from_action(
@@ -687,6 +692,7 @@ pub async fn run_with_actions(
                         scheduled_tasks,
                         feedback_instructions,
                         crate::protocol::metadata::ConversationOverrides { history, batching },
+                        crate::capture::CaptureRequest::action(capture),
                         llm.clone(),
                         None, // status_tx: headless, drain to tracing
                     )
