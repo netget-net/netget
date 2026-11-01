@@ -239,7 +239,7 @@ pub static FIDO2_DEVICE_DETACHED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "fido2_device_detached",
         "The USB/IP session ended. Credentials are held per session and are gone with it.",
-        json!({"type": "show_message", "message": "Security key detached"}),
+        json!({"type": "notify_operator", "message": "Security key detached"}),
     )
     .with_no_actions()
     .with_parameters(vec![Parameter {

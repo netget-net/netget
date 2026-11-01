@@ -188,7 +188,7 @@ Don't send any response.
       "server_hostname": "bootserver.local"
     },
     {
-      "type": "show_message",
+      "type": "notify_operator",
       "message": "Assigned 192.168.1.100 to client 00:11:22:33:44:55"
     }
   ]

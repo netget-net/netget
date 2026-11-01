@@ -6,6 +6,8 @@ For current protocol support and maturity, run `netget --mcp` and call `list_pro
 
 ## Installation and development
 
+- [Install](guides/INSTALL.md) — npm, release archives, Cargo, Docker, and which protocols each
+  prebuilt binary carries.
 - [Build from source](guides/BUILDING.md) — system libraries and portable builds.
 - [macOS dependency notes](guides/SYSTEM_DEPENDENCIES_macOS.md).
 - [Android / Termux](guides/TERMUX_INSTALL.md).

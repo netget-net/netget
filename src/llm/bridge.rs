@@ -194,6 +194,8 @@ static GENERIC_ACTIONS: std::sync::LazyLock<std::collections::HashSet<String>> =
                 .map(|a| a.name)
                 .collect();
         names.insert(crate::llm::actions::common::provide_feedback_action().name);
+        names.insert(crate::llm::actions::common::set_connection_memory_action().name);
+        names.insert(crate::llm::actions::common::append_connection_memory_action().name);
         names
     });
 
@@ -214,7 +216,7 @@ static GENERIC_ACTIONS: std::sync::LazyLock<std::collections::HashSet<String>> =
 /// - `tool` is true for a tool (`read_file`, `web_search`, …): the model is asked again with
 ///   its result, and in the JSON envelope it goes under `"tools"` rather than `"actions"`.
 /// - `generic` is true for the bookkeeping actions every network event offers whatever the
-///   protocol (`set_memory`, `show_message`, `provide_feedback`, …), so a host can put the
+///   protocol (`set_memory`, `notify_operator`, `provide_feedback`, …), so a host can put the
 ///   protocol's own answer first.
 /// - `schema` is the JSON Schema of the parameters, the one a native tool schema carries.
 pub fn offered_action(action: &ActionDefinition) -> serde_json::Value {

@@ -164,7 +164,7 @@ them produces; it is **not** an action name the model may emit.
 - `send_cluster_health` — `cluster_name`, `status` (`green`/`yellow`/`red`, validated),
   `number_of_nodes`, `active_shards`. Answers `GET /_cluster/health`.
 
-The generic actions (`show_message`, memory operations, …) are supplied centrally by
+The generic actions (`notify_operator`, memory operations, …) are supplied centrally by
 `get_network_event_common_actions()`.
 
 ### Startup Parameters

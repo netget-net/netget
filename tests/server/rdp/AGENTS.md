@@ -24,7 +24,7 @@ Confirm the server must emit, and the test compares it byte-for-byte. Swapping t
 routing token. The request also carries an RDP_NEG_REQ offering TLS|HYBRID.
 
 **Two failure paths, kept distinct.**
-- `test_rdp_fails_closed_on_no_answer` answers with only `show_message` (no protocol output); the
+- `test_rdp_fails_closed_on_no_answer` answers with only `notify_operator` (no protocol output); the
   server must fail closed with a server-forced `NEG_FAILURE(SSL_REQUIRED_BY_SERVER)`.
 - `test_rdp_model_rejects_connection` has the model deliberately reject with
   `NEG_FAILURE(HYBRID_REQUIRED_BY_SERVER)`. Same PDU shape, model-chosen code — the structurally

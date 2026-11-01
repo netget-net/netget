@@ -242,7 +242,7 @@ pub enum ToolCategory {
     /// Examples: read_file, web_search, read_documentation, list_models
     InformationTool,
     /// Action: executed with acknowledgment, LLM may continue
-    /// Examples: open_server, close_server, set_memory, show_message
+    /// Examples: open_server, close_server, set_memory, notify_operator
     Action,
     /// Protocol-specific sync action: executed during network event handling
     /// Examples: send_http_response, send_tcp_data, send_dns_a_response
@@ -358,7 +358,7 @@ impl ActionDefinition {
                 // Expose management actions, exclude internal-only ones
                 !matches!(
                     self.name.as_str(),
-                    "show_message" | "append_to_log" | "provide_feedback"
+                    "notify_operator" | "append_to_log" | "provide_feedback"
                 )
             }
             ToolCategory::ProtocolAction => {
@@ -373,7 +373,7 @@ impl ActionDefinition {
     fn is_common_action(&self) -> bool {
         matches!(
             self.name.as_str(),
-            "show_message"
+            "notify_operator"
                 | "open_server"
                 | "close_server"
                 | "close_all_servers"
@@ -641,6 +641,10 @@ fn first_answer_shaped_value(text: &str, start: usize) -> Option<serde_json::Val
 ///   - the action name under `type`, `function`, or `name`;
 ///   - parameters nested under `args`, `arguments`, or `parameters` rather than flat.
 ///
+/// A former action name is rewritten to its current one (`show_message` → `notify_operator`,
+/// see [`common::canonical_action_name`]), so an answer written against the old vocabulary is
+/// validated and executed as the action it names.
+///
 /// A value with no recognizable name key, or a non-object, is returned unchanged.
 pub fn normalize_action_object(value: &serde_json::Value) -> serde_json::Value {
     let obj = match value.as_object() {
@@ -667,7 +671,10 @@ pub fn normalize_action_object(value: &serde_json::Value) -> serde_json::Value {
     };
 
     let mut out = serde_json::Map::new();
-    out.insert("type".to_string(), serde_json::Value::String(name));
+    out.insert(
+        "type".to_string(),
+        serde_json::Value::String(common::canonical_action_name(&name).to_string()),
+    );
 
     // Flat params: keep everything except wrapper keys and whichever key
     // supplied the action name.

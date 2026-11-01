@@ -229,7 +229,7 @@ Don't send any response.
       "lease_time": 86400
     },
     {
-      "type": "show_message",
+      "type": "notify_operator",
       "message": "Offered 192.168.1.100 to client 00:11:22:33:44:55"
     }
   ]

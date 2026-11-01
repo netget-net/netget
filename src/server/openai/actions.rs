@@ -37,7 +37,7 @@ pub static OPENAI_REQUEST_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         "status": 404
     }))
     // This is the protocol's only event, so without an action list `call_llm` would offer the
-    // model nothing but set_memory/show_message and reject every response it produced. All three
+    // model nothing but set_memory/notify_operator and reject every response it produced. All three
     // sync actions apply here: the event covers every path, and any of them may be refused.
     .with_actions(vec![
         openai_chat_response_action(),

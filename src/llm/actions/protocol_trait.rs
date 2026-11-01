@@ -430,7 +430,7 @@ pub trait Server: Protocol {
 /// Report event types that leave the model without a protocol vocabulary to answer them.
 ///
 /// This is the item-56 defect: the model answering such an event is handed only
-/// `set_memory`/`append_memory`/`show_message`/`append_to_log`, so every protocol action it
+/// `set_memory`/`append_memory`/`notify_operator`/`append_to_log`, so every protocol action it
 /// returns is rejected as unknown, retried twice, and fails. It silently disabled sixteen
 /// protocols. An `EventType` that genuinely needs no actions declares that with
 /// `.with_no_actions()`, which this ignores.

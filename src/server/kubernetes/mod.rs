@@ -906,7 +906,7 @@ fn base_event_data(
 }
 
 /// Turn one action result into an HTTP response, or `None` if it is not a Kubernetes action
-/// so the caller can keep scanning (a model may emit `show_message` alongside the real answer).
+/// so the caller can keep scanning (a model may emit `notify_operator` alongside the real answer).
 fn build_response(
     action_result: crate::llm::ActionResult,
     route: &ResourceRoute,

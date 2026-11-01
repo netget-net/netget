@@ -84,7 +84,7 @@ scripting is highly recommended for performance.
 
 Every mock rule that produces an **answer record** uses `.respond_with_actions_from_event()`,
 to enable protocol-correct transaction ID matching. This line used to say "all DNS tests",
-which stopped being true once `llm_failure_test.rs` arrived: its `show_message` and
+which stopped being true once `llm_failure_test.rs` arrived: its `notify_operator` and
 `ignore_query` rules are static, and correctly so — neither produces a packet, so there is no
 id to echo. The rule is about what the answer carries, not about which file it is in.
 
@@ -338,7 +338,7 @@ a decoder, plus the id and question echo, plus the pcap oracle.
 `test_dns_distinguishes_no_usable_action_from_a_deliberate_black_hole`: the case `call_llm`
 returns **`Ok`** for and this server used to answer with silence — a model reply made only of
 common actions. One server, two queries, because the assertion is that they *differ*:
-`show_message` must be SERVFAIL and `ignore_query` must be silence.
+`notify_operator` must be SERVFAIL and `ignore_query` must be silence.
 
 ### 9-13. Bounds (`bounds_test.rs`)
 

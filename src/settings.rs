@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tracing::{debug, warn};
 
-use crate::state::app_state::WebSearchMode;
+use crate::state::app_state::{ScriptingMode, WebSearchMode};
 
 /// Application settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -14,7 +14,7 @@ pub struct Settings {
     #[serde(default)]
     pub model: Option<String>,
 
-    /// Scripting mode (llm, python, javascript, go)
+    /// Scripting mode, any spelling `-e`/`--env` accepts (see [`ScriptingMode::SPELLINGS`])
     #[serde(default)]
     pub scripting_mode: Option<String>,
 
@@ -104,9 +104,16 @@ impl Settings {
         self.save()
     }
 
+    /// Record a scripting mode, in its canonical spelling ([`ScriptingMode::config_name`]),
+    /// without saving. What is written here is exactly what [`Self::parse_scripting_mode`]
+    /// reads back.
+    pub fn record_scripting_mode(&mut self, mode: ScriptingMode) {
+        self.scripting_mode = Some(mode.config_name().to_string());
+    }
+
     /// Update scripting mode and save
-    pub fn set_scripting_mode(&mut self, mode: String) -> Result<()> {
-        self.scripting_mode = Some(mode);
+    pub fn set_scripting_mode(&mut self, mode: ScriptingMode) -> Result<()> {
+        self.record_scripting_mode(mode);
         self.save()
     }
 
@@ -127,22 +134,19 @@ impl Settings {
         self.save()
     }
 
-    /// Parse saved scripting mode
-    pub fn parse_scripting_mode(&self) -> Option<crate::state::app_state::ScriptingMode> {
-        self.scripting_mode
-            .as_ref()
-            .and_then(|mode_str| match mode_str.to_lowercase().as_str() {
-                "llm" => Some(crate::state::app_state::ScriptingMode::Off),
-                "python" => Some(crate::state::app_state::ScriptingMode::Python),
-                "javascript" => Some(crate::state::app_state::ScriptingMode::JavaScript),
-                "go" => Some(crate::state::app_state::ScriptingMode::Go),
-                _ => {
-                    warn!(
-                        "Invalid scripting mode in settings: '{}', ignoring",
-                        mode_str
-                    );
-                    None
-                }
-            })
+    /// Parse saved scripting mode.
+    ///
+    /// Reads through [`ScriptingMode::parse`], the parser `-e`/`--env` uses, so every
+    /// spelling the command line accepts (`on`, `auto`, `off`, `llm`, `perl`, …) is accepted
+    /// here too, and whatever [`Self::record_scripting_mode`] writes parses back.
+    pub fn parse_scripting_mode(&self) -> Option<ScriptingMode> {
+        let mode_str = self.scripting_mode.as_ref()?;
+        match ScriptingMode::parse(mode_str) {
+            Ok(mode) => Some(mode),
+            Err(e) => {
+                warn!("Invalid scripting mode in settings, ignoring: {}", e);
+                None
+            }
+        }
     }
 }

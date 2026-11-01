@@ -1,7 +1,7 @@
 //! Common actions available in all prompts
 //!
 //! This module defines actions that are available in both user input
-//! and network event prompts (show_message, memory operations, etc.).
+//! and network event prompts (notify_operator, memory operations, etc.).
 
 use super::{ActionDefinition, Parameter};
 use anyhow::{Context, Result};
@@ -190,8 +190,12 @@ pub struct ServerTaskDefinition {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CommonAction {
-    /// Display a message to the user
-    ShowMessage { message: String },
+    /// Show a note to the person operating NetGet. Never reaches a peer.
+    ///
+    /// Accepted under its former name `show_message` as well, so handlers and `.netget` files
+    /// written before the rename keep working.
+    #[serde(alias = "show_message")]
+    NotifyOperator { message: String },
 
     /// Open a new server
     OpenServer {
@@ -382,8 +386,18 @@ pub enum CommonAction {
     /// Replace this instance's memory completely
     SetMemory { value: String },
 
-    /// Append to this instance's memory
+    /// Append to this instance's memory. A `key: value` line replaces an earlier line with the
+    /// same key (see [`append_memory_lines`]).
     AppendMemory { value: String },
+
+    /// Replace the memory of the connection the event arrived on. Only meaningful on a
+    /// server's network event: there is no connection anywhere else, and the executor refuses
+    /// it rather than writing the note somewhere every other peer would see it.
+    SetConnectionMemory { value: String },
+
+    /// Append to the memory of the connection the event arrived on; see
+    /// [`CommonAction::SetConnectionMemory`] and [`append_memory_lines`].
+    AppendConnectionMemory { value: String },
 
     /// Append content to a log file
     AppendToLog {
@@ -543,20 +557,66 @@ impl CommonAction {
     }
 }
 
-/// Get action definition for show_message
-pub fn show_message_action() -> ActionDefinition {
+/// The action that shows text to the person running NetGet: the dashboard's stream, the
+/// MCP status stream, the non-interactive console. Nothing on the network sees it.
+pub const NOTIFY_OPERATOR: &str = "notify_operator";
+
+/// The name [`NOTIFY_OPERATOR`] had until October 2026. Still accepted wherever an action is
+/// read — the model's answer, a static or script handler, a `.netget` file — and rewritten to
+/// the current name, so nothing written against it stops working.
+///
+/// It was renamed because the old name read as "show the message to whoever is on the other
+/// end": a telnet server told to greet its users answered the connect event and the first
+/// line with `show_message`, and the peer saw nothing.
+pub const LEGACY_NOTIFY_OPERATOR: &str = "show_message";
+
+/// Whether `name` is [`NOTIFY_OPERATOR`] under its current or its former name.
+pub fn is_notify_operator(name: &str) -> bool {
+    name == NOTIFY_OPERATOR || name == LEGACY_NOTIFY_OPERATOR
+}
+
+/// The current name of an action that may be written under a former one.
+pub fn canonical_action_name(name: &str) -> &str {
+    if name == LEGACY_NOTIFY_OPERATOR {
+        NOTIFY_OPERATOR
+    } else {
+        name
+    }
+}
+
+/// Rewrite an action object's `type` to its current name, in place. Anything that is not an
+/// object with a string `type` is left alone.
+pub fn canonicalize_action(action: &mut serde_json::Value) {
+    let Some(obj) = action.as_object_mut() else {
+        return;
+    };
+    let renamed = match obj.get("type").and_then(|t| t.as_str()) {
+        Some(name) if canonical_action_name(name) != name => canonical_action_name(name),
+        _ => return,
+    };
+    obj.insert(
+        "type".to_string(),
+        serde_json::Value::String(renamed.to_string()),
+    );
+}
+
+/// Get action definition for notify_operator
+pub fn notify_operator_action() -> ActionDefinition {
     ActionDefinition {
-        name: "show_message".to_string(),
-        description: "Display a message to the user controlling NetGet".to_string(),
+        name: NOTIFY_OPERATOR.to_string(),
+        description: "Show a note to the person operating NetGet, on their own screen. It is \
+            NOT sent over the network: the peer, client or server on the other end never sees \
+            it. To say anything to them, use this protocol's own send or response action."
+            .to_string(),
         parameters: vec![Parameter {
             name: "message".to_string(),
             type_hint: "string".to_string(),
-            description: "Message to display".to_string(),
+            description: "The note for the operator (never transmitted)".to_string(),
             required: true,
         }],
         example: json!({
-            "type": "show_message",
-            "message": "Server started successfully on port 8080"
+            "type": NOTIFY_OPERATOR,
+            "message": "Server #1 is listening on port 8080"
         }),
         log_template: None,
     }
@@ -1455,7 +1515,8 @@ pub fn set_memory_action() -> ActionDefinition {
         description: "Replace this server's (or client's) memory with new content; the old \
             memory is discarded. Memory is shown to the model with every event, is shared by \
             all of the instance's connections and outlives each one, unlike the history of a \
-            single connection, which ends with it. Keep here anything needed later."
+            single connection, which ends with it. Keep here anything needed later by every \
+            connection: data you stored, counters, settings."
             .to_string(),
         parameters: vec![Parameter {
             name: "value".to_string(),
@@ -1465,7 +1526,7 @@ pub fn set_memory_action() -> ActionDefinition {
         }],
         example: json!({
             "type": "set_memory",
-            "value": "session_id: abc123\nuser_preferences: dark_mode=true\nlast_command: LIST"
+            "value": "users_created: alice,bob\nnext_order_id: 1043"
         }),
         log_template: None,
     }
@@ -1475,24 +1536,128 @@ pub fn set_memory_action() -> ActionDefinition {
 pub fn append_memory_action() -> ActionDefinition {
     ActionDefinition {
         name: "append_memory".to_string(),
-        description: "Add text to the end of this server's (or client's) memory, after a \
-            newline; existing memory is kept. Memory is shown to the model with every event, \
-            is shared by all of the instance's connections and outlives each one."
+        description: "Add lines to this server's (or client's) memory; existing memory is \
+            kept. A line written `key: value` replaces an earlier line with the same key \
+            instead of adding a second one. Memory is shown to the model with every event, is \
+            shared by all of the instance's connections and outlives each one."
             .to_string(),
         parameters: vec![Parameter {
             name: "value".to_string(),
             type_hint: "string".to_string(),
-            description: "Text to append as a string. Will be added after existing memory with \
-                newline separator."
+            description: "Text to append as a string, one fact per line. A `key: value` \
+                line replaces the earlier line with that key; any other line is added after \
+                the existing memory."
                 .to_string(),
             required: true,
         }],
         example: json!({
             "type": "append_memory",
-            "value": "connection_count: 5\nlast_file_requested: readme.md"
+            "value": "connection_count: 5\nfiles_uploaded: 3"
         }),
         log_template: None,
     }
+}
+
+/// Get action definition for set_connection_memory
+///
+/// Offered only on a server's network event that arrived on a connection of a
+/// connection-oriented protocol (see [`network_event_common_actions_for`]).
+pub fn set_connection_memory_action() -> ActionDefinition {
+    ActionDefinition {
+        name: "set_connection_memory".to_string(),
+        description: "Replace the notes kept about the peer on THIS connection: their name, \
+            what they chose, whether they logged in. Shown with every later event on this \
+            connection only — never to any other connection — and discarded when it closes. \
+            Use this, not set_memory, for anything about one peer."
+            .to_string(),
+        parameters: vec![Parameter {
+            name: "value".to_string(),
+            type_hint: "string".to_string(),
+            description: "The connection's new notes; replaces all of them.".to_string(),
+            required: true,
+        }],
+        example: json!({
+            "type": "set_connection_memory",
+            "value": "user_name: alice\nlogged_in: yes"
+        }),
+        log_template: None,
+    }
+}
+
+/// Get action definition for append_connection_memory; see [`set_connection_memory_action`].
+pub fn append_connection_memory_action() -> ActionDefinition {
+    ActionDefinition {
+        name: "append_connection_memory".to_string(),
+        description: "Add lines to the notes kept about the peer on THIS connection (their \
+            name, choices, login state). A `key: value` line replaces an earlier line with the \
+            same key. Shown with every later event on this connection only, never to another \
+            connection, and discarded when it closes. Use this, not append_memory, for \
+            anything about one peer."
+            .to_string(),
+        parameters: vec![Parameter {
+            name: "value".to_string(),
+            type_hint: "string".to_string(),
+            description: "Lines to add, one fact per line; `key: value` replaces that key."
+                .to_string(),
+            required: true,
+        }],
+        example: json!({
+            "type": "append_connection_memory",
+            "value": "user_name: alice"
+        }),
+        log_template: None,
+    }
+}
+
+/// The longest `key` [`memory_line_key`] recognises.
+const MAX_MEMORY_KEY_CHARS: usize = 48;
+
+/// The key of a memory line written `key: value`, lower-cased, or `None` for any other line.
+///
+/// A key starts with a letter, digit or `_`, holds only letters, digits, spaces and `_ . - /`,
+/// and is followed by `:` and then a space or the end of the line — so `user_name: Zed` and
+/// `conn-3 cwd: /home` have keys, while `http://host`, `12:30` and a sentence that merely
+/// contains a colon later on do not.
+pub fn memory_line_key(line: &str) -> Option<String> {
+    let line = line.trim_start();
+    let colon = line.find(':')?;
+    let key = line[..colon].trim_end();
+    let after = &line[colon + 1..];
+    if key.is_empty()
+        || key.chars().count() > MAX_MEMORY_KEY_CHARS
+        || !(after.is_empty() || after.starts_with(' ') || after.starts_with('\t'))
+    {
+        return None;
+    }
+    let mut chars = key.chars();
+    let first = chars.next()?;
+    if !(first.is_alphanumeric() || first == '_') {
+        return None;
+    }
+    if !key
+        .chars()
+        .all(|c| c.is_alphanumeric() || matches!(c, ' ' | '_' | '.' | '-' | '/'))
+    {
+        return None;
+    }
+    Some(key.to_lowercase())
+}
+
+/// `current` with the lines of `addition` appended, where each `key: value` line of
+/// `addition` first removes every earlier line with the same key (see [`memory_line_key`]).
+///
+/// Memory is read by a model on every event, so `user_name: Zed` appended twice must not
+/// read as two facts, and a changed value must not leave the stale one beside it. The newest
+/// line goes last, which is also the end the size bound keeps.
+pub fn append_memory_lines(current: &str, addition: &str) -> String {
+    let mut lines: Vec<&str> = current.lines().collect();
+    for new_line in addition.lines() {
+        if let Some(key) = memory_line_key(new_line) {
+            lines.retain(|line| memory_line_key(line).as_deref() != Some(key.as_str()));
+        }
+        lines.push(new_line);
+    }
+    lines.join("\n")
 }
 
 /// Get action definition for append_to_log
@@ -1777,7 +1942,7 @@ pub fn get_all_common_actions(
 
     // === System/Utility ===
     // actions.push(change_model_action());
-    actions.push(show_message_action());
+    actions.push(notify_operator_action());
     actions.push(append_to_log_action());
 
     // === Database Management ===
@@ -1841,12 +2006,42 @@ pub fn get_network_event_common_actions() -> Vec<ActionDefinition> {
         set_memory_action(),
         append_memory_action(),
         // === System/Utility ===
-        show_message_action(),
+        notify_operator_action(),
         append_to_log_action(),
         // === Feedback/Learning ===
         // Note: provide_feedback is added conditionally in action_helper.rs
         // only when feedback_instructions is set on the server/client
     ]
+}
+
+/// The common actions one server network event offers, given what the event is.
+///
+/// - `answers_on_the_wire`: the event offers protocol actions to answer the peer with. Then
+///   `notify_operator` is left out. Offered beside `send_telnet_message`, a note to the
+///   operator was taken for the reply: a telnet BBS told to greet its users answered the
+///   connect event and the first line with it, and the peer saw nothing (llama3.1:8b, 31
+///   October 2026). An informational event — a connection closed, nothing to answer — keeps
+///   it, since telling the operator is then all there is to do. A model that names it anyway
+///   is not punished: it is still accepted and executed (see `ConversationHandler`), just not
+///   advertised.
+/// - `on_a_connection`: the event arrived on a live connection of a connection-oriented
+///   protocol. Then the connection-memory actions are offered beside the shared ones, so
+///   what the model learns about one peer need not be written where every other peer reads
+///   it.
+pub fn network_event_common_actions_for(
+    answers_on_the_wire: bool,
+    on_a_connection: bool,
+) -> Vec<ActionDefinition> {
+    let mut actions = vec![set_memory_action(), append_memory_action()];
+    if on_a_connection {
+        actions.push(set_connection_memory_action());
+        actions.push(append_connection_memory_action());
+    }
+    if !answers_on_the_wire {
+        actions.push(notify_operator_action());
+    }
+    actions.push(append_to_log_action());
+    actions
 }
 
 /// Get all protocol names that should be available to the LLM

@@ -302,7 +302,7 @@ timeout protects the caller either way.
 - `search_packages` builds its `search_url` from the configured index. It hardcoded `https://pypi.org/search/?q=...`, so a client pointed at a private index was handed the public one as somewhere to go.
 - `download_package` **streams and counts**; it does not buffer. It used to hold an entire distribution in memory and use it for nothing but `.len()`, at a size chosen by whatever the client was pointed at. It is capped at `MAX_DOWNLOAD_BYTES` (256 MiB). Nothing is written to disk — NetGet implements no storage, so a download here is a fetch-and-report.
 - One `reqwest::Client`, built once on `spawn_blocking`. Every request used to build a fresh one, and `connect()` built a further one into `_http_client` and dropped it immediately — the blocking rustls + platform-root-store cost that `AGENTS.md` records as having stalled a whole client runtime, paid per request.
-- `get_event_types()` returns clones of the `LazyLock` statics the client actually raises. It used to hand-build a parallel set with no parameters and `{"type": "placeholder"}` examples, which steered the model to `show_message` — an action `execute_action` rejects.
+- `get_event_types()` returns clones of the `LazyLock` statics the client actually raises. It used to hand-build a parallel set with no parameters and `{"type": "placeholder"}` examples, which steered the model to `notify_operator` — an action `execute_action` rejects.
 
 ## Browser build
 

@@ -600,7 +600,7 @@ Deny all other users.
 {
   "actions": [
     {
-      "type": "show_message",
+      "type": "notify_operator",
       "message": "Allowing alice to connect"
     },
     {
@@ -616,7 +616,7 @@ Deny all other users.
 {
   "actions": [
     {
-      "type": "show_message",
+      "type": "notify_operator",
       "message": "Denying bob - not authorized"
     },
     {
@@ -666,7 +666,7 @@ Start an SMB file server on port 445. Accept file writes, log the content.
 {
   "actions": [
     {
-      "type": "show_message",
+      "type": "notify_operator",
       "message": "Client wrote 256 bytes to /documents/newfile.txt"
     },
     {

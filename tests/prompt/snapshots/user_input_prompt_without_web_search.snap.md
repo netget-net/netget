@@ -58,7 +58,7 @@ Tools gather information and return results to you. After a tool completes, you'
 
 ## 0. generate_random
 
-Generate random data of various types. IMPORTANT: LLMs cannot generate truly random data - you MUST use this tool whenever you need random/mock data for responses. Supports: UUIDs, numbers, strings, emails, IPs, dates, lorem ipsum text, and more. This tool returns the random value which you can then use in your response.
+Generate random data of various types: UUIDs, numbers, strings, emails, IPs, dates, lorem ipsum text, and more. Use it only when your answer itself must contain a random value (a fresh id, a nonce, a random pick) - models cannot produce real randomness. An ordinary answer needs no random value, and each call costs an extra round trip before anything runs. Returns the value for you to use in your answer.
 
 Parameters:
 - `data_type` (string, required): Type of random data: uuid, integer, float, string, hex, base64, word, sentence, paragraph, email, ipv4, ipv6, mac, port, timestamp, date, boolean, choice, choices
@@ -419,16 +419,16 @@ Example:
 {"type":"cancel_task","task_id":"cleanup_logs"}
 ```
 
-## 13. show_message
+## 13. notify_operator
 
-Display a message to the user controlling NetGet
+Show a note to the person operating NetGet, on their own screen. It is NOT sent over the network: the peer, client or server on the other end never sees it. To say anything to them, use this protocol's own send or response action.
 
 Parameters:
-- `message` (string, required): Message to display
+- `message` (string, required): The note for the operator (never transmitted)
 
 Example:
 ```json
-{"type":"show_message","message":"Server started successfully on port 8080"}
+{"type":"notify_operator","message":"Server #1 is listening on port 8080"}
 ```
 
 ## 14. append_to_log
@@ -653,14 +653,14 @@ Replace `<connection_event>`, `<data_event>` and `<protocol_action>` with the id
 
 ```json
 {
-  "actions": [{"type": "show_message", "message": "Done"}]
+  "actions": [{"type": "notify_operator", "message": "Done"}]
 }
 ```
 
 - Apart from an optional `<reasoning>` block before it, the response starts with `{` and ends with `}`
-- **`tools`** (optional): Array of tool calls (read_file, generate_random, etc.)
+- **`tools`** (optional): Array of tool calls (read_documentation, read_file, etc.)
   - Tools return their results for another response; any actions in that intermediate response are drafts
-  - Use tools to gather information before deciding on actions
+  - Use a tool only when you need its result to decide your answer: each one costs a whole extra round trip, and most answers need none
 - **`actions`** (optional): Array of protocol-specific actions (open_server, close_server, etc.)
   - Only actions from your final response with no tool calls execute
   - Actions execute in order
@@ -706,7 +706,7 @@ Brief explanation of your understanding and decision (1-3 sentences)
 ```json
 {
   "actions": [
-    {"type": "show_message", "message": "Hello"}
+    {"type": "notify_operator", "message": "Server #1 is running on port 8080"}
   ]
 }
 ```
@@ -719,21 +719,12 @@ Brief explanation of your understanding and decision (1-3 sentences)
 }
 ```
 
-✓ **Valid (multiple tools):**
-```json
-{
-  "tools": [
-    {"type": "generate_random", "data_type": "uuid"}
-  ]
-}
-```
-
 ✓ **Valid (multiple actions):**
 ```json
 {
   "actions": [
     {"type": "close_server", "server_id": 1},
-    {"type": "show_message", "message": "Server #1 stopped"}
+    {"type": "notify_operator", "message": "Server #1 stopped"}
   ]
 }
 ```

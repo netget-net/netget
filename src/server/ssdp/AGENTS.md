@@ -60,7 +60,7 @@ lost — matters here too, and is why `no_response` is an action at all rather
 than an absence:
 
 * `execute_action` returns `ActionResult::Custom { name: "ssdp_no_response" }`
-  for it, **not** `ActionResult::NoAction`. `NoAction` is what `show_message`
+  for it, **not** `ActionResult::NoAction`. `NoAction` is what `notify_operator`
   and `set_memory` return, so a `no_response` that returned it would be
   indistinguishable from a model that answered with nothing but chat.
 * `WireFailure::classify` is still called on an LLM error, and its category is
