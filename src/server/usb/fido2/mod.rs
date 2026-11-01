@@ -883,7 +883,11 @@ impl UsbFido2Server {
         // The attach event hangs off `import_rx`, not off the accept: see the loop below.
         let guard_status_tx = status_tx.clone();
         let (import_tx, mut import_rx) = tokio::sync::oneshot::channel();
-        let mut usbip_task = tokio::spawn(async move {
+        // Held in `AbortOnDrop`: this connection task is what `stop_server` aborts, and the abort
+        // drops the handle the `select!` below awaits. A dropped `JoinHandle` detaches its task
+        // rather than ending it, so without the guard the USB/IP session outlived the stop,
+        // still holding the peer's socket.
+        let mut usbip_task = crate::utils::task_guard::AbortOnDrop(tokio::spawn(async move {
             match crate::server::usb::guard::run_guarded_usbip(
                 stream,
                 usbip_server,
@@ -908,7 +912,7 @@ impl UsbFido2Server {
                     connection_id, e
                 ),
             }
-        });
+        }));
 
         // The attach event is raised in the loop below rather than here. USB/IP authenticates
         // nothing, so a bare TCP connect must cost nothing: `import_rx` fires only once the
@@ -960,7 +964,7 @@ impl UsbFido2Server {
                     )
                     .await;
                 }
-                _ = &mut usbip_task => break,
+                _ = &mut usbip_task.0 => break,
             }
         }
 

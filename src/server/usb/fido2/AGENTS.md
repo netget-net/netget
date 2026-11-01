@@ -230,6 +230,19 @@ listening to.
 still fragments into its 129 packets — a guard that refused everything would satisfy the first
 assertion while breaking the protocol.
 
+**CTAP2 parameters reach `serde_cbor` only through `utils::cbor_depth::decode_bounded`.**
+`Ctap2Request::parse` used to call `serde_cbor::from_slice` on whatever followed the command
+byte. serde_cbor 0.11 stops itself at 128 levels, but a debug build spends ~7 KiB of stack a
+level getting there, one byte of input per level. The scan in `src/utils/cbor_depth.rs` walks
+the item iteratively first and refuses, before anything is decoded or allocated: nesting past
+`MAX_CTAP2_CBOR_DEPTH` (8; CTAP 2.1 §8 allows four), a string, array or map declaring more than
+the bytes present, indefinite-length items (CTAP2's canonical encoding forbids them), and bytes
+after the item. Every refusal answers `CTAP2_ERR_INVALID_CBOR` (0x12) and logs
+`decision=refused_invalid_cbor` with the reason. The guard lives outside the `libusb` tree on
+purpose: `tests/ctap2_cbor_depth_test.rs` and `fuzz/fuzz_targets/ctap2_cbor.rs` reach the
+server's exact decode path in every build, where nothing behind `libusb` can be fuzzed (nusb,
+see `fuzz/Cargo.toml`).
+
 ## What is and is not verified
 
 **Verified**, by `tests/server/usb_fido2/e2e_test.rs` driving USB/IP and CTAPHID directly over

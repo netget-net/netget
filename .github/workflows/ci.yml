@@ -235,6 +235,7 @@ jobs:
             real_client_evidence_is_run_test
             test_suite_hygiene_test
             vendored_hyper_patch_test
+            vendored_pgwire_patch_test
             vendored_tonic_patch_test
         run: scripts/test_batches.sh --locked --no-default-features
 

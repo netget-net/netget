@@ -97,8 +97,10 @@ impl Ctap2Request {
 
         let command = Ctap2Command::from_u8(data[0]).context("Invalid CTAP2 command")?;
 
+        // Through the iterative depth and size scan, never `serde_cbor::from_slice` directly:
+        // the parameters come from an unauthenticated USB/IP peer (src/utils/cbor_depth.rs).
         let cbor_params = if data.len() > 1 {
-            Some(serde_cbor::from_slice(&data[1..])?)
+            Some(crate::utils::cbor_depth::decode_bounded(&data[1..])?)
         } else {
             None
         };
@@ -543,7 +545,10 @@ impl Ctap2Handler {
         let request = match Ctap2Request::parse(data) {
             Ok(req) => req,
             Err(e) => {
-                warn!("Failed to parse CTAP2 request: {}", e);
+                // Malformed, too deeply nested or oversized CBOR all answer
+                // CTAP2_ERR_INVALID_CBOR (0x12), the spec's status for parameters that do not
+                // parse; the log carries which.
+                warn!("CTAP2 decision=refused_invalid_cbor: {:#}", e);
                 return Ctap2Outcome::Response(
                     Ctap2Response::error(Ctap2Status::InvalidCbor).to_bytes(),
                 );
