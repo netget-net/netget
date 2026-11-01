@@ -961,10 +961,15 @@ fn server_rows(
                 ),
                 (
                     format!(
-                        " ↓{} ↑{} · {}{}",
+                        " ↓{} ↑{} · {}{}{}",
                         human_bytes(conn.bytes_received),
                         human_bytes(conn.bytes_sent),
                         mine.len(),
+                        if conn.memory_len > 0 {
+                            format!(" · memory {} chars", conn.memory_len)
+                        } else {
+                            String::new()
+                        },
                         if conn.active { "" } else { " (closed)" }
                     ),
                     Tone::Dim,

@@ -796,7 +796,7 @@ impl EventHandler {
                     // Then everything the loop above did not run: actions that are not common
                     // actions, and the two common actions it leaves to the executor. The loop
                     // has already run every other common action, and running one again would
-                    // land each append_memory twice and print each show_message twice.
+                    // land each append_memory twice and print each notify_operator twice.
                     let protocol_ref: Option<&dyn Server> =
                         protocol.as_ref().map(|p| p.as_ref() as &dyn Server);
                     let remaining: Vec<serde_json::Value> = action_values
@@ -1147,14 +1147,22 @@ impl EventHandler {
             CommonAction::AppendMemory { value } => {
                 if let Some(server_id) = self.state.get_first_server_id().await {
                     let current = self.state.get_memory(server_id).await.unwrap_or_default();
-                    let combined = if current.is_empty() {
-                        value
-                    } else {
-                        format!("{current}\n{value}")
-                    };
+                    let combined =
+                        crate::llm::actions::common::append_memory_lines(&current, &value);
                     let bounded = crate::llm::actions::executor::bound_server_memory(combined);
                     self.state.set_memory(server_id, bounded).await;
                 }
+            }
+            CommonAction::SetConnectionMemory { .. }
+            | CommonAction::AppendConnectionMemory { .. } => {
+                // Not offered here: an operator command arrives on no connection, and the
+                // only other place to write the note is a server's shared memory.
+                let _ = status_tx.send(
+                    "[ERROR] connection memory can only be written while answering a network \
+                     event on a connection; use update_server's memory for a server's shared \
+                     memory"
+                        .to_string(),
+                );
             }
             CommonAction::AppendToLog { .. } => {
                 // AppendToLog is handled by the action executor, not here
@@ -1903,7 +1911,7 @@ impl EventHandler {
                 }
             }
 
-            CommonAction::ShowMessage { message } => {
+            CommonAction::NotifyOperator { message } => {
                 let _ = status_tx.send(format!("[CLIENT] {}", message));
             }
             CommonAction::ProvideFeedback { .. } => {
@@ -2856,6 +2864,8 @@ impl EventHandler {
 /// Mirrors the variants of [`crate::llm::CommonAction`]; an action naming one of these is
 /// valid for every protocol, so it must never be rejected as unknown.
 const COMMON_ACTION_NAMES: &[&str] = &[
+    "notify_operator",
+    // `notify_operator`'s former name, still accepted (see `common::LEGACY_NOTIFY_OPERATOR`).
     "show_message",
     "open_server",
     "close_server",
@@ -2870,6 +2880,8 @@ const COMMON_ACTION_NAMES: &[&str] = &[
     "change_model",
     "set_memory",
     "append_memory",
+    "set_connection_memory",
+    "append_connection_memory",
     "append_to_log",
     "schedule_task",
     "cancel_task",

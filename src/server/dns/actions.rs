@@ -752,7 +752,7 @@ fn execute_send_dns_refused(action: &serde_json::Value) -> Result<ActionResult> 
 fn send_dns_a_response_action() -> ActionDefinition {
     ActionDefinition {
         name: "send_dns_a_response".to_string(),
-        description: "Answer a query whose query_type is A with an IPv4 address. Only for query_type A: a TXT query is answered with send_dns_txt_response, AAAA with send_dns_aaaa_response, MX with send_dns_mx_response. This is the correct DNS-specific action - do NOT use generic 'send_data' or 'show_message' actions for DNS responses. Always include the query_id from the request, the domain name, and the IPv4 address to return.".to_string(),
+        description: "Answer a query whose query_type is A with an IPv4 address. Only for query_type A: a TXT query is answered with send_dns_txt_response, AAAA with send_dns_aaaa_response, MX with send_dns_mx_response. This is the correct DNS-specific action - do NOT use generic 'send_data' or 'notify_operator' actions for DNS responses. Always include the query_id from the request, the domain name, and the IPv4 address to return.".to_string(),
         parameters: vec![
             Parameter {
                 name: "query_id".to_string(),

@@ -1999,6 +1999,9 @@ impl AppState {
                 conn.status = ConnectionStatus::Closed;
                 conn.status_changed_at = crate::utils::clock::Instant::now();
             }
+            // What the model kept about this peer ends with the connection, not with the
+            // later sweep that removes its row.
+            server.connection_memory.remove(&connection_id);
         }
 
         self.remove_peer_handle(server_id, connection_id.as_u32())
@@ -2317,10 +2320,14 @@ impl AppState {
         connection_id: ConnectionId,
         status: crate::state::server::ConnectionStatus,
     ) {
+        let closed = status == crate::state::server::ConnectionStatus::Closed;
         if let Some(server) = self.inner.write().await.servers.get_mut(&server_id) {
             if let Some(conn) = server.connections.get_mut(&connection_id) {
                 conn.status = status;
                 conn.status_changed_at = crate::utils::clock::Instant::now();
+            }
+            if closed {
+                server.connection_memory.remove(&connection_id);
             }
         }
     }
@@ -3515,11 +3522,102 @@ impl AppState {
             .render(server.history_entries)
     }
 
-    /// The history block for a client's next prompt — see [`Self::render_server_history`].
+    /// Change one connection's memory (see [`ServerInstance::connection_memory`]) with
+    /// `update`, which receives the current notes (empty when there are none) and returns the
+    /// new ones. Returns the new length.
+    ///
+    /// Refused for a connection the server does not hold — an id it has removed, or never
+    /// registered — because nothing would ever clear the entry; an empty result removes it.
+    pub async fn update_connection_memory(
+        &self,
+        server_id: ServerId,
+        connection_id: crate::server::connection::ConnectionId,
+        update: impl FnOnce(&str) -> String,
+    ) -> anyhow::Result<usize> {
+        let mut inner = self.inner.write().await;
+        let server = inner
+            .servers
+            .get_mut(&server_id)
+            .ok_or_else(|| anyhow::anyhow!("server #{} does not exist", server_id.as_u32()))?;
+        anyhow::ensure!(
+            server.connections.contains_key(&connection_id),
+            "{} is not a live connection of server #{}",
+            connection_id,
+            server_id.as_u32()
+        );
+        let current = server
+            .connection_memory
+            .get(&connection_id)
+            .map(String::as_str)
+            .unwrap_or("");
+        let updated = update(current);
+        let len = updated.len();
+        if updated.is_empty() {
+            server.connection_memory.remove(&connection_id);
+        } else {
+            server.connection_memory.insert(connection_id, updated);
+        }
+        Ok(len)
+    }
+
+    /// One connection's memory, or `None` when it has none.
+    pub async fn get_connection_memory(
+        &self,
+        server_id: ServerId,
+        connection_id: crate::server::connection::ConnectionId,
+    ) -> Option<String> {
+        let inner = self.inner.read().await;
+        inner
+            .servers
+            .get(&server_id)?
+            .connection_memory
+            .get(&connection_id)
+            .cloned()
+    }
+
+    /// The block showing the model a connection's own memory ahead of its event, or `None`
+    /// when there is no connection or nothing kept. Carries none of the trigger's labels, like
+    /// the history block beside it.
+    pub async fn render_connection_memory(
+        &self,
+        server_id: ServerId,
+        connection_id: Option<crate::server::connection::ConnectionId>,
+    ) -> Option<String> {
+        let conn = connection_id?;
+        let memory = self.get_connection_memory(server_id, conn).await?;
+        Some(format!(
+            "Memory for this connection ({conn} only; other connections do not see it, and it \
+             ends when the connection closes):\n```text\n{memory}\n```\n"
+        ))
+    }
+
+    /// The history block for a client's next prompt — see [`Self::render_server_history`] and
+    /// [`crate::state::exchange_history::ExchangeHistory::render_for_client`].
     pub async fn render_client_history(&self, client_id: ClientId) -> Option<String> {
         let inner = self.inner.read().await;
         let client = inner.clients.get(&client_id)?;
-        client.exchange_history.render(client.history_entries)
+        client
+            .exchange_history
+            .render_for_client(client.history_entries)
+    }
+
+    /// Record one exchange in a client's history only — not in the access log, which counts
+    /// network events (`--exit-after-events` reads its total). For what a client did before any
+    /// event arrived ([`crate::state::exchange_history::CLIENT_STARTED_EVENT`]).
+    pub async fn record_client_history(
+        &self,
+        client_id: ClientId,
+        event_type: &str,
+        request: &serde_json::Value,
+        response: &[serde_json::Value],
+    ) {
+        let mut inner = self.inner.write().await;
+        if let Some(client) = inner.clients.get_mut(&client_id) {
+            let limit = client.history_entries;
+            client
+                .exchange_history
+                .record(event_type, request, response, limit);
+        }
     }
 
     /// An instance's history and batching settings as `(history entries, batching)`.
@@ -3564,17 +3662,29 @@ impl AppState {
 
     /// A server's memoisation, with what a cache key needs, or `None` when it is off (or the
     /// server is gone). See [`crate::llm::answer_reuse`].
+    ///
+    /// The context includes the memory of `connection_id` (`set_connection_memory`): the model
+    /// answers a connection in the light of what it kept about that peer, so an answer given
+    /// while it knew one peer's name must not be replayed to a peer it knows nothing about.
     pub async fn server_memo(
         &self,
         server_id: ServerId,
+        connection_id: Option<crate::server::connection::ConnectionId>,
     ) -> Option<crate::llm::answer_reuse::MemoHandle> {
         let inner = self.inner.read().await;
         let server = inner.servers.get(&server_id)?;
         server.memo.settings()?;
+        let connection_memory = connection_id
+            .and_then(|conn| server.connection_memory.get(&conn))
+            .map(String::as_str)
+            .unwrap_or("");
         Some(crate::llm::answer_reuse::MemoHandle {
             memo: server.memo.clone(),
             history_entries: server.history_entries,
-            context: format!("{}\u{1f}{}", server.instruction, server.memory),
+            context: format!(
+                "{}\u{1f}{}\u{1f}{}",
+                server.instruction, server.memory, connection_memory
+            ),
         })
     }
 

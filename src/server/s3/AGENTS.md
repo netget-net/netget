@@ -172,7 +172,7 @@ an action here:
 
 Use `send_s3_error` to reject any operation.
 
-The generic actions (`show_message`, memory operations, …) are supplied centrally by
+The generic actions (`notify_operator`, memory operations, …) are supplied centrally by
 `get_network_event_common_actions()`.
 
 ### Binary object bodies
@@ -223,7 +223,7 @@ impractical regardless of encoding.
 {
   "actions": [
     {
-      "type": "show_message",
+      "type": "notify_operator",
       "message": "Stored object my-bucket/uploaded.txt"
     }
   ]

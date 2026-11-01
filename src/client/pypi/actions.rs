@@ -89,7 +89,7 @@ pub static PYPI_FILE_DOWNLOADED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         "Package file downloaded from PyPI",
         // A real answer, not `{"type": "placeholder"}`. This event *is* raised, and with
         // a placeholder example and no attached actions the model was steered to
-        // `show_message`, which `execute_action` rejects.
+        // `notify_operator`, which `execute_action` rejects.
         json!({"type": "get_package_info", "package_name": "requests"}),
     )
     .with_parameters(vec![
@@ -269,7 +269,7 @@ impl Protocol for PypiClientProtocol {
     /// This used to hand-build a second set of `EventType`s with the same ids, no
     /// parameters, and `{"type": "placeholder", "event_id": ...}` as the response
     /// example. `EventType::effective_response_example` cannot repair a placeholder
-    /// without an attached action, so it fell through to `show_message` — which this
+    /// without an attached action, so it fell through to `notify_operator` — which this
     /// protocol's own `execute_action` rejects as unknown. The model was being taught an
     /// answer its own client refuses.
     fn get_event_types(&self) -> Vec<EventType> {

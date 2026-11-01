@@ -471,7 +471,7 @@ impl WolServer {
                     recognised = true
                 }
                 Some(actions::IGNORE_MAGIC_PACKET) => ignored = true,
-                // Generic actions (show_message, update_instruction, …) say nothing about
+                // Generic actions (notify_operator, update_instruction, …) say nothing about
                 // this packet, so they do not count as a decision either way.
                 _ => {}
             }

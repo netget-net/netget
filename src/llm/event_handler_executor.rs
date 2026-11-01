@@ -6,7 +6,7 @@
 //! - Static: Execute predefined actions
 //! - LLM: Delegate to LLM (fallback/default)
 
-use crate::llm::actions::executor::{execute_actions, ExecutionResult};
+use crate::llm::actions::executor::{execute_actions_on_connection, ExecutionResult};
 use crate::llm::actions::protocol_trait::Server;
 use crate::scripting::EventHandlerType;
 use crate::state::app_state::AppState;
@@ -218,6 +218,7 @@ async fn try_execute_event_handler_inner(
             execute_static_handler(
                 state,
                 server_id,
+                connection_id,
                 event_type_id,
                 event_description,
                 actions,
@@ -244,6 +245,7 @@ async fn try_execute_event_handler_inner(
             execute_static_handler(
                 state,
                 server_id,
+                connection_id,
                 event_type_id,
                 event_description,
                 &actions,
@@ -796,9 +798,16 @@ async fn execute_script_handler(
                 .await;
 
             // Execute the script's actions with server context
-            let result = execute_actions(response.actions, state, protocol, Some(server_id), None)
-                .await
-                .context("Failed to execute script actions")?;
+            let result = execute_actions_on_connection(
+                response.actions,
+                state,
+                protocol,
+                Some(server_id),
+                None,
+                connection_id,
+            )
+            .await
+            .context("Failed to execute script actions")?;
 
             // End conversation tracking
             state.end_conversation(&conv_id).await;
@@ -826,6 +835,7 @@ async fn execute_script_handler(
 async fn execute_static_handler(
     state: &AppState,
     server_id: ServerId,
+    connection_id: Option<crate::server::connection::ConnectionId>,
     event_type_id: &str,
     event_description: &str,
     actions: &[serde_json::Value],
@@ -855,10 +865,17 @@ async fn execute_static_handler(
         }
     };
 
-    // Execute the static actions with server context
-    let result = execute_actions(actions, state, protocol, Some(server_id), None)
-        .await
-        .context("Failed to execute static actions")?;
+    // Execute the static actions with server context, and the connection for its own memory
+    let result = execute_actions_on_connection(
+        actions,
+        state,
+        protocol,
+        Some(server_id),
+        None,
+        connection_id,
+    )
+    .await
+    .context("Failed to execute static actions")?;
 
     // Log as STATIC interaction (no conversation tracking needed for static responses)
     debug!("Static handler completed: {}", event_description);

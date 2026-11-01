@@ -522,7 +522,7 @@ pub static AR_CLOSED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         "profinet_ar_closed",
         "An AR ended: the controller released it, its watchdog expired, or it was aborted. \
          Nothing to answer",
-        json!({"type": "show_message", "message": "PROFINET AR closed"}),
+        json!({"type": "notify_operator", "message": "PROFINET AR closed"}),
     )
     .with_parameters(vec![
         p(

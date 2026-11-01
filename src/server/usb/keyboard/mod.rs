@@ -528,7 +528,7 @@ impl UsbKeyboardServer {
     /// Call LLM when the USB/IP host detaches.
     ///
     /// `usb_keyboard_detached` is declared `with_no_actions()`, so the model's vocabulary
-    /// here is the common action set (`show_message`, memory operations); there is no
+    /// here is the common action set (`notify_operator`, memory operations); there is no
     /// wire left to write to.
     async fn call_llm_on_detach(
         connection_id: ConnectionId,
