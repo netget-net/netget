@@ -192,12 +192,26 @@ Six, each advertising exactly the actions that can answer it:
 
 | event | data | actions |
 |---|---|---|
-| `ldap_bind` | `message_id`, `version`, `dn`, `password`, `auth_type` | `ldap_bind_response`, `close_connection` |
+| `ldap_bind` | `message_id`, `version`, `dn`, `password`, `auth_type`, `anonymous`, `answer_with` | `ldap_bind_response` |
 | `ldap_search` | `message_id`, `base_dn`, `scope`, `filter`, `attributes`, `authenticated`, `bind_dn` | `ldap_search_response`, `close_connection` |
 | `ldap_add` | `message_id`, `dn`, `attributes`, `authenticated`, `bind_dn` | `ldap_add_response`, `close_connection` |
 | `ldap_modify` | `message_id`, `dn`, `changes`, `authenticated`, `bind_dn` | `ldap_modify_response`, `close_connection` |
 | `ldap_delete` | `message_id`, `dn`, `authenticated`, `bind_dn` | `ldap_delete_response`, `close_connection` |
 | `ldap_unbind` | `bind_dn` | none, declared with `.with_no_actions()` |
+
+**`ldap_bind` says what kind of bind it is, and is answered by the BindResponse alone.**
+`anonymous` is true for a simple bind with no DN and no password, and `answer_with`
+(`actions::bind_answer_with`) names the kind of bind — anonymous, a DN with no password, a DN
+with a password, or SASL, which can only be refused — says what the instructions decide it on,
+and that what a later search finds is decided when the search arrives. Told "accept anonymous
+connections. A search under dc=example,dc=com finds one person …", llama3.1:8b refused
+`ldapsearch -x`'s anonymous bind ("anonymous bind not allowed") in every run of two real-model
+eval cases (seed 42): the event showed an empty `dn` and `password` and nothing said that this is
+the anonymous connection the instructions accept. Replayed with the hint, five seeds in five
+accepted. `close_connection` is not offered on a bind: offered beside the BindResponse, the
+model answered an anonymous bind with both four runs in five and hung up before the search
+`ldapsearch` had already pipelined. A refused bind is `ldap_bind_response` with `success: false`,
+after which the client closes by itself.
 
 `ldap_unbind` used to carry `.with_actions(vec![])`, which is indistinguishable from a
 forgotten action list: `call_llm` treats that as a bug and fires a `debug_assert!(false, ...)`,

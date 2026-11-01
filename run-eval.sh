@@ -45,6 +45,7 @@ ALL_PROTOCOLS=(
     ldap ipp syslog ntp telnet tcp ftp udp
     prometheus otlp docker vault bolt
     smtp pop3 imap nntp memcached mqtt coap modbus snmp sip websocket nostr
+    lmtp rsync
 )
 
 # The default model. Chosen deliberately, and the reasoning matters:
@@ -178,7 +179,7 @@ echo "${GREEN}✓${NC} ${MODEL} is available"
 # its cases 'client-missing' in the results rather than silently absent.
 echo "${BLUE}Checking third-party clients…${NC}"
 for bin in curl dig whois redis-cli psql mysql ldapsearch ipptool nc ftp python3 \
-    mosquitto_sub coap-client snmpget sipsak websocat; do
+    mosquitto_sub coap-client snmpget sipsak websocat nak rsync; do
     if command -v "$bin" >/dev/null 2>&1; then
         echo "  ${GREEN}✓${NC} $bin"
     else
