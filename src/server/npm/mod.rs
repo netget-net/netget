@@ -486,7 +486,7 @@ async fn handle_npm_request_inner(
             // Scan for the first action that is actually an NPM response. This was a
             // `for` loop with an unconditional `return` inside it, so it examined only
             // the first result and returned a 500 if that happened to be something
-            // like `show_message`. It also tripped clippy's `never_loop`.
+            // like `notify_operator`. It also tripped clippy's `never_loop`.
             let failures = execution_result.failures.len();
             for result in execution_result.protocol_results {
                 if let Some(response) = process_npm_action_result(result, &status_tx).await {
@@ -606,7 +606,7 @@ fn npm_server_error(
 /// Returns `None` when the action is not an NPM response action, so the caller can
 /// keep scanning. It used to return a 500 for anything it did not recognise, and the
 /// caller returned unconditionally on the first result — so a model emitting the
-/// documented `show_message` + NPM-response pair got a 500 and lost the real answer.
+/// documented `notify_operator` + NPM-response pair got a 500 and lost the real answer.
 async fn process_npm_action_result(
     action_result: crate::llm::ActionResult,
     status_tx: &mpsc::UnboundedSender<String>,

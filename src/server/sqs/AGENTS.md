@@ -143,7 +143,7 @@ saturation looked like a permanent fault and the client did not retry.
   the *internal* `ActionResult::Custom` name the server matches on; it is not an action name
   the model may emit.
 
-The generic actions (`show_message`, memory operations, …) are supplied centrally by
+The generic actions (`notify_operator`, memory operations, …) are supplied centrally by
 `get_network_event_common_actions()`.
 
 **Event Types**:

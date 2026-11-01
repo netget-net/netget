@@ -18,7 +18,7 @@ use crate::protocol::log_template::LogTemplate;
 //
 // Every event carries the reply action(s) that endpoint can actually produce, plus `npm_error`:
 // `call_llm` prompts the model with the *event's* action list, so an event that declares none
-// leaves the model with only set_memory/show_message and every npm action it returns is rejected.
+// leaves the model with only set_memory/notify_operator and every npm action it returns is rejected.
 pub static NPM_PACKAGE_REQUEST: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "NPM_PACKAGE_REQUEST",

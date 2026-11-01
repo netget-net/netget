@@ -474,6 +474,11 @@ impl TelnetServer {
                                 .await
                                 {
                                     Ok(execution_result) => {
+                                        // Notes for the operator (`notify_operator`), as the
+                                        // line path below prints them.
+                                        for message in &execution_result.messages {
+                                            log.info(message);
+                                        }
                                         let mut greeted = 0usize;
                                         for protocol_result in execution_result.protocol_results {
                                             if let ActionResult::Output(data) = protocol_result {

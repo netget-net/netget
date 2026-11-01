@@ -716,7 +716,7 @@ pub async fn run_with_actions(
                         }
                     }
                 }
-                CommonAction::ShowMessage { message } => {
+                CommonAction::NotifyOperator { message } => {
                     emit_status_line(&format!("[{}] {}", i + 1, message), to_stderr);
                 }
                 _ => {

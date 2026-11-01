@@ -11,7 +11,7 @@ Every action below applies to this {{{instance_type}}} (#{{instance_id}}) and no
 - `update_{{{instance_type}}}` with `{{{instance_type}}}_id` {{instance_id}} changes event_handlers, history or batching in place. `event_handlers` replaces the whole list.
 - `set_memory` / `append_memory` change this {{{instance_type}}}'s memory.
 - `schedule_task` / `cancel_task` manage tasks on this {{{instance_type}}}.
-- `show_message` tells the operator what you changed and why.
+- `notify_operator` tells the operator what you changed and why.
 
 Any other action, or one naming a different instance, is refused.
 {{/if}}

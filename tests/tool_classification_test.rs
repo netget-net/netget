@@ -47,7 +47,7 @@ fn prompt_classifier_matches_runtime_router() {
         "open_server",
         "close_server",
         "set_memory",
-        "show_message",
+        "notify_operator",
         "update_script",
         "schedule_task",
     ] {

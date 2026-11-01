@@ -22,6 +22,9 @@ pub struct ConnRow {
     /// Whether this connection accepts injected actions ("message this
     /// peer") — true only where the protocol registered a peer handle.
     pub can_message: bool,
+    /// Size of what the model keeps about this one peer (`set_connection_memory`); 0 for none
+    /// and always 0 for a client, whose memory is the instance's.
+    pub memory_len: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -202,6 +205,11 @@ pub async fn build_snapshot(state: &AppState) -> RailSnapshot {
                 bytes_sent: c.bytes_sent,
                 active: c.status == crate::state::server::ConnectionStatus::Active,
                 can_message: state.has_peer_handle(server.id, c.id.as_u32()).await,
+                memory_len: server
+                    .connection_memory
+                    .get(&c.id)
+                    .map(String::len)
+                    .unwrap_or(0),
             });
         }
         conns.sort_by_key(|c| c.id);
@@ -278,6 +286,7 @@ pub async fn build_snapshot(state: &AppState) -> RailSnapshot {
                 bytes_sent: c.bytes_sent,
                 active: c.status == ClientStatus::Connected,
                 can_message: false,
+                memory_len: 0,
             }),
             history: client.connection_history.iter().cloned().collect(),
             requests: client_requests

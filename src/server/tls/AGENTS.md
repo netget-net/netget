@@ -247,7 +247,7 @@ Example:
       "data": "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 7\r\n\r\nSuccess"
     },
     {
-      "type": "show_message",
+      "type": "notify_operator",
       "message": "Sent HTTP 200 OK response over TLS"
     }
   ]

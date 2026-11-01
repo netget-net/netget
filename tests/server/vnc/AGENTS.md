@@ -76,7 +76,7 @@ The whole feature in one connection:
 
 ### 3. `test_vnc_placeholder_when_model_gives_no_usable_answer`
 
-The mock answers the framebuffer event with `show_message` — a valid action that draws nothing.
+The mock answers the framebuffer event with `notify_operator` — a valid action that draws nothing.
 The client must receive the placeholder screen (`netget::server::vnc::PLACEHOLDER_BACKGROUND`,
 compared against the decoded pixel) and the server must report `produced no usable action`.
 This is the fail-closed path: RFB has no "no answer" reply, so silence would hang the viewer,

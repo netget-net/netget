@@ -545,7 +545,7 @@ pub static QUIC_CONNECTION_OPENED_EVENT: LazyLock<EventType> = LazyLock::new(|| 
         "A QUIC connection was established (TLS 1.3 complete), but the client has not opened a \
          stream yet. Purely informational: every send action needs a stream to write to, and \
          none exists yet. Act on quic_stream_opened instead.",
-        json!({"type": "show_message", "message": "QUIC connection established"}),
+        json!({"type": "notify_operator", "message": "QUIC connection established"}),
     )
     // No parameters - just connection opened notification
     .with_log_template(

@@ -69,6 +69,7 @@ fn conn(id: u32, active: bool) -> ConnRow {
         bytes_sent: 2048,
         active,
         can_message: false,
+        memory_len: 0,
     }
 }
 

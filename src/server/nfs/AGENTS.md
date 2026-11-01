@@ -109,7 +109,7 @@ server bugs. Say so in the instruction.
 
 — a comment where the actions should have been. `call_llm` builds the model's tool list from
 `event.event_type.actions`, **not** from `get_sync_actions()`, so the model was offered
-`set_memory` / `show_message` / `append_to_log` and nothing else. Every `nfs_*_response` it
+`set_memory` / `notify_operator` / `append_to_log` and nothing else. Every `nfs_*_response` it
 produced was rejected as an unknown action, retried twice, and failed. Every operation then
 fell through to `error!("No valid nfs_..._response action in LLM response")` and returned
 NFS3ERR. **No NFS operation could ever be answered.**

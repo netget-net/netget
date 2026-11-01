@@ -1377,6 +1377,14 @@ impl NetGetMcpService {
                                 ""
                             }
                         ));
+                        // What the model keeps about this one peer (set_connection_memory),
+                        // beside the shared Memory above.
+                        if let Some(memory) = server.connection_memory.get(&conn.id) {
+                            result.push_str(&format!(
+                                "  - Connection memory: {}\n",
+                                memory.replace('\n', "; ")
+                            ));
+                        }
                     }
                 }
                 Ok(CallToolResult::success(vec![Content::text(result)]))

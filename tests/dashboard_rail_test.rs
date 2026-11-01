@@ -42,6 +42,7 @@ fn conn(id: u32, active: bool, can_message: bool) -> ConnRow {
         bytes_sent: 20,
         active,
         can_message,
+        memory_len: 0,
     }
 }
 
@@ -900,6 +901,7 @@ fn a_client_connection_shows_its_conversation_with_a_send_button() {
         bytes_sent: 6,
         active: true,
         can_message: false,
+        memory_len: 0,
     });
     row.requests = vec![
         AccessLogEntry {

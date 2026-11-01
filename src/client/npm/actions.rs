@@ -274,7 +274,7 @@ impl Protocol for NpmClientProtocol {
     /// This used to hand-build a second set of `EventType`s with the same ids, no
     /// parameters, and `{"type": "placeholder", "event_id": ...}` as the response
     /// example. `EventType::effective_response_example` cannot repair a placeholder
-    /// without an attached action, so it fell through to `show_message` — which this
+    /// without an attached action, so it fell through to `notify_operator` — which this
     /// protocol's own `execute_action` rejects as unknown. The model was being taught an
     /// answer its own client refuses.
     fn get_event_types(&self) -> Vec<EventType> {

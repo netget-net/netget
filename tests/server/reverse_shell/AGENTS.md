@@ -12,7 +12,7 @@ line and asserts the mocked model's answer appears. `read_until` accumulates byt
 with a 15 s timeout per read.
 
 **Assert the fail-closed path structurally.** The second test answers the command event with only
-`show_message` (a valid action that yields no protocol output). The server must treat this as "no
+`notify_operator` (a valid action that yields no protocol output). The server must treat this as "no
 usable answer" and **half-close** the socket; the test asserts a subsequent read returns EOF (0
 bytes). Equating "no answer" with "empty output, keep going" would be the fail-open shape that bit
 OAuth2 — an LLM outage would look like a working silent shell.
