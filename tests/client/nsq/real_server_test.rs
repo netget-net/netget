@@ -1,5 +1,5 @@
 use super::common::*;
-use crate::helpers::real_server::{InstallHint, RealServer};
+use crate::helpers::real_server::{find_binary, InstallHint, RealServer};
 use serde_json::json;
 use std::time::Duration;
 async fn daemon() -> crate::helpers::E2EResult<RealServer> {
@@ -263,6 +263,7 @@ async fn mocked_model_writes_to_real_nsqd_and_memory_is_available_on_followup(
         .expect_calls(1)
         .and()
         .on_event("nsq_response")
+        .and_event_data_contains("command", "PUB")
         .and_prompt_containing("published first NSQ message")
         .respond_with_actions(json!([]))
         .expect_calls(1)
@@ -271,14 +272,6 @@ async fn mocked_model_writes_to_real_nsqd_and_memory_is_available_on_followup(
     let mock = MockOllamaServer::start(config).await?;
     let state = netget::state::AppState::new_with_options(false, mock.base_url());
     state.set_ollama_model(Some("mock".into())).await;
-    let subscriber = connected_client(&state, server.addr()).await;
-    request(
-        &state,
-        subscriber,
-        json!({"operation":"subscribe","topic":"llm","channel":"proof"}),
-    )
-    .await;
-    send(&state, subscriber, json!({"operation":"ready","count":1})).await;
     let (tx, _) = tokio::sync::mpsc::unbounded_channel();
     let publisher = netget::cli::management::ClientForm {
         protocol: "nsq".into(),
@@ -288,11 +281,42 @@ async fn mocked_model_writes_to_real_nsqd_and_memory_is_available_on_followup(
     }
     .create(&state, netget::llm::OllamaClient::new(mock.base_url()), tx)
     .await?;
+    event(&state, publisher, "nsq_response", 0).await;
+    // Condition 4 from nsqd's side: the official Go consumer `nsq_tail` reads the message the
+    // model chose out of the topic. The topic has no channel until nsq_tail creates one, so
+    // nsqd holds the message for it; without the model's publish nsq_tail reads nothing.
+    let tail = tokio::time::timeout(
+        Duration::from_secs(15),
+        tokio::process::Command::new(find_binary("nsq_tail").expect(
+            "nsq_tail required: brew install nsq / the official nsq v1.3.0 release binaries",
+        ))
+        .args([
+            &format!("--nsqd-tcp-address={}", server.addr()),
+            "--topic=llm",
+            "--channel=independent",
+            "-n",
+            "1",
+        ])
+        .kill_on_drop(true)
+        .output(),
+    )
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "nsq_tail read nothing from topic llm; nsqd log: {}",
+            server.log()
+        )
+    })?;
+    assert!(
+        tail.status.success(),
+        "nsq_tail: {}",
+        String::from_utf8_lossy(&tail.stderr)
+    );
     assert_eq!(
-        event(&state, subscriber, "nsq_message", 0).await.1["body"],
+        String::from_utf8_lossy(&tail.stdout).trim_end(),
         "model chose this"
     );
-    event(&state, publisher, "nsq_response", 0).await;
+    mock.wait_for_expectations(30).await;
     assert_eq!(
         state.get_memory_for_client(publisher).await.unwrap(),
         "published first NSQ message"
@@ -300,6 +324,5 @@ async fn mocked_model_writes_to_real_nsqd_and_memory_is_available_on_followup(
     assert_eq!(mock.call_count().await, 2);
     mock.verify_calls().await?;
     state.remove_client(publisher).await;
-    state.remove_client(subscriber).await;
     Ok(())
 }
