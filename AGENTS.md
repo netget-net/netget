@@ -2183,6 +2183,15 @@ Read before assuming a subsystem is sound:
   `Overflow` error. **Check the crate, not its reputation**: an official, widely used decoder
   had the same hole as the hand-written ones.
 
+  **DNS was the ninth (October 2026), and the recursion was not on nesting at all.**
+  `hickory-proto` 0.24 follows a *name-compression pointer* by recursing, so a chain of pointers
+  each aiming two bytes back — hidden in a NULL record's RDATA — is a frame per two bytes: a
+  debug build dies at 1 702 hops, 3.4 KB in one UDP datagram, in five servers at once (release
+  frames are small enough that the longest chain the format allows still fits a 2 MiB worker).
+  `src/utils/dns_screen.rs` bounds the chain before every decode. **Anything a decoder
+  *follows* — a pointer, an offset, a reference — is depth too**, whether or not the format
+  looks nested. (`docs/planning/IMPROVEMENTS.md` item 48 has the rest of that audit.)
+
 - **Bound the *declared* size, not the remainder.** NATS's `HPUB` limit was applied to
   `total − header`, leaving `header` unbounded — and `header == total` passes every check with
   a zero-length body. `HPUB x 4000000000 4000000000` is thirty bytes on the wire and buffers

@@ -74,12 +74,40 @@ pub struct PacketLimitTrip {
     sequence: AtomicU8,
     /// Declared size of the logical packet at the moment it crossed, for the log line.
     declared: AtomicUsize,
+    /// Which rule refused: [`Refusal`] as a `u8`, so the trip stays lock-free.
+    reason: AtomicU8,
+}
+
+/// Why the reader refused a packet header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// The logical packet's declared size crossed [`MAX_PACKET_BYTES`].
+    TooLarge,
+    /// A sequence id `opensrv-mysql` 0.7.0 would panic on — see [`PacketLimitReader`].
+    OutOfOrder,
 }
 
 impl PacketLimitTrip {
     /// Whether the bound refused a packet on this connection.
     pub fn tripped(&self) -> bool {
         self.tripped.load(Ordering::SeqCst)
+    }
+
+    /// Which rule refused. Meaningful only once [`Self::tripped`] is true.
+    pub fn refusal(&self) -> Refusal {
+        if self.reason.load(Ordering::SeqCst) == Refusal::OutOfOrder as u8 {
+            Refusal::OutOfOrder
+        } else {
+            Refusal::TooLarge
+        }
+    }
+
+    /// The ERR packet that answers the refusal, carrying [`Self::reply_sequence`].
+    pub fn refusal_packet(&self) -> Vec<u8> {
+        match self.refusal() {
+            Refusal::TooLarge => packet_too_large_err(self.reply_sequence()),
+            Refusal::OutOfOrder => packets_out_of_order_err(self.reply_sequence()),
+        }
     }
 
     /// Sequence id the refusal must carry: one past the header that crossed the bound.
@@ -92,9 +120,10 @@ impl PacketLimitTrip {
         self.declared.load(Ordering::SeqCst)
     }
 
-    fn record(&self, sequence: u8, declared: usize) {
+    fn record(&self, refusal: Refusal, sequence: u8, declared: usize) {
         self.sequence.store(sequence, Ordering::SeqCst);
         self.declared.store(declared, Ordering::SeqCst);
+        self.reason.store(refusal as u8, Ordering::SeqCst);
         self.tripped.store(true, Ordering::SeqCst);
     }
 }
@@ -105,6 +134,25 @@ impl PacketLimitTrip {
 /// to the caller and the framing is tracked alongside them. That is what makes it safe to put
 /// beneath a crate that does its own buffering — the decision is taken on the header, so the
 /// crate underneath never sees the payload it would have allocated for.
+///
+/// # Sequence ids
+///
+/// The same header carries the one other number `opensrv-mysql` 0.7.0 trusts until it panics:
+///
+/// - Every packet it reads is answered with `writer.set_seq(seq + 1)` on the client's `u8`
+///   sequence id (`lib.rs:389`, `:502`, `:563`). A client sending sequence id `0xFF` overflows
+///   that addition, which is a panic wherever overflow checks are on — every debug and test
+///   build. Nothing legitimate sends it: a client's packets in one exchange start at 0 (a
+///   command) or 1 (the handshake response) and a chain long enough to reach 255 would be
+///   4 GiB, sixty-four times [`MAX_PACKET_BYTES`].
+/// - A chained packet is reassembled by `packet()` with `assert_eq!(nseq, seq + 1)` between
+///   fragments and `assert_eq!(last.0, full.0 + 1)` before the final one
+///   (`packet_reader.rs:252`, `:266`). A peer that numbers its fragments any other way panics
+///   the connection task — before authentication, since the handshake response is read the
+///   same way.
+///
+/// Both are refused here, from the header, with [`Refusal::OutOfOrder`]: MySQL's own 1156
+/// `ER_NET_PACKETS_OUT_OF_ORDER` is what the connection task then answers.
 pub struct PacketLimitReader<R> {
     inner: R,
     limit: usize,
@@ -117,6 +165,9 @@ pub struct PacketLimitReader<R> {
     /// Declared payload bytes accumulated so far for the logical packet being assembled.
     /// Non-zero only while a chain of [`FULL_PACKET_PAYLOAD`] fragments is in progress.
     logical_declared: usize,
+    /// Sequence id of the last fragment while a chain is in progress; the next header must
+    /// carry this plus one.
+    chain_sequence: Option<u8>,
 }
 
 impl<R> PacketLimitReader<R> {
@@ -140,6 +191,7 @@ impl<R> PacketLimitReader<R> {
             header_len: 0,
             payload_remaining: 0,
             logical_declared: 0,
+            chain_sequence: None,
         }
     }
 
@@ -184,18 +236,29 @@ impl<R> PacketLimitReader<R> {
             let logical = self.logical_declared.saturating_add(declared);
 
             if logical > self.limit {
-                self.trip.record(sequence, logical);
+                self.trip.record(Refusal::TooLarge, sequence, logical);
+                return Err(());
+            }
+
+            let out_of_order = sequence == u8::MAX
+                || self
+                    .chain_sequence
+                    .is_some_and(|previous| sequence != previous.wrapping_add(1));
+            if out_of_order {
+                self.trip.record(Refusal::OutOfOrder, sequence, logical);
                 return Err(());
             }
 
             self.payload_remaining = declared;
             // A fragment of exactly FULL_PACKET_PAYLOAD continues into the next packet, so the
             // logical size carries over. Anything shorter ends the logical packet.
-            self.logical_declared = if declared == FULL_PACKET_PAYLOAD {
-                logical
+            if declared == FULL_PACKET_PAYLOAD {
+                self.logical_declared = logical;
+                self.chain_sequence = Some(sequence);
             } else {
-                0
-            };
+                self.logical_declared = 0;
+                self.chain_sequence = None;
+            }
         }
         Ok(())
     }
@@ -218,9 +281,13 @@ impl<R: AsyncRead + Unpin> AsyncRead for PacketLimitReader<R> {
                     // packet's worth, so this is bounded by the caller's buffer.
                     let fresh = buf.filled()[before..filled].to_vec();
                     if this.observe(&fresh).is_err() {
+                        let reason = match this.trip.refusal() {
+                            Refusal::TooLarge => "MySQL packet exceeds max_allowed_packet",
+                            Refusal::OutOfOrder => "MySQL packet sequence id out of order",
+                        };
                         return Poll::Ready(Err(std::io::Error::new(
                             std::io::ErrorKind::InvalidData,
-                            "MySQL packet exceeds max_allowed_packet",
+                            reason,
                         )));
                     }
                 }
@@ -246,15 +313,34 @@ impl<R: AsyncRead + Unpin> AsyncRead for PacketLimitReader<R> {
 /// conforming client as "packet out of order" — so getting this wrong turns a clear refusal
 /// back into the silence this bound exists to replace.
 pub fn packet_too_large_err(sequence: u8) -> Vec<u8> {
-    const MESSAGE: &[u8] = b"Got a packet bigger than 'max_allowed_packet' bytes";
     const ER_NET_PACKET_TOO_LARGE: u16 = 1153;
+    err_packet(
+        sequence,
+        ER_NET_PACKET_TOO_LARGE,
+        b"Got a packet bigger than 'max_allowed_packet' bytes",
+    )
+}
 
-    let mut payload = Vec::with_capacity(9 + MESSAGE.len());
+/// The ERR packet a peer gets when a header carries a sequence id [`PacketLimitReader`]
+/// refuses: error **1156 `ER_NET_PACKETS_OUT_OF_ORDER`**, SQLSTATE `08S01`, with mysqld's own
+/// message — what a real server answers a client whose packet numbering it cannot follow.
+pub fn packets_out_of_order_err(sequence: u8) -> Vec<u8> {
+    const ER_NET_PACKETS_OUT_OF_ORDER: u16 = 1156;
+    err_packet(
+        sequence,
+        ER_NET_PACKETS_OUT_OF_ORDER,
+        b"Got packets out of order",
+    )
+}
+
+/// A communication-class (`08S01`) ERR packet, framed with `sequence`.
+fn err_packet(sequence: u8, code: u16, message: &[u8]) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(9 + message.len());
     payload.push(0xFF);
-    payload.extend_from_slice(&ER_NET_PACKET_TOO_LARGE.to_le_bytes());
+    payload.extend_from_slice(&code.to_le_bytes());
     payload.push(b'#');
     payload.extend_from_slice(b"08S01");
-    payload.extend_from_slice(MESSAGE);
+    payload.extend_from_slice(message);
 
     let len = payload.len();
     let mut packet = Vec::with_capacity(4 + len);

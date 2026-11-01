@@ -665,7 +665,7 @@ impl LlmnrClient {
         question_type: RecordType,
         from: SocketAddr,
     ) -> std::result::Result<ResponderAnswer, String> {
-        let message = DnsMessage::from_vec(data)
+        let message = crate::utils::dns_screen::decode_dns_message(data)
             .map_err(|e| format!("not a parseable DNS/LLMNR message ({e})"))?;
 
         if message.message_type() != MessageType::Response {

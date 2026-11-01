@@ -5,6 +5,7 @@ pub mod bson_depth;
 pub mod cbor_depth;
 pub mod clock;
 pub mod display;
+pub mod dns_screen;
 pub mod file_io;
 pub mod gre;
 pub mod json_budget;
