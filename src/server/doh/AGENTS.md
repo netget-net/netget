@@ -192,7 +192,7 @@ mode for deterministic answers; static mode is only useful for `ignore_query`.
       "ttl": 300
     },
     {
-      "type": "show_message",
+      "type": "notify_operator",
       "message": "Resolved example.com to 93.184.216.34 over HTTPS"
     }
   ]

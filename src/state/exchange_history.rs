@@ -38,6 +38,21 @@ pub const ANSWERED_WITH_NEXT: &str = "answered_together_with_next";
 /// (`send_to_peer`, `send_to_client`, the dashboard's `[ send ]`).
 pub const INJECTED_ACTION_EVENT: &str = "injected_action";
 
+/// Event type recorded for a client's first model call, the one that acts on its instruction
+/// before any event has arrived. Without it the first thing a client did was in nobody's
+/// history, and every later event was answered by a model that could not see it had already
+/// started the script.
+pub const CLIENT_STARTED_EVENT: &str = "client_started";
+
+/// What separates an event from its answer inside one recorded entry. It begins with a real
+/// newline, which compact JSON can never contain, so it marks our own text and nothing a peer
+/// sent; [`ExchangeHistory::render_for_client`] relies on that to reword it.
+const ANSWERED_WITH: &str = "\n   answered with: ";
+
+/// The client wording of [`ANSWERED_WITH`]: on a client the "answer" is what the client
+/// itself did next.
+const CLIENT_DID: &str = "\n   you did: ";
+
 #[derive(Debug, Clone)]
 struct HistoryEntry {
     /// 1-based position of this entry among everything ever recorded on the connection.
@@ -96,6 +111,23 @@ impl ExchangeHistory {
     /// nothing earlier to show. At most `limit` entries, newest kept, within
     /// [`HISTORY_PROMPT_BUDGET_CHARS`].
     pub fn render(&self, limit: u16) -> Option<String> {
+        self.render_with(limit, Perspective::Server)
+    }
+
+    /// [`Self::render`] for a client, which reads its history as progress through its own
+    /// instruction rather than as requests it answered.
+    ///
+    /// A client's instruction is a script ("send PING, then GET mykey, then stop") and the
+    /// model is asked again on every reply, so its record is worded as what the client did and
+    /// the header says all of it is done. That is the accurate wording, not a cure: llama3.1:8b
+    /// re-sends the script on replies with or without it (6 of 8 seeded runs before, 6 of 8
+    /// after, 31 October 2026), with both commands listed as already sent directly above the
+    /// reply it was answering.
+    pub fn render_for_client(&self, limit: u16) -> Option<String> {
+        self.render_with(limit, Perspective::Client)
+    }
+
+    fn render_with(&self, limit: u16, perspective: Perspective) -> Option<String> {
         if limit == 0 || self.entries.is_empty() {
             return None;
         }
@@ -112,7 +144,12 @@ impl ExchangeHistory {
         chosen.reverse();
 
         let omitted = self.recorded - chosen.len() as u64;
-        let mut out = String::from("Earlier on this connection, oldest first");
+        let mut out = String::from(match perspective {
+            Perspective::Server => "Earlier on this connection, oldest first",
+            Perspective::Client => {
+                "Earlier in this session, oldest first: everything that arrived and what you did"
+            }
+        });
         if omitted > 0 {
             out.push_str(&format!(
                 " ({} shown; {} earlier not shown — keep anything that must outlive this in memory)",
@@ -120,15 +157,34 @@ impl ExchangeHistory {
                 omitted
             ));
         }
-        out.push_str(
-            ". These were already handled and are shown for context only; do not answer them \
-             again.\n",
-        );
+        out.push_str(match perspective {
+            Perspective::Server => {
+                ". These were already handled and are shown for context only; do not answer \
+                 them again.\n"
+            }
+            Perspective::Client => {
+                ". All of it is done: every action listed was already sent, so do not send it \
+                 again. Your instruction is the plan for the whole session, not a new request \
+                 on each event: continue it from where this leaves off, and once every step of \
+                 it is done answer with no actions (or disconnect, if it says to finish).\n"
+            }
+        });
         for entry in chosen {
-            out.push_str(&format!("#{} {}\n", entry.seq, entry.text));
+            let text = match perspective {
+                Perspective::Server => entry.text.clone(),
+                Perspective::Client => entry.text.replace(ANSWERED_WITH, CLIENT_DID),
+            };
+            out.push_str(&format!("#{} {}\n", entry.seq, text));
         }
         Some(out)
     }
+}
+
+/// Whose history is being rendered; see [`ExchangeHistory::render_for_client`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Perspective {
+    Server,
+    Client,
 }
 
 fn render_entry(event_type: &str, request: &Value, response: &[Value]) -> String {
@@ -146,6 +202,19 @@ fn render_entry(event_type: &str, request: &Value, response: &[Value]) -> String
     let text = if event_type == INJECTED_ACTION_EVENT {
         // The request is the action the operator sent; the response is its outcome.
         format!("operator sent {}", render_action(request))
+    } else if event_type == CLIENT_STARTED_EVENT {
+        // No event arrived; the client acted on its instruction alone.
+        let answers: Vec<String> = response.iter().map(render_action).collect();
+        format!(
+            "{} (no event yet: acting on the instruction){}{}",
+            event_type,
+            ANSWERED_WITH,
+            if answers.is_empty() {
+                "nothing".to_string()
+            } else {
+                answers.join("; ")
+            }
+        )
     } else if response.iter().any(|action| {
         action
             .get("type")
@@ -176,9 +245,10 @@ fn render_entry(event_type: &str, request: &Value, response: &[Value]) -> String
             answers.join("; ")
         };
         format!(
-            "{} {}\n   answered with: {}",
+            "{} {}{}{}",
             event_type,
             compact(&crate::utils::redact::redact_sensitive(request)),
+            ANSWERED_WITH,
             answered
         )
     };

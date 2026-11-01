@@ -16,6 +16,7 @@ fn server(id: u32, status: ServerStatus) -> ServerRow {
     ServerRow {
         history_entries: 0,
         batching: false,
+        capture: None,
         id: ServerId::new(id),
         protocol: "HTTP".into(),
         port: 8080,
@@ -40,6 +41,7 @@ fn client(id: u32, status: ClientStatus) -> ClientRow {
     ClientRow {
         history_entries: 0,
         batching: false,
+        capture: None,
         id: ClientId::new(id),
         protocol: "telnet".into(),
         remote_addr: "127.0.0.1:2323".into(),
@@ -67,6 +69,7 @@ fn conn(id: u32, active: bool) -> ConnRow {
         bytes_sent: 2048,
         active,
         can_message: false,
+        memory_len: 0,
     }
 }
 
@@ -81,6 +84,7 @@ fn entry(id: u64, conn: Option<u32>) -> AccessLogEntry {
         event_type: "http_request".into(),
         request: serde_json::json!({"path": "/"}),
         response: vec![serde_json::json!({"type": "send_http_response"})],
+        answered_by: None,
     }
 }
 

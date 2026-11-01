@@ -84,7 +84,7 @@ The LLM responds to UDP events with actions:
 
 - `send_udp_response` - Send datagram to peer (text or hex)
 - `send_to_address` - Send datagram to arbitrary address (async action)
-- Common actions: `show_message`, `update_instruction`, etc.
+- Common actions: `notify_operator`, `update_instruction`, etc.
 
 ### Example LLM Response
 
@@ -97,7 +97,7 @@ The LLM responds to UDP events with actions:
       "encoding": "text"
     },
     {
-      "type": "show_message",
+      "type": "notify_operator",
       "message": "Echoed PING"
     }
   ]

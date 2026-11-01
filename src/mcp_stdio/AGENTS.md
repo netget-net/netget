@@ -93,7 +93,7 @@ OllamaClient (3 backends)
 | `start_server` | Start protocol server | `server_startup::start_server_from_action()` |
 | `stop_server` | Stop server by ID (aborts its tasks + cancels its scheduled tasks) | `AppState::remove_server()` |
 | `list_servers` | List running servers | `AppState::get_all_servers()` |
-| `server_status` | Detailed server status, including each connection's id and whether it accepts `send_to_peer` | `AppState::get_server()` |
+| `server_status` | Detailed server status, including each connection's id, whether it accepts `send_to_peer`, and its connection memory (what the model keeps about that one peer) | `AppState::get_server()` |
 | `start_client` | Connect a protocol client to a remote server | `client_startup::start_client_from_action()` |
 | `stop_client` | Stop a client by ID (aborts its registered tasks) — see below | `AppState::remove_client()` |
 | `list_clients` | List clients | `AppState::get_all_clients()` |
@@ -104,14 +104,15 @@ OllamaClient (3 backends)
 | `list_intercepts` | Requests parked by a `manual` handler, with what they may be answered with and time left | `AppState::list_intercepts()` |
 | `answer_intercept` | Answer a parked request with actions, or with `[]` ("say nothing") | `AppState::resolve_intercept()` |
 | `fail_intercept` | Refuse a parked request now — the peer gets the fail-closed reply | `AppState::dismiss_intercept()` |
-| `get_status` | Overall NetGet status | AppState model + server count |
-| `set_model` | Change LLM model | `AppState::set_ollama_model()` |
+| `get_status` | Overall NetGet status: the model in use, whether the endpoint has it (asked live), how it was chosen, the last backend failure | `llm::model_selection::check_model()` + `AppState::model_health()` |
+| `set_model` | Change LLM model; refused when Ollama does not have it, warned when an OpenAI-compatible endpoint does not list it | `llm::model_selection::check_model()` + `AppState::set_ollama_model()` |
 | `get_protocol_docs` | MCP-shaped protocol documentation | `mcp_stdio::docs::render_protocol_docs()` |
 | `update_server_instruction` | Update just a running server's instruction | `AppState::with_server_mut()` |
 | `update_server` | Update a running server in place by id (supply only changed fields) — see below | `cli::management::update_server()` |
 | `update_client` | Update a running client in place by id (supply only changed fields) — see below | `cli::management::update_client()` |
 | `list_access_logs` | Recent request/response entries (newest first) | `AppState::list_access_logs()` |
 | `get_access_log` | Full request + response for one entry by id | `AppState::get_access_log()` |
+| `export_rules` | Turn an instance's model-authored answers into `event_handlers`; optionally apply them and/or write a `.netget` file — see below | `llm::rule_export::export_rules()` |
 | `stop_all` | Stop all servers | Iterate + remove all |
 | `get_next_llm_request` | (agent mode) Fetch next queued LLM request; optional long-poll | `LlmRequestQueue::wait_and_claim()` |
 | `answer_llm_request` | (agent mode) Answer a queued request with action JSON | `LlmRequestQueue::answer()` |
@@ -239,7 +240,7 @@ second one, and route through `cli::management::update_server` / `update_client`
 the TUI's management UI uses). Supply only the fields to change.
 
 - **Hot-applied without dropping connections/reconnecting**: `instruction`, `event_handlers`,
-  `initial_memory`, `feedback_instructions`, `scheduled_tasks`.
+  `initial_memory`, `feedback_instructions`, `scheduled_tasks`, `history`, `batching`, `capture`.
 - **Requires a clean stop+start / reconnect** (connections dropped, the entity gets a **new id**):
   `port` / `host` for a server, `remote_addr` for a client, and `startup_params` for either.
 - An unknown id and invalid `startup_params` **error cleanly and leave the running entity
@@ -249,6 +250,64 @@ the TUI's management UI uses). Supply only the fields to change.
 Both tools re-sync `AppState`'s LLM client before applying, in case the update restarts the
 entity. Prefer `update_server` over a second `start_server` when a server already exists;
 `update_server_instruction` remains as the narrow "just the instruction" tool.
+
+`memoize_ttl_secs` / `memoize_across_connections` (on `start_server`, `start_client`,
+`update_server`, `update_client`) are hot-applied too; a changed setting starts an empty cache,
+and the setting (not the cached answers) survives a restart. See "Reusing the model's answers".
+
+## Reusing the model's answers (`export_rules`, memoisation)
+
+Both features live in `src/llm/answer_reuse.rs` (shared) and `src/llm/rule_export.rs`, and
+both read `AccessLogEntry::answered_by` — `"model"`, `"cache"`, `"rule"` or `"easy"` — which
+the shared paths (`action_helper::call_llm`, `llm_budget::call_llm_for_client`) record.
+Entries a protocol logs itself carry none and are ignored by both.
+
+**`export_rules { server_id | client_id, apply?, fallback?, save_to? }`** derives static rules
+from the instance's `model`/`cache` entries ("record with the model, replay without it"):
+
+- per event type, the fewest event fields that explain why the answers differ become each
+  rule's `match` (an HTTP method + path, a DNS name), plus every other field that was constant
+  and that the recording never showed to be irrelevant — so a rule is narrower rather than
+  wrong;
+- per-request fields (`answer_reuse::PER_REQUEST_FIELDS`: `query_id`, `id`, `tag`, `xid`,
+  `client_port`, …, top-level only) are never conditions, and where an answer echoes one it
+  becomes a `{{event.<field>}}` reference;
+- every rule is validated by `parse_event_handlers` and replayed against each recorded event it
+  covers before it is offered; groups the model answered differently with nothing to tell them
+  apart are listed as undetermined, and answers that failed, carried credentials, answered a
+  batch, or also wrote memory/tasks/logs are listed as skipped;
+- the returned table is the derived rules, then the instance's other rules, then the fallback:
+  `keep` (default — the instance's own `*` rule), `llm`, or `manual`. `apply: true` hot-applies
+  it through `management::update_server`/`update_client`; `save_to` writes the instance with that
+  table as a `.netget` file (`save_load::save_with_handlers`) that `--load` replays.
+
+Rule matching gained an optional `match` object on each handler (field path → exact JSON
+value; a missing field reads as `null`), validated in `parse_event_handlers` and used by
+`EventHandlerConfig::find_handler_for`. `find_handler(id)` still ignores it, which is the
+"might a rule answer this kind of event" question protocols ask without an event in hand.
+
+**Memoisation** (`memoize_ttl_secs`, off by default) answers an event identical to one the
+model answered within the TTL — same type, same data less per-request fields, same instruction,
+memory and per-event handler instruction — with the stored actions re-rendered for the new
+event, and logs it `answered_by: "cache"`. Rules and scripts still run first; a batch, a
+credential-bearing event, a failed answer, an empty answer, or one that wrote memory/tasks is
+never stored or replayed. With `history` on, answers are per connection unless
+`memoize_across_connections` is set. 256 answers per instance, oldest dropped.
+
+Tests: `tests/answer_reuse_test.rs` (HTTP and DNS record → export → apply → replay with zero
+model calls, the `.netget` round trip, memoisation hits/expiry/failures/connection scope).
+
+## Packet capture (`capture`)
+
+`start_server`, `start_client`, `update_server` and `update_client` take `capture`: `true`
+(`netget-<server|client>-<id>-<protocol>.pcap` in the capture directory — `--capture <dir>`, else
+the working directory), a file path (relative paths land in the capture directory), or `false`
+to stop. It is validated before anything starts (a missing directory, or an existing file that
+is not a pcap, is refused; NetGet never overwrites one), begins before the protocol binds or
+connects, and is hot on update. A restart forced by another field keeps the capture, appending to
+the same file. `server_status` / `client_status` print a `Capture` line — path, packets, payload
+bytes, drops, rotations — and say so when the protocol does not feed capture (its file stays
+empty); see `src/capture/mod.rs` for which do. Stopping the instance closes the file.
 
 ## Server teardown and state reaping
 
@@ -309,8 +368,9 @@ the action JSON the LLM produced (e.g. `send_http_response`). Recording happens
 centrally in `action_helper::call_llm` after the event is handled, so it works for
 every protocol without per-protocol wiring.
 
-- `list_access_logs { limit? }` — newest-first summaries (id, age, owner, protocol, request→response).
-- `get_access_log { id }` — full request and response JSON for one entry.
+- `list_access_logs { limit? }` — newest-first summaries (id, age, owner, protocol, request→response,
+  and what answered it where recorded).
+- `get_access_log { id }` — full request and response JSON for one entry, with `answered_by`.
 
 **Clients record too, and entries carry an owner.** `AccessLogEntry` has
 `server_id: Option<u32>` and `client_id: Option<u32>`, exactly one set, both
@@ -344,6 +404,25 @@ All of those are wired now, plus the model falling back to the saved setting and
 web-search degrading to `Off` (MCP has no terminal to prompt on, same as the
 non-interactive runner). `tests/mcp_startup_config_test.rs` asserts each one from the
 service's `app_state()`, so a new flag that skips this path fails a test.
+
+**The configured model is checked against the endpoint before it is stored**
+(`llm::model_selection::resolve_configured_model`). Ollama lists its models, so a configured
+model it does not have is replaced by the largest installed one — the dashboard's choice — and
+the replacement is a `Model note` in `get_status` naming the missing model and the endpoint.
+An OpenAI-compatible endpoint's list is advisory (aliases and routed names are often served
+unlisted), so there an unlisted model is kept with a note; an endpoint that cannot be asked
+keeps the configured model, noted as unverified. `--llm-agent` is not checked: the calling
+agent answers whatever the model name. With no model configured nothing is asked at startup;
+the first request auto-selects one and stores it (`ensure_state_model`), so `get_status` names
+the model requests actually use. `tests/llm_model_not_installed_test.rs` covers startup,
+`set_model` and a request meeting Ollama's 404.
+
+**A backend failure is not a bad answer.** The transport raises `llm::LlmBackendError`
+(model not installed, unreachable, timed out, key rejected, refused with a status) naming the
+model and the endpoint. The conversation layer does not retry it and does not wrap it in
+"failed to generate valid response after retries" (`backend_error::LlmContextExt`); the
+access-log failure entry, the ERROR log line and `get_status`'s `Last LLM backend failure`
+all carry its text. The peer still gets only a `WireFailure` category.
 
 ## LLM Backend
 

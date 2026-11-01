@@ -115,7 +115,7 @@ Four things at once:
 
 - MKCOL → the model's `201`.
 - DELETE → the model's `403` with its explanation reaching the client verbatim.
-- GET → the model answers with `show_message` only, i.e. **no WebDAV response action**. The
+- GET → the model answers with `notify_operator` only, i.e. **no WebDAV response action**. The
   server must fail closed with `503`. This is the fail-open regression guard; mutating that
   503 to a 200 in `build_webdav_response` fails exactly this assertion, and nothing else.
 - OPTIONS → `200` with `Allow` advertising PROPFIND/MKCOL/PUT/LOCK, at **zero** LLM cost. No

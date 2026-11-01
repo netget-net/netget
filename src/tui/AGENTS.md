@@ -129,7 +129,7 @@ the list badge, the inspector overview, the feed, and the status bar.
 | `hit.rs` | per-frame hit-test registry for the mouse |
 | `render/` | one file per pane plus `overlay.rs` for modals |
 | `modal/` | forms, composer, routing editor, intercept answer, picker, help, wireshark |
-| `wireshark.rs` | protocol → dissector/capture-filter table |
+| `wireshark.rs` | protocol → dissector/capture-filter table; leads with `wireshark -r <file>` when NetGet is writing the instance's own pcap (`ServerRow::capture` / `ClientRow::capture`, from `src/capture/`) and otherwise says how to turn that on |
 
 The rule that keeps keyboard and mouse from drifting: an action is an `InstanceAction`, run
 by `actions::run`, whatever produced it — a letter, a menu entry, Enter on an item, a click.

@@ -1,7 +1,8 @@
 # NetGet — LLM-Controlled Network Protocol Server & Client
 
-Rust CLI where an LLM (Ollama or any OpenAI-compatible endpoint) drives ~116 network
-protocols as servers and ~90 as clients. NetGet owns the network stack; the LLM decides
+Rust CLI where an LLM (Ollama or any OpenAI-compatible endpoint) drives ~290 network
+protocols as servers and ~250 as clients (about 310 distinct protocols; `list_protocols` is the
+count). NetGet owns the network stack; the LLM decides
 what to say on the wire, either by reasoning per-request or via deterministic handlers.
 
 Three ways to run it: interactive TUI (default), headless (`--mcp` / `--mcp-http`, see
@@ -92,13 +93,32 @@ it. The pty snapshots in `tests/terminal_snapshot/` prove the real binary paints
 **`[ wireshark ]`** (`w`, a button on every card, and a `[ View in Wireshark ]` button on the
 create/edit form so the capture can be running *before* the instance starts) opens a modal with a paste-ready
 `wireshark -k …` / `tshark -l …` line, plus the pieces separately: interface, BPF capture filter,
-display filter and a `-d` decode-as clause. NetGet writes no pcap; `src/tui/wireshark.rs` is a
+display filter and a `-d` decode-as clause — and, when NetGet is writing the instance's own pcap
+(below), a `wireshark -r <file>` line first. `src/tui/wireshark.rs` is a
 pure table of NetGet protocol → transport + Wireshark dissector name, and every name in it was
 checked against `tshark -d` / `-Y`. Three traps it encodes: `isis` is an Ethernet-only BPF keyword
 and is rejected on loopback; `drda` (db2) is heuristic-only and not in the `tcp.port` decode-as
 table; `ipp` is reached through `http`. A protocol missing from the table is treated as plain TCP
 (correct for everything in the registry that is not UDP, raw or off-network), and the off-network
 families (USB, BLE, NFC, pty/pipe/stdio) get an explanation of where to look instead of a command.
+
+**Packet capture: NetGet writes the pcap itself** (`src/capture/`), with no libpcap and no
+privilege, because it owns the sockets. `capture` on an instance (`ServerForm`/`ClientForm`, MCP
+`start_*`/`update_*`, `.netget` files) is `true` (`netget-<server|client>-<id>-<protocol>.pcap` in
+the capture directory), a file name, or `false`; `--capture <dir>` records every instance the
+process starts. Hot-applied: a connection already open is opened in the file (SYN, SYN-ACK, ACK) at
+its next byte. The file is classic pcap, `LINKTYPE_RAW`, with IP/TCP/UDP headers synthesised from
+the real 4-tuple and sequence numbers that advance by exactly the bytes carried, so "Follow TCP
+Stream" reassembles it; a FIN per side closes it. Writes go through a bounded queue to a writer
+thread (a full queue drops and counts, never blocks), and a file rotates to `<path>.1` at 256 MiB.
+There is **no central seam carrying payloads** (`update_connection_stats` sees counts only), so a
+protocol adopts it: wrap the stream in `capture::tcp::CapturedStream` before splitting it, or call a
+`capture::udp::UdpTap` after each `recv_from`/`send_to`. Adopted today: servers `tcp`, `telnet`,
+`http`, `redis`, `dns` (UDP and TCP), `udp`; client `tcp` (`capture::adopted` is the list; any
+other protocol's file stays empty and `server_status` says so). Two guards: an existing file that
+is not a pcap is never overwritten, and a `capture` read from an *action* (the model's
+`open_server`, a `.netget` file, a replayed session) may only name a file inside the capture
+directory. `tests/capture_pcap_test.rs` reads NetGet's files back with `tshark`.
 
 ## Protocol inventory — always query, never trust a list
 
@@ -201,13 +221,17 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
     checked at a second site that could never fire — is a comment, and was removed.
 
   **Nine protocols now have two clients and still fail conditions 2 or 3**, which is worth knowing
-  before picking the next one: `doh`, `dot`, `etcd`, `grpc`, `postgresql` and `websocket` have
-  neither a pcap-oracle test nor a fuzz target; `mongodb` has a fuzz target
-  (`fuzz_targets/bson_document.rs`) and no oracle; `mqtt` and `kafka` have the oracle and no
-  fuzz target. (`redis` was in that last group until `fuzz_targets/resp_frame.rs` landed in
-  September 2026.) A fuzz target with a depth-bomb corpus is the cheaper of the two to
-  add. Derive this rather than trusting it — and note that fuzz targets are named after the
-  *decoder*, not the protocol, so read each target's `use` lines rather than grepping its name:
+  before picking the next one: `etcd`, `grpc`, `postgresql` and `websocket` have neither a
+  pcap-oracle test nor a fuzz target; `doh` and `dot` have a fuzz target and no oracle —
+  `fuzz_targets/dns_message.rs` fuzzes `hickory_proto`'s `Message::from_vec`, which both servers
+  call inline on every request, and its corpus carries a `compression_pointer_loop`, DNS's
+  depth bomb; `mongodb` has a fuzz target (`fuzz_targets/bson_document.rs`) and no oracle;
+  `mqtt` and `kafka` have the oracle and no fuzz target. (`redis` was in that last group until
+  `fuzz_targets/resp_frame.rs` landed in September 2026.) A fuzz target with a depth-bomb
+  corpus is the cheaper of the two to add. Derive this rather than trusting it — and note that
+  fuzz targets are named after the *decoder*, not the protocol, so read each target's `use`
+  lines rather than grepping its name (`dns_message.rs` covers three protocols, none of them
+  in its file name but `dns`):
 
   ```bash
   grep -rln pcap_oracle tests/server/<p>/ ; grep -ln "<p>\|<decoder crate>" fuzz/fuzz_targets/*.rs
@@ -852,8 +876,40 @@ in `metadata()` and `tests/history_batching_declaration_test.rs` requires:
 
 Both are overridable per instance everywhere an instance is started or updated (`history` /
 `batching` on `ServerForm`/`ClientForm`, `open_*`/`update_*`, MCP, `--history`/`--batching`,
-the dashboard form) and hot-applied. Memory is separate: it is what the model chooses to keep
-and outlives the connection; history is what happened and ends with it.
+the dashboard form) and hot-applied. Memory is separate: it is what the model chooses to keep;
+history is what happened and ends with the connection.
+
+**Memory has two scopes, and the difference is a privacy boundary.** `set_memory` /
+`append_memory` write the instance's memory, one string every connection's prompt reads and
+that outlives them all — data the model stored, counters, settings. `set_connection_memory` /
+`append_connection_memory` write `ServerInstance::connection_memory`, shown above one
+connection's events only (`AppState::render_connection_memory`) and dropped when it closes;
+they are offered on a server event that arrived on a connection of a non-connectionless
+protocol, and refused anywhere else rather than redirected to shared memory. They exist because
+a telnet BBS (llama3.1:8b, 31 October 2026) wrote `user_name: Zed` into shared memory, so the
+next peer would have been greeted as Zed. A line written `key: value` replaces the earlier line
+with that key in either scope (`common::append_memory_lines`), so the same fact appended twice
+reads once. `tests/connection_memory_test.rs` drives two telnet peers through the bridge.
+
+**A client's history is worded as progress, and its first turn is in it — but that does not
+stop a small model restarting a script.** `ExchangeHistory::render_for_client` lists each entry
+as "you did:" under a header saying all of it is done, and the initial call with no event is
+recorded as `client_started` (`tests/client_session_progress_test.rs`). Measured 31 October
+2026 with llama3.1:8b, a redis client told "Send PING, then GET mykey, then stop sending
+commands" re-sent the script on replies in 6 of 8 seeded runs before and 6 of 8 after, with both
+commands listed as sent directly above the reply. A paragraph in the client system prompt
+framing the instruction as a plan under way made it worse (the connect event, which has no
+history, came back empty or as an echoed transcript in 5 of 8) and was removed. A scripted
+client should be a script or static handler (`--client-handlers`); a structural answer for the
+model path is still open.
+
+**`notify_operator` is a note on the operator's screen and is never offered beside a wire
+answer.** It was `show_message`, and offered beside `send_telnet_line` it was taken for the
+reply: a BBS greeting went to the operator and the peer saw nothing. `show_message` is still
+accepted everywhere an action is read (model answers, handlers, `.netget` files) and rewritten
+to the current name; a server event that offers protocol actions leaves it out of the list
+(`common::network_event_common_actions_for`), though a model that names it anyway is executed,
+not retried (`tests/notify_operator_test.rs`).
 
 **Actions**: protocols implement `ProtocolActions` (`src/llm/actions/protocol_trait.rs`) with
 async actions (user-triggered) and sync actions (network-event-triggered), in
@@ -882,6 +938,18 @@ async actions (user-triggered) and sync actions (network-event-triggered), in
 
 Scripts and static handlers are the right default for deterministic behavior (echo, canned
 responses, routing). Reserve the LLM for responses that genuinely require reasoning.
+
+A rule may narrow itself with `"match": {"method": "GET", "path": "/a"}` — event-field paths to
+exact values, all of which must hold (`EventHandler::matches_event`). **Two ways to stop paying
+for answers the model already gave** (`src/llm/answer_reuse.rs`, `src/llm/rule_export.rs`; MCP
+details in `src/mcp_stdio/AGENTS.md`): the `export_rules` tool turns an instance's access-log
+entries with `answered_by: "model"` into static rules keyed on the fields that explain the
+answers, echoing per-request ids (`query_id`, `id`, `tag`, …) through `{{event.…}}`, replaying
+each rule against its recordings before offering it, and reporting rather than guessing where
+answers differ for no recorded reason; and `memoize_ttl_secs` (off by default) replays the
+model's answer to an identical event within a TTL, logged as answered by `cache`, never across
+connections where history makes the answer connection-specific unless
+`memoize_across_connections` is set. `tests/answer_reuse_test.rs` counts the model calls.
 
 A caveat manual handlers exposed: several clients handle their `*_connected` event inline in
 `connect()` before returning, so a parked connect event delays creation until answered — the
@@ -1230,9 +1298,15 @@ targeted stress runs.** If a test hangs, fix the hang rather than serializing th
 
 ### CI reality
 
-`release.yml` builds every target's binaries on release tags and manual dispatch (macOS with the
-`libpcap`, `bluetooth` and `pcsc` features, whose libraries ship with the OS; Linux and Windows
-with no system-library feature).
+`release.yml` builds every target's binaries on release tags and manual dispatch: macOS with the
+`libpcap`, `bluetooth` and `pcsc` features (their libraries ship with the OS); plain glibc Linux,
+musl and Windows with no system-library feature (these are what npm ships, so they must start on
+a minimal system); and separate glibc Linux `-full` archives with those three features, built
+after installing the `-dev` packages. A step asserts each glibc binary's linked libraries: the
+plain ones nothing beyond glibc and zlib, the `-full` ones exactly those plus libpcap, libdbus-1
+and libpcsclite.
+`docs/guides/INSTALL.md` is the per-artifact table users read; keep it, the matrix and the
+`Dockerfile` in step.
 `ci.yml` runs on pull requests and on demand. **A push to `master` does not start CI.**
 `fuzz.yml` remains an on-demand search.
 
@@ -1741,8 +1815,8 @@ for `wasm32-unknown-unknown` (68 features, TCP and UDP; the list is
 `--mcp` (stdio) and `--mcp-http PORT` expose tools sharing the TUI's code paths. See
 `src/mcp_stdio/AGENTS.md`.
 
-**Five of the six gaps this section used to list have been fixed, and it kept claiming them.**
-Re-verified September 2026 against `src/mcp_stdio/`:
+**All six gaps this section used to list have been fixed, and it kept claiming them.**
+Re-verified against `src/mcp_stdio/` (September 2026) and `src/events/handler.rs` (October 2026):
 
 | Former gap | Status |
 |---|---|
@@ -1751,6 +1825,7 @@ Re-verified September 2026 against `src/mcp_stdio/`:
 | `send_first` accepted as `_send_first` and ignored on every path | **Fixed** — `params.send_first` is passed and folded into `startup_params`, though only where the protocol declares it |
 | `get_protocol_docs` returns TUI docs describing an uninvokable API | **Fixed** — `docs.rs` is MCP-shaped and mentions neither `open_server` nor `base_stack` |
 | `stop_server`/`stop_all` skip `cleanup_server_tasks()` | **Fixed** — teardown moved inside `AppState::remove_server`, pinned by `tests/mcp_stop_cleanup_test.rs` |
+| Unknown action names in `event_handlers` accepted at startup | **Fixed** — `EventHandler::parse_event_handlers` runs `validate_static_action_names` on every static handler before anything is registered (`start_server`, `start_client`, `update_*`, `open_server`/`open_client`), and the error names the valid actions; pinned by `tests/static_handler_action_catalog_test.rs` |
 
 **Everything the dashboard's buttons do is a tool too** — `send_to_client`, `send_to_peer`,
 `disconnect_peer`, `list_intercepts`, `answer_intercept` (`[]` = answer with nothing) and
@@ -1759,11 +1834,12 @@ it to a running loop; `server_status` lists connection ids and which accept `sen
 There is no `dismiss_intercept` tool on purpose: dismissing *is* failing closed. Details in
 `src/mcp_stdio/AGENTS.md` ("Driving by hand").
 
-**Two remain:**
+**What is not checked at creation, and what is by design:**
 
-- **Unknown action names in `event_handlers` are still accepted at startup** — only the
-  handler's *shape* is validated. They are no longer silent at runtime, though:
-  `executor.rs` logs at ERROR and records a failure.
+- **A script handler's actions are only known when it runs**, so they cannot be validated up
+  front, and a static handler on an event id no compiled protocol declares has no catalogue to
+  check against and is accepted. Neither is silent at runtime: `executor.rs` logs an unknown
+  action at ERROR and records a failure.
 - **No state persists across process restarts**, which is by design.
 
 **The lesson is about this file, not about MCP.** A "current gaps" list is the part of any

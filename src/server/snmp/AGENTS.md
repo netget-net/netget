@@ -318,7 +318,7 @@ need to (and cannot) set them.
 - `ignore_request` - Don't respond (client will timeout and retry)
 - `send_trap` - send a v1/v2c trap or a v2c inform (see Notifications above)
 - `acknowledge_notification` / `ignore_notification` - answer an `snmp_notification`
-- Common actions: `show_message`, `update_instruction`, etc.
+- Common actions: `notify_operator`, `update_instruction`, etc.
 
 ### Example LLM Responses
 

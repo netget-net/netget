@@ -102,7 +102,7 @@ carries any of them. See decision 2 in `src/server/coap/AGENTS.md` for why.
 
 (This line said "every rule in these tests", which stopped being true with `llm_failure_test.rs`
 and the 4.04 rule in `e2e_test.rs`: a rule whose answer carries nothing derived from the request
-— a bare 4.04, a `show_message` — is correctly static. The rule is about what the answer needs,
+— a bare 4.04, a `notify_operator` — is correctly static. The rule is about what the answer needs,
 not about which file it is in.)
 
 That removes the hazard the rule exists to prevent (a static mock *cannot* desynchronise an

@@ -81,7 +81,7 @@ The most important test in the suite. Server started with
 2. The model answers a blob request with content that does **not** hash to the
    requested digest → **404 `BLOB_UNKNOWN`**, with `detail.requested` and
    `detail.computed` both present and different. The wrong bytes are never served.
-3. The model answers a manifest request with `show_message` — a valid action, but
+3. The model answers a manifest request with `notify_operator` — a valid action, but
    not an OCI reply → **500 `UNKNOWN`**. Silence must not be able to masquerade as a
    successful pull. (Note: the action must be a *valid* common action. An earlier
    draft used a malformed `set_memory`, which sent the executor into its repair loop

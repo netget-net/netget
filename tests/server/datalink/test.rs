@@ -88,7 +88,7 @@ fn datalink_offers_only_observation_actions() {
 
     assert_eq!(
         names,
-        vec!["show_message".to_string(), "ignore_packet".to_string()],
+        vec!["notify_operator".to_string(), "ignore_packet".to_string()],
         "DataLink cannot inject frames; offering an action that implies it would make the model \
          try to answer packets it has no way to answer"
     );

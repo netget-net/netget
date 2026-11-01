@@ -41,6 +41,7 @@ fn manual() -> EventHandlerConfig {
     EventHandlerConfig {
         handlers: vec![EventHandler {
             event_pattern: EventPattern::Wildcard,
+            data_match: None,
             handler: EventHandlerType::Manual { timeout_secs: 300 },
         }],
     }
@@ -58,11 +59,13 @@ fn populated() -> RailSnapshot {
             event_type: "http_request".into(),
             request: serde_json::json!({"method": "GET", "path": format!("/{id}")}),
             response: vec![serde_json::json!({"type": "send_http_response", "status": 200})],
+            answered_by: None,
         })
         .collect();
     let server = ServerRow {
         history_entries: 0,
         batching: false,
+        capture: None,
         id: ServerId::new(1),
         protocol: "HTTP".into(),
         port: 8080,
@@ -79,6 +82,7 @@ fn populated() -> RailSnapshot {
             bytes_sent: 45_678,
             active: true,
             can_message: false,
+            memory_len: 0,
         }],
         recent: Vec::new(),
         requests,
@@ -100,6 +104,7 @@ fn populated() -> RailSnapshot {
     let broken = ServerRow {
         history_entries: 0,
         batching: false,
+        capture: None,
         id: ServerId::new(2),
         protocol: "DNS".into(),
         port: 53,
@@ -121,6 +126,7 @@ fn populated() -> RailSnapshot {
     let client = ClientRow {
         history_entries: 0,
         batching: false,
+        capture: None,
         id: ClientId::new(3),
         protocol: "telnet".into(),
         remote_addr: "127.0.0.1:2323".into(),
@@ -912,6 +918,7 @@ fn peer_escape_sequences_are_not_painted_as_terminal_cells() {
         event_type: "telnet_line_received".into(),
         request: serde_json::json!({"message": HOSTILE, "connection_id": "conn-7"}),
         response: vec![serde_json::json!({"type": "send_telnet_line", "text": HOSTILE})],
+        answered_by: None,
     });
     app.absorb_snapshot(snapshot);
     app.activity.push_log(
@@ -973,6 +980,7 @@ fn intercept_payload_controls_are_not_painted_as_terminal_cells() {
                 event_type: "telnet_line_received".into(),
                 request: payload.clone(),
                 response: vec![serde_json::json!({"type": "send_telnet_line", "text": HOSTILE})],
+                answered_by: None,
             }),
             scroll: 0,
         },

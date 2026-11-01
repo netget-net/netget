@@ -871,7 +871,7 @@ async fn test_unknown_action_retry_prompt() {
     let available_actions = vec![
         "open_server".to_string(),
         "close_server".to_string(),
-        "show_message".to_string(),
+        "notify_operator".to_string(),
     ];
     let prompt = netget::llm::PromptBuilder::build_unknown_action_retry_prompt(
         &unknown_actions,

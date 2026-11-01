@@ -160,7 +160,7 @@ pub static USB_SERIAL_DETACHED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         "usb_serial_detached",
         "The host closed this virtual serial port. Purely informational - the port is gone, so \
          written data has nowhere to go.",
-        json!({"type": "show_message", "message": "USB serial host detached"}),
+        json!({"type": "notify_operator", "message": "USB serial host detached"}),
     )
     .with_parameters(vec![Parameter {
         name: "connection_id".to_string(),

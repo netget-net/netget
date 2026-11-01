@@ -69,7 +69,8 @@ impl TcpClient {
         let _ = status_tx.send(format!("[CLIENT] TCP client {} connected", client_id));
         let _ = status_tx.send("__UPDATE_UI__".to_string());
 
-        // Split stream
+        // Split stream, wrapped first so packet capture sees both halves (`src/capture/`).
+        let stream = crate::capture::tcp::CapturedStream::client(&app_state, client_id, stream);
         let (mut read_half, write_half) = tokio::io::split(stream);
         let write_half_arc = Arc::new(Mutex::new(write_half));
         let write_half_for_connected = write_half_arc.clone();

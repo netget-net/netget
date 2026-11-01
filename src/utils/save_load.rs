@@ -135,6 +135,25 @@ fn record_conversation(
     }
 }
 
+/// Save a running capture as what a loaded action may say: the file's name when it is a
+/// chosen name in the capture directory, else `true` (the loaded instance's default file).
+/// An action may not name a path outside the capture directory, so a capture elsewhere is
+/// saved as `true` rather than as a path the load would refuse.
+fn record_capture(action: &mut Value, state: &AppState, owner: crate::capture::CaptureOwner) {
+    let Some(status) = state.capture.status(owner) else {
+        return;
+    };
+    let path = Path::new(&status.path);
+    let in_capture_dir = path.parent() == Some(state.capture.directory().as_path());
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let is_default = name.starts_with("netget-server-") || name.starts_with("netget-client-");
+    action["capture"] = if in_capture_dir && !is_default && !name.is_empty() {
+        json!(name)
+    } else {
+        json!(true)
+    };
+}
+
 /// Save all servers and clients to a file
 pub async fn save_all(state: &AppState, filename: &str) -> Result<PathBuf> {
     let mut servers = state.get_all_servers().await;
@@ -148,6 +167,11 @@ pub async fn save_all(state: &AppState, filename: &str) -> Result<PathBuf> {
     let mut resources = Vec::new();
     for server in servers {
         let mut action = server_to_action(&server);
+        record_capture(
+            &mut action,
+            state,
+            crate::capture::CaptureOwner::Server(server.id),
+        );
         attach_tasks(
             &mut action,
             &tasks,
@@ -158,6 +182,11 @@ pub async fn save_all(state: &AppState, filename: &str) -> Result<PathBuf> {
     }
     for client in clients {
         let mut action = client_to_action(&client);
+        record_capture(
+            &mut action,
+            state,
+            crate::capture::CaptureOwner::Client(client.id),
+        );
         attach_tasks(
             &mut action,
             &tasks,
@@ -202,6 +231,11 @@ pub async fn save_server(state: &AppState, server_id: ServerId, filename: &str) 
         .context("Server not found")?;
 
     let mut action = server_to_action(&server);
+    record_capture(
+        &mut action,
+        state,
+        crate::capture::CaptureOwner::Server(server_id),
+    );
     attach_tasks(
         &mut action,
         &state.get_all_tasks().await,
@@ -219,6 +253,11 @@ pub async fn save_client(state: &AppState, client_id: ClientId, filename: &str) 
         .context("Client not found")?;
 
     let mut action = client_to_action(&client);
+    record_capture(
+        &mut action,
+        state,
+        crate::capture::CaptureOwner::Client(client_id),
+    );
     attach_tasks(
         &mut action,
         &state.get_all_tasks().await,
@@ -226,6 +265,42 @@ pub async fn save_client(state: &AppState, client_id: ClientId, filename: &str) 
     )?;
     let actions = vec![action];
     save_actions(actions, filename).await
+}
+
+/// Save one server or client to a `.netget` file with `event_handlers` replaced by
+/// `handlers` — the table `export_rules` builds — so `--load` starts it answering from those
+/// rules. Everything else is saved as [`save_server`] / [`save_client`] would save it.
+pub async fn save_with_handlers(
+    state: &AppState,
+    owner: crate::state::AccessLogOwner,
+    handlers: &[Value],
+    filename: &str,
+) -> Result<PathBuf> {
+    let (mut action, scope) = match owner {
+        crate::state::AccessLogOwner::Server(id) => {
+            let server = state
+                .get_server(ServerId::new(id))
+                .await
+                .context("Server not found")?;
+            (
+                server_to_action(&server),
+                crate::state::task::TaskScope::Server(server.id),
+            )
+        }
+        crate::state::AccessLogOwner::Client(id) => {
+            let client = state
+                .get_client(ClientId::new(id))
+                .await
+                .context("Client not found")?;
+            (
+                client_to_action(&client),
+                crate::state::task::TaskScope::Client(client.id),
+            )
+        }
+    };
+    action["event_handlers"] = Value::Array(handlers.to_vec());
+    attach_tasks(&mut action, &state.get_all_tasks().await, &scope)?;
+    save_actions(vec![action], filename).await
 }
 
 /// Save an array of actions to a file
@@ -492,13 +567,17 @@ pub async fn restore_session(
     let result: Result<()> = async {
         for form in forms {
             match form {
+                // A session is replayed as an action, which the model can emit too, so its
+                // `capture` is held to what an action may name: a file in the capture directory.
                 Form::Server(key, form) => {
-                    let id = form.create(state, status_tx.clone()).await?;
+                    let id = form.create_from_action(state, status_tx.clone()).await?;
                     ownership.servers.push(id);
                     servers.insert(key, id);
                 }
                 Form::Client(key, form) => {
-                    let id = form.create(state, llm.clone(), status_tx.clone()).await?;
+                    let id = form
+                        .create_from_action(state, llm.clone(), status_tx.clone())
+                        .await?;
                     ownership.clients.push(id);
                     clients.insert(key, id);
                 }

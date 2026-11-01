@@ -33,7 +33,8 @@ impl UdpServer {
         let local_addr = socket.local_addr()?;
         Log::new(Some(&status_tx)).info(format!("UDP server listening on {}", local_addr));
 
-        let protocol = Arc::new(UdpProtocol::with_socket(socket.clone()));
+        let tap = crate::capture::udp::UdpTap::server(&app_state, server_id, local_addr);
+        let protocol = Arc::new(UdpProtocol::with_socket(socket.clone(), tap.clone()));
 
         let task_registrar = app_state.clone();
         let accept_handle = tokio::spawn(async move {
@@ -43,6 +44,7 @@ impl UdpServer {
                 match socket.recv_from(&mut buffer).await {
                     Ok((n, peer_addr)) => {
                         let data = buffer[..n].to_vec();
+                        tap.inbound(peer_addr, &data);
                         let connection_id =
                             ConnectionId::new(app_state.get_next_unified_id().await);
 
@@ -104,6 +106,7 @@ impl UdpServer {
                         let state_clone = app_state.clone();
                         let status_clone = status_tx.clone();
                         let socket_clone = socket.clone();
+                        let reply_tap = tap.clone();
                         let protocol_clone = protocol.clone();
 
                         // Tracked, not detached: stop_server must abort this task too.
@@ -206,6 +209,7 @@ impl UdpServer {
                                                 ));
                                             } else {
                                                 sent += 1;
+                                                reply_tap.outbound(peer_addr, output_data);
                                                 // Sent summary + payload are FileOnly; the
                                                 // access line below carries the TUI.
                                                 if output_data.iter().all(|&b| {

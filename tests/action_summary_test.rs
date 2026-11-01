@@ -2,15 +2,18 @@ use netget::llm::actions::summary::{summarize_action, summarize_actions};
 use serde_json::json;
 
 #[test]
-fn test_summarize_show_message() {
+fn test_summarize_notify_operator() {
     let action = json!({
-        "type": "show_message",
+        "type": "notify_operator",
         "message": "Server started successfully"
     });
     assert_eq!(
         summarize_action(&action),
-        "show_message: \"Server started successfully\""
+        "notify_operator: \"Server started successfully\""
     );
+    // The former name is read as the same action.
+    let legacy = json!({"type": "show_message", "message": "Server started successfully"});
+    assert_eq!(summarize_action(&legacy), summarize_action(&action));
 }
 
 #[test]
@@ -40,11 +43,11 @@ fn test_summarize_read_file() {
 #[test]
 fn test_summarize_actions() {
     let actions = vec![
-        json!({"type": "show_message", "message": "Test"}),
+        json!({"type": "notify_operator", "message": "Test"}),
         json!({"type": "read_file", "path": "test.txt", "mode": "head", "lines": 10}),
     ];
     let summary = summarize_actions(&actions);
     assert!(summary.starts_with("2 actions:"));
-    assert!(summary.contains("show_message"));
+    assert!(summary.contains("notify_operator"));
     assert!(summary.contains("read_file"));
 }

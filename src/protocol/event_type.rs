@@ -90,7 +90,7 @@ pub fn connect_event_data() -> JsonValue {
         "bytes_received": 0,
         "answer_with": "If the instruction says to greet, show a banner, prompt or ask for \
                         something as soon as someone connects, send that text to the client \
-                        now with this protocol's send action (show_message only reaches the \
+                        now with this protocol's send action (notify_operator only reaches the \
                         operator's screen, never the client). Otherwise answer with no actions \
                         ({\"actions\": []}): the client has sent 0 bytes, so there is nothing \
                         to echo, transform or answer yet.",
@@ -175,7 +175,7 @@ impl EventType {
     /// Declare that this event deliberately offers the model no protocol-specific action.
     ///
     /// Use this for events that are purely informational (a connection closed, a peer went away)
-    /// where the only sensible responses are the common actions — `set_memory`, `show_message`,
+    /// where the only sensible responses are the common actions — `set_memory`, `notify_operator`,
     /// `append_to_log`. It exists so that "this event needs no action" is written down and
     /// distinguishable from "somebody forgot `with_actions(...)`", which is the failure mode that
     /// silently disabled sixteen protocols. `call_llm` reports the latter and repairs it at
@@ -196,7 +196,7 @@ impl EventType {
     /// Rather than leave those rendering as-is, derive a real one: the first action attached to
     /// this event is by construction a valid answer to it, and its `example` is a complete,
     /// protocol-specific action object. Events that legitimately have no action
-    /// ([`Self::with_no_actions`]) fall back to `show_message`, which is a common action and is
+    /// ([`Self::with_no_actions`]) fall back to `notify_operator`, which is a common action and is
     /// always accepted.
     ///
     /// A declared example that is not a placeholder is returned untouched, so this changes
@@ -212,7 +212,7 @@ impl EventType {
             }
         }
         serde_json::json!({
-            "type": "show_message",
+            "type": crate::llm::actions::common::NOTIFY_OPERATOR,
             "message": format!("Handled {}", self.id),
         })
     }
