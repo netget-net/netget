@@ -318,6 +318,7 @@ jobs:
     # the steps after it, and the summary step fails the job when a blocking group did not
     # pass. The blocking/advisory split comes from the 30 runs between 2026-10-15 and
     # 2026-10-29 that reached the evidence loop: every blocking group passed in all 30.
+    #
     # At 273 protocol features the --all-features test build was killed mid-compile
     # (SIGTERM from the runner's memory-pressure killer). Debug info is most of what
     # rustc and the linker hold for it, and these audits never read a backtrace's line
@@ -1059,10 +1060,10 @@ jobs:
 
       # BLOCKING evidence groups: every one passed in all 30 runs between 2026-10-15 and
       # 2026-10-29 that reached this loop, each with its peer installed by the steps above and
-      # each answered by mock or scripted handlers, never a real model. The loop runs every
-      # group rather than stopping at the first failure, because one run should tell you
-      # everything that is broken; it remembers, and exits non-zero at the end. A group that
-      # times out (five minutes each) or runs zero tests is a failure.
+      # none needing a real model (the runner has none; NetGet's side is mocked or scripted).
+      # The loop runs every group rather than stopping at the first failure, because one run
+      # should tell you everything that is broken; it remembers, and exits non-zero at the end.
+      # A group that times out (five minutes each) or runs zero tests is a failure.
       #
       # `mercurial` and `wol` are Experimental, so strictly they need not be here; they are
       # because the test exists, is not #[ignore]d, and costs a few seconds. `ollama` is the

@@ -20,9 +20,10 @@ MIB files installed on the machine. `tests/server/snmp/ber_depth_test.rs` covers
 independent one, the tests are not `#[ignore]`d, and they **hard-fail** when the binaries are
 missing (`Command::new("snmpget").output().await?` returns `NotFound`) rather than printing SKIP
 and passing. The cost of that is real: Net-SNMP must exist wherever the suite runs. Note also that
-**no CI job runs these tests** — the blocking `test` job compiles `tcp,http,dns,udp,redis,mcp-stdio`
-and `registry-audit` is `continue-on-error` and does not run the e2e suites. A green PR says
-nothing about SNMP.
+**no pull-request CI job runs these tests** — the blocking `test` job runs only the
+`CI_PROTOCOL_TESTS` suites and `registry-audit`'s evidence loops do not name SNMP's; SNMP's job
+in `protocol-pairs.yml` runs them on demand and before a release. A green PR says nothing
+about SNMP.
 
 ## Library Choices
 
