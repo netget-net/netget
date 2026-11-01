@@ -17,7 +17,7 @@ use std::sync::LazyLock;
 //
 // These are defined here rather than inline in `get_sync_actions` so that each event type can
 // attach the actions that actually answer it. An event that lists none leaves the model with
-// only the common actions (`set_memory`, `show_message`, ...), so every agent action it returns
+// only the common actions (`set_memory`, `notify_operator`, ...), so every agent action it returns
 // is rejected as unknown and the request fails after two retries - which is what happened to
 // all eight of these events. See `tests/event_action_declarations_test.rs`.
 // ============================================================================

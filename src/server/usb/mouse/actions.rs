@@ -60,7 +60,7 @@ pub static USB_MOUSE_DETACHED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         "usb_mouse_detached",
         "The host detached from this virtual mouse. Purely informational - the USB/IP session \
          is gone, so an input report has nowhere to go.",
-        json!({"type": "show_message", "message": "USB mouse host detached"}),
+        json!({"type": "notify_operator", "message": "USB mouse host detached"}),
     )
     .with_parameters(vec![Parameter {
         name: "connection_id".to_string(),

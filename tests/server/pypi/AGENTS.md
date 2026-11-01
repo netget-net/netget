@@ -35,7 +35,7 @@ Comprehensive test covering all PyPI endpoints with multiple packages:
 
 - 2s server startup
 - 3-5s for curl requests
-- 2-5s for pip query (if pip available)
+- 2-5s for the pip query
 
 ### test_pypi_single_package
 
@@ -59,9 +59,9 @@ Minimal test with single package for quick verification:
 ### pip
 
 - **Purpose**: Real-world PyPI client integration
-- **Availability**: May not be available in all test environments
+- **Availability**: Required. Test 4 fails, naming the install command, when `pip` is not on
+  `PATH` — a skip would report a pass for a step that asserted nothing
 - **Usage**: `pip index versions` to query package metadata
-- **Fallback**: Tests gracefully handle pip not being available
 
 ## Known Issues
 
@@ -97,20 +97,18 @@ requiring valid wheel contents.
 - **pip configuration**: Uses `--index-url` to override default PyPI, preventing external requests
 - **Offline-compatible**: Tests work without internet connection
 
-## Feature Gating
+## Running
 
-Tests are gated with `#![cfg(feature = "pypi")]` to only compile when pypi feature is enabled.
-
-Run tests with:
+PyPI is compiled into every native build; select the suite by module path:
 
 ```bash
-./cargo-isolated.sh test --no-default-features --features pypi --test server -- server::pypi::e2e_test
+./cargo-isolated.sh test --test server -- server::pypi:: --test-threads=16
 ```
 
 ## CI Considerations
 
 - **curl requirement**: Tests assume curl is available (standard in most CI environments)
-- **pip optional**: Tests gracefully handle pip not being available
+- **pip required**: Test 4 fails when pip is absent (`brew install python3` / `apt-get install -y python3-pip`)
 - **No root required**: Tests use high ports, no privileged access needed
 - **Concurrent safe**: random ports and an in-process mock LLM per test
 

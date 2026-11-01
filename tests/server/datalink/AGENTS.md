@@ -53,7 +53,7 @@ four capture protocols by `tests/capture_startup_reports_failure_test.rs`.
 |---|---|
 | `datalink_default_binding_is_the_platform_loopback` | default interface is `lo0` on macOS/BSD, `lo` elsewhere; no port is declared. Hardcoding `lo` once made the default unresolvable on macOS |
 | `datalink_declares_packet_capture_privilege` | requirement is `PacketCapture` (not `RawSockets` — a ChmodBPF user has one and not the other) and `is_met_by` agrees with the probe |
-| `datalink_offers_only_observation_actions` | exactly `show_message` and `ignore_packet`, and every event type carries actions |
+| `datalink_offers_only_observation_actions` | exactly `notify_operator` and `ignore_packet`, and every event type carries actions |
 | `test_datalink_registration_and_startup_params` | registered under `DataLink`, claims the `datalink` keyword, declares `filter` and **not** `interface` |
 
 ## LLM call budget

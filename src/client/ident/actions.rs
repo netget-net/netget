@@ -207,19 +207,18 @@ pub static IDENT_CLIENT_REPLY_MISMATCH_EVENT: LazyLock<EventType> = LazyLock::ne
 
 /// The client's entire vocabulary, defined **once**.
 ///
-/// It is returned by `get_async_actions()` and attached to every event type, which are two
-/// mechanisms for two different readers and not a duplicated list:
+/// It is returned by `get_async_actions()` and attached to every event type, so each event's
+/// own description names the verbs that answer it. Both consumers of a client's vocabulary
+/// take the union, so neither depends on the attachment:
 ///
 /// * `client_llm_action_set` (`src/llm/actions/client_trait.rs`) unions async ∪ sync ∪ the
 ///   firing event's actions and deduplicates by name, so the model sees each verb once. A
 ///   client has one LLM entry point and therefore cannot express a narrowing, which is why
 ///   `get_sync_actions()` is empty here rather than a second copy.
-/// * `validate_static_action_names` (`src/events/handler.rs`) builds its catalogue from
-///   `get_sync_actions()` **plus the matching event types' actions**, and never from the async
-///   list. Without the `with_actions` attachment below, a perfectly correct
+/// * `validate_static_action_names` (`src/events/handler.rs`) checks a client handler against
+///   `client_action_names_for_pattern`, the same union plus the matching events' actions, so a
 ///   `{"type": "static", "actions": [{"type": "send_ident_query", …}]}` routing rule is
-///   rejected at creation as an unknown action — which is what the operator, the dashboard's
-///   routing editor and `get_startup_examples()` all try to write.
+///   accepted at creation.
 fn client_action_set() -> Vec<ActionDefinition> {
     vec![
         ActionDefinition {

@@ -770,7 +770,7 @@ fn nfs_setattr_response_action() -> ActionDefinition {
 /// The action list is the whole protocol. `call_llm` builds the model's vocabulary from
 /// `event.event_type.actions`, **not** from `get_sync_actions()`, so the empty
 /// `.with_actions(vec![])` this used to carry meant the model was offered `set_memory`,
-/// `show_message` and nothing else: every `nfs_*_response` it produced was rejected as an
+/// `notify_operator` and nothing else: every `nfs_*_response` it produced was rejected as an
 /// unknown action, retried twice, and failed. No NFS operation could ever be answered.
 pub static NFS_OPERATION_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(

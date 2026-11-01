@@ -110,7 +110,7 @@ pub static DISCONNECTED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "devp2p_disconnected",
         "The session ended. Nothing more can be sent on it",
-        json!({"type": "show_message", "message": "devp2p session ended"}),
+        json!({"type": "notify_operator", "message": "devp2p session ended"}),
     )
     .with_parameters(vec![p(
         "reason",

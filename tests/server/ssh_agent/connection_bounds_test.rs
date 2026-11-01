@@ -18,6 +18,9 @@
 //! * **The connection past `MAX_CONNECTIONS` reads EOF at once** (the protocol's only negative
 //!   is an answer, so the refusal is a clean close), **and closing one admitted connection frees
 //!   exactly one slot.**
+//! * **Stopping the server unlinks its socket node**, so a client pointed at the path gets
+//!   ENOENT ("no agent") rather than ECONNREFUSED. Remove the cleanup guard in `mod.rs` and the
+//!   last test fails with the node still on disk.
 //!
 //! No mock backend: the LLM endpoint is a dead port and every rule is static or manual.
 //!
@@ -301,4 +304,29 @@ async fn the_connection_past_the_cap_reads_eof_and_a_slot_comes_back() {
             .is_some(),
         "closing one connection freed more than one slot"
     );
+}
+
+#[tokio::test]
+async fn stopping_the_server_unlinks_its_socket_node() {
+    let state = new_state().await;
+    let (id, path, _dir) = start_server(&state, serde_json::json!({}), Vec::new()).await;
+    assert!(
+        path.exists(),
+        "the socket node exists while the server runs"
+    );
+
+    // Let the accept loop run first: a stop arrives at a server that is serving, and a task
+    // aborted before its first poll drops its captures without ever running.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    state.remove_server(id).await;
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while path.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{} is still on disk 10s after the server stopped",
+            path.display()
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
 }

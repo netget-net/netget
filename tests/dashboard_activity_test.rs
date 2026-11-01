@@ -67,6 +67,7 @@ fn conn(id: u32, active: bool) -> ConnRow {
         bytes_sent: 2048,
         active,
         can_message: false,
+        memory_len: 0,
     }
 }
 
@@ -81,6 +82,7 @@ fn entry(id: u64, conn: Option<u32>) -> AccessLogEntry {
         event_type: "http_request".into(),
         request: serde_json::json!({"path": "/"}),
         response: vec![serde_json::json!({"type": "send_http_response"})],
+        answered_by: None,
     }
 }
 
