@@ -11,6 +11,32 @@ use std::time::Duration;
 /// `(to_server, bytes)` in the order they crossed.
 pub type Recording = Arc<Mutex<Vec<(bool, Vec<u8>)>>>;
 
+/// Hand one recorded stream to an oracle, each chunk in the direction it travelled.
+pub fn replay(
+    mut oracle: crate::helpers::pcap_oracle::PcapOracle,
+    chunks: &[(bool, Vec<u8>)],
+) -> crate::helpers::pcap_oracle::PcapOracle {
+    for (to_server, bytes) in chunks {
+        oracle = if *to_server {
+            oracle.to_server(bytes)
+        } else {
+            oracle.from_server(bytes)
+        };
+    }
+    oracle
+}
+
+/// Every non-empty stream the relay has recorded so far, copied out.
+pub fn recorded(streams: &Arc<Mutex<Vec<Recording>>>) -> Vec<Vec<(bool, Vec<u8>)>> {
+    streams
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|r| r.lock().unwrap().clone())
+        .filter(|chunks| !chunks.is_empty())
+        .collect()
+}
+
 /// A UDP relay in front of `upstream`: each client datagram is forwarded from a socket of its
 /// own, and each answer returned to the client.
 pub async fn udp_relay(upstream: std::net::SocketAddr) -> (std::net::SocketAddr, Recording) {
