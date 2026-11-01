@@ -31,6 +31,10 @@ while the connected event is parked. During a transaction, injected disconnect r
 responsive and other injected commands receive explicit busy rejection. Both event and
 handler-action queues are bounded at 16; overload fails rather than dropping an event.
 Clean EOF drains final response events; client removal cancels every tracked task.
+Every event carries its depth in the handler chain; an answer to an event at depth
+`wire::MAX_FOLLOWUPS` (4) is logged and not sent, so a model that answers every response
+with another request stops there. `tests/client/beanstalkd/real_server_test.rs` reads the
+count from beanstalkd's own `stats`.
 Connect/write/complete-response deadlines are 30 seconds, so a slow byte stream cannot
 keep a transaction alive indefinitely.
 
