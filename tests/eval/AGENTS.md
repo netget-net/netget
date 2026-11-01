@@ -183,7 +183,10 @@ Each of these cost a debugging pass and every one presented as a model failure.
   `event_never_reached_model` once Homebrew upgraded it, with nothing changed
   in NetGet. The probes write `{}` — an empty template the flags fill in.
   **A client upgrade can zero a protocol's score**; read a sudden 0/N as a
-  harness question first.
+  harness question first. nak 0.21 also gives up on a subscription after about
+  7 s and on a publish after about 10 s, with no option to raise either, so a
+  slow nostr answer scores `client_left_before_model_answered` — the
+  short-built-in-timeout trap above, and the next thing to fix there.
 - **A Python probe's library is not checked the way a binary is.**
   `binary_available` sees `python3`, not `pymemcache`, `pymodbus`,
   `greenstalk` or `ignition` (all `pip install`ed into the Homebrew Python
