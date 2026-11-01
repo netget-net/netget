@@ -7,6 +7,7 @@
 //! 4. Works for both user input and network events
 
 use crate::llm::actions::{execute_tool, ActionDefinition, ActionResponse, ToolAction, ToolResult};
+use crate::llm::backend_error::LlmContextExt;
 use crate::llm::conversation_state::ConversationState;
 use crate::llm::ollama_client::{ChatRequest, ChatResponse, Message, OllamaClient};
 use crate::llm::{RateLimiter, RequestSource};
@@ -527,10 +528,13 @@ impl ConversationHandler {
             }
         }
 
-        // If there's text content and no tool calls, convert to show_message
+        // If there's text content and no tool calls, convert to notify_operator
         if let Some(content) = &response.content {
             if !content.is_empty() && tools.is_empty() && actions.is_empty() {
-                actions.push(serde_json::json!({"type": "show_message", "message": content}));
+                actions.push(serde_json::json!({
+                    "type": crate::llm::actions::common::NOTIFY_OPERATOR,
+                    "message": content
+                }));
             }
         }
 
@@ -781,6 +785,13 @@ impl ConversationHandler {
             available_actions.iter().map(|a| a.name.clone()).collect();
         let mut valid_action_names_list: Vec<String> =
             available_actions.iter().map(|a| a.name.clone()).collect();
+        // `notify_operator` is accepted even where it is not offered. A server's network event
+        // leaves it out of the list beside the protocol's own answers, so the model is not
+        // tempted to take it for a reply (`network_event_common_actions_for`); but a model
+        // that names it anyway has asked for something harmless that every executor runs, and
+        // rejecting it would turn a stray operator note into a failed event. It stays out of
+        // `valid_action_names_list`, so no correction prompt advertises it either.
+        valid_action_names.insert(crate::llm::actions::common::NOTIFY_OPERATOR.to_string());
         // History can retain a credential after the currently offered actions are narrowed.
         self.private_payloads |= crate::utils::redact::actions_have_credentials(&available_actions);
         self.offered_actions = available_actions.clone();
@@ -795,7 +806,7 @@ impl ConversationHandler {
             let (original_response, cleaned_response) = self
                 .generate_with_retry()
                 .await
-                .context("✗  LLM failed to generate valid response after retries.")?;
+                .llm_context("✗  LLM failed to generate valid response after retries.")?;
 
             // Add assistant's response to conversation history (with reasoning preserved)
             let assistant_idx = self.messages.len();
@@ -985,6 +996,8 @@ impl ConversationHandler {
                         | "change_model"
                         | "set_memory"
                         | "append_memory"
+                        | "set_connection_memory"
+                        | "append_connection_memory"
                         | "append_to_log"
                         | "provide_feedback"
                         | "update_server"
@@ -993,7 +1006,7 @@ impl ConversationHandler {
                         | "delete_database"
                         | "schedule_task"
                         | "cancel_task"
-                        | "show_message"
+                        | "notify_operator"
                         | "close_connection_by_id"
                         | "reconnect_client"
                         | "update_client_instruction"
@@ -1581,7 +1594,7 @@ impl ConversationHandler {
                             .unwrap_or_else(|| "?".to_string())
                     )
                 }
-                "show_message" => {
+                "notify_operator" => {
                     let message = action.get("message").and_then(|m| m.as_str()).unwrap_or("");
                     let preview: String = message.chars().take(50).collect();
                     if message.len() > 50 {
@@ -1721,7 +1734,7 @@ impl ConversationHandler {
                     .client
                     .chat_with_tools(&chat_request, self.private_payloads)
                     .await
-                    .context("Chat API call failed")?;
+                    .llm_context("Chat API call failed")?;
 
                 // Record token usage
                 permit
@@ -1799,7 +1812,7 @@ impl ConversationHandler {
                         )
                         .await
                 }
-                .context("Generate API call failed")?;
+                .llm_context("Generate API call failed")?;
 
                 // Record token usage
                 permit

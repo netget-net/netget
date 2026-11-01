@@ -93,7 +93,7 @@ with the example's `"subprotocol": "chat"` five runs in five, and with `reject_w
 subprotocols offered" five runs in five (real-model eval, seed 42). The action and event examples
 accept without a subprotocol. The hint also says a greeting belongs to the opened connection,
 never to the handshake: told to greet every client, the model answered the handshake with
-`show_message` and no accept, which is the fail-closed 503.
+`notify_operator` and no accept, which is the fail-closed 503.
 
 **`websocket_connection_opened` and `websocket_text_message` carry `answer_with` too**
 (`actions::OPENED_ANSWER_WITH`, `actions::TEXT_MESSAGE_ANSWER_WITH`). Speaking first is the
@@ -117,10 +117,10 @@ sent.
 
 Measured with the real-model eval (5 runs each, seed 42): echo 0/5 and greeting 0/5 before;
 subprotocol drop + handshake hint → echo 0/5 (an empty greeting, or the model greeting on every
-connection with the old `{"event":"welcome"}` example), greeting 0/5 (`show_message` answering
+connection with the old `{"event":"welcome"}` example), greeting 0/5 (`notify_operator` answering
 the handshake); + opened/message hints and placeholder examples → echo 0/5, greeting 2/5 and then
 4/5 once the handshake hint gave the accept as a literal action; + the empty-greeting drop → echo
-5/5, greeting 3/5. The greeting misses are the model answering the handshake with `show_message`
+5/5, greeting 3/5. The greeting misses are the model answering the handshake with `notify_operator`
 or with nothing, which is the fail-closed 503.
 
 **An accept naming a subprotocol the client did not offer is accepted without one.** RFC 6455
@@ -162,7 +162,7 @@ nearly valid base64, and only the sender knows which it means.
 
 A `websocket_handshake` answered with neither `accept_websocket` nor `reject_websocket` is
 **refused with HTTP 503**, and the refusal is logged at ERROR with wording distinct from an
-explicit rejection. An LLM outage, a handler that returns only `show_message`, and a model that
+explicit rejection. An LLM outage, a handler that returns only `notify_operator`, and a model that
 means to deny all end at the same place, and none of them can be mistaken for consent. This is
 the OAuth2 post-mortem in CLAUDE.md applied ahead of time rather than after.
 

@@ -31,7 +31,7 @@ sides.
 | `websocket_client_connected` | handshake done; carries the negotiated subprotocol | send text/binary/ping, close, disconnect |
 | `websocket_client_text_message` | a text message from the server | the above plus `wait_for_websocket_data` |
 | `websocket_client_binary_message` | a binary message; `data` + `encoding` round-trip | same |
-| `websocket_client_closed` | the server closed | **`with_no_actions()`** — nothing can go on the wire after the closing handshake, so the common actions (`show_message`, `set_memory`, `append_to_log`) are the only honest vocabulary |
+| `websocket_client_closed` | the server closed | **`with_no_actions()`** — nothing can go on the wire after the closing handshake, so the common actions (`notify_operator`, `set_memory`, `append_to_log`) are the only honest vocabulary |
 
 Pings from the server are answered automatically — by the read loop, which keeps polling while a
 turn runs — and pongs are logged; neither raises an event.

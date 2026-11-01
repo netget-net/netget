@@ -592,7 +592,7 @@ impl RtpServer {
             "send_rtcp_sender_report" => {
                 Self::send_rtcp(action, peer_addr, socket, status_tx).await;
             }
-            // Common/no-op actions (set_memory, show_message, …) are executed by the shared
+            // Common/no-op actions (set_memory, notify_operator, …) are executed by the shared
             // executor already; nothing to put on the wire here.
             "" => {
                 Log::new(Some(status_tx)).warn(format!(

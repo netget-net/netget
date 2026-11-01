@@ -56,7 +56,7 @@ async fn concurrent_generations_clear_individually_on_success_and_cancellation()
                 .generate_with_tools_and_retry(
                     None,
                     WebSearchMode::Off,
-                    vec![netget::llm::actions::common::show_message_action()],
+                    vec![netget::llm::actions::common::notify_operator_action()],
                 )
                 .await
         }));
@@ -114,7 +114,7 @@ async fn failed_generation_clears_even_while_the_handler_is_kept_for_retry() {
         .generate_with_tools_and_retry(
             None,
             WebSearchMode::Off,
-            vec![netget::llm::actions::common::show_message_action()]
+            vec![netget::llm::actions::common::notify_operator_action()]
         )
         .await
         .is_err());
@@ -153,7 +153,7 @@ async fn private_generations_keep_sensitive_details_out_of_ui_snapshots() {
             .generate_with_tools_and_retry(
                 None,
                 WebSearchMode::Off,
-                vec![netget::llm::actions::common::show_message_action()],
+                vec![netget::llm::actions::common::notify_operator_action()],
             )
             .await
     });

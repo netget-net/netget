@@ -10,7 +10,7 @@ use serde_json::Value;
 /// Generate a summary of an action for logging
 ///
 /// Returns a brief description like:
-/// - "show_message"
+/// - "notify_operator"
 /// - "open_server: HTTP:8080 \"Act as REST API...\""
 /// - "read_file: schema.json (full, 1024 lines)"
 pub fn summarize_action(action: &Value) -> String {
@@ -36,9 +36,9 @@ pub fn summarize_action(action: &Value) -> String {
 /// Summarize a common action
 fn summarize_common_action(action: &CommonAction) -> String {
     match action {
-        CommonAction::ShowMessage { message } => {
+        CommonAction::NotifyOperator { message } => {
             let preview = crate::utils::truncate_for_log(&message, 37);
-            format!("show_message: \"{}\"", preview)
+            format!("notify_operator: \"{}\"", preview)
         }
         CommonAction::OpenServer {
             interface,
@@ -78,6 +78,14 @@ fn summarize_common_action(action: &CommonAction) -> String {
         CommonAction::AppendMemory { value } => {
             let preview = crate::utils::truncate_for_log(&value, 27);
             format!("append_memory: \"{}\"", preview)
+        }
+        CommonAction::SetConnectionMemory { value } => {
+            let preview = crate::utils::truncate_for_log(&value, 27);
+            format!("set_connection_memory: \"{}\"", preview)
+        }
+        CommonAction::AppendConnectionMemory { value } => {
+            let preview = crate::utils::truncate_for_log(&value, 27);
+            format!("append_connection_memory: \"{}\"", preview)
         }
         CommonAction::AppendToLog {
             output_name,
@@ -264,7 +272,7 @@ fn summarize_protocol_action(action_type: &str, action: &Value) -> String {
 /// Generate a summary of all actions in a response
 ///
 /// Returns a string like:
-/// "3 actions: → read_file: schema.json (full), → open_server: HTTP:8080 \"...\", → show_message"
+/// "3 actions: → read_file: schema.json (full), → open_server: HTTP:8080 \"...\", → notify_operator"
 pub fn summarize_actions(actions: &[Value]) -> String {
     if actions.is_empty() {
         return "0 actions".to_string();

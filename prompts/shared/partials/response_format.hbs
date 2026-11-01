@@ -9,14 +9,14 @@
 
 ```json
 {
-  "actions": [{"type": "show_message", "message": "Done"}]
+  "actions": [{"type": "notify_operator", "message": "Done"}]
 }
 ```
 
 - Apart from an optional `<reasoning>` block before it, the response starts with `{` and ends with `}`
-- **`tools`** (optional): Array of tool calls (read_file{{#if web_search_enabled}}, web_search{{/if}}, generate_random, etc.)
+- **`tools`** (optional): Array of tool calls (read_documentation, read_file{{#if web_search_enabled}}, web_search{{/if}}, etc.)
   - Tools return their results for another response; any actions in that intermediate response are drafts
-  - Use tools to gather information before deciding on actions
+  - Use a tool only when you need its result to decide your answer: each one costs a whole extra round trip, and most answers need none
 - **`actions`** (optional): Array of protocol-specific actions (open_server, close_server, etc.)
   - Only actions from your final response with no tool calls execute
   - Actions execute in order
@@ -62,7 +62,7 @@ Brief explanation of your understanding and decision (1-3 sentences)
 ```json
 {
   "actions": [
-    {"type": "show_message", "message": "Hello"}
+    {"type": "notify_operator", "message": "Server #1 is running on port 8080"}
   ]
 }
 ```
@@ -75,22 +75,12 @@ Brief explanation of your understanding and decision (1-3 sentences)
 }
 ```
 
-✓ **Valid (multiple tools):**
-```json
-{
-  "tools": [
-{{#if web_search_enabled}}    {"type": "web_search", "query": "https://datatracker.ietf.org/doc/html/rfc7231"},
-{{/if}}    {"type": "generate_random", "data_type": "uuid"}
-  ]
-}
-```
-
 ✓ **Valid (multiple actions):**
 ```json
 {
   "actions": [
     {"type": "close_server", "server_id": 1},
-    {"type": "show_message", "message": "Server #1 stopped"}
+    {"type": "notify_operator", "message": "Server #1 stopped"}
   ]
 }
 ```

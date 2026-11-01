@@ -97,7 +97,7 @@ fn the_centrally_handled_names_are_exactly_the_injected_ones() {
             "provide_feedback",
             "set_memory",
             "append_memory",
-            "show_message"
+            "notify_operator"
         ],
         "these are the actions call_llm_for_client injects that no client declares. If another \
          is added there, add it here too, or the model will be offered a tool its protocol \
@@ -110,7 +110,7 @@ fn the_centrally_handled_names_are_exactly_the_injected_ones() {
         (common::provide_feedback_action().name, "provide_feedback"),
         (common::set_memory_action().name, "set_memory"),
         (common::append_memory_action().name, "append_memory"),
-        (common::show_message_action().name, "show_message"),
+        (common::notify_operator_action().name, "notify_operator"),
     ] {
         assert_eq!(
             injected, listed,

@@ -164,7 +164,7 @@ The LLM responds to syslog events with actions:
   (`syslog/drop-healthchecks`) found llama3.1:8b storing a message it was told to drop in every
   run — once writing "I've ignored the message" beside the `store_syslog_message` carrying it.
   A parameterless drop listed second lost to a keep with a `message` field listed first.
-- Common actions: `show_message`, `update_instruction`, etc.
+- Common actions: `notify_operator`, `update_instruction`, etc.
 
 ### Example LLM Responses
 
@@ -178,7 +178,7 @@ The LLM responds to syslog events with actions:
       "message": "<34>Oct 11 22:14:15 mymachine su: 'su root' failed for user on /dev/pts/8"
     },
     {
-      "type": "show_message",
+      "type": "notify_operator",
       "message": "⚠️ Critical: Failed su attempt detected from mymachine"
     }
   ]
@@ -217,7 +217,7 @@ The LLM responds to syslog events with actions:
 {
   "actions": [
     {
-      "type": "show_message",
+      "type": "notify_operator",
       "message": "🚨 EMERGENCY: Kernel panic on server-01! Priority: 0 (emergency)"
     },
     {

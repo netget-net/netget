@@ -134,7 +134,7 @@ The LLM responds to TCP events with actions:
   [Data Format](#data-format))
 - `close_this_connection` - Close the connection
 - `wait_for_more` - Keep this payload and wait for the rest of the message
-- Common actions: `show_message`, `update_instruction`, etc.
+- Common actions: `notify_operator`, `update_instruction`, etc.
 
 The one async (user-triggered) action is `close_connection`, which the dashboard's
 `[ disconnect this peer ]` injects. Its `connection_id` is optional and ignored — the executor
@@ -155,7 +155,7 @@ then discarded its `connection_id`. Both are gone, the same removal `socket_file
       "encoding": "utf8"
     },
     {
-      "type": "show_message",
+      "type": "notify_operator",
       "message": "Sent FTP greeting"
     }
   ]

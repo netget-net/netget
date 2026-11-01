@@ -431,7 +431,7 @@ pub static DISCONNECTED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "h323_client_stopped",
         "The client stopped. Nothing more can be sent",
-        json!({"type": "show_message", "message": "H.323 client stopped"}),
+        json!({"type": "notify_operator", "message": "H.323 client stopped"}),
     )
     .with_parameters(vec![p(
         "reason",

@@ -49,7 +49,7 @@ pub static OPENID_REQUEST_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     }))
     // `call_llm` builds the model's tool list from `event.event_type.actions`, NOT from
     // `get_sync_actions()`. This list was missing entirely: the model was told
-    // "No specific actions available for this event", got only set_memory/show_message/
+    // "No specific actions available for this event", got only set_memory/notify_operator/
     // append_to_log, and every OIDC action it invented was rejected as unknown, retried
     // twice, and failed — so the server answered every request with its 500 fallback.
     .with_actions(OpenIdProtocol.get_sync_actions())

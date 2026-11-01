@@ -316,6 +316,12 @@ pub struct ServerInstance {
     /// kept beside rather than inside `ConnectionState` for the reason `connection_opened_at`
     /// is, and dropped by `remove_connection` like it.
     pub exchange_history: HashMap<ConnectionId, crate::state::exchange_history::ExchangeHistory>,
+    /// Each live connection's own memory: what the model chose to keep about the peer on it
+    /// (`set_connection_memory` / `append_connection_memory`). Shown with that connection's
+    /// events only, beside the shared [`Self::memory`], and dropped by `remove_connection`, so
+    /// one peer's name is never read out to the next. Kept beside `ConnectionState` for the
+    /// same reason as [`Self::exchange_history`].
+    pub connection_memory: HashMap<ConnectionId, String>,
     /// Memoisation of the model's answers: off unless the instance turns it on. Cloning the
     /// instance shares the cache. See [`crate::llm::answer_reuse`].
     pub memo: crate::llm::answer_reuse::Memo,
@@ -388,6 +394,7 @@ impl ServerInstance {
             history_entries: 0,
             batching: false,
             exchange_history: HashMap::new(),
+            connection_memory: HashMap::new(),
             memo: Default::default(),
         }
     }
@@ -495,6 +502,7 @@ impl ServerInstance {
     pub fn remove_connection(&mut self, id: ConnectionId) -> Option<ConnectionState> {
         let removed = self.connections.remove(&id);
         self.exchange_history.remove(&id);
+        self.connection_memory.remove(&id);
         if let Some(state) = &removed {
             self.record_closed_connection(state);
         }

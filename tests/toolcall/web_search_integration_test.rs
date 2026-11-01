@@ -190,7 +190,7 @@ async fn test_llm_search_and_extract_rfc2324_media_type() {
     // This tests the full search workflow: search query -> find URL -> fetch URL -> extract info
     let prompt = "Use web_search to fetch RFC 2324. \
                   Read the RFC and find what media type (Content-Type) is defined. \
-                  Use show_message to tell me the exact media type string you found.";
+                  Use notify_operator to tell me the exact media type string you found.";
 
     let mut child = Command::new(get_netget_binary())
         .arg(prompt)
@@ -230,19 +230,19 @@ async fn test_llm_search_and_extract_rfc2324_media_type() {
         combined_output
     );
 
-    // Verify the LLM used show_message to report the media type
-    // Look for show_message in the LLM response (turn 2), not in the prompt examples
-    // The pattern should be: LLM response contains show_message action with coffeepot
-    let show_message_in_response = combined_output.contains("LLM response (turn 2)")
-        && combined_output.contains("→ show_message")
+    // Verify the LLM used notify_operator to report the media type
+    // Look for notify_operator in the LLM response (turn 2), not in the prompt examples
+    // The pattern should be: LLM response contains notify_operator action with coffeepot
+    let notify_operator_in_response = combined_output.contains("LLM response (turn 2)")
+        && combined_output.contains("→ notify_operator")
         && combined_output.contains("coffeepot");
 
     assert!(
-        show_message_in_response,
-        "Expected LLM to execute show_message action in turn 2 to report 'message/coffeepot'. \
-         The LLM should extract the media type from RFC 2324 and report it using show_message.\n\
-         Look for 'LLM response (turn 2)' followed by '→ show_message' with 'coffeepot'.\n\
-         Current turn 2 shows unknown_action instead of show_message.\n\
+        notify_operator_in_response,
+        "Expected LLM to execute notify_operator action in turn 2 to report 'message/coffeepot'. \
+         The LLM should extract the media type from RFC 2324 and report it using notify_operator.\n\
+         Look for 'LLM response (turn 2)' followed by '→ notify_operator' with 'coffeepot'.\n\
+         Current turn 2 shows unknown_action instead of notify_operator.\n\
          Output:\n{}",
         combined_output
     );

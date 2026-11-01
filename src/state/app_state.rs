@@ -127,6 +127,35 @@ pub enum ScriptingMode {
 }
 
 impl ScriptingMode {
+    /// Every scripting mode, in the order the CLI help lists them.
+    pub const ALL: [ScriptingMode; 6] = [
+        Self::On,
+        Self::Off,
+        Self::Python,
+        Self::JavaScript,
+        Self::Go,
+        Self::Perl,
+    ];
+
+    /// Every spelling a scripting mode may be written in — `-e`/`--env` on the command line
+    /// and `scripting_mode` in the settings file both read through [`ScriptingMode::parse`],
+    /// which accepts exactly these (case-insensitively). One table, so a value one surface
+    /// writes is a value the other reads.
+    pub const SPELLINGS: &'static [(&'static str, ScriptingMode)] = &[
+        ("on", Self::On),
+        ("auto", Self::On),
+        ("off", Self::Off),
+        ("llm", Self::Off),
+        ("python", Self::Python),
+        ("py", Self::Python),
+        ("javascript", Self::JavaScript),
+        ("js", Self::JavaScript),
+        ("node", Self::JavaScript),
+        ("go", Self::Go),
+        ("golang", Self::Go),
+        ("perl", Self::Perl),
+    ];
+
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::On => "On",
@@ -136,6 +165,44 @@ impl ScriptingMode {
             Self::Go => "Go",
             Self::Perl => "Perl",
         }
+    }
+
+    /// The canonical spelling: what the settings file stores, and the first entry for this
+    /// mode in [`Self::SPELLINGS`].
+    pub fn config_name(&self) -> &'static str {
+        match self {
+            Self::On => "on",
+            Self::Off => "off",
+            Self::Python => "python",
+            Self::JavaScript => "javascript",
+            Self::Go => "go",
+            Self::Perl => "perl",
+        }
+    }
+
+    /// Parse any spelling in [`Self::SPELLINGS`], ignoring case and surrounding whitespace.
+    /// The error names the value and lists every accepted spelling.
+    pub fn parse(value: &str) -> Result<Self, String> {
+        let wanted = value.trim().to_lowercase();
+        Self::SPELLINGS
+            .iter()
+            .find(|(name, _)| *name == wanted)
+            .map(|(_, mode)| *mode)
+            .ok_or_else(|| {
+                format!(
+                    "Invalid scripting environment: '{}'\n\
+                     Valid options: on (auto), off (llm), python (py), javascript (js, node), go (golang), perl",
+                    value
+                )
+            })
+    }
+}
+
+impl std::str::FromStr for ScriptingMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s)
     }
 }
 
@@ -348,6 +415,21 @@ pub struct AppState {
     inner: Arc<RwLock<AppStateInner>>,
     pub llm_activity: super::llm_activity::LlmActivityTracker,
     pub event_journal: Arc<crate::events::journal::EventJournal>,
+    /// What is known to be wrong with the model or its backend, for `get_status`. Kept
+    /// outside `inner` so the transport can record it synchronously on every request
+    /// without taking the state lock.
+    model_health: Arc<std::sync::Mutex<ModelHealth>>,
+}
+
+/// What `get_status` says about the model beyond its name.
+#[derive(Debug, Clone, Default)]
+pub struct ModelHealth {
+    /// How the model in use was chosen, when that is not simply "as configured" — a configured
+    /// model the endpoint does not have, replaced by an installed one.
+    pub notice: Option<String>,
+    /// The most recent backend failure (model not installed, endpoint unreachable), cleared by
+    /// the next request the backend answers.
+    pub last_backend_failure: Option<String>,
 }
 
 struct AppStateInner {
@@ -630,6 +712,7 @@ impl AppState {
 
         Self {
             llm_activity: super::llm_activity::LlmActivityTracker::default(),
+            model_health: Default::default(),
             event_journal: Arc::new(crate::events::journal::EventJournal::default()),
             inner: Arc::new(RwLock::new(AppStateInner {
                 mode: Mode::Idle,
@@ -1491,6 +1574,48 @@ impl AppState {
         self.inner.write().await.ollama_model = model;
     }
 
+    /// Set the model only if none is set; returns whether it was set.
+    pub async fn set_ollama_model_if_unset(&self, model: String) -> bool {
+        let mut inner = self.inner.write().await;
+        if inner.ollama_model.is_some() {
+            return false;
+        }
+        inner.ollama_model = Some(model);
+        true
+    }
+
+    /// What is known to be wrong with the model or its backend.
+    pub fn model_health(&self) -> ModelHealth {
+        self.model_health
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Record how the model in use was chosen (or `None` once it is simply the configured one).
+    pub fn set_model_notice(&self, notice: Option<String>) {
+        self.model_health
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .notice = notice;
+    }
+
+    /// Record a backend failure (see [`crate::llm::LlmBackendError`]).
+    pub fn note_llm_backend_failure(&self, failure: String) {
+        self.model_health
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .last_backend_failure = Some(failure);
+    }
+
+    /// The backend answered a request: whatever failed before is no longer current.
+    pub fn clear_llm_backend_failure(&self) {
+        let mut health = self.model_health.lock().unwrap_or_else(|e| e.into_inner());
+        if health.last_backend_failure.is_some() {
+            health.last_backend_failure = None;
+        }
+    }
+
     /// Get the scripting environment information
     pub async fn get_scripting_env(&self) -> crate::scripting::ScriptingEnvironment {
         self.inner.read().await.scripting_env.clone()
@@ -1874,6 +1999,9 @@ impl AppState {
                 conn.status = ConnectionStatus::Closed;
                 conn.status_changed_at = crate::utils::clock::Instant::now();
             }
+            // What the model kept about this peer ends with the connection, not with the
+            // later sweep that removes its row.
+            server.connection_memory.remove(&connection_id);
         }
 
         self.remove_peer_handle(server_id, connection_id.as_u32())
@@ -2192,10 +2320,14 @@ impl AppState {
         connection_id: ConnectionId,
         status: crate::state::server::ConnectionStatus,
     ) {
+        let closed = status == crate::state::server::ConnectionStatus::Closed;
         if let Some(server) = self.inner.write().await.servers.get_mut(&server_id) {
             if let Some(conn) = server.connections.get_mut(&connection_id) {
                 conn.status = status;
                 conn.status_changed_at = crate::utils::clock::Instant::now();
+            }
+            if closed {
+                server.connection_memory.remove(&connection_id);
             }
         }
     }
@@ -3390,11 +3522,102 @@ impl AppState {
             .render(server.history_entries)
     }
 
-    /// The history block for a client's next prompt — see [`Self::render_server_history`].
+    /// Change one connection's memory (see [`ServerInstance::connection_memory`]) with
+    /// `update`, which receives the current notes (empty when there are none) and returns the
+    /// new ones. Returns the new length.
+    ///
+    /// Refused for a connection the server does not hold — an id it has removed, or never
+    /// registered — because nothing would ever clear the entry; an empty result removes it.
+    pub async fn update_connection_memory(
+        &self,
+        server_id: ServerId,
+        connection_id: crate::server::connection::ConnectionId,
+        update: impl FnOnce(&str) -> String,
+    ) -> anyhow::Result<usize> {
+        let mut inner = self.inner.write().await;
+        let server = inner
+            .servers
+            .get_mut(&server_id)
+            .ok_or_else(|| anyhow::anyhow!("server #{} does not exist", server_id.as_u32()))?;
+        anyhow::ensure!(
+            server.connections.contains_key(&connection_id),
+            "{} is not a live connection of server #{}",
+            connection_id,
+            server_id.as_u32()
+        );
+        let current = server
+            .connection_memory
+            .get(&connection_id)
+            .map(String::as_str)
+            .unwrap_or("");
+        let updated = update(current);
+        let len = updated.len();
+        if updated.is_empty() {
+            server.connection_memory.remove(&connection_id);
+        } else {
+            server.connection_memory.insert(connection_id, updated);
+        }
+        Ok(len)
+    }
+
+    /// One connection's memory, or `None` when it has none.
+    pub async fn get_connection_memory(
+        &self,
+        server_id: ServerId,
+        connection_id: crate::server::connection::ConnectionId,
+    ) -> Option<String> {
+        let inner = self.inner.read().await;
+        inner
+            .servers
+            .get(&server_id)?
+            .connection_memory
+            .get(&connection_id)
+            .cloned()
+    }
+
+    /// The block showing the model a connection's own memory ahead of its event, or `None`
+    /// when there is no connection or nothing kept. Carries none of the trigger's labels, like
+    /// the history block beside it.
+    pub async fn render_connection_memory(
+        &self,
+        server_id: ServerId,
+        connection_id: Option<crate::server::connection::ConnectionId>,
+    ) -> Option<String> {
+        let conn = connection_id?;
+        let memory = self.get_connection_memory(server_id, conn).await?;
+        Some(format!(
+            "Memory for this connection ({conn} only; other connections do not see it, and it \
+             ends when the connection closes):\n```text\n{memory}\n```\n"
+        ))
+    }
+
+    /// The history block for a client's next prompt — see [`Self::render_server_history`] and
+    /// [`crate::state::exchange_history::ExchangeHistory::render_for_client`].
     pub async fn render_client_history(&self, client_id: ClientId) -> Option<String> {
         let inner = self.inner.read().await;
         let client = inner.clients.get(&client_id)?;
-        client.exchange_history.render(client.history_entries)
+        client
+            .exchange_history
+            .render_for_client(client.history_entries)
+    }
+
+    /// Record one exchange in a client's history only — not in the access log, which counts
+    /// network events (`--exit-after-events` reads its total). For what a client did before any
+    /// event arrived ([`crate::state::exchange_history::CLIENT_STARTED_EVENT`]).
+    pub async fn record_client_history(
+        &self,
+        client_id: ClientId,
+        event_type: &str,
+        request: &serde_json::Value,
+        response: &[serde_json::Value],
+    ) {
+        let mut inner = self.inner.write().await;
+        if let Some(client) = inner.clients.get_mut(&client_id) {
+            let limit = client.history_entries;
+            client
+                .exchange_history
+                .record(event_type, request, response, limit);
+        }
     }
 
     /// An instance's history and batching settings as `(history entries, batching)`.
@@ -3439,17 +3662,29 @@ impl AppState {
 
     /// A server's memoisation, with what a cache key needs, or `None` when it is off (or the
     /// server is gone). See [`crate::llm::answer_reuse`].
+    ///
+    /// The context includes the memory of `connection_id` (`set_connection_memory`): the model
+    /// answers a connection in the light of what it kept about that peer, so an answer given
+    /// while it knew one peer's name must not be replayed to a peer it knows nothing about.
     pub async fn server_memo(
         &self,
         server_id: ServerId,
+        connection_id: Option<crate::server::connection::ConnectionId>,
     ) -> Option<crate::llm::answer_reuse::MemoHandle> {
         let inner = self.inner.read().await;
         let server = inner.servers.get(&server_id)?;
         server.memo.settings()?;
+        let connection_memory = connection_id
+            .and_then(|conn| server.connection_memory.get(&conn))
+            .map(String::as_str)
+            .unwrap_or("");
         Some(crate::llm::answer_reuse::MemoHandle {
             memo: server.memo.clone(),
             history_entries: server.history_entries,
-            context: format!("{}\u{1f}{}", server.instruction, server.memory),
+            context: format!(
+                "{}\u{1f}{}\u{1f}{}",
+                server.instruction, server.memory, connection_memory
+            ),
         })
     }
 

@@ -15,7 +15,7 @@ You used action name(s) that are not in the Available Actions list. This is NOT 
 
 ## Valid Actions
 
-`open_server`, `close_server`, `show_message`
+`open_server`, `close_server`, `notify_operator`
 
 ---
 
