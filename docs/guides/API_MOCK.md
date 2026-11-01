@@ -45,6 +45,7 @@ actions that answer them.
 written atomically and removed at startup if stale, so its appearance means "ready":
 
 ```bash
+rm -f ready.json   # a stale report would read as "ready" before NetGet removes it
 netget --load users.netget --ready-file ready.json --ollama-url http://127.0.0.1:1 \
   --run-for 60 > netget.out 2>&1 &
 until [ -s ready.json ]; do sleep 0.1; done

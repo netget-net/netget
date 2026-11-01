@@ -34,6 +34,7 @@ cat > interop.netget <<'EOF'
      {"event_pattern": "*", "handler": {"type": "static", "actions": []}}]}
 ]}
 EOF
+rm -f ready.json   # a stale report would read as "ready" before NetGet removes it
 netget --load interop.netget --ready-file ready.json --ollama-url http://127.0.0.1:1 \
   --run-for 120 > netget.out 2>&1 &
 until [ -s ready.json ]; do sleep 0.1; done
