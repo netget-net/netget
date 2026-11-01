@@ -23,7 +23,7 @@ With the guards in place the bombs are refused in microseconds and nothing downs
 sees them, so they cost the running fuzzer nothing. They exist for the day a guard
 regresses.
 
-This file is the provenance for 136 otherwise-opaque binary blobs; edit it rather than
+This file is the provenance for the otherwise-opaque binary blobs; edit it rather than
 the blobs.
 """
 import os
@@ -1468,6 +1468,55 @@ write("gre_packet", "keepalive", gre(0x0800, ipv4([198, 18, 0, 1], [198, 18, 0, 
 write("gre_packet", "ends_inside_sequence", gre(0x6558, b"", key=1, seq=2)[:10])
 write("gre_packet", "routing_bit", bytes([0x40, 0, 0x65, 0x58]) + arp_request)
 write("gre_packet", "version_1", bytes([0x30, 1, 0x88, 0x0B, 0, 0, 0, 0, 0, 0, 0, 0]))
+
+# --- ctap2_cbor: utils::cbor_depth + serde_cbor, the usb-fido2 CTAP2 parameter decoder ---------
+
+
+def cbor_text(s):
+    b = s.encode()
+    assert len(b) < 24
+    return bytes([0x60 | len(b)]) + b
+
+
+def cbor_bytes(n, fill):
+    assert n < 256
+    return bytes([0x58, n]) + bytes([fill]) * n
+
+
+def cbor_int(i):
+    assert -24 <= i < 24
+    return bytes([i]) if i >= 0 else bytes([0x20 | (-1 - i)])
+
+
+# authenticatorMakeCredential's parameters (CTAP 2.1 6.1); three levels at their deepest.
+write("ctap2_cbor", "make_credential",
+      bytes([0xa5])
+      + cbor_int(1) + cbor_bytes(32, 7)
+      + cbor_int(2) + bytes([0xa1]) + cbor_text("id") + cbor_text("example.com")
+      + cbor_int(3) + bytes([0xa2]) + cbor_text("id") + cbor_bytes(16, 8)
+      + cbor_text("name") + cbor_text("ada")
+      + cbor_int(4) + bytes([0x81, 0xa2]) + cbor_text("alg") + cbor_int(-7)
+      + cbor_text("type") + cbor_text("public-key")
+      + cbor_int(7) + bytes([0xa1]) + cbor_text("rk") + bytes([0xf5]))
+# GetAssertion with hmac-secret: CTAP2's four levels, a COSE key at the bottom.
+cose_key = (bytes([0xa4]) + cbor_int(1) + cbor_int(2) + cbor_int(3) + cbor_int(-7)
+            + cbor_int(-1) + cbor_int(1) + cbor_int(-2) + cbor_bytes(32, 1))
+write("ctap2_cbor", "get_assertion_hmac_secret",
+      bytes([0xa3])
+      + cbor_int(1) + cbor_text("example.com")
+      + cbor_int(2) + cbor_bytes(32, 9)
+      + cbor_int(4) + bytes([0xa1]) + cbor_text("hmac-secret")
+      + bytes([0xa2]) + cbor_int(1) + cose_key + cbor_int(2) + cbor_bytes(32, 3))
+write("ctap2_cbor", "client_pin_get_retries", bytes([0xa2, 0x01, 0x01, 0x02, 0x01]))
+write("ctap2_cbor", "floats_and_simple",
+      bytes([0x84, 0xf9, 0x3c, 0x00, 0xfa, 0x3f, 0x80, 0, 0, 0xf8, 0x20, 0xf6]))
+write("ctap2_cbor", "at_depth_limit", bytes([0x81]) * 8 + b"\x00")
+write("ctap2_cbor", "depth_bomb", bytes([0x81]) * 10000 + b"\x00")
+write("ctap2_cbor", "map_depth_bomb", bytes([0xa1, 0x00]) * 5000 + b"\x00")
+write("ctap2_cbor", "tag_depth_bomb", bytes([0xc6]) * 10000 + b"\x00")
+write("ctap2_cbor", "indefinite_array", bytes([0x9f, 0x01, 0x02, 0xff]))
+write("ctap2_cbor", "huge_declared_len", bytes([0x5b]) + b"\xff" * 8)
+write("ctap2_cbor", "huge_declared_count", bytes([0xbb, 0x7f]) + b"\xff" * 7)
 
 total = sum(len(files) for _, _, files in os.walk(CORPUS))
 print("seeded %d corpus files across %d targets" %
