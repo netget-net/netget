@@ -72,6 +72,42 @@ fn write_proto(dir: &TempDir) -> E2EResult<std::path::PathBuf> {
     Ok(path)
 }
 
+/// Every connection a relay recorded, through the pcap oracle.
+///
+/// Wireshark's `http2` dissector and its `grpc` sub-dissector read the preface, the SETTINGS
+/// exchange, the HPACK-compressed headers, the length-prefixed message and the trailers,
+/// independently of grpc-go and of hyper. It has no `user.proto`, so it checks the protobuf
+/// message's wire structure rather than its field names.
+fn oracle(
+    streams: &std::sync::Arc<std::sync::Mutex<Vec<crate::helpers::recording_relay::Recording>>>,
+) {
+    let connections = crate::helpers::recording_relay::recorded(streams);
+    assert!(
+        !connections.is_empty(),
+        "grpcurl's connection never crossed the relay"
+    );
+    for chunks in &connections {
+        crate::helpers::recording_relay::replay(
+            crate::helpers::pcap_oracle::PcapOracle::tcp("grpc").also_named("grpc"),
+            chunks,
+        )
+        .assert_clean();
+    }
+}
+
+/// A recording relay in front of the server on `port`.
+async fn relay_to(
+    port: u16,
+) -> (
+    u16,
+    std::sync::Arc<std::sync::Mutex<Vec<crate::helpers::recording_relay::Recording>>>,
+) {
+    let (relay, streams) =
+        crate::helpers::recording_relay::tcp_relay(format!("127.0.0.1:{port}").parse().unwrap())
+            .await;
+    (relay.port(), streams)
+}
+
 /// Run one unary call with grpcurl and return (exit status, combined output).
 async fn grpcurl_call(
     port: u16,
@@ -170,7 +206,8 @@ async fn test_grpc_unary_call_against_real_grpcurl() -> E2EResult<()> {
     let server = start_netget_server(config).await?;
     println!("gRPC server on 127.0.0.1:{}", server.port);
 
-    let (status, out) = grpcurl_call(server.port, &dir, r#"{"id":123}"#).await?;
+    let (relay_port, streams) = relay_to(server.port).await;
+    let (status, out) = grpcurl_call(relay_port, &dir, r#"{"id":123}"#).await?;
 
     assert!(
         status.success(),
@@ -193,6 +230,8 @@ async fn test_grpc_unary_call_against_real_grpcurl() -> E2EResult<()> {
         out.contains("123"),
         "grpcurl did not decode the `id` field:\n{out}"
     );
+    // The success shape: HEADERS, a DATA frame with the message, trailing HEADERS.
+    oracle(&streams);
 
     server.wait_for_mocks(30).await;
     server.verify_mocks().await?;
@@ -240,7 +279,8 @@ async fn test_grpc_error_status_is_read_back_by_real_grpcurl() -> E2EResult<()> 
     });
 
     let server = start_netget_server(config).await?;
-    let (status, out) = grpcurl_call(server.port, &dir, r#"{"id":999}"#).await?;
+    let (relay_port, streams) = relay_to(server.port).await;
+    let (status, out) = grpcurl_call(relay_port, &dir, r#"{"id":999}"#).await?;
 
     assert!(
         !status.success(),
@@ -256,6 +296,8 @@ async fn test_grpc_error_status_is_read_back_by_real_grpcurl() -> E2EResult<()> 
         out.contains("User not found"),
         "grpcurl did not report our grpc-message:\n{out}"
     );
+    // The Trailers-Only shape: one HEADERS frame with END_STREAM.
+    oracle(&streams);
 
     server.wait_for_mocks(30).await;
     server.verify_mocks().await?;
