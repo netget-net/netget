@@ -150,10 +150,6 @@ length-prefixed, so it can carry any bytes, newlines included.
   skipped (no Redis action returns `Custom` any more; the arm exists so a
   regression is loud); if nothing else was produced the no-response error above
   is sent.
-Every `decision=` tag above for a plain command, and its wire form, is asserted by
-`tests/server/redis/failure_decision_test.rs` — the tags are written to the status stream as
-well as `netget.log`, so the test reads them there.
-
 - **Undecodable RESP** → the connection is closed.
 - **Arrays nested deeper than 32** (`utils::resp::MAX_RESP_DEPTH`) →
   `-ERR Protocol error: nesting too deep`, half-close, logged
@@ -171,11 +167,21 @@ well as `netget.log`, so the test reads them there.
   soon as its unfinished part passes the cap, or when it completes if its last byte arrived in
   the read that completed it; measured after the complete frames in front of it have been
   handled, so a pipelined command behind a large frame is not counted against it. A frame of
-  exactly 64 MiB is answered. Without the cap a client announcing a long frame and stalling
-  would grow the per-connection buffer without bound.
+  exactly 64 MiB passes framing and the connection survives it. Without the cap a client
+  announcing a long frame and stalling would grow the per-connection buffer without bound.
+- **A command whose event is larger than the shared handler budget** (8 MiB of JSON or
+  65 536 nodes, `scripting::event_handler::MAX_INTERPOLATION_*`; `args` is one node per
+  argument) → refused before any handler or the model sees it, answered with the
+  `-ERR <category>` of a failed call, and the connection stays open. Framing admits up to
+  64 MiB and 2^20 values, so this is the bound a large command meets first.
 
-All three refusals are fixed strings — nothing from the peer's bytes or an
+All the framing refusals are fixed strings — nothing from the peer's bytes or an
 internal error reaches the wire.
+
+Every `decision=` tag above for a plain command, and its wire form, is asserted by
+`tests/server/redis/failure_decision_test.rs` — the tags are written to the status stream as
+well as `netget.log`, so the test reads them there. Each framing bound is driven at its
+boundary by `frame_bounds_test.rs` and `resp_depth_test.rs`.
 
 ### RESP nesting
 
@@ -388,7 +394,21 @@ different view is redirected by it.
 
 ## Testing
 
-Twelve files, declared in `tests/server/redis/mod.rs`:
+Sixteen files, declared in `tests/server/redis/mod.rs` (`tests/server/redis/AGENTS.md` has
+the table):
+
+- `verb_coverage_test.rs` — the verbs Rust answers that the files below left to raw sockets:
+  sharded pub/sub, `PUBSUB SHARD*`, `UNSUBSCRIBE`/`PUNSUBSCRIBE`, `RESET`, subscribed-mode
+  `PING`, `CLUSTER KEYSLOT|MYID|SHARDS|INFO`, `-CROSSSLOT` and `-CLUSTERDOWN`, through two of
+  redis-cli, redis-rs and redis-py each.
+- `pcap_oracle_test.rs` — every RESP2 reply shape on the success paths (the model's six verbs,
+  Rust's `HELLO 2`, `PUBSUB`, subscription confirmations, a delivered message, subscribed
+  `PING`, `RESET`, and cluster replies and `-MOVED`) read by Wireshark's `resp` dissector, with
+  the integers, lengths and error text it read asserted. Wireshark 4.6 has no RESP3 types, so
+  RESP3 rests on its three client parsers.
+- `frame_bounds_test.rs` — the frame cap, `MAX_BULK_LEN`, `MAX_RESP_ELEMENTS` and
+  `MAX_REPLY_DEPTH` at their boundaries, and a 64 MiB unfinished line refused in seconds.
+- `failure_decision_test.rs` — the failure section's wire forms and `decision=` tags.
 
 - `pubsub_test.rs` — redis-cli (RESP2 and `-3`) and redis-rs (its RESP2 `PubSub` and a RESP3
   multiplexed connection with a push sender): a message one real client publishes reaches
@@ -406,16 +426,16 @@ Twelve files, declared in `tests/server/redis/mod.rs`:
 - `e2e_test.rs` — six `redis-rs` tests, one per RESP2 reply type.
 - `real_client_test.rs` — the real `redis-cli` binary, seven commands on one
   connection, asserted as one ordered list of rendered replies. Hard-fails when
-  the binary is missing. Together with `e2e_test.rs` this is what the Beta rating
-  rests on.
+  the binary is missing.
 - `resp_framing_test.rs` — CR/LF in a model-supplied simple string or error
   cannot split the frame, and `stop_server` ends an in-flight connection rather
   than just the listener. Zero LLM calls.
 - `llm_failure_test.rs` — the RESP error a client sees when the backend fails.
 - `peer_inject_test.rs` — dashboard injection through `send_to_peer`.
-- `connection_bounds_test.rs` — the read deadlines (see "Connection bounds").
-- `resp3_test.rs` — redis-cli `-3` and redis-py 5 (`protocol=3`, credentials in
-  `HELLO`) read every RESP3 type, a push, and the RESP2 downgrades; a wrong password in
+- `connection_bounds_test.rs` — the read deadlines and the connection cap (see "Connection
+  bounds").
+- `resp3_test.rs` — redis-cli `-3`, redis-py 5 (`protocol=3`, credentials in
+  `HELLO`) and redis-rs read every RESP3 type, a push, and the RESP2 downgrades; a wrong password in
   `HELLO` is refused and `HELLO 4` is `NOPROTO`. Zero LLM calls (a python handler).
 - `resp_depth_test.rs` — a 100 000-level nesting bomb is refused and the
   server still answers a fresh connection; 32 levels answered, 33 refused;
@@ -423,7 +443,7 @@ Twelve files, declared in `tests/server/redis/mod.rs`:
   guard the test binary aborts with `stack overflow`.
 
 `fuzz/fuzz_targets/resp_frame.rs` drives the guard and `decode` as a pair, with
-a depth-bomb seed.
+a depth-bomb seed, and checks that a scan resumed across reads gives the one-shot verdict.
 
 `--test` names a **target**, so `--test server::redis::e2e_test` makes cargo list
 its targets and exit having run nothing — it does not fail, so it silently looks
@@ -481,12 +501,102 @@ TFTP evicted live transfers because "idle" was measured wrongly.
 
 Both bounds are declared startup parameters, because the right value is a property of who is
 on the other end and only the operator knows that.
-`tests/server/redis/connection_bounds_test.rs` drives all three claims from a raw socket: a
+`tests/server/redis/connection_bounds_test.rs` drives each from raw sockets: a
 short `first_byte_timeout_secs` closes a silent peer, a short `idle_timeout_secs` closes one
-that has been answered (proving the loop switches bounds), and the **default** leaves a silent
+that has been answered (proving the loop switches bounds), the **default** leaves a silent
 peer alone for 40 seconds — past the 30 this used to be, which is the regression for the defect
-above and the reason that one test is deliberately slow.
+above and the reason that one test is deliberately slow — and 256 live peers are admitted, the
+257th is told `-ERR max number of clients reached` and closed, and a peer that hangs up gives
+its slot back. The 300-second defaults themselves are not waited out; they are the declared
+`default` of each startup parameter, which `tests/startup_param_defaults_test.rs` ties to the
+constants.
 
 `tests/tcp_server_bounds_ratchet_test.rs` fails the build if either bound is removed;
 `tests/accept_bounded_test.rs` drives the shared helper, including the guarantee that a busy
 connection is never reported as idle.
+
+## Maturity: the six conditions
+
+The root `AGENTS.md` defines `Stable` as six conditions. Re-derived against source on
+31 October 2026 rather than inherited. **The rating covers the surface this server implements**
+— RESP2/RESP3 framing and its bounds, the reply verbs, `HELLO`, pub/sub, and cluster routing
+and introspection — which is a subset of Redis. Command semantics are the model's (there is no
+keyspace), and scripting, transactions, blocking commands, inline commands, keyspace
+notifications, client-side caching, a cluster bus and TLS are not implemented at all.
+
+| # | condition | holds? |
+|---|---|---|
+| 1 | two independent third-party clients, no skip, no `#[ignore]` | **yes, as of this pass** — redis-rs and redis-cli for every RESP2 reply verb; redis-cli `-3`, redis-py and redis-rs for every RESP3 type; and two of redis-cli, redis-rs and redis-py for every verb Rust answers (`verb_coverage_test.rs`). None of them shares code with `redis-protocol`, and each binary hard-fails when absent |
+| 2 | the pcap oracle is green over its wire traffic | **yes, as of this pass** — `pcap_oracle_test.rs`, over the success paths, with what the dissector read asserted; RESP2 only, since Wireshark 4.6 has no RESP3 types |
+| 3 | a fuzz target exists and has run clean, with a depth bomb | **yes** — `resp_frame`, rebuilt and run this pass; see below |
+| 4 | every declared bound has a test | **yes, as of this pass** — each at its boundary, each verified by removal; see below |
+| 5 | both `AGENTS.md` files verified against source in this pass | **yes** — this file and `tests/server/redis/AGENTS.md`; corrections below |
+| 6 | no `#[ignore]`, no skip-when-missing gate | **yes** — `grep -rn '#\[ignore' tests/server/redis/*.rs` is empty, and every external binary and redis-py fail rather than skip |
+
+**Condition 1 was true of a sample.** Counting what the clients sent against what the server
+answers: `SUBSCRIBE`, `PSUBSCRIBE`, `PUBLISH`, `PUBSUB NUMSUB|NUMPAT|CHANNELS`, `HELLO`, `MOVED`,
+`ASK`, `CLUSTER SLOTS` and `NODES` had two real clients; sharded pub/sub, `PUBSUB SHARD*`,
+`UNSUBSCRIBE`/`PUNSUBSCRIBE`, `RESET`, subscribed-mode `PING`, `CLUSTER KEYSLOT|MYID|SHARDS|INFO`,
+`-CROSSSLOT` and `-CLUSTERDOWN` were asserted only from raw sockets, and the RESP3 big number
+had one reader (redis-cli 7.0 cannot render it). `verb_coverage_test.rs` and a redis-rs RESP3
+test close each. Subscribed-mode `PING` rests on redis-py plus the exact raw-socket shape:
+redis-cli cannot send it while subscribed and redis-rs 0.27's `PubSub` has no `ping`.
+
+**Condition 2 was satisfied by error frames.** The only oracle call was in
+`resp_framing_test.rs`, over a CR/LF-sanitised simple string and error. Bulk strings (with CRLF
+inside), nil, integers, arrays, Rust's `HELLO`, `PUBSUB`, pub/sub frames and cluster replies —
+the shapes a client parses most — had never been shown to an independent reader.
+
+**Condition 3: the target did not build as documented.** `cd fuzz && rustup run
+nightly-2025-12-04 cargo fuzz build resp_frame` fails three ways on this machine, none of them
+in the target: with no lockfile, `fuzz/` resolves `libc` 0.2.191, which no longer has the
+constants `nix` 0.8.1 (via `webrtc-util`) uses — seed it with `cp Cargo.lock fuzz/Cargo.lock`
+as CI's `ratchets` job does; `rustup run` does not put the toolchain ahead of Homebrew's
+`cargo`/`rustc` on `PATH`, so prepend `~/.rustup/toolchains/<toolchain>/bin`; and macOS `ld`
+refuses the `crc-fast` cdylib, whose instrumented objects reference sancov hooks only the fuzz
+binary defines — a linker wrapper adding `-Wl,-undefined,dynamic_lookup`
+(`CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER`) gets past it. Built that way, with the
+resumed-scan property added, `resp_frame -s none -max_total_time=300 -timeout=25` ran 119 465
+inputs in 301 s from the committed seeds (`depth_bomb`, 65 536 levels, among them) and found
+nothing; the corpus grew to 302 inputs.
+
+**Condition 4 found two defects.** The guard re-walked an unfinished frame from its first
+byte on every 4 KiB read, so one 64 MiB line with no CRLF cost minutes of a worker (see "RESP
+nesting"); it now resumes. And `$N` was capped at the 64 MiB buffer itself, so a `$N` just
+under it was accepted on its header and could never complete; `MAX_BULK_LEN` is the largest
+that can. The cap is now measured after the complete frames ahead of it, which also stopped a
+pipelined command counting against a large frame. Every bound, and the test that fails when it
+is removed:
+
+| bound | direction | test |
+|---|---|---|
+| `MAX_PENDING_FRAME_BYTES` (64 MiB) — `max_inbound_bytes` | inbound | `frame_bounds_test.rs`: exactly the cap passes, one byte more refused complete and unfinished |
+| `MAX_BULK_LEN` | inbound | `frame_bounds_test.rs`: the largest is waited for, one more refused on its header |
+| `MAX_RESP_ELEMENTS` (per frame) | inbound | `frame_bounds_test.rs`: 2^20 − 1 passes, one header past refused, a split frame refused |
+| `MAX_RESP_DEPTH` (32) | inbound | `resp_depth_test.rs`: 32 answered, 33 refused; removed, the binary aborts |
+| linear scan | inbound | `frame_bounds_test.rs`: a 64 MiB unfinished line refused within 45 s |
+| `MAX_REPLY_DEPTH` (32) | **outbound** (the model's RESP3 arrays) | `frame_bounds_test.rs`: 32 written, 33 an error with nothing of the frame |
+| `MAX_CONNECTIONS` (256) | accept | `connection_bounds_test.rs`: 257th refused with Redis's text, a closed peer's slot returned |
+| first-byte / idle read deadlines | inbound | `connection_bounds_test.rs` |
+| channel/pattern length, message size, per-connection / per-server / distinct-pattern caps | inbound | `pubsub_bounds_test.rs` |
+| 8 MiB per-subscriber queue | **outbound** | `pubsub_bounds_test.rs`: the slow consumer is disconnected |
+
+Verified by one build with every bound above removed at once (the connection cap ×64, both
+frame-cap checks, `MAX_BULK_LEN` widened to the buffer, the per-header element check, the
+resumed scan reset on every call, `MAX_REPLY_DEPTH` +1000, each pub/sub check and the 8 MiB
+queue): 12 of the suite's 47 tests failed, each on its own bound's assertion. Two pub/sub
+checks — message size and distinct patterns — sit in a test behind an earlier assertion that
+already failed, so for those the September mutation pass is the evidence. The depth counter is
+not removable in isolation any more (its fixed 32-slot array would panic first); removing the
+whole guard aborts the test binary with a stack overflow, as recorded in "RESP nesting".
+
+The shared event budget (8 MiB / 65 536 JSON nodes) is not this protocol's bound but is the one
+a large command meets first: framing admits a 64 MiB frame, the handler layer refuses its event.
+
+**Condition 5 found a promise the code did not keep.** The failure section said a model's
+`redis_error` answer to a plain command was logged `decision=model_reject`; only `HELLO … AUTH`
+and the pub/sub paths wrote it. It is written now, and `failure_decision_test.rs` asserts every
+tag in the section along with its wire form, `-LOADING` for a saturated backend included. Also
+corrected: `redis_command` carries `protocol`; the frame-cap, bulk-length and element-count
+statements; what a bare non-array RESP value does; the run commands, which named a `redis`
+Cargo feature that no longer exists.

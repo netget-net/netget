@@ -115,10 +115,10 @@ netget --mcp   # then call list_protocols / get_protocol_docs
 
 Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/protocol/metadata.rs`):
 
-- **Stable** — **four as of 30 September 2026: `coap`, `dns`, `modbus` and `smb`.** Before
+- **Stable** — **five as of 31 October 2026: `coap`, `dns`, `modbus`, `smb` and `redis`.** Before
   16 September 2026 there were none, and three protocols had held the rating and lost it, each
   for the same reason: nobody had said what it required, so "Stable" meant whoever set it felt
-  good about the code. The bar below is what replaced that, and these four are the ones
+  good about the code. The bar below is what replaced that, and these five are the ones
   measured against it rather than against a feeling. Each carries its own justification in
   `metadata()` — read `e2e_testing` and `notes` there, and the "Maturity: the six conditions"
   section at the foot of each `src/server/<p>/CLAUDE.md`, before quoting any of the ratings:
@@ -134,11 +134,20 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
   one most likely to be silently false for any protocol. Rebuild before believing it:
 
   ```bash
-  cd fuzz && rustup run nightly-2025-12-04 cargo fuzz build <target>
+  cp Cargo.lock fuzz/Cargo.lock      # as CI does: unseeded, fuzz/ resolves fresh and breaks
+  cd fuzz && PATH=~/.rustup/toolchains/nightly-2025-12-04-aarch64-apple-darwin/bin:$PATH \
+    CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=/path/to/cc-wrapper \
+    cargo fuzz build -s none <target>
   ```
 
   (`cargo +nightly fuzz` fails on this machine: asdf's shims precede `~/.cargo/bin` on `PATH`,
-  so `cargo` is not the rustup proxy and `+toolchain` is read as a subcommand name.)
+  so `cargo` is not the rustup proxy and `+toolchain` is read as a subcommand name. `rustup run
+  <toolchain> cargo …` is not enough either, as measured in October 2026: Homebrew's `cargo`
+  and `rustc` still come first on `PATH`, so the toolchain's `bin` has to be prepended. Without a
+  seeded lockfile `libc` resolves to a release that dropped constants `nix` 0.8.1 uses. And
+  macOS `ld` refuses the `crc-fast` cdylib, whose instrumented objects reference sancov hooks
+  only the fuzz binary defines; the wrapper is `exec cc -Wl,-undefined,dynamic_lookup "$@"`.
+  `src/server/redis/AGENTS.md` has the details.)
 
   A protocol is Stable when **all six** hold. Each one exists because its absence produced a
   false Stable rating here:
@@ -199,13 +208,20 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
     slot as long as the peer held its end open: `close` shut the write half from another task
     and the reader never learned. A bound the test removal cannot move — `MAX_BUFFERED` was
     checked at a second site that could never fire — is a comment, and was removed.
+  - **A byte cap bounds memory, not work.** `redis` (31 October 2026) capped a frame at 64 MiB
+    and its guard re-walked the unfinished frame from the start on every 4 KiB read, so one
+    64 MiB line cost ~16 000 walks — minutes of a worker per unauthenticated connection, all
+    inside the cap. A test of a size bound should time the walk to it, not only assert the
+    refusal at the end. The same pass found `$N` capped at the buffer size, so a declared length
+    just under it was accepted and could never complete: put the boundary where a frame can
+    still fit, and test both sides of it.
 
   **Nine protocols now have two clients and still fail conditions 2 or 3**, which is worth knowing
   before picking the next one: `doh`, `dot`, `etcd`, `grpc`, `postgresql` and `websocket` have
   neither a pcap-oracle test nor a fuzz target; `mongodb` has a fuzz target
   (`fuzz_targets/bson_document.rs`) and no oracle; `mqtt` and `kafka` have the oracle and no
   fuzz target. (`redis` was in that last group until `fuzz_targets/resp_frame.rs` landed in
-  September 2026.) A fuzz target with a depth-bomb corpus is the cheaper of the two to
+  September 2026, and went Stable on 31 October 2026.) A fuzz target with a depth-bomb corpus is the cheaper of the two to
   add. Derive this rather than trusting it — and note that fuzz targets are named after the
   *decoder*, not the protocol, so read each target's `use` lines rather than grepping its name:
 
@@ -238,7 +254,8 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
   `prometheus`, `docker`, `vault`, `beanstalkd`, `zabbix`, `gearman`, `bolt` — less `modbus`,
   which went to Stable, plus `nostr`, a new relay that
   arrived Beta on nak and rust-nostr's `nostr-sdk`, and `nsq` (`to_nsq`, `nsq_tail`) and `otlp`
-  (`otel-cli`, `telemetrygen`), new servers that arrived Beta the same day; re-derive, the count drifts every pass —
+  (`otel-cli`, `telemetrygen`), new servers that arrived Beta the same day. Re-derived
+  31 October 2026 after `redis` went to Stable: 57. Re-derive, the count drifts every pass —
   `python3 scripts/beta_evidence_table.py --check` prints it).
 
   **Do not read the rest of this section as the list. Generate it:**

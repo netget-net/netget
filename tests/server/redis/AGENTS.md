@@ -21,6 +21,11 @@ Sixteen files, all declared in `tests/server/redis/mod.rs`.
 | `cluster_test.rs` | 2 | Three NetGet servers as a cluster, through `redis-cli -c`, `redis-cli --cluster check` and redis-rs's `ClusterClient`; a bad topology refuses to start | 0 |
 | `keys_oracle_test.rs` | 1 | Hash slots and glob matching equal a real `redis-server`'s `CLUSTER KEYSLOT` and `KEYS` | 0 |
 
+The server is Stable on this suite; which test carries which of the six conditions is in
+"Maturity: the six conditions" at the foot of `src/server/redis/AGENTS.md`. Every external
+peer — redis-cli, redis-server, redis-py 5 (`NETGET_REDIS_PYTHON`), tshark — fails the test
+when absent rather than skipping.
+
 ## Running
 
 `--test` names a **target**, not a module path. `--test server::redis::e2e_test`
@@ -32,7 +37,7 @@ looks like a pass. Filter after `--`:
     --test server -- server::redis --test-threads=100
 ```
 
-## What the Beta rating rests on
+## The two RESP2 clients
 
 `e2e_test.rs` drives **redis-rs** (`redis` 0.27, a dev-dependency), an
 independent implementation of RESP2 — not the `redis-protocol` crate the server
@@ -231,13 +236,16 @@ right.
 
 - **RESP3 is tested in `resp3_test.rs` only**, with a python handler: redis-cli `-3`
   renders map, set, double, boolean, verbatim and null (7.0 has no case for a big number
-  and stops with "Unknown reply type: 13", so redis-py carries that one), and redis-py's
-  pure-Python RESP3 parser reads them all, plus a push before a reply. `redis-py` must be
+  and stops with "Unknown reply type: 13"), and redis-py's pure-Python RESP3 parser and
+  redis-rs's `Value` read them all, the big number included; redis-py also reads a push
+  before a reply. Wireshark 4.6's `resp` dissector has no RESP3 types, so the pcap oracle
+  covers RESP2 only. `redis-py` must be
   importable from `NETGET_REDIS_PYTHON` (default `python3`); the test fails otherwise.
 - **Inline commands** (`PING\r\n` typed into `nc`) are not tested; only RESP
   arrays decode, and both redis-cli and redis-rs always send arrays.
-- **Pipelining** — the read loop processes several frames from one read in order,
-  each with its own LLM call, but no test sends two commands in one write.
+- **Pipelining** — the read loop processes several frames from one read in order, each with
+  its own LLM call. Only `frame_bounds_test.rs` sends two commands in one write (a frame at a
+  bound with a `PING` behind it); neither real client pipelines.
 - **AUTH / SELECT / MULTI** reach the model as ordinary commands with no special handling,
   and nothing asserts on them.
 - **Cluster-wide `PUBLISH`** — a fake cluster has no bus, so nothing asserts a publish on one

@@ -1095,7 +1095,7 @@ jobs:
             postgresql::real_client_test \
             prometheus::real_client_test otlp::real_client_test \
             pypi::e2e_test quic::independent_peer_test radius::real_client_test redis::real_client_test redis::resp3_test \
-            redis::pubsub_test redis::cluster_test redis::keys_oracle_test \
+            redis::pubsub_test redis::cluster_test redis::keys_oracle_test redis::verb_coverage_test \
             rtsp::ffprobe_test s3::real_client_test sip::real_client_test \
             smb::real_client_test statsd::real_client_test graphite::real_client_test \
             sqs::real_client_test ssh::real_client_test stun::real_client_test \
