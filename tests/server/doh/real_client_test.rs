@@ -60,7 +60,10 @@ struct KdigOutput {
 /// a blocking `output()` parks the only worker and stops the harness tasks draining the netget
 /// child's pipes; the pipes fill, netget blocks inside a log call while serving, and the client
 /// times out against a server that is perfectly correct.
-async fn kdig_doh(port: u16, domain: &str, get: bool) -> KdigOutput {
+///
+/// `keylog` is handed to kdig as `SSLKEYLOGFILE`, which GnuTLS honours, so the pcap oracle can
+/// decrypt the session and read the HTTP/2 and DNS inside it.
+async fn kdig_doh(port: u16, domain: &str, get: bool, keylog: &std::path::Path) -> KdigOutput {
     // The authority here becomes the HTTP `:authority` header **and the TLS SNI**, and it must
     // be a name rather than an IP literal: rustls rejects an IP address in SNI with a fatal
     // alert, which surfaces as `TLS, handshake failed (A TLS fatal alert has been received.)`
@@ -79,6 +82,7 @@ async fn kdig_doh(port: u16, domain: &str, get: bool) -> KdigOutput {
     };
 
     let out = Command::new("kdig")
+        .env("SSLKEYLOGFILE", keylog)
         .arg(&mode)
         .arg("+timeout=20")
         .arg("+retry=0")
@@ -147,10 +151,18 @@ async fn kdig_completes_both_rfc8484_encodings() -> E2EResult<()> {
 
     let server = crate::server::helpers::start_netget_server(doh_server()).await?;
     crate::helpers::wait_for_server_listening(&server, Duration::from_secs(30)).await?;
-    let port = server.port;
+    // kdig reaches the server through a recording relay and logs its TLS secrets, so the pcap
+    // oracle at the end decrypts both sessions and reads the HTTP/2 and DNS inside them.
+    let (relay, streams) = crate::helpers::recording_relay::tcp_relay(
+        format!("127.0.0.1:{}", server.port).parse().unwrap(),
+    )
+    .await;
+    let port = relay.port();
+    let keys = tempfile::tempdir()?;
+    let keylog = keys.path().join("sslkeylog.txt");
 
     // --- POST application/dns-message --------------------------------------
-    let post = kdig_doh(port, "post.example.com", false).await;
+    let post = kdig_doh(port, "post.example.com", false, &keylog).await;
     assert!(
         post.success,
         "kdig could not complete a DoH POST query.\nstdout: {}\nstderr: {}\n\nThis is the first \
@@ -178,7 +190,7 @@ async fn kdig_completes_both_rfc8484_encodings() -> E2EResult<()> {
     //
     // The other RFC 8484 encoding, and the one with a padding rule worth having a third party
     // apply: the query is base64url with padding stripped.
-    let get = kdig_doh(port, "get.example.com", true).await;
+    let get = kdig_doh(port, "get.example.com", true, &keylog).await;
     assert!(
         get.success,
         "kdig could not complete a DoH GET query.\nstdout: {}\nstderr: {}",
@@ -194,6 +206,31 @@ async fn kdig_completes_both_rfc8484_encodings() -> E2EResult<()> {
         "the GET reply carried the POST query's address:\n{}",
         get.stdout
     );
+
+    // --- the pcap oracle, decrypted -----------------------------------------
+    //
+    // tshark decrypts each session with kdig's key log; ALPN `h2` hands the plaintext to its
+    // `http2` dissector, and the `application/dns-message` body to `dns` — HPACK, framing,
+    // flow control and the DNS reply all read independently of hyper, h2 and hickory-proto.
+    // `require_named("dns")` is what makes this a check on the server's DNS bytes rather than
+    // on the TLS record layer: without decryption the chain stops at `tls` and this fails.
+    let sessions = crate::helpers::recording_relay::recorded(&streams);
+    assert!(
+        sessions.len() >= 2,
+        "both kdig sessions should have crossed the relay, saw {}",
+        sessions.len()
+    );
+    for chunks in &sessions {
+        crate::helpers::recording_relay::replay(
+            crate::helpers::pcap_oracle::PcapOracle::tcp("doh")
+                .port(443)
+                .tls_keylog(&keylog)
+                .require_named("http2")
+                .require_named("dns"),
+            chunks,
+        )
+        .assert_clean();
+    }
 
     server.wait_for_mocks(30).await;
     server.verify_mocks().await?;
