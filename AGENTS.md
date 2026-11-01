@@ -2474,10 +2474,16 @@ Read before assuming a subsystem is sound:
   What is still detached, and why: the per-connection **writer** tasks (`amqp`, `mqtt`,
   `websocket`, `webrtc`, `webrtc_signaling`, `bgp`) are `.await`ed on the exit path so they need
   a `JoinHandle`, and they already end when the registered reader is aborted and drops their
-  channel; `bluetooth_ble`'s radio dispatcher is process-wide by design; and the USB/IP session
-  tasks and `postgresql`'s pgwire task are awaited inside a `select!`, so they are children of a
-  registered connection task that **aborting does not reach** — that gap is real and stated
-  rather than quietly closed.
+  channel; and `bluetooth_ble`'s radio dispatcher is process-wide by design.
+
+  **A task the registered task awaits is not ended by aborting it.** The abort drops the
+  awaiting future, which drops the child's `JoinHandle`, and dropping a `JoinHandle` *detaches*
+  the task. `postgresql` (pgwire's `process_socket`, spawned separately so its panics are
+  contained, plus its idle watchdog) and the six USB/IP servers (the session task their
+  `select!` awaits) had exactly that shape, so a stopped server's sessions kept their sockets.
+  Each such child is now held in `utils::task_guard::AbortOnDrop` and awaited as `guard.0`.
+  `tests/stop_server_stops_connections_test.rs` asserts it from the peer's side, for PostgreSQL
+  after a completed handshake and (with `libusb`) for every USB server.
 - `AppState` is one global `RwLock` over everything — a throughput ceiling, not a deadlock.
 - Keep the repository root focused on `README.md`, `AGENTS.md`, the license and build
   entry points. User documentation is indexed in `docs/README.md`: installation guides in

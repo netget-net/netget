@@ -382,3 +382,97 @@ async fn stopping_a_nostr_relay_disconnects_a_live_peer() {
 async fn stopping_an_http_server_disconnects_a_live_peer() {
     stopping_disconnects_a_peer_of("HTTP", b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n").await;
 }
+
+/// The USB/IP servers have the same nested shape as PostgreSQL below: the registered connection
+/// task spawns the USB/IP session (`usb::guard::run_guarded_usbip`, which owns the socket) and
+/// awaits it inside a `select!`. A peer that has connected and not yet spoken is enough to show
+/// it: the session waits up to `DEFAULT_FIRST_MESSAGE_TIMEOUT` (30s) for a first message, longer
+/// than the 10s the helper allows, so a session the stop detached instead of ending fails here.
+#[cfg(all(unix, feature = "libusb"))]
+#[tokio::test(flavor = "multi_thread")]
+async fn stopping_a_usb_server_disconnects_a_live_peer() {
+    for name in [
+        "USB-Mouse",
+        "USB-Keyboard",
+        "USB-Serial",
+        "usb-fido2",
+        "usb-smartcard",
+        "USB-MassStorage",
+    ] {
+        stopping_disconnects_a_peer_of(name, b"").await;
+    }
+}
+
+/// A PostgreSQL session that has completed its handshake must not survive the stop.
+///
+/// This is the nested-task case. The registered per-connection task does not run the session
+/// itself: it spawns `pgwire::tokio::process_socket` as a task of its own (so a panic in pgwire
+/// is contained rather than lost) and awaits that task's `JoinHandle`. Aborting the registered
+/// task drops the handle, and dropping a `JoinHandle` detaches its task — so the session, and
+/// the socket it owns, used to outlive `stop_server` until the 600-second idle watchdog (itself
+/// detached the same way) caught up with it.
+///
+/// The handshake is completed first, and asserted, because before it the registered task is
+/// still in its own first-byte `peek` and aborting it there proves nothing about the session.
+#[tokio::test(flavor = "multi_thread")]
+async fn stopping_a_postgresql_server_disconnects_a_handshaken_peer() {
+    let (state, server_id, port) = start_server("PostgreSQL").await;
+
+    let mut peer = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("connect to the running PostgreSQL server");
+
+    // StartupMessage: Int32 length, Int32 protocol 3.0, key/value cstrings, terminating NUL.
+    let mut body = 196_608i32.to_be_bytes().to_vec();
+    for kv in ["user", "netget", "database", "netget"] {
+        body.extend_from_slice(kv.as_bytes());
+        body.push(0);
+    }
+    body.push(0);
+    let mut startup = ((body.len() + 4) as i32).to_be_bytes().to_vec();
+    startup.extend_from_slice(&body);
+    peer.write_all(&startup)
+        .await
+        .expect("write StartupMessage");
+
+    // ReadyForQuery ('Z', Int32 5, status) means pgwire's session task is live and waiting.
+    let mut seen = Vec::new();
+    let ready = tokio::time::timeout(Duration::from_secs(10), async {
+        let mut buf = [0u8; 512];
+        loop {
+            match peer.read(&mut buf).await {
+                Ok(0) | Err(_) => return false,
+                Ok(n) => seen.extend_from_slice(&buf[..n]),
+            }
+            if seen
+                .windows(5)
+                .any(|w| w[0] == b'Z' && w[1..5] == [0, 0, 0, 5])
+            {
+                return true;
+            }
+        }
+    })
+    .await;
+    assert!(
+        matches!(ready, Ok(true)),
+        "the PostgreSQL handshake never reached ReadyForQuery (got {seen:?}), so there is no \
+         live session for the stop to end"
+    );
+
+    state.remove_server(server_id).await;
+
+    let mut buf = [0u8; 256];
+    loop {
+        match tokio::time::timeout(Duration::from_secs(10), peer.read(&mut buf)).await {
+            Ok(Ok(0)) => return,
+            Ok(Ok(_)) => continue,
+            Ok(Err(e)) if e.kind() == std::io::ErrorKind::ConnectionReset => return,
+            Ok(Err(e)) => panic!("unexpected error reading from PostgreSQL after stop: {e}"),
+            Err(_) => panic!(
+                "the PostgreSQL session was still open 10s after the server stopped: the \
+                 registered task was aborted but the pgwire session task it was awaiting was \
+                 detached rather than ended, and still owns the socket"
+            ),
+        }
+    }
+}
