@@ -530,10 +530,31 @@ server-killers; it is a malformed message producing a panic instead of a clean p
 Still worth fixing, because a panicking connection is a silent one.
 
 The fix belongs upstream — `pgwire` owns the socket loop, so NetGet cannot bound the frame
-without wrapping the stream. Report it there. `opensrv-mysql`'s `params.rs` cluster (five
-malformed `COM_STMT_EXECUTE` shapes, including an explicit `panic!("bad column type")` on a
-client-chosen byte) and `kafka-protocol`'s unbounded element counts are the same shape and are
-documented in the panic audit.
+without wrapping the stream. Report it there. `kafka-protocol`'s unbounded element counts are
+the same shape and are documented in the panic audit.
+
+`opensrv-mysql`'s `params.rs` cluster (five malformed `COM_STMT_EXECUTE` shapes, including an
+explicit `panic!("bad column type")` on a client-chosen byte) was the same shape and is
+**resolved on NetGet's side**, which shows the wrapping the PostgreSQL fix would need. The
+panics are all in `Params::next`, which runs only when a shim iterates `ParamParser`; the MySQL
+server never does. It used to buy that safety by dropping the parameter values, so the model
+saw `WHERE id = ?` and nothing else. It now copies each execute from beneath the crate
+(`src/server/mysql/command_tap.rs`, a reader wrapper like `packet_limit`'s) and decodes it with
+a bounded parser of its own (`src/server/mysql/stmt_params.rs`): the model gets `params` with
+types and values plus a `query_rendered` for reading, and every malformed shape is answered ERR
+1835 `ER_MALFORMED_PACKET` on a connection that stays up. Covered by
+`tests/server/mysql/prepared_params_test.rs` from a raw socket and by
+`fuzz/fuzz_targets/mysql_stmt_execute.rs`. One `opensrv-mysql` panic is still reachable from
+the wire and is not this one: `packet_reader.rs:252,266` asserts consecutive sequence ids across
+a chained (>16 MiB) packet.
+
+The same work found a **use-after-free** in `opensrv-mysql` 0.7.0, which is worse than any
+panic in this list: `PacketReader::next_async` (`packet_reader.rs:132-141`) returns a packet
+borrowed from `self.bytes` through `slice::from_raw_parts` after `self.bytes = rest.to_vec()`
+has freed that buffer, whenever one read held more than one packet. Two pipelined
+`COM_STMT_SEND_LONG_DATA` chunks produced a stray OK and desynchronised the session. NetGet
+defends it with `command_tap`, which never lets a read cross a packet boundary; the crate needs
+an upstream fix (return the packet before reassigning, or parse from an owned copy).
 
 ### 78. `tcp_connection_opened` is advertised unconditionally and fires only for `send_first` servers **[verified, fixed: telnet raises it always, tcp/tls document the gate]**
 

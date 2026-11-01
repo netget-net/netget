@@ -85,6 +85,34 @@ Three tests, each **1 server startup + 2-3 query calls** (mysql_async issues one
 during handshake, then the statement). `placeholder_counting_skips_literals_and_comments` is a
 pure unit test and makes **0** LLM calls.
 
+### `prepared_params_test.rs` / `stmt_params_test.rs`
+
+The bound parameter values, and the refusal of malformed `COM_STMT_EXECUTE` packets (see
+"Prepared-statement parameters" in `src/server/mysql/AGENTS.md`).
+
+- `stmt_params_test.rs` makes **0** LLM calls: the decoder against packets built byte by byte
+  (every type, every `opensrv-mysql` `ParamParser` panic shape, lying lengths, every prefix of a
+  valid packet), the `⟨ ⟩` rendering, and `CommandTapReader` read 1, 2, 3, 7 and 4096 bytes at a
+  time so the framing is exercised at every split.
+- `mysql_async_bound_values_reach_the_model_with_their_types`: 1 startup + `SELECT @@…` + **1**
+  execute. The mock records the event; the assertions are on its `params` and `query_rendered`.
+- `malformed_executes_get_an_err_packet_and_the_connection_survives`: 1 startup + **4** executes.
+  Nine malformed executes are sent from a raw socket first and make **0** calls — the final
+  assertion is that exactly the four well-formed ones reached the model. A raw socket because no
+  real client will send a malformed execute, and `CLIENT_DEPRECATE_EOF` so the PREPARE reply has
+  no EOF packet to account for.
+
+- `pipelined_commands_reach_opensrv_one_packet_per_read` (0 LLM calls) runs a bare
+  `opensrv-mysql` server beneath `CommandTapReader` over an in-memory pipe and sends two long-data
+  chunks and an execute in one write. It is the regression test for the crate's use-after-free on
+  pipelined packets (`src/server/mysql/AGENTS.md`).
+
+The raw-socket test tells the model's OK from the crate's own by `affected_rows` (the mock answers
+1; the crate's OKs carry 0), because a stray OK from the crate is exactly the failure the
+pipelining fix exists for. Verified by mutation: letting a read cross a packet boundary fails the
+pipelining test (both long-data chunks then draw a stray OK) and the raw-socket test; answering a
+decode failure by running the statement anyway fails the raw-socket test on its first case.
+
 ### `llm_failure_test.rs` / `connection_stats_test.rs`
 
 `connection_stats_test` runs with a static handler and makes **0** LLM calls, which is what

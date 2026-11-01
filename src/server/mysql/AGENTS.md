@@ -67,12 +67,14 @@ Two traps that writer produced, both worth keeping:
 ## What the model sees and controls
 
 **Event**: `mysql_query`, fired for `COM_QUERY` and for `COM_STMT_EXECUTE`
-(the stored statement text is replayed as if it were a fresh query).
+(the prepared statement's text, with the values the execute bound beside it).
 
 | Field | Notes |
 |---|---|
-| `query` | the SQL text |
+| `query` | the SQL text; for a prepared statement exactly as prepared, `?` placeholders and all |
 | `answer_with` | which response shape the statement needs — `mysql_query_response` for a statement that returns rows, `mysql_ok_response` for one that does not — from its first keyword (`crate::utils::sql`); absent when the keyword does not say |
+| `params` | prepared statements only: one object per `?`, in order — `{"index": 1, "type": "LONGLONG", "value": 42}`. See "Prepared-statement parameters" below |
+| `query_rendered` | prepared statements only, **for reading**: `query` with each `?` replaced by `⟨value⟩`. Not SQL; `params` is authoritative |
 
 `client_ip`, `client_port`, `connection_id` and `server_id` are added by the
 event logger, so log templates may reference them.
@@ -156,6 +158,17 @@ back. Verified: `mysql_error_response` with 1146 arrives as
 - **More than 4096 live prepared statements on one connection** →
   `ER_MAX_PREPARED_STMT_COUNT_REACHED`. The map is only pruned by
   `COM_STMT_CLOSE`, so without the cap a PREPARE loop would grow it unbounded.
+- **A malformed `COM_STMT_EXECUTE` parameter block** → ERR `1835`
+  `ER_MALFORMED_PACKET` / `HY000`, `Malformed communication packet.` (mysqld's own
+  text), logged at WARN as `decision=fail_closed_malformed_execute` with what was wrong.
+  The model is not called and the session continues.
+- **`COM_STMT_SEND_LONG_DATA` naming a parameter the statement does not have** → ERR
+  `1210` `ER_WRONG_ARGUMENTS` at the next execute, as mysqld does (long data has no
+  reply of its own); `decision=fail_closed_long_data_index`.
+- **An execute the capture beneath the crate did not see** (reachable only by
+  overflowing its queue, see below) → ERR `1105` with the `WireFailure` category;
+  `decision=fail_closed_no_capture` at ERROR. The statement is never run without its
+  values.
 
 ## Dashboard injection & connection counters
 
@@ -209,8 +222,9 @@ counters live and refresh `last_activity`. Proven with zero LLM calls by
   every in-flight session running, so `stop_server` did not actually stop the
   server. `register_server_task` prunes finished handles on each call, so the
   vector cannot grow without bound.
-- PREPARE stores the SQL text keyed by an incrementing statement id; EXECUTE
-  looks it up and re-runs it as a query; CLOSE removes it.
+- PREPARE stores the SQL text, its placeholder offsets, and (once an execute
+  binds them) the parameter types, keyed by an incrementing statement id;
+  EXECUTE decodes the bound values and asks the model; CLOSE removes it.
 - **PREPARE reports the statement's `?` count** (`count_placeholders`, which
   skips `?` inside string literals, quoted identifiers and comments). The count
   is not cosmetic: the client stores it and uses it to frame COM_STMT_EXECUTE.
@@ -218,12 +232,105 @@ counters live and refresh `last_activity`. Proven with zero LLM calls by
   `conn.exec("… WHERE id = ?", (42,))` was rejected client-side and never reached
   the wire at all. Statements past `MAX_PLACEHOLDERS` (1024) get
   `ER_PS_MANY_PARAM` rather than a silently wrong count.
-- Parameter **values** are still not substituted — the model sees the statement
-  text with its `?` placeholders intact — and `on_execute` deliberately does not
-  iterate `ParamParser`. opensrv-mysql's `params.rs` panics on several malformed
-  COM_STMT_EXECUTE shapes, including an explicit `panic!("bad column type")` on a
-  client-chosen byte (see IMPROVEMENTS' panic audit), so decoding parameters
-  would trade a limitation for a remotely reachable panic.
+- Parameter **values** are decoded by NetGet's own parser, never by
+  `ParamParser` — see the next section.
+
+## Prepared-statement parameters
+
+`on_execute` is handed an `opensrv_mysql::ParamParser` and **never iterates it**.
+Its iterator, `Params::next` in `opensrv-mysql-0.7.0/src/params.rs`, trusts every
+length the peer sent and panics the connection task on five shapes:
+
+| line | panic | the peer sends |
+|---|---|---|
+| 81 | `split_at(nullmap_len)` | fewer bytes than the NULL bitmap |
+| 86 | `rest[1..].split_at(2 * params)` | the new-params-bound flag, then a short type map |
+| 90–91 | `panic!("bad column type …")` | one unknown type byte |
+| 103 | `bound_types[col]` out of bounds | the flag clear on a statement's first execute |
+| 127 | `Value::parse_from(…).unwrap()` | a value shorter than its type, or a length past the packet |
+
+(`ParamParser::new` only stores the bytes, so none of this runs unless a shim
+iterates — which is why the values used to be dropped rather than read.)
+
+Two pieces replace it:
+
+- **`command_tap.rs` — getting the bytes.** `ParamParser`'s fields are
+  `pub(crate)`, so the packet is copied where the crate cannot hide it: in the
+  reader beneath it, the same generic-reader seam `packet_limit` uses.
+  `CommandTapReader` frames the stream alongside the crate and queues
+  `COM_STMT_EXECUTE` (whole), `COM_STMT_SEND_LONG_DATA` (statement, parameter, a
+  prefix of at most 516 bytes and the chunk's length — long data is how a client
+  sends a value bigger than a packet, so only what the model is shown is kept) and
+  `COM_STMT_RESET` (which opensrv does not parse at all). It captures only
+  sequence-0 packets, so no connection-phase packet is ever taken for a command,
+  and only packets long enough for opensrv's own parser to accept, so every
+  capture has exactly one `on_execute`. `on_execute` pops the queue up to the
+  next execute and checks its statement id; a mismatch is discarded and logged,
+  never decoded as the wrong statement's values. The queue holds at most 4096
+  commands; past that it stops capturing and every later execute is refused
+  (1105) rather than risk a wrong pairing. An execute is copied whole, so its size
+  is `packet_limit::MAX_PACKET_BYTES` at most — the limiter sits beneath the tap
+  and trips first.
+
+  **The tap is also a memory-safety fix, and must stay the reader the crate reads
+  from.** It hands `opensrv-mysql` at most the rest of one packet per read.
+  The crate's `PacketReader::next_async` (`packet_reader.rs:132-141`) parses from
+  a raw-pointer slice of `self.bytes` and, when a read held more than one
+  packet, runs `self.bytes = rest.to_vec()` before returning — freeing the
+  buffer the returned packet points into. Any two pipelined commands hit it:
+  two `COM_STMT_SEND_LONG_DATA` chunks (what `mysql_async` sends), or
+  `COM_STMT_CLOSE` and the next command. Measured here as a stray OK packet for
+  the first long-data chunk (the freed bytes no longer parsed, and the crate
+  answers a parse failure with OK), after which every reply was one behind.
+  `stmt_params_test.rs::pipelined_commands_reach_opensrv_one_packet_per_read`
+  drives the bare crate through the tap.
+- **`stmt_params.rs` — decoding them.** Every length is compared, as a `u64`,
+  with the bytes remaining before it is used, so an 8-byte length-encoded size of
+  2⁶⁴−1 is a refusal, not an overflow; values are borrowed from the packet, not
+  copied. Supported: the integer types (signed and unsigned), `FLOAT`, `DOUBLE`,
+  `NULL`, `DATE`/`DATETIME`/`TIMESTAMP` (lengths 0, 4, 7, 11), `TIME` (0, 8, 12),
+  and every length-encoded string type — `VARCHAR`, `VAR_STRING`, `STRING`, the
+  `BLOB`s, `DECIMAL`/`NEWDECIMAL` (as their text), `ENUM`, `SET`, `BIT`, `JSON`,
+  `GEOMETRY`. It is **stricter than mysqld**, deliberately: an unknown type byte,
+  a temporal length the format does not define, or bytes left after the last
+  value are refused rather than guessed at, because the model answers as though
+  the decoded values were what the client meant. Long data takes the place of a
+  parameter's value whatever the NULL bitmap says, as in mysqld, and is cleared
+  after every execute. An execute that clears the new-params-bound flag reuses the
+  types the last successful execute bound.
+
+What the model sees, for `INSERT INTO t (a, b) VALUES (?, ?)` executed with
+`(42, "O'Brien")`:
+
+```json
+"query": "INSERT INTO t (a, b) VALUES (?, ?)",
+"params": [{"index": 1, "type": "LONGLONG", "value": 42},
+           {"index": 2, "type": "VAR_STRING", "value": "O'Brien"}],
+"query_rendered": "INSERT INTO t (a, b) VALUES (⟨42⟩, ⟨\"O'Brien\"⟩)"
+```
+
+- `value` is a JSON number for integers and floats (a non-finite float is its
+  name as a string), `null` for NULL, and a string otherwise — dates as
+  `YYYY-MM-DD[ HH:MM:SS[.ffffff]]`, `TIME` as `[-]HH:MM:SS[.ffffff]` with hours
+  past 24 for a multi-day value. `unsigned: true` marks an unsigned integer.
+- A string longer than 512 bytes is cut on a character boundary and carries
+  `"truncated": true` and `"byte_length"`. Bytes that are not UTF-8 are a lossy
+  rendering with `"not_utf8": true` — never hex or base64 (the project rule).
+  `"long_data": true` marks a value that arrived as `COM_STMT_SEND_LONG_DATA`.
+- **`query_rendered` cannot be mistaken for SQL, by construction.** Values sit
+  inside `⟨ ⟩` (U+27E8/U+27E9), which are not SQL syntax; strings are JSON
+  literals, so an embedded quote is `\"` and never SQL's `''`; and a `⟨` or `⟩`
+  inside a value is escaped as `⟨`/`⟩`, so a value can never close its
+  own bracket and make the text after it read as statement. A truncated string
+  ends `"…"…`. `query` keeps the text the client prepared, so a rule matching on
+  it still matches.
+
+Tests: `tests/server/mysql/stmt_params_test.rs` (the decoder and the tap, the
+framing split at every byte), `prepared_params_test.rs` (`mysql_async` binding
+eight types; a raw socket sending each panic shape and several lying lengths,
+each answered 1835 at the right sequence id, none reaching the model, and the
+connection then answering a ping, an execute, a type-reusing execute and a
+long-data execute), and `fuzz/fuzz_targets/mysql_stmt_execute.rs`.
 
 ## Not implemented
 
@@ -232,8 +339,8 @@ counters live and refresh `last_activity`. Proven with zero LLM calls by
   a `caching_sha2_password` client expects, which is not the same thing as checking
   anything. Any current `mysql` CLI can be pointed at it.
 - **TLS**.
-- **Prepared-statement parameter values** — see above; the `?` reaches the model
-  unsubstituted.
+- **Cursors and multi-row parameter arrays** — the execute's cursor flags and
+  iteration count are read and ignored; every execute is answered with one result.
 - **Binary column data** — `BLOB`/`BINARY` values are sent as UTF-8 text.
 - **Transactions, stored procedures, multi-statement queries** — `BEGIN`,
   `COMMIT` and friends reach the model as ordinary queries.
