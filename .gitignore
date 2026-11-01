@@ -56,6 +56,15 @@ target-etcd-build/
 # SQLite databases created by the runtime sqlite facility
 netget_db_*.db
 
+# Run artefacts NetGet writes into its working directory when started from the checkout (as
+# `cargo test` does): `append_to_log` output (netget_<name>_<time>_s<id>.log, covered by *.log
+# above), Unix socket nodes (`ssh_agent`'s ./netget-ssh-agent.sock, `socket_file`'s
+# ./netget.sock) and `pty`'s slave symlink; plus the empty pki/{trusted,rejected} trust store
+# that OPC UA tooling run from the checkout leaves behind.
+*.sock
+/netget.pty
+/pki/
+
 # Generated npm packages
 /dist/
 

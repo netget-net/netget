@@ -248,7 +248,7 @@ The other two events are declared `.with_no_actions()`, deliberately:
   delays relay. Putting a model round-trip in front of every ICE candidate would break any
   real browser peer.
 
-Both can still use the common actions (`set_memory`, `append_memory`, `show_message`,
+Both can still use the common actions (`set_memory`, `append_memory`, `notify_operator`,
 `append_to_log`), which is how a handler records signaling flow.
 
 ### When the LLM call fails

@@ -342,6 +342,7 @@ pub async fn start_client_from_action(
         history_entries,
         batching,
         exchange_history: Default::default(),
+        memo: Default::default(),
     };
 
     let client_id = state.add_client(client).await;

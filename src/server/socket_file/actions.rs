@@ -66,7 +66,7 @@ impl Protocol for SocketFileProtocol {
             crate::llm::actions::ParameterDefinition {
                 name: "send_first".to_string(),
                 type_hint: "boolean".to_string(),
-                description: "Whether the server should send the first message after connection (e.g., for greeting banners)".to_string(),
+                description: "Set true when the server speaks first (a banner, a greeting, a prompt). It is the only way socket_file_connection_opened is raised: then nothing the peer sends is answered until that event has been, and a failed answer closes the connection. Left false (the default), no connect event is raised and a connection costs no model call until the peer sends something.".to_string(),
                 required: false,
                 example: serde_json::json!(false),
                 default: None,
@@ -446,7 +446,10 @@ pub static CLOSE_THIS_CONNECTION_ACTION: LazyLock<ActionDefinition> =
 pub static SOCKET_FILE_CONNECTION_OPENED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "socket_file_connection_opened",
-        "New Unix domain socket connection established (send initial greeting/banner if needed)",
+        "A peer has just connected and has not sent anything yet. Raised only when the server \
+         was started with send_first, which means the peer is owed a greeting: send the banner \
+         or prompt now with send_socket_data. Anything the peer sends meanwhile is answered \
+         after this.",
         json!({
             "type": "send_socket_data",
             "data": "READY\n"

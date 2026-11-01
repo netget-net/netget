@@ -107,7 +107,7 @@ itself is always honoured.
 The reason is measured. Asked on a separate `websocket_connection_opened`, the model greeted every
 connection whatever the instructions said — an echo server sent "Hello, Client!" five runs in
 five, which also ended the eval's echo probe before the echo arrived — and told to greet, it
-answered the *handshake* with `show_message` and the greeting three runs in five, which is the
+answered the *handshake* with an operator notice (`notify_operator`) and the greeting three runs in five, which is the
 fail-closed 503: the greeting had nowhere to go but the first event it saw. Hints on the opened
 event (say nothing unless told; a `stay_silent` action; a `greet_client`/`wait_for_client` pair)
 were each replayed against the captured prompt (seeds 42-46) and each still greeted four or five
@@ -133,9 +133,9 @@ sent.
 
 Measured with the real-model eval (llama3.1:8b, seed 42, 5 runs each, 31 October 2026): with
 the opened event asked separately, echo 0/5 (the model greeted "Hello, Client!" every run) and
-greeting 2/5 (the model answered the handshake with `show_message`, the fail-closed 503); with
+greeting 2/5 (the model answered the handshake with an operator notice, the fail-closed 503); with
 the greeting in the accept, echo 5/5 and greeting 4/5. The remaining greeting miss is the same
-`show_message` answer to the handshake.
+operator-notice answer to the handshake.
 
 **An accept naming a subprotocol the client did not offer is accepted without one.** RFC 6455
 §4.2.2 forbids echoing a subprotocol the client did not offer, and websocat fails the connection
@@ -176,7 +176,7 @@ nearly valid base64, and only the sender knows which it means.
 
 A `websocket_handshake` answered with neither `accept_websocket` nor `reject_websocket` is
 **refused with HTTP 503**, and the refusal is logged at ERROR with wording distinct from an
-explicit rejection. An LLM outage, a handler that returns only `show_message`, and a model that
+explicit rejection. An LLM outage, a handler that returns only `notify_operator`, and a model that
 means to deny all end at the same place, and none of them can be mistaken for consent. This is
 the OAuth2 post-mortem in CLAUDE.md applied ahead of time rather than after.
 

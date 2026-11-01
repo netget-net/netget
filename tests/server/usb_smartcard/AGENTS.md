@@ -52,7 +52,7 @@ Two things the client has to get right, and both are load-bearing:
 - The SELECT-by-AID response is asserted as the full byte string `"NetGet PIV" 90 00` — body
   from `data_text`, then SW1/SW2 — so both the handler's body and its status word have to
   survive the round trip.
-- The VERIFY case has the mock answer with `show_message` and **no `respond_to_apdu`**. The
+- The VERIFY case has the mock answer with `notify_operator` and **no `respond_to_apdu`**. The
   test asserts `6F00`. This is the fail-closed path: an implementation that defaulted to `9000`
   when the handler said nothing fails here.
 
@@ -81,7 +81,7 @@ detach) via `wait_for_log_count`, plus `"USB smart card host detached on connect
 
 `wait_for_more` is **not** a valid action for this protocol — the harness
 (`tests/helpers/mock_action_names.rs`) fails the test if a mock returns it, because the server
-would reject it as unknown and the mock would prove nothing. Use `show_message` for a no-op
+would reject it as unknown and the mock would prove nothing. Use `notify_operator` for a no-op
 answer; it is generic, executes cleanly, and produces no `respond_to_apdu`, which is exactly
 what the fail-closed assertion needs.
 

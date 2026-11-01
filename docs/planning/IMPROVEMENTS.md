@@ -92,8 +92,10 @@ fixes whose end-to-end validation still needs hardware — see item 2 below.
 
 ### Still open
 
-Re-derived from source on 26 September 2026. Seven items in "Open — actionable" below were
-already fixed and are now marked so in their headings (7, 9, 16, 32, 39, 42, 50).
+Re-derived from source on 26 September 2026, and again on 31 October 2026. Seven items in
+"Open — actionable" below were already fixed and are now marked so in their headings (7, 9, 16,
+32, 39, 42, 50). Items 20b (startup ignores the dependency system) and 78 (connect events only
+with `send_first`) are fixed and live in the [Fixed](#fixed) table, not here.
 
 1. **`bluetooth_ble_beacon` on real Linux hardware.** *(Implemented, unverified.)* The BlueZ
    path has never been compiled or run on Linux; first use is bring-up via the `#[ignore]`d test
@@ -103,20 +105,17 @@ already fixed and are now marked so in their headings (7, 9, 16, 32, 39, 42, 50)
 3. **`pgwire` malformed-query panic (item 77)** — upstream; kills one connection task only.
 4. **`AppState` is one `RwLock` over everything (item 23)** — a throughput ceiling.
 5. **The `easy` layer (item 35)** — still present (`src/easy/http`). Finish or delete.
-6. **Startup does not consult the dependency system (item 20b)** — **fixed 26 Sep 2026**: all
-   four `start_*` paths refuse a definitively-missing library or tool; see the item.
-7. **`REQUIRE_DOCS_FOR_OPEN_ACTIONS` (item 29)** — a hardcoded `false` guarding a gate nobody
+6. **`REQUIRE_DOCS_FOR_OPEN_ACTIONS` (item 29)** — a hardcoded `false` guarding a gate nobody
    enables; make it a runtime setting or delete it and its state.
-8. **ARP and DataLink are absent from the Linux `dist` set (item 54).**
-9. **Connect events fire only with `send_first` (item 78)** — **fixed 26 Sep 2026**
-   (`527e07f3`) for `tcp`, `telnet` and `tls`; `socket_file`, `pty` and `stdio` still gate theirs
-   on `send_first`. See the item.
+7. **Linux `-full` release archives with libpcap, Bluetooth and PC/SC (item 54)** — added
+   beside the unchanged plain ones and documented; nothing has run them yet. Confirm on the
+   next tagged release.
 
-10. **Logging long tail.** 111 of 153 server `mod.rs` files use the `Log` facade
+8. **Logging long tail.** 111 of 153 server `mod.rs` files use the `Log` facade
     (`src/logging/emit.rs`); 42 still hand-roll dual logging. Derive with
     `grep -L 'Log::new\|crate::logging::Log' src/server/*/mod.rs`.
 
-11. **RTP failed the startup smoke test once in CI, and passes otherwise (item 82).** See below.
+9. **RTP failed the startup smoke test once in CI, and passes otherwise (item 82).** See below.
 
 ### Patterns worth auditing for
 
@@ -182,7 +181,7 @@ Delete an entry once its context is no longer useful.
 | 29/50 — dead documentation gate | (earlier) | One gate remains, behind a documented compile-time `false`; the second is gone |
 | 32 — validator accepted a superset | `272acbc0` | `advertised_user_input_actions()` narrows to what the prompt rendered, mirroring the network-event path |
 | 39 — doc gate broke mocked tests | (earlier) | The retry no longer fires; 35 tests recovered from the `#[ignore]` it caused |
-| 78 — connect events fired only with `send_first` | `527e07f3`, then narrowed | `telnet_connection_opened` is raised for every connection, answered by a zero-action rule on dashboard servers via `EventType::raised_on_every_connection()`. `tcp_connection_opened` and `tls_connection_opened` stay gated on `send_first`, and their event and parameter descriptions now say so: raising them everywhere cost a model call per connection and cut the real-model eval's `tcp` score from 15/15 to 10/15. |
+| 78 — connect events fired only with `send_first` | `527e07f3`, then narrowed | `telnet_connection_opened` is raised for every connection, answered by a zero-action rule on dashboard servers via `EventType::raised_on_every_connection()`. `tcp_connection_opened` and `tls_connection_opened` stay gated on `send_first`, and their event and parameter descriptions now say so: raising them everywhere cost a model call per connection and cut the real-model eval's `tcp` score from 15/15 to 10/15. `socket_file`, `pty` and `stdio` are gated the same way and their `send_first` and connect-event descriptions say so too. |
 | 47 — tests passing while broken | `1b7f26e5`, `180c01ac`, `f0c7e42c` | NTP now requires the client to succeed; three assertion-free tests no longer count as coverage; the FIDO2 test awaits the future it was only constructing |
 | 76 — transport-level-only asserts | `1e989ba5` | nfs/ipp/vnc/webdav decode and assert real protocol output |
 | — 43 stale blanket `#[ignore]`s | `025ff3f5`, `2e3c8fbc`, `8009299b` | svn/whois/USB/bitcoin/sip/tls running; arp/igmp ignored for the real privilege reason |
@@ -496,7 +495,19 @@ Gate both behind the existing flag. Note the flag is process-global — `is_serv
 returns `!documented_server_protocols.is_empty()` (`src/state/app_state.rs:728`) — so it fires
 once per process regardless of which protocol is being started.
 
-### 54. ARP and DataLink still cannot ship on Linux **[verified]**
+### 54. ARP and DataLink still cannot ship on Linux **[`-full` Linux archives added 31 Oct 2026; unverified on runners]**
+
+> The plain glibc Linux archives are unchanged: no system-library feature, linking nothing
+> beyond glibc and zlib, because they are what the npm packages ship and a new runtime library
+> would stop `npx @smotana/netget` starting on minimal systems. Two additional archives,
+> `netget-x86_64-unknown-linux-gnu-full` and `netget-aarch64-unknown-linux-gnu-full` (native
+> `ubuntu-22.04` / `ubuntu-22.04-arm` runners), install `libpcap-dev libdbus-1-dev
+> libpcsclite-dev` and build with `libpcap,bluetooth,pcsc`. A step checks every glibc binary's
+> `NEEDED` set: the plain ones may link nothing new, the `-full` ones must link exactly libpcap,
+> libdbus-1 and libpcsclite on top. `docs/guides/INSTALL.md` and the release notes
+> (`.github/release-notes-platforms.md`) say which protocols are only in `-full` and which
+> packages they need. Open until a tagged release has run the jobs. The text below is the
+> original finding.
 
 `748fccca` added `arp` to `dist-darwin` and `icmp` to `dist`, which fixed macOS. But `arp` and
 `datalink` remain absent from `dist` itself, so the Linux release binaries still cannot start
@@ -547,8 +558,9 @@ decided it: generic TCP is client-speaks-first, so raising the event everywhere 
 call per connection, and in the seeded real-model eval llama3.1:8b answered the empty connect
 event with an unrequested greeting, taking `tcp` from 15/15 to 10/15. `send_first` means the peer
 is owed a greeting: reads are held until the connect event is answered, a silent answer is
-`decision=model_silent`, and a failed one closes. **Still gated, unchanged:** `socket_file`, `pty`
-and `stdio`.
+`decision=model_silent`, and a failed one closes. `socket_file`, `pty` and `stdio` are gated on
+`send_first` the same way, and their `send_first` parameter and connect-event descriptions say
+that `send_first` is the only way the event is raised.
 
 `src/server/tcp/actions.rs:490` describes the event as *"New TCP connection established (send
 initial greeting/banner if needed)"* and ships a `response_example` that sends a `220 Welcome`

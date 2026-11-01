@@ -43,12 +43,25 @@ const MEMORY_TRIMMED_NOTICE: &str = "[older memory dropped: over the size limit]
 /// the result is marked so the model can tell that history was lost. A single line longer
 /// than the cap is truncated char-safely rather than dropped entirely.
 pub fn bound_server_memory(memory: String) -> String {
-    if memory.len() <= MAX_SERVER_MEMORY_CHARS {
+    bound_memory(memory, MAX_SERVER_MEMORY_CHARS)
+}
+
+/// The most characters one connection's memory may hold. Smaller than an instance's: it is
+/// meant for a handful of facts about one peer, and it rides on every event of a connection.
+pub const MAX_CONNECTION_MEMORY_CHARS: usize = 2000;
+
+/// [`bound_server_memory`] at [`MAX_CONNECTION_MEMORY_CHARS`].
+pub fn bound_connection_memory(memory: String) -> String {
+    bound_memory(memory, MAX_CONNECTION_MEMORY_CHARS)
+}
+
+fn bound_memory(memory: String, max_chars: usize) -> String {
+    if memory.len() <= max_chars {
         return memory;
     }
 
     // Budget for the notice plus its newline.
-    let budget = MAX_SERVER_MEMORY_CHARS.saturating_sub(MEMORY_TRIMMED_NOTICE.len() + 1);
+    let budget = max_chars.saturating_sub(MEMORY_TRIMMED_NOTICE.len() + 1);
 
     let mut kept: Vec<&str> = Vec::new();
     let mut size = 0usize;
@@ -75,6 +88,27 @@ pub fn bound_server_memory(memory: String) -> String {
     }
 
     format!("{}\n{}", MEMORY_TRIMMED_NOTICE, kept.join("\n"))
+}
+
+/// The server and connection a connection-memory action writes to, or why there is none.
+///
+/// Refused rather than redirected: with no connection in context (an operator command, a
+/// client, a server-scoped task) the only other place to put the note is the server's shared
+/// memory, which is exactly where a fact about one peer must not go.
+fn connection_memory_target(
+    server_id: Option<crate::state::ServerId>,
+    connection_id: Option<crate::server::connection::ConnectionId>,
+) -> Result<(
+    crate::state::ServerId,
+    crate::server::connection::ConnectionId,
+)> {
+    match (server_id, connection_id) {
+        (Some(sid), Some(conn)) => Ok((sid, conn)),
+        _ => anyhow::bail!(
+            "connection memory exists only on a server's network event that arrived on a \
+             connection; use set_memory / append_memory for the instance's shared memory"
+        ),
+    }
 }
 
 /// One action from a batch that could not be executed.
@@ -270,6 +304,21 @@ pub async fn execute_actions(
     server_id: Option<crate::state::ServerId>,
     client_id: Option<crate::state::ClientId>,
 ) -> Result<ExecutionResult> {
+    execute_actions_on_connection(actions, state, protocol, server_id, client_id, None).await
+}
+
+/// [`execute_actions`] for an event that arrived on `connection_id` of `server_id`, so
+/// `set_connection_memory` / `append_connection_memory` know whose notes they write. With
+/// `connection_id` `None` those two fail the action rather than fall back to the server's
+/// shared memory, where every other peer would read what was meant for one.
+pub async fn execute_actions_on_connection(
+    actions: Vec<serde_json::Value>,
+    state: &AppState,
+    protocol: Option<&dyn Server>,
+    server_id: Option<crate::state::ServerId>,
+    client_id: Option<crate::state::ClientId>,
+    connection_id: Option<crate::server::connection::ConnectionId>,
+) -> Result<ExecutionResult> {
     // Static interpolation and parsed JSON have budgets, but manual answers and
     // direct callers can construct arbitrarily nested Values. Check the whole
     // batch before cloning, logging, parsing or recursively destroying anything.
@@ -321,8 +370,15 @@ pub async fn execute_actions(
 
         // Try to parse as common action first
         if let Ok(common_action) = CommonAction::from_json(action) {
-            if let Err(e) =
-                execute_common_action(common_action, state, &mut result, server_id, client_id).await
+            if let Err(e) = execute_common_action(
+                common_action,
+                state,
+                &mut result,
+                server_id,
+                client_id,
+                connection_id,
+            )
+            .await
             {
                 error!(
                     "Action {} '{}' failed: {} (action: {})",
@@ -409,12 +465,13 @@ async fn execute_common_action(
     result: &mut ExecutionResult,
     server_id: Option<crate::state::ServerId>,
     client_id: Option<crate::state::ClientId>,
+    connection_id: Option<crate::server::connection::ConnectionId>,
 ) -> Result<()> {
     match action {
-        CommonAction::ShowMessage { message } => {
-            // The operator, feedback and non-interactive paths answer show_message themselves
-            // and never reach here; a network event does. This arm used to do nothing, and
-            // nothing filled `messages`, so a server's model could call show_message and the
+        CommonAction::NotifyOperator { message } => {
+            // The operator, feedback and non-interactive paths answer notify_operator
+            // themselves and never reach here; a network event does. This arm used to do
+            // nothing, and nothing filled `messages`, so a server's model could call it and the
             // operator saw nothing. Each server logs `result.messages` to the status stream.
             result.add_message(message);
         }
@@ -487,11 +544,10 @@ async fn execute_common_action(
                 if let Some(cid) = client_id {
                     let bounded = state
                         .with_client_mut(cid, |client| {
-                            let combined = if client.memory.is_empty() {
-                                value
-                            } else {
-                                format!("{}\n{}", client.memory, value)
-                            };
+                            let combined = crate::llm::actions::common::append_memory_lines(
+                                &client.memory,
+                                &value,
+                            );
                             client.memory = bound_server_memory(combined);
                             client.memory.len()
                         })
@@ -508,11 +564,7 @@ async fn execute_common_action(
             };
             if let Some(server_id) = sid {
                 let current = state.get_memory(server_id).await.unwrap_or_default();
-                let new_memory = if current.is_empty() {
-                    value
-                } else {
-                    format!("{}\n{}", current, value)
-                };
+                let new_memory = crate::llm::actions::common::append_memory_lines(&current, &value);
                 let bounded = bound_server_memory(new_memory);
                 debug!(
                     "Server #{} memory appended ({} chars)",
@@ -521,6 +573,36 @@ async fn execute_common_action(
                 );
                 state.set_memory(server_id, bounded).await;
             }
+        }
+
+        CommonAction::SetConnectionMemory { value } => {
+            let (sid, conn) = connection_memory_target(server_id, connection_id)?;
+            let len = state
+                .update_connection_memory(sid, conn, |_| bound_connection_memory(value))
+                .await?;
+            debug!(
+                "Server #{} {} memory set ({} chars)",
+                sid.as_u32(),
+                conn,
+                len
+            );
+        }
+
+        CommonAction::AppendConnectionMemory { value } => {
+            let (sid, conn) = connection_memory_target(server_id, connection_id)?;
+            let len = state
+                .update_connection_memory(sid, conn, |current| {
+                    bound_connection_memory(crate::llm::actions::common::append_memory_lines(
+                        current, &value,
+                    ))
+                })
+                .await?;
+            debug!(
+                "Server #{} {} memory appended ({} chars)",
+                sid.as_u32(),
+                conn,
+                len
+            );
         }
 
         CommonAction::AppendToLog {

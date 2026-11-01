@@ -1363,7 +1363,7 @@ fn open_connection_actions() -> Vec<ActionDefinition> {
 /// It also carries the speak-first decision, through `accept_websocket`'s `greeting`. Asked
 /// separately, on `websocket_connection_opened`, the model greeted every connection whatever
 /// the instructions said - an echo server sent "Hello, Client!" five runs in five - and told
-/// to greet, it answered the handshake itself with `show_message` and the greeting three runs
+/// to greet, it answered the handshake itself with `notify_operator` and the greeting three runs
 /// in five, which is the fail-closed 503. With the greeting a field of the accept, the same
 /// prompts replayed (seeds 42-46) greeted with the instruction's words five in five, and the
 /// echo server left it empty three in five.
@@ -1700,7 +1700,7 @@ pub static WEBSOCKET_CLOSE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         "websocket_close",
         "The client is closing the connection. The close frame is echoed back automatically; \
          this event is the last chance to record what happened or send a final frame.",
-        json!({"type": "show_message", "message": "client disconnected"}),
+        json!({"type": "notify_operator", "message": "client disconnected"}),
     )
     .with_parameters(vec![
         Parameter {

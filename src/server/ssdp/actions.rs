@@ -923,7 +923,7 @@ impl Server for SsdpProtocol {
 
             "no_response" => {
                 // Deliberately not `ActionResult::NoAction`. NoAction is what a bookkeeping
-                // action such as `show_message` returns, so it cannot be told apart from a
+                // action such as `notify_operator` returns, so it cannot be told apart from a
                 // model that produced no protocol action at all — and telling those two
                 // apart is the entire point of this action existing.
                 let reason = action

@@ -514,7 +514,7 @@ impl SsdpServer {
                         .and_then(|v| v.as_str())
                         .map(str::to_string),
                 )),
-                // NoAction covers show_message / set_memory and friends: bookkeeping, not
+                // NoAction covers notify_operator / set_memory and friends: bookkeeping, not
                 // an answer. It must not be read as a decision either way.
                 _ => None,
             };
