@@ -47,7 +47,7 @@ Every action below applies to this server (#1) and nothing else:
 - `update_server` with `server_id` 1 changes event_handlers, history or batching in place. `event_handlers` replaces the whole list.
 - `set_memory` / `append_memory` change this server's memory.
 - `schedule_task` / `cancel_task` manage tasks on this server.
-- `show_message` tells the operator what you changed and why.
+- `notify_operator` tells the operator what you changed and why.
 
 Any other action, or one naming a different instance, is refused.
 
@@ -142,7 +142,7 @@ Example:
 {"type":"cancel_task","task_id":"recheck_timeouts"}
 ```
 
-## 6. show_message
+## 6. notify_operator
 
 Tell the operator what you changed and why. Not sent to any peer.
 
@@ -151,7 +151,7 @@ Parameters:
 
 Example:
 ```json
-{"type":"show_message","message":"Peers kept asking for a goodbye; the instruction now sends one."}
+{"type":"notify_operator","message":"Peers kept asking for a goodbye; the instruction now sends one."}
 ```
 
 ## 7. append_to_log
@@ -173,7 +173,7 @@ Example:
 # Response Format
 
 Return a JSON object with an `actions` array. Each action has a `type` from the
-Available Actions list (update_instruction, update_server, set_memory, append_memory, schedule_task, cancel_task, show_message, append_to_log) and that action's documented parameters.
+Available Actions list (update_instruction, update_server, set_memory, append_memory, schedule_task, cancel_task, notify_operator, append_to_log) and that action's documented parameters.
 
 Put every adjustment in this single response, in the order it should be applied.
 No tools are available for this response. Return `{"actions": []}` when nothing

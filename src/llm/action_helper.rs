@@ -10,11 +10,11 @@
 //! USE THIS HELPER FOR ALL LLM CALLS. Do not call OllamaClient.generate() directly.
 
 use crate::llm::actions::{
-    executor::{execute_actions, ExecutionResult},
-    get_network_event_common_actions,
+    executor::{execute_actions_on_connection, ExecutionResult},
     protocol_trait::Server,
     ActionDefinition,
 };
+use crate::llm::backend_error::LlmContextExt;
 use crate::llm::ollama_client::OllamaClient;
 use crate::llm::prompt::PromptBuilder;
 use crate::protocol::{Event, EventLogContext};
@@ -111,15 +111,20 @@ pub async fn call_llm_with_actions(
     // FALLBACK TO LLM (normal path if no handler or handler requested fallback)
 
     // Get model from state, auto-select if not set
-    let model = crate::llm::ensure_model_selected(
-        state.get_ollama_model().await,
-        &state.get_ollama_url().await,
-    )
-    .await
-    .context("Failed to ensure model is selected")?;
+    let model = crate::llm::model_selection::ensure_state_model(&state)
+        .await
+        .context("Failed to ensure model is selected")?;
 
-    // Collect all actions: common + protocol sync + custom
-    let mut all_actions = get_network_event_common_actions();
+    // Collect all actions: common + protocol sync + custom. `notify_operator` is left out
+    // wherever there is a protocol answer to offer; see `network_event_common_actions_for`.
+    let answers_on_the_wire =
+        !custom_actions.is_empty() || protocol.is_some_and(|p| !p.get_sync_actions().is_empty());
+    let on_a_connection =
+        connection_id.is_some() && protocol.is_some_and(|p| !p.metadata().connectionless);
+    let mut all_actions = crate::llm::actions::common::network_event_common_actions_for(
+        answers_on_the_wire,
+        on_a_connection,
+    );
 
     // Add provide_feedback action only if server has feedback_instructions configured
     let has_feedback_instructions = state
@@ -206,6 +211,13 @@ pub async fn call_llm_with_actions(
     // Add event trigger as a user message
     let event_trigger =
         PromptBuilder::build_event_trigger_message(event_description, context_json.clone());
+    let event_trigger = match state
+        .render_connection_memory(server_id, connection_id)
+        .await
+    {
+        Some(memory) => format!("{}\n{}", memory, event_trigger),
+        None => event_trigger,
+    };
     conversation.add_user_message(apply_handler_instruction(
         event_trigger,
         handler_instruction.as_deref(),
@@ -219,7 +231,7 @@ pub async fn call_llm_with_actions(
     let action_values = conversation
         .generate_with_tools_and_retry(approval_tx, web_search_mode, advertised_actions)
         .await
-        .context("LLM generate with tools failed")?;
+        .llm_context("LLM generate with tools failed")?;
 
     if action_values.is_empty() {
         warn!(
@@ -229,9 +241,16 @@ pub async fn call_llm_with_actions(
     }
 
     // Execute all collected actions with server context
-    let result = execute_actions(action_values, state, protocol, Some(server_id), None)
-        .await
-        .context("Failed to execute actions")?;
+    let result = execute_actions_on_connection(
+        action_values,
+        state,
+        protocol,
+        Some(server_id),
+        None,
+        connection_id,
+    )
+    .await
+    .context("Failed to execute actions")?;
 
     debug!(
         "LLM call completed: {} messages, {} protocol results",
@@ -349,6 +368,7 @@ async fn record_event_access_log(
     protocol: &dyn Server,
     event: &Event,
     result: &ExecutionResult,
+    answered_by: &str,
 ) {
     if let Some(summary) = result.failure_summary() {
         error!(
@@ -362,7 +382,7 @@ async fn record_event_access_log(
     }
 
     state
-        .record_access_log(
+        .record_access_log_answered(
             crate::state::AccessLogOwner::Server(server_id.as_u32()),
             protocol.protocol_name(),
             connection_id.map(|c| c.as_u32()),
@@ -372,6 +392,7 @@ async fn record_event_access_log(
                 // The original actions/results remain available to the protocol executor.
                 vec![serde_json::json!({"type":"private_handler_result", "action_count":result.raw_actions.len(), "failed_actions":result.failures.len()})]
             } else { result.access_log_actions() },
+            answered_by,
         )
         .await;
 }
@@ -399,7 +420,7 @@ async fn record_failed_event_access_log(
             event.data.clone(),
             vec![serde_json::json!({
                 "type": format!("FAILED: {}", event.id()),
-                "error": if crate::utils::redact::contains_credentials(&event.data) { "credential-bearing event failed; diagnostics hidden".to_string() } else { error.to_string() },
+                "error": if crate::utils::redact::contains_credentials(&event.data) { "credential-bearing event failed; diagnostics hidden".to_string() } else { crate::llm::describe_llm_failure(error) },
             })],
         )
         .await;
@@ -696,8 +717,16 @@ async fn call_llm_inner(
                 if !private_payloads {
                     log_ctx.log_complete(event_status_tx, &result.protocol_results);
                 }
-                record_event_access_log(state, server_id, connection_id, protocol, event, &result)
-                    .await;
+                record_event_access_log(
+                    state,
+                    server_id,
+                    connection_id,
+                    protocol,
+                    event,
+                    &result,
+                    crate::state::app_state::answered_by::EASY,
+                )
+                .await;
                 return Ok(result);
             }
         }
@@ -721,8 +750,16 @@ async fn call_llm_inner(
             if !private_payloads {
                 log_ctx.log_complete(event_status_tx, &result.protocol_results);
             }
-            record_event_access_log(state, server_id, connection_id, protocol, event, &result)
-                .await;
+            record_event_access_log(
+                state,
+                server_id,
+                connection_id,
+                protocol,
+                event,
+                &result,
+                crate::state::app_state::answered_by::RULE,
+            )
+            .await;
             return Ok(result);
         }
         crate::llm::event_handler_executor::EventHandlerResult::FallbackToLlm { instruction } => {
@@ -732,28 +769,70 @@ async fn call_llm_inner(
         }
     }
 
+    // MEMOISED ANSWER, when the instance memoises: the model's answer to an identical event
+    // within the TTL, re-rendered for this one. Never for a batch (one answer covers several
+    // events) or a credential-bearing event.
+    let memo = if earlier.is_empty() && !private_payloads {
+        state.server_memo(server_id, connection_id).await
+    } else {
+        None
+    };
+    let memo_key = memo.as_ref().and_then(|memo| {
+        memo.key_for(
+            event.id(),
+            &event.data,
+            connection_id.map(|c| c.as_u32()),
+            handler_instruction.as_deref(),
+        )
+    });
+    if let (Some(memo), Some(key)) = (&memo, &memo_key) {
+        if let Some(actions) = memo.memo.get(key, &event.data) {
+            let result = execute_actions_on_connection(
+                actions,
+                state,
+                Some(protocol),
+                Some(server_id),
+                None,
+                connection_id,
+            )
+            .await
+            .context("Failed to execute memoised actions")?;
+            if !result.failures.is_empty() {
+                // A replay that failed is not kept: the next identical event asks the model.
+                memo.memo.forget(key);
+            }
+            debug!(
+                "Answered '{}' on server #{} from the memo (no model call)",
+                event.id(),
+                server_id.as_u32()
+            );
+            if !private_payloads {
+                log_ctx.log_complete(event_status_tx, &result.protocol_results);
+            }
+            record_event_access_log(
+                state,
+                server_id,
+                connection_id,
+                protocol,
+                event,
+                &result,
+                crate::state::app_state::answered_by::CACHE,
+            )
+            .await;
+            return Ok(result);
+        }
+    }
+
     // FALLBACK TO LLM (normal path if no script or script failed/requested fallback)
 
     // Get model from state, auto-select if not set
-    let model = crate::llm::ensure_model_selected(
-        state.get_ollama_model().await,
-        &state.get_ollama_url().await,
-    )
-    .await
-    .context("Failed to ensure model is selected")?;
-
-    // Collect all actions: common + event-specific actions
-    let mut all_actions = get_network_event_common_actions();
-
-    // Add provide_feedback action only if server has feedback_instructions configured
-    let has_feedback_instructions = state
-        .with_server_mut(server_id, |server| server.feedback_instructions.is_some())
+    let model = crate::llm::model_selection::ensure_state_model(&state)
         .await
-        .unwrap_or(false);
+        .context("Failed to ensure model is selected")?;
 
-    if has_feedback_instructions {
-        all_actions.push(crate::llm::actions::common::provide_feedback_action());
-    }
+    // Collect all actions: common + event-specific actions. The event-specific ones are
+    // gathered first, because which common actions are offered depends on them.
+    let mut event_actions: Vec<ActionDefinition> = Vec::new();
 
     // Add event-specific actions (these are the actions available for this event type).
     //
@@ -763,7 +842,7 @@ async fn call_llm_inner(
     // authentication request. So a narrowing is preserved wherever a protocol expressed one.
     //
     // What is never intended is an *empty* list on a protocol that declares sync actions: the
-    // model is then handed only set_memory/append_memory/show_message/append_to_log, and every
+    // model is then handed only set_memory/append_memory/append_to_log, and every
     // protocol action it returns is rejected as unknown, retried twice, and fails. That shape
     // silently disabled sixteen protocols, so it is reported and repaired instead of shipped.
     //
@@ -788,19 +867,38 @@ async fn call_llm_inner(
                 protocol.protocol_name(),
                 fallback.len()
             );
-            all_actions.extend(fallback);
+            event_actions.extend(fallback);
         }
     } else {
-        all_actions.extend(event.event_type.actions.clone());
+        event_actions.extend(event.event_type.actions.clone());
     }
     // A batch may hold events of other types; each one's own answers are on offer too.
     for earlier_event in earlier {
         for action in &earlier_event.event_type.actions {
-            if !all_actions.iter().any(|a| a.name == action.name) {
-                all_actions.push(action.clone());
+            if !event_actions.iter().any(|a| a.name == action.name) {
+                event_actions.push(action.clone());
             }
         }
     }
+
+    // `notify_operator` only where there is no protocol answer to confuse it with, and the
+    // per-connection memory only where there is a connection that lasts beyond one datagram.
+    let on_a_connection = connection_id.is_some() && !protocol.metadata().connectionless;
+    let mut all_actions = crate::llm::actions::common::network_event_common_actions_for(
+        !event_actions.is_empty(),
+        on_a_connection,
+    );
+
+    // Add provide_feedback action only if server has feedback_instructions configured
+    let has_feedback_instructions = state
+        .with_server_mut(server_id, |server| server.feedback_instructions.is_some())
+        .await
+        .unwrap_or(false);
+
+    if has_feedback_instructions {
+        all_actions.push(crate::llm::actions::common::provide_feedback_action());
+    }
+    all_actions.extend(event_actions);
 
     debug!(
         "LLM call for event '{}' (server #{}, {} actions available)",
@@ -876,12 +974,17 @@ async fn call_llm_inner(
         format!("{}\n{}", render_unanswered(earlier, event), event_trigger)
     };
     let history = state.render_server_history(server_id, connection_id).await;
+    let connection_memory = match connection_id {
+        Some(conn) => state.get_connection_memory(server_id, conn).await,
+        None => None,
+    };
     if llm_client.backend_type() == "agent" {
         if let Some(server) = state.get_server(server_id).await {
             conversation = conversation.with_agent_context(serde_json::json!({
                 "server_id":server_id.as_u32(), "connection_id":connection_id.map(|id|id.as_u32()),
                 "protocol":protocol.protocol_name(), "event_type":event.id(), "data":event.data,
                 "instruction":server.instruction, "memory":server.memory,
+                "connection_memory":connection_memory,
                 "handler_instruction":handler_instruction, "history":history,
                 "earlier_events":earlier.iter().map(|e|serde_json::json!({"event_type":e.id(),"data":e.data})).collect::<Vec<_>>(),
             }));
@@ -889,6 +992,15 @@ async fn call_llm_inner(
     }
     let event_trigger = match history {
         Some(history) => format!("{}\n{}", history, event_trigger),
+        None => event_trigger,
+    };
+    // The connection's own memory goes first: it is what the model kept about this peer, and
+    // the shared memory in the system prompt is about every peer.
+    let event_trigger = match state
+        .render_connection_memory(server_id, connection_id)
+        .await
+    {
+        Some(memory) => format!("{}\n{}", memory, event_trigger),
         None => event_trigger,
     };
     conversation.add_user_message(apply_handler_instruction(
@@ -904,16 +1016,23 @@ async fn call_llm_inner(
             advertised_actions,
         )
         .await
-        .context("✗  LLM failed to generate valid response after retries.")?;
+        .llm_context("✗  LLM failed to generate valid response after retries.")?;
 
     if actions.is_empty() {
         warn!("LLM returned empty actions array for event: {}", event.id());
     }
 
-    // Execute actions with server context
-    let result = execute_actions(actions, state, Some(protocol), Some(server_id), None)
-        .await
-        .context("Failed to execute actions")?;
+    // Execute actions with server context, and the connection for its own memory
+    let result = execute_actions_on_connection(
+        actions,
+        state,
+        Some(protocol),
+        Some(server_id),
+        None,
+        connection_id,
+    )
+    .await
+    .context("Failed to execute actions")?;
 
     debug!(
         "LLM call completed: {} messages, {} protocol results",
@@ -930,7 +1049,7 @@ async fn call_llm_inner(
     // answered together with it.
     for earlier_event in earlier {
         state
-            .record_access_log(
+            .record_access_log_answered(
                 crate::state::AccessLogOwner::Server(server_id.as_u32()),
                 protocol.protocol_name(),
                 connection_id.map(|c| c.as_u32()),
@@ -939,10 +1058,27 @@ async fn call_llm_inner(
                 vec![serde_json::json!({
                     "type": crate::state::exchange_history::ANSWERED_WITH_NEXT
                 })],
+                crate::state::app_state::answered_by::MODEL,
             )
             .await;
     }
-    record_event_access_log(state, server_id, connection_id, protocol, event, &result).await;
+    record_event_access_log(
+        state,
+        server_id,
+        connection_id,
+        protocol,
+        event,
+        &result,
+        crate::state::app_state::answered_by::MODEL,
+    )
+    .await;
+
+    // Memoise the answer only when every action ran: a failure is never replayed.
+    if let (Some(memo), Some(key)) = (memo, memo_key) {
+        if result.failures.is_empty() {
+            memo.memo.put(key, &event.data, &result.raw_actions);
+        }
+    }
 
     Ok(result)
 }
@@ -1132,9 +1268,9 @@ async fn call_llm_for_client_inner(
 
     // A client's only way to say anything to the user. Without it, a model that had nothing
     // to send on the wire but something to report had no action it was allowed to use, and
-    // reaching for `show_message` — the most obvious name there is — cost two retries and
-    // then failed the whole event.
-    all_actions.push(crate::llm::actions::common::show_message_action());
+    // reaching for `show_message` (now `notify_operator`) — the most obvious name there is —
+    // cost two retries and then failed the whole event.
+    all_actions.push(crate::llm::actions::common::notify_operator_action());
 
     // Add provide_feedback action only if client has feedback_instructions configured
     // Parse client_id from string format "client-123"
@@ -1152,6 +1288,13 @@ async fn call_llm_for_client_inner(
     // The client prompt used to be the instruction and the action list and nothing else: no
     // response envelope, no "one response", no way to say "nothing now". A model that wrote two
     // JSON objects lost the second without an error, because the parser takes the first.
+    //
+    // The instruction is asked about again on every event; what says how far it has got is the
+    // history block above the event (`ExchangeHistory::render_for_client`), not this prompt.
+    // A paragraph here framing the instruction as a plan under way was measured and removed:
+    // with llama3.1:8b it made the connect event — which has no history yet — come back as an
+    // echoed transcript or no actions at all in 5 of 8 seeded runs, where the bare
+    // instruction had started the script in 8 of 8.
     let system_prompt = format!(
         "You are controlling a network client ({}). Your instruction: {}\n\n\
          # Response Format\n\
@@ -1227,10 +1370,9 @@ async fn call_llm_for_client_inner(
 
     // Get current model from state, auto-select if not set
     let current_model = state.get_ollama_model().await;
-    let model =
-        crate::llm::ensure_model_selected(current_model.clone(), &state.get_ollama_url().await)
-            .await
-            .context("Failed to ensure model is selected")?;
+    let model = crate::llm::model_selection::ensure_state_model(&state)
+        .await
+        .context("Failed to ensure model is selected")?;
 
     // If model was auto-selected (wasn't set before), notify via status_tx
     if current_model.is_none() {
@@ -1310,12 +1452,16 @@ async fn call_llm_for_client_inner(
     // split happens here — in the one place that advertises the action.
     let (common_actions, protocol_actions) = split_client_common_actions(actions);
 
-    // `show_message` is emitted here rather than by the executor, whose match arm for it is a
-    // deliberate no-op ("handled by the caller, to avoid duplicate output"). Accepting the
-    // action without this loop would take the model's message and drop it, which is the same
+    // `notify_operator` is emitted here rather than by the executor, which only collects it
+    // into `ExecutionResult::messages` for a server to print. Accepting the action without
+    // this loop would take the model's message and drop it, which is the same
     // advertise-a-no-op shape as rejecting it outright — just quieter.
     for action in &common_actions {
-        if action.get("type").and_then(|t| t.as_str()) == Some("show_message") {
+        if action
+            .get("type")
+            .and_then(|t| t.as_str())
+            .is_some_and(crate::llm::actions::common::is_notify_operator)
+        {
             if let Some(message) = action.get("message").and_then(|m| m.as_str()) {
                 let _ = status_tx.send(format!("[CLIENT] {}", message));
             }
@@ -1382,7 +1528,7 @@ pub const CLIENT_COMMON_ACTION_NAMES: &[&str] = &[
     "provide_feedback",
     "set_memory",
     "append_memory",
-    "show_message",
+    "notify_operator",
 ];
 
 /// Split a client model's actions into the common ones this module executes itself and the
@@ -1393,11 +1539,16 @@ pub const CLIENT_COMMON_ACTION_NAMES: &[&str] = &[
 pub fn split_client_common_actions(
     actions: Vec<serde_json::Value>,
 ) -> (Vec<serde_json::Value>, Vec<serde_json::Value>) {
+    // A former name (`show_message`, from a client handler written before the rename) is
+    // still a common action; see `common::canonical_action_name`.
     actions.into_iter().partition(|action| {
         action
             .get("type")
             .and_then(|t| t.as_str())
-            .map(|name| CLIENT_COMMON_ACTION_NAMES.contains(&name))
+            .map(|name| {
+                CLIENT_COMMON_ACTION_NAMES
+                    .contains(&crate::llm::actions::common::canonical_action_name(name))
+            })
             .unwrap_or(false)
     })
 }
@@ -1458,10 +1609,9 @@ pub async fn call_llm_for_feedback(
 
     // Get current model from state, auto-select if not set
     let current_model = state.get_ollama_model().await;
-    let model =
-        crate::llm::ensure_model_selected(current_model.clone(), &state.get_ollama_url().await)
-            .await
-            .context("Failed to ensure model is selected")?;
+    let model = crate::llm::model_selection::ensure_state_model(&state)
+        .await
+        .context("Failed to ensure model is selected")?;
 
     // If model was auto-selected, notify via status_tx
     if current_model.is_none() {
@@ -1533,7 +1683,7 @@ pub async fn call_llm_for_feedback(
             feedback_actions,
         )
         .await
-        .context("✗  LLM failed to generate feedback processing response after retries")?;
+        .llm_context("✗  LLM failed to generate feedback processing response after retries")?;
 
     if actions.is_empty() {
         warn!(

@@ -176,7 +176,7 @@ response into a passing test.
 - ListObjects: Verify file appears in listing
 - Expected: 200 status for PUT, valid XML for LIST
 - **Expected LLM Response**:
-    - PUT: NoAction or show_message
+    - PUT: NoAction or notify_operator
     - LIST: `send_s3_object_list` with uploaded file
 
 ## Known Issues

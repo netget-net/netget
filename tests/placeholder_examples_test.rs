@@ -82,5 +82,5 @@ fn effective_response_example_repairs_only_placeholders() {
     let fallback = EventType::new("x", "d", placeholder).with_no_actions();
     let got = fallback.effective_response_example();
     assert!(!EventType::is_placeholder(&got));
-    assert_eq!(got["type"], "show_message");
+    assert_eq!(got["type"], "notify_operator");
 }

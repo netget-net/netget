@@ -843,10 +843,7 @@ impl RedisHandler {
 
         let event = Event::new(
             &REDIS_COMMAND_EVENT,
-            serde_json::json!({
-                "command": command_str,
-                "protocol": proto,
-            }),
+            command_event_data(&command_str, &args, proto),
         );
         let answer = self.ask_model(conn, &event, &command_for_log).await;
         if answer.accept || answer.deliver {
@@ -1006,10 +1003,11 @@ impl RedisHandler {
         }
         let event = Event::new(
             &REDIS_COMMAND_EVENT,
-            serde_json::json!({
-                "command": command_str,
-                "protocol": conn.protocol.protocol_version(),
-            }),
+            command_event_data(
+                command_str,
+                &frame_args(frame),
+                conn.protocol.protocol_version(),
+            ),
         );
         let answer = self.ask_model(conn, &event, command_for_log).await;
         let response = if answer.output.starts_with(b"-") {
@@ -1318,6 +1316,40 @@ fn frame_args(frame: &Frame) -> Vec<Vec<u8>> {
             .collect(),
         other => vec![format!("{other:?}").into_bytes()],
     }
+}
+
+/// The data of a `redis_command` event.
+///
+/// `command` is the space-joined line, kept for display, log templates and simple matching,
+/// but it cannot carry argument boundaries: `SET k "a b c"` and `SET k a b c` join to the
+/// same string. `args` is the command exactly as the client framed it, one string per
+/// argument, the command name first.
+///
+/// A RESP bulk string is binary-safe and an argument need not be UTF-8, while a JSON string
+/// must be text. An argument that is valid UTF-8 is given as that text; one that is not is
+/// given as lowercase hex (two digits per byte) and its index is listed in `hex_args`. The
+/// encoding is stated rather than left to be guessed, the same rule as TCP's `encoding`
+/// field: `"cafe"` is both valid text and valid hex, and only the index list says which one
+/// a given argument is.
+fn command_event_data(command: &str, args: &[Vec<u8>], protocol: u8) -> serde_json::Value {
+    let mut hex_args = Vec::new();
+    let args: Vec<String> = args
+        .iter()
+        .enumerate()
+        .map(|(i, arg)| match std::str::from_utf8(arg) {
+            Ok(text) => text.to_string(),
+            Err(_) => {
+                hex_args.push(i);
+                hex::encode(arg)
+            }
+        })
+        .collect();
+    serde_json::json!({
+        "command": command,
+        "args": args,
+        "hex_args": hex_args,
+        "protocol": protocol,
+    })
 }
 
 /// The arguments of a `HELLO` command, or `None` for any other command.

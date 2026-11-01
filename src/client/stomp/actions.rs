@@ -221,7 +221,7 @@ pub static STOMP_CLIENT_ERROR_RECEIVED_EVENT: LazyLock<EventType> = LazyLock::ne
         },
     ])
     // Nothing can be written to a connection the broker is closing, so the only useful answers
-    // are the common actions (set_memory, show_message, append_to_log) plus an explicit
+    // are the common actions (set_memory, notify_operator, append_to_log) plus an explicit
     // acknowledgement that there is nothing to send.
     .with_actions(vec![wait_for_more_action()])
 });

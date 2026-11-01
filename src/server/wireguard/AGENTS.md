@@ -316,7 +316,7 @@ LLM response:
 {
   "actions": [
     {
-      "type": "show_message",
+      "type": "notify_operator",
       "message": "Starting WireGuard VPN server on UDP port 51820. Generating keypair and creating TUN interface..."
     }
   ]
@@ -355,7 +355,7 @@ LLM can authorize with allowed IPs:
       "allowed_ips": ["10.20.30.2/32"]
     },
     {
-      "type": "show_message",
+      "type": "notify_operator",
       "message": "Peer authorized with VPN IP 10.20.30.2"
     }
   ]

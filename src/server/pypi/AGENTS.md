@@ -153,7 +153,7 @@ The LLM responds to PyPI events with actions:
 **Available Actions**:
 
 - `send_pypi_response` - Send PyPI HTTP response (status, headers, body)
-- Common actions: `show_message`, `update_instruction`, etc.
+- Common actions: `notify_operator`, `update_instruction`, etc.
 - **No async actions** - PyPI is purely request-response
 
 ### Request Types
@@ -189,7 +189,7 @@ The LLM receives a `request_type` parameter indicating what kind of request this
       "body": "<!DOCTYPE html>\n<html>\n<body>\n<a href=\"hello-world/\">hello-world</a>\n<a href=\"example-pkg/\">example-pkg</a>\n</body>\n</html>"
     },
     {
-      "type": "show_message",
+      "type": "notify_operator",
       "message": "Served package index"
     }
   ]

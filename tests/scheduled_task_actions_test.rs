@@ -163,7 +163,7 @@ async fn global_task_prompt_offers_operator_actions_and_no_untargeted_ones() {
         "close_server",
         "open_client",
         "schedule_task",
-        "show_message",
+        "notify_operator",
     ] {
         assert!(offered.contains(name), "global task must be offered {name}");
     }

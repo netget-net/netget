@@ -170,7 +170,7 @@ The LLM responds to Maven artifact requests with actions:
 - `send_maven_artifact` - Send artifact file content
 - `send_maven_metadata` - Send version listing XML
 - `send_maven_error` - Send error response (404, etc.)
-- Common actions: `show_message`, `update_instruction`, etc.
+- Common actions: `notify_operator`, `update_instruction`, etc.
 - **No async actions** - Maven is purely request-response
 
 ### Example LLM Responses
@@ -187,7 +187,7 @@ The LLM responds to Maven artifact requests with actions:
       "body_base64": "UEsDBBQACAgIAAAAIQ..." // real JAR bytes, base64-encoded
     },
     {
-      "type": "show_message",
+      "type": "notify_operator",
       "message": "Served JAR: com.example:mylib:1.0.0"
     }
   ]

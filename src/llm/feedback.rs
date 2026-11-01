@@ -237,7 +237,7 @@ pub fn get_feedback_actions(target: FeedbackTarget) -> Vec<ActionDefinition> {
             log_template: None,
         },
         ActionDefinition {
-            name: "show_message".to_string(),
+            name: crate::llm::actions::common::NOTIFY_OPERATOR.to_string(),
             description: "Tell the operator what you changed and why. Not sent to any peer."
                 .to_string(),
             parameters: vec![Parameter {
@@ -247,7 +247,7 @@ pub fn get_feedback_actions(target: FeedbackTarget) -> Vec<ActionDefinition> {
                 required: true,
             }],
             example: json!({
-                "type": "show_message",
+                "type": crate::llm::actions::common::NOTIFY_OPERATOR,
                 "message": "Peers kept asking for a goodbye; the instruction now sends one."
             }),
             log_template: None,
@@ -765,10 +765,10 @@ fn route(mut action: Value, target: FeedbackTarget) -> Route {
             Ok(_) => Route::Refused("cancel_task did not parse".to_string()),
             Err(e) => Route::Refused(format!("cancel_task is malformed: {e}")),
         },
-        "show_message" => match CommonAction::from_json(&action) {
-            Ok(CommonAction::ShowMessage { message }) => Route::Message(message),
-            Ok(_) => Route::Refused("show_message did not parse".to_string()),
-            Err(e) => Route::Refused(format!("show_message is malformed: {e}")),
+        "notify_operator" | "show_message" => match CommonAction::from_json(&action) {
+            Ok(CommonAction::NotifyOperator { message }) => Route::Message(message),
+            Ok(_) => Route::Refused("notify_operator did not parse".to_string()),
+            Err(e) => Route::Refused(format!("notify_operator is malformed: {e}")),
         },
         // set_memory, append_memory and (server only) append_to_log.
         _ => Route::Executor(action),

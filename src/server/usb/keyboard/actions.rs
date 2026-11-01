@@ -61,7 +61,7 @@ pub static USB_KEYBOARD_DETACHED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         "usb_keyboard_detached",
         "The host detached from this virtual keyboard. Purely informational - the USB/IP \
          session is gone, so a HID report has nowhere to go.",
-        json!({"type": "show_message", "message": "USB keyboard host detached"}),
+        json!({"type": "notify_operator", "message": "USB keyboard host detached"}),
     )
     .with_parameters(vec![Parameter {
         name: "connection_id".to_string(),

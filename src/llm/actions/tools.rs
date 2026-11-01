@@ -1549,7 +1549,7 @@ pub fn list_models_action() -> ActionDefinition {
 pub fn generate_random_action() -> ActionDefinition {
     ActionDefinition {
         name: "generate_random".to_string(),
-        description: "Generate random data of various types. IMPORTANT: LLMs cannot generate truly random data - you MUST use this tool whenever you need random/mock data for responses. Supports: UUIDs, numbers, strings, emails, IPs, dates, lorem ipsum text, and more. This tool returns the random value which you can then use in your response.".to_string(),
+        description: "Generate random data of various types: UUIDs, numbers, strings, emails, IPs, dates, lorem ipsum text, and more. Use it only when your answer itself must contain a random value (a fresh id, a nonce, a random pick) - models cannot produce real randomness. An ordinary answer needs no random value, and each call costs an extra round trip before anything runs. Returns the value for you to use in your answer.".to_string(),
         parameters: vec![
             Parameter {
                 name: "data_type".to_string(),
