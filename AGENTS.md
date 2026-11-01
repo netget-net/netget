@@ -13,7 +13,14 @@ started until all have stopped or Ctrl+C, keeps a clients-only run alive while a
 connected, and exits **non-zero** if anything it was asked to start failed. `--run-for <SECS>`
 and `--exit-after-events <N>` end it with status 0; the event count is the access log's
 monotonic total (`AppState::access_log_total`), so it counts every handled event on every
-instance whoever answered it. `tests/non_interactive_run_limits_test.rs` drives the binary.
+instance whoever answered it. `--ready-file <PATH>` writes a JSON report of every server's bound
+address (and every client's target and status) once all of them have started — atomically, and
+after removing any stale file at the path, so its appearance is the readiness signal for a
+process started on port 0; a run that fails to start never writes it, and MCP, `--simple` and
+the TUI refuse the flag. `tests/non_interactive_run_limits_test.rs` drives the binary. The test
+fixture helpers built on it are `crates/netget-fixture` (Rust, depends only on `serde_json`) and
+`sdk/python/netget_fixture` (stdlib, plus a pytest plugin); `tests/fixture_helpers_test.rs`
+runs both against this tree's binary and needs `python3` with pytest. Neither is published.
 
 **The interactive TUI is the full-screen ratatui dashboard (`src/tui/`)**, the only
 interactive UI — the rolling-terminal TUI that used to sit behind `--legacy-tui` was removed

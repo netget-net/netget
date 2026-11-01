@@ -1103,7 +1103,18 @@ impl TcpServer {
 
                     // Handle close_connection
                     if should_close {
+                        // FIN, then forget the connection. Removing it from the map alone
+                        // closed nothing: the reader task still owns the read half of the
+                        // split stream, so the socket stayed open and the peer waited for
+                        // its own timeout after the model had hung up.
+                        {
+                            let mut write = write_half.lock().await;
+                            let _ = write.shutdown().await;
+                        }
                         connections.lock().await.remove(&connection_id);
+                        app_state
+                            .close_connection_on_server(server_id, connection_id)
+                            .await;
                         // The model answered by hanging up — distinct in the log from
                         // "answered nothing" and from an LLM failure.
                         log.info(format!(

@@ -584,6 +584,9 @@ tokio-test = "0.4"
 ctor = "0.2"
 # For creating temporary mock config files
 tempfile = "3.13"
+# The test-fixture helper users depend on; tests/fixture_helpers_test.rs drives it against
+# this tree's own binary.
+netget-fixture = { path = "crates/netget-fixture" }
 
 # Terminal snapshot parsing
 vt100 = "0.15"
