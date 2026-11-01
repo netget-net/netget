@@ -590,7 +590,7 @@ pub static SSH_SEND_BANNER_ACTION: LazyLock<ActionDefinition> =
         description: "Write the greeting shown the moment an SSH shell opens, before the user \
             has typed anything - a welcome line, MOTD or fake 'Last login' banner. Answers the \
             ssh_banner event. If the server should open silently, return no action at all \
-            (or show_message, which is not sent to the client)."
+            (or notify_operator, which is not sent to the client)."
             .to_string(),
         parameters: vec![Parameter {
             name: "banner".to_string(),

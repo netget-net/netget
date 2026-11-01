@@ -186,7 +186,7 @@ async fn telnet_client_answers_what_arrived_during_a_call_together() {
         "the model must be told it answers both:\n{prompt}"
     );
     assert!(
-        before.contains("Earlier on this connection"),
+        before.contains("Earlier in this session"),
         "the session's history (the first read) must be shown too:\n{prompt}"
     );
 }

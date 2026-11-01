@@ -287,7 +287,7 @@ fn for_each_output_at(results: &[ActionResult], depth: usize, visit: &mut impl F
 ///
 /// True when some `Output` payload parses as JSON — the same condition [`build_response`]
 /// uses to decide whether to answer from the model or fall back to the server's
-/// `default_response` (or a blank `200`).
+/// `default_response` (or, with none configured, a `500`).
 ///
 /// It is public because the *caller* is where that outcome has to be logged: `build_response`
 /// is shared by every HTTP-shaped protocol and cannot know what any one of them wants to say
@@ -312,8 +312,8 @@ pub fn build_response(
     uri: &str,
     status_tx: &mpsc::UnboundedSender<String>,
     // Fallback for when the model produced no `send_http_response` — the server's
-    // `default_response` startup param, as `(status, headers, body)`. `None` keeps
-    // the historical empty `200`.
+    // `default_response` startup param, as `(status, headers, body)`. With `None` the
+    // request is refused with a `500` (see below).
     default_response: Option<(u16, Vec<(String, String)>, String)>,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
     // Default response in case nothing was produced
@@ -348,13 +348,28 @@ pub fn build_response(
         }
     });
 
-    // The model was consulted but returned no send_http_response. Use the server's
-    // configured default_response if it set one, instead of a bare (blank) 200.
+    // The model was consulted but returned no send_http_response. The server's configured
+    // `default_response` is a deliberate answer for exactly this case and is used when set.
+    //
+    // Without one the request fails closed with a `500`. Answering `200` with an empty body
+    // would make a model that said nothing — or whose action the executor refused —
+    // indistinguishable from a model that deliberately answered an empty success, so a client
+    // would record an unanswered request as a completed one. `500` with the
+    // `WireFailure::Unavailable` category is what a failed backend gets from
+    // `build_error_response` and what HTTP/2 (`h2_server.rs`) and OpenAPI answer a silent
+    // model with; `503` stays reserved for overload, which this is not, so a client does not
+    // retry a request the model will keep declining.
     if !produced_response {
         if let Some((status, headers, body)) = default_response {
             status_code = status;
             response_headers = headers.into_iter().collect();
             response_body = body;
+        } else {
+            status_code = 500;
+            response_headers = HashMap::new();
+            response_body = crate::utils::WireFailure::Unavailable
+                .prefixed_text()
+                .to_string();
         }
     }
 
@@ -528,9 +543,9 @@ pub struct RequestFilter {
     rules: Vec<FilterRule>,
     filtered_response: FilteredResponse,
     /// Canned response used when the model is consulted but produces no
-    /// `send_http_response` (an empty action list). `None` keeps the historical
-    /// behavior of an empty `200`. Set via the `default_response` startup param so
-    /// a declined request looks intentional (e.g. a 404 page) rather than blank.
+    /// `send_http_response` (an empty action list). With `None` such a request is
+    /// refused with a `500`. Set via the `default_response` startup param so a
+    /// declined request gets a deliberate answer (e.g. a 404 page) instead.
     default_response: Option<FilteredResponse>,
     /// Human-readable problems found while parsing the config. Callers surface
     /// these on the status channel so a typo is visible in the TUI/MCP stream,
@@ -601,7 +616,7 @@ impl RequestFilter {
         }
 
         // Independent of the filter: what to send when the model is asked and
-        // answers with no response action. Absent => the historical empty 200.
+        // answers with no response action. Absent => a 500 (`build_response`).
         let default_response = params
             .and_then(|p| p.get("default_response"))
             .map(|raw| Self::parse_filtered_response(raw, &mut warnings));
@@ -615,8 +630,8 @@ impl RequestFilter {
     }
 
     /// The configured `default_response` as `(status, headers, body)`, or `None`
-    /// to keep the empty-200 default. Used by `build_response` when the model
-    /// produced no `send_http_response`.
+    /// when there is none and a silent model is answered `500`. Used by
+    /// `build_response` when the model produced no `send_http_response`.
     pub fn default_response_parts(&self) -> Option<(u16, Vec<(String, String)>, String)> {
         self.default_response
             .as_ref()
@@ -818,10 +833,11 @@ pub fn request_handling_startup_parameters() -> Vec<crate::llm::actions::Paramet
             name: "default_response".to_string(),
             type_hint: "object".to_string(),
             description: "Response used when the model IS consulted for a request but returns no \
-                send_http_response (an empty answer). Without this, such a request gets a blank \
-                200, which looks broken. Set a sensible fallback — commonly a 404 page — so a \
-                declined request looks intentional. Same shape as filtered_response: `status` \
-                (number), `body` (string), `headers` (object of name→value)."
+                send_http_response (an empty answer). Without this, such a request is refused \
+                with a 500, because nothing answered it. Set a sensible fallback — commonly a \
+                404 page — so a declined request gets a deliberate answer instead. Same shape \
+                as filtered_response: `status` (number), `body` (string), `headers` (object of \
+                name→value)."
                 .to_string(),
             required: false,
             example: serde_json::json!({

@@ -69,7 +69,7 @@ impl Protocol for DataLinkProtocol {
         vec![]
     }
     fn get_sync_actions(&self) -> Vec<ActionDefinition> {
-        vec![show_message_action(), ignore_packet_action()]
+        vec![notify_operator_action(), ignore_packet_action()]
     }
     fn protocol_name(&self) -> &'static str {
         "DataLink"
@@ -159,7 +159,7 @@ impl Protocol for DataLinkProtocol {
 data = json.load(sys.stdin)
 event = data["event"]
 if data["event_type_id"] == "datalink_packet_captured":
-    actions = [{"type": "show_message", "message": "packet captured"}]
+    actions = [{"type": "notify_operator", "message": "packet captured"}]
 else:
     actions = []
 print(json.dumps({"actions": actions}))"#;
@@ -195,7 +195,7 @@ print(json.dumps({"actions": actions}))"#;
                     "handler": {
                         "type": "static",
                         "actions": [{
-                            "type": "show_message",
+                            "type": "notify_operator",
                             "message": "Packet captured"
                         }]
                     }
@@ -257,9 +257,10 @@ impl Server for DataLinkProtocol {
             .context("Missing 'type' field in action")?;
 
         match action_type {
-            "show_message" => {
-                // Message actions are handled by the LLM's text response
-                // This action just acknowledges the intent
+            // `show_message` is the former name, still accepted.
+            "notify_operator" | "show_message" => {
+                // The note itself is printed by the shared executor, which runs it as a
+                // common action before this protocol is asked; this only acknowledges it.
                 Ok(ActionResult::NoAction)
             }
             "ignore_packet" => Ok(ActionResult::NoAction),
@@ -268,11 +269,14 @@ impl Server for DataLinkProtocol {
     }
 }
 
-/// Action definition for show_message
-fn show_message_action() -> ActionDefinition {
+/// Action definition for notify_operator: capture is passive, so a note to the operator about
+/// what was seen is this protocol's answer.
+fn notify_operator_action() -> ActionDefinition {
     ActionDefinition {
-        name: "show_message".to_string(),
-        description: "Show a message about the packet analysis".to_string(),
+        name: "notify_operator".to_string(),
+        description: "Show the operator a note about the packet analysis (nothing is sent on \
+            the network)"
+            .to_string(),
         parameters: vec![Parameter {
             name: "message".to_string(),
             type_hint: "string".to_string(),
@@ -280,13 +284,13 @@ fn show_message_action() -> ActionDefinition {
             required: true,
         }],
         example: json!({
-            "type": "show_message",
+            "type": "notify_operator",
             "message": "ARP request detected for 192.168.1.1"
         }),
         log_template: Some(
             LogTemplate::new()
                 .with_info("-> L2 {message}")
-                .with_debug("DataLink show_message: {message}"),
+                .with_debug("DataLink notify_operator: {message}"),
         ),
     }
 }
@@ -317,7 +321,7 @@ pub static DATALINK_PACKET_CAPTURED_EVENT: LazyLock<EventType> = LazyLock::new(|
         "datalink_packet_captured",
         "Layer 2 Ethernet packet captured from network interface",
         json!({
-            "type": "show_message",
+            "type": "notify_operator",
             "message": "ARP request detected"
         }),
     )
@@ -356,7 +360,7 @@ pub static DATALINK_PACKET_CAPTURED_EVENT: LazyLock<EventType> = LazyLock::new(|
             required: true,
         },
     ])
-    .with_actions(vec![show_message_action(), ignore_packet_action()])
+    .with_actions(vec![notify_operator_action(), ignore_packet_action()])
 });
 
 pub fn get_datalink_event_types() -> Vec<EventType> {

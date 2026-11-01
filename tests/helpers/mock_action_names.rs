@@ -26,7 +26,11 @@ use std::collections::BTreeSet;
 /// that one is private; if it gains a variant this list needs the same one, and the
 /// symptom of forgetting is a spurious "unknown action" in a test rather than silence.
 const COMMON_ACTION_NAMES: &[&str] = &[
+    "notify_operator",
+    // notify_operator's former name, still accepted
     "show_message",
+    "set_connection_memory",
+    "append_connection_memory",
     "open_server",
     "close_server",
     "close_all_servers",

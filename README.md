@@ -19,6 +19,8 @@ npm install -g @smotana/netget
 netget
 ```
 
+Release archives, `cargo install`, Docker, and which protocols each platform's binary carries (on Linux, packet capture, Bluetooth LE and NFC are in the separate `-full` archives) are in the [install guide](docs/guides/INSTALL.md).
+
 For LLM responses, use Ollama or an OpenAI-compatible endpoint. Manual, static, and scripted responses run without a model.
 
 ## Try a prompt
@@ -78,6 +80,6 @@ for schemas, replay limits and protocol compatibility.
 
 ## Build and explore
 
-Install from Rust with `cargo install --locked netget-tool`; the command is `netget`. See [installation and development docs](https://github.com/netget-net/netget/blob/master/docs/README.md) for system libraries, source builds, testing, and historical plans.
+Install from Rust with `cargo install --locked netget-tool`; the command is `netget`, and this build includes every protocol, the USB devices and SMB client that no prebuilt binary carries among them. See [installation and development docs](https://github.com/netget-net/netget/blob/master/docs/README.md) for system libraries, source builds, testing, and historical plans.
 
 [AGPL-3.0-or-later](LICENSE)

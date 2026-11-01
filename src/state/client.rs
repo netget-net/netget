@@ -181,6 +181,9 @@ pub struct ClientInstance {
     /// What has happened on this client's session — a client is one connection, so one
     /// history. See [`crate::state::exchange_history`].
     pub exchange_history: crate::state::exchange_history::ExchangeHistory,
+    /// Memoisation of the model's answers: off unless the client turns it on. See
+    /// [`crate::llm::answer_reuse`].
+    pub memo: crate::llm::answer_reuse::Memo,
 }
 
 impl ClientInstance {
@@ -213,6 +216,7 @@ impl ClientInstance {
             history_entries: 0,
             batching: false,
             exchange_history: Default::default(),
+            memo: Default::default(),
         }
     }
 

@@ -819,26 +819,10 @@ impl Args {
 
         match &self.scripting_env {
             None => Ok(None),
-            Some(env) => {
-                let mode = match env.to_lowercase().as_str() {
-                    "on" | "auto" => crate::state::app_state::ScriptingMode::On,
-                    "off" | "llm" => crate::state::app_state::ScriptingMode::Off,
-                    "python" | "py" => crate::state::app_state::ScriptingMode::Python,
-                    "javascript" | "js" | "node" => {
-                        crate::state::app_state::ScriptingMode::JavaScript
-                    }
-                    "go" | "golang" => crate::state::app_state::ScriptingMode::Go,
-                    "perl" => crate::state::app_state::ScriptingMode::Perl,
-                    _ => {
-                        anyhow::bail!(
-                            "Invalid scripting environment: '{}'\n\
-                             Valid options: on (auto), off (llm), python (py), javascript (js, node), go (golang), perl",
-                            env
-                        );
-                    }
-                };
-                Ok(Some(mode))
-            }
+            // The same parser the settings file is read with: `ScriptingMode::parse`.
+            Some(env) => crate::state::app_state::ScriptingMode::parse(env)
+                .map(Some)
+                .map_err(|e| anyhow::anyhow!(e)),
         }
     }
 

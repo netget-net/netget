@@ -87,6 +87,10 @@ const UNIVERSAL_ACTIONS: &[&str] = &[
     "change_model",
     "set_memory",
     "append_memory",
+    "set_connection_memory",
+    "append_connection_memory",
+    "notify_operator",
+    // notify_operator's former name, still accepted
     "show_message",
     "append_to_log",
     "schedule_task",

@@ -32,7 +32,7 @@ The ATR check is what proves `set_atr` is no longer write-only — the mock sets
 `3B8180018050`, which is not the compiled-in default.
 
 The GET CHALLENGE case is the fail-open regression test. The mock returns a valid response
-containing only `show_message`, i.e. the handler answered but produced no APDU response. If
+containing only `notify_operator`, i.e. the handler answered but produced no APDU response. If
 anyone ever adds a permissive default, that assertion turns red.
 
 **The INTERNAL AUTHENTICATE case is the sharper half of the same test, and it used to fail.**

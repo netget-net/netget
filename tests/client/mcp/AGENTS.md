@@ -37,7 +37,7 @@ it.
   which surfaces as `expected 2, got 3` on an unrelated rule.
   `tests/helpers/mock_action_names.rs` catches the statically-declared form and says so
   usefully, but it cannot see inside a `respond_with_actions_from_event` closure. Use
-  `show_message` to terminate a chain.
+  `notify_operator` to terminate a chain.
 - **The initialize mock must include `serverInfo`.** `connect()` fails with "Missing serverInfo
   in initialize response" without it, so an incomplete mock fails the handshake rather than the
   assertion under test.

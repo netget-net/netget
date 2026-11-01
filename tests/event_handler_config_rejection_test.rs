@@ -4,8 +4,8 @@
 //! debugging before the real cause surfaced. They are exactly what an LLM writing handlers
 //! gets wrong, because in both cases the configuration looks entirely reasonable.
 //!
-//! 1. **An unknown key.** `EventHandler` has exactly two fields and matches on the event id
-//!    alone -- there is no data-based matching. An `event_data_contains` key is a natural
+//! 1. **An unknown key.** Data-based matching is spelled `match` (exact values per field
+//!    path) and nothing else. An `event_data_contains` key is a natural
 //!    thing to assume exists, and it used to be accepted and ignored, so every rule
 //!    registered against one event id matched every occurrence and first-match-wins picked
 //!    the first. A zookeeper test wrote five such rules to answer five different requests;

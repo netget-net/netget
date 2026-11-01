@@ -58,7 +58,7 @@ A handler that answers a notification does no harm — the response is discarded
 raw action.
 
 This matters: `raw_actions` includes common actions, so a response that leads with
-`show_message` or `update_memory` — the exact shape this very document used to
+`notify_operator` or `update_memory` — the exact shape this very document used to
 recommend, and the shape the notification E2E test uses — was rejected as a "non-JSON-RPC
 action" and turned into `-32603 Internal error`. Scanning also means the chosen action is
 no longer executed a second time, which previously rendered every action log template

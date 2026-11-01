@@ -71,7 +71,7 @@ pub static USB_MSC_DETACHED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         "usb_msc_detached",
         "The host detached from this virtual mass-storage device. Purely informational - the \
          USB/IP session is gone, so there is nothing left to mount, eject or write-protect.",
-        json!({"type": "show_message", "message": "USB mass storage host detached"}),
+        json!({"type": "notify_operator", "message": "USB mass storage host detached"}),
     )
     .with_parameters(vec![Parameter {
         name: "connection_id".to_string(),

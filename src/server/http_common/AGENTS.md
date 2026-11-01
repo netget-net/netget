@@ -72,13 +72,13 @@ adding a field there breaks that test's build.
 per-protocol handler then calls `build_response`, which merges every `Output`
 result it received and produces the final response.
 
-This path is deliberately lenient, because **a rejected action is invisible to
-the client**: `execute_actions()` (`src/llm/actions/executor.rs:114`) only logs a
-warning and drops the action, and the request then falls through to whatever the
-protocol does with no response action (HTTP/1.1: the server's `default_response`, or
-an empty `200` if none is set; HTTP/2: a fail-closed `500`). A strict executor
-therefore turns a slightly-off model response into a silent wrong answer rather than
-an error. So:
+This path is deliberately lenient, because **a rejected action never reaches the
+client**: `execute_actions()` (`src/llm/actions/executor.rs`) logs a warning and
+drops the action, and the request then falls through to whatever the protocol does
+with no response action (HTTP/1.1 and HTTP/2 alike: the server's `default_response`,
+or a fail-closed `500` if none is set). A strict executor therefore turns a
+slightly-off model response into a refusal rather than the answer the model meant.
+So:
 
 - `status` accepts a number or a numeric string, and must be 100-599.
 - `body` is optional (absent ⇒ empty body, which is what 204/304 need) and a

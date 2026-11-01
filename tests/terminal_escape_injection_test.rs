@@ -129,6 +129,7 @@ fn a_c1_csi_in_a_json_payload_is_not_painted() {
         event_type: "telnet_line_received".into(),
         request: payload.clone(),
         response: vec![serde_json::json!({"type": "send_telnet_line", "text": "\u{9b}2J"})],
+        answered_by: None,
     };
     let lines = detail_lines(&entry);
     for line in &lines {
