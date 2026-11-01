@@ -257,9 +257,13 @@ struct ConnectionData {
 
 ### 5. Half-Close Is a Failure Signal, Not a Feature
 
-- The model cannot request a half-close: `close_this_connection` closes both directions
-- The server half-closes (`write.shutdown()`) in exactly one case — the LLM call returned
-  `Err` — on the data path, and on the connect event of a `send_first` server (which owes the
+- The model cannot request a half-close as such: `close_this_connection` (after any bytes in the
+  same answer) sends FIN, removes the connection and marks it closed, on the data path and on
+  the connect event alike. Removing it from the map is not enough on its own — the reader task
+  owns the read half of the split stream, so the socket stays open until the peer gives up;
+  `tests/server/tcp/model_close_test.rs` asserts the peer reads EOF
+- As a *failure* signal the server half-closes (`write.shutdown()`) when the LLM call returned
+  `Err` on the data path, and on the connect event of a `send_first` server (which owes the
   peer a greeting; without `send_first` a failed connect event is only logged). Raw TCP has no error
   frame, so FIN is the only honest answer: the peer reads EOF immediately instead of
   blocking until its own timeout. Nothing derived from the error is ever written to the
