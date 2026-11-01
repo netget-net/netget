@@ -689,7 +689,7 @@ Query server capabilities, list all branches and bookmarks, then report what you
 {
   "actions": [
     {
-      "type": "show_message",
+      "type": "notify_operator",
       "message": "Connected to Mercurial server. Server supports: batch, branchmap, getbundle, known, lookup"
     },
     {
@@ -719,7 +719,7 @@ Query server capabilities, list all branches and bookmarks, then report what you
 {
   "actions": [
     {
-      "type": "show_message",
+      "type": "notify_operator",
       "message": "Repository has 1 head: 1234567890abcdef1234567890abcdef12345678"
     },
     {
@@ -752,7 +752,7 @@ Query server capabilities, list all branches and bookmarks, then report what you
 {
   "actions": [
     {
-      "type": "show_message",
+      "type": "notify_operator",
       "message": "Found 2 branches: default, stable"
     },
     {
@@ -787,7 +787,7 @@ Query server capabilities, list all branches and bookmarks, then report what you
 {
   "actions": [
     {
-      "type": "show_message",
+      "type": "notify_operator",
       "message": "Found bookmarks: master (1234...), develop (abcd...)"
     },
     {
@@ -822,7 +822,7 @@ Query server capabilities, list all branches and bookmarks, then report what you
 {
   "actions": [
     {
-      "type": "show_message",
+      "type": "notify_operator",
       "message": "Received bundle: 4096 bytes (uncompressed). Repository successfully cloned."
     },
     {

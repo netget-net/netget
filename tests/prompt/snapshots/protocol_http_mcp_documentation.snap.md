@@ -22,7 +22,7 @@ Web server serving HTTP traffic
 - `protocol` (string, **required**) — `"http"`
 - `port` (number) — listen port. <normalized: resolved against this host's privilege and bound ports>
 - `host` (string) — bind address. Default `"127.0.0.1"`.
-- `event_handlers` (array) — **preferred**. Deterministic, in-process, no LLM call. Each entry is `{"event_pattern": "<event id>" | "*", "handler": {…}}`, matched in order, first match wins. `handler` is one of `{"type":"script","language":"python"|"javascript","code":"…"}`, `{"type":"static","actions":[…]}`, or `{"type":"llm","instruction":"…"}`. A script receives the event as JSON on stdin (fields under `data['event']`) and must print `{"actions":[…]}` to stdout. Use the event ids and field names listed below.
+- `event_handlers` (array) — **preferred**. Deterministic, in-process, no LLM call. Each entry is `{"event_pattern": "<event id>" | "*", "handler": {…}}`, matched in order, first match wins; an optional `"match": {"method": "GET", "path": "/a"}` narrows a rule to events whose fields equal those values (keys are field paths like `headers.host`). `handler` is one of `{"type":"script","language":"python"|"javascript","code":"…"}`, `{"type":"static","actions":[…]}`, or `{"type":"llm","instruction":"…"}`. A script receives the event as JSON on stdin (fields under `data['event']`) and must print `{"actions":[…]}` to stdout. Use the event ids and field names listed below.
 - `instruction` (string) — natural-language fallback. Costs one model call per event; use only when the response genuinely needs reasoning.
 - `startup_params` (object) — this protocol accepts `tls_enabled`, `cert_path`, `key_path`, `common_name`, `san_dns_names`, `validity_days`, `organization`, `organizational_unit`, `request_filter`, `filtered_response`, `default_response`. Schema below. Passing a key this protocol does not declare is an error.
 - `initial_memory` (string) — seeds the server's LLM memory before the first event.
@@ -30,6 +30,7 @@ Web server serving HTTP traffic
 - `scheduled_tasks` (array) — server-scoped recurring/delayed LLM tasks. Each entry: `{"task_id":"…","recurring":true,"interval_secs":60,"instruction":"…"}` (or `"recurring":false` with `"delay_secs"`). Removed when the server stops.
 - `history` (number) — earlier exchanges on the same connection the model is shown with each event; 0 turns it off. Omit for the default above.
 - `batching` (boolean) — deliver events that arrive during a call together afterwards. Omit for the default above.
+- `memoize_ttl_secs` (number) — memoise the model's answers: for this many seconds an event identical to one the model already answered (ignoring per-request ids such as a DNS `query_id`, which the replay echoes back) gets the same actions with no model call, recorded in the access log as answered by `cache`. Off unless set; 0 turns it off. Failures, answers that change memory or tasks, and credential-bearing events are never memoised. With `history` on, answers are kept per connection unless `memoize_across_connections` is true. To replay recorded traffic with no model at all, use the `export_rules` tool instead.
 
 ### Events (`http_request`) — valid values for `event_pattern`
 
@@ -107,7 +108,7 @@ These are the action objects a handler may return (inside `{"actions":[…]}` fo
 
 #### `send_http_response`
 
-Respond to the HTTP request that triggered this event. This is the ONLY action that produces an HTTP response - do NOT use generic 'send_data' or 'show_message' for that. ALWAYS emit exactly one send_http_response for every request — never return an empty action list, or the client gets a 500 error. HONOR THE CLIENT'S `Accept` REQUEST HEADER (in the event's headers.accept): return a `Content-Type` the client accepts, and a body in that format. If Accept is `text/html`, return HTML; `application/json`, return JSON; `text/plain`, return text. If the client asks ONLY for a type you cannot produce — most commonly an image (`Accept: image/*`, e.g. a browser fetching /favicon.ico) or any other binary type — respond `404` (or `204`) rather than sending text mislabeled as an image: the body is UTF-8 text only, so binary payloads (images, gzip, protobuf) cannot be produced at all. The response is sent complete, in one piece, as soon as you return; there is no way to stream or chunk it, to send it in parts, or to keep the request open.
+Respond to the HTTP request that triggered this event. This is the ONLY action that produces an HTTP response - do NOT use generic 'send_data' or 'notify_operator' for that. ALWAYS emit exactly one send_http_response for every request — never return an empty action list, or the client gets a 500 error. HONOR THE CLIENT'S `Accept` REQUEST HEADER (in the event's headers.accept): return a `Content-Type` the client accepts, and a body in that format. If Accept is `text/html`, return HTML; `application/json`, return JSON; `text/plain`, return text. If the client asks ONLY for a type you cannot produce — most commonly an image (`Accept: image/*`, e.g. a browser fetching /favicon.ico) or any other binary type — respond `404` (or `204`) rather than sending text mislabeled as an image: the body is UTF-8 text only, so binary payloads (images, gzip, protobuf) cannot be produced at all. The response is sent complete, in one piece, as soon as you return; there is no way to stream or chunk it, to send it in parts, or to keep the request open.
 
 Parameters:
 
@@ -167,6 +168,7 @@ HTTP/HTTPS client for making web requests (HTTP/1.1, HTTP/2)
 - `scheduled_tasks` (array) — client-scoped recurring/delayed LLM tasks, same shape as for `start_server`.
 - `history` (number) — earlier exchanges on the same connection the model is shown with each event; 0 turns it off. Omit for the default above.
 - `batching` (boolean) — deliver events that arrive during a call together afterwards. Omit for the default above.
+- `memoize_ttl_secs` (number) — memoise the model's answers: for this many seconds an event identical to one the model already answered (ignoring per-request ids such as a DNS `query_id`, which the replay echoes back) gets the same actions with no model call, recorded in the access log as answered by `cache`. Off unless set; 0 turns it off. Failures, answers that change memory or tasks, and credential-bearing events are never memoised. With `history` on, answers are kept per connection unless `memoize_across_connections` is true. To replay recorded traffic with no model at all, use the `export_rules` tool instead.
 
 ### Events (`http_connected`, `http_response_received`) — valid values for `event_pattern`
 
@@ -182,7 +184,7 @@ Example handler response:
 {
   "actions": [
     {
-      "type": "show_message",
+      "type": "notify_operator",
       "message": "Handled http_connected"
     }
   ]
@@ -201,7 +203,7 @@ Example handler response:
 {
   "actions": [
     {
-      "type": "show_message",
+      "type": "notify_operator",
       "message": "Handled http_response_received"
     }
   ]

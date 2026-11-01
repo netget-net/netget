@@ -376,7 +376,7 @@ Don't send any response to this query.
       "ttl": 300
     },
     {
-      "type": "show_message",
+      "type": "notify_operator",
       "message": "Resolved example.com to 93.184.216.34"
     }
   ]
@@ -582,7 +582,7 @@ silence costs it a full per-server timeout (5s in glibc) first.
 `call_llm` returns `Err` — backend down, overloaded, **or no usable response**". The third
 clause was false: `call_llm` returns **`Ok`** whenever the model produced a syntactically valid
 answer, and `protocol_results` is empty whenever that answer was made only of *common* actions
-(`show_message`) or of a DNS action `execute_action` refused — an invalid IP, an out-of-range
+(`notify_operator`) or of a DNS action `execute_action` refused — an invalid IP, an out-of-range
 `query_id`, a TXT string over 255 octets. The result loop then ended having written nothing and
 the `Err` arm was never reached, so the one case the sentence claimed to cover was the one that
 went silent. `send_servfail` is now the single exit for all three:

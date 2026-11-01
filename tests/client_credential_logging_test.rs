@@ -436,7 +436,7 @@ async fn native_tool_arguments_and_reasoning_are_private_on_ollama_and_openai() 
             .with_status_tx(tx.clone());
             let offered = vec![
                 action(true),
-                netget::llm::actions::common::show_message_action(),
+                netget::llm::actions::common::notify_operator_action(),
             ];
             let mut conversation = ConversationHandler::new(
                 "credential request".into(),
@@ -480,7 +480,7 @@ async fn malformed_plain_text_and_reflected_backend_errors_never_expose_credenti
                     .with_status_tx(tx.clone());
                     let offered = vec![
                         action(true),
-                        netget::llm::actions::common::show_message_action(),
+                        netget::llm::actions::common::notify_operator_action(),
                     ];
                     let mut conversation = ConversationHandler::new(
                         "credential request".into(),
@@ -606,7 +606,7 @@ async fn tool_and_action_diagnostics_hide_credentials_without_changing_display_a
             .with_status_tx(tx.clone());
             let offered = vec![
                 action(true),
-                netget::llm::actions::common::show_message_action(),
+                netget::llm::actions::common::notify_operator_action(),
                 netget::llm::actions::tools::read_file_action(),
             ];
             let mut conversation = ConversationHandler::new(
@@ -626,7 +626,8 @@ async fn tool_and_action_diagnostics_hide_credentials_without_changing_display_a
             assert!(
                 actions
                     .iter()
-                    .any(|a| a["type"] == "show_message" && a["message"] == PASSWORD),
+                    // Answered under the former name, executed under the current one.
+                    .any(|a| a["type"] == "notify_operator" && a["message"] == PASSWORD),
                 "intentional display action must preserve its original value"
             );
             assert_hidden(&observed.text(), &drain(&mut rx));

@@ -268,7 +268,8 @@ fn write_canonical(value: &Value, out: &mut String) {
 }
 
 /// Whether an answer may be replayed: it names at least one action, every action is the
-/// protocol's own or `show_message`, and nothing in it carries a credential. Memory writes,
+/// protocol's own or `notify_operator` (under either name), and nothing in it carries a
+/// credential. Memory writes (shared or per-connection),
 /// scheduled tasks, logs and instance management are side effects of *answering once*; a
 /// replay that repeated them would be doing more than answering.
 pub fn replayable_answer(actions: &[Value]) -> bool {
@@ -283,7 +284,7 @@ pub fn replayable_actions(actions: &[Value]) -> bool {
         let name = action.get("type").and_then(Value::as_str).unwrap_or("");
         !name.is_empty()
             && !name.starts_with(crate::llm::actions::executor::FAILED_ACTION_TYPE_PREFIX)
-            && (name == "show_message"
+            && (crate::llm::actions::common::is_notify_operator(name)
                 || !crate::events::handler::common_action_names().contains(&name))
     }) && !actions
         .iter()

@@ -290,7 +290,7 @@ the 10-second idle sweep evict live transfers out from under themselves — see 
       "data_hex": "48656c6c6f20544654502100"
     },
     {
-      "type": "show_message",
+      "type": "notify_operator",
       "message": "Sent file: 12 bytes"
     }
   ]
@@ -306,7 +306,7 @@ the 10-second idle sweep evict live transfers out from under themselves — see 
       "block_number": 0
     },
     {
-      "type": "show_message",
+      "type": "notify_operator",
       "message": "Ready to receive file"
     }
   ]
@@ -335,7 +335,7 @@ the 10-second idle sweep evict live transfers out from under themselves — see 
       "block_number": 5
     },
     {
-      "type": "show_message",
+      "type": "notify_operator",
       "message": "Received block 5 (512 bytes), total: 2560 bytes"
     }
   ]

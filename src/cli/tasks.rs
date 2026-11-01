@@ -279,7 +279,10 @@ async fn execute_single_task(
 /// - The instance's protocol actions run inside the instance — `send_to_peer` for a server
 ///   or connection, `send_to_client` for a client — so their bytes reach the wire. Executing
 ///   them anywhere else produces output nobody writes.
-/// - `show_message` goes to the status stream, named after the task.
+/// - `notify_operator` (or its former name `show_message`) goes to the status stream, named
+///   after the task.
+/// - A connection-scoped task's `set_connection_memory` / `append_connection_memory` write
+///   that connection's memory.
 /// - A global task's operator actions (open/close/update servers and clients, tasks,
 ///   databases) run through the same executor the operator's own commands use.
 /// - Memory and log actions run through `execute_actions` with the task's instance as
@@ -320,7 +323,7 @@ async fn run_task_actions(
             continue;
         }
 
-        if name == "show_message" {
+        if crate::llm::actions::common::is_notify_operator(&name) {
             let message = action
                 .get("message")
                 .and_then(|v| v.as_str())
@@ -346,8 +349,19 @@ async fn run_task_actions(
             continue;
         }
 
-        match crate::llm::execute_actions(vec![action.clone()], state, None, server_id, client_id)
-            .await
+        let connection_id = match &task.scope {
+            TaskScope::Connection(_, conn) => Some(*conn),
+            _ => None,
+        };
+        match crate::llm::actions::executor::execute_actions_on_connection(
+            vec![action.clone()],
+            state,
+            None,
+            server_id,
+            client_id,
+            connection_id,
+        )
+        .await
         {
             Ok(result) => {
                 for msg in result.messages {

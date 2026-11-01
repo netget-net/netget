@@ -436,7 +436,7 @@ async fn handle_s3_request_inner(
 
             // Scan for the first action that is actually an S3 response. This was a
             // `for` loop with an unconditional `return` inside it — so it examined
-            // only the first result and, if that was something like `show_message`,
+            // only the first result and, if that was something like `notify_operator`,
             // returned the empty-200 fallback and dropped the real object. It also
             // tripped clippy's `never_loop`, which is how it was found.
             if let Some(response) = execution_result
@@ -628,7 +628,7 @@ fn parse_s3_path(method: &Method, path: &str) -> (Option<String>, Option<String>
 /// Returns `None` when the action is not an S3 response action, so the caller can
 /// keep scanning. This used to return an empty `200 OK` for anything it did not
 /// recognise, and the caller returned unconditionally on the first result — so a
-/// model that emitted the documented `show_message` + `s3_object` pair had its
+/// model that emitted the documented `notify_operator` + `s3_object` pair had its
 /// object silently replaced by an empty body.
 fn process_s3_action_result(
     action_result: ActionResult,

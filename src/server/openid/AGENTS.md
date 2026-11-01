@@ -52,7 +52,7 @@ what makes the deliberate-misbehaviour scenarios above possible.
 `call_llm` builds the model's tool list from `event.event_type.actions`, **not** from
 `get_sync_actions()`. `OPENID_REQUEST_EVENT` had no `.with_actions(...)` at all, so the prompt
 said "No specific actions available for this event", the model got only
-`set_memory` / `show_message` / `append_to_log`, and every OIDC action it produced was
+`set_memory` / `notify_operator` / `append_to_log`, and every OIDC action it produced was
 rejected as unknown, retried twice, and failed — leaving the server to answer every request
 with its `500 server_error` no-answer fallback. In debug builds it also tripped the
 `debug_assert!` in `action_helper.rs`.

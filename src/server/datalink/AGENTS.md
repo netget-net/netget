@@ -110,7 +110,7 @@ Current implementation is **capture-only**:
 
 - LLM can observe packets (receive events)
 - LLM cannot inject packets (no send capability)
-- Actions limited to: `show_message`, `ignore_packet`
+- Actions limited to: `notify_operator`, `ignore_packet`
 
 **Why?**:
 
@@ -247,7 +247,7 @@ The LLM responds to DataLink events with actions:
 
 **Available Actions**:
 
-- `show_message` - Display analysis of packet (e.g., "ARP request from 192.168.1.1")
+- `notify_operator` - Display analysis of packet (e.g., "ARP request from 192.168.1.1")
 - `ignore_packet` - Don't process packet (no action)
 - Common actions: `update_instruction`, etc.
 
@@ -267,7 +267,7 @@ per captured packet (grep `decision=`):
 
 | tag | meaning |
 |---|---|
-| `decision=model_analysed` | the model answered with actions (a `show_message`, typically) |
+| `decision=model_analysed` | the model answered with actions (a `notify_operator`, typically) |
 | `decision=model_ignore` | the model explicitly chose `ignore_packet` — an analysis result |
 | `decision=model_silent` | the model was asked and returned no actions |
 | `decision=fail_closed_llm_error` | the LLM call errored; also logs `category=overloaded` vs `category=unavailable` from `WireFailure::classify`, and the full error |
@@ -284,7 +284,7 @@ observation from a broken backend.
 {
   "actions": [
     {
-      "type": "show_message",
+      "type": "notify_operator",
       "message": "ARP request: Who has 192.168.1.1? Tell 192.168.1.100"
     }
   ]
@@ -309,7 +309,7 @@ observation from a broken backend.
 {
   "actions": [
     {
-      "type": "show_message",
+      "type": "notify_operator",
       "message": "Unknown EtherType 0x88B5 - possibly proprietary protocol"
     }
   ]
@@ -334,7 +334,7 @@ DataLink has no connection concept:
 4. Create `datalink_packet_captured` event
 5. Spawn async task to call LLM
 6. LLM analyzes packet and returns actions
-7. Actions executed (show_message, ignore_packet, etc.)
+7. Actions executed (notify_operator, ignore_packet, etc.)
 8. Loop continues for next packet
 
 ### Concurrent Packet Processing, and the bound on it

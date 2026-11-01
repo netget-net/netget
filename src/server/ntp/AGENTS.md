@@ -192,7 +192,7 @@ Don't send any response.
       "stratum": 2
     },
     {
-      "type": "show_message",
+      "type": "notify_operator",
       "message": "Sent NTP time response as stratum 2 server"
     }
   ]

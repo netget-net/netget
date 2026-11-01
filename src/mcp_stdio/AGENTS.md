@@ -93,7 +93,7 @@ OllamaClient (3 backends)
 | `start_server` | Start protocol server | `server_startup::start_server_from_action()` |
 | `stop_server` | Stop server by ID (aborts its tasks + cancels its scheduled tasks) | `AppState::remove_server()` |
 | `list_servers` | List running servers | `AppState::get_all_servers()` |
-| `server_status` | Detailed server status, including each connection's id and whether it accepts `send_to_peer` | `AppState::get_server()` |
+| `server_status` | Detailed server status, including each connection's id, whether it accepts `send_to_peer`, and its connection memory (what the model keeps about that one peer) | `AppState::get_server()` |
 | `start_client` | Connect a protocol client to a remote server | `client_startup::start_client_from_action()` |
 | `stop_client` | Stop a client by ID (aborts its registered tasks) — see below | `AppState::remove_client()` |
 | `list_clients` | List clients | `AppState::get_all_clients()` |

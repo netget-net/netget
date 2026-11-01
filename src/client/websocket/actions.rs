@@ -627,7 +627,7 @@ pub static WEBSOCKET_CLIENT_CLOSED_EVENT: LazyLock<EventType> = LazyLock::new(||
     EventType::new(
         "websocket_client_closed",
         "The server closed the connection. Record what happened; nothing more can be sent.",
-        json!({"type": "show_message", "message": "server closed the WebSocket"}),
+        json!({"type": "notify_operator", "message": "server closed the WebSocket"}),
     )
     .with_parameters(vec![
         Parameter {
@@ -644,7 +644,7 @@ pub static WEBSOCKET_CLIENT_CLOSED_EVENT: LazyLock<EventType> = LazyLock::new(||
         },
     ])
     // Nothing can go on the wire after the closing handshake, so the common actions
-    // (show_message, set_memory, append_to_log) are the only honest vocabulary here.
+    // (notify_operator, set_memory, append_to_log) are the only honest vocabulary here.
     .with_no_actions()
     .with_log_template(LogTemplate::new().with_info("WS client closed code={code}"))
 });
