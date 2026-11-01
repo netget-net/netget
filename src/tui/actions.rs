@@ -206,7 +206,16 @@ pub fn open_intercept(app: &mut DashboardApp, key: UiKey, intercept_id: u64, sta
         ));
         return;
     };
-    let (_events, vocabulary) = crate::tui::modal::routing::vocabulary(key, &protocol, state);
+    // What the model would be offered for this event, and what `answer_intercept` accepts —
+    // the event's own answers, not the protocol's whole vocabulary.
+    let vocabulary = match key {
+        UiKey::Server(_) => {
+            crate::state::intercepts::server_answer_actions(&protocol, &view.event_type)
+        }
+        UiKey::Client(_) => {
+            crate::state::intercepts::client_answer_actions(&protocol, state, &view.event_type)
+        }
+    };
     app.modals.push(Modal::Intercept(Box::new(InterceptModel {
         id: view.id,
         owner: key,
@@ -650,11 +659,13 @@ async fn open_composer(
 fn open_wireshark(app: &mut DashboardApp, key: UiKey) {
     use crate::tui::wireshark::{CapturePlan, CaptureTarget, Platform, Role};
 
+    let recorded;
     let target = match key {
         UiKey::Server(id) => {
             let Some(row) = app.server_row(id) else {
                 return;
             };
+            recorded = row.capture.clone();
             let bound: Option<std::net::SocketAddr> =
                 row.local_addr.as_deref().and_then(|a| a.parse().ok());
             let param = |name: &str| -> Option<String> {
@@ -676,10 +687,12 @@ fn open_wireshark(app: &mut DashboardApp, key: UiKey) {
             let Some(row) = app.client_row(id) else {
                 return;
             };
+            recorded = row.capture.clone();
             CaptureTarget::client(&row.protocol, Some(&row.remote_addr))
         }
     };
-    let plan = CapturePlan::build(target, Platform::current());
+    let mut plan = CapturePlan::build(target, Platform::current());
+    plan.recorded = Some(recorded);
     app.modals.push(Modal::Wireshark {
         plan: Box::new(plan),
         scroll: 0,

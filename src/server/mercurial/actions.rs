@@ -4,6 +4,7 @@
 //! capabilities, heads, branch maps and bookmark namespaces; the server owns the wire
 //! framing and refuses to advertise anything it cannot honour.
 
+use super::changegroup;
 use crate::llm::actions::protocol_trait::{ActionResult, Protocol, Server};
 use crate::llm::actions::{ActionDefinition, Parameter};
 use crate::protocol::log_template::LogTemplate;
@@ -20,14 +21,21 @@ use tracing::warn;
 /// Wire commands this server actually implements.
 ///
 /// `capabilities` is answered by the LLM, but a capability the server cannot honour is worse
-/// than a missing one: advertising `unbundle` invites a push that gets a 403, and advertising
-/// `bundle2` makes the client negotiate a format this server never speaks. Anything outside
-/// this list is dropped with a warning.
-const SUPPORTED_CAPABILITIES: &[&str] = &["branchmap", "getbundle", "listkeys"];
+/// than a missing one: advertising `unbundle` or `pushkey` invites a push that gets a 403, and
+/// advertising `bundle2` makes the client negotiate a format this server never speaks. Anything
+/// outside this list is dropped with a warning.
+const SUPPORTED_CAPABILITIES: &[&str] = &[
+    "batch",
+    "branchmap",
+    "getbundle",
+    "known",
+    "listkeys",
+    "lookup",
+];
 
 /// Filter a model-supplied capability list down to what this server can honour.
 ///
-/// Always returns at least the supported set, so a client is never left with nothing to do.
+/// Always returns the whole supported set, so a client is never left with nothing to do.
 pub fn sanitize_capabilities(requested: &[String]) -> Vec<String> {
     for capability in requested {
         let base = capability.split('=').next().unwrap_or(capability);
@@ -44,23 +52,9 @@ pub fn sanitize_capabilities(requested: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// Build an empty bundle1 changegroup.
-///
-/// `HG10UN` (uncompressed) followed by three empty chunk groups: no changesets, no manifests,
-/// no filelogs. This is a well-formed bundle that a client accepts, and it produces an empty
-/// repository. Generating a *non-empty* changegroup would mean emitting revlog deltas and
-/// manifest entries, which is not implemented - see `CLAUDE.md`.
-pub fn empty_bundle(bundle_type: &str) -> Vec<u8> {
-    if bundle_type != "HG10UN" {
-        warn!(
-            "Mercurial: bundle_type {:?} is not supported, sending HG10UN (uncompressed)",
-            bundle_type
-        );
-    }
-    let mut bundle = b"HG10UN".to_vec();
-    // End-of-changesets, end-of-manifests, end-of-files.
-    bundle.extend_from_slice(&[0u8; 12]);
-    bundle
+/// The capabilities this server advertises, in the order it advertises them.
+pub fn supported_capabilities() -> Vec<String> {
+    sanitize_capabilities(&[])
 }
 
 /// Mercurial HTTP protocol implementation
@@ -87,6 +81,7 @@ impl Protocol for MercurialProtocol {
 
     fn get_sync_actions(&self) -> Vec<ActionDefinition> {
         vec![
+            hg_repository_action(),
             hg_capabilities_action(),
             hg_heads_action(),
             hg_branchmap_action(),
@@ -118,35 +113,41 @@ impl Protocol for MercurialProtocol {
         ProtocolMetadataV2::builder()
             .state(DevelopmentState::Experimental)
             .well_known_port(8000)
-            .implementation("Hand-rolled Mercurial HTTP wire protocol v1 on hyper")
-            .llm_control("Capabilities, heads, branch map, bookmark namespaces")
+            .implementation(
+                "Hand-rolled Mercurial HTTP wire protocol v1 on hyper; histories become revlog \
+                 nodes and a version-1 changegroup in changegroup.rs",
+            )
+            .llm_control(
+                "The whole repository history (hg_repository: commits with author, date, \
+                 message, parents, branch and text files), or per-command metadata \
+                 (capabilities, heads, branch map, listkeys)",
+            )
             .e2e_testing(
-                "REAL THIRD-PARTY CLIENT, for the handshake only: the real `hg` 7.2.4 in \
-                 tests/server/mercurial/real_client_test.rs. NOT #[ignore]d and NOT skip-gated \
-                 — it FAILS, naming `brew install mercurial`, when hg is absent. \
-                 `hg debugcapabilities` runs Mercurial's own wire-protocol handshake \
-                 (httppeer.performhandshake), which requires the reply to carry \
-                 `Content-Type: application/mercurial-*` before it will treat us as a \
-                 repository at all — something no reqwest assertion in this tree checks. The \
-                 test also asserts, through hg's parser, that sanitize_capabilities STRIPPED \
-                 the lookup/known/batch/unbundle/pushkey the model asked for, since advertising \
-                 any of them makes hg issue a request this server 404s. \
-                 THIS IS NOT A BETA CASE and the reason is the openvpn precedent, not a missing \
-                 test: the server implements only the FRONT of the protocol, so no real hg \
-                 command that does work can complete. MEASURED: `hg id` aborts with 'remote \
-                 repository does not support the lookup capability' — and lookup CANNOT be \
-                 advertised, because sanitize_capabilities substitutes a hardcoded three-entry \
-                 list. `hg clone` dies one step later in discovery, where \
-                 setdiscovery.findcommonheads issues `known`, which is not capability-gated so \
-                 there is no way to opt out of being asked, and which this server 404s. \
-                 Everything else here is reqwest, which the root CLAUDE.md rules out on its own.",
+                "REAL THIRD-PARTY CLIENT: the real `hg` 7.2.4 in \
+                 tests/server/mercurial/real_client_test.rs, NOT #[ignore]d and NOT skip-gated \
+                 - it FAILS, naming `brew install mercurial`, when hg is absent. A static \
+                 hg_repository handler serves five commits (a named branch, a merge, a removal, \
+                 an executable, an empty file, a file starting with filelog's metadata marker); \
+                 `hg clone` runs discovery (heads and known, batched) and getbundle, `hg verify` recomputes \
+                 every changelog, manifest and filelog node, and `hg cat`, `hg log` and \
+                 `hg manifest -v` assert the exact bytes and history described. `hg id <url>` \
+                 resolves tip through lookup, and `hg clone -r 1` + `hg pull` exercise lookup, \
+                 a non-empty known and a partial changegroup whose deltas start from revisions \
+                 the client already holds. A refused history reaches hg as `abort: remote \
+                 error:` with the reason kept in the log. `hg debugcapabilities` asserts the \
+                 handshake and that unbundle/pushkey/bundle2 are never advertised. \
+                 tests/server/mercurial/changegroup_test.rs covers every MAX_* bound. One \
+                 client only, no pcap oracle (Wireshark has no Mercurial dissector) and no \
+                 fuzz target.",
             )
             .notes(
-                "Read-only and metadata-only: getbundle always answers with an EMPTY \
-                 changegroup, so a clone produces an empty repository. No changegroup \
-                 generation, no bundle2, no batch/known/lookup commands, no push. A real `hg` \
-                 can complete the capabilities handshake and nothing beyond it: `hg id` needs \
-                 `lookup` and `hg clone` needs `known`, and neither is implemented.",
+                "Read-only: clone and pull work, push does not (unbundle/pushkey refused). \
+                 Bundle1 only - getbundle answers a zlib-compressed cg1 changegroup, which hg \
+                 7.x still pulls from a server that does not advertise bundle2. Every node is \
+                 derived from the described history on every request, so the model must \
+                 describe the same history each time. No bookmarks or tags (hg reads listkeys \
+                 only from a pushkey server), no stream clone, no \
+                 authentication, no SSH transport. Files are text only.",
             )
             .max_inbound_bytes(crate::server::mercurial::MAX_REQUEST_BODY_BYTES)
             .request_only("Mercurial is HTTP request/response; a server cannot send a peer anything unprompted")
@@ -156,11 +157,11 @@ impl Protocol for MercurialProtocol {
     }
 
     fn description(&self) -> &'static str {
-        "Mercurial HTTP server for serving virtual repositories"
+        "Mercurial HTTP server that serves a described commit history to hg clone and pull"
     }
 
     fn example_prompt(&self) -> &'static str {
-        "listen on port 8000 via mercurial. Serve repository 'hello-world' with one head on the default branch."
+        "listen on port 8000 via mercurial. Serve repository 'hello-world' with two commits: a README, then a change to it."
     }
 
     fn group_name(&self) -> &'static str {
@@ -170,13 +171,37 @@ impl Protocol for MercurialProtocol {
     fn get_startup_examples(&self) -> crate::llm::actions::StartupExamples {
         use crate::llm::actions::StartupExamples;
 
+        // Every mode answers with one history, so a real `hg clone` completes. The static and
+        // script modes answer every event (`*`) with the same `hg_repository`, which is what
+        // keeps the nodes the client sees in `heads` and the changesets `getbundle` sends in
+        // agreement.
+        let history = json!({
+            "type": "hg_repository",
+            "commits": [
+                {
+                    "id": "init",
+                    "author": "NetGet <netget@localhost>",
+                    "date": "2026-10-01T09:00:00+00:00",
+                    "message": "Initial commit",
+                    "files": [{"path": "README", "content": "Hello from NetGet\n"}]
+                },
+                {
+                    "id": "docs",
+                    "date": "2026-10-02T09:00:00+00:00",
+                    "message": "Expand the README",
+                    "files": [{"path": "README", "content": "Hello from NetGet\nServed over hg.\n"}]
+                }
+            ]
+        });
+        let script = format!("respond([{}])", history);
+
         StartupExamples::new(
             // LLM mode
             json!({
                 "type": "open_server",
                 "port": 8000,
                 "base_stack": "mercurial",
-                "instruction": "Mercurial HTTP server for repository 'hello-world'. Answer hg_heads with one 40-character hex node, hg_branchmap with a 'default' branch pointing at it, and hg_listkeys with no bookmarks."
+                "instruction": "Mercurial HTTP server for repository 'hello-world'. Answer every request with hg_repository describing the same two commits, dated 2026-10-01T09:00:00+00:00 and 2026-10-02T09:00:00+00:00: 'Initial commit' adding README with the text 'Hello from NetGet', then 'Expand the README' adding a second line 'Served over hg.'."
             }),
             // Script mode
             json!({
@@ -184,11 +209,11 @@ impl Protocol for MercurialProtocol {
                 "port": 8000,
                 "base_stack": "mercurial",
                 "event_handlers": [{
-                    "event_pattern": "hg_heads",
+                    "event_pattern": "*",
                     "handler": {
                         "type": "script",
                         "language": "python",
-                        "code": "respond([{'type': 'hg_heads', 'heads': ['1234567890abcdef1234567890abcdef12345678']}])"
+                        "code": script
                     }
                 }]
             }),
@@ -197,22 +222,10 @@ impl Protocol for MercurialProtocol {
                 "type": "open_server",
                 "port": 8000,
                 "base_stack": "mercurial",
-                "event_handlers": [
-                    {
-                        "event_pattern": "hg_capabilities",
-                        "handler": {
-                            "type": "static",
-                            "actions": [{"type": "hg_capabilities", "capabilities": ["branchmap", "getbundle", "listkeys"]}]
-                        }
-                    },
-                    {
-                        "event_pattern": "hg_heads",
-                        "handler": {
-                            "type": "static",
-                            "actions": [{"type": "hg_heads", "heads": ["1234567890abcdef1234567890abcdef12345678"]}]
-                        }
-                    }
-                ]
+                "event_handlers": [{
+                    "event_pattern": "*",
+                    "handler": {"type": "static", "actions": [history]}
+                }]
             }),
         )
     }
@@ -240,6 +253,21 @@ impl Server for MercurialProtocol {
             .ok_or_else(|| anyhow!("Missing action type"))?;
 
         match action_type {
+            "hg_repository" => {
+                // Only the shape is checked here. The history itself is built - and refused
+                // with an hg error naming nothing internal - by the command handler, which is
+                // the one place that knows which command it is answering.
+                let commits = action
+                    .get("commits")
+                    .ok_or_else(|| anyhow!("Missing commits"))?;
+                if !commits.is_array() {
+                    return Err(anyhow!("commits must be an array of commit objects"));
+                }
+                Ok(ActionResult::Custom {
+                    name: REPOSITORY_RESPONSE.to_string(),
+                    data: json!({ "commits": commits }),
+                })
+            }
             "hg_capabilities" => {
                 let capabilities = action
                     .get("capabilities")
@@ -280,12 +308,7 @@ impl Server for MercurialProtocol {
             }
             "hg_send_bundle" => Ok(ActionResult::Custom {
                 name: "hg_bundle_response".to_string(),
-                data: json!({
-                    "bundle_type": action
-                        .get("bundle_type")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("HG10UN")
-                }),
+                data: json!({}),
             }),
             "hg_error" => {
                 let message = action
@@ -408,26 +431,92 @@ fn hg_listkeys_action() -> ActionDefinition {
 fn hg_send_bundle_action() -> ActionDefinition {
     ActionDefinition {
         name: "hg_send_bundle".to_string(),
-        description:
-            "Answer a getbundle request. NOTE: this server can only send an EMPTY changegroup - \
-             a clone against it produces a repository with no changesets. There is no parameter \
-             for changeset data because generating a Mercurial changegroup (revlog deltas, \
-             manifests, filelogs) is not implemented."
-                .to_string(),
-        parameters: vec![Parameter {
-            name: "bundle_type".to_string(),
-            type_hint: "string".to_string(),
-            description: "Bundle format; only \"HG10UN\" (uncompressed) is supported".to_string(),
-            required: false,
-        }],
+        description: "Answer a getbundle request with an EMPTY changegroup: the client receives \
+             no changesets. To serve real history, answer with hg_repository instead."
+            .to_string(),
+        parameters: vec![],
         example: json!({
-            "type": "hg_send_bundle",
-            "bundle_type": "HG10UN"
+            "type": "hg_send_bundle"
         }),
         log_template: Some(
             LogTemplate::new()
-                .with_info("-> empty bundle ({bundle_type})")
-                .with_debug("Mercurial send bundle: type={bundle_type}"),
+                .with_info("-> empty changegroup")
+                .with_debug("Mercurial send empty changegroup"),
+        ),
+    }
+}
+
+/// `Custom` result name of an `hg_repository` action.
+pub const REPOSITORY_RESPONSE: &str = "hg_repository_response";
+
+/// The example history every `hg_repository` example shows: two commits on `default`.
+fn example_repository() -> Value {
+    json!({
+        "type": "hg_repository",
+        "commits": [
+            {
+                "id": "init",
+                "author": "Ada Lovelace <ada@example.com>",
+                "date": "2026-10-01T09:00:00+00:00",
+                "message": "Initial commit",
+                "files": [
+                    {"path": "README", "content": "Hello from NetGet\n"},
+                    {"path": "src/main.py", "content": "print('hello')\n"}
+                ]
+            },
+            {
+                "id": "docs",
+                "parents": ["init"],
+                "author": "Ada Lovelace <ada@example.com>",
+                "date": "2026-10-02T09:00:00+00:00",
+                "message": "Expand the README",
+                "files": [
+                    {"path": "README", "content": "Hello from NetGet\nServed over hg.\n"}
+                ]
+            }
+        ]
+    })
+}
+
+fn hg_repository_action() -> ActionDefinition {
+    ActionDefinition {
+        name: "hg_repository".to_string(),
+        description: format!(
+            "Describe the whole repository as a history of commits; the server derives every \
+             changeset id, manifest and file revision from it and answers any command \
+             (capabilities, heads, branchmap, known, lookup, getbundle) from it, so a real \
+             `hg clone` receives exactly these commits. You never write node ids: they are \
+             SHA-1 hashes the server computes. Describe the SAME history, with the same dates, \
+             every time - a different description is a different repository. List parents \
+             before children. Limits: {} commits, {} files+removals per commit, {} distinct \
+             paths, {} bytes per file, {} bytes of file content in total.",
+            changegroup::MAX_COMMITS,
+            changegroup::MAX_CHANGES_PER_COMMIT,
+            changegroup::MAX_PATHS,
+            changegroup::MAX_FILE_BYTES,
+            changegroup::MAX_TOTAL_CONTENT_BYTES
+        ),
+        parameters: vec![Parameter {
+            name: "commits".to_string(),
+            type_hint: "array".to_string(),
+            description: "Commits oldest first. Each is an object: `message` (required); \
+                 `id` (a label of your choice, used only to name parents); `parents` (array of \
+                 up to two earlier ids; omitted means the previous commit, [] means a root); \
+                 `author` (\"Name <email>\", default \"NetGet <netget@localhost>\"); `date` \
+                 (RFC 3339 such as \"2026-10-31T12:00:00+01:00\", or Unix seconds; default \
+                 1700000000); `branch` (default \"default\"); `files` (array of {\"path\", \
+                 \"content\" as text, optional \"executable\": true} - the files this commit \
+                 adds or changes); `removed` (array of paths this commit deletes). Each commit \
+                 starts from its first parent's files; a merge also keeps paths only its second \
+                 parent has. An empty array is an empty repository."
+                .to_string(),
+            required: true,
+        }],
+        example: example_repository(),
+        log_template: Some(
+            LogTemplate::new()
+                .with_info("-> repository of {commits_len} commits")
+                .with_debug("Mercurial repository: {commits_len} commits"),
         ),
     }
 }
@@ -497,11 +586,15 @@ pub static HG_CAPABILITIES_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         "Mercurial client asked which capabilities the server supports",
         json!({
             "type": "hg_capabilities",
-            "capabilities": ["branchmap", "getbundle", "listkeys"]
+            "capabilities": ["batch", "branchmap", "getbundle", "known", "listkeys", "lookup"]
         }),
     )
     .with_parameters(vec![repository_parameter(), client_ip_parameter()])
-    .with_actions(vec![hg_capabilities_action(), hg_error_action()])
+    .with_actions(vec![
+        hg_capabilities_action(),
+        hg_repository_action(),
+        hg_error_action(),
+    ])
     .with_alternative_example(error_alternative())
     .with_log_template(
         LogTemplate::new()
@@ -515,13 +608,14 @@ pub static HG_HEADS_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "hg_heads",
         "Mercurial client asked for the repository heads",
-        json!({
-            "type": "hg_heads",
-            "heads": ["1234567890abcdef1234567890abcdef12345678"]
-        }),
+        example_repository(),
     )
     .with_parameters(vec![repository_parameter(), client_ip_parameter()])
-    .with_actions(vec![hg_heads_action(), hg_error_action()])
+    .with_actions(vec![
+        hg_repository_action(),
+        hg_heads_action(),
+        hg_error_action(),
+    ])
     .with_alternative_example(error_alternative())
     .with_log_template(
         LogTemplate::new()
@@ -535,13 +629,14 @@ pub static HG_BRANCHMAP_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "hg_branchmap",
         "Mercurial client asked for the branch map",
-        json!({
-            "type": "hg_branchmap",
-            "branches": {"default": ["1234567890abcdef1234567890abcdef12345678"]}
-        }),
+        example_repository(),
     )
     .with_parameters(vec![repository_parameter(), client_ip_parameter()])
-    .with_actions(vec![hg_branchmap_action(), hg_error_action()])
+    .with_actions(vec![
+        hg_repository_action(),
+        hg_branchmap_action(),
+        hg_error_action(),
+    ])
     .with_alternative_example(error_alternative())
     .with_log_template(
         LogTemplate::new()
@@ -551,6 +646,9 @@ pub static HG_BRANCHMAP_EVENT: LazyLock<EventType> = LazyLock::new(|| {
 });
 
 /// `GET /?cmd=listkeys&namespace=...`
+///
+/// hg asks for listkeys only from a server advertising `pushkey`, which this one does not
+/// (push is refused), so a real client never raises it; it is answered for anything that asks.
 pub static HG_LISTKEYS_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "hg_listkeys",
@@ -570,7 +668,11 @@ pub static HG_LISTKEYS_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         },
         client_ip_parameter(),
     ])
-    .with_actions(vec![hg_listkeys_action(), hg_error_action()])
+    .with_actions(vec![
+        hg_listkeys_action(),
+        hg_repository_action(),
+        hg_error_action(),
+    ])
     .with_alternative_example(error_alternative())
     .with_log_template(
         LogTemplate::new()
@@ -579,16 +681,68 @@ pub static HG_LISTKEYS_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     )
 });
 
+/// `GET /?cmd=known&nodes=...` - discovery asking which of the client's changesets the server
+/// has. Raised only when the client sends at least one node: an empty question (every clone
+/// into an empty repository asks one) is answered with an empty answer without asking anyone.
+pub static HG_KNOWN_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    EventType::new(
+        "hg_known",
+        "Mercurial client asked which of its changesets this repository has (pull discovery)",
+        example_repository(),
+    )
+    .with_parameters(vec![
+        repository_parameter(),
+        Parameter {
+            name: "nodes".to_string(),
+            type_hint: "string".to_string(),
+            description: "Space-separated changeset ids the client holds".to_string(),
+            required: true,
+        },
+        client_ip_parameter(),
+    ])
+    .with_actions(vec![hg_repository_action(), hg_error_action()])
+    .with_alternative_example(error_alternative())
+    .with_log_template(
+        LogTemplate::new()
+            .with_info("{client_ip} hg known {repository}")
+            .with_debug("Mercurial known: repository={repository}, nodes={nodes}"),
+    )
+});
+
+/// `GET /?cmd=lookup&key=...` - resolve a revision symbol (`hg id <url>`, `hg clone -r`).
+pub static HG_LOOKUP_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    EventType::new(
+        "hg_lookup",
+        "Mercurial client asked to resolve a revision (tip, a branch, a revision number or \
+         id prefix)",
+        example_repository(),
+    )
+    .with_parameters(vec![
+        repository_parameter(),
+        Parameter {
+            name: "key".to_string(),
+            type_hint: "string".to_string(),
+            description: "The revision symbol to resolve".to_string(),
+            required: true,
+        },
+        client_ip_parameter(),
+    ])
+    .with_actions(vec![hg_repository_action(), hg_error_action()])
+    .with_alternative_example(error_alternative())
+    .with_log_template(
+        LogTemplate::new()
+            .with_info("{client_ip} hg lookup {key}")
+            .with_debug("Mercurial lookup: repository={repository}, key={key}"),
+    )
+});
+
 /// `GET|POST /?cmd=getbundle`
 pub static HG_GETBUNDLE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "hg_getbundle",
-        "Mercurial client asked for changesets (clone or pull). Only an empty changegroup can \
-         be sent.",
-        json!({
-            "type": "hg_send_bundle",
-            "bundle_type": "HG10UN"
-        }),
+        "Mercurial client asked for changesets (clone or pull). Answer with hg_repository: the \
+         server sends every changeset the client asked for and does not already have.",
+        example_repository(),
     )
     .with_parameters(vec![
         repository_parameter(),
@@ -607,7 +761,11 @@ pub static HG_GETBUNDLE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         },
         client_ip_parameter(),
     ])
-    .with_actions(vec![hg_send_bundle_action(), hg_error_action()])
+    .with_actions(vec![
+        hg_repository_action(),
+        hg_send_bundle_action(),
+        hg_error_action(),
+    ])
     .with_alternative_example(error_alternative())
     .with_log_template(
         LogTemplate::new()
@@ -622,6 +780,8 @@ pub fn get_mercurial_event_types() -> Vec<EventType> {
         HG_HEADS_EVENT.clone(),
         HG_BRANCHMAP_EVENT.clone(),
         HG_LISTKEYS_EVENT.clone(),
+        HG_KNOWN_EVENT.clone(),
+        HG_LOOKUP_EVENT.clone(),
         HG_GETBUNDLE_EVENT.clone(),
     ]
 }

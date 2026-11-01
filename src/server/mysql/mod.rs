@@ -337,22 +337,29 @@ impl MysqlServer {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let declared = trip.declared_bytes();
-        let sequence = trip.reply_sequence();
 
-        Log::new(Some(status_tx)).warn(format!(
-            "MySQL connection {connection_id} decision=fail_closed_packet_too_large: {remote_addr} \
-             declared a {declared}-byte packet, limit is {} bytes; answering 1153 \
-             ER_NET_PACKET_TOO_LARGE",
-            packet_limit::MAX_PACKET_BYTES
-        ));
+        match trip.refusal() {
+            packet_limit::Refusal::TooLarge => Log::new(Some(status_tx)).warn(format!(
+                "MySQL connection {connection_id} decision=fail_closed_packet_too_large: \
+                 {remote_addr} declared a {declared}-byte packet, limit is {} bytes; answering \
+                 1153 ER_NET_PACKET_TOO_LARGE",
+                packet_limit::MAX_PACKET_BYTES
+            )),
+            packet_limit::Refusal::OutOfOrder => Log::new(Some(status_tx)).warn(format!(
+                "MySQL connection {connection_id} decision=fail_closed_packets_out_of_order: \
+                 {remote_addr} sent a packet with sequence id {} that opensrv-mysql would panic \
+                 on; answering 1156 ER_NET_PACKETS_OUT_OF_ORDER",
+                trip.reply_sequence().wrapping_sub(1)
+            )),
+        }
 
-        let err = packet_limit::packet_too_large_err(sequence);
+        let err = trip.refusal_packet();
         if let Err(e) = writer.write_all(&err).await {
-            debug!("MySQL {connection_id}: could not write the 1153 refusal: {e}");
+            debug!("MySQL {connection_id}: could not write the refusal: {e}");
             return;
         }
         if let Err(e) = writer.flush().await {
-            debug!("MySQL {connection_id}: could not flush the 1153 refusal: {e}");
+            debug!("MySQL {connection_id}: could not flush the refusal: {e}");
         }
 
         let mut drained = 0usize;

@@ -359,7 +359,11 @@ impl UsbMscServer {
         // The attach event hangs off `import_rx`, not off the accept: see the loop below.
         let guard_status_tx = status_tx.clone();
         let (import_tx, mut import_rx) = tokio::sync::oneshot::channel();
-        let mut usbip_task = tokio::spawn(async move {
+        // Held in `AbortOnDrop`: this connection task is what `stop_server` aborts, and the abort
+        // drops the handle the `select!` below awaits. A dropped `JoinHandle` detaches its task
+        // rather than ending it, so without the guard the USB/IP session outlived the stop,
+        // still holding the peer's socket.
+        let mut usbip_task = crate::utils::task_guard::AbortOnDrop(tokio::spawn(async move {
             match crate::server::usb::guard::run_guarded_usbip(
                 stream,
                 usbip_server,
@@ -377,7 +381,7 @@ impl UsbMscServer {
                     connection_id, e
                 ),
             }
-        });
+        }));
 
         // Serve the host until the USB/IP session ends. This loop is the whole reason
         // usb_msc_read / usb_msc_write / usb_msc_detached can fire: the previous version
@@ -445,7 +449,7 @@ impl UsbMscServer {
                         .await;
                     }
                 }
-                _ = &mut usbip_task => break,
+                _ = &mut usbip_task.0 => break,
             }
         }
 

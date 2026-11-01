@@ -375,6 +375,7 @@ pub async fn start_server_from_action(
     scheduled_tasks: Option<Vec<crate::llm::actions::common::ServerTaskDefinition>>,
     feedback_instructions: Option<String>,
     conversation: crate::protocol::metadata::ConversationOverrides,
+    capture: crate::capture::CaptureRequest,
     status_tx: mpsc::UnboundedSender<String>,
 ) -> Result<ServerId> {
     use crate::state::server::ServerStatus;
@@ -648,7 +649,12 @@ pub async fn start_server_from_action(
     }
 
     let parsed_handlers = event_handlers
-        .map(crate::events::handler::EventHandler::parse_event_handlers)
+        .map(|handlers| {
+            crate::events::handler::EventHandler::parse_event_handlers_for(
+                handlers,
+                crate::events::handler::HandlerOwner::Server(protocol_impl.protocol_name()),
+            )
+        })
         .transpose()
         .map_err(|error| anyhow::anyhow!("Invalid event handler configuration: {}", error))?;
 
@@ -686,6 +692,22 @@ pub async fn start_server_from_action(
 
     let server_id = state.add_server(server).await;
     let mut startup_guard = super::startup_guard::StartupGuard::server(state, server_id);
+    // Packet capture starts before the protocol binds, so its first peer is in the file. A
+    // capture that cannot start fails the start; the guard removes the instance.
+    if let Some(path) = state
+        .capture
+        .begin(
+            crate::capture::CaptureOwner::Server(server_id),
+            protocol,
+            &capture,
+        )
+        .await
+        .inspect_err(|e| {
+            let _ = status_tx.send(format!("[ERROR] {e}"));
+        })?
+    {
+        let _ = status_tx.send(format!("[INFO] Capturing to {}", path.display()));
+    }
 
     // Set initial memory if provided
     if let Some(mem) = initial_memory {

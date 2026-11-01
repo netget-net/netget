@@ -13,6 +13,7 @@ extern crate netget_crossterm_wasm as crossterm;
 #[cfg(target_arch = "wasm32")]
 extern crate netget_tokio_wasm as tokio;
 
+pub mod capture;
 pub mod cli;
 pub mod client;
 pub mod display;

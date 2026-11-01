@@ -27,6 +27,13 @@ fn an_event_names_both_decisions_as_literal_actions() {
         hint.contains("already checked its id and signature"),
         "{hint}"
     );
+    // A refusal's words are the instructions' own: told to say "adverts are not allowed",
+    // the model wrote "blocked: advertisement" and the like in every run until the hint said
+    // where the reason comes from.
+    assert!(
+        hint.contains("the message your instructions give for this refusal, in their exact words"),
+        "{hint}"
+    );
 }
 
 #[test]

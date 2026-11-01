@@ -80,6 +80,7 @@ async fn owned_forms_and_direct_startups_refuse_deep_json_before_earlier_errors(
                 None,
                 None,
                 Default::default(),
+                netget::capture::CaptureRequest::default(),
                 tx,
             )
             .await
@@ -97,6 +98,7 @@ async fn owned_forms_and_direct_startups_refuse_deep_json_before_earlier_errors(
                 None,
                 None,
                 Default::default(),
+                netget::capture::CaptureRequest::default(),
                 llm(),
                 None,
             )

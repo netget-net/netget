@@ -51,7 +51,7 @@ default = [
 libpcap = ["dep:pcap"]  # arp, datalink, isis, lldp, cdp, stp, eapol
 bluetooth = ["dep:btleplug", "dep:ble-peripheral-rust", "dep:bluer"]  # bluetooth-ble* (CoreBluetooth on macOS; BlueZ over D-Bus on Linux)
 pcsc = ["dep:pcsc"]  # NFC client (PC/SC; pcsclite on Linux)
-libusb = ["dep:usbip", "dep:serde_cbor", "dep:memmap2"]  # usb-* virtual devices over USB/IP
+libusb = ["dep:usbip", "dep:memmap2"]  # usb-* virtual devices over USB/IP
 libsmbclient = ["dep:pavao"]  # SMB client
 
 # Optional capabilities.
@@ -298,6 +298,7 @@ socket2 = { version = "0.5", features = ["all"] }  # Socket options (SO_REUSEADD
 fs2 = "0.4"  # Cross-process lock for non-destructive legacy settings migration
 syntect = "5.3"
 encoding_rs = "0.8"  # AFP long names and volume names are MacRoman
+serde_cbor = "0.11"  # CTAP2 (usb-fido2); decoded only through utils::cbor_depth::decode_bounded, which fuzz and tests reach without libusb
 unicode-normalization = "0.1"  # AFP 3 sends UTF-8 names decomposed (NFD)
 
 # ---------------------------------------------------------------------------------------------
@@ -575,7 +576,6 @@ pcsc = { version = "2.9", optional = true }
 usbip = { version = "0.9", optional = true }
 # Memory-mapped file I/O for USB MSC disk images
 memmap2 = { version = "0.9", optional = true }
-serde_cbor = { version = "0.11", optional = true }  # CBOR encoding for CTAP2
 
 [dev-dependencies]
 # For async tests
@@ -584,6 +584,9 @@ tokio-test = "0.4"
 ctor = "0.2"
 # For creating temporary mock config files
 tempfile = "3.13"
+# The test-fixture helper users depend on; tests/fixture_helpers_test.rs drives it against
+# this tree's own binary.
+netget-fixture = { path = "crates/netget-fixture" }
 
 # Terminal snapshot parsing
 vt100 = "0.15"
@@ -694,3 +697,12 @@ panic = "abort"
 # browser build is affected, so the published crate uses upstream hyper. NetGet's security
 # patches to other crates live in published forks (github.com/netget-net), not here.
 hyper = { path = "vendor/hyper" }
+# pgwire 0.35.0 panics decoding a malformed frontend message (a Query with no NUL, a Bind
+# whose parameter length runs past the message, a Close with no body, ...): its framer
+# hands each body decoder the whole receive buffer and the decoders read with panicking
+# getters. This copy isolates each message, reads with checked getters, and answers a
+# malformed one FATAL 08P01 (vendor/pgwire/README.md). Like hyper above, a [patch] does not
+# reach the crate as published to crates.io; there the panic is still contained to the one
+# connection by src/server/postgresql/mod.rs. tests/vendored_pgwire_patch_test.rs fails when
+# Cargo.lock stops building this copy.
+pgwire = { path = "vendor/pgwire" }

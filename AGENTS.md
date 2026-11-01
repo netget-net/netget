@@ -13,7 +13,14 @@ started until all have stopped or Ctrl+C, keeps a clients-only run alive while a
 connected, and exits **non-zero** if anything it was asked to start failed. `--run-for <SECS>`
 and `--exit-after-events <N>` end it with status 0; the event count is the access log's
 monotonic total (`AppState::access_log_total`), so it counts every handled event on every
-instance whoever answered it. `tests/non_interactive_run_limits_test.rs` drives the binary.
+instance whoever answered it. `--ready-file <PATH>` writes a JSON report of every server's bound
+address (and every client's target and status) once all of them have started — atomically, and
+after removing any stale file at the path, so its appearance is the readiness signal for a
+process started on port 0; a run that fails to start never writes it, and MCP, `--simple` and
+the TUI refuse the flag. `tests/non_interactive_run_limits_test.rs` drives the binary. The test
+fixture helpers built on it are `crates/netget-fixture` (Rust, depends only on `serde_json`) and
+`sdk/python/netget_fixture` (stdlib, plus a pytest plugin); `tests/fixture_helpers_test.rs`
+runs both against this tree's binary and needs `python3` with pytest. Neither is published.
 
 **The interactive TUI is the full-screen ratatui dashboard (`src/tui/`)**, the only
 interactive UI — the rolling-terminal TUI that used to sit behind `--legacy-tui` was removed
@@ -93,13 +100,32 @@ it. The pty snapshots in `tests/terminal_snapshot/` prove the real binary paints
 **`[ wireshark ]`** (`w`, a button on every card, and a `[ View in Wireshark ]` button on the
 create/edit form so the capture can be running *before* the instance starts) opens a modal with a paste-ready
 `wireshark -k …` / `tshark -l …` line, plus the pieces separately: interface, BPF capture filter,
-display filter and a `-d` decode-as clause. NetGet writes no pcap; `src/tui/wireshark.rs` is a
+display filter and a `-d` decode-as clause — and, when NetGet is writing the instance's own pcap
+(below), a `wireshark -r <file>` line first. `src/tui/wireshark.rs` is a
 pure table of NetGet protocol → transport + Wireshark dissector name, and every name in it was
 checked against `tshark -d` / `-Y`. Three traps it encodes: `isis` is an Ethernet-only BPF keyword
 and is rejected on loopback; `drda` (db2) is heuristic-only and not in the `tcp.port` decode-as
 table; `ipp` is reached through `http`. A protocol missing from the table is treated as plain TCP
 (correct for everything in the registry that is not UDP, raw or off-network), and the off-network
 families (USB, BLE, NFC, pty/pipe/stdio) get an explanation of where to look instead of a command.
+
+**Packet capture: NetGet writes the pcap itself** (`src/capture/`), with no libpcap and no
+privilege, because it owns the sockets. `capture` on an instance (`ServerForm`/`ClientForm`, MCP
+`start_*`/`update_*`, `.netget` files) is `true` (`netget-<server|client>-<id>-<protocol>.pcap` in
+the capture directory), a file name, or `false`; `--capture <dir>` records every instance the
+process starts. Hot-applied: a connection already open is opened in the file (SYN, SYN-ACK, ACK) at
+its next byte. The file is classic pcap, `LINKTYPE_RAW`, with IP/TCP/UDP headers synthesised from
+the real 4-tuple and sequence numbers that advance by exactly the bytes carried, so "Follow TCP
+Stream" reassembles it; a FIN per side closes it. Writes go through a bounded queue to a writer
+thread (a full queue drops and counts, never blocks), and a file rotates to `<path>.1` at 256 MiB.
+There is **no central seam carrying payloads** (`update_connection_stats` sees counts only), so a
+protocol adopts it: wrap the stream in `capture::tcp::CapturedStream` before splitting it, or call a
+`capture::udp::UdpTap` after each `recv_from`/`send_to`. Adopted today: servers `tcp`, `telnet`,
+`http`, `redis`, `dns` (UDP and TCP), `udp`; client `tcp` (`capture::adopted` is the list; any
+other protocol's file stays empty and `server_status` says so). Two guards: an existing file that
+is not a pcap is never overwritten, and a `capture` read from an *action* (the model's
+`open_server`, a `.netget` file, a replayed session) may only name a file inside the capture
+directory. `tests/capture_pcap_test.rs` reads NetGet's files back with `tshark`.
 
 ## Protocol inventory — always query, never trust a list
 
@@ -2189,6 +2215,15 @@ Read before assuming a subsystem is sound:
   `Overflow` error. **Check the crate, not its reputation**: an official, widely used decoder
   had the same hole as the hand-written ones.
 
+  **DNS was the ninth (October 2026), and the recursion was not on nesting at all.**
+  `hickory-proto` 0.24 follows a *name-compression pointer* by recursing, so a chain of pointers
+  each aiming two bytes back — hidden in a NULL record's RDATA — is a frame per two bytes: a
+  debug build dies at 1 702 hops, 3.4 KB in one UDP datagram, in five servers at once (release
+  frames are small enough that the longest chain the format allows still fits a 2 MiB worker).
+  `src/utils/dns_screen.rs` bounds the chain before every decode. **Anything a decoder
+  *follows* — a pointer, an offset, a reference — is depth too**, whether or not the format
+  looks nested. (`docs/planning/IMPROVEMENTS.md` item 48 has the rest of that audit.)
+
 - **Bound the *declared* size, not the remainder.** NATS's `HPUB` limit was applied to
   `total − header`, leaving `header` unbounded — and `header == total` passes every check with
   a zero-length body. `HPUB x 4000000000 4000000000` is thirty bytes on the wire and buffers
@@ -2407,11 +2442,17 @@ Read before assuming a subsystem is sound:
   harmless, and `wait_for_more` still reads more clearly where the protocol declares it.
 - **`ServerForm::create` substitutes a default instruction** (`"You are a {protocol} server.
   Handle requests appropriately."`) whenever `instruction` is `None` — see
-  `src/cli/management.rs`. Any non-empty instruction makes `operator_wants_dynamic` true, so a
+  `src/state/server.rs::default_server_instruction`; MCP `start_server` does the same. Any
+  non-empty instruction makes `operator_wants_dynamic` true, so a
   test built with `..Default::default()` **does consult the model**, whatever its comments claim.
   Two `peer_inject` tests documented "Zero LLM calls" while doing the opposite, and passed only
   because the old fail-open swallowed the resulting error. Pass `instruction: Some(String::new())`
-  when you want a genuinely model-free server.
+  when you want a genuinely model-free server. The substitution applies to a handlers-only
+  server too, deliberately: the dashboard creates every instance with `*` → manual and no
+  instruction, and switching its driver to LLM must still reach the model on the 17 gated
+  protocols. What changed is that it is never *shown* as the operator's:
+  `ServerInstance::instruction_is_default` makes `list_servers` / `server_status` say
+  "none given — NetGet's default applies", and the dashboard card and edit form show none.
 - **Answering the peer is not a licence to tell it anything.** Fixing the silence above
   introduced the opposite defect across ~25 protocols at once: each interpolated the error into
   the reply, so a plain `telnet` session printed `[netget] cannot answer right now: ✗  LLM
@@ -2487,10 +2528,16 @@ Read before assuming a subsystem is sound:
   What is still detached, and why: the per-connection **writer** tasks (`amqp`, `mqtt`,
   `websocket`, `webrtc`, `webrtc_signaling`, `bgp`) are `.await`ed on the exit path so they need
   a `JoinHandle`, and they already end when the registered reader is aborted and drops their
-  channel; `bluetooth_ble`'s radio dispatcher is process-wide by design; and the USB/IP session
-  tasks and `postgresql`'s pgwire task are awaited inside a `select!`, so they are children of a
-  registered connection task that **aborting does not reach** — that gap is real and stated
-  rather than quietly closed.
+  channel; and `bluetooth_ble`'s radio dispatcher is process-wide by design.
+
+  **A task the registered task awaits is not ended by aborting it.** The abort drops the
+  awaiting future, which drops the child's `JoinHandle`, and dropping a `JoinHandle` *detaches*
+  the task. `postgresql` (pgwire's `process_socket`, spawned separately so its panics are
+  contained, plus its idle watchdog) and the six USB/IP servers (the session task their
+  `select!` awaits) had exactly that shape, so a stopped server's sessions kept their sockets.
+  Each such child is now held in `utils::task_guard::AbortOnDrop` and awaited as `guard.0`.
+  `tests/stop_server_stops_connections_test.rs` asserts it from the peer's side, for PostgreSQL
+  after a completed handshake and (with `libusb`) for every USB server.
 - `AppState` is one global `RwLock` over everything — a throughput ceiling, not a deadlock.
 - Keep the repository root focused on `README.md`, `AGENTS.md`, the license and build
   entry points. User documentation is indexed in `docs/README.md`: installation guides in

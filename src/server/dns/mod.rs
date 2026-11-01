@@ -287,6 +287,8 @@ impl DnsServer {
         // advertise 1232-4096 byte buffers. A short buffer would silently truncate those
         // datagrams, and the truncated bytes would then fail to parse as DNS.
         let mut buffer = vec![0u8; 4096];
+        let tap =
+            crate::capture::udp::UdpTap::server(&shared.app_state, shared.server_id, local_addr);
         loop {
             let (n, peer_addr) = match socket.recv_from(&mut buffer).await {
                 Ok(r) => r,
@@ -296,6 +298,7 @@ impl DnsServer {
                 }
             };
             let data = buffer[..n].to_vec();
+            tap.inbound(peer_addr, &data);
             let connection_id =
                 Self::register_connection(&shared, peer_addr, local_addr, n as u64).await;
             {
@@ -305,6 +308,7 @@ impl DnsServer {
             }
             let task_shared = shared.clone();
             let task_socket = socket.clone();
+            let reply_tap = tap.clone();
             // Tracked, not detached: stop_server must abort this task too.
             shared
                 .app_state
@@ -319,7 +323,9 @@ impl DnsServer {
                     .await;
                     // UDP carries one message; a transfer never reaches here as more.
                     if let Some(reply) = replies.first() {
-                        let _ = task_socket.send_to(reply, peer_addr).await;
+                        if task_socket.send_to(reply, peer_addr).await.is_ok() {
+                            reply_tap.outbound(peer_addr, reply);
+                        }
                         Self::count_sent(&task_shared, connection_id, reply.len()).await;
                     }
                 })
@@ -373,6 +379,11 @@ impl DnsServer {
                 .spawn_server_task(shared.server_id, async move {
                     let _permit = permit;
                     let _source_slot = source_slot;
+                    let stream = crate::capture::tcp::CapturedStream::server(
+                        &task_shared.app_state,
+                        task_shared.server_id,
+                        stream,
+                    );
                     Self::tcp_connection(stream, peer_addr, connection_id, task_shared, idle).await;
                 })
                 .await;
@@ -383,7 +394,7 @@ impl DnsServer {
     /// are answered in order. The connection closes when the peer does, after `idle` with no
     /// query, or on a query this server cannot read.
     async fn tcp_connection(
-        mut stream: TcpStream,
+        mut stream: crate::capture::tcp::CapturedStream<TcpStream>,
         peer_addr: SocketAddr,
         connection_id: ConnectionId,
         shared: Arc<Shared>,
@@ -429,7 +440,7 @@ impl DnsServer {
             ));
             let replies =
                 Self::answer(&shared, &data, peer_addr, connection_id, Transport::Tcp).await;
-            if replies.is_empty() && DnsMessage::from_vec(&data).is_err() {
+            if replies.is_empty() && crate::utils::dns_screen::decode_dns_message(&data).is_err() {
                 break; // unreadable: nothing on this stream can be trusted to be framed
             }
             for reply in &replies {
@@ -481,7 +492,7 @@ impl DnsServer {
         transport: Transport,
     ) -> Vec<Vec<u8>> {
         let log = Log::new(Some(&shared.status_tx));
-        let query = match DnsMessage::from_vec(data) {
+        let query = match crate::utils::dns_screen::decode_dns_message(data) {
             Ok(q) => q,
             Err(e) => {
                 log.warn(format!("Failed to parse DNS query: {e}"));
@@ -603,7 +614,7 @@ impl DnsServer {
             match result {
                 ActionResult::NoAction => model_chose_silence = true,
                 ActionResult::Output(bytes) => {
-                    let Ok(message) = DnsMessage::from_vec(&bytes) else {
+                    let Ok(message) = crate::utils::dns_screen::decode_dns_message(&bytes) else {
                         // Only `send_dns_response`'s hand-assembled bytes can fail here. Bytes
                         // that are not a DNS message never go out: unparsed, they would skip
                         // truncation and could be any length at all.
@@ -699,7 +710,7 @@ impl DnsServer {
                 }
                 ActionResult::Output(bytes) => {
                     // A refusal (or any single-message answer) to the transfer.
-                    let Ok(message) = DnsMessage::from_vec(bytes) else {
+                    let Ok(message) = crate::utils::dns_screen::decode_dns_message(bytes) else {
                         log.error(format!(
                             "DNS answer to the {kind} of {zone} from {peer_addr} is not a DNS \
                              message ({} bytes); answering SERVFAIL \
