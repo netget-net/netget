@@ -47,17 +47,27 @@ impl fmt::Display for StartupParamError {
                 allowed,
                 accessed_by_protocol,
             } => {
+                // The caller-supplied case is what an MCP user or the model reads, inside
+                // "Invalid startup_params for <protocol>: …", so it speaks about their input.
+                // The other case is a defect in the protocol itself and says so.
+                let accepted = if allowed.is_empty() {
+                    "none — this protocol takes no startup parameters".to_string()
+                } else {
+                    allowed.join(", ")
+                };
                 if *accessed_by_protocol {
                     write!(
                         f,
-                        "Attempted to access undeclared startup parameter '{}'. Protocol must declare this parameter in get_startup_parameters(). Allowed parameters: {:?}",
-                        key, allowed
+                        "internal error: the protocol read startup parameter '{}', which it \
+                         does not declare (a NetGet bug — it must be added to the protocol's \
+                         get_startup_parameters()). Declared parameters: {}",
+                        key, accepted
                     )
                 } else {
                     write!(
                         f,
-                        "Undeclared startup parameter '{}'. Protocol must declare this parameter in get_startup_parameters(). Allowed parameters: {:?}",
-                        key, allowed
+                        "unknown startup parameter '{}'. Accepted parameters: {}",
+                        key, accepted
                     )
                 }
             }

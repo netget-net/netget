@@ -2394,11 +2394,17 @@ Read before assuming a subsystem is sound:
   harmless, and `wait_for_more` still reads more clearly where the protocol declares it.
 - **`ServerForm::create` substitutes a default instruction** (`"You are a {protocol} server.
   Handle requests appropriately."`) whenever `instruction` is `None` — see
-  `src/cli/management.rs`. Any non-empty instruction makes `operator_wants_dynamic` true, so a
+  `src/state/server.rs::default_server_instruction`; MCP `start_server` does the same. Any
+  non-empty instruction makes `operator_wants_dynamic` true, so a
   test built with `..Default::default()` **does consult the model**, whatever its comments claim.
   Two `peer_inject` tests documented "Zero LLM calls" while doing the opposite, and passed only
   because the old fail-open swallowed the resulting error. Pass `instruction: Some(String::new())`
-  when you want a genuinely model-free server.
+  when you want a genuinely model-free server. The substitution applies to a handlers-only
+  server too, deliberately: the dashboard creates every instance with `*` → manual and no
+  instruction, and switching its driver to LLM must still reach the model on the 17 gated
+  protocols. What changed is that it is never *shown* as the operator's:
+  `ServerInstance::instruction_is_default` makes `list_servers` / `server_status` say
+  "none given — NetGet's default applies", and the dashboard card and edit form show none.
 - **Answering the peer is not a licence to tell it anything.** Fixing the silence above
   introduced the opposite defect across ~25 protocols at once: each interpolated the error into
   the reply, so a plain `telnet` session printed `[netget] cannot answer right now: ✗  LLM

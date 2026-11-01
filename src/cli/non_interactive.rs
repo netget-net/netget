@@ -258,7 +258,7 @@ pub async fn run_non_interactive(
     let _status_forwarder = tokio::spawn(async move {
         while let Some(msg) = status_rx.recv().await {
             // Skip internal control messages
-            if !msg.starts_with("__") {
+            if !crate::utils::is_status_control_line(&msg) {
                 let clean_msg = msg
                     .strip_prefix("[INFO] ")
                     .unwrap_or(&msg)
@@ -485,7 +485,7 @@ pub(crate) async fn run_server(
 
                 // Process status messages from handler (drain remaining)
                 while let Ok(msg) = status_rx.try_recv() {
-                    if !msg.starts_with("__") {
+                    if !crate::utils::is_status_control_line(&msg) {
                         emit_status_line(&format!("[STATUS] {msg}"), to_stderr);
                     }
                 }
@@ -573,7 +573,7 @@ pub async fn run_with_actions(
     // Spawn background task to print status messages in real-time
     let status_printer = tokio::spawn(async move {
         while let Some(msg) = status_rx.recv().await {
-            if !msg.starts_with("__") {
+            if !crate::utils::is_status_control_line(&msg) {
                 // Print status messages immediately for real-time output
                 emit_status_line(&msg, to_stderr);
             }

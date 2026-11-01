@@ -598,6 +598,89 @@ impl AppStateInner {
         }
     }
 
+    /// Withdraw every parked intercept matching `owner` (and `connection_id`, when given).
+    ///
+    /// Dropping an entry drops its reply sender, which wakes the waiting dispatcher at once
+    /// and sends it down the fail-closed path — the same thing a refusal does. Called from
+    /// every path that ends a connection or an instance, so a request whose peer has gone is
+    /// never listed as waiting and can never be "answered" onto a dead socket.
+    fn reap_intercepts(
+        &mut self,
+        owner: crate::state::intercepts::InterceptOwner,
+        connection_id: Option<u32>,
+        why: &str,
+    ) {
+        self.pending_intercepts.retain(|entry| {
+            let matches = entry.owner == owner
+                && (connection_id.is_none() || entry.connection_id == connection_id);
+            if matches {
+                tracing::info!(
+                    "manual handler: intercept #{} for event '{}' withdrawn unanswered — {}",
+                    entry.id,
+                    entry.event_type,
+                    why
+                );
+            }
+            !matches
+        });
+    }
+
+    /// Whether the connection or instance a parked intercept belongs to has ended.
+    ///
+    /// `Some(reason)` when it is known to be gone: the server or client no longer exists,
+    /// the client is disconnected, or the connection is marked closed or has already moved
+    /// to the server's closed-connection history. A connection id the server never
+    /// registered is not evidence of anything — some protocols pass one without tracking
+    /// the connection — so it reads as live.
+    fn intercept_target_gone(
+        &self,
+        owner: crate::state::intercepts::InterceptOwner,
+        connection_id: Option<u32>,
+    ) -> Option<String> {
+        use crate::state::intercepts::InterceptOwner;
+        match owner {
+            InterceptOwner::Server(server_id) => {
+                let Some(server) = self.servers.get(&server_id) else {
+                    return Some(format!("server #{} no longer exists", server_id.as_u32()));
+                };
+                if matches!(
+                    server.status,
+                    super::server::ServerStatus::Stopped | super::server::ServerStatus::Error(_)
+                ) {
+                    return Some(format!("server #{} has stopped", server_id.as_u32()));
+                }
+                let connection_id = connection_id?;
+                let id = ConnectionId::new(connection_id);
+                match server.connections.get(&id) {
+                    Some(conn) if conn.status == super::server::ConnectionStatus::Closed => {
+                        Some(format!("connection #{connection_id} has closed"))
+                    }
+                    Some(_) => None,
+                    None if server
+                        .recent_connections
+                        .iter()
+                        .any(|c| c.id == connection_id) =>
+                    {
+                        Some(format!("connection #{connection_id} has closed"))
+                    }
+                    None => None,
+                }
+            }
+            InterceptOwner::Client(client_id) => match self.clients.get(&client_id) {
+                None => Some(format!("client #{} no longer exists", client_id.as_u32())),
+                Some(client) => match client.status {
+                    super::client::ClientStatus::Disconnected => {
+                        Some(format!("client #{} has disconnected", client_id.as_u32()))
+                    }
+                    super::client::ClientStatus::Error(_) => {
+                        Some(format!("client #{} has failed", client_id.as_u32()))
+                    }
+                    _ => None,
+                },
+            },
+        }
+    }
+
     /// Tear down everything a server owns, other than its own map entry.
     ///
     /// Called from every path that drops a server — [`AppState::remove_server`] and
@@ -629,6 +712,11 @@ impl AppStateInner {
             false
         });
         self.drop_tasks_for_server(server_id);
+        self.reap_intercepts(
+            crate::state::intercepts::InterceptOwner::Server(server_id),
+            None,
+            "its server was stopped",
+        );
 
         // Tear down any pipe touching this server (as source or sink), mirroring
         // scheduled-task scoping: a pipe cannot outlive either of its endpoints.
@@ -1114,18 +1202,38 @@ impl AppState {
     }
 
     /// Pending intercepts, oldest first, with dead entries pruned.
+    ///
+    /// A request whose connection or instance has ended is withdrawn here too, so the
+    /// list never offers a question nobody is left to hear the answer to.
     pub async fn list_intercepts(&self) -> Vec<crate::state::intercepts::InterceptView> {
         let mut inner = self.inner.write().await;
         inner.pending_intercepts.retain(|entry| !entry.is_dead());
+        let ended: Vec<(
+            crate::state::intercepts::InterceptOwner,
+            Option<u32>,
+            String,
+        )> = inner
+            .pending_intercepts
+            .iter()
+            .filter_map(|e| {
+                inner
+                    .intercept_target_gone(e.owner, e.connection_id)
+                    .map(|why| (e.owner, e.connection_id, why))
+            })
+            .collect();
+        for (owner, connection_id, why) in ended {
+            inner.reap_intercepts(owner, connection_id, &why);
+        }
         inner.pending_intercepts.iter().map(|e| e.view()).collect()
     }
 
     /// Answer a parked event with the operator's actions.
     ///
     /// Errors if the intercept is gone — already answered, dismissed, or the
-    /// waiting dispatcher gave up (timeout / connection closed). The answer is
-    /// then NOT delivered anywhere; the peer has already received the
-    /// fail-closed reply.
+    /// waiting dispatcher gave up (timeout / connection closed) — and if the
+    /// connection or instance it belongs to has ended even though the request is
+    /// still parked (a peer that hung up while a protocol was not reading). The
+    /// answer is then NOT delivered anywhere.
     pub async fn resolve_intercept(
         &self,
         id: u64,
@@ -1136,6 +1244,20 @@ impl AppState {
             let Some(index) = inner.pending_intercepts.iter().position(|e| e.id == id) else {
                 return Err(format!("request #{id} is no longer waiting"));
             };
+            let (owner, connection_id) = {
+                let entry = &inner.pending_intercepts[index];
+                (entry.owner, entry.connection_id)
+            };
+            if let Some(gone) = inner.intercept_target_gone(owner, connection_id) {
+                // The peer is not there to receive an answer. Withdraw the request (the
+                // dispatcher fails closed) rather than execute actions against a dead socket
+                // and report them as delivered.
+                inner.pending_intercepts.remove(index);
+                return Err(format!(
+                    "request #{id} cannot be answered: its {gone}. Nothing was sent; the \
+                     request has been withdrawn"
+                ));
+            }
             inner.pending_intercepts.remove(index)
         };
         let Some(tx) = entry.reply_tx else {
@@ -1158,6 +1280,20 @@ impl AppState {
         // `await` with RecvError.
         inner.pending_intercepts.retain(|e| e.id != id);
         inner.pending_intercepts.len() != before
+    }
+
+    /// Why a parked request for `owner` / `connection_id` can no longer be answered, if its
+    /// connection or instance has ended (`None` while it is live). The dispatcher asks this
+    /// when its request is withdrawn, to tell a refusal from a hang-up.
+    pub async fn intercept_target_ended(
+        &self,
+        owner: crate::state::intercepts::InterceptOwner,
+        connection_id: Option<u32>,
+    ) -> Option<String> {
+        self.inner
+            .read()
+            .await
+            .intercept_target_gone(owner, connection_id)
     }
 
     /// Drop a parked entry without answering (the dispatcher cleans up after
@@ -2008,14 +2144,22 @@ impl AppState {
         connection_id: crate::server::connection::ConnectionId,
     ) {
         use super::server::ConnectionStatus;
-        if let Some(server) = self.inner.write().await.servers.get_mut(&server_id) {
-            if let Some(conn) = server.get_connection_mut(connection_id) {
-                conn.status = ConnectionStatus::Closed;
-                conn.status_changed_at = crate::utils::clock::Instant::now();
+        {
+            let mut inner = self.inner.write().await;
+            if let Some(server) = inner.servers.get_mut(&server_id) {
+                if let Some(conn) = server.get_connection_mut(connection_id) {
+                    conn.status = ConnectionStatus::Closed;
+                    conn.status_changed_at = crate::utils::clock::Instant::now();
+                }
+                // What the model kept about this peer ends with the connection, not with the
+                // later sweep that removes its row.
+                server.connection_memory.remove(&connection_id);
             }
-            // What the model kept about this peer ends with the connection, not with the
-            // later sweep that removes its row.
-            server.connection_memory.remove(&connection_id);
+            inner.reap_intercepts(
+                crate::state::intercepts::InterceptOwner::Server(server_id),
+                Some(connection_id.as_u32()),
+                "its connection closed",
+            );
         }
 
         self.remove_peer_handle(server_id, connection_id.as_u32())
@@ -2032,8 +2176,16 @@ impl AppState {
         server_id: ServerId,
         connection_id: crate::server::connection::ConnectionId,
     ) {
-        if let Some(server) = self.inner.write().await.servers.get_mut(&server_id) {
-            server.remove_connection(connection_id);
+        {
+            let mut inner = self.inner.write().await;
+            if let Some(server) = inner.servers.get_mut(&server_id) {
+                server.remove_connection(connection_id);
+            }
+            inner.reap_intercepts(
+                crate::state::intercepts::InterceptOwner::Server(server_id),
+                Some(connection_id.as_u32()),
+                "its connection closed",
+            );
         }
 
         self.remove_peer_handle(server_id, connection_id.as_u32())
@@ -2335,7 +2487,8 @@ impl AppState {
         status: crate::state::server::ConnectionStatus,
     ) {
         let closed = status == crate::state::server::ConnectionStatus::Closed;
-        if let Some(server) = self.inner.write().await.servers.get_mut(&server_id) {
+        let mut inner = self.inner.write().await;
+        if let Some(server) = inner.servers.get_mut(&server_id) {
             if let Some(conn) = server.connections.get_mut(&connection_id) {
                 conn.status = status;
                 conn.status_changed_at = crate::utils::clock::Instant::now();
@@ -2343,6 +2496,13 @@ impl AppState {
             if closed {
                 server.connection_memory.remove(&connection_id);
             }
+        }
+        if closed {
+            inner.reap_intercepts(
+                crate::state::intercepts::InterceptOwner::Server(server_id),
+                Some(connection_id.as_u32()),
+                "its connection closed",
+            );
         }
     }
 
@@ -2487,6 +2647,11 @@ impl AppState {
             let mut inner = self.inner.write().await;
             let client = inner.clients.remove(&id);
             inner.client_llm_calls.remove(&id);
+            inner.reap_intercepts(
+                crate::state::intercepts::InterceptOwner::Client(id),
+                None,
+                "its client was stopped",
+            );
             // A command handle must never outlive the client it points at.
             inner.client_handles.remove(&id);
 
@@ -2636,10 +2801,22 @@ impl AppState {
 
     /// Update client status
     pub async fn update_client_status(&self, id: ClientId, status: super::client::ClientStatus) {
-        if let Some(client) = self.inner.write().await.clients.get_mut(&id) {
+        let ended = matches!(
+            status,
+            super::client::ClientStatus::Disconnected | super::client::ClientStatus::Error(_)
+        );
+        let mut inner = self.inner.write().await;
+        if let Some(client) = inner.clients.get_mut(&id) {
             client.record_status_transition(&status);
             client.status = status;
             client.status_changed_at = crate::utils::clock::Instant::now();
+        }
+        if ended {
+            inner.reap_intercepts(
+                crate::state::intercepts::InterceptOwner::Client(id),
+                None,
+                "its client disconnected",
+            );
         }
     }
 

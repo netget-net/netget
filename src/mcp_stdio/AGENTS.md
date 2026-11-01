@@ -219,11 +219,21 @@ connection task and coming back as an executor error.
 - **`list_intercepts`** — every request parked by a `manual` handler: id, owner and
   connection, event type and data, the actions it may be answered with (`name(param*, …)`),
   and seconds until it fails closed (`PendingIntercept::timeout_secs`, recorded at park time).
-- **`answer_intercept {intercept_id, actions}`** — checked against the firing event's own
-  actions ∪ the protocol's sync actions (for a client, its whole set) plus the common actions
-  — the catalog a static handler for that event is held to. A refused answer leaves the
-  request waiting. **`[]` is a real answer**: nothing is written and the connection carries
-  on, which is distinct from a timeout.
+- **`answer_intercept {intercept_id, actions}`** — checked against exactly what
+  `list_intercepts` offered, which is what the model would be offered for the same event
+  (`state::intercepts::server_answer_actions` / `client_answer_actions`): a server event's own
+  declared actions — redis's `redis_subscribe` declares four of the protocol's eighteen — with
+  the protocol's sync set only where the event declares none, and for a client its async ∪
+  sync ∪ the event's; plus the common actions. The dashboard's composer offers the same list.
+  A refused answer leaves the request waiting. **`[]` is a real answer**: nothing is written
+  and the connection carries on, which is distinct from a timeout.
+- **A parked request lives as long as its connection.** Closing the connection, stopping the
+  server or client, or a client disconnecting withdraws it (`AppState::reap_intercepts`): the
+  dispatcher fails closed at once and the request leaves `list_intercepts`. `answer_intercept`
+  on a request whose connection has ended — still parked because its protocol had not noticed
+  — is refused with the reason and nothing is sent. Noticing is the protocol's part: a server
+  that reads nothing while a command is parked learns of a hang-up only from its next read, so
+  `redis` watches its socket while a command is being answered (`src/server/redis/mod.rs`).
 - **`fail_intercept {intercept_id}`** — refuses now; the dispatcher takes the fail-closed path
   (TCP half-closes, HTTP answers an error status). There is deliberately **no separate
   `dismiss_intercept` tool**: `AppState::dismiss_intercept` *is* the dashboard's `[ Fail
@@ -231,7 +241,35 @@ connection task and coming back as an executor error.
   branch — so a second tool would be the same call under another name.
 
 `tests/mcp_client_send_test.rs` and `tests/mcp_intercept_test.rs` assert each of these from the
-peer's side of a real socket (bytes read, EOF observed), not from the tool's text.
+peer's side of a real socket (bytes read, EOF observed), not from the tool's text;
+`tests/mcp_handler_and_intercept_scope_test.rs` covers the offered set and the hang-up, and
+`tests/intercept_lifetime_test.rs` the store's side of it.
+
+## What the tools show and what they do not
+
+- **Ids are shared across kinds.** Servers, clients, connections, pipes, databases and easy
+  instances all draw from one counter (`AppState::next_unified_id`), so an id names exactly one
+  thing whatever its kind. The consequence an MCP caller sees: server and client ids are not
+  consecutive — a session that started server #1 and then accepted five connections starts its
+  next server as #7. Ids are never reused, including after a failed start removes its row.
+- **Status-channel control sentinels are not output.** Protocols signal the dashboard with
+  `__UPDATE_UI__` on the same channel as their log lines; `start_server`'s result and MCP's
+  stderr drop every line `utils::is_status_control_line` matches.
+- **An instruction nobody gave is not reported as given.** A server started without an
+  `instruction` runs on `state::server::default_server_instruction` ("You are a redis server.
+  Handle requests appropriately.") — the 17 protocols with an `operator_wants_dynamic` gate
+  consult the model only when the server has an instruction, so the default is what keeps an
+  unmatched event reaching the model. `list_servers` / `server_status` report it as
+  `(none given — NetGet's default applies: "…")`, not as the operator's. An explicit empty
+  instruction remains the way to say "no model".
+- **Disconnected clients stay listed, apart.** `disconnect_client` and a peer hanging up keep
+  the client's row so `reconnect_client` (and the dashboard) can bring it back by id;
+  `list_clients` lists them under their own heading after the live ones, and `stop_client`
+  removes one.
+- **Static handlers are validated against the instance's own protocol.** `start_server`,
+  `start_client`, `update_server` and `update_client` hold every static action in
+  `event_handlers` to that protocol's vocabulary (`EventHandler::parse_event_handlers_for`),
+  wildcard patterns included, and a refusal lists that protocol's actions and the common ones.
 
 ## In-place update (`update_server` / `update_client`)
 

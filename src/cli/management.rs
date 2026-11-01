@@ -265,12 +265,10 @@ impl ServerForm {
             None,
         )?
         .flatten();
-        let instruction = self.instruction.clone().unwrap_or_else(|| {
-            format!(
-                "You are a {} server. Handle requests appropriately.",
-                self.protocol
-            )
-        });
+        let instruction = self
+            .instruction
+            .clone()
+            .unwrap_or_else(|| crate::state::server::default_server_instruction(&self.protocol));
         let id = crate::cli::server_startup::start_server_from_action(
             state,
             self.mac_address,
@@ -519,8 +517,11 @@ pub async fn update_server(
 
     // Validate event handlers before mutating, too.
     if let Some(handlers) = &form.event_handlers {
-        crate::events::handler::EventHandler::parse_event_handlers(handlers.clone())
-            .map_err(|e| anyhow::anyhow!("Invalid event_handlers: {}", e))?;
+        crate::events::handler::EventHandler::parse_event_handlers_for(
+            handlers.clone(),
+            crate::events::handler::HandlerOwner::Server(&current.protocol_name),
+        )
+        .map_err(|e| anyhow::anyhow!("Invalid event_handlers: {}", e))?;
     }
 
     // History and batching: what is asked for, else what the instance already has.
@@ -659,8 +660,11 @@ pub async fn update_server(
     }
     if let Some(handlers) = &form.event_handlers {
         // Already validated above.
-        let config = crate::events::handler::EventHandler::parse_event_handlers(handlers.clone())
-            .map_err(|e| anyhow::anyhow!("Invalid event_handlers: {}", e))?;
+        let config = crate::events::handler::EventHandler::parse_event_handlers_for(
+            handlers.clone(),
+            crate::events::handler::HandlerOwner::Server(&current.protocol_name),
+        )
+        .map_err(|e| anyhow::anyhow!("Invalid event_handlers: {}", e))?;
         state
             .with_server_mut(server_id, |s| {
                 s.event_handler_config = Some(config);
@@ -788,7 +792,7 @@ pub async fn update_client(
 
     // Validate event handlers before mutating (clients parse each handler value).
     if let Some(handlers) = &form.event_handlers {
-        validate_client_handlers(handlers)?;
+        validate_client_handlers(handlers, &current.protocol_name)?;
     }
 
     // History and batching: what is asked for, else what the client already has.
@@ -913,7 +917,7 @@ pub async fn update_client(
         changed.push("memory");
     }
     if let Some(handlers) = &form.event_handlers {
-        let config = parse_client_handlers(handlers)?;
+        let config = parse_client_handlers(handlers, &current.protocol_name)?;
         state
             .with_client_mut(client_id, |c| {
                 c.event_handler_config = Some(config);
@@ -985,24 +989,22 @@ pub async fn update_client(
 }
 
 /// Validate client event handler JSON without mutating anything.
-fn validate_client_handlers(handlers: &[Value]) -> Result<()> {
-    parse_client_handlers(handlers).map(|_| ())
+fn validate_client_handlers(handlers: &[Value], protocol: &str) -> Result<()> {
+    parse_client_handlers(handlers, protocol).map(|_| ())
 }
 
-/// Parse client event handler JSON into an [`EventHandlerConfig`].
-///
-/// Clients deserialize each handler value directly (as `start_client_from_action`
-/// does); an entry that fails to parse is a hard error rather than silently
-/// dropped, so a bad update is reported instead of applied partially.
-fn parse_client_handlers(handlers: &[Value]) -> Result<crate::scripting::EventHandlerConfig> {
-    use crate::scripting::{EventHandler, EventHandlerConfig};
-    let mut parsed = Vec::with_capacity(handlers.len());
-    for (i, h) in handlers.iter().enumerate() {
-        let handler: EventHandler = serde_json::from_value(h.clone())
-            .map_err(|e| anyhow::anyhow!("Invalid event_handlers[{}]: {}", i, e))?;
-        parsed.push(handler);
-    }
-    Ok(EventHandlerConfig { handlers: parsed })
+/// Parse client event handler JSON into an [`EventHandlerConfig`], with the same validator
+/// `start_client_from_action` uses: the shape, the handler type, and every static action
+/// name held to this client protocol's own vocabulary.
+fn parse_client_handlers(
+    handlers: &[Value],
+    protocol: &str,
+) -> Result<crate::scripting::EventHandlerConfig> {
+    crate::events::handler::EventHandler::parse_event_handlers_for(
+        handlers.to_vec(),
+        crate::events::handler::HandlerOwner::Client(protocol),
+    )
+    .map_err(|e| anyhow::anyhow!("Invalid event_handlers: {}", e))
 }
 
 // ===========================================================================
