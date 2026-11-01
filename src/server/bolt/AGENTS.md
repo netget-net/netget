@@ -132,7 +132,11 @@ valid Cypher with Neo4j's syntax error", llama3.1:8b answered `SELECT name FROM 
 — the event example's Alice and Bob — in every run (real-model eval, seed 42); a hint that only
 said to check validity first was replayed against the captured prompt and changed nothing, and
 naming the first word turned five seeds in five into the syntax error, while a `MATCH` under the
-same hint still got its rows. `send_bolt_failure`'s example message (`Invalid input 'RETRUN'…`)
+same hint still got its rows. The hint also says that `mode` is only the access mode the client
+asked for: cypher-shell asks for write on every query, and a first version of the hint that gave
+"a write they forbid" as an example refusal had the model answer `SELECT` with
+`Neo.ClientError.Security.Forbidden` "Write operations are not allowed" five runs in five.
+`send_bolt_failure`'s example message (`Invalid input 'RETRUN'…`)
 is copied for the message text; the eval case passes either way.
 
 **A record may be an object keyed by exactly the field names.** `{"name": "Ada"}` for fields

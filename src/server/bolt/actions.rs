@@ -667,6 +667,11 @@ const CYPHER_LEADING_CLAUSES: &[&str] = &[
 /// first word and whether it is a Cypher clause - a fact NetGet can read off the text, and no
 /// substitute for Neo4j's parser - turned five replayed seeds in five into the syntax error,
 /// while a MATCH under the same hint still got its rows.
+///
+/// A first version gave "a write they forbid" as an example of a refusal, and in the eval the
+/// model refused `SELECT name FROM people` with `Neo.ClientError.Security.Forbidden` "Write
+/// operations are not allowed" five runs in five: cypher-shell sends every query with `mode`
+/// write, and the example turned that field into a reason. The hint says what `mode` is.
 pub fn query_answer_with(query: &str) -> String {
     let first = query
         .split(|c: char| c.is_whitespace() || c == '(')
@@ -681,9 +686,11 @@ pub fn query_answer_with(query: &str) -> String {
         format!("This query begins with {first}, which is not a Cypher clause.")
     };
     format!(
-        "first hold the query against your instructions. If they refuse it - text that is not \
-         valid Cypher, a write they forbid - answer send_bolt_failure with the Neo4j code that \
-         says why (Neo.ClientError.Statement.SyntaxError for invalid Cypher). {fact} Otherwise \
+        "first hold the query against your instructions. If they refuse it - for instance \
+         because it is not valid Cypher - answer send_bolt_failure with the Neo4j code that \
+         says why (Neo.ClientError.Statement.SyntaxError for invalid Cypher). {fact} 'mode' \
+         is only the access mode the client asked for (cypher-shell asks for write on every \
+         query), never a reason to refuse unless your instructions forbid writes. Otherwise \
          answer send_bolt_records whose fields are the names after RETURN and whose rows are \
          what your instructions say the graph holds"
     )

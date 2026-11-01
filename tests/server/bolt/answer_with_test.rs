@@ -40,6 +40,13 @@ fn the_query_hint_says_whether_the_query_begins_like_cypher() {
         sql.contains("Neo.ClientError.Statement.SyntaxError"),
         "{sql}"
     );
+    // cypher-shell asks for write mode on every query; an example refusal naming writes made
+    // the model refuse SELECT as Forbidden, so the hint says what `mode` is.
+    assert!(!sql.contains("a write they forbid"), "{sql}");
+    assert!(
+        sql.contains("never a reason to refuse unless your instructions forbid writes"),
+        "{sql}"
+    );
     let cypher = query_answer_with("  match (m:Movie) RETURN count(m) AS movies");
     assert!(
         cypher.contains("This query begins with MATCH, a Cypher clause."),
