@@ -57,6 +57,8 @@ pub struct ServerRow {
     pub history_entries: u16,
     /// Whether events arriving during a call are batched — the edit form's value.
     pub batching: bool,
+    /// The pcap NetGet is writing of this instance (`src/capture/`), if it is capturing.
+    pub capture: Option<crate::capture::CaptureStatus>,
 }
 
 #[derive(Debug, Clone)]
@@ -91,6 +93,8 @@ pub struct ClientRow {
     pub history_entries: u16,
     /// Whether events arriving during a call are batched — the edit form's value.
     pub batching: bool,
+    /// The pcap NetGet is writing of this instance (`src/capture/`), if it is capturing.
+    pub capture: Option<crate::capture::CaptureStatus>,
 }
 
 /// One verb a client can send, as the send section lists it.
@@ -247,6 +251,9 @@ pub async fn build_snapshot(state: &AppState) -> RailSnapshot {
                 .unwrap_or_default(),
             history_entries: server.history_entries,
             batching: server.batching,
+            capture: state
+                .capture
+                .status(crate::capture::CaptureOwner::Server(server.id)),
         });
     }
     server_rows.sort_by_key(|s| s.id.as_u32());
@@ -304,6 +311,9 @@ pub async fn build_snapshot(state: &AppState) -> RailSnapshot {
                 .unwrap_or_default(),
             history_entries: client.history_entries,
             batching: client.batching,
+            capture: state
+                .capture
+                .status(crate::capture::CaptureOwner::Client(client.id)),
         });
     }
     client_rows.sort_by_key(|c| c.id.as_u32());

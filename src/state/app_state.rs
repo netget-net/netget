@@ -415,6 +415,8 @@ pub struct AppState {
     inner: Arc<RwLock<AppStateInner>>,
     pub llm_activity: super::llm_activity::LlmActivityTracker,
     pub event_journal: Arc<crate::events::journal::EventJournal>,
+    /// Every instance's packet capture (`src/capture/`).
+    pub capture: Arc<crate::capture::CaptureRegistry>,
     /// What is known to be wrong with the model or its backend, for `get_status`. Kept
     /// outside `inner` so the transport can record it synchronously on every request
     /// without taking the state lock.
@@ -714,6 +716,7 @@ impl AppState {
             llm_activity: super::llm_activity::LlmActivityTracker::default(),
             model_health: Default::default(),
             event_journal: Arc::new(crate::events::journal::EventJournal::default()),
+            capture: Arc::new(crate::capture::CaptureRegistry::default()),
             inner: Arc::new(RwLock::new(AppStateInner {
                 mode: Mode::Idle,
                 servers: HashMap::new(),
@@ -835,6 +838,10 @@ impl AppState {
         for handle in aborted {
             let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
         }
+        // After the connections are gone, so the FINs their drop records reach the file.
+        self.capture
+            .forget(crate::capture::CaptureOwner::Server(id))
+            .await;
         server
     }
 
@@ -1964,15 +1971,22 @@ impl AppState {
             .map(|(id, _)| *id)
             .collect();
 
-        for id in to_remove {
-            inner.servers.remove(&id);
+        for id in &to_remove {
+            inner.servers.remove(id);
             // Detached on purpose: this sweep holds the state lock and must not wait.
-            drop(inner.teardown_server(id));
+            drop(inner.teardown_server(*id));
         }
 
         // Set mode to Idle if no more servers and no clients
         if inner.servers.is_empty() && inner.clients.is_empty() {
             inner.mode = Mode::Idle;
+        }
+        drop(inner);
+        // A reaped server's capture is closed with it, outside the state lock.
+        for id in to_remove {
+            self.capture
+                .forget(crate::capture::CaptureOwner::Server(id))
+                .await;
         }
     }
 
@@ -2502,6 +2516,9 @@ impl AppState {
         // Guard dropped above: resident-script teardown awaits child kills and
         // must not run under the state lock.
         crate::scripting::ResidentScriptManager::shutdown_client(id.as_u32()).await;
+        self.capture
+            .forget(crate::capture::CaptureOwner::Client(id))
+            .await;
 
         client
     }

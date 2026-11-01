@@ -227,6 +227,7 @@ pub async fn start_client_from_action(
     scheduled_tasks: Option<Vec<crate::llm::actions::common::ServerTaskDefinition>>,
     feedback_instructions: Option<String>,
     conversation: crate::protocol::metadata::ConversationOverrides,
+    capture: crate::capture::CaptureRequest,
     llm_client: OllamaClient,
     status_tx: Option<mpsc::UnboundedSender<String>>,
 ) -> Result<ClientId> {
@@ -347,6 +348,21 @@ pub async fn start_client_from_action(
 
     let client_id = state.add_client(client).await;
     let mut startup_guard = super::startup_guard::StartupGuard::client(state, client_id);
+    // Packet capture starts before the client connects, so what it says on connect is in the
+    // file. A capture that cannot start fails the start; the guard removes the instance.
+    if let Some(path) = state
+        .capture
+        .begin(
+            crate::capture::CaptureOwner::Client(client_id),
+            &protocol,
+            &capture,
+        )
+        .await?
+    {
+        if let Some(tx) = &status_tx {
+            let _ = tx.send(format!("[INFO] Capturing to {}", path.display()));
+        }
+    }
 
     // Set initial memory if provided
     if let Some(mem) = initial_memory {

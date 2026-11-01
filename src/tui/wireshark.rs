@@ -1,7 +1,11 @@
 //! `[ view in wireshark ]` — a paste-ready capture command for one instance.
 //!
-//! NetGet does not write pcaps; what it can do is tell Wireshark exactly where
-//! to look. Given what the dashboard already knows about an instance (its
+//! Two ways to see an instance's traffic. NetGet can write the pcap itself
+//! (`src/capture/`, `capture` on the instance or `--capture <dir>`), with no capture
+//! privilege, for the protocols that feed it; when it is doing so the modal leads with
+//! a `wireshark -r` line for that file. Otherwise — or for a live view of every
+//! protocol — it tells Wireshark exactly where to look. Given what the dashboard
+//! already knows about an instance (its
 //! protocol, the address it binds or dials, an interface for the raw-socket
 //! protocols) this module derives:
 //!
@@ -820,6 +824,10 @@ pub struct CapturePlan {
     /// `tcp.port==8080,http` — the argument to `-d`.
     pub decode_as: Option<String>,
     pub notes: Vec<String>,
+    /// NetGet's own capture of a running instance: `Some(Some(_))` while it writes one,
+    /// `Some(None)` when it is running uncaptured, `None` for an instance not started yet
+    /// (the form), which is set at creation instead.
+    pub recorded: Option<Option<crate::capture::CaptureStatus>>,
 }
 
 /// `wire_for` keyed on the protocol name alone, which is right for every protocol whose two
@@ -991,7 +999,19 @@ impl CapturePlan {
             display_filter,
             decode_as,
             notes,
+            recorded: None,
         }
+    }
+
+    /// `wireshark -r <file>` for the pcap NetGet is writing of this instance, with the
+    /// decode-as clause the live command would use.
+    pub fn recorded_command(&self) -> Option<String> {
+        let status = self.recorded.as_ref()?.as_ref()?;
+        let mut out = format!("wireshark -r {}", shell_word(&status.path));
+        if let Some(d) = &self.decode_as {
+            let _ = write!(out, " -d {}", shell_word(d));
+        }
+        Some(out)
     }
 
     fn common_args(&self, out: &mut String) {
@@ -1045,6 +1065,42 @@ impl CapturePlan {
         }
         lines.push(PlanLine::Note(ident));
         lines.push(PlanLine::Blank);
+
+        match &self.recorded {
+            Some(Some(status)) => {
+                lines.push(PlanLine::Heading(
+                    "NetGet's own capture of this instance — open it".into(),
+                ));
+                if let Some(cmd) = self.recorded_command() {
+                    lines.push(PlanLine::Value(cmd));
+                }
+                lines.push(PlanLine::Note(format!(
+                    "{} packet(s) so far, {} dropped; rotated to {}.1 at {} MiB",
+                    status.packets,
+                    status.dropped,
+                    status.path,
+                    status.max_file_bytes / (1024 * 1024)
+                )));
+                if !status.adopted {
+                    lines.push(PlanLine::Note(format!(
+                        "{} does not feed NetGet's capture yet, so the file stays empty — use \
+                         the live capture below",
+                        self.target.protocol
+                    )));
+                }
+                lines.push(PlanLine::Blank);
+            }
+            Some(None) if self.wire.transport != Transport::NotNetwork => {
+                lines.push(PlanLine::Note(
+                    "NetGet can also write this instance's pcap itself, no privilege needed: \
+                     update it with capture: true (MCP update_server / update_client), or \
+                     start NetGet with --capture <dir>."
+                        .into(),
+                ));
+                lines.push(PlanLine::Blank);
+            }
+            _ => {}
+        }
 
         if let Some(cmd) = self.wireshark_command() {
             lines.push(PlanLine::Heading(

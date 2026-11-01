@@ -93,13 +93,32 @@ it. The pty snapshots in `tests/terminal_snapshot/` prove the real binary paints
 **`[ wireshark ]`** (`w`, a button on every card, and a `[ View in Wireshark ]` button on the
 create/edit form so the capture can be running *before* the instance starts) opens a modal with a paste-ready
 `wireshark -k …` / `tshark -l …` line, plus the pieces separately: interface, BPF capture filter,
-display filter and a `-d` decode-as clause. NetGet writes no pcap; `src/tui/wireshark.rs` is a
+display filter and a `-d` decode-as clause — and, when NetGet is writing the instance's own pcap
+(below), a `wireshark -r <file>` line first. `src/tui/wireshark.rs` is a
 pure table of NetGet protocol → transport + Wireshark dissector name, and every name in it was
 checked against `tshark -d` / `-Y`. Three traps it encodes: `isis` is an Ethernet-only BPF keyword
 and is rejected on loopback; `drda` (db2) is heuristic-only and not in the `tcp.port` decode-as
 table; `ipp` is reached through `http`. A protocol missing from the table is treated as plain TCP
 (correct for everything in the registry that is not UDP, raw or off-network), and the off-network
 families (USB, BLE, NFC, pty/pipe/stdio) get an explanation of where to look instead of a command.
+
+**Packet capture: NetGet writes the pcap itself** (`src/capture/`), with no libpcap and no
+privilege, because it owns the sockets. `capture` on an instance (`ServerForm`/`ClientForm`, MCP
+`start_*`/`update_*`, `.netget` files) is `true` (`netget-<server|client>-<id>-<protocol>.pcap` in
+the capture directory), a file name, or `false`; `--capture <dir>` records every instance the
+process starts. Hot-applied: a connection already open is opened in the file (SYN, SYN-ACK, ACK) at
+its next byte. The file is classic pcap, `LINKTYPE_RAW`, with IP/TCP/UDP headers synthesised from
+the real 4-tuple and sequence numbers that advance by exactly the bytes carried, so "Follow TCP
+Stream" reassembles it; a FIN per side closes it. Writes go through a bounded queue to a writer
+thread (a full queue drops and counts, never blocks), and a file rotates to `<path>.1` at 256 MiB.
+There is **no central seam carrying payloads** (`update_connection_stats` sees counts only), so a
+protocol adopts it: wrap the stream in `capture::tcp::CapturedStream` before splitting it, or call a
+`capture::udp::UdpTap` after each `recv_from`/`send_to`. Adopted today: servers `tcp`, `telnet`,
+`http`, `redis`, `dns` (UDP and TCP), `udp`; client `tcp` (`capture::adopted` is the list; any
+other protocol's file stays empty and `server_status` says so). Two guards: an existing file that
+is not a pcap is never overwritten, and a `capture` read from an *action* (the model's
+`open_server`, a `.netget` file, a replayed session) may only name a file inside the capture
+directory. `tests/capture_pcap_test.rs` reads NetGet's files back with `tshark`.
 
 ## Protocol inventory — always query, never trust a list
 

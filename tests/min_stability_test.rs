@@ -134,6 +134,7 @@ async fn min_stability_beta_refuses_experimental_and_allows_beta() {
         None,
         None,
         Default::default(),
+        netget::capture::CaptureRequest::default(),
         status_tx.clone(),
     )
     .await;
@@ -168,6 +169,7 @@ async fn min_stability_beta_refuses_experimental_and_allows_beta() {
         None,
         None,
         Default::default(),
+        netget::capture::CaptureRequest::default(),
         status_tx.clone(),
     )
     .await;
