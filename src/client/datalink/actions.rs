@@ -11,6 +11,12 @@ use anyhow::{Context, Result};
 use serde_json::json;
 use std::sync::LazyLock;
 
+pub use crate::client::datalink::packet::LinkType;
+use crate::client::datalink::packet::{
+    build_ipv4_tcp, link_header, tcp_flag_list, BuildDefaults, TcpFlow, MP_CAPABLE_FLAG_NAMES,
+    TCP_OPTION_KINDS,
+};
+
 /// The shortest thing that can be an Ethernet frame: 6 + 6 + 2.
 ///
 /// Anything shorter has no EtherType and libpcap would either refuse it or put a runt on the
@@ -152,39 +158,75 @@ fn parse_payload(action: &serde_json::Value) -> Result<Vec<u8>> {
     }
 }
 
-/// Assemble the bytes `inject_frame` will hand to libpcap, from whichever spelling was used.
+/// Assemble the bytes `inject_frame` will hand to libpcap on an **Ethernet** link.
+///
+/// Kept for callers that know they are on Ethernet; [`build_frame_for_link`] is what the
+/// client executes, with the link type of its open handle.
+pub fn build_frame(action: &serde_json::Value) -> Result<Vec<u8>> {
+    build_frame_for_link(action, LinkType::Ethernet)
+}
+
+/// Assemble the bytes `inject_frame` will hand to libpcap, from whichever spelling was used,
+/// for the interface's link type.
 ///
 /// Two spellings, and exactly one of them per action:
 ///
-/// - **Structured** — `dst_mac`, `src_mac`, `ethertype`, and an optional `payload` with its
-///   required `payload_encoding`. This is the one the model is shown, because every part of
-///   it is a thing a model can write correctly and a person can check.
-/// - **`frame_hex`** — the whole frame as hex. The escape hatch, kept because
-///   `datalink_frame_captured` hands the model exactly this and replaying or amending a
-///   captured frame is a real thing to want.
+/// - **Structured** — on Ethernet `dst_mac`, `src_mac`, `ethertype`; on a loopback link
+///   (`NULL` / `LOOP`) `ethertype` alone (ipv4 / ipv6, which becomes the 4-byte family
+///   header); on `RAW` nothing (the payload is the IP packet). Plus an optional `payload`
+///   with its required `payload_encoding`. This is the one the model is shown, because
+///   every part of it is a thing a model can write correctly and a person can check.
+/// - **`frame_hex`** — the whole frame as hex, link header included. The escape hatch, kept
+///   because `datalink_frame_captured` hands the model exactly this and replaying or
+///   amending a captured frame is a real thing to want.
 ///
 /// Supplying both is **refused** rather than resolved by precedence: they are two statements
 /// about the same wire bytes and guessing which one was meant is how a frame nobody intended
-/// goes out. A structured spelling missing one of its three required fields is refused by
-/// name rather than silently falling back to zeros.
-pub fn build_frame(action: &serde_json::Value) -> Result<Vec<u8>> {
+/// goes out. A structured spelling missing a required field is refused by name rather than
+/// silently falling back to zeros, and a field the link cannot carry (a MAC on loopback) is
+/// refused rather than dropped.
+pub fn build_frame_for_link(action: &serde_json::Value, link: LinkType) -> Result<Vec<u8>> {
     let frame_hex = action.get("frame_hex").and_then(|v| v.as_str());
     let structured = ["dst_mac", "src_mac", "ethertype"]
         .iter()
-        .any(|k| action.get(k).is_some());
+        .any(|k| action.get(k).is_some())
+        || (!link.has_macs() && action.get("payload").is_some());
 
     let frame = match (frame_hex, structured) {
         (Some(_), true) => anyhow::bail!(
-            "Both 'frame_hex' and the structured fields (dst_mac / src_mac / ethertype) were \
-             supplied. Send exactly one: the structured form for a frame you are building, or \
-             'frame_hex' for a frame you already have in full. They are not combined and \
-             neither takes precedence."
+            "Both 'frame_hex' and the structured fields (dst_mac / src_mac / ethertype / \
+             payload) were supplied. Send exactly one: the structured form for a frame you are \
+             building, or 'frame_hex' for a frame you already have in full. They are not \
+             combined and neither takes precedence."
         ),
         (None, false) => anyhow::bail!(
-            "Missing frame. Give 'dst_mac', 'src_mac' and 'ethertype' (plus an optional \
-             'payload' with its 'payload_encoding'), or the whole frame as 'frame_hex'."
+            "Missing frame. Give {} (plus an optional 'payload' with its 'payload_encoding'), \
+             or the whole frame as 'frame_hex'.",
+            structured_fields_for(link)
         ),
         (Some(h), false) => decode_frame_hex(h)?,
+        (None, true) if link != LinkType::Ethernet => {
+            let payload = parse_payload(action)?;
+            let ethertype = match action.get("ethertype") {
+                Some(v) => parse_ethertype(v)?,
+                // A raw-IP link carries no type of its own; the IP version nibble says it.
+                None if matches!(link, LinkType::Raw | LinkType::Ipv4 | LinkType::Ipv6) => {
+                    match payload.first().map(|b| b >> 4) {
+                        Some(6) => 0x86dd,
+                        _ => 0x0800,
+                    }
+                }
+                None => anyhow::bail!(
+                    "Missing 'ethertype'. This interface's link type is {}: give 'ethertype' \
+                     (\"ipv4\" or \"ipv6\") and the 4-byte family header is built from it.",
+                    link.name()
+                ),
+            };
+            let macs_given = action.get("dst_mac").is_some() || action.get("src_mac").is_some();
+            let mut frame = link_header(link, ethertype, macs_given.then_some(([0; 6], [0; 6])))?;
+            frame.extend_from_slice(&payload);
+            frame
+        }
         (None, true) => {
             let get = |k: &str| -> Result<&serde_json::Value> {
                 action.get(k).ok_or_else(|| {
@@ -208,15 +250,44 @@ pub fn build_frame(action: &serde_json::Value) -> Result<Vec<u8>> {
         }
     };
 
-    // Bounds before libpcap sees it: a runt has no EtherType, and a frame the size of a
-    // prompt is a mistake worth naming rather than an ENOBUFS from a syscall. The model is
-    // told the actual length so it can fix the frame.
-    if frame.len() < MIN_ETHERNET_FRAME_BYTES {
+    check_frame_bounds(&frame, link)?;
+    Ok(frame)
+}
+
+/// The structured fields a link type's `inject_frame` is built from, for messages.
+pub fn structured_fields_for(link: LinkType) -> &'static str {
+    match link {
+        LinkType::Ethernet => "'dst_mac', 'src_mac' and 'ethertype'",
+        LinkType::Null | LinkType::Loop => {
+            "'ethertype' (\"ipv4\" or \"ipv6\"; this link has no MAC addresses)"
+        }
+        LinkType::Raw | LinkType::Ipv4 | LinkType::Ipv6 => {
+            "'payload' (the IP packet itself; this link has no header)"
+        }
+        LinkType::LinuxSll | LinkType::Other(_) => {
+            "'frame_hex' (this link type has no structured form)"
+        }
+    }
+}
+
+/// Bounds before libpcap sees a frame: a runt has no link header, and a frame the size of a
+/// prompt is a mistake worth naming rather than an ENOBUFS from a syscall. The model is told
+/// the actual length so it can fix the frame.
+fn check_frame_bounds(frame: &[u8], link: LinkType) -> Result<()> {
+    if link == LinkType::Ethernet && frame.len() < MIN_ETHERNET_FRAME_BYTES {
         anyhow::bail!(
             "the frame is {} bytes; an Ethernet frame needs at least {} (6-byte destination \
              MAC, 6-byte source MAC, 2-byte EtherType)",
             frame.len(),
             MIN_ETHERNET_FRAME_BYTES
+        );
+    }
+    let min = link.header_len().unwrap_or(0).max(1);
+    if frame.len() < min {
+        anyhow::bail!(
+            "the frame is {} bytes; on link type {} it needs at least {min}",
+            frame.len(),
+            link.name()
         );
     }
     if frame.len() > MAX_ETHERNET_FRAME_BYTES {
@@ -226,8 +297,101 @@ pub fn build_frame(action: &serde_json::Value) -> Result<Vec<u8>> {
             MAX_ETHERNET_FRAME_BYTES
         );
     }
+    Ok(())
+}
 
-    Ok(frame)
+// ---------------------------------------------------------------------------
+// IPv4 / TCP crafting
+// ---------------------------------------------------------------------------
+
+/// What one open DataLink client knows about its interface. The registry's instance has
+/// none ([`LinkSession::default`]): it validates actions, it never sends.
+#[derive(Debug, Clone, Default)]
+pub struct LinkSession {
+    /// The open handle's link type; `None` on an instance with no handle behind it.
+    pub link_type: Option<LinkType>,
+    /// Whether the interface is a loopback (checksum offload notes).
+    pub loopback: bool,
+    /// Destination defaults from `remote_addr`.
+    pub defaults: BuildDefaults,
+}
+
+/// Longest a `probe_tcp` waits for replies.
+pub const MAX_PROBE_TIMEOUT_MS: u64 = 10_000;
+/// Default `probe_tcp` wait.
+pub const DEFAULT_PROBE_TIMEOUT_MS: u64 = 1_000;
+/// Most replies one `probe_tcp` collects.
+pub const MAX_PROBE_REPLIES: u64 = 16;
+
+/// What `probe_tcp` hands the client loop: the frame, the flow its replies come back on, and
+/// how long and for how many to wait. Internal — the model never writes or sees this shape.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ProbeRequest {
+    /// The whole frame, link header included.
+    pub frame: Vec<u8>,
+    /// The flow the probe opens, from the sender's side.
+    pub flow: TcpFlow,
+    /// How long to wait for replies after sending.
+    pub timeout_ms: u64,
+    /// Stop after this many replies.
+    pub max_replies: usize,
+}
+
+/// An IPv4/TCP frame for this client's link: the packet from [`build_ipv4_tcp`], behind the
+/// link header the open handle needs (Ethernet needs `dst_mac` / `src_mac`; loopback gets the
+/// AF_INET family header; RAW gets none).
+pub fn build_tcp_frame(
+    action: &serde_json::Value,
+    session: &LinkSession,
+) -> Result<(Vec<u8>, TcpFlow)> {
+    let built = build_ipv4_tcp(action, &session.defaults)?;
+    let macs = match (action.get("dst_mac"), action.get("src_mac")) {
+        (None, None) => None,
+        (Some(d), Some(s)) => Some((
+            parse_mac(d.as_str().unwrap_or_default(), "dst_mac")?,
+            parse_mac(s.as_str().unwrap_or_default(), "src_mac")?,
+        )),
+        _ => anyhow::bail!("give both 'dst_mac' and 'src_mac', or neither"),
+    };
+    let header = match session.link_type {
+        Some(link) => link_header(link, 0x0800, macs)?,
+        // No handle: validation only. Frame it as the MACs say.
+        None => match macs {
+            Some(m) => link_header(LinkType::Ethernet, 0x0800, Some(m))?,
+            None => Vec::new(),
+        },
+    };
+    let mut frame = header;
+    frame.extend_from_slice(&built.packet);
+    Ok((frame, built.flow))
+}
+
+/// `probe_tcp`'s request: [`build_tcp_frame`] plus `timeout_ms` and `max_replies`.
+pub fn build_probe(action: &serde_json::Value, session: &LinkSession) -> Result<ProbeRequest> {
+    let (frame, flow) = build_tcp_frame(action, session)?;
+    let num = |k: &str| -> Result<Option<u64>> {
+        match action.get(k) {
+            None | Some(serde_json::Value::Null) => Ok(None),
+            Some(v) => v
+                .as_u64()
+                .map(Some)
+                .with_context(|| format!("'{k}' must be a positive number; got {v}")),
+        }
+    };
+    let timeout_ms = num("timeout_ms")?.unwrap_or(DEFAULT_PROBE_TIMEOUT_MS);
+    if timeout_ms == 0 || timeout_ms > MAX_PROBE_TIMEOUT_MS {
+        anyhow::bail!("'timeout_ms' must be 1 to {MAX_PROBE_TIMEOUT_MS}; got {timeout_ms}");
+    }
+    let max_replies = num("max_replies")?.unwrap_or(1);
+    if max_replies == 0 || max_replies > MAX_PROBE_REPLIES {
+        anyhow::bail!("'max_replies' must be 1 to {MAX_PROBE_REPLIES}; got {max_replies}");
+    }
+    Ok(ProbeRequest {
+        frame,
+        flow,
+        timeout_ms,
+        max_replies: max_replies as usize,
+    })
 }
 
 /// `frame_hex`, with the separators a model reading a packet dump naturally writes
@@ -250,8 +414,8 @@ fn frame_parameters(what: &str) -> Vec<Parameter> {
             type_hint: "string".to_string(),
             description: format!(
                 "Destination MAC of {what}, as \"aa:bb:cc:dd:ee:ff\". Pass it straight back \
-                 to inject_frame. Null only when the captured bytes are shorter than an \
-                 Ethernet header."
+                 to inject_frame. Null when the link has no MAC addresses (link_type NULL, \
+                 LOOP, RAW - macOS lo0 is NULL) or the bytes are shorter than the link header."
             ),
             required: true,
         },
@@ -266,7 +430,8 @@ fn frame_parameters(what: &str) -> Vec<Parameter> {
             type_hint: "string".to_string(),
             description: format!(
                 "EtherType of {what} as a 0x-prefixed hex string, e.g. \"0x0806\" (ARP) or \
-                 \"0x0800\" (IPv4). inject_frame accepts this spelling unchanged."
+                 \"0x0800\" (IPv4); on a loopback link, the one its address family means. \
+                 inject_frame accepts this spelling unchanged."
             ),
             required: true,
         },
@@ -274,8 +439,9 @@ fn frame_parameters(what: &str) -> Vec<Parameter> {
             name: "payload".to_string(),
             type_hint: "string".to_string(),
             description: format!(
-                "Everything in {what} after the 14-byte Ethernet header, read according to \
-                 'payload_encoding'. A prefix when `truncated` is true."
+                "Everything in {what} after the link header (14 bytes on Ethernet, 4 on a \
+                 NULL/LOOP loopback, none on RAW), read according to 'payload_encoding'. A \
+                 prefix when `truncated` is true."
             ),
             required: true,
         },
@@ -293,8 +459,8 @@ fn frame_parameters(what: &str) -> Vec<Parameter> {
             name: "frame_hex".to_string(),
             type_hint: "string".to_string(),
             description: format!(
-                "The whole of the first {} bytes of {} as hex (dst MAC, src MAC, EtherType, \
-                 payload), for replaying it verbatim through inject_frame's 'frame_hex' \
+                "The whole of the first {} bytes of {} as hex (link header and payload), for \
+                 replaying it verbatim through inject_frame's 'frame_hex' \
                  escape hatch. Longer frames are cut there - see `truncated`.",
                 crate::client::datalink::MAX_HEX_BYTES_TO_MODEL,
                 what
@@ -319,6 +485,71 @@ fn frame_parameters(what: &str) -> Vec<Parameter> {
             description: "True when frame_hex is a prefix of the frame rather than all of it"
                 .to_string(),
             required: true,
+        },
+    ]
+    .into_iter()
+    .chain(decoded_frame_parameters())
+    .collect()
+}
+
+/// The decoded fields both DataLink protocols add to a frame event (see
+/// [`crate::client::datalink::packet::decode_frame`]). `link_type` is always present; the
+/// rest only when the frame carries them.
+pub fn decoded_frame_parameters() -> Vec<Parameter> {
+    vec![
+        Parameter {
+            name: "link_type".to_string(),
+            type_hint: "string".to_string(),
+            description: "The interface's link-layer format: \"EN10MB\" (Ethernet), \"NULL\" \
+                          (BSD loopback such as macOS lo0: a 4-byte address family, no MACs), \
+                          \"LOOP\", \"RAW\" (no link header), \"LINUX_SLL\""
+                .to_string(),
+            required: true,
+        },
+        Parameter {
+            name: "family".to_string(),
+            type_hint: "string".to_string(),
+            description: "NULL/LOOP links only: the address family in the 4-byte header, \
+                          \"AF_INET\" or \"AF_INET6\" (a number when unknown)"
+                .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "ip".to_string(),
+            type_hint: "object".to_string(),
+            description: "The IPv4 header, decoded: src, dst, protocol, ttl, id, \
+                          dont_fragment, total_length, checksum and checksum_ok. Absent when \
+                          the frame is not IPv4."
+                .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "tcp".to_string(),
+            type_hint: "object".to_string(),
+            description: "The TCP header, decoded: src_port, dst_port, seq, ack, flags (names), \
+                          window, options (a list in the spelling send_ipv4_tcp accepts - mss, \
+                          wscale, sack_perm, timestamps, mp_capable with version and flags, \
+                          other MPTCP subtypes by name), checksum / checksum_ok / \
+                          checksum_note (0x0000 on loopback is checksum offload, not an \
+                          error), payload_length. Absent unless the frame is IPv4 TCP."
+                .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "udp".to_string(),
+            type_hint: "object".to_string(),
+            description: "The UDP header, decoded: src_port, dst_port, length, checksum. \
+                          Absent unless the frame is IPv4 UDP."
+                .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "icmp".to_string(),
+            type_hint: "object".to_string(),
+            description: "ICMP type, type_name and code; for an error, 'about' names the \
+                          packet it reports on. Absent unless the frame is ICMP."
+                .to_string(),
+            required: false,
         },
     ]
 }
@@ -371,8 +602,93 @@ pub static DATALINK_CLIENT_CONNECTED_EVENT: LazyLock<EventType> = LazyLock::new(
             description: "Whether the interface was opened in promiscuous mode".to_string(),
             required: true,
         },
+        Parameter {
+            name: "link_type".to_string(),
+            type_hint: "string".to_string(),
+            description: "The interface's link-layer format, which decides how frames are \
+                          built: \"EN10MB\" (Ethernet - inject_frame needs dst_mac, src_mac, \
+                          ethertype), \"NULL\" / \"LOOP\" (loopback, e.g. macOS lo0 - no \
+                          MACs; give only ethertype ipv4/ipv6), \"RAW\" (no link header at all)"
+                .to_string(),
+            required: true,
+        },
+        Parameter {
+            name: "capture".to_string(),
+            type_hint: "boolean".to_string(),
+            description: "Whether captured frames are delivered as datalink_frame_captured"
+                .to_string(),
+            required: true,
+        },
+        Parameter {
+            name: "filter".to_string(),
+            type_hint: "string".to_string(),
+            description: "The BPF filter frames are captured through, or null for none".to_string(),
+            required: true,
+        },
     ])
-    .with_actions(vec![inject_frame_action(false), wait_for_more_action()])
+    .with_actions(vec![
+        inject_frame_action(false),
+        send_ipv4_tcp_action(),
+        probe_tcp_action(),
+        wait_for_more_action(),
+    ])
+});
+
+/// Raised when a `probe_tcp` the model asked for has finished waiting for replies.
+pub static DATALINK_CLIENT_PROBE_COMPLETED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    EventType::new(
+        "datalink_probe_completed",
+        "A probe_tcp segment was sent and the replies on its flow collected",
+        json!({"type": "wait_for_more"}),
+    )
+    .with_parameters(vec![
+        Parameter {
+            name: "flow".to_string(),
+            type_hint: "object".to_string(),
+            description: "The probe's flow from our side: src_ip, dst_ip, src_port, dst_port"
+                .to_string(),
+            required: true,
+        },
+        Parameter {
+            name: "sent".to_string(),
+            type_hint: "object".to_string(),
+            description: "The probe as sent, decoded (ip, tcp with its options)".to_string(),
+            required: true,
+        },
+        Parameter {
+            name: "replies".to_string(),
+            type_hint: "array".to_string(),
+            description: "Each reply on the flow, decoded like a captured frame (ip, tcp or \
+                          icmp, options), plus options_echoed / options_not_echoed against \
+                          the probe's own options"
+                .to_string(),
+            required: true,
+        },
+        Parameter {
+            name: "reply_count".to_string(),
+            type_hint: "number".to_string(),
+            description: "How many replies were collected".to_string(),
+            required: true,
+        },
+        Parameter {
+            name: "waited_ms".to_string(),
+            type_hint: "number".to_string(),
+            description: "How long the probe listened".to_string(),
+            required: true,
+        },
+        Parameter {
+            name: "summary".to_string(),
+            type_hint: "array".to_string(),
+            description: "One line per reply, or one saying none came".to_string(),
+            required: true,
+        },
+    ])
+    .with_actions(vec![
+        send_ipv4_tcp_action(),
+        probe_tcp_action(),
+        inject_frame_action(false),
+        wait_for_more_action(),
+    ])
 });
 
 /// Raised after a frame really went out on the wire.
@@ -396,14 +712,19 @@ fn inject_frame_action(in_response: bool) -> ActionDefinition {
     ActionDefinition {
         name: "inject_frame".to_string(),
         description: format!(
-            "{} Build it from fields: 'dst_mac' and 'src_mac' as \"aa:bb:cc:dd:ee:ff\", \
-             'ethertype' as a name ({}), a number (2054) or a 0x string (\"0x0806\"), and an \
+            "{} Build it from fields, which depend on the interface's link_type (reported \
+             in datalink_connected). On Ethernet (EN10MB): 'dst_mac' and 'src_mac' as \
+             \"aa:bb:cc:dd:ee:ff\" and 'ethertype'. On a loopback link (NULL/LOOP - macOS \
+             lo0): no MACs, only 'ethertype' \"ipv4\" or \"ipv6\", which becomes the 4-byte \
+             address-family header. On RAW: no header at all, just 'payload'. \
+             'ethertype' is a name ({}), a number (2054) or a 0x string (\"0x0806\"), and an \
              optional 'payload' whose 'payload_encoding' says whether it is \"hex\" (binary - \
              ARP, IP, anything with a header) or \"utf8\" (its characters, as they are). \
              'payload_encoding' has no default and nothing is sniffed: \"deadbeef\" is four \
              bytes as hex and eight characters as text. For an ARP request set 'ethertype' to \
-             \"arp\" and put the 28-byte RFC 826 body in 'payload' as hex. The 14-byte \
-             Ethernet header is assembled for you, so do not repeat it in 'payload'. Do NOT \
+             \"arp\" and put the 28-byte RFC 826 body in 'payload' as hex. The link \
+             header for this interface is assembled for you, so do not repeat it in 'payload'. \
+             For IPv4 TCP use send_ipv4_tcp instead: it builds and checksums the headers. Do NOT \
              append the FCS - the interface computes it. The whole frame must be at least \
              {MIN_ETHERNET_FRAME_BYTES} and at most {MAX_ETHERNET_FRAME_BYTES} bytes. \
              Alternatively, for a frame you already have in full - one a \
@@ -425,16 +746,17 @@ fn inject_frame_action(in_response: bool) -> ActionDefinition {
                 name: "dst_mac".to_string(),
                 type_hint: "string".to_string(),
                 description: "Destination MAC address, e.g. \"00:11:22:33:44:55\", or \
-                              \"ff:ff:ff:ff:ff:ff\" to broadcast. Required unless \
-                              'frame_hex' is used."
+                              \"ff:ff:ff:ff:ff:ff\" to broadcast. Ethernet (link_type EN10MB) only, \
+                              where it is required unless 'frame_hex' is used; refused on a \
+                              loopback or RAW link, which has no MACs."
                     .to_string(),
                 required: false,
             },
             Parameter {
                 name: "src_mac".to_string(),
                 type_hint: "string".to_string(),
-                description: "Source MAC address, same spelling as 'dst_mac'. Required unless \
-                              'frame_hex' is used."
+                description: "Source MAC address, same spelling as 'dst_mac'. Ethernet only, \
+                              like 'dst_mac'."
                     .to_string(),
                 required: false,
             },
@@ -444,7 +766,8 @@ fn inject_frame_action(in_response: bool) -> ActionDefinition {
                 description: format!(
                     "What the payload is: a name ({}), a number (2054), or a 0x-prefixed hex \
                      string (\"0x0806\"). A bare \"0806\" is refused - it is 2054 as hex \
-                     and 806 as decimal. Required unless 'frame_hex' is used.",
+                     and 806 as decimal. Required unless 'frame_hex' is used (or the link \
+                     is RAW). On a loopback link only ipv4 and ipv6 exist.",
                     ETHERTYPE_NAMES
                         .iter()
                         .map(|(n, _)| *n)
@@ -456,8 +779,9 @@ fn inject_frame_action(in_response: bool) -> ActionDefinition {
             Parameter {
                 name: "payload".to_string(),
                 type_hint: "string".to_string(),
-                description: "Everything after the 14-byte Ethernet header, read according to \
-                              'payload_encoding'. Omit it for a header-only frame."
+                description: "Everything after the link header (14 bytes on Ethernet, 4 on \
+                              NULL/LOOP, none on RAW), read according to 'payload_encoding'. \
+                              Omit it for a header-only frame."
                     .to_string(),
                 required: false,
             },
@@ -477,7 +801,7 @@ fn inject_frame_action(in_response: bool) -> ActionDefinition {
                 name: "frame_hex".to_string(),
                 type_hint: "string".to_string(),
                 description: format!(
-                    "Escape hatch: a complete Ethernet frame as hex, header included, for \
+                    "Escape hatch: a complete frame as hex, link header included, for \
                      replaying one a datalink_frame_captured event gave you. Prefer the \
                      structured fields for a frame you are composing - a model cannot \
                      proofread hex. At least {MIN_ETHERNET_FRAME_BYTES} and at most \
@@ -513,12 +837,206 @@ fn wait_for_more_action() -> ActionDefinition {
     }
 }
 
-/// DataLink client protocol action handler
-pub struct DataLinkClientProtocol;
+/// The parameters `send_ipv4_tcp` and `probe_tcp` share.
+fn tcp_segment_parameters() -> Vec<Parameter> {
+    let p = |name: &str, type_hint: &str, description: String| Parameter {
+        name: name.to_string(),
+        type_hint: type_hint.to_string(),
+        description,
+        required: false,
+    };
+    vec![
+        p(
+            "dst_ip",
+            "string",
+            "Destination IPv4 address. Defaults to the host in the client's remote_addr.".into(),
+        ),
+        p(
+            "dst_port",
+            "number",
+            "Destination TCP port. Defaults to the port in the client's remote_addr.".into(),
+        ),
+        p(
+            "src_ip",
+            "string",
+            "Source IPv4 address. Defaults to dst_ip when that is loopback; required otherwise."
+                .into(),
+        ),
+        p(
+            "src_port",
+            "number",
+            "Source TCP port. Default: a random ephemeral port (49152-65535).".into(),
+        ),
+        p(
+            "flags",
+            "array",
+            format!(
+                "TCP flags by name, e.g. [\"syn\"] or [\"syn\", \"ack\"] (default \
+                 [\"syn\"]). Names: {}",
+                tcp_flag_list()
+            ),
+        ),
+        p("seq", "number", "Sequence number. Default: random.".into()),
+        p("ack", "number", "Acknowledgement number. Default 0.".into()),
+        p(
+            "window",
+            "number",
+            "Advertised window. Default 65535.".into(),
+        ),
+        p(
+            "options",
+            "array",
+            format!(
+                "TCP options in order, each an object with a 'kind': {{\"kind\":\"mss\", \
+                 \"value\":1460}}, {{\"kind\":\"wscale\",\"shift\":7}}, \
+                 {{\"kind\":\"sack_perm\"}}, {{\"kind\":\"timestamps\",\"tsval\":1, \
+                 \"tsecr\":0}}, {{\"kind\":\"nop\"}}, and MPTCP {{\"kind\":\"mp_capable\", \
+                 \"version\":1,\"flags\":1}} (flags a number or names: {}; optional \
+                 sender_key / receiver_key as 64-bit numbers). Escape hatch for anything \
+                 else: {{\"kind\": <number>, \"data_hex\": \"...\"}}. Known kinds: {}. \
+                 Padded to 4 bytes for you; 40 bytes at most.",
+                MP_CAPABLE_FLAG_NAMES
+                    .iter()
+                    .map(|(_, n)| *n)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                TCP_OPTION_KINDS.join(", ")
+            ),
+        ),
+        p("ttl", "number", "IPv4 TTL. Default 64.".into()),
+        p(
+            "ip_id",
+            "number",
+            "IPv4 identification. Default: random.".into(),
+        ),
+        p(
+            "dont_fragment",
+            "boolean",
+            "IPv4 DF bit. Default true.".into(),
+        ),
+        p(
+            "payload",
+            "string",
+            "TCP data, read according to 'payload_encoding'. Omit for a bare segment.".into(),
+        ),
+        Parameter {
+            name: "payload_encoding".to_string(),
+            type_hint: "string".to_string(),
+            description: "\"utf8\" or \"hex\"; required with 'payload', no default.".into(),
+            required: false,
+        }
+        .with_choices(["hex", "utf8"]),
+        p(
+            "dst_mac",
+            "string",
+            "Ethernet (EN10MB) links only, with src_mac: the next hop's MAC. Refused on a \
+             loopback or RAW link."
+                .into(),
+        ),
+        p(
+            "src_mac",
+            "string",
+            "Ethernet links only: this interface's MAC.".into(),
+        ),
+    ]
+}
+
+/// `send_ipv4_tcp`: one IPv4 TCP segment from fields, checksums and link header built.
+fn send_ipv4_tcp_action() -> ActionDefinition {
+    ActionDefinition {
+        name: "send_ipv4_tcp".to_string(),
+        description: "Send one hand-crafted IPv4 TCP segment from fields: addresses, ports, \
+         flags by name, sequence numbers and TCP options as a structured list \
+         (including MPTCP mp_capable). The IPv4 and TCP headers and both \
+         checksums are computed for you, and the link header is built for this \
+         interface's link_type - no MACs on loopback. dst_ip/dst_port default to \
+         the client's remote_addr. Use probe_tcp instead to get the replies back."
+            .to_string(),
+        parameters: tcp_segment_parameters(),
+        example: json!({
+            "type": "send_ipv4_tcp",
+            "dst_ip": "127.0.0.1",
+            "dst_port": 3333,
+            "src_port": 40000,
+            "flags": ["syn"],
+            "options": [
+                {"kind": "mss", "value": 16344},
+                {"kind": "mp_capable", "version": 1, "flags": 1}
+            ]
+        }),
+        log_template: None,
+    }
+}
+
+/// `probe_tcp`: send like `send_ipv4_tcp`, then collect the replies on that flow.
+fn probe_tcp_action() -> ActionDefinition {
+    let mut parameters = tcp_segment_parameters();
+    parameters.push(Parameter {
+        name: "timeout_ms".to_string(),
+        type_hint: "number".to_string(),
+        description: format!(
+            "How long to listen for replies after sending (default {DEFAULT_PROBE_TIMEOUT_MS}, \
+             max {MAX_PROBE_TIMEOUT_MS})"
+        ),
+        required: false,
+    });
+    parameters.push(Parameter {
+        name: "max_replies".to_string(),
+        type_hint: "number".to_string(),
+        description: format!(
+            "Stop listening after this many replies (default 1, max {MAX_PROBE_REPLIES})"
+        ),
+        required: false,
+    });
+    ActionDefinition {
+        name: "probe_tcp".to_string(),
+        description: "Send one IPv4 TCP segment exactly as send_ipv4_tcp does, then listen on \
+         its flow and report the replies decoded: flags, sequence numbers, every \
+         TCP option (MPTCP subtypes by name) and which of the probe's options \
+         came back. A SYN to an open port returns its SYN-ACK; to a closed one, \
+         a RST. Works whether or not 'capture' is on: the probe opens its own \
+         capture filtered to the reply flow. From send_to_client the replies are \
+         the result; from the model they arrive as datalink_probe_completed."
+            .to_string(),
+        parameters,
+        example: json!({
+            "type": "probe_tcp",
+            "dst_ip": "127.0.0.1",
+            "dst_port": 3333,
+            "flags": ["syn"],
+            "options": [
+                {"kind": "mss", "value": 16344},
+                {"kind": "mp_capable", "version": 1, "flags": 1}
+            ],
+            "timeout_ms": 1000
+        }),
+        log_template: None,
+    }
+}
+
+/// DataLink client protocol action handler.
+///
+/// The registry's instance ([`DataLinkClientProtocol::new`]) has no open handle behind it and
+/// only validates. A connected client executes with [`DataLinkClientProtocol::with_session`],
+/// which knows the link type, so frames are built for the interface they go out on.
+#[derive(Default)]
+pub struct DataLinkClientProtocol {
+    session: LinkSession,
+}
 
 impl DataLinkClientProtocol {
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    /// An executor for one open client: its link type, loopback flag and remote_addr defaults.
+    pub fn with_session(session: LinkSession) -> Self {
+        Self { session }
+    }
+
+    /// What this executor knows about its interface.
+    pub fn session(&self) -> &LinkSession {
+        &self.session
     }
 }
 
@@ -539,11 +1057,37 @@ impl Protocol for DataLinkClientProtocol {
             ParameterDefinition {
                 name: "promiscuous".to_string(),
                 type_hint: "boolean".to_string(),
-                description:
-                    "Enable promiscuous mode to capture frames (requires root/CAP_NET_RAW)"
-                        .to_string(),
+                description: "Open the interface in promiscuous mode, so frames addressed to \
+                              other hosts are seen too (default false). Irrelevant on loopback. \
+                              On its own it also turns 'capture' on, as it always has."
+                    .to_string(),
                 required: false,
                 example: json!(false),
+                default: None,
+            },
+            ParameterDefinition {
+                name: "capture".to_string(),
+                type_hint: "boolean".to_string(),
+                description: "Deliver captured frames to the model as datalink_frame_captured \
+                              (each one is a model call or a handler run). Independent of \
+                              promiscuous mode; defaults to the value of 'promiscuous', so a \
+                              client that sets neither only injects. probe_tcp needs neither."
+                    .to_string(),
+                required: false,
+                example: json!(true),
+                default: None,
+            },
+            ParameterDefinition {
+                name: "filter".to_string(),
+                type_hint: "string".to_string(),
+                description: "BPF filter for captured frames, e.g. \"tcp port 3333\" or \
+                              \"arp\". Without one, a remote_addr that is an address \
+                              (\"127.0.0.1:3333\") captures through \"host 127.0.0.1 and port \
+                              3333\"; a remote_addr that is not an address captures everything. \
+                              \"\" means no filter at all."
+                    .to_string(),
+                required: false,
+                example: json!("tcp port 3333"),
                 default: None,
             },
         ]
@@ -551,6 +1095,8 @@ impl Protocol for DataLinkClientProtocol {
     fn get_async_actions(&self, _state: &AppState) -> Vec<ActionDefinition> {
         vec![
             inject_frame_action(false),
+            send_ipv4_tcp_action(),
+            probe_tcp_action(),
             ActionDefinition {
                 name: "disconnect".to_string(),
                 description: "Close the DataLink client and release the interface".to_string(),
@@ -563,7 +1109,11 @@ impl Protocol for DataLinkClientProtocol {
         ]
     }
     fn get_sync_actions(&self) -> Vec<ActionDefinition> {
-        vec![inject_frame_action(true), wait_for_more_action()]
+        vec![
+            inject_frame_action(true),
+            send_ipv4_tcp_action(),
+            wait_for_more_action(),
+        ]
     }
     fn protocol_name(&self) -> &'static str {
         "DataLink"
@@ -576,6 +1126,7 @@ impl Protocol for DataLinkClientProtocol {
             DATALINK_CLIENT_CONNECTED_EVENT.clone(),
             DATALINK_CLIENT_FRAME_INJECTED_EVENT.clone(),
             DATALINK_CLIENT_FRAME_CAPTURED_EVENT.clone(),
+            DATALINK_CLIENT_PROBE_COMPLETED_EVENT.clone(),
         ]
     }
     fn stack_name(&self) -> &'static str {
@@ -606,7 +1157,11 @@ impl Protocol for DataLinkClientProtocol {
             // capabilities in `SystemCapabilities`, and a macOS user in the ChmodBPF group has
             // capture without raw sockets, so the wrong variant refuses a host that works.
             .privilege_requirement(PrivilegeRequirement::PacketCapture)
-            .implementation("libpcap (pcap crate) for Layer 2 frame injection and capture")
+            .implementation(
+                "libpcap (pcap crate) for frame injection and capture, framed for the handle's \
+                 link type (Ethernet, BSD loopback NULL/LOOP, RAW); IPv4/TCP crafting and \
+                 decoding with TCP and MPTCP options in client/datalink/packet.rs",
+            )
             .llm_control("Full control over Ethernet frames (inject/capture)")
             .e2e_testing(
                 "tests/client/datalink: `action_test.rs` pins the action/event surface with no \
@@ -627,7 +1182,12 @@ impl Protocol for DataLinkClientProtocol {
                  nothing is injected - the outcome is in the log as decision=model_inject / \
                  model_silent / model_reject / fail_closed_llm_error. The inject -> \
                  datalink_frame_injected -> inject chain is capped at 4 hops; captured frames \
-                 arriving while a model turn is running are dropped and counted, not queued.",
+                 arriving while a model turn is running are dropped and counted, not queued. \
+                 The link type is read from the open handle and reported as link_type: on \
+                 macOS lo0 (NULL) frames carry a 4-byte address family, not MACs. Capture is \
+                 its own startup parameter (default: the value of promiscuous), with an \
+                 optional BPF filter that defaults from an address remote_addr. probe_tcp \
+                 sends a crafted segment and returns the decoded replies on its flow.",
             )
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
@@ -730,7 +1290,17 @@ impl Client for DataLinkClientProtocol {
             .context("Missing 'type' field in action")?;
 
         match action_type {
-            "inject_frame" => Ok(ClientActionResult::SendData(build_frame(&action)?)),
+            "inject_frame" => Ok(ClientActionResult::SendData(build_frame_for_link(
+                &action,
+                self.session.link_type.unwrap_or_default(),
+            )?)),
+            "send_ipv4_tcp" => Ok(ClientActionResult::SendData(
+                build_tcp_frame(&action, &self.session)?.0,
+            )),
+            "probe_tcp" => Ok(ClientActionResult::Custom {
+                name: "probe_tcp".to_string(),
+                data: serde_json::to_value(build_probe(&action, &self.session)?)?,
+            }),
             "disconnect" => Ok(ClientActionResult::Disconnect),
             "wait_for_more" => Ok(ClientActionResult::WaitForMore),
             _ => Err(anyhow::anyhow!(
