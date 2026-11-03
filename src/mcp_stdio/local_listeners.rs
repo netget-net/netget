@@ -78,7 +78,7 @@ pub fn netget_label(listener: &LocalListener, servers: &[RunningServer]) -> Opti
         let matched: Vec<String> = servers
             .iter()
             .filter(|s| s.port == listener.addr.port())
-            .map(|s| format!("server #{} ({})", s.id, s.protocol))
+            .map(|s| format!("server #{} ({})", s.id, s.protocol.to_lowercase()))
             .collect();
         return Some(if matched.is_empty() {
             "this NetGet process".to_string()
