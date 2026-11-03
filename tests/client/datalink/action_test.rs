@@ -83,8 +83,9 @@ async fn every_event_offers_an_executable_vocabulary() {
     let events = p.get_event_types();
     assert_eq!(
         events.len(),
-        3,
-        "expected datalink_connected, datalink_frame_injected and datalink_frame_captured; got {:?}",
+        4,
+        "expected datalink_connected, datalink_frame_injected, datalink_frame_captured and \
+         datalink_probe_completed; got {:?}",
         events.iter().map(|e| e.id.clone()).collect::<Vec<_>>()
     );
 
@@ -106,7 +107,7 @@ async fn every_event_offers_an_executable_vocabulary() {
     }
 }
 
-/// `interface` and `promiscuous`, and nothing else. A parameter that is declared and never read
+/// `interface`, `promiscuous`, `capture` and `filter`, and nothing else. A parameter that is declared and never read
 /// is a knob the model will turn to no effect; one read and not declared is refused at startup.
 #[tokio::test]
 async fn startup_parameters_are_exactly_what_connect_reads() {
@@ -117,8 +118,13 @@ async fn startup_parameters_are_exactly_what_connect_reads() {
         .collect();
     assert_eq!(
         declared,
-        vec!["interface".to_string(), "promiscuous".to_string()],
-        "connect_with_llm_actions reads exactly these two"
+        vec![
+            "interface".to_string(),
+            "promiscuous".to_string(),
+            "capture".to_string(),
+            "filter".to_string()
+        ],
+        "connect_with_llm_actions reads exactly these four"
     );
 }
 
@@ -341,28 +347,42 @@ async fn declared_event_parameters_match_the_payload() {
     for event in protocol()
         .get_event_types()
         .into_iter()
-        .filter(|e| e.id != "datalink_connected")
+        .filter(|e| e.id != "datalink_connected" && e.id != "datalink_probe_completed")
     {
-        for param in &event.parameters {
+        // Every required field is always there; the decoded layers (`ip`, `tcp`, ...) are
+        // optional and present only when the frame carries them.
+        for param in event.parameters.iter().filter(|p| p.required) {
             assert!(
                 payload.get(&param.name).is_some(),
-                "event '{}' declares parameter '{}', which frame_event_fields never sets",
+                "event '{}' declares required parameter '{}', which frame_event_fields never sets",
                 event.id,
                 param.name
             );
         }
-        assert_eq!(
-            event.parameters.len(),
-            payload.as_object().unwrap().len(),
-            "event '{}' declares {:?} but the payload carries {:?}",
-            event.id,
-            event
-                .parameters
-                .iter()
-                .map(|p| p.name.clone())
-                .collect::<Vec<_>>(),
-            payload.as_object().unwrap().keys().collect::<Vec<_>>()
+        // An IPv4/TCP frame on loopback exercises every optional field there is to set.
+        let mut syn = 2u32.to_ne_bytes().to_vec();
+        syn.extend_from_slice(
+            &hex::decode(
+                "450000301234400040062a927f0000017f0000019c400d0511223344000000007002ffff434b\
+                 000002043fd81e040101",
+            )
+            .unwrap(),
         );
+        let decoded = netget::client::datalink::frame_event_fields_for_link(
+            &syn,
+            netget::client::datalink::packet::LinkType::Null,
+            true,
+        );
+        for sample in [&payload, &decoded] {
+            for key in sample.as_object().unwrap().keys() {
+                assert!(
+                    event.parameters.iter().any(|p| &p.name == key),
+                    "event '{}' payload carries '{key}', which it does not declare",
+                    event.id
+                );
+            }
+        }
+        assert!(decoded.get("tcp").is_some() && decoded.get("family").is_some());
     }
 }
 

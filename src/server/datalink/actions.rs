@@ -325,41 +325,68 @@ pub static DATALINK_PACKET_CAPTURED_EVENT: LazyLock<EventType> = LazyLock::new(|
             "message": "ARP request detected"
         }),
     )
-    .with_parameters(vec![
-        Parameter {
-            name: "packet_length".to_string(),
-            type_hint: "number".to_string(),
-            description: "Full length of the captured frame in bytes, before any truncation"
-                .to_string(),
-            required: true,
-        },
-        Parameter {
-            name: "packet_hex".to_string(),
-            type_hint: "string".to_string(),
-            description: format!(
-                "Hex of the frame's first {} bytes (dst MAC, src MAC, EtherType, payload). \
+    .with_parameters(
+        vec![
+            Parameter {
+                name: "packet_length".to_string(),
+                type_hint: "number".to_string(),
+                description: "Full length of the captured frame in bytes, before any truncation"
+                    .to_string(),
+                required: true,
+            },
+            Parameter {
+                name: "packet_hex".to_string(),
+                type_hint: "string".to_string(),
+                description: format!(
+                    "Hex of the frame's first {} bytes (link header, then payload). \
                  A frame longer than that is cut here - see `truncated` - because the whole \
                  of a {}-byte frame would be {} characters of prompt.",
-                crate::server::datalink::MAX_HEX_BYTES_TO_MODEL,
-                65535,
-                65535 * 2
-            ),
-            required: false,
-        },
-        Parameter {
-            name: "captured_length".to_string(),
-            type_hint: "number".to_string(),
-            description: "Number of bytes actually encoded in packet_hex".to_string(),
-            required: true,
-        },
-        Parameter {
-            name: "truncated".to_string(),
-            type_hint: "boolean".to_string(),
-            description: "True when packet_hex is a prefix of the frame rather than all of it"
-                .to_string(),
-            required: true,
-        },
-    ])
+                    crate::server::datalink::MAX_HEX_BYTES_TO_MODEL,
+                    65535,
+                    65535 * 2
+                ),
+                required: false,
+            },
+            Parameter {
+                name: "captured_length".to_string(),
+                type_hint: "number".to_string(),
+                description: "Number of bytes actually encoded in packet_hex".to_string(),
+                required: true,
+            },
+            Parameter {
+                name: "truncated".to_string(),
+                type_hint: "boolean".to_string(),
+                description: "True when packet_hex is a prefix of the frame rather than all of it"
+                    .to_string(),
+                required: true,
+            },
+            Parameter {
+                name: "dst_mac".to_string(),
+                type_hint: "string".to_string(),
+                description: "Destination MAC, Ethernet (link_type EN10MB) only; null on a link \
+                          with no MACs such as macOS lo0 (NULL)"
+                    .to_string(),
+                required: true,
+            },
+            Parameter {
+                name: "src_mac".to_string(),
+                type_hint: "string".to_string(),
+                description: "Source MAC, like dst_mac".to_string(),
+                required: true,
+            },
+            Parameter {
+                name: "ethertype".to_string(),
+                type_hint: "string".to_string(),
+                description: "EtherType as \"0x0800\"; on a loopback link, the one its address \
+                          family means; null when unreadable"
+                    .to_string(),
+                required: true,
+            },
+        ]
+        .into_iter()
+        .chain(crate::client::datalink::actions::decoded_frame_parameters())
+        .collect(),
+    )
     .with_actions(vec![notify_operator_action(), ignore_packet_action()])
 });
 

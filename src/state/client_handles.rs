@@ -40,6 +40,12 @@ pub const CLIENT_COMMAND_CAPACITY: usize = 16;
 pub enum ClientSendOutcome {
     /// Action executed; bytes were written and flushed to the wire.
     Sent { bytes_sent: usize },
+    /// Action sent `bytes_sent` bytes and then collected what came back for it — a DataLink
+    /// `probe_tcp`. `report` is the protocol's own structured account of the replies.
+    Probed {
+        bytes_sent: usize,
+        report: serde_json::Value,
+    },
     /// Action executed but produced no wire data (NoAction / WaitForMore /
     /// a Custom result the protocol handled internally).
     Executed { detail: String },

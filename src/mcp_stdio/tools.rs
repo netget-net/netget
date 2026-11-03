@@ -2002,11 +2002,21 @@ impl NetGetMcpService {
             self.state.app_state.set_client_memo(client_id, memo).await;
         }
 
+        // A protocol may say what it made of remote_addr (DataLink: a capture filter).
+        let connect_note = self
+            .state
+            .app_state
+            .get_client(client_id)
+            .await
+            .and_then(|c| c.get_protocol_field("connect_note").cloned())
+            .and_then(|v| v.as_str().map(|s| format!("\n{s}")))
+            .unwrap_or_default();
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "Client #{} ({}) connected to {}.{}",
+            "Client #{} ({}) connected to {}.{}{}",
             client_id.as_u32(),
             params.protocol,
             params.remote_addr,
+            connect_note,
             capturing
         ))]))
     }

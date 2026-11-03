@@ -169,6 +169,10 @@ pub fn describe_outcome(outcome: &ClientSendOutcome) -> String {
         ClientSendOutcome::Sent { bytes_sent } => {
             format!("sent {bytes_sent} byte(s) on the wire")
         }
+        ClientSendOutcome::Probed { bytes_sent, report } => format!(
+            "sent {bytes_sent} byte(s) on the wire; replies:\n{}",
+            serde_json::to_string_pretty(report).unwrap_or_else(|_| report.to_string())
+        ),
         ClientSendOutcome::Executed { detail } => {
             format!("executed, nothing written to the wire ({detail})")
         }
