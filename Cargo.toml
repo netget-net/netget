@@ -56,8 +56,8 @@ libsmbclient = ["dep:pavao"]  # SMB client
 
 # Optional capabilities.
 # The rmcp `client` feature is enabled so the in-process MCP smoke tests can drive the server.
-mcp-stdio = ["dep:rmcp", "dep:schemars", "rmcp/client"]  # MCP STDIO server mode for Claude Desktop/Code integration
-mcp-http = ["dep:rmcp", "dep:schemars", "rmcp/client", "rmcp/transport-streamable-http-server", "rmcp/transport-streamable-http-client-reqwest", "dep:reqwest-mcp"]  # MCP HTTP/SSE server mode for remote/web MCP clients
+mcp-stdio = ["dep:rmcp", "dep:schemars", "rmcp/client", "dep:listeners"]  # MCP STDIO server mode for Claude Desktop/Code integration
+mcp-http = ["dep:rmcp", "dep:schemars", "rmcp/client", "dep:listeners", "rmcp/transport-streamable-http-server", "rmcp/transport-streamable-http-client-reqwest", "dep:reqwest-mcp"]  # MCP HTTP/SSE server mode for remote/web MCP clients
 embedded-llm = ["dep:llama-cpp-2", "dep:hf-hub"]  # Embedded LLM inference via llama.cpp (needs cmake and a C++ compiler)
 sqlite = ["dep:rusqlite"]  # SQLite databases the model can create at runtime
 gpu = ["dep:gfxinfo"]  # GPU stats in the dashboard (not on macOS, see AGENTS.md)
@@ -300,6 +300,7 @@ syntect = "5.3"
 encoding_rs = "0.8"  # AFP long names and volume names are MacRoman
 serde_cbor = "0.11"  # CTAP2 (usb-fido2); decoded only through utils::cbor_depth::decode_bounded, which fuzz and tests reach without libusb
 unicode-normalization = "0.1"  # AFP 3 sends UTF-8 names decomposed (NFD)
+listeners = { version = "0.6", optional = true }  # MCP list_local_listeners: the host's listening sockets with their processes
 
 # ---------------------------------------------------------------------------------------------
 # wasm32-unknown-unknown: the browser demo (crates/netget-web). `tokio` and `crossterm` are

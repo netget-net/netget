@@ -12,6 +12,7 @@ pub mod docs;
 pub mod drain;
 pub mod events;
 pub mod http_guard;
+pub mod local_listeners;
 pub mod protocol_search;
 #[cfg(feature = "mcp-stdio")]
 pub mod stdio;

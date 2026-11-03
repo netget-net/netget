@@ -425,6 +425,16 @@ pub struct GetAccessLogParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListLocalListenersParams {
+    /// "tcp" (listening sockets), "udp" (bound sockets), or "all" (default)
+    #[serde(default)]
+    pub transport: Option<String>,
+    /// Only sockets on this port
+    #[serde(default, deserialize_with = "deserialize_option_u16_flexible")]
+    pub port: Option<u16>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct ExportRulesParams {
     /// The server whose recorded model answers to turn into rules. Give this or client_id.
     #[serde(default, deserialize_with = "deserialize_option_u32_flexible")]
@@ -1851,6 +1861,60 @@ impl NetGetMcpService {
         out.push_str("\nUse `get_access_log` with an id for the full request and response.");
 
         Ok(CallToolResult::success(vec![Content::text(out)]))
+    }
+
+    #[tool(
+        description = "List the TCP sockets listening and UDP sockets bound on THIS host — something to point a client at — with each one's address, port, pid and process name, and which are this NetGet's own servers. Read-only; filter with transport (tcp/udp) and port. Without root, other users' processes are not visible."
+    )]
+    async fn list_local_listeners(
+        &self,
+        Parameters(params): Parameters<ListLocalListenersParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let transport = match params
+            .transport
+            .as_deref()
+            .map(|t| t.trim().to_ascii_lowercase())
+            .as_deref()
+        {
+            None | Some("") | Some("all") => None,
+            Some("tcp") => Some("tcp"),
+            Some("udp") => Some("udp"),
+            Some(other) => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Unknown transport {other:?}: use \"tcp\", \"udp\" or \"all\"."
+                ))]));
+            }
+        };
+        // The socket table is read with blocking system calls.
+        let listeners =
+            match tokio::task::spawn_blocking(super::local_listeners::local_listeners).await {
+                Ok(Ok(listeners)) => listeners,
+                Ok(Err(e)) => {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Could not list local listeners: {e}"
+                    ))]));
+                }
+                Err(e) => {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Could not list local listeners: {e}"
+                    ))]));
+                }
+            };
+        let servers: Vec<super::local_listeners::RunningServer> = self
+            .state
+            .app_state
+            .get_all_servers()
+            .await
+            .iter()
+            .map(|s| super::local_listeners::RunningServer {
+                id: s.id.as_u32(),
+                protocol: s.protocol_name.clone(),
+                port: bound_port(s),
+            })
+            .collect();
+        Ok(CallToolResult::success(vec![Content::text(
+            super::local_listeners::render(&listeners, &servers, transport, params.port),
+        )]))
     }
 
     #[tool(
