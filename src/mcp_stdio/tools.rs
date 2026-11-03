@@ -1141,6 +1141,18 @@ impl NetGetMcpService {
         &self,
         Parameters(params): Parameters<StartServerParams>,
     ) -> Result<CallToolResult, McpError> {
+        // `protocol` is a name: resolve it exactly (canonical name, stack name or declared
+        // alias) and start that protocol under its canonical name. A near miss is refused with
+        // suggestions rather than started as whatever it happens to contain.
+        let mut params = params;
+        match crate::protocol::server_registry::registry().resolve_name(&params.protocol) {
+            Ok((protocol, _)) => params.protocol = protocol.protocol_name().to_string(),
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Failed to start server: {e}"
+                ))]))
+            }
+        }
         let instruction = params.instruction.unwrap_or_else(|| {
             format!(
                 "You are a {} server. Handle requests appropriately.",
@@ -1536,23 +1548,21 @@ impl NetGetMcpService {
         match crate::mcp_stdio::docs::render_protocol_docs(&params.protocol, &self.state.app_state)
             .await
         {
-            Some(text) => Ok(CallToolResult::success(vec![Content::text(text)])),
-            None => {
-                // Protocol not compiled in - list what's available
+            Ok(text) => Ok(CallToolResult::success(vec![Content::text(text)])),
+            Err(reason) => {
+                // Not a name either registry has: say why (with did-you-mean suggestions) and
+                // list what is available. Protocols are not Cargo features, so there is no
+                // feature to rebuild with.
                 let server_registry = crate::protocol::server_registry::registry();
                 let available = server_registry.available_protocols();
                 Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Protocol '{}' not found. It may not be compiled into this build.\n\n\
-                     Available server protocols ({}):\n{}\n\n\
-                     Build with the protocol feature enabled: cargo build --features mcp-stdio,{}",
-                    params.protocol,
+                    "{reason}\n\nAvailable server protocols ({}):\n{}",
                     available.len(),
                     available
                         .iter()
                         .map(|p| format!("  - {}", p))
                         .collect::<Vec<_>>()
                         .join("\n"),
-                    params.protocol.to_lowercase(),
                 ))]))
             }
         }
@@ -1921,6 +1931,16 @@ impl NetGetMcpService {
         &self,
         Parameters(params): Parameters<StartClientParams>,
     ) -> Result<CallToolResult, McpError> {
+        // `protocol` is a name: resolved exactly, as for start_server.
+        let mut params = params;
+        match crate::protocol::CLIENT_REGISTRY.resolve_name(&params.protocol) {
+            Ok((protocol, _)) => params.protocol = protocol.protocol_name().to_string(),
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Failed to start client: {e}"
+                ))]))
+            }
+        }
         let instruction = params.instruction.unwrap_or_else(|| {
             format!(
                 "You are a {} client connected to {}. Handle responses appropriately.",

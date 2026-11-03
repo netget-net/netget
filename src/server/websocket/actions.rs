@@ -1661,7 +1661,8 @@ pub static WEBSOCKET_CLOSE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         "websocket_close",
         "The client is closing the connection. The close frame is echoed back automatically; \
          this event is the last chance to record what happened or send a final frame.",
-        json!({"type": "notify_operator", "message": "client disconnected"}),
+        // Recording is append_to_log: notify_operator is not offered beside the send actions.
+        json!({"type": "append_to_log", "output_name": "websocket", "content": "client closed"}),
     )
     .with_parameters(vec![
         Parameter {

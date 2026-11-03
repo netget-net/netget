@@ -75,10 +75,58 @@ pub fn server_startup_examples_text(mut examples: crate::llm::actions::StartupEx
     examples.to_prompt_text()
 }
 
+/// Which side of a protocol an event belongs to. The two are offered different actions for
+/// an event that attaches none of its own, so an example derived for one is not valid for
+/// the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    Server,
+    Client,
+}
+
+/// The protocol actions the model is offered for `event` beyond the event's own list — what
+/// an example response may be derived from when the event declares only a placeholder
+/// (`EventType::effective_response_example_from`).
+///
+/// - A **server** offers only the event's own actions (`call_llm` narrows), except for an
+///   event that forgot to attach any (`has_no_usable_actions`), which `call_llm` repairs with
+///   the protocol's sync actions.
+/// - A **client** offers every action it declares, async and sync, on every event
+///   (`client_llm_action_set` unions).
+///
+/// Without this, an event with no attached actions was documented as answered by
+/// `notify_operator` (`show_message` before the rename) — on a client `tcp_data_received` it
+/// read as if the client could only talk to the operator, not to the server.
+pub fn example_fallback_actions<P: Protocol + ?Sized>(
+    p: &P,
+    state: &AppState,
+    event: &EventType,
+    role: Role,
+) -> Vec<ActionDefinition> {
+    match role {
+        Role::Server if event.has_no_usable_actions() => p.get_sync_actions(),
+        Role::Server => Vec::new(),
+        Role::Client => {
+            let mut out = p.get_async_actions(state);
+            for a in p.get_sync_actions() {
+                if !out.iter().any(|o| o.name == a.name) {
+                    out.push(a);
+                }
+            }
+            out
+        }
+    }
+}
+
 /// One event: its description, the fields of its data, what may answer it, and an example
 /// handler response. `heading` is the Markdown heading prefix for the event's own title
-/// (`"####"`, `"###"`).
-pub fn render_event(out: &mut String, event: &EventType, heading: &str) {
+/// (`"####"`, `"###"`). `fallback` is [`example_fallback_actions`] for the event's role.
+pub fn render_event(
+    out: &mut String,
+    event: &EventType,
+    heading: &str,
+    fallback: &[ActionDefinition],
+) {
     let _ = writeln!(out, "{heading} `{}`\n", event.id);
     let _ = writeln!(out, "{}\n", event.description);
 
@@ -102,7 +150,8 @@ pub fn render_event(out: &mut String, event: &EventType, heading: &str) {
     }
 
     out.push_str("Example handler response:\n\n```json\n");
-    let example = serde_json::json!({ "actions": [event.effective_response_example()] });
+    let example =
+        serde_json::json!({ "actions": [event.effective_response_example_from(fallback)] });
     out.push_str(&serde_json::to_string_pretty(&example).unwrap_or_default());
     out.push_str("\n```\n\n");
 
@@ -228,6 +277,7 @@ pub fn render_all_protocol_docs() -> String {
             Some(&port),
             Some(&examples),
             state,
+            Role::Server,
         ));
     }
 
@@ -244,6 +294,7 @@ pub fn render_all_protocol_docs() -> String {
                 None,
                 Some(&examples),
                 state,
+                Role::Client,
             ));
         }
     }
@@ -257,6 +308,7 @@ fn render_protocol_doc<P: Protocol + ?Sized>(
     port: Option<&str>,
     examples: Option<&str>,
     state: &AppState,
+    role: Role,
 ) -> String {
     let mut s = String::new();
     let meta = p.metadata();
@@ -303,7 +355,8 @@ fn render_protocol_doc<P: Protocol + ?Sized>(
     if !events.is_empty() {
         s.push_str("**Events:**\n\n");
         for ev in &events {
-            render_event(&mut s, ev, "####");
+            let fallback = example_fallback_actions(p, state, ev, role);
+            render_event(&mut s, ev, "####", &fallback);
         }
     }
 

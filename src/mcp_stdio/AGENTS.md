@@ -140,6 +140,26 @@ MCP caller actually has:
 - for a server, its `failure_mode` (what the peer gets when the model cannot answer) and
   whether it is `connectionless`.
 
+**The `protocol` argument is a name, resolved exactly.** `get_protocol_docs`, `start_server`
+and `start_client` use `ServerRegistry::resolve_name` / `ClientRegistry::resolve_name`
+(`src/protocol/name_match.rs`): the canonical name, the stack name, or a declared keyword equal to
+the whole input, case- and `-`/`_`/space-insensitive. Anything else is an error with
+did-you-mean suggestions — the free-text parser's pick among them — never the closest
+substring hit. `mptcp` used to return TCP's page headed "`mptcp` — MCP reference" because the
+client registry matched keywords as raw substrings and the server registry ended with
+"anything containing `tcp` is TCP". The page is now headed with the **canonical** name, the
+`protocol` value in the argument lists is the canonical name, and an alias is announced
+("`mptcp` is an alias of `tcp`", plus the protocol's `alias_note`). The model's
+`read_documentation` resolves the same way. Free-text paths (`open_server`'s protocol, CLI,
+prompts) still go through `resolve` / `parse_from_str`, which now match keywords as whole
+words only.
+
+An event's example answer is derived per role when it declares only a placeholder
+(`protocol::docs::example_fallback_actions`): a server event from its own actions (or the sync
+actions, for one that forgot them), a client event from the client's whole action set, since a
+client offers every action on every event. `tests/event_example_actions_test.rs` checks every
+event's rendered and alternative examples against what the runtime would offer it.
+
 What both say about the protocol itself — each event with its fields, each action with its
 parameters and example, each startup parameter with its default — is written by the shared
 renderers in `src/protocol/docs.rs` (`render_event`, `render_action`, `render_startup_param`),
