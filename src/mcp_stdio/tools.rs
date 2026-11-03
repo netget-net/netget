@@ -842,6 +842,22 @@ fn spawn_task_ticker(
     })
 }
 
+/// What a `mptcp` field in a connection's protocol info says, for status output. Present only
+/// on a `tcp` instance started with `multipath` (`src/utils/mptcp.rs`).
+fn mptcp_text(value: Option<&serde_json::Value>) -> Option<&'static str> {
+    match value.and_then(|v| v.as_bool())? {
+        true => Some("MPTCP negotiated"),
+        false => Some("multipath requested, peer fell back to plain TCP"),
+    }
+}
+
+/// [`mptcp_text`] as a suffix for a connection line, empty when there is nothing to say.
+fn mptcp_suffix(value: Option<&serde_json::Value>) -> String {
+    mptcp_text(value)
+        .map(|t| format!(" — {t}"))
+        .unwrap_or_default()
+}
+
 /// The port a server is actually listening on.
 ///
 /// `ServerInstance::port` is the port that was *requested*, which is `0` for an OS-assigned
@@ -1377,12 +1393,13 @@ impl NetGetMcpService {
                             .has_peer_handle(server_id, conn.id.as_u32())
                             .await;
                         result.push_str(&format!(
-                            "- connection_id **{}** — {} ({:?}), {} byte(s) in / {} out{}\n",
+                            "- connection_id **{}** — {} ({:?}), {} byte(s) in / {} out{}{}\n",
                             conn.id.as_u32(),
                             conn.remote_addr,
                             conn.status,
                             conn.bytes_received,
                             conn.bytes_sent,
+                            mptcp_suffix(conn.protocol_info.data.get("mptcp")),
                             if injectable {
                                 " — accepts send_to_peer / disconnect_peer"
                             } else {
@@ -2127,6 +2144,9 @@ impl NetGetMcpService {
                     &self.state.app_state,
                     crate::capture::CaptureOwner::Client(client_id),
                 ));
+                if let Some(mptcp) = mptcp_text(client.get_protocol_field("mptcp")) {
+                    result.push_str(&format!("- **Multipath**: {mptcp}\n"));
+                }
 
                 if let Some(conn) = &client.connection {
                     result.push_str(&format!(

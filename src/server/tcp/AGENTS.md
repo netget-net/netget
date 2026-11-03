@@ -109,7 +109,35 @@ TcpStream is split into `(ReadHalf, WriteHalf)` using `tokio::io::split()`:
 - **WriteHalf**: Wrapped in `Arc<Mutex<WriteHalf>>` and stored in connection map
 - This allows concurrent reading and writing without cloning the stream
 
-### 6. Dual Logging
+### 6. Multipath TCP (`multipath: true`)
+
+MPTCP is a startup parameter of `tcp` (server and client), not a protocol: it is the same byte
+stream over one or more subflows. `mptcp` and `multipath tcp` are declared keywords, so
+`get_protocol_docs mptcp` returns this protocol's page headed `tcp`, saying "`mptcp` is an alias
+of `tcp`" and that MPTCP means `startup_params: {"multipath": true}` (`alias_note`).
+
+- The socket code is `src/utils/mptcp.rs`, self-contained (std/tokio/socket2/libc only). The
+  listener (and the client's socket) is opened with `IPPROTO_MPTCP` (262) via socket2.
+- **What was negotiated is read per connection**, because a peer without MPTCP is served plain
+  TCP from the same listener: `is_mptcp` asks `getsockopt(SOL_TCP, TCP_IS_MPTCP = 43)`
+  (`include/uapi/linux/tcp.h`), and on kernels that do not have it (6.8 answers `EOPNOTSUPP` on
+  an MPTCP socket, `ENOPROTOOPT` on a TCP one) falls back to `getsockopt(SOL_MPTCP = 284,
+  MPTCP_INFO = 1)`, which succeeds only on a socket using MPTCP.
+- The result is `mptcp: true|false` in every event of the connection (`tcp_connection_opened`,
+  `tcp_data_received`), in the connection's `protocol_info` and on its `server_status` line. A
+  server started without `multipath` adds no field.
+- **Refused, never downgraded**: a kernel without MPTCP (`EPROTONOSUPPORT`) or with it off in
+  the namespace (`ENOPROTOOPT`, `net.mptcp.enabled=0`) fails the start with that reason
+  (`explain_open_error`). macOS and every other platform refuse `multipath: true` up front
+  (`UNSUPPORTED_REASON`): the macOS kernel has MPTCP, but a third-party process cannot listen
+  with it and a client reaches it only through Network.framework.
+- Verified on Linux 6.8 (colima VM, aarch64), November 2026, by compiling `src/utils/mptcp.rs`
+  unmodified into a probe in a `rust:1-bookworm` container: MPTCP→MPTCP reads true on both ends,
+  plain→MPTCP and MPTCP→plain read false on both ends, `--sysctl net.mptcp.enabled=0` gives the
+  `ENOPROTOOPT` message. `tests/server/tcp/mptcp_test.rs` holds the Linux end-to-end tests
+  (static rules keyed on `mptcp`) and the off-Linux refusal test.
+
+### 7. Dual Logging
 
 All data operations use **dual logging**:
 

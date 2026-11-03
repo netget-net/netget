@@ -133,13 +133,17 @@ struct ConnectionData {
     reads: ReadQueue,
     memory: String,
     write_half: Arc<Mutex<tokio::io::WriteHalf<CapturedTcp>>>,
+    /// Whether this connection negotiated MPTCP, on a `multipath` server; `None` on a plain
+    /// one. Copied into every event of the connection as `mptcp`.
+    mptcp: Option<bool>,
 }
 
 /// TCP server that listens for incoming connections
 pub struct TcpServer;
 
 impl TcpServer {
-    /// Spawn the TCP server with integrated LLM actions
+    /// Spawn the TCP server with integrated LLM actions, on a plain TCP socket.
+    #[allow(clippy::too_many_arguments)]
     pub async fn spawn_with_llm_actions(
         listen_addr: SocketAddr,
         llm_client: OllamaClient,
@@ -150,6 +154,34 @@ impl TcpServer {
         first_byte_timeout_secs: Option<u64>,
         idle_timeout_secs: Option<u64>,
     ) -> Result<SocketAddr> {
+        Self::spawn_with_options(
+            listen_addr,
+            llm_client,
+            app_state,
+            status_tx,
+            send_first,
+            server_id,
+            first_byte_timeout_secs,
+            idle_timeout_secs,
+            false,
+        )
+        .await
+    }
+
+    /// Spawn the TCP server; `multipath` listens on an MPTCP socket (Linux only, see
+    /// [`crate::utils::mptcp`]) and reports per connection whether MPTCP was negotiated.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn spawn_with_options(
+        listen_addr: SocketAddr,
+        llm_client: OllamaClient,
+        app_state: Arc<AppState>,
+        status_tx: mpsc::UnboundedSender<String>,
+        send_first: bool,
+        server_id: crate::state::ServerId,
+        first_byte_timeout_secs: Option<u64>,
+        idle_timeout_secs: Option<u64>,
+        multipath: bool,
+    ) -> Result<SocketAddr> {
         let first_byte_timeout = first_byte_timeout_secs
             .map(Duration::from_secs)
             .unwrap_or(FIRST_BYTE_READ_TIMEOUT);
@@ -157,10 +189,24 @@ impl TcpServer {
             .map(Duration::from_secs)
             .unwrap_or(IDLE_BETWEEN_MESSAGES_TIMEOUT);
         // Create and bind TCP server
-        let listener =
-            crate::server::socket_helpers::create_reusable_tcp_listener(listen_addr).await?;
+        let listener = if multipath {
+            if let Some(reason) = crate::utils::mptcp::UNSUPPORTED_REASON {
+                anyhow::bail!("{reason}");
+            }
+            crate::utils::mptcp::listen(listen_addr)?
+        } else {
+            crate::server::socket_helpers::create_reusable_tcp_listener(listen_addr).await?
+        };
         let local_addr = listener.local_addr()?;
-        Log::new(Some(&status_tx)).info(format!("TCP server listening on {}", local_addr));
+        Log::new(Some(&status_tx)).info(format!(
+            "TCP server listening on {}{}",
+            local_addr,
+            if multipath {
+                " (multipath: MPTCP socket)"
+            } else {
+                ""
+            }
+        ));
 
         let connections = Arc::new(Mutex::new(HashMap::new()));
         let protocol = Arc::new(TcpProtocol::new());
@@ -183,7 +229,31 @@ impl TcpServer {
                         let connection_id =
                             ConnectionId::new(app_state.get_next_unified_id().await);
                         let local_addr_conn = stream.local_addr().unwrap_or(local_addr);
-                        info!("Accepted connection {} from {}", connection_id, remote_addr);
+                        // On a multipath listener a peer without MPTCP is served plain TCP by
+                        // the kernel, so what was negotiated is read per connection.
+                        let mptcp = multipath.then(|| {
+                            crate::utils::mptcp::is_mptcp(&stream).unwrap_or_else(|e| {
+                                Log::new(Some(&status_tx)).warn(format!(
+                                    "Connection {connection_id}: could not tell whether MPTCP \
+                                     was negotiated ({e}); reporting plain TCP"
+                                ));
+                                false
+                            })
+                        });
+                        match mptcp {
+                            Some(true) => info!(
+                                "Accepted connection {} from {} (MPTCP)",
+                                connection_id, remote_addr
+                            ),
+                            Some(false) => info!(
+                                "Accepted connection {} from {} (multipath server, peer \
+                                 fell back to plain TCP)",
+                                connection_id, remote_addr
+                            ),
+                            None => {
+                                info!("Accepted connection {} from {}", connection_id, remote_addr)
+                            }
+                        }
 
                         // Split stream. Wrapped first, so packet capture sees every byte
                         // either half carries (`src/capture/`).
@@ -216,9 +286,13 @@ impl TcpServer {
                             last_activity: now,
                             status: ConnectionStatus::Active,
                             status_changed_at: now,
-                            protocol_info: ProtocolConnectionInfo::new(serde_json::json!({
-                                "state": "Idle"
-                            })),
+                            protocol_info: ProtocolConnectionInfo::new(match mptcp {
+                                Some(mptcp) => serde_json::json!({
+                                    "state": "Idle",
+                                    "mptcp": mptcp
+                                }),
+                                None => serde_json::json!({ "state": "Idle" }),
+                            }),
                         };
                         app_state
                             .add_connection_to_server(server_id, conn_state)
@@ -252,6 +326,7 @@ impl TcpServer {
                                 },
                                 memory: String::new(),
                                 write_half: write_half_arc.clone(),
+                                mptcp,
                             },
                         );
 
@@ -611,10 +686,14 @@ impl TcpServer {
         protocol: Arc<TcpProtocol>,
     ) {
         let log = Log::new(Some(&status_tx));
-        let event = Event::new(
-            &TCP_CONNECTION_OPENED_EVENT,
-            crate::protocol::event_type::connect_event_data(),
-        );
+        let mut data = crate::protocol::event_type::connect_event_data();
+        let mptcp = connections
+            .lock()
+            .await
+            .get(&connection_id)
+            .and_then(|c| c.mptcp);
+        with_mptcp(&mut data, mptcp);
+        let event = Event::new(&TCP_CONNECTION_OPENED_EVENT, data);
 
         // A peer that connects and leaves before the connect event is answered has nobody
         // left to greet. The call is abandoned rather than finished, so a port scan against a
@@ -896,12 +975,12 @@ impl TcpServer {
         let mut all_data = payload;
 
         loop {
-            // Get memory
-            let memory = {
+            // Get memory, and whether the connection negotiated MPTCP
+            let (memory, mptcp) = {
                 let conns = connections.lock().await;
                 conns
                     .get(&connection_id)
-                    .map(|c| c.memory.clone())
+                    .map(|c| (c.memory.clone(), c.mptcp))
                     .unwrap_or_default()
             };
 
@@ -932,13 +1011,12 @@ impl TcpServer {
             };
 
             // Create data received event
-            let event = Event::new(
-                &TCP_DATA_RECEIVED_EVENT,
-                serde_json::json!({
-                    "data": data_str,
-                    "encoding": data_encoding
-                }),
-            );
+            let mut data = serde_json::json!({
+                "data": data_str,
+                "encoding": data_encoding
+            });
+            with_mptcp(&mut data, mptcp);
+            let event = Event::new(&TCP_DATA_RECEIVED_EVENT, data);
 
             // Call LLM
             match call_llm(
@@ -1188,6 +1266,14 @@ impl TcpServer {
 }
 
 /// Send data on a TCP connection
+/// Add `mptcp` to an event's data on a `multipath` server; a plain server's events stay as
+/// they were, since the field would only ever read `false` there.
+fn with_mptcp(data: &mut serde_json::Value, mptcp: Option<bool>) {
+    if let (Some(mptcp), Some(obj)) = (mptcp, data.as_object_mut()) {
+        obj.insert("mptcp".to_string(), serde_json::Value::Bool(mptcp));
+    }
+}
+
 pub async fn send_data(stream: &mut TcpStream, data: &[u8]) -> Result<()> {
     stream
         .write_all(data)
