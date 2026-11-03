@@ -701,7 +701,7 @@ impl DnsClient {
                 }
                 let mut body = vec![0u8; len];
                 stream.read_exact(&mut body).await?;
-                let response = Message::from_vec(&body)
+                let response = crate::utils::dns_screen::decode_dns_message(&body)
                     .map_err(|e| anyhow::anyhow!("{transfer_type} failed: {e}"))?;
                 if response.id() != id {
                     anyhow::bail!(

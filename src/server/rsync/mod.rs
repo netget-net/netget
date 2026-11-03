@@ -246,6 +246,15 @@ async fn ask(
     id: ConnectionId,
     event: Event,
 ) -> Result<Option<(String, Value)>> {
+    Ok(ask_all(ctx, id, event).await?.into_iter().next())
+}
+
+/// Every answer the model gave, in order.
+async fn ask_all(
+    ctx: &SpawnContext,
+    id: ConnectionId,
+    event: Event,
+) -> Result<Vec<(String, Value)>> {
     let execution = call_llm(
         &ctx.llm_client,
         &ctx.state,
@@ -255,10 +264,14 @@ async fn ask(
         &actions::RsyncProtocol,
     )
     .await?;
-    Ok(execution.protocol_results.iter().find_map(|r| match r {
-        ActionResult::Custom { name, data } => Some((name.clone(), data.clone())),
-        _ => None,
-    }))
+    Ok(execution
+        .protocol_results
+        .iter()
+        .filter_map(|r| match r {
+            ActionResult::Custom { name, data } => Some((name.clone(), data.clone())),
+            _ => None,
+        })
+        .collect())
 }
 
 fn decision(ctx: &SpawnContext, id: ConnectionId, operation: &str, decision: &str) {
@@ -857,9 +870,20 @@ async fn list_modules(
 ) -> Result<()> {
     let event = Event::new(&actions::LIST_MODULES_EVENT, json!({"client": client}));
     let mut listing = String::new();
-    match ask(ctx, id, event).await {
-        Ok(Some((name, data))) if name == actions::MODULES => {
-            for m in data["modules"].as_array().into_iter().flatten() {
+    match ask_all(ctx, id, event).await {
+        // One listing, however many rsync_modules actions it came in: llama3.1:8b answered
+        // "offer two modules: backups … and media …" with one action per module in every run
+        // of the real-model eval, and only the first used to be listed. A name listed twice
+        // is listed once, and the whole listing stays within MAX_MODULES.
+        Ok(answers) if answers.iter().any(|(name, _)| name == actions::MODULES) => {
+            let mut seen = std::collections::HashSet::new();
+            let modules = answers
+                .iter()
+                .filter(|(name, _)| name == actions::MODULES)
+                .flat_map(|(_, data)| data["modules"].as_array().cloned().unwrap_or_default())
+                .filter(|m| seen.insert(m["name"].as_str().unwrap_or_default().to_string()))
+                .take(actions::MAX_MODULES);
+            for m in modules {
                 let name = m["name"].as_str().unwrap_or_default();
                 let comment =
                     crate::utils::sanitize::line_field(m["comment"].as_str().unwrap_or_default());

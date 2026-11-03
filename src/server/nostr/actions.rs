@@ -456,12 +456,16 @@ fn reject_nostr_event_action() -> ActionDefinition {
             name: "reason".to_string(),
             type_hint: "string".to_string(),
             description: "Why, starting with one of NIP-01's prefixes: blocked:, \
-                          rate-limited:, invalid:, restricted:, pow:, duplicate: or error:. \
-                          Without one, blocked: is added."
+                          rate-limited:, invalid:, restricted:, pow:, duplicate: or error:, \
+                          then the message your instructions give the author, word for word. \
+                          Without a prefix, blocked: is added."
                 .to_string(),
             required: true,
         }],
-        example: json!({"type": "reject_nostr_event", "reason": "blocked: <why>"}),
+        example: json!({
+            "type": "reject_nostr_event",
+            "reason": "blocked: <what your instructions tell the author, word for word>"
+        }),
         log_template: Some(
             LogTemplate::new()
                 .with_info("-> Nostr OK false {reason}")
@@ -587,13 +591,21 @@ fn close_connection_action() -> ActionDefinition {
 }
 
 /// The `answer_with` of `nostr_event`.
+///
+/// Told "refuse any note that advertises something for sale, telling the author that adverts
+/// are not allowed", llama3.1:8b refused with reasons of its own - "blocked: advertisement",
+/// "blocked: Advert", once the example's own placeholder - five runs in five (real-model eval,
+/// seed 42), so the author never read the words the operator chose. The request says where
+/// the reason's words come from.
 pub fn event_answer_with(kind: u64) -> String {
     format!(
         "a client published a kind {kind} event; NetGet has already checked its id and \
          signature. Decide from your instructions whether the relay takes it, with exactly one \
          action: {{\"type\": \"accept_nostr_event\"}}, or {{\"type\": \"reject_nostr_event\", \
-         \"reason\": \"blocked: ...\"}} (the reason starts with blocked:, restricted:, \
-         invalid:, rate-limited:, pow:, duplicate: or error:)"
+         \"reason\": \"blocked: <what your instructions tell the author, word for word>\"}}. \
+         The reason starts with blocked:, restricted:, invalid:, rate-limited:, pow:, \
+         duplicate: or error:, and after the prefix it is the message your instructions give \
+         for this refusal, in their exact words - never a summary of it"
     )
 }
 

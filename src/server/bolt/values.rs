@@ -513,9 +513,25 @@ pub fn query_answer(action: &Json) -> Result<QueryAnswer, String> {
     };
     let mut records = Vec::with_capacity(rows.len());
     for (i, row) in rows.iter().enumerate() {
-        let cells = row.as_array().ok_or_else(|| {
-            format!("record {i} must be an array with one value per field, in field order")
-        })?;
+        let cells: Vec<&Json> = match row {
+            Json::Array(cells) => cells.iter().collect(),
+            // The same row written as a map from column name to value. llama3.1:8b answered
+            // `MATCH (p:Person) RETURN p.name AS name` with `[{"name": "Ada"}, …]` in every
+            // run of the real-model eval's `bolt/people-by-name` - the shape a Neo4j driver
+            // hands back as a record - and refusing it failed every query. Only an object
+            // whose keys are exactly the fields is read this way, so nothing is guessed.
+            Json::Object(map)
+                if map.len() == fields.len() && fields.iter().all(|f| map.contains_key(f)) =>
+            {
+                fields.iter().map(|f| &map[f]).collect()
+            }
+            _ => {
+                return Err(format!(
+                    "record {i} must be an array with one value per field, in field order (or \
+                     an object whose keys are exactly the field names)"
+                ))
+            }
+        };
         if cells.len() != fields.len() {
             return Err(format!(
                 "record {i} has {} values but there are {} fields",
@@ -525,7 +541,7 @@ pub fn query_answer(action: &Json) -> Result<QueryAnswer, String> {
         }
         records.push(
             cells
-                .iter()
+                .into_iter()
                 .map(|c| {
                     let value = json_to_value(c).map_err(|e| format!("record {i}: {e}"))?;
                     if !within_wire_depth(&value, 3) {

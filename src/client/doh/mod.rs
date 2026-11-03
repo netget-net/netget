@@ -670,8 +670,9 @@ impl DohClient {
             .await
             .context("Failed to read DoH response body")?;
 
-        let response_msg =
-            Message::from_vec(&response_bytes).context("Failed to parse DNS response")?;
+        let response_msg = crate::utils::dns_screen::decode_dns_message(&response_bytes)
+            .map_err(anyhow::Error::msg)
+            .context("Failed to parse DNS response")?;
         trace!("DoH response: {:?}", response_msg);
 
         let answers: Vec<serde_json::Value> = response_msg

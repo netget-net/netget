@@ -29,7 +29,7 @@ use crate::state::app_state::AppState;
 use crate::state::ServerId;
 use actions::{LlmnrProtocol, LLMNR_IPV4_GROUP, LLMNR_IPV6_GROUP, LLMNR_QUERY_EVENT};
 use anyhow::{Context, Result};
-use hickory_proto::op::{Message as DnsMessage, MessageType, OpCode};
+use hickory_proto::op::{MessageType, OpCode};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -446,7 +446,7 @@ impl Responder {
             hex::encode(&data)
         );
 
-        let query = match DnsMessage::from_vec(&data) {
+        let query = match crate::utils::dns_screen::decode_dns_message(&data) {
             Ok(m) => m,
             Err(e) => {
                 // A malformed datagram on a multicast group is normal background noise, not

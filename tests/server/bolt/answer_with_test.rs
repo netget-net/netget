@@ -25,3 +25,65 @@ fn the_login_hint_names_the_user_and_sets_query_rules_aside() {
         "{anonymous}"
     );
 }
+
+/// The query hint names the query's first word and whether it is a Cypher clause - the fact
+/// that turned `SELECT name FROM people` from invented rows into the syntax error.
+#[test]
+fn the_query_hint_says_whether_the_query_begins_like_cypher() {
+    use netget::server::bolt::actions::query_answer_with;
+    let sql = query_answer_with("SELECT name FROM people");
+    assert!(
+        sql.contains("This query begins with SELECT, which is not a Cypher clause."),
+        "{sql}"
+    );
+    assert!(
+        sql.contains("Neo.ClientError.Statement.SyntaxError"),
+        "{sql}"
+    );
+    // cypher-shell asks for write mode on every query; an example refusal naming writes made
+    // the model refuse SELECT as Forbidden, so the hint says what `mode` is.
+    assert!(!sql.contains("a write they forbid"), "{sql}");
+    assert!(
+        sql.contains("never a reason to refuse unless your instructions forbid writes"),
+        "{sql}"
+    );
+    let cypher = query_answer_with("  match (m:Movie) RETURN count(m) AS movies");
+    assert!(
+        cypher.contains("This query begins with MATCH, a Cypher clause."),
+        "{cypher}"
+    );
+    let call = query_answer_with("CALL(x) { RETURN 1 }");
+    assert!(call.contains("begins with CALL, a Cypher clause"), "{call}");
+    assert!(query_answer_with("   ").contains("This query is empty."));
+}
+
+/// A record written as an object keyed by exactly the field names is the same row, in field
+/// order; anything else that is not an array is still refused.
+#[test]
+fn a_record_keyed_by_its_field_names_is_read_in_field_order() {
+    use netget::server::bolt::{packstream::Value, values::query_answer};
+    let answer = query_answer(&serde_json::json!({
+        "type": "send_bolt_records",
+        "fields": ["name", "born"],
+        "records": [{"born": 1815, "name": "Ada"}, ["Grace", 1906]]
+    }))
+    .expect("an object row keyed by the fields is accepted");
+    assert_eq!(answer.records.len(), 2);
+    assert_eq!(
+        answer.records[0],
+        vec![Value::String("Ada".into()), Value::Int(1815)]
+    );
+    for bad in [
+        serde_json::json!({"name": "Ada"}),
+        serde_json::json!({"name": "Ada", "born": 1815, "died": 1852}),
+        serde_json::json!({"name": "Ada", "year": 1815}),
+        serde_json::json!("Ada"),
+    ] {
+        let refused = query_answer(&serde_json::json!({
+            "type": "send_bolt_records",
+            "fields": ["name", "born"],
+            "records": [bad.clone()]
+        }));
+        assert!(refused.is_err(), "{bad} must be refused");
+    }
+}

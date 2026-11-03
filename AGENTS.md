@@ -13,7 +13,14 @@ started until all have stopped or Ctrl+C, keeps a clients-only run alive while a
 connected, and exits **non-zero** if anything it was asked to start failed. `--run-for <SECS>`
 and `--exit-after-events <N>` end it with status 0; the event count is the access log's
 monotonic total (`AppState::access_log_total`), so it counts every handled event on every
-instance whoever answered it. `tests/non_interactive_run_limits_test.rs` drives the binary.
+instance whoever answered it. `--ready-file <PATH>` writes a JSON report of every server's bound
+address (and every client's target and status) once all of them have started — atomically, and
+after removing any stale file at the path, so its appearance is the readiness signal for a
+process started on port 0; a run that fails to start never writes it, and MCP, `--simple` and
+the TUI refuse the flag. `tests/non_interactive_run_limits_test.rs` drives the binary. The test
+fixture helpers built on it are `crates/netget-fixture` (Rust, depends only on `serde_json`) and
+`sdk/python/netget_fixture` (stdlib, plus a pytest plugin); `tests/fixture_helpers_test.rs`
+runs both against this tree's binary and needs `python3` with pytest. Neither is published.
 
 **The interactive TUI is the full-screen ratatui dashboard (`src/tui/`)**, the only
 interactive UI — the rolling-terminal TUI that used to sit behind `--legacy-tui` was removed
@@ -2176,6 +2183,15 @@ Read before assuming a subsystem is sound:
   `Overflow` error. **Check the crate, not its reputation**: an official, widely used decoder
   had the same hole as the hand-written ones.
 
+  **DNS was the ninth (October 2026), and the recursion was not on nesting at all.**
+  `hickory-proto` 0.24 follows a *name-compression pointer* by recursing, so a chain of pointers
+  each aiming two bytes back — hidden in a NULL record's RDATA — is a frame per two bytes: a
+  debug build dies at 1 702 hops, 3.4 KB in one UDP datagram, in five servers at once (release
+  frames are small enough that the longest chain the format allows still fits a 2 MiB worker).
+  `src/utils/dns_screen.rs` bounds the chain before every decode. **Anything a decoder
+  *follows* — a pointer, an offset, a reference — is depth too**, whether or not the format
+  looks nested. (`docs/planning/IMPROVEMENTS.md` item 48 has the rest of that audit.)
+
 - **Bound the *declared* size, not the remainder.** NATS's `HPUB` limit was applied to
   `total − header`, leaving `header` unbounded — and `header == total` passes every check with
   a zero-length body. `HPUB x 4000000000 4000000000` is thirty bytes on the wire and buffers
@@ -2394,11 +2410,17 @@ Read before assuming a subsystem is sound:
   harmless, and `wait_for_more` still reads more clearly where the protocol declares it.
 - **`ServerForm::create` substitutes a default instruction** (`"You are a {protocol} server.
   Handle requests appropriately."`) whenever `instruction` is `None` — see
-  `src/cli/management.rs`. Any non-empty instruction makes `operator_wants_dynamic` true, so a
+  `src/state/server.rs::default_server_instruction`; MCP `start_server` does the same. Any
+  non-empty instruction makes `operator_wants_dynamic` true, so a
   test built with `..Default::default()` **does consult the model**, whatever its comments claim.
   Two `peer_inject` tests documented "Zero LLM calls" while doing the opposite, and passed only
   because the old fail-open swallowed the resulting error. Pass `instruction: Some(String::new())`
-  when you want a genuinely model-free server.
+  when you want a genuinely model-free server. The substitution applies to a handlers-only
+  server too, deliberately: the dashboard creates every instance with `*` → manual and no
+  instruction, and switching its driver to LLM must still reach the model on the 17 gated
+  protocols. What changed is that it is never *shown* as the operator's:
+  `ServerInstance::instruction_is_default` makes `list_servers` / `server_status` say
+  "none given — NetGet's default applies", and the dashboard card and edit form show none.
 - **Answering the peer is not a licence to tell it anything.** Fixing the silence above
   introduced the opposite defect across ~25 protocols at once: each interpolated the error into
   the reply, so a plain `telnet` session printed `[netget] cannot answer right now: ✗  LLM

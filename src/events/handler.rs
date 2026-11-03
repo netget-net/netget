@@ -1433,7 +1433,10 @@ impl EventHandler {
                 // behind in `Connecting`, exactly the way undeclared startup parameters used
                 // to leave an orphan server. Validate first, register nothing on failure.
                 let parsed_event_handlers = match event_handlers {
-                    Some(handlers_json) => match Self::parse_event_handlers(handlers_json) {
+                    Some(handlers_json) => match Self::parse_event_handlers_for(
+                        handlers_json,
+                        HandlerOwner::Client(&protocol),
+                    ) {
                         Ok(config) => Some(config),
                         Err(e) => {
                             // Build the original action JSON for reference
@@ -1953,7 +1956,9 @@ impl EventHandler {
     /// Static handlers are validated here rather than at the first packet:
     /// * every action name must exist in the action catalog of the protocol(s) that
     ///   declare an event matching the handler's `event_pattern` (see
-    ///   [`action_catalog_for_pattern`]), and
+    ///   [`action_catalog_for_pattern`]) — with no owner, any protocol in the build; every
+    ///   start/update path knows the instance's protocol and calls
+    ///   [`Self::parse_event_handlers_for`] instead, and
     /// * every `{{event.…}}` reference must be well formed
     ///   ([`EventHandlerType::validate`]).
     ///
@@ -1963,6 +1968,25 @@ impl EventHandler {
     /// configuration outright.
     pub fn parse_event_handlers(
         handlers_json: Vec<serde_json::Value>,
+    ) -> Result<crate::scripting::EventHandlerConfig> {
+        Self::parse_event_handlers_inner(handlers_json, None)
+    }
+
+    /// [`Self::parse_event_handlers`] for handlers that will be installed on an instance of a
+    /// known protocol — every `start_*` / `update_*` path. Static handler actions are held to
+    /// that protocol's vocabulary alone (see [`action_catalog_for_pattern`]), so an action only
+    /// another protocol can execute is refused, and the rejection lists only this protocol's
+    /// actions.
+    pub fn parse_event_handlers_for(
+        handlers_json: Vec<serde_json::Value>,
+        owner: HandlerOwner<'_>,
+    ) -> Result<crate::scripting::EventHandlerConfig> {
+        Self::parse_event_handlers_inner(handlers_json, Some(owner))
+    }
+
+    fn parse_event_handlers_inner(
+        handlers_json: Vec<serde_json::Value>,
+        owner: Option<HandlerOwner<'_>>,
     ) -> Result<crate::scripting::EventHandlerConfig> {
         use crate::scripting::{EventHandler, EventHandlerConfig, EventHandlerType, EventPattern};
 
@@ -2102,7 +2126,7 @@ impl EventHandler {
 
             // Reject action names the protocol cannot execute.
             if let EventHandlerType::Static { ref actions } = handler_type {
-                validate_static_action_names(&event_pattern, actions)?;
+                validate_static_action_names(&event_pattern, actions, owner)?;
             }
 
             // Optional conditions on the event's data (`{"method": "GET", "path": "/a"}`).
@@ -2934,11 +2958,44 @@ const MAX_LISTED_ACTIONS: usize = 40;
 
 /// The set of action names a handler for `pattern` is allowed to use, plus a label
 /// describing where that set came from.
+///
+/// The common actions ([`COMMON_ACTION_NAMES`]) are valid everywhere and are not stored
+/// here; [`ActionCatalog::allows`] adds them. Keeping them apart is what lets a rejection
+/// list the protocol's own vocabulary first instead of burying it among the names every
+/// protocol shares.
 struct ActionCatalog {
-    /// Valid action names, sorted
+    /// The protocol's own valid action names, sorted
     names: std::collections::BTreeSet<String>,
     /// Human-readable scope, e.g. `TCP` or `TCP, HTTP`
     scope: String,
+}
+
+impl ActionCatalog {
+    /// Whether nothing was found to validate against (no candidate protocol declares an event
+    /// matching the pattern).
+    fn is_unknown(&self) -> bool {
+        self.scope.is_empty()
+    }
+
+    fn allows(&self, name: &str) -> bool {
+        self.names.contains(name) || COMMON_ACTION_NAMES.contains(&name)
+    }
+}
+
+/// Whose `event_handlers` are being parsed: the protocol of the instance they will be
+/// installed on.
+///
+/// A handler runs on exactly one instance, so the vocabulary it may use is that protocol's
+/// and no other's. Without an owner the validator can only ask "does *any* protocol raising
+/// a matching event accept this name" — which, for the wildcard pattern, is the union of
+/// every protocol in the build, and let a redis server start with `send_http_response` as its
+/// catch-all and then answer every command `ERR no response produced`.
+#[derive(Debug, Clone, Copy)]
+pub enum HandlerOwner<'a> {
+    /// A server of this protocol (any name the server registry resolves).
+    Server(&'a str),
+    /// A client of this protocol (any name the client registry resolves).
+    Client(&'a str),
 }
 
 /// Render an event pattern for an error message.
@@ -2990,11 +3047,6 @@ fn server_actions_for_pattern(
     Some(names)
 }
 
-/// Build the action catalog for a handler's event pattern.
-///
-/// Protocols are matched by the events they declare: a pattern of `tcp_data_received`
-/// resolves to TCP alone and yields TCP's catalog; a wildcard pattern matches every
-/// protocol and yields the union. Both server and client registries are consulted because
 /// Name the `open_server` / `open_client` parameter an event-handler parse error refers to.
 ///
 /// The error surfaces to the model inside `InvalidActionParameters`, whose whole value is
@@ -3029,73 +3081,101 @@ fn catalog_state() -> &'static AppState {
     CATALOG_STATE.get_or_init(AppState::new)
 }
 
-/// `parse_event_handlers` serves `start_server` and `start_client` alike.
+/// Build the action catalog for a handler's event pattern.
 ///
-/// Protocols are matched by the events they declare, so a specific pattern resolves to the
-/// protocol(s) that raise that event and a wildcard pattern matches every protocol in both
-/// registries and yields the union of their catalogs. The union is what makes a wildcard
-/// handler usable at all — the caller starts one instance, of one protocol, and the pattern
-/// says nothing about which — and it is why a wildcard catalog is necessarily broader than
-/// any one protocol's: validation here rejects a name *no* candidate protocol could execute,
-/// which is the typo case it exists for.
+/// **With an owner** — every start and update path — the catalog is that one protocol's:
+/// a server's sync vocabulary plus the matching events' own actions
+/// ([`server_actions_for_pattern`], narrowing), a client's whole vocabulary plus the matching
+/// events' ([`crate::llm::actions::client_trait::client_action_names_for_pattern`], union).
+/// A wildcard handler on a redis server is therefore held to redis's actions, and an action
+/// only HTTP can execute is refused rather than accepted and then failing on every event.
 ///
-/// Server and client contributions are gathered by different rules, and the difference is
-/// deliberate: see [`server_actions_for_pattern`] (narrowing) and
-/// [`crate::llm::actions::client_trait::client_action_names_for_pattern`] (union). For a
-/// wildcard that matches both a server and a client this means the server contributes its
-/// sync vocabulary and the client its whole one, which is exactly what each of them would
-/// accept when the event fires.
+/// **Without an owner** ([`EventHandler::parse_event_handlers`], for callers that hold a
+/// handler list and no instance — saved configurations, tests), protocols are matched by the
+/// events they declare across both registries and the catalog is the union of the matches.
+/// That union is the only honest answer when the protocol is unknown, and it is why every
+/// instance-creating path passes an owner.
 ///
-/// If no compiled protocol declares a matching event (an event id we do not know about),
-/// the catalog is empty and validation is skipped rather than rejecting the handler.
-fn action_catalog_for_pattern(pattern: &crate::scripting::EventPattern) -> ActionCatalog {
-    let mut names: std::collections::BTreeSet<String> = COMMON_ACTION_NAMES
-        .iter()
-        .map(|s| (*s).to_string())
-        .collect();
+/// If the candidate protocol(s) declare no matching event (an event id the protocol never
+/// raises), the catalog is empty and validation is skipped rather than rejecting the handler
+/// on a guess — such a handler never fires.
+fn action_catalog_for_pattern(
+    pattern: &crate::scripting::EventPattern,
+    owner: Option<HandlerOwner<'_>>,
+) -> ActionCatalog {
+    let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut scopes: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
 
-    for (_, protocol) in crate::protocol::server_registry::registry().all_protocols() {
-        if let Some(actions) = server_actions_for_pattern(protocol.as_ref(), pattern) {
-            scopes.insert(protocol.protocol_name().to_string());
-            names.extend(actions);
+    match owner {
+        Some(HandlerOwner::Server(protocol_name)) => {
+            if let Ok(protocol) =
+                crate::protocol::server_registry::registry().resolve(protocol_name)
+            {
+                if let Some(actions) = server_actions_for_pattern(protocol.as_ref(), pattern) {
+                    scopes.insert(protocol.protocol_name().to_string());
+                    names.extend(actions);
+                }
+            }
+        }
+        Some(HandlerOwner::Client(protocol_name)) => {
+            let protocol = crate::cli::client_startup::resolve_client_protocol(protocol_name)
+                .and_then(|name| crate::protocol::client_registry::CLIENT_REGISTRY.get(&name));
+            if let Some(protocol) = protocol {
+                if let Some(actions) =
+                    crate::llm::actions::client_trait::client_action_names_for_pattern(
+                        protocol.as_ref(),
+                        catalog_state(),
+                        pattern,
+                    )
+                {
+                    scopes.insert(protocol.protocol_name().to_string());
+                    names.extend(actions);
+                }
+            }
+        }
+        None => {
+            for (_, protocol) in crate::protocol::server_registry::registry().all_protocols() {
+                if let Some(actions) = server_actions_for_pattern(protocol.as_ref(), pattern) {
+                    scopes.insert(protocol.protocol_name().to_string());
+                    names.extend(actions);
+                }
+            }
+
+            for protocol in crate::protocol::client_registry::CLIENT_REGISTRY.get_all() {
+                if let Some(actions) =
+                    crate::llm::actions::client_trait::client_action_names_for_pattern(
+                        protocol.as_ref(),
+                        catalog_state(),
+                        pattern,
+                    )
+                {
+                    scopes.insert(protocol.protocol_name().to_string());
+                    names.extend(actions);
+                }
+            }
         }
     }
 
-    for protocol in crate::protocol::client_registry::CLIENT_REGISTRY.get_all() {
-        if let Some(actions) = crate::llm::actions::client_trait::client_action_names_for_pattern(
-            protocol.as_ref(),
-            catalog_state(),
-            pattern,
-        ) {
-            scopes.insert(protocol.protocol_name().to_string());
-            names.extend(actions);
-        }
-    }
-
-    if scopes.is_empty() {
-        // Nothing declares this event: no catalog to validate against.
-        return ActionCatalog {
-            names: std::collections::BTreeSet::new(),
-            scope: String::new(),
-        };
-    }
+    // Common actions are allowed by `ActionCatalog::allows`, not listed as the protocol's.
+    names.retain(|name| !COMMON_ACTION_NAMES.contains(&name.as_str()));
 
     let scope = scopes.into_iter().collect::<Vec<_>>().join(", ");
     ActionCatalog { names, scope }
 }
 
-/// Reject static handler actions whose `type` no matching protocol can execute.
+/// Reject static handler actions whose `type` the owning protocol cannot execute.
 ///
 /// Without this a typo'd action name is accepted by `start_server` and only surfaces when
 /// the first packet arrives — where it produces no response at all.
 fn validate_static_action_names(
     pattern: &crate::scripting::EventPattern,
     actions: &[serde_json::Value],
+    owner: Option<HandlerOwner<'_>>,
 ) -> Result<()> {
-    let catalog = action_catalog_for_pattern(pattern);
-    if catalog.names.is_empty() {
-        // No protocol declares an event matching this pattern; nothing to check against.
+    let catalog = action_catalog_for_pattern(pattern, owner);
+    if catalog.is_unknown() {
+        // No candidate protocol declares an event matching this pattern; nothing to check
+        // against.
         return Ok(());
     }
 
@@ -3108,7 +3188,7 @@ fn validate_static_action_names(
             );
         };
 
-        if catalog.names.contains(name) {
+        if catalog.allows(name) {
             continue;
         }
 
@@ -3119,18 +3199,23 @@ fn validate_static_action_names(
             .map(|s| s.as_str())
             .collect();
         let overflow = catalog.names.len().saturating_sub(listed.len());
-        let mut valid = listed.join(", ");
+        let mut valid = if listed.is_empty() {
+            "(none of its own)".to_string()
+        } else {
+            listed.join(", ")
+        };
         if overflow > 0 {
             valid.push_str(&format!(", … ({} more)", overflow));
         }
 
         anyhow::bail!(
             "Unknown action \"{}\" in the static handler for {}. \
-             Valid actions for {}: {}",
+             Valid actions for {}: {}; plus the actions every protocol accepts: {}",
             name,
             describe_pattern(pattern),
             catalog.scope,
-            valid
+            valid,
+            COMMON_ACTION_NAMES.join(", ")
         );
     }
 
