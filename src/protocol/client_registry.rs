@@ -5,6 +5,7 @@
 //! and keyword-based parsing for client connections.
 
 use crate::llm::actions::Client;
+use crate::protocol::name_match::{contains_words, normalize, NameMatch};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -1093,7 +1094,74 @@ impl ClientRegistry {
         // against every known client protocol name, compiled in or not.
         Err(ClientProtocolLookupError::Unknown {
             input: input.to_string(),
-            suggestion: suggest_client_protocol_name(input, ALL_KNOWN_CLIENT_PROTOCOLS),
+            suggestions: suggest_client_protocol_name(input, ALL_KNOWN_CLIENT_PROTOCOLS)
+                .map(|s| vec![s.to_string()])
+                .unwrap_or_default(),
+        })
+    }
+
+    /// Find the client protocol `input` *names*: its canonical name, its stack name, or one
+    /// of its declared keywords equal to the whole input (case-insensitive, `-`/`_`/space
+    /// folded). The counterpart of `ServerRegistry::lookup_name`; see
+    /// [`crate::protocol::name_match`].
+    pub fn lookup_name(&self, input: &str) -> Option<(String, NameMatch)> {
+        let wanted = normalize(input);
+        if wanted.is_empty() {
+            return None;
+        }
+        let mut names: Vec<&String> = self.protocols.keys().collect();
+        names.sort();
+        for name in &names {
+            if normalize(self.protocols[*name].protocol_name()) == wanted
+                || normalize(name) == wanted
+            {
+                return Some(((*name).clone(), NameMatch::Canonical));
+            }
+        }
+        for name in &names {
+            if normalize(self.protocols[*name].stack_name()) == wanted {
+                return Some(((*name).clone(), NameMatch::StackName));
+            }
+        }
+        for name in &names {
+            if let Some(keyword) = self.protocols[*name]
+                .keywords()
+                .into_iter()
+                .find(|k| normalize(k) == wanted)
+            {
+                return Some(((*name).clone(), NameMatch::Alias(keyword.to_string())));
+            }
+        }
+        None
+    }
+
+    /// Resolve a client protocol **name** (MCP `start_client` / `get_protocol_docs`, the
+    /// model's `read_documentation`): exactly what [`Self::lookup_name`] accepts, or an error
+    /// with did-you-mean suggestions. Never the closest substring hit.
+    pub fn resolve_name(
+        &self,
+        input: &str,
+    ) -> Result<(Arc<dyn Client>, NameMatch), ClientProtocolLookupError> {
+        if let Some((name, how)) = self.lookup_name(input) {
+            if let Some(p) = self.get(&name) {
+                return Ok((p, how));
+            }
+        }
+        let input_norm = normalize(input);
+        for (name, requires) in ALL_KNOWN_CLIENT_PROTOCOLS {
+            if normalize(name) == input_norm {
+                return Err(ClientProtocolLookupError::NotCompiled { name, requires });
+            }
+        }
+        let free_text_hit = self
+            .parse_from_str(input)
+            .and_then(|n| self.get(&n))
+            .map(|p| p.protocol_name().to_lowercase());
+        let mut known: Vec<&str> = self.protocols.values().map(|p| p.protocol_name()).collect();
+        known.extend(ALL_KNOWN_CLIENT_PROTOCOLS.iter().map(|(n, _)| *n));
+        Err(ClientProtocolLookupError::Unknown {
+            input: input.to_string(),
+            suggestions: crate::protocol::name_match::suggestions(input, free_text_hit, &known),
         })
     }
 
@@ -1128,7 +1196,12 @@ impl ClientRegistry {
             return Some(protocol_name.clone());
         }
 
-        // Substring matching, longest keyword first.
+        // Whole-word matching, longest keyword first.
+        //
+        // This was raw substring matching (`input.contains(keyword)`), so "mptcp" matched the
+        // TCP client's "tcp" and an unknown protocol was silently given the TCP client.
+        // Keywords now match as whole words, as the server registry does
+        // (`name_match::contains_words`).
         //
         // This used to return the first `contains()` hit while iterating a HashMap,
         // whose order is unspecified. "ssh_agent" contains both "ssh" and "agent", so
@@ -1139,7 +1212,9 @@ impl ClientRegistry {
         // win, and the name tie-break makes the answer identical on every run.
         let mut best: Option<(usize, &String)> = None;
         for (keyword, protocol_name) in &self.keyword_map {
-            if !(input_lower.contains(keyword) || input_normalized.contains(keyword)) {
+            if !(contains_words(&input_lower, keyword)
+                || contains_words(&input_normalized, keyword))
+            {
                 continue;
             }
             let better = match best {
@@ -1505,7 +1580,8 @@ pub enum ClientProtocolLookupError {
     /// any build.
     Unknown {
         input: String,
-        suggestion: Option<&'static str>,
+        /// Did-you-mean candidates, best first; empty when nothing is close.
+        suggestions: Vec<String>,
     },
 }
 
@@ -1516,14 +1592,14 @@ impl std::fmt::Display for ClientProtocolLookupError {
                 f,
                 "Client protocol '{name}' exists but is not compiled into this build: it needs {requires}"
             ),
-            ClientProtocolLookupError::Unknown {
-                input,
-                suggestion: Some(s),
-            } => write!(f, "Unknown client protocol: '{input}'. Did you mean '{s}'?"),
-            ClientProtocolLookupError::Unknown {
-                input,
-                suggestion: None,
-            } => write!(f, "Unknown client protocol: '{input}'"),
+            ClientProtocolLookupError::Unknown { input, suggestions } if suggestions.is_empty() => {
+                write!(f, "Unknown client protocol: '{input}'")
+            }
+            ClientProtocolLookupError::Unknown { input, suggestions } => write!(
+                f,
+                "Unknown client protocol: '{input}'. Did you mean {}?",
+                crate::protocol::name_match::or_list(suggestions)
+            ),
         }
     }
 }

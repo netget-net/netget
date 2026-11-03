@@ -922,6 +922,22 @@ fn spawn_task_ticker(
     })
 }
 
+/// What a `mptcp` field in a connection's protocol info says, for status output. Present only
+/// on a `tcp` instance started with `multipath` (`src/utils/mptcp.rs`).
+fn mptcp_text(value: Option<&serde_json::Value>) -> Option<&'static str> {
+    match value.and_then(|v| v.as_bool())? {
+        true => Some("MPTCP negotiated"),
+        false => Some("multipath requested, peer fell back to plain TCP"),
+    }
+}
+
+/// [`mptcp_text`] as a suffix for a connection line, empty when there is nothing to say.
+fn mptcp_suffix(value: Option<&serde_json::Value>) -> String {
+    mptcp_text(value)
+        .map(|t| format!(" — {t}"))
+        .unwrap_or_default()
+}
+
 /// The port a server is actually listening on.
 ///
 /// `ServerInstance::port` is the port that was *requested*, which is `0` for an OS-assigned
@@ -1280,6 +1296,18 @@ impl NetGetMcpService {
         &self,
         Parameters(params): Parameters<StartServerParams>,
     ) -> Result<CallToolResult, McpError> {
+        // `protocol` is a name: resolve it exactly (canonical name, stack name or declared
+        // alias) and start that protocol under its canonical name. A near miss is refused with
+        // suggestions rather than started as whatever it happens to contain.
+        let mut params = params;
+        match crate::protocol::server_registry::registry().resolve_name(&params.protocol) {
+            Ok((protocol, _)) => params.protocol = protocol.protocol_name().to_string(),
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Failed to start server: {e}"
+                ))]))
+            }
+        }
         let instruction = params
             .instruction
             .unwrap_or_else(|| crate::state::server::default_server_instruction(&params.protocol));
@@ -1498,12 +1526,13 @@ impl NetGetMcpService {
                             .has_peer_handle(server_id, conn.id.as_u32())
                             .await;
                         result.push_str(&format!(
-                            "- connection_id **{}** — {} ({:?}), {} byte(s) in / {} out{}\n",
+                            "- connection_id **{}** — {} ({:?}), {} byte(s) in / {} out{}{}\n",
                             conn.id.as_u32(),
                             conn.remote_addr,
                             conn.status,
                             conn.bytes_received,
                             conn.bytes_sent,
+                            mptcp_suffix(conn.protocol_info.data.get("mptcp")),
                             if injectable {
                                 " — accepts send_to_peer / disconnect_peer"
                             } else {
@@ -1680,23 +1709,21 @@ impl NetGetMcpService {
         match crate::mcp_stdio::docs::render_protocol_docs(&params.protocol, &self.state.app_state)
             .await
         {
-            Some(text) => Ok(CallToolResult::success(vec![Content::text(text)])),
-            None => {
-                // Protocol not compiled in - list what's available
+            Ok(text) => Ok(CallToolResult::success(vec![Content::text(text)])),
+            Err(reason) => {
+                // Not a name either registry has: say why (with did-you-mean suggestions) and
+                // list what is available. Protocols are not Cargo features, so there is no
+                // feature to rebuild with.
                 let server_registry = crate::protocol::server_registry::registry();
                 let available = server_registry.available_protocols();
                 Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Protocol '{}' not found. It may not be compiled into this build.\n\n\
-                     Available server protocols ({}):\n{}\n\n\
-                     Build with the protocol feature enabled: cargo build --features mcp-stdio,{}",
-                    params.protocol,
+                    "{reason}\n\nAvailable server protocols ({}):\n{}",
                     available.len(),
                     available
                         .iter()
                         .map(|p| format!("  - {}", p))
                         .collect::<Vec<_>>()
                         .join("\n"),
-                    params.protocol.to_lowercase(),
                 ))]))
             }
         }
@@ -2143,6 +2170,16 @@ impl NetGetMcpService {
         &self,
         Parameters(params): Parameters<StartClientParams>,
     ) -> Result<CallToolResult, McpError> {
+        // `protocol` is a name: resolved exactly, as for start_server.
+        let mut params = params;
+        match crate::protocol::CLIENT_REGISTRY.resolve_name(&params.protocol) {
+            Ok((protocol, _)) => params.protocol = protocol.protocol_name().to_string(),
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Failed to start client: {e}"
+                ))]))
+            }
+        }
         let instruction = params.instruction.unwrap_or_else(|| {
             crate::state::client::default_client_instruction(&params.protocol, &params.remote_addr)
         });
@@ -2356,6 +2393,9 @@ impl NetGetMcpService {
                     &self.state.app_state,
                     crate::capture::CaptureOwner::Client(client_id),
                 ));
+                if let Some(mptcp) = mptcp_text(client.get_protocol_field("mptcp")) {
+                    result.push_str(&format!("- **Multipath**: {mptcp}\n"));
+                }
 
                 if client.connection.is_none() {
                     // Byte and packet counters are kept by the protocol itself, and only
