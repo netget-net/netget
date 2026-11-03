@@ -872,10 +872,7 @@ impl Args {
     pub fn client_instruction(&self, protocol: &str, remote_addr: &str) -> String {
         let trailing = self.prompt.join(" ").trim().to_string();
         if trailing.is_empty() {
-            format!(
-                "You are a {} client connected to {}. Handle responses appropriately.",
-                protocol, remote_addr
-            )
+            crate::state::client::default_client_instruction(protocol, remote_addr)
         } else {
             trailing
         }

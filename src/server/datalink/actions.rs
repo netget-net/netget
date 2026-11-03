@@ -139,6 +139,8 @@ impl Protocol for DataLinkProtocol {
             )
             .history(crate::protocol::metadata::HistoryMode::Off)
             .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // Sees every frame on the interface, IP packets included.
+            .search_terms(&["raw", "packet", "packets", "ip", "sniff", "frame"])
             .build()
     }
     fn description(&self) -> &'static str {

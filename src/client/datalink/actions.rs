@@ -1193,6 +1193,8 @@ impl Protocol for DataLinkClientProtocol {
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
             .batching(crate::protocol::metadata::BatchingMode::Unsupported)
+            // The only client that puts arbitrary bytes on the wire, IP packets included.
+            .search_terms(&["raw", "packet", "packets", "ip", "injection"])
             .build()
     }
     fn description(&self) -> &'static str {
