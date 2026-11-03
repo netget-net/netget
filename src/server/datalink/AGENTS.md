@@ -49,6 +49,7 @@ is an unroutable address, so reaching a model would itself be a failure):
 | `datalink_unknown_interface_is_refused` | none | `spawn` returns `Err` naming the device |
 | `datalink_startup_outcome_matches_capture_privilege` | none | `Ok` **iff** the pcap handle really opened; the unprivileged branch asserts the refusal text names `/dev/bpf*` or `CAP_NET_RAW` |
 | `datalink_event_payload_reports_the_frame_and_any_truncation` | none | `packet_event_data` against literal ARP bytes: a short frame whole, a long one cut with `truncated`/`captured_length` set, and every field it emits declared on the event |
+| `datalink_event_payload_decodes_a_loopback_frame_for_its_link_type` | none | `packet_event_data_for_link` on a `DLT_NULL` SYN-ACK: `link_type`, `family`, null MACs, decoded IPv4/TCP with MP_CAPABLE, the loopback zero-checksum note, every field declared |
 | `datalink_invalid_bpf_filter_is_refused` | capture | an uncompilable BPF expression fails startup |
 | `datalink_captures_a_real_loopback_frame` | capture | a UDP datagram put on loopback appears byte-for-byte in the captured hex **and** reaches the event path |
 
@@ -80,14 +81,37 @@ sudo -E ./cargo-isolated.sh test --no-default-features --features datalink \
     - Cross-platform (Linux, macOS, Windows with WinPcap)
     - Requires elevated privileges (root/admin)
 
-- **Manual frame parsing** - No high-level protocol library
-    - LLM receives raw Ethernet frame bytes
-    - LLM must parse frame structure (destination MAC, source MAC, EtherType, payload)
-    - Allows complete flexibility for custom protocols
+- **Link-aware decoding, shared with the DataLink client** (`src/client/datalink/packet.rs`)
+    - the link header is read for the handle's real link type, then IPv4 and TCP / UDP / ICMP
+    - `packet_hex` stays beside the decoded fields, so anything not decoded is still there
 
-**Rationale**: libpcap is the de facto standard for packet capture. The pcap crate provides thin Rust bindings. We don't
-use high-level parsing libraries (like pnet) because the LLM can interpret raw bytes and adapt to any protocol (ARP,
-custom, etc.).
+**Rationale**: libpcap is the de facto standard for packet capture. The pcap crate provides thin
+Rust bindings. The decoder is small and hand-written (no pnet) because what the model is shown
+has to be spelled the way the DataLink client's actions accept it.
+
+### Link type: what the first bytes of a frame are
+
+`spawn_with_llm` reads the handle's DLT when it opens (`Capture::get_datalink`,
+`packet::LinkType::from_dlt`) and logs it. **This server's default interface is loopback, and on
+macOS `lo0` is `DLT_NULL`**: a 4-byte address family in host byte order and no MACs at all. The
+event used to carry only `packet_hex`, which a model then read as Ethernet — six bytes of
+"destination MAC" made of the family word and the start of the IP header. Every event now
+carries, from `packet_event_data_for_link(frame, link_type, loopback)`:
+
+| field | meaning |
+|---|---|
+| `link_type` | `"EN10MB"`, `"NULL"`, `"LOOP"`, `"RAW"`, `"LINUX_SLL"`, or `"DLT_<n>"` — always |
+| `dst_mac` / `src_mac` | Ethernet only; `null` on a link with no MACs and for a runt |
+| `ethertype` | `"0x0800"`; on NULL/LOOP the one the family means; `null` when unreadable |
+| `family` | NULL/LOOP only: `"AF_INET"` / `"AF_INET6"` (or the number) |
+| `ip`, `tcp`, `udp`, `icmp` | decoded headers, **absent** when the frame does not carry them |
+
+The `tcp` object includes flags by name, sequence numbers and every TCP option in the DataLink
+client's `send_ipv4_tcp` spelling, MPTCP subtypes named (`mp_capable` with version, flags and
+keys). On a loopback interface a `0x0000` TCP/UDP checksum is `checksum_ok: null` with a
+`checksum_note` saying it is checksum offload — the kernel never computes it for traffic that
+never crosses a wire — rather than a failure. See `src/client/datalink/AGENTS.md` for the full
+field list; `packet_event_data(frame)` is the Ethernet, non-loopback case.
 
 ## Architecture Decisions
 
@@ -243,7 +267,9 @@ The LLM responds to DataLink events with actions:
 **Events**:
 
 - `datalink_packet_captured` - Ethernet frame captured from interface
-    - Parameters: `packet_length`, `packet_hex`
+    - Parameters: `packet_length`, `packet_hex`, `captured_length`, `truncated`, `link_type`,
+      `dst_mac`, `src_mac`, `ethertype`, and when present `family`, `ip`, `tcp`, `udp`, `icmp`
+      (see **Link type** above)
 
 **Available Actions**:
 
@@ -397,14 +423,10 @@ Failed to start server: failed to open pcap capture on 'en0' (needs root, or rea
 
 **Workaround**: Use BPF filters to reduce packet volume (e.g., "arp" instead of capturing all traffic).
 
-### 4. No Packet Parsing Library
+### 4. Partial decoding
 
-- LLM must parse raw hex (MAC addresses, EtherType, etc.)
-- No helper functions for common protocols (ARP, ICMP, etc.)
-- LLM may make parsing mistakes
-
-**Rationale**: Keeps implementation flexible - LLM can adapt to any protocol. Adding parsing library would limit to
-known protocols.
+- The link header (per link type), IPv4, TCP (with options), UDP and ICMP are decoded
+- ARP, IPv6 and everything else are left to `packet_hex`; the model still parses those itself
 
 ### 5. Platform-Specific Interface Names
 
