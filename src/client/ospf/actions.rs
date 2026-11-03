@@ -517,6 +517,7 @@ impl Protocol for OspfClientProtocol {
             history: HistoryMode::Last(SESSION_HISTORY_ENTRIES),
             // Packets are handled one by one inside the client's read loop.
             batching: BatchingMode::Unsupported,
+            search_terms: &[],
         }
     }
     fn description(&self) -> &'static str {

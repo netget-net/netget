@@ -157,6 +157,19 @@ pub struct ListProtocolsParams {
     /// Include experimental/honeypot protocols
     #[serde(default)]
     pub include_disabled: Option<bool>,
+    /// Words to search for (case-insensitive, whole words): matched against each protocol's
+    /// name, keywords, search aliases, group, layer and description, e.g. "raw ip packet",
+    /// "ethernet", "mqtt". Results are ranked by how many words they match.
+    #[serde(default)]
+    pub query: Option<String>,
+    /// Only protocols at this layer of the stack: "l2" (link: Ethernet, ARP), "l3" (network:
+    /// IP, ICMP, tunnels), "l4" (transport: TCP, UDP, QUIC with nothing above),
+    /// "app" (application protocols), or "other" (USB, Bluetooth, serial, pipes).
+    #[serde(default)]
+    pub layer: Option<String>,
+    /// Show at most this many protocols per section (server / client).
+    #[serde(default, deserialize_with = "deserialize_option_u32_flexible")]
+    pub limit: Option<u32>,
 }
 
 fn default_all() -> Option<String> {
@@ -1086,20 +1099,51 @@ impl NetGetMcpService {
     }
 
     #[tool(
-        description = "List all available network protocols that can be started as servers or clients"
+        description = "List the network protocols that can be started as servers or clients. The full list is long (~250 per side): pass `query` (words such as \"raw ip packet\", \"ethernet\", \"mqtt\"; ranked by words matched) and/or `layer` (l2, l3, l4, app, other) and `limit` to narrow it; filtered results show each protocol's layer and stack, and how many matched out of the total."
     )]
     async fn list_protocols(
         &self,
         Parameters(params): Parameters<ListProtocolsParams>,
     ) -> Result<CallToolResult, McpError> {
+        use super::protocol_search::{
+            query_terms, Layer, ProtocolFilters, ProtocolRow, Searchable,
+        };
+
         let filter_type = params.r#type.as_deref().unwrap_or("all");
         let include_disabled = params.include_disabled.unwrap_or(false);
+        let terms = params.query.as_deref().map(query_terms).unwrap_or_default();
+        let layer = match params.layer.as_deref().filter(|l| !l.trim().is_empty()) {
+            None => None,
+            Some(text) => match Layer::parse(text) {
+                Some(layer) => Some(layer),
+                None => {
+                    let valid: Vec<&str> = Layer::ALL.iter().map(|l| l.as_str()).collect();
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Unknown layer {text:?}. Valid layers: {}.",
+                        valid.join(", ")
+                    ))]));
+                }
+            },
+        };
+        let limit = params.limit.map(|n| n as usize);
+        // With no filter the listing is exactly what it always was.
+        let filtering = !terms.is_empty() || layer.is_some() || limit.is_some();
+
+        let filters = ProtocolFilters {
+            terms: &terms,
+            layer,
+            limit,
+            filtering,
+        };
+
         let mut result = String::new();
 
         if filter_type == "all" || filter_type == "server" {
             let registry = crate::protocol::server_registry::registry();
             let protocols = registry.available_protocols();
             result.push_str("## Server Protocols\n\n");
+            let mut rows = Vec::new();
+            let mut total = 0;
             for name in &protocols {
                 if let Some(proto) = registry.get(name) {
                     let metadata = proto.metadata();
@@ -1111,14 +1155,25 @@ impl NetGetMcpService {
                     {
                         continue;
                     }
-                    result.push_str(&format!(
-                        "- **{}** ({}) - {}\n",
+                    total += 1;
+                    let searchable = Searchable {
                         name,
+                        keywords: proto.keywords(),
+                        search_terms: metadata.search_terms,
+                        group: proto.group_name(),
+                        stack: proto.stack_name(),
+                        prose: vec![proto.description(), metadata.implementation],
+                    };
+                    if let Some(row) = filters.row(
+                        &searchable,
                         metadata.state.as_str(),
-                        metadata.implementation
-                    ));
+                        metadata.implementation,
+                    ) {
+                        rows.push(row);
+                    }
                 }
             }
+            filters.render("server", total, rows, &mut result);
             result.push('\n');
         }
 
@@ -1128,6 +1183,8 @@ impl NetGetMcpService {
             protocols.sort();
             result.push_str("## Client Protocols\n\n");
             result.push_str("Start one with `start_client` (needs a `remote_addr`).\n\n");
+            let mut rows = Vec::new();
+            let mut total = 0;
             for name in &protocols {
                 if let Some(proto) = registry.get(name) {
                     let metadata = proto.metadata();
@@ -1139,16 +1196,29 @@ impl NetGetMcpService {
                     {
                         continue;
                     }
-                    result.push_str(&format!(
-                        "- **{}** ({}) - {}\n",
+                    total += 1;
+                    let searchable = Searchable {
                         name,
-                        metadata.state.as_str(),
-                        proto.description()
-                    ));
-                } else {
-                    result.push_str(&format!("- **{}**\n", name));
+                        keywords: proto.keywords(),
+                        search_terms: metadata.search_terms,
+                        group: proto.group_name(),
+                        stack: proto.stack_name(),
+                        prose: vec![proto.description()],
+                    };
+                    if let Some(row) =
+                        filters.row(&searchable, metadata.state.as_str(), proto.description())
+                    {
+                        rows.push(row);
+                    }
+                } else if !filtering {
+                    rows.push(ProtocolRow {
+                        line: format!("- **{}**\n", name),
+                        rank: (0, 0),
+                        name: name.clone(),
+                    });
                 }
             }
+            filters.render("client", total, rows, &mut result);
             result.push('\n');
         }
 
