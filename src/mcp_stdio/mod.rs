@@ -6,6 +6,7 @@
 
 #[cfg(feature = "mcp-http")]
 pub mod agent_client;
+pub mod activity;
 pub mod control;
 pub mod docs;
 #[cfg(feature = "mcp-stdio")]

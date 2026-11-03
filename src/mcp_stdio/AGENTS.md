@@ -89,15 +89,15 @@ OllamaClient (3 backends)
 
 | Tool | Description | Maps To |
 |------|-------------|---------|
-| `list_protocols` | List available server/client protocols (both halves carry maturity + description) | `ServerRegistry`, `ClientRegistry` |
+| `list_protocols` | List available server/client protocols (both halves carry maturity + description); `query` / `layer` / `limit` narrow it — see "Finding a protocol" | `ServerRegistry`, `ClientRegistry`, `mcp_stdio::protocol_search` |
 | `start_server` | Start protocol server | `server_startup::start_server_from_action()` |
 | `stop_server` | Stop server by ID (aborts its tasks + cancels its scheduled tasks) | `AppState::remove_server()` |
 | `list_servers` | List running servers | `AppState::get_all_servers()` |
-| `server_status` | Detailed server status, including each connection's id, whether it accepts `send_to_peer`, and its connection memory (what the model keeps about that one peer) | `AppState::get_server()` |
+| `server_status` | Detailed server status, including each connection's id, whether it accepts `send_to_peer`, and its connection memory (what the model keeps about that one peer); its event handlers, activity counters and last 5 events | `AppState::get_server()`, `mcp_stdio::activity` |
 | `start_client` | Connect a protocol client to a remote server | `client_startup::start_client_from_action()` |
 | `stop_client` | Stop a client by ID (aborts its registered tasks) — see below | `AppState::remove_client()` |
 | `list_clients` | List clients | `AppState::get_all_clients()` |
-| `client_status` | Detailed client status | `AppState::get_client()` |
+| `client_status` | Detailed client status: instruction (or that none was given), event handlers, activity counters (events, who answered, actions, model calls), byte/packet counts where the protocol keeps them, last 5 events | `AppState::get_client()`, `mcp_stdio::activity` |
 | `send_to_client` | Put one of a client's actions on the wire now (the dashboard's `[ send ]`) | `AppState::send_to_client()` |
 | `send_to_peer` | Put one of a server's actions on the wire to one live connection (`[ message ]`) | `AppState::send_to_peer()` |
 | `disconnect_peer` | Hang up one live connection from the server side (`[ disconnect ]`) | `AppState::send_to_peer()` with `close_connection` |
@@ -110,8 +110,9 @@ OllamaClient (3 backends)
 | `update_server_instruction` | Update just a running server's instruction | `AppState::with_server_mut()` |
 | `update_server` | Update a running server in place by id (supply only changed fields) — see below | `cli::management::update_server()` |
 | `update_client` | Update a running client in place by id (supply only changed fields) — see below | `cli::management::update_client()` |
-| `list_access_logs` | Recent request/response entries (newest first) | `AppState::list_access_logs()` |
+| `list_access_logs` | Recent request/response entries (newest first); `client_id` / `server_id` for one instance, `since_id` for only newer entries | `AppState::list_access_logs_for()` |
 | `get_access_log` | Full request + response for one entry by id | `AppState::get_access_log()` |
+| `list_local_listeners` | The host's listening TCP / bound UDP sockets with pid and process, this NetGet's servers named (native only) | `mcp_stdio::local_listeners` (`listeners` crate) |
 | `export_rules` | Turn an instance's model-authored answers into `event_handlers`; optionally apply them and/or write a `.netget` file — see below | `llm::rule_export::export_rules()` |
 | `stop_all` | Stop all servers | Iterate + remove all |
 | `get_next_llm_request` | (agent mode) Fetch next queued LLM request; optional long-poll | `LlmRequestQueue::wait_and_claim()` |
@@ -120,6 +121,32 @@ OllamaClient (3 backends)
 | `get_llm_request` / `release_llm_request` | (agent mode) Recover or release a claim | `LlmRequestQueue::get()` / `release()` |
 | `answer_and_get_next_llm_request` | (agent mode) Answer then wait in one call | Answer + claim |
 | `get_agent_status` | (agent mode) Listener activity and recent timings | `LlmRequestQueue::status()` |
+
+## Finding a protocol (`list_protocols { query, layer, limit }`)
+
+The unfiltered listing is ~250 lines per half (~28 KB with `include_disabled`), which is past
+what an agent reads through. Three optional arguments narrow it; with none of them the output
+is byte-for-byte the plain listing it always was.
+
+- **`query`** — whole words, case-insensitive, a trailing plural `s` ignored (`ip` does not
+  match `pipe`; `frames` matches `frame`); a word of three letters or more also matches inside
+  the name (`sql` → `mysql`). A protocol is listed if it matches any word, ranked by how many it
+  matches, then by how many of those hit its name, `keywords()`, metadata `search_terms`, group
+  or layer vocabulary rather than only its description. Each line says what matched.
+- **`layer`** — `l2`, `l3`, `l4`, `app`, `other` (synonyms: `link`/`ethernet`, `network`/`ip`,
+  `transport`, `l7`/`application`, `local`). Derived from `stack_name()` by
+  `protocol_search::layer_of_stack` — the last transport (TCP/UDP/SCTP/QUIC) decides l4 vs app,
+  otherwise IP-family tokens mean l3, Ethernet/LLC/ARP mean l2, and anything off an IP stack
+  (USB, BLE, CAN, pipes, PTYs) is `other`. There is no per-protocol layer table to maintain.
+- **`limit`** — per section. Filtered output starts each section with "Showing N of M …, out
+  of T in total" and ends with "… K more" when cut.
+
+**Search aliases go in metadata, not in `keywords()`.** `keywords()` drive protocol-name
+resolution from free text and must be unique across protocols, so "raw" or "packet" there
+would hijack resolution. `ProtocolMetadataV2::search_terms` (builder `.search_terms(&[…])`)
+is read only by this search and may repeat across protocols; the `datalink` client and server
+declare `raw`, `packet`, `ip` so "raw ip packet" finds the only client that injects arbitrary
+frames. Pinned by `tests/mcp_observability_test.rs`.
 
 ## Protocol documentation (`docs.rs`)
 
@@ -262,6 +289,22 @@ peer's side of a real socket (bytes read, EOF observed), not from the tool's tex
   unmatched event reaching the model. `list_servers` / `server_status` report it as
   `(none given — NetGet's default applies: "…")`, not as the operator's. An explicit empty
   instruction remains the way to say "no model".
+  **Clients the same**: `start_client`, `--client` and the management path fall back to
+  `state::client::default_client_instruction` ("You are a datalink client connected to …"),
+  which the model still receives; `list_clients` / `client_status` check
+  `ClientInstance::instruction_is_default` and say `(none given …)` — with handlers, that only
+  events no handler matches reach the model.
+- **Status shows behaviour, not just configuration.** `client_status` and `server_status` end
+  with the instance's event handlers in match order (`pattern → static: send_frame`,
+  `script (python)`, `model: "…"`, `manual`), then **Activity** — events handled with a
+  per-`answered_by` breakdown (`rule`, `model`, `cache`, `easy`, `unrecorded`), actions answered
+  with, actions sent by hand (`injected_action` entries), last event age, and for a client its
+  model calls against the budget — then the last 5 access-log entries, pointing at
+  `list_access_logs {"client_id": N}` / `get_access_log`. The counters are
+  `AppState::access_activity(owner)`: lifetime totals kept beside the access-log ring buffer
+  (so they survive its eviction) and dropped with the instance. A client with no
+  `ClientConnectionState` (datalink, most packet-level clients) says its bytes/packets are not
+  counted rather than omitting the line; capture, when on, counts them.
 - **Disconnected clients stay listed, apart.** `disconnect_client` and a peer hanging up keep
   the client's row so `reconnect_client` (and the dashboard) can bring it back by id;
   `list_clients` lists them under their own heading after the live ones, and `stop_client`
@@ -406,8 +449,10 @@ the action JSON the LLM produced (e.g. `send_http_response`). Recording happens
 centrally in `action_helper::call_llm` after the event is handled, so it works for
 every protocol without per-protocol wiring.
 
-- `list_access_logs { limit? }` — newest-first summaries (id, age, owner, protocol, request→response,
-  and what answered it where recorded).
+- `list_access_logs { limit?, client_id?, server_id?, since_id? }` — newest-first summaries
+  (id, age, owner, protocol, request→response, and what answered it where recorded).
+  `client_id` / `server_id` narrow to one instance (both at once is refused); `since_id` returns
+  only entries with a larger id, for polling what happened since the last look.
 - `get_access_log { id }` — full request and response JSON for one entry, with `answered_by`.
 
 **Clients record too, and entries carry an owner.** `AccessLogEntry` has
@@ -424,6 +469,18 @@ request whose LLM call errors out produces no entry; and a **client** entry reco
 the actions that were *produced*, not executed, because execution happens later
 inside the client's own connection loop, which does not report back. The
 `send_to_client` path is honest about outcomes via `ClientSendOutcome`.
+
+## Local listeners (`list_local_listeners`)
+
+`list_local_listeners { transport?, port? }` lists this host's TCP sockets in LISTEN and UDP
+sockets bound to a port — address, pid, process name — so an agent looking for something to
+point a client at does not shell out to `lsof` / `ss`. Read-only. The table comes from the
+`listeners` crate (libproc on macOS, procfs on Linux, also Windows and the BSDs; a native-only
+optional dependency enabled by `mcp-stdio` / `mcp-http`), read on a blocking thread; on any
+other OS, and in the wasm build, the tool returns an error saying it is unsupported. A socket
+owned by this process is labelled with the server on its port (`this NetGet — server #3
+(http)`), one owned by another process named `netget` as `another NetGet process`. Without
+root, other users' processes are not visible — the result says so.
 
 ## Startup configuration
 
@@ -673,7 +730,9 @@ All logging goes to stderr (stdout is JSON-RPC). Status messages from protocol s
 Automated in-process smoke tests (no Ollama, no real stdio) live in
 `tests/mcp_stdio_test.rs` — see `tests/mcp_stdio_CLAUDE.md`. Teardown regressions are
 pinned separately in `tests/mcp_stop_cleanup_test.rs`, and the hand-driving tools in
-`tests/mcp_client_send_test.rs` and `tests/mcp_intercept_test.rs`. All drive the real tools over
+`tests/mcp_client_send_test.rs` and `tests/mcp_intercept_test.rs`; protocol search, status
+activity, per-instance access logs and `list_local_listeners` in
+`tests/mcp_observability_test.rs`. All drive the real tools over
 `tokio::io::duplex`, so they are root-level test files rather than entries in
 `tests/server/mod.rs` and are compiled without the mod.rs footgun.
 

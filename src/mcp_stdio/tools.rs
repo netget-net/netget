@@ -415,6 +415,17 @@ pub struct ListAccessLogsParams {
     /// Maximum number of recent entries to return (default 20)
     #[serde(default, deserialize_with = "deserialize_option_u32_flexible")]
     pub limit: Option<u32>,
+    /// Only entries for this client (its handled events and the actions it was answered
+    /// with). Give at most one of client_id / server_id.
+    #[serde(default, deserialize_with = "deserialize_option_u32_flexible")]
+    pub client_id: Option<u32>,
+    /// Only entries for this server.
+    #[serde(default, deserialize_with = "deserialize_option_u32_flexible")]
+    pub server_id: Option<u32>,
+    /// Only entries newer than this access-log id — pass the newest id you have seen to
+    /// fetch just what happened since.
+    #[serde(default, deserialize_with = "deserialize_option_u64_flexible")]
+    pub since_id: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -830,6 +841,33 @@ fn describe_server_instruction(server: &crate::state::server::ServerInstance) ->
         )
     } else {
         server.instruction.clone()
+    }
+}
+
+/// A client's instruction as `list_clients` / `client_status` report it — the client twin of
+/// [`describe_server_instruction`]: NetGet's default
+/// ([`crate::state::client::default_client_instruction`]) is labelled as such, not shown as
+/// though the operator had written it.
+fn describe_client_instruction(client: &crate::state::client::ClientInstance) -> String {
+    if client.instruction.is_empty() {
+        "(none)".to_string()
+    } else if client.instruction_is_default() {
+        let has_rules = client
+            .event_handler_config
+            .as_ref()
+            .is_some_and(|c| !c.handlers.is_empty());
+        if has_rules {
+            "(none given — only events no handler matches reach the model, with NetGet's \
+             generic default)"
+                .to_string()
+        } else {
+            format!(
+                "(none given — NetGet's default applies: \"{}\")",
+                client.instruction
+            )
+        }
+    } else {
+        client.instruction.clone()
     }
 }
 
@@ -1402,7 +1440,9 @@ impl NetGetMcpService {
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
-    #[tool(description = "Get detailed status of a specific server")]
+    #[tool(
+        description = "Get detailed status of a specific server: port, status, instruction, connections (with the ids send_to_peer takes), its event handlers, counters (events handled and who answered them) and its most recent events with their answers."
+    )]
     async fn server_status(
         &self,
         Parameters(params): Parameters<ServerStatusParams>,
@@ -1480,6 +1520,17 @@ impl NetGetMcpService {
                         }
                     }
                 }
+                result.push_str(&super::activity::handlers_section(
+                    server.event_handler_config.as_ref(),
+                ));
+                result.push_str(
+                    &super::activity::activity_section(
+                        &self.state.app_state,
+                        crate::state::app_state::AccessLogOwner::Server(server_id.as_u32()),
+                        None,
+                    )
+                    .await,
+                );
                 Ok(CallToolResult::success(vec![Content::text(result)]))
             }
             None => Ok(CallToolResult::error(vec![Content::text(format!(
@@ -1815,48 +1866,72 @@ impl NetGetMcpService {
     }
 
     #[tool(
-        description = "List recent request/response access-log entries across all servers (newest first). Use get_access_log with an entry id to see the full request and response."
+        description = "List recent request/response access-log entries across all servers and clients (newest first): each handled event, the actions it was answered with, and what answered it (rule, model, cache). Filter to one instance with client_id or server_id, and pass since_id (the newest id already seen) to get only newer entries. Use get_access_log with an entry id to see the full request and response."
     )]
     async fn list_access_logs(
         &self,
         Parameters(params): Parameters<ListAccessLogsParams>,
     ) -> Result<CallToolResult, McpError> {
+        use crate::state::app_state::AccessLogOwner;
+
         let limit = params.limit.unwrap_or(20) as usize;
-        let entries = self.state.app_state.list_access_logs(Some(limit)).await;
+        let owner = match (params.client_id, params.server_id) {
+            (Some(_), Some(_)) => {
+                return Ok(CallToolResult::error(vec![Content::text(
+                    "Give client_id or server_id, not both.",
+                )]));
+            }
+            (Some(id), None) => Some(AccessLogOwner::Client(id)),
+            (None, Some(id)) => Some(AccessLogOwner::Server(id)),
+            (None, None) => None,
+        };
+        let entries: Vec<_> = match params.since_id {
+            // Newest first, so everything after the first entry at or below `since_id` is
+            // older still.
+            Some(since) => self
+                .state
+                .app_state
+                .list_access_logs_for(owner, None)
+                .await
+                .into_iter()
+                .take_while(|e| e.id > since)
+                .take(limit)
+                .collect(),
+            None => {
+                self.state
+                    .app_state
+                    .list_access_logs_for(owner, Some(limit))
+                    .await
+            }
+        };
 
         if entries.is_empty() {
-            return Ok(CallToolResult::success(vec![Content::text(
-                "No requests logged yet. Access logs are recorded as servers handle requests.",
-            )]));
+            let text = match (owner, params.since_id) {
+                (_, Some(since)) => format!("No entries newer than #{since}."),
+                (Some(AccessLogOwner::Client(id)), None) => format!(
+                    "No events logged for client #{id} yet. An event is recorded once it has \
+                     been answered; one whose model call failed leaves no entry."
+                ),
+                (Some(AccessLogOwner::Server(id)), None) => {
+                    format!("No requests logged for server #{id} yet.")
+                }
+                (None, None) => "No requests logged yet. Access logs are recorded as servers \
+                                 and clients handle events."
+                    .to_string(),
+            };
+            return Ok(CallToolResult::success(vec![Content::text(text)]));
         }
 
-        let now_ms = crate::utils::clock::SystemTime::now()
-            .duration_since(crate::utils::clock::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
+        let now_ms = super::activity::now_unix_ms();
 
-        let mut out = format!("## Recent requests ({} shown)\n\n", entries.len());
+        let scope = match owner {
+            Some(AccessLogOwner::Client(id)) => format!(" for client #{id}"),
+            Some(AccessLogOwner::Server(id)) => format!(" for server #{id}"),
+            None => String::new(),
+        };
+        let mut out = format!("## Recent requests{scope} ({} shown)\n\n", entries.len());
         for e in &entries {
-            let age = now_ms.saturating_sub(e.unix_ms) / 1000;
-            let owner = match (e.server_id, e.client_id) {
-                (Some(id), _) => format!("server #{id}"),
-                (None, Some(id)) => format!("client #{id}"),
-                (None, None) => "unknown".to_string(),
-            };
-            out.push_str(&format!(
-                "- **#{}** [{}s ago] {} ({}) — {} — {} → {}{}\n",
-                e.id,
-                age,
-                owner,
-                e.protocol,
-                e.event_type,
-                summarize_request(&e.request),
-                summarize_response(&e.response),
-                e.answered_by
-                    .as_deref()
-                    .map(|by| format!(" (answered by {by})"))
-                    .unwrap_or_default(),
-            ));
+            out.push_str(&super::activity::access_log_line(e, now_ms, true));
         }
         out.push_str("\nUse `get_access_log` with an id for the full request and response.");
 
@@ -2069,10 +2144,7 @@ impl NetGetMcpService {
         Parameters(params): Parameters<StartClientParams>,
     ) -> Result<CallToolResult, McpError> {
         let instruction = params.instruction.unwrap_or_else(|| {
-            format!(
-                "You are a {} client connected to {}. Handle responses appropriately.",
-                params.protocol, params.remote_addr
-            )
+            crate::state::client::default_client_instruction(&params.protocol, &params.remote_addr)
         });
 
         let scheduled_tasks = match parse_scheduled_tasks(params.scheduled_tasks) {
@@ -2228,11 +2300,7 @@ impl NetGetMcpService {
                     client.protocol_name,
                     client.remote_addr,
                     client.status,
-                    if client.instruction.is_empty() {
-                        "(none)"
-                    } else {
-                        &client.instruction
-                    },
+                    describe_client_instruction(client),
                     if client.memory.is_empty() {
                         "(empty)"
                     } else {
@@ -2245,7 +2313,9 @@ impl NetGetMcpService {
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
-    #[tool(description = "Get detailed status of a specific client")]
+    #[tool(
+        description = "Get detailed status of a specific client: protocol, addresses, status, instruction (or that none was given), its event handlers, counters (events handled and who answered them, actions, model calls used), byte/packet counts where the protocol keeps them, and its most recent events with their answers."
+    )]
     async fn client_status(
         &self,
         Parameters(params): Parameters<ClientStatusParams>,
@@ -2265,11 +2335,7 @@ impl NetGetMcpService {
                     client.protocol_name,
                     client.remote_addr,
                     client.status,
-                    if client.instruction.is_empty() {
-                        "(none)"
-                    } else {
-                        &client.instruction
-                    },
+                    describe_client_instruction(&client),
                     if client.memory.is_empty() {
                         "(empty)"
                     } else {
@@ -2281,6 +2347,14 @@ impl NetGetMcpService {
                     crate::capture::CaptureOwner::Client(client_id),
                 ));
 
+                if client.connection.is_none() {
+                    // Byte and packet counters are kept by the protocol itself, and only
+                    // those that open a socket of their own fill them in.
+                    result.push_str(
+                        "- **Bytes/packets**: not counted by this protocol — the events and \
+                         actions below are what NetGet saw it do\n",
+                    );
+                }
                 if let Some(conn) = &client.connection {
                     result.push_str(&format!(
                         "- **Local address**: {}\n\
@@ -2299,6 +2373,22 @@ impl NetGetMcpService {
                         conn.packets_received,
                     ));
                 }
+
+                result.push_str(&super::activity::handlers_section(
+                    client.event_handler_config.as_ref(),
+                ));
+                let budget = (
+                    self.state.app_state.get_client_llm_calls(client_id).await,
+                    self.state.app_state.get_client_llm_call_limit().await,
+                );
+                result.push_str(
+                    &super::activity::activity_section(
+                        &self.state.app_state,
+                        crate::state::app_state::AccessLogOwner::Client(client_id.as_u32()),
+                        Some(budget),
+                    )
+                    .await,
+                );
 
                 Ok(CallToolResult::success(vec![Content::text(result)]))
             }
@@ -3171,7 +3261,7 @@ fn parse_scheduled_tasks(
 }
 
 /// Build a short one-line summary of a request (event data) for the log list.
-fn summarize_request(request: &serde_json::Value) -> String {
+pub(super) fn summarize_request(request: &serde_json::Value) -> String {
     // HTTP-style requests: method + path
     let method = request.get("method").and_then(|v| v.as_str());
     let path = request.get("path").and_then(|v| v.as_str());
@@ -3187,7 +3277,7 @@ fn summarize_request(request: &serde_json::Value) -> String {
 }
 
 /// Build a short one-line summary of the response action array for the log list.
-fn summarize_response(response: &[serde_json::Value]) -> String {
+pub(super) fn summarize_response(response: &[serde_json::Value]) -> String {
     if response.is_empty() {
         return "(no response)".to_string();
     }

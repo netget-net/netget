@@ -381,11 +381,33 @@ impl AccessLogEntry {
 }
 
 /// The instance an access-log entry belongs to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AccessLogOwner {
     Server(u32),
     Client(u32),
 }
+
+/// Running totals of what one instance's access log has recorded, kept beside the ring
+/// buffer so they survive its eviction: the counts are for the instance's whole life, the
+/// entries only for the last [`ACCESS_LOG_CAPACITY`] across every instance.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AccessActivity {
+    /// Events handled (one access-log entry each), injected actions excluded.
+    pub events: u64,
+    /// Actions those events were answered with. For a client these were produced, and the
+    /// client's own loop executes them; see [`AccessLogEntry::response`].
+    pub actions: u64,
+    /// Actions put on the wire by hand (`send_to_client`, `send_to_peer`), recorded as
+    /// `injected_action` entries.
+    pub injected: u64,
+    /// Events per [`answered_by`] value; entries that record none count under `"unrecorded"`.
+    pub answered_by: std::collections::BTreeMap<String, u64>,
+    /// Unix milliseconds of the most recent entry.
+    pub last_unix_ms: Option<u64>,
+}
+
+/// The access-log event type `send_to_client` records an injected action under.
+pub const INJECTED_ACTION_EVENT: &str = "injected_action";
 
 /// Maximum number of access-log entries retained in memory (ring buffer).
 const ACCESS_LOG_CAPACITY: usize = 1000;
@@ -517,6 +539,8 @@ struct AppStateInner {
     access_logs: std::collections::VecDeque<AccessLogEntry>,
     /// Next access-log entry id to assign
     next_access_log_id: u64,
+    /// Per-instance totals of what the access log recorded (see [`AccessActivity`]).
+    access_activity: HashMap<AccessLogOwner, AccessActivity>,
     /// Declared pipes: `from` server's `on` event forwarded into `to` server.
     /// Keyed by pipe id. Torn down when either endpoint server closes.
     pipes: HashMap<crate::pipe::PipeId, crate::pipe::PipeSpec>,
@@ -845,6 +869,7 @@ impl AppState {
                 documented_client_protocols: std::collections::HashSet::new(),
                 access_logs: std::collections::VecDeque::new(),
                 next_access_log_id: 1,
+                access_activity: HashMap::new(),
                 pipes: HashMap::new(),
                 client_llm_call_limit: client_llm_call_limit_from_env(),
                 client_llm_calls: HashMap::new(),
@@ -913,6 +938,9 @@ impl AppState {
         let (server, aborted) = {
             let mut inner = self.inner.write().await;
             let server = inner.servers.remove(&id);
+            inner
+                .access_activity
+                .remove(&AccessLogOwner::Server(id.as_u32()));
             let aborted = inner.teardown_server(id);
             // Set mode to Idle if no more servers and no clients
             if inner.servers.is_empty() && inner.clients.is_empty() {
@@ -2647,6 +2675,9 @@ impl AppState {
             let mut inner = self.inner.write().await;
             let client = inner.clients.remove(&id);
             inner.client_llm_calls.remove(&id);
+            inner
+                .access_activity
+                .remove(&AccessLogOwner::Client(id.as_u32()));
             inner.reap_intercepts(
                 crate::state::intercepts::InterceptOwner::Client(id),
                 None,
@@ -3672,6 +3703,20 @@ impl AppState {
             }
         }
 
+        let activity = inner.access_activity.entry(owner).or_default();
+        if event_type == INJECTED_ACTION_EVENT {
+            // The entry's request is the action itself; its response is usually empty.
+            activity.injected += 1;
+        } else {
+            activity.events += 1;
+            activity.actions += response.len() as u64;
+            *activity
+                .answered_by
+                .entry(answered_by.unwrap_or("unrecorded").to_string())
+                .or_default() += 1;
+        }
+        activity.last_unix_ms = Some(unix_ms);
+
         let id = inner.next_access_log_id;
         inner.next_access_log_id += 1;
         inner.access_logs.push_back(AccessLogEntry {
@@ -3976,6 +4021,17 @@ impl AppState {
             .take(take)
             .cloned()
             .collect()
+    }
+
+    /// What one instance's access log has recorded over its life (zeroes if nothing yet).
+    pub async fn access_activity(&self, owner: AccessLogOwner) -> AccessActivity {
+        self.inner
+            .read()
+            .await
+            .access_activity
+            .get(&owner)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Look up a single access-log entry by id.

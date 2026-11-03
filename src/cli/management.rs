@@ -348,10 +348,7 @@ impl ClientForm {
         )?
         .flatten();
         let instruction = self.instruction.clone().unwrap_or_else(|| {
-            format!(
-                "You are a {} client connected to {}. Handle responses appropriately.",
-                self.protocol, remote_addr
-            )
+            crate::state::client::default_client_instruction(&self.protocol, &remote_addr)
         });
         let id = crate::cli::client_startup::start_client_from_action(
             state,
