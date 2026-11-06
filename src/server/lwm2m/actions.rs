@@ -200,7 +200,8 @@ pub static DEREGISTER_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "lwm2m_deregister",
         "A device left: it deregistered or its lifetime expired",
-        json!({"type": "lwm2m_accept"}),
+        // Informational: nothing answers a departure, so the example is a note to the operator.
+        json!({"type": "notify_operator", "message": "Device left"}),
     )
     .with_parameters(vec![
         endpoint_param(),

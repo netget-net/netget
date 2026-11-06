@@ -1272,9 +1272,9 @@ async fn hg_getbundle_sends_a_bundle() -> E2EResult<()> {
     }
     EventCase::new(
         "Mercurial",
-        "You are a Mercurial server. A client is cloning; send it a changegroup \
-         bundle in the uncompressed HG10UN format, which is the only bundle \
-         format this server can produce.",
+        "You are a Mercurial server for repository 'netget-live'. Its history is one commit, \
+         'Initial commit', adding README with the text 'Hello from NetGet'. A client is \
+         cloning; send it that history.",
         "hg_getbundle",
         json!({
             "repository": "netget-live",
@@ -1283,17 +1283,20 @@ async fn hg_getbundle_sends_a_bundle() -> E2EResult<()> {
             "client_ip": "127.0.0.1"
         }),
     )
-    .expect_action("hg_send_bundle")
+    .expect_action("hg_repository")
     .check(ParamCheck::custom(
-        "bundle_type",
-        "is HG10UN, the only format supported",
-        |v| {
-            let s = v.as_str().unwrap_or("HG10UN").to_uppercase();
-            if s == "HG10UN" {
+        "commits",
+        "is a non-empty array of commits with messages",
+        |v| match v.as_array() {
+            Some(commits)
+                if !commits.is_empty()
+                    && commits
+                        .iter()
+                        .all(|c| c.get("message").is_some_and(|m| m.is_string())) =>
+            {
                 Ok(())
-            } else {
-                Err(format!("expected bundle_type HG10UN, got {:?}", v))
             }
+            _ => Err(format!("expected commits with messages, got {:?}", v)),
         },
     ))
     .run()

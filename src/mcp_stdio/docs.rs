@@ -26,39 +26,101 @@
 use std::fmt::Write as _;
 
 use crate::llm::actions::ActionDefinition;
-use crate::protocol::docs::{failure_mode_text, render_action, render_event, render_startup_param};
+use crate::protocol::docs::{
+    example_fallback_actions, failure_mode_text, render_action, render_event, render_startup_param,
+    Role,
+};
+use crate::protocol::name_match::NameMatch;
 use crate::state::app_state::AppState;
 
 /// Render MCP-shaped documentation for one protocol.
 ///
-/// Returns `None` when the protocol is in neither registry (i.e. not compiled
-/// into this build).
-pub async fn render_protocol_docs(protocol: &str, state: &AppState) -> Option<String> {
+/// `protocol` is a protocol *name*: the canonical name, the stack name, or a declared keyword
+/// equal to the whole input (`ServerRegistry::resolve_name` / `ClientRegistry::resolve_name`).
+/// The page is headed and its `protocol` arguments filled with the **canonical** name, and an
+/// alias is said to be one — asking for `mptcp` gets "`mptcp` is an alias of `tcp`" and how to
+/// turn MPTCP on, never TCP's page presented as MPTCP's.
+///
+/// `Err` carries the message for a name neither registry has, with did-you-mean suggestions
+/// (it always contains "not found").
+pub async fn render_protocol_docs(protocol: &str, state: &AppState) -> Result<String, String> {
     let server_registry = crate::protocol::server_registry::registry();
     let client_registry = &crate::protocol::CLIENT_REGISTRY;
 
-    // Registries disagree on case: servers are keyed upper-ish, clients lower-ish.
-    // Try the parse helpers first, then the raw casings.
-    let server = server_registry
-        .parse_from_str(protocol)
-        .and_then(|name| server_registry.get(&name))
-        .or_else(|| server_registry.get(protocol))
-        .or_else(|| server_registry.get(&protocol.to_uppercase()))
-        .or_else(|| server_registry.get(&protocol.to_lowercase()));
-
-    let client = client_registry
-        .parse_from_str(protocol)
-        .and_then(|name| client_registry.get(&name))
-        .or_else(|| client_registry.get(protocol))
-        .or_else(|| client_registry.get(&protocol.to_lowercase()))
-        .or_else(|| client_registry.get(&protocol.to_uppercase()));
+    let server_lookup = server_registry.resolve_name(protocol);
+    let client_lookup = client_registry.resolve_name(protocol);
+    let (server, server_match) = match &server_lookup {
+        Ok((p, how)) => (Some(p.clone()), Some(how.clone())),
+        Err(_) => (None, None),
+    };
+    let (client, client_match) = match &client_lookup {
+        Ok((p, how)) => (Some(p.clone()), Some(how.clone())),
+        Err(_) => (None, None),
+    };
 
     if server.is_none() && client.is_none() {
-        return None;
+        let mut reasons: Vec<String> = Vec::new();
+        for reason in [
+            server_lookup.err().map(|e| e.to_string()),
+            client_lookup.err().map(|e| e.to_string()),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !reasons.contains(&reason) {
+                reasons.push(reason);
+            }
+        }
+        return Err(format!(
+            "Protocol '{protocol}' not found. {}\nPass a protocol name exactly as \
+             `list_protocols` prints it (or one of its declared aliases).",
+            reasons.join(" ")
+        ));
     }
 
+    let server_name = server.as_ref().map(|s| s.protocol_name().to_lowercase());
+    let client_name = client.as_ref().map(|c| c.protocol_name().to_lowercase());
+    let canonical = server_name
+        .clone()
+        .or_else(|| client_name.clone())
+        .unwrap_or_default();
+
     let mut out = String::new();
-    let _ = writeln!(out, "# `{}` — MCP reference\n", protocol.to_lowercase());
+    let _ = writeln!(out, "# `{}` — MCP reference\n", canonical);
+
+    // Say how the input named it whenever it was not the canonical name, so an alias is never
+    // mistaken for a protocol of its own.
+    let alias = server_match
+        .as_ref()
+        .and_then(|m| m.alias())
+        .or_else(|| client_match.as_ref().and_then(|m| m.alias()));
+    let by_stack = matches!(server_match, Some(NameMatch::StackName))
+        || matches!(client_match, Some(NameMatch::StackName));
+    if let Some(alias) = alias {
+        let _ = writeln!(
+            out,
+            "`{}` is an alias of `{}` — a keyword `{}` declares, not a protocol of its own. \
+             Pass `\"{}\"` as `protocol`.\n",
+            protocol.trim(),
+            canonical,
+            canonical,
+            canonical
+        );
+        let note = server
+            .as_ref()
+            .and_then(|s| s.alias_note(alias))
+            .or_else(|| client.as_ref().and_then(|c| c.alias_note(alias)));
+        if let Some(note) = note {
+            let _ = writeln!(out, "{note}\n");
+        }
+    } else if by_stack {
+        let _ = writeln!(
+            out,
+            "`{}` is the stack name of `{}`.\n",
+            protocol.trim(),
+            canonical
+        );
+    }
 
     match (server.is_some(), client.is_some()) {
         (true, true) => out.push_str(
@@ -116,7 +178,7 @@ pub async fn render_protocol_docs(protocol: &str, state: &AppState) -> Option<St
         let _ = writeln!(
             out,
             "- `protocol` (string, **required**) — `\"{}\"`",
-            protocol.to_lowercase()
+            server_name.as_deref().unwrap_or(&canonical)
         );
 
         let interface_based = binding
@@ -276,7 +338,9 @@ pub async fn render_protocol_docs(protocol: &str, state: &AppState) -> Option<St
                 ids.join(", ")
             );
             for event in &event_types {
-                render_event(&mut out, event, "####");
+                let fallback =
+                    example_fallback_actions(server.as_ref(), state, event, Role::Server);
+                render_event(&mut out, event, "####", &fallback);
             }
         }
 
@@ -347,7 +411,7 @@ pub async fn render_protocol_docs(protocol: &str, state: &AppState) -> Option<St
         let _ = writeln!(
             out,
             "- `protocol` (string, **required**) — `\"{}\"`",
-            protocol.to_lowercase()
+            client_name.as_deref().unwrap_or(&canonical)
         );
         out.push_str(
             "- `remote_addr` (string, **required**) — the server to connect to, \
@@ -419,7 +483,9 @@ pub async fn render_protocol_docs(protocol: &str, state: &AppState) -> Option<St
                 ids.join(", ")
             );
             for event in &event_types {
-                render_event(&mut out, event, "####");
+                let fallback =
+                    example_fallback_actions(client.as_ref(), state, event, Role::Client);
+                render_event(&mut out, event, "####", &fallback);
             }
         }
 
@@ -461,5 +527,5 @@ pub async fn render_protocol_docs(protocol: &str, state: &AppState) -> Option<St
         }
     }
 
-    Some(out)
+    Ok(out)
 }

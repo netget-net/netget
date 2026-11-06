@@ -120,7 +120,9 @@ fn script(event: &str, code: &str) -> Value {
     })
 }
 
-/// Fixed data, a 403 for a mismatched token, a 404 for anything unknown.
+/// Fixed data, a 403 for a mismatched token, a 404 for anything unknown: a read answers it
+/// with `send_vault_not_found`, a list with `send_vault_error` 404, and the CLI must print its
+/// own "No value found" for the first.
 fn fixture_handlers() -> Vec<Value> {
     let prelude = "import json, sys\nevent = json.load(sys.stdin)['event']\n\
                    def reply(act):\n    print(json.dumps({'actions': [act]}))\n\
@@ -136,7 +138,7 @@ fn fixture_handlers() -> Vec<Value> {
                  'password': 'hunter2-fixture'}}, 'version': 7, \
                  'created_time': '2026-09-01T10:00:00Z', \
                  'custom_metadata': {{'owner': 'netget-fixture'}}}})\n\
-                 else:\n    reply({{'type': 'send_vault_error', 'status': 404, 'errors': []}})\n"
+                 else:\n    reply({{'type': 'send_vault_not_found'}})\n"
             ),
         ),
         script(

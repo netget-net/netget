@@ -229,7 +229,14 @@ pub async fn build_snapshot(state: &AppState) -> RailSnapshot {
             port: server.port,
             local_addr: server.local_addr.map(|a| a.to_string()),
             status: server.status.clone(),
-            instruction: server.instruction.clone(),
+            // NetGet's default text is not the operator's instruction: the card shows
+            // "(none)" and the edit form opens empty, so it is never presented — or
+            // re-submitted — as something they wrote.
+            instruction: if server.instruction_is_default() {
+                String::new()
+            } else {
+                server.instruction.clone()
+            },
             memory_len: server.memory.len(),
             startup_params: server.startup_params.clone(),
             routing: server.event_handler_config.clone(),

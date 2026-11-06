@@ -425,6 +425,10 @@ async fn inject_protocol_action(
     };
     match outcome {
         ClientSendOutcome::Sent { bytes_sent } => Ok(format!("sent {bytes_sent} byte(s)")),
+        ClientSendOutcome::Probed { bytes_sent, report } => Ok(format!(
+            "sent {bytes_sent} byte(s); {} repl(ies)",
+            report["reply_count"]
+        )),
         ClientSendOutcome::Executed { detail } => Ok(format!("executed ({detail})")),
         ClientSendOutcome::Disconnected => Ok("executed; the connection is closed".to_string()),
         ClientSendOutcome::Rejected { error } => {

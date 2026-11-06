@@ -73,20 +73,25 @@ fn the_hint_says_whether_anything_was_offered() {
         "{none}"
     );
     assert!(none.contains("never a reason to refuse"), "{none}");
-    assert!(
-        none.contains(r#"Answer exactly {"type": "accept_websocket"} and nothing else"#),
-        "{none}"
-    );
+    assert!(none.contains("Answer accept_websocket"), "{none}");
 
     let some = handshake_answer_with(&["chat".to_string(), "superchat".to_string()]);
     assert!(some.contains("(chat, superchat)"), "{some}");
     assert!(some.contains("reject_websocket only when"), "{some}");
-    // A greeting belongs to the opened connection, not the handshake: told to greet, the model
-    // answered the handshake with the greeting and no accept, which is the fail-closed 503.
-    assert!(
-        none.contains("any message - a greeting, an echo, a reply - is sent after it has opened"),
-        "{none}"
-    );
+    // Speaking first is decided here, in the accept: told to greet, the model answered the
+    // handshake with the greeting and no accept when the greeting had nowhere else to go,
+    // which is the fail-closed 503. Echoes and replies still wait for a message.
+    for hint in [&none, &some] {
+        assert!(
+            hint.contains("put those exact words in accept_websocket's greeting"),
+            "{hint}"
+        );
+        assert!(hint.contains("otherwise no greeting"), "{hint}");
+        assert!(
+            hint.contains("Echoes and replies are sent later, when messages arrive"),
+            "{hint}"
+        );
+    }
 }
 
 /// Speaking first is the instruction's call: an echo server stays silent on connect.
@@ -148,4 +153,27 @@ fn an_empty_greeting_is_dropped_but_an_empty_reply_is_sent() {
         out_rx.try_recv().is_ok(),
         "an empty reply must still be sent"
     );
+}
+
+/// The accept carries the server's first message: the words it was given, and nothing for an
+/// empty one, which websocat would read as the end of the stream.
+#[test]
+fn an_accept_carries_its_greeting_and_an_empty_one_is_none() {
+    let greeting = |accept: serde_json::Value| match executor(&[]).execute_action(accept) {
+        Ok(ActionResult::Custom { data, .. }) => data["greeting"].as_str().map(str::to_string),
+        other => panic!("expected an accept, got {other:?}"),
+    };
+    assert_eq!(
+        greeting(json!({"type": "accept_websocket", "greeting": "Welcome to NetGet Eval"}))
+            .as_deref(),
+        Some("Welcome to NetGet Eval")
+    );
+    assert_eq!(
+        greeting(json!({"type": "accept_websocket", "greeting": ""})),
+        None
+    );
+    assert_eq!(greeting(json!({"type": "accept_websocket"})), None);
+    assert!(executor(&[])
+        .execute_action(json!({"type": "accept_websocket", "greeting": 42}))
+        .is_err());
 }

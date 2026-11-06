@@ -240,6 +240,48 @@ fn datalink_event_payload_reports_the_frame_and_any_truncation() {
     }
 }
 
+/// On macOS `lo0` — this server's default interface — a frame is `DLT_NULL`: a 4-byte address
+/// family and no MACs. Read as Ethernet it decodes into invented MACs, so the event reports the
+/// link type and decodes the frame for it: `family`, no MACs, and the IPv4 / TCP headers with
+/// their options (MPTCP MP_CAPABLE here) and the loopback checksum-offload note.
+#[test]
+fn datalink_event_payload_decodes_a_loopback_frame_for_its_link_type() {
+    use netget::client::datalink::packet::{LinkType, AF_INET};
+    use netget::server::datalink::packet_event_data_for_link;
+
+    // 127.0.0.1:3333 -> 127.0.0.1:40000 SYN-ACK, TCP checksum left 0 as loopback does.
+    let mut frame = AF_INET.to_ne_bytes().to_vec();
+    frame.extend_from_slice(
+        &hex::decode(
+            "450000301234400040062a927f0000017f0000010d059c4000000007112233457012ffff0000\
+             000002043fd81e040101",
+        )
+        .unwrap(),
+    );
+    let data = packet_event_data_for_link(&frame, LinkType::Null, true);
+    assert_eq!(data["link_type"], "NULL");
+    assert_eq!(data["family"], "AF_INET");
+    assert!(data["dst_mac"].is_null() && data["src_mac"].is_null());
+    assert_eq!(data["ip"]["dst"], "127.0.0.1");
+    assert_eq!(data["tcp"]["src_port"], 3333);
+    assert_eq!(data["tcp"]["flags"], serde_json::json!(["syn", "ack"]));
+    assert_eq!(data["tcp"]["options"][1]["kind"], "mp_capable");
+    assert!(data["tcp"]["checksum_ok"].is_null());
+    assert!(data["tcp"]["checksum_note"]
+        .as_str()
+        .unwrap()
+        .contains("offload"));
+
+    let declared: Vec<String> = netget::server::datalink::actions::DATALINK_PACKET_CAPTURED_EVENT
+        .parameters
+        .iter()
+        .map(|p| p.name.clone())
+        .collect();
+    for key in data.as_object().unwrap().keys() {
+        assert!(declared.contains(key), "'{key}' is not declared: {declared:?}");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Privileged: the capture itself
 // ---------------------------------------------------------------------------

@@ -1,9 +1,10 @@
 //! DNS wire format — `hickory_proto::op::Message::from_vec`.
 //!
 //! **NetGet has no DNS parser of its own** (DNS over TCP adds only a two-byte length prefix,
-//! read with `read_u16` and bounded by its own width). `src/server/dns/mod.rs`, `dot/mod.rs` and
-//! `doh/mod.rs` each call `DnsMessage::from_vec(&data)` inline in their receive loop and
-//! hand the result to the model; there is no hand-written framing or name decompression
+//! read with `read_u16` and bounded by its own width). `src/server/dns/mod.rs`, `dot/mod.rs`,
+//! `doh/mod.rs` and `llmnr/mod.rs` each decode through `utils::dns_screen::decode_dns_message`
+//! in their receive loop and hand the result to the model; there is no hand-written framing or
+//! name decompression
 //! anywhere around it. That makes this the one target here that fuzzes a third-party crate
 //! rather than NetGet code — and it earns its place anyway, because the exposure is NetGet's:
 //! three registered protocols reach this decoder from an unauthenticated datagram on the
@@ -15,8 +16,15 @@
 //! or recurses. That is the same class as the six overflows this harness exists for, sitting
 //! in a dependency rather than in `src/`.
 //!
-//! If this target crashes, the finding belongs upstream — and the NetGet-side fix is a
-//! structural screen in front of `from_vec`, the shape `utils::bencode` already establishes.
+//! There is one, found by reading rather than by this target: `hickory-proto` 0.24 follows a
+//! compression pointer by recursing, one frame per hop, and a chain of pointers each aiming two
+//! bytes back overflows a debug build's 2 MiB worker at ~1 700 hops — 3.4 KB. The NetGet-side
+//! fix is `utils::dns_screen`, which every decode site now calls first, so this target runs the
+//! same pair the servers do: **anything the screen accepts, the decoder must survive.**
+//! `corpus/dns_message/pointer_chain_bomb` is the depth seed. It does not crash this target
+//! with the screen removed — libFuzzer runs on the 8 MiB main thread, and an optimised frame is
+//! ~155 bytes — so the regression for the overflow is `tests/server/dns/compression_chain_test.rs`
+//! against the debug server, not this target.
 
 #![no_main]
 
@@ -24,6 +32,9 @@ use hickory_proto::op::Message as DnsMessage;
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
+    if netget::utils::dns_screen::screen_dns_message(data).is_err() {
+        return;
+    }
     let Ok(msg) = DnsMessage::from_vec(data) else {
         return;
     };

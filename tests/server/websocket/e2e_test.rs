@@ -16,12 +16,12 @@
 //! `tungstenite`, so it is a second, genuinely independent RFC 6455 implementation and not the
 //! circular-evidence case. That test **fails** when `websocat` is missing; it does not skip.
 //!
-//! # LLM call budget: 6 (plus repair retries on the one deliberate failure)
+//! # LLM call budget: 5 (plus repair retries on the one deliberate failure)
 //!
 //! - `test_websocket_wire_protocol_against_raw_client`: 1 (`open_server`; every event on that
 //!   server is answered by a static handler, so frames cost nothing)
-//! - `test_websocket_subprotocol_and_rejection`: 4 (`open_server`, two `websocket_handshake`
-//!   decisions, one `websocket_connection_opened`)
+//! - `test_websocket_subprotocol_and_rejection`: 3 (`open_server` and two `websocket_handshake`
+//!   decisions; the accept carries the greeting, so `websocket_connection_opened` is not raised)
 //! - `test_websocket_with_websocat`: 0 additional (reuses the static-handler server started
 //!   inside it — 1 `open_server`)
 //! - `test_websocket_handshake_backend_failure_is_tagged_fail_closed`: 1 (`open_server`) plus
@@ -695,13 +695,14 @@ async fn test_websocket_subprotocol_and_rejection() -> E2EResult<()> {
             }]))
             .expect_calls(1)
             .and()
-            // Accept /chat, agreeing the subprotocol the client offered first.
+            // Accept /chat, agreeing the subprotocol the client offered first, and speak first
+            // through the accept's greeting.
             .on_event("websocket_handshake")
             .and_event_data_contains("path", "/chat")
             // Matches only when the event lists what this client offered.
             .and_event_data_contains("answer_with", "(chat, superchat)")
             .respond_with_actions(serde_json::json!([
-                {"type": "accept_websocket", "subprotocol": "chat"}
+                {"type": "accept_websocket", "subprotocol": "chat", "greeting": "joined"}
             ]))
             .expect_calls(1)
             .and()
@@ -712,11 +713,13 @@ async fn test_websocket_subprotocol_and_rejection() -> E2EResult<()> {
             ]))
             .expect_calls(1)
             .and()
+            // The model answered the handshake, greeting included, so it is not asked again
+            // when the connection opens.
             .on_event("websocket_connection_opened")
             .respond_with_actions(serde_json::json!([
-                {"type": "send_websocket_text", "text": "joined"}
+                {"type": "send_websocket_text", "text": "asked twice"}
             ]))
-            .expect_calls(1)
+            .expect_calls(0)
             .and()
     });
 

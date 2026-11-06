@@ -604,7 +604,7 @@ impl Protocol for AfpProtocol {
             DevelopmentState, PrivilegeRequirement, ProtocolMetadataV2,
         };
         ProtocolMetadataV2::builder()
-            .state(DevelopmentState::Experimental)
+            .state(DevelopmentState::Beta)
             .privilege_requirement(PrivilegeRequirement::PrivilegedPort(548))
             .well_known_port(548)
             // A model failure is answered with the AFP error the operation defines —
@@ -643,16 +643,18 @@ impl Protocol for AfpProtocol {
                  FPEnumerate and FPResolveID, reads a file with FPOpenFork, FPGetForkParms and \
                  FPRead, and writes one with FPCreateFile, FPSetForkParms and FPWrite; \
                  asip-status (netatalk) decodes FPGetSrvrInfo; Nmap's afp NSE library (Lua, \
-                 an independent client) runs afp-serverinfo, afp-showmount and afp-ls with No \
-                 User Authent (FPGetSrvrParms, FPOpenVol, FPEnumerateExt2 with Unix \
+                 an independent client) runs afp-serverinfo and afp-ls with No User \
+                 Authent (FPGetSrvrParms, FPOpenVol, FPEnumerateExt2 with Unix \
                  privileges and dates); tshark's dsi and afp dissectors read both directions \
                  of those sessions. In-process: the password check, every bound and the \
                  fail-closed paths from a raw DSI client",
             )
             .notes(
-                "Experimental: two independent clients drive it and tshark reads the bytes, \
-                 but it is new, its fuzz target has not run at length, and its pair job had \
-                 not run in CI when it landed. Not implemented, each answered \
+                "Beta: two independent clients drive it and tshark reads the bytes - \
+                 netatalk's afparg and asip-status (login, walk, read, create and write) and \
+                 Nmap's AFP library (guest login, volume list, listing) - here and in the afp \
+                 pair job. No independent client deletes a file; afp_delete rests on the raw \
+                 DSI tests. Not implemented, each answered \
                  kFPCallNotSupported: DHX, DHX2, DHCAST128 and Kerberos logins, FPLoginCont, \
                  byte-range locks, rename and move, FPCopyFile, FPExchangeFiles, catalog \
                  search, the desktop database (icons, comments, APPL), extended attributes, \

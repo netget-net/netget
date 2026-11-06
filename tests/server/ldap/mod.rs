@@ -1,3 +1,4 @@
+mod answer_with_test;
 mod connection_bounds_test;
 pub mod e2e_test;
 mod llm_failure_test;

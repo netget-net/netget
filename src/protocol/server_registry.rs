@@ -5,6 +5,7 @@
 //! and keyword-based parsing.
 
 use super::metadata::ProtocolMetadataV2;
+use super::name_match::{normalize, NameMatch};
 use crate::llm::actions::Server;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -1135,7 +1136,81 @@ impl ServerRegistry {
         // against every known protocol name, compiled in or not.
         Err(ProtocolLookupError::Unknown {
             input: input.to_string(),
-            suggestion: suggest_protocol_name(input, ALL_KNOWN_PROTOCOLS),
+            suggestions: suggest_protocol_name(input, ALL_KNOWN_PROTOCOLS)
+                .map(|s| vec![s.to_string()])
+                .unwrap_or_default(),
+        })
+    }
+
+    /// Find the protocol `input` *names*: its canonical name, its stack name, or one of its
+    /// declared keywords equal to the whole input (case-insensitive, `-`/`_`/space folded).
+    /// No substring or word matching — see [`crate::protocol::name_match`].
+    ///
+    /// When two protocols declare the same keyword the alphabetically first wins, so the
+    /// answer is the same on every run.
+    pub fn lookup_name(&self, input: &str) -> Option<(String, NameMatch)> {
+        let wanted = normalize(input);
+        if wanted.is_empty() {
+            return None;
+        }
+        let mut names: Vec<&String> = self.protocols.keys().collect();
+        names.sort();
+        for name in &names {
+            if normalize(self.protocols[*name].protocol_name()) == wanted
+                || normalize(name) == wanted
+            {
+                return Some(((*name).clone(), NameMatch::Canonical));
+            }
+        }
+        for name in &names {
+            if normalize(self.protocols[*name].stack_name()) == wanted {
+                return Some(((*name).clone(), NameMatch::StackName));
+            }
+        }
+        for name in &names {
+            if let Some(keyword) = self.protocols[*name]
+                .keywords()
+                .into_iter()
+                .find(|k| normalize(k) == wanted)
+            {
+                return Some(((*name).clone(), NameMatch::Alias(keyword.to_string())));
+            }
+        }
+        None
+    }
+
+    /// Resolve a protocol **name** — for callers whose argument is a name and not free text
+    /// (MCP `start_server` / `get_protocol_docs`, the model's `read_documentation`).
+    ///
+    /// Accepts exactly what [`Self::lookup_name`] accepts and reports how it matched, so a
+    /// caller can say "`mptcp` is an alias of `tcp`". Anything else is
+    /// [`ProtocolLookupError::Unknown`] with did-you-mean suggestions — including inputs the
+    /// free-text [`Self::resolve`] would have mapped to some protocol, which are offered as a
+    /// suggestion instead of being silently chosen.
+    pub fn resolve_name(
+        &self,
+        input: &str,
+    ) -> Result<(Arc<dyn Server>, NameMatch), ProtocolLookupError> {
+        if let Some((name, how)) = self.lookup_name(input) {
+            if let Some(p) = self.get(&name) {
+                return Ok((p, how));
+            }
+        }
+        let input_norm = normalize(input);
+        for (name, requires) in ALL_KNOWN_PROTOCOLS {
+            if normalize(name) == input_norm {
+                return Err(ProtocolLookupError::NotCompiled { name, requires });
+            }
+        }
+        let free_text_hit = self
+            .parse_from_str(input)
+            .and_then(|n| self.get(&n))
+            .map(|p| p.protocol_name().to_lowercase());
+        let mut known: Vec<&str> = self.protocols.values().map(|p| p.protocol_name()).collect();
+        known.extend(ALL_KNOWN_PROTOCOLS.iter().map(|(n, _)| *n));
+        Err(ProtocolLookupError::Unknown {
+            input: input.to_string(),
+            suggestions: crate::protocol::name_match::suggestions(input, free_text_hit, &known),
         })
     }
 
@@ -1313,15 +1388,10 @@ impl ServerRegistry {
             return Some(protocol_name.clone());
         }
 
-        // Default to TCP if "tcp", "raw", "ftp", "custom" found
-        if input_lower.contains("tcp")
-            || input_lower.contains("raw")
-            || input_lower.contains("ftp")
-            || input_lower.contains("custom")
-        {
-            return Some("TCP".to_string());
-        }
-
+        // There used to be a last-resort "anything containing tcp, raw, ftp or custom is
+        // TCP" here. It matched raw substrings, so "mptcp" resolved to TCP and was then
+        // documented as if TCP were MPTCP. "tcp", "raw" and "custom" are TCP's own keywords,
+        // which the loop above already matches as whole words.
         None
     }
 
@@ -1333,36 +1403,7 @@ impl ServerRegistry {
     ///   - "mail" does NOT match "email" ✗
     ///   - "ai" does NOT match "mail" ✗
     fn matches_with_word_boundary(&self, input: &str, keyword: &str) -> bool {
-        // Handle multi-word keywords (e.g., "mail server", "ssh keys")
-        if keyword.contains(' ') {
-            return input.contains(keyword);
-        }
-
-        // For single-word keywords, check word boundaries
-        let input_bytes = input.as_bytes();
-
-        if let Some(pos) = input.find(keyword) {
-            // Check character before keyword
-            let before_ok = if pos == 0 {
-                true
-            } else {
-                let c = input_bytes[pos - 1];
-                !c.is_ascii_alphanumeric() && c != b'_' && c != b'-'
-            };
-
-            // Check character after keyword
-            let end_pos = pos + keyword.len();
-            let after_ok = if end_pos >= input.len() {
-                true
-            } else {
-                let c = input_bytes[end_pos];
-                !c.is_ascii_alphanumeric() && c != b'_' && c != b'-'
-            };
-
-            return before_ok && after_ok;
-        }
-
-        false
+        crate::protocol::name_match::contains_words(input, keyword)
     }
 
     /// Match a specific protocol by checking if input contains ANY of its keywords (with word boundaries)
@@ -1858,7 +1899,8 @@ pub enum ProtocolLookupError {
     /// No protocol by this name/keyword is known to NetGet at all, in any build.
     Unknown {
         input: String,
-        suggestion: Option<&'static str>,
+        /// Did-you-mean candidates, best first; empty when nothing is close.
+        suggestions: Vec<String>,
     },
 }
 
@@ -1869,14 +1911,14 @@ impl std::fmt::Display for ProtocolLookupError {
                 f,
                 "Protocol '{name}' exists but is not compiled into this build: it needs {requires}"
             ),
-            ProtocolLookupError::Unknown {
-                input,
-                suggestion: Some(s),
-            } => write!(f, "Unknown protocol: '{input}'. Did you mean '{s}'?"),
-            ProtocolLookupError::Unknown {
-                input,
-                suggestion: None,
-            } => write!(f, "Unknown protocol: '{input}'"),
+            ProtocolLookupError::Unknown { input, suggestions } if suggestions.is_empty() => {
+                write!(f, "Unknown protocol: '{input}'")
+            }
+            ProtocolLookupError::Unknown { input, suggestions } => write!(
+                f,
+                "Unknown protocol: '{input}'. Did you mean {}?",
+                crate::protocol::name_match::or_list(suggestions)
+            ),
         }
     }
 }

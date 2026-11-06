@@ -1,206 +1,224 @@
 # Mercurial HTTP Protocol Implementation
 
-Read-only Mercurial server speaking a subset of the HTTP wire protocol
-(version 1) on hyper. The model controls repository *metadata* — capabilities,
-heads, branch map, bookmark namespaces. It cannot control repository *content*:
-`getbundle` always answers with an empty changegroup.
+Read-only Mercurial server speaking the HTTP wire protocol (version 1) on hyper. The model — or
+a static or script handler — describes a repository **history** (commits with author, date,
+message, parents, branch and text files) in one `hg_repository` action, and the server derives
+everything Mercurial computes for itself: filelog, manifest and changelog texts, their revlog
+nodes, and the changegroup `hg clone` / `hg pull` applies. A real `hg` clones it, and `hg verify`
+passes.
 
-**State**: Experimental. **Privilege**: none; the default port 8000 is above
-1024. **Spec**: [WireProtocol](https://www.mercurial-scm.org/wiki/WireProtocol),
-[HttpCommandProtocol](https://wiki.mercurial-scm.org/HttpCommandProtocol).
+**State**: Experimental. **Privilege**: none; the default port 8000 is above 1024.
+**Spec**: [WireProtocol](https://www.mercurial-scm.org/wiki/WireProtocol),
+[HttpCommandProtocol](https://wiki.mercurial-scm.org/HttpCommandProtocol); the formats below
+were checked against the installed `hg` 7.2.4's own source (`httppeer.py`,
+`wireprotov1peer.py`, `changegroup.py`, `changelog.py`, `setdiscovery.py`, `exchange.py`).
 
 ## Commands
 
-| Request | Event | Response format |
+| Request | Event | Response |
 |---|---|---|
-| `GET /<repo>?cmd=capabilities` | `hg_capabilities` | newline-separated capability names |
-| `GET /<repo>?cmd=heads` | `hg_heads` | space-separated 40-char node IDs |
-| `GET /<repo>?cmd=branchmap` | `hg_branchmap` | one `branch node…` line per branch |
-| `GET /<repo>?cmd=listkeys&namespace=…` | `hg_listkeys` | `key\tvalue` per line |
-| `GET`/`POST /<repo>?cmd=getbundle` | `hg_getbundle` | `HG10UN` + empty changegroup |
+| `?cmd=capabilities` | `hg_capabilities` | newline-separated capability names |
+| `?cmd=heads` | `hg_heads` | space-separated 40-hex nodes **and a trailing newline** — the client decodes `d[:-1]` |
+| `?cmd=branchmap` | `hg_branchmap` | one `<url-quoted branch> <node>…` line per branch |
+| `?cmd=listkeys&namespace=…` | `hg_listkeys` | `key\tvalue` per line |
+| `?cmd=known&nodes=…` | `hg_known` (only when `nodes` is non-empty) | one `0`/`1` per node |
+| `?cmd=lookup&key=…` | `hg_lookup` | `1 <node>\n`, or `0 <reason>\n` |
+| `?cmd=batch&cmds=…` | one event per sub-command | the sub-commands' answers, `:`-escaped and joined by `;` |
+| `?cmd=getbundle` (GET or POST) | `hg_getbundle` | zlib-compressed version-1 changegroup |
 | `?cmd=unbundle`, `?cmd=pushkey` | — | `403`, push is not implemented |
 | any other `cmd` | — | `404` |
 
+Every response carries `Content-Type: application/mercurial-0.1`; `httppeer` refuses anything
+else as "not an hg repository". With 0.1 the client **zlib-decompresses** the body of a
+compressible command, and `getbundle` is one — so the changegroup is zlib-compressed and carries
+no `HG10UN` header (the bundle1 `getbundle` reply is a bare cg1 stream, read by
+`cg1unpacker(f, 'UN')`). Query arguments are form-decoded (`+` is a space), because the node lists
+in `heads`, `common` and `nodes` are space-separated.
+
+**`batch` is not optional.** hg 7.x sends every group of two or more batchable commands as one
+`batch` request whether or not the server advertises it (`wireprotov1peer.peerexecutor
+.sendcommands`), so a clone's discovery always arrives as `cmd=batch&cmds=heads ;known nodes=`.
+`batch` carries `capabilities`, `heads`, `branchmap`, `listkeys`, `known` and `lookup`, at most
+`MAX_BATCH_COMMANDS` (16) of them; arguments and answers use `wireprototypes`' escaping
+(`:` → `::`, `,` → `:c`, `;` → `:s`, `=` → `:e`). Any other sub-command, or an empty or oversized
+batch, is refused with an `application/hg-error`. Each sub-command raises its own event, and the
+first one that fails decides the whole response.
+
 ## What the model sees and controls
 
-Every event carries `repository` and `client_ip`; `hg_listkeys` adds
-`namespace`, `hg_getbundle` adds the raw `heads` and `common` request arguments.
+Every event carries `repository` and `client_ip`; `hg_listkeys` adds `namespace`, `hg_known`
+`nodes`, `hg_lookup` `key`, and `hg_getbundle` the raw `heads` and `common` arguments.
 
-**Actions**: `hg_capabilities` (`capabilities`), `hg_heads` (`heads`),
-`hg_branchmap` (`branches`), `hg_listkeys` (`keys`), `hg_send_bundle`
-(`bundle_type`), and `hg_error` (`message`, `code`) which is accepted for every
-event.
+**`hg_repository` (`commits`) is accepted for every event**, and is what makes a clone work. One
+static or script rule on `*` answering with the same history serves the whole exchange:
+capabilities, `heads`, `known`, `lookup`, `branchmap` and `getbundle` are all derived from it.
+Each commit is an object:
 
-There are no async actions. `create_hg_repository`, `delete_hg_repository` and
-`list_hg_repositories` used to be advertised; there was no repository store for
-them to act on and their results were discarded.
+| field | meaning | default |
+|---|---|---|
+| `message` | required; stored as `changelog.stripdesc` stores it | — |
+| `id` | a label of the caller's choice, used only to name parents | `#<index>` |
+| `parents` | up to two earlier ids; `[]` is a root | the previous commit |
+| `author` | `Name <email>`, one line | `NetGet <netget@localhost>` |
+| `date` | RFC 3339 (`2026-10-31T12:00:00+01:00`), Unix seconds, or hg's `"<secs> <tz>"` | `1700000000` UTC |
+| `branch` | letters, digits, `- _ . / +`; not `.`, `tip`, `null` or a number | `default` |
+| `files` | `[{"path", "content" (text), "executable"?}]` — added or changed | `[]` |
+| `removed` | paths this commit deletes | `[]` |
+
+A commit starts from its first parent's files; a merge also keeps every path only its second
+parent has, and a path both parents have keeps the first parent's version unless listed. Commits
+must be listed parents-first, and their order is the revision order. The model never writes a
+node id: they are SHA-1 hashes the server computes, so **the same description must be given on
+every request** — a different description is a different repository, and a client asking
+`getbundle` for a head an earlier `heads` reply named gets a refusal.
+
+The per-command actions remain for metadata-only answers: `hg_capabilities` (`capabilities`),
+`hg_heads` (`heads`), `hg_branchmap` (`branches`), `hg_listkeys` (`keys`), `hg_send_bundle`
+(an empty changegroup), and `hg_error` (`message`, `code`). `hg_known` and `hg_lookup` accept only
+`hg_repository` and `hg_error` — answering them needs the history. There are no async actions.
+
+### How the history becomes revlogs (`changegroup.rs`)
+
+- **Node** = `sha1(min(p1, p2) + max(p1, p2) + text)` (`storageutil.hashrevisionsha1`).
+- **Filelog text** = the content, wrapped in an empty metadata block `\x01\n\x01\n` when it
+  itself starts with `\x01\n` (`filelog.add`). A file whose content equals its first-parent
+  revision reuses that node.
+- **Manifest text** = `path\0<hex filenode>[x]\n` per file, sorted by path. Its parents are the
+  parent commits' manifests; an unchanged non-merge manifest reuses its parent's node.
+- **Changelog text** = `hex(manifest)\nauthor\n<secs> <tz>[ branch:<name>]\n<touched files>\n\n<message>`
+  (`changelog.add`), where `tz` is seconds *west* of UTC and the touched files are those added,
+  changed or removed relative to the first parent.
+- **Changegroup** = cg1: a changelog group, a manifest group, then one group per file. Each chunk
+  is a 4-byte length, `node p1 p2 linknode` and one delta hunk replacing the whole base (the
+  previous chunk in the group, or the revision's `p1` for the first) with the full text.
+  `getbundle` sends `ancestors(heads) − ancestors(common)`, and only the manifests and file
+  revisions the client's changesets do not already reference; each is linked to the first
+  missing changeset that uses it, which is always one that touched it.
+
+### Bounds (all refusals, never truncation)
+
+| constant | value |
+|---|---|
+| `MAX_COMMITS` | 256 |
+| `MAX_CHANGES_PER_COMMIT` (`files` + `removed`) | 256 |
+| `MAX_PATHS` (distinct, whole history) | 1024 |
+| `MAX_PATH_BYTES` | 255 |
+| `MAX_FILE_BYTES` | 1 MiB |
+| `MAX_TOTAL_CONTENT_BYTES` | 8 MiB |
+| `MAX_MANIFEST_BYTES` (sum of distinct manifest texts — the commits × paths cost) | 8 MiB |
+| `MAX_MESSAGE_BYTES` / `MAX_AUTHOR_BYTES` / `MAX_ID_BYTES` / `MAX_BRANCH_BYTES` | 16 KiB / 512 / 64 / 64 |
+
+The changegroup has no cap of its own: it is bounded by these (tens of MiB at the very worst),
+and the peer chooses only which part of it to receive. Paths are refused when absolute, when they
+contain an empty, `.` or `..` component, a `.hg` component (any case), NUL, CR, LF or a
+backslash, or when a path would be both a file and a directory. Dates must fit Mercurial's 32
+bits with an offset of at most 14 hours.
 
 ### The server refuses to put nonsense on the wire
 
-- **Node IDs are validated.** Anything that is not exactly 40 hex characters is
-  dropped with a WARN. Models like to answer `"abc123..."`, which would leave the
-  client with an unparseable head. `heads` also accepts a whitespace-separated
-  string, not just an array.
-- **Capabilities are filtered** to what this server implements (`branchmap`,
-  `getbundle`, `listkeys`). Advertising `unbundle` would invite a push that gets
-  a `403`; advertising `bundle2` would make the client negotiate a format this
-  server never speaks. Dropped entries are logged.
-- **`hg_send_bundle` has no data parameter.** It used to take `bundle_data`,
-  whose string was written to the socket as-is — arbitrary text presented to the
-  client as a changegroup. Generating a real changegroup means emitting revlog
-  deltas, manifests and filelogs, which is not implemented, so the action now
-  only chooses the (single supported) bundle type and the server emits a
-  well-formed *empty* bundle: `HG10UN` followed by three empty chunk groups.
+- **Node IDs from per-command actions are validated.** Anything that is not exactly 40 hex
+  characters is dropped with a WARN; `heads` also accepts a whitespace-separated string.
+- **Capabilities are fixed** to what this server implements — `batch`, `branchmap`,
+  `getbundle`, `known`, `listkeys`, `lookup` — whatever the model lists. Advertising `unbundle`
+  or `pushkey` would invite a push that gets a `403`; `bundle2` would make the client negotiate a
+  format this server never speaks.
+- **A history the server cannot build is refused** as Mercurial's own error: `200` with
+  `Content-Type: application/hg-error`, which `httppeer` raises as `OutOfBandError`, so `hg`
+  prints `abort: remote error:` and a fixed sentence. The reason (which commit, which path) is
+  logged as `decision=fail_closed_invalid_repository`. A `getbundle` for an unknown head is
+  refused the same way (`decision=refused_unknown_head`).
 
 ### Failure behavior
 
 | Situation | Result |
 |---|---|
-| `hg_error` action | that HTTP status and message |
-| Action for a different command, or no action | `500` carrying only a `WireFailure` category; `decision=fail_closed_no_action` naming what was expected |
+| `hg_error` action | that HTTP status and message; `decision=model_reject` |
+| `hg_repository` the server cannot build | `application/hg-error`; `decision=fail_closed_invalid_repository` |
+| Action for a different command, or no action | `500` carrying only a `WireFailure` category; `decision=fail_closed_no_action` |
 | LLM/handler call fails, backend saturated | `503` + `Retry-After: 1`; `decision=fail_closed_overloaded` |
 | LLM/handler call fails otherwise | `500` carrying only a category; `decision=fail_closed_llm_error` |
 | Request body over `MAX_REQUEST_BODY_BYTES` (1 MiB) | `413`, nothing buffered past the cap |
-| `heads` with no valid node | the null node `000…0` (an empty repository) |
+| `heads` with no valid node, or an empty history | the null node `000…0` (an empty repository) |
 
-The peer gets a category, the log gets the error: `WireFailure::text()` is a
-`&'static str`, so nothing derived from the failure — backend URL, model name,
-anyhow chain — reaches an `hg` client. `decision=` tags (as in
-`src/server/radius/`) keep "the model refused" (`model_reject`), "the model said
-nothing usable" (`fail_closed_no_action`) and "the call errored" apart in the log.
+The peer gets a category, the log gets the error: nothing derived from a failure — backend URL,
+model name, anyhow chain, or the description's own ids — reaches an `hg` client.
 
 ## Implementation
 
-`mod.rs` — hyper service, query parsing, one handler per command, all routed
-through `call_llm`, so script and static `event_handlers` work.
-`actions.rs` — action and event definitions, capability filtering, bundle
-construction.
+`mod.rs` — hyper service, query parsing, one handler per command, all routed through
+`call_llm`, so script and static `event_handlers` work. `actions.rs` — action and event
+definitions and capability filtering. `changegroup.rs` — the history builder and cg1 encoder.
 
-**No storage**: nothing is written to disk, no `.hg` directory exists, nothing
-shells out to `hg`, and no state survives a request beyond the per-connection list
-of repository names used for the UI. A repository name from the URL only ever
-becomes a `String`.
+**No storage**: nothing is written to disk, no `.hg` directory exists, nothing shells out to
+`hg`, and nothing survives a request beyond the per-connection list of repository names used for
+the UI. Every request rebuilds the history from the action that answered it.
 
-**Request bodies are bounded.** Only `getbundle` has a body, and it is read
-through `http_body_util::Limited` at 1 MiB and refused with `413` beyond that. A
-plain `collect()` let one unauthenticated client grow the process by whatever it
-cared to send.
+**Request bodies are bounded.** Only `getbundle` may have a body (hg uses POST only for
+arguments too long for a URL), read through `http_body_util::Limited` at 1 MiB and refused with
+`413` beyond that.
 
 ## Connection bounds
 
-Before September 2026 this server accepted without limit and bounded no read in time, so a peer
-that connected and said nothing held a socket, a connection task and an `AppState` entry
-forever, pre-authentication, on a server that would happily accept a hundred more. It now
-declares both halves; the constants and the reasoning live beside them in
-`src/server/mercurial/mod.rs`.
-
 | Bound | Value | Why this number |
 |---|---|---|
-| `FIRST_BYTE_READ_TIMEOUT` | 30s | The wire protocol rides on HTTP, which is client-speaks-first, so a peer that has sent nothing has begun no command. Enforced with `TcpStream::peek` before the socket reaches hyper, so the request line is still there afterwards. |
-| `IDLE_BETWEEN_REQUESTS_TIMEOUT` | 900s | The wait *between* commands, not a bound on a transfer. An `hg clone` issues `capabilities`, `heads`, `branchmap`, `listkeys` and `getbundle` on one keep-alive connection, and each answer is a `Full<Bytes>` built before the response is returned, so a slow reader is draining bytes rather than idling. hg sets no keep-alive interval of its own. |
-| `MAX_CONNECTIONS` | 256 | Refusal: **HTTP/1.1 `503 Service Unavailable` with `Retry-After`** — the wire protocol here *is* HTTP, so hg reports the status rather than an unexplained reset. |
+| `FIRST_BYTE_READ_TIMEOUT` | 30s | HTTP is client-speaks-first, so a peer that has sent nothing has begun no command. Enforced with `TcpStream::peek` before the socket reaches hyper, so the request line is still there afterwards. |
+| `IDLE_BETWEEN_REQUESTS_TIMEOUT` | 900s | The wait *between* commands, not a bound on a transfer. A clone issues `capabilities`, `batch` (`heads` + `known`) and `getbundle` on one keep-alive connection, and each answer is a `Full<Bytes>` built before the response is returned. |
+| `MAX_CONNECTIONS` | 256 | Refusal: **HTTP/1.1 `503 Service Unavailable` with `Retry-After`** — hg reports the status rather than an unexplained reset. |
 
-**There is no NetGet Mercurial client** — `src/client/mercurial/` holds a `AGENTS.md` and no
-Rust, and nothing registers it — so this bound has no peer of ours to strand, the fourth
-exemption in `PROTOCOL_QUALITY.md`'s three-state test.
+**There is no NetGet Mercurial client** — `src/client/mercurial/` holds an `AGENTS.md` and no
+Rust, and nothing registers it.
 
 **The deadline bounds the silence, not the transfer.** hyper owns every read once
-`serve_connection` starts and keeps polling for frames *while a command is being answered*, so a
-deadline on reads would be wrong here rather than merely awkward. The idle bound is a watchdog
-over `ConnectionActivity` instead, which reports a connection with a command in flight as not
-idle at all — so an LLM round-trip, or a `manual` rule parked for a human
-(`src/state/intercepts.rs`, 300s by default), can never close the connection it is an answer for.
-
-`tests/server/mercurial/connection_bounds_test.rs` drives both halves from the wire: a peer that
-says nothing is closed at the bound, and a peer that speaks is still served 38 seconds later.
-Removing the `tokio::time::timeout` around the `peek` makes the first test hang for its whole
-70-second window and fail. `tests/tcp_server_bounds_ratchet_test.rs` fails the build if either
-bound is removed, and `tests/accept_bounded_test.rs` covers the shared helper.
+`serve_connection` starts, so the idle bound is a watchdog over `ConnectionActivity`, which
+reports a connection with a command in flight as not idle — an LLM round-trip, or a `manual`
+rule parked for a human, can never close the connection it is an answer for.
+`tests/server/mercurial/connection_bounds_test.rs` drives both halves from the wire;
+`tests/tcp_server_bounds_ratchet_test.rs` fails the build if either bound is removed.
 
 ## Not implemented
 
-Push (`unbundle`, `pushkey`), any non-empty changegroup, bundle2, stream clones,
-the `batch` / `known` / `lookup` commands, compression (`HG10GZ`, `HG10BZ`),
-phases and obsolescence markers, largefiles, authentication, and SSH transport.
-
-A clone against this server therefore produces an **empty repository** at best.
-It is useful as a honeypot, for exercising a client's metadata path, and for
-logging what a client asks for — not for distributing code.
+Push (`unbundle`, `pushkey`), bundle2 (hg 7.x still pulls bundle1 from a server that does not
+advertise `bundle2`), stream clones, `clonebundles`, bookmarks and tags (hg
+reads `listkeys` only from a server advertising `pushkey`; every changeset is public), copy and
+rename metadata, symlinks, binary file content, obsolescence markers, largefiles,
+authentication, and SSH transport.
 
 **Request-only.** `metadata()` declares `.request_only(…)`: "Mercurial is HTTP request/response; a
 server cannot send a peer anything unprompted". The dashboard's `[ send message ]` on a peer is
 disabled and shows that reason, and MCP `send_to_peer` refuses with it.
 
-## Example prompts
+## Example
 
 ```json
 {"type": "open_server", "port": 8000, "base_stack": "mercurial",
- "event_handlers": [
-   {"event_pattern": "hg_capabilities", "handler": {"type": "static",
-     "actions": [{"type": "hg_capabilities", "capabilities": ["branchmap", "getbundle", "listkeys"]}]}},
-   {"event_pattern": "hg_heads", "handler": {"type": "static",
-     "actions": [{"type": "hg_heads", "heads": ["1234567890abcdef1234567890abcdef12345678"]}]}}]}
+ "event_handlers": [{"event_pattern": "*", "handler": {"type": "static", "actions": [
+   {"type": "hg_repository", "commits": [
+     {"id": "init", "date": "2026-10-01T09:00:00+00:00", "message": "Initial commit",
+      "files": [{"path": "README", "content": "Hello from NetGet\n"}]},
+     {"id": "docs", "date": "2026-10-02T09:00:00+00:00", "message": "Expand the README",
+      "files": [{"path": "README", "content": "Hello from NetGet\nServed over hg.\n"}]}]}]}}]}
 ```
 
-```
-listen on port 8000 via mercurial. Repository 'hello-world': answer hg_heads with
-one 40-character hex node, hg_branchmap with a 'default' branch pointing at it,
-and hg_listkeys with no bookmarks.
-```
+then `hg clone http://127.0.0.1:8000/hello-world`.
 
-## Verified
+## Maturity
 
-At the HTTP level with `curl` and static handlers (zero LLM calls), on
-127.0.0.1: `capabilities` filtered `unbundle`/`bundle2` out of a handler that
-asked for them; `heads` dropped a bogus `abc123...` and returned only the valid
-node; `branchmap` and `listkeys` framed correctly; `getbundle` returned exactly
-`48 47 31 30 55 4e` + twelve zero bytes; `?cmd=unbundle` returned `403`.
+`tests/server/mercurial/real_client_test.rs` drives the real `hg` 7.2.4 — not `#[ignore]`d, and
+it **fails**, naming `brew install mercurial`, when hg is absent:
 
-**Not verified against the `hg` client** — it is not installed on the
-development machine. The command set and framing follow the wire protocol
-documentation, but no real Mercurial client has ever spoken to this server, and
-modern `hg` prefers bundle2 and the `batch` command, neither of which exists
-here. Treat "works with hg" as unproven.
+- `hg debugcapabilities` — the handshake, and that `unbundle`/`pushkey`/`bundle2` are never
+  advertised whatever the model asks for;
+- `hg clone` (discovery batched as `heads ;known`) of a five-commit history (named branch, merge, removal, executable file, empty file,
+  a file starting with the metadata marker), then **`hg verify`** — which recomputes every node
+  from `(p1, p2, text)` — and `hg log`, `hg cat`, `hg manifest -v` asserting the exact history
+  and bytes; `hg id <url>` through `lookup`; `hg clone -r 1` + `hg pull` through `lookup`, a
+  non-empty `known` and a partial changegroup whose first deltas are against revisions the client
+  already holds;
+- a history the server refuses, reaching hg as `abort: remote error:` with the reason only in
+  the log.
 
-`tests/server/mercurial/` **is** declared in `tests/server/mod.rs` (behind
-`#[cfg(feature = "mercurial")]`) and runs: five mocked e2e cases. This file claimed
-the opposite — the mod.rs footgun was real when it was written and has since been
-fixed tree-wide.
-
-## Maturity: what a real `hg` can and cannot do here
-
-**`Experimental`, and it stays there despite a passing real-client test.** This is the `openvpn`
-precedent the root `AGENTS.md` records: the test is genuine, is not `#[ignore]`d and hard-fails
-when the binary is missing, and it still does not justify `Beta`, because the server implements
-only the **front** of the protocol.
-
-Measured 16 September 2026 against the installed `hg` 7.2.4:
-
-| command | result |
-|---|---|
-| `hg debugcapabilities <url>` | **works** — the full wire-protocol handshake |
-| `hg id <url>` | `abort: cannot look up remote revision; remote repository does not support the 'lookup' capability` |
-| `hg clone <url>` | dies in discovery, asking for `known` |
-
-`tests/server/mercurial/real_client_test.rs` drives the first of those. It is worth more than it
-looks: `httppeer.performhandshake` requires the reply to carry
-`Content-Type: application/mercurial-*` before `hg` will treat us as a repository at all, and no
-`reqwest` assertion anywhere in this tree checks that. The test also asserts — *through hg's own
-parser* — that `sanitize_capabilities` stripped the `lookup`/`known`/`batch`/`unbundle`/`pushkey`
-the model asked for, which matters because advertising any of them makes `hg` issue a request
-this server answers with a 404.
-
-Why the other two cannot be made to work without new protocol code:
-
-- **`hg id` needs `lookup`.** `wireprotov1peer.lookup` begins `self.requirecap(b'lookup', …)`, and
-  `sanitize_capabilities` **discards whatever the model returns** and substitutes the constant
-  `["branchmap", "getbundle", "listkeys"]`. So `lookup` cannot be advertised at all, and
-  `?cmd=lookup` is a 404 besides. Implementing it means answering `"1 <40-hex node>\n"`.
-- **`hg clone` needs `known`.** Because `getbundle` *is* advertised, discovery takes
-  `setdiscovery.findcommonheads`, which issues `heads` **and `known`** — and `known` is not
-  capability-gated, so there is no way to opt out of being asked for it. After that, `getbundle`
-  would have to return a real changegroup rather than the current empty `HG10UN` bundle.
-
-So the minimum for a clone is `known` plus a non-empty changegroup; the minimum for `hg id` is
-`lookup`. Until one of those lands, "works against real clients" would be a false claim whatever
-the handshake test shows.
+`tests/server/mercurial/changegroup_test.rs` covers every `MAX_*` bound at the limit and one past
+it, and every refusal. That is the evidence Beta asks for (one real third-party client completing
+the protocol's own exchange); the rating is the maintainer's call. Not yet there for Stable: one
+client only, no pcap oracle (Wireshark has no Mercurial dissector — the bytes are HTTP to it), and
+no fuzz target.

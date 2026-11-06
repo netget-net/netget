@@ -68,10 +68,11 @@ const MAX_INLINE_HEX_BYTES: usize = 16;
 ///
 /// ## Kind 1 — opaque identifiers, staying
 ///
-/// * **`A:mercurial:actions.rs:20`, `C:mercurial:actions.rs:20`** — `hg_heads` / `hg_branchmap`
-///   / `hg_listkeys` and the startup example, all carrying `1234567890abcdef…`, a 40-character
-///   changeset node id. The parameter description *requires* exactly 40 hex characters and
-///   tells the model to write them out rather than elide them.
+/// * **`C:mercurial:actions.rs:20`** — `hg_heads` / `hg_branchmap` / `hg_listkeys`, all
+///   carrying `1234567890abcdef…`, a 40-character changeset node id. The parameter description
+///   *requires* exactly 40 hex characters and tells the model to write them out rather than
+///   elide them. The startup examples carry none: they answer with `hg_repository`, whose node
+///   ids the server derives.
 /// * **`A:torrent_dht:actions.rs:20`, `C:torrent_dht:actions.rs:20`** — `send_ping_response`
 ///   and friends, and the startup script: 20-byte DHT node ids and info hashes.
 /// * **`C:torrent_peer:actions.rs:20`** — `send_handshake`'s `info_hash` and `peer_id_hex`.
@@ -149,7 +150,6 @@ const MAX_INLINE_HEX_BYTES: usize = 16;
 /// this ratchet rather than by reading.
 const LONG_HEX_EXAMPLE_BASELINE: &[&str] = &[
     // Kind 1 — opaque identifiers a caller supplies.
-    "A:mercurial:actions.rs:20",
     "A:torrent_dht:actions.rs:20",
     "C:bitcoin:actions.rs:32",
     "C:mercurial:actions.rs:20",
