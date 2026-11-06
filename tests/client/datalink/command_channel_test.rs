@@ -394,7 +394,10 @@ async fn probe_tcp_on_loopback_returns_the_syn_ack_and_the_rst() {
     assert!(note.contains("capture off"), "{note}");
     assert!(note.contains(&format!("127.0.0.1:{open_port}")), "{note}");
     if cfg!(target_os = "macos") {
-        assert!(note.contains("link_type NULL"), "macOS lo0 is DLT_NULL: {note}");
+        assert!(
+            note.contains("link_type NULL"),
+            "macOS lo0 is DLT_NULL: {note}"
+        );
     }
 
     let probe = |port: u16| {

@@ -4,9 +4,9 @@
 //! tools. Protocol servers are driven by NetGet's own configured LLM backend
 //! (Ollama or an OpenAI-compatible endpoint).
 
+pub mod activity;
 #[cfg(feature = "mcp-http")]
 pub mod agent_client;
-pub mod activity;
 pub mod control;
 pub mod docs;
 #[cfg(feature = "mcp-stdio")]
