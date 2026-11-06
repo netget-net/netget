@@ -105,7 +105,10 @@ impl<R: AsyncRead + Unpin> AsyncRead for PacketReader<R> {
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<io::Result<()>> {
         if self.remaining != 0 {
-            buf.put_slice(&self.bytes[self.start..]);
+            // NetGet patch (vendor/opensrv-mysql/README.md): exactly the unparsed bytes, not
+            // the zeroed tail of the buffer after them.
+            let (start, end) = (self.start, self.start + self.remaining);
+            buf.put_slice(&self.bytes[start..end]);
             self.bytes.clear();
             self.start = 0;
             self.remaining = 0;
@@ -118,7 +121,9 @@ impl<R: AsyncRead + Unpin> AsyncRead for PacketReader<R> {
 
 impl<R: AsyncRead + Unpin> PacketReader<R> {
     pub async fn next_async(&mut self) -> io::Result<Option<(u8, Packet<'_>)>> {
-        self.start = self.bytes.len() - self.remaining;
+        // NetGet patch (vendor/opensrv-mysql/README.md): the unparsed bytes are always
+        // `bytes[start..start + remaining]`, kept by the arms below, rather than recomputed
+        // from `bytes.len()`, which counts the zeroed tail a read leaves after them.
 
         let mut buffer_size = PACKET_BUFFER_SIZE;
         loop {
@@ -133,11 +138,13 @@ impl<R: AsyncRead + Unpin> PacketReader<R> {
                 };
                 match packet(bytes) {
                     Ok((rest, p)) => {
+                        // NetGet patch (vendor/opensrv-mysql/README.md): `p` borrows
+                        // `self.bytes`, so the buffer must not be replaced before it is
+                        // returned. Upstream ran `self.bytes = rest.to_vec()` here whenever a
+                        // read held more than one packet, freeing the memory `p` points into.
+                        // Step past the packet instead; the next call drains it.
+                        self.start += self.remaining - rest.len();
                         self.remaining = rest.len();
-                        if self.remaining > 0 {
-                            self.bytes = rest.to_vec();
-                            self.start = 0;
-                        }
                         return Ok(Some(p));
                     }
                     Err(nom::Err::Incomplete(_)) | Err(nom::Err::Error(_)) => {}

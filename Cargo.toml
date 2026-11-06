@@ -707,3 +707,12 @@ hyper = { path = "vendor/hyper" }
 # connection by src/server/postgresql/mod.rs. tests/vendored_pgwire_patch_test.rs fails when
 # Cargo.lock stops building this copy.
 pgwire = { path = "vendor/pgwire" }
+# opensrv-mysql 0.7.0 parses a packet out of a buffer it has just freed when one read holds
+# two pipelined commands, answers a COM_STMT_EXECUTE too short to parse with OK, and does not
+# parse COM_STMT_RESET. This copy fixes the reader, answers a malformed execute ERR 1835 (and
+# a malformed command with no reply, none), and handles the reset; its API is upstream's
+# (vendor/opensrv-mysql/README.md). As with hyper and pgwire, a [patch] does not reach the
+# crate as published to crates.io; there src/server/mysql/command_tap.rs still keeps every
+# read inside one packet. tests/vendored_opensrv_patch_test.rs fails when Cargo.lock stops
+# building this copy.
+opensrv-mysql = { path = "vendor/opensrv-mysql" }

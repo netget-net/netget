@@ -461,3 +461,8 @@ path = "fuzz_targets/ctap2_cbor.rs"
 test = false
 doc = false
 bench = false
+
+# The fuzzed MySQL session runs opensrv-mysql's own loop, so it must be the copy NetGet builds
+# (vendor/opensrv-mysql/README.md): upstream 0.7.0 parses pipelined packets out of freed memory.
+[patch.crates-io]
+opensrv-mysql = { path = "../vendor/opensrv-mysql" }

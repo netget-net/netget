@@ -179,6 +179,8 @@ pub enum Command<'a> {
         param: u16,
         data: &'a [u8],
     },
+    // NetGet patch (vendor/opensrv-mysql/README.md): COM_STMT_RESET discards long data.
+    Reset(u32),
     Ping,
     Quit,
 }
@@ -235,6 +237,14 @@ pub fn parse(i: &[u8]) -> nom::IResult<&[u8], Command<'_>> {
                 nom::number::complete::le_u32,
             ),
             Command::Close,
+        ),
+        // NetGet patch (vendor/opensrv-mysql/README.md).
+        map(
+            preceded(
+                tag(&[CommandByte::COM_STMT_RESET as u8]),
+                nom::number::complete::le_u32,
+            ),
+            Command::Reset,
         ),
         map(tag(&[CommandByte::COM_QUIT as u8]), |_| Command::Quit),
         map(tag(&[CommandByte::COM_PING as u8]), |_| Command::Ping),

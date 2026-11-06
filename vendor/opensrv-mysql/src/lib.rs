@@ -677,6 +677,20 @@ where
                                 .or_insert_with(Vec::new)
                                 .extend(data);
                         }
+                        Command::Reset(stmt) => {
+                            // NetGet patch (vendor/opensrv-mysql/README.md): upstream did not
+                            // parse COM_STMT_RESET, answered it OK through its parse-failure
+                            // path and kept the long data, which the next execute then used.
+                            if let Some(state) = stmts.get_mut(&stmt) {
+                                state.long_data.clear();
+                            }
+                            writers::write_ok_packet(
+                                &mut self.writer,
+                                self.client_capabilities,
+                                OkResponse::default(),
+                            )
+                            .await?;
+                        }
                         Command::Close(stmt) => {
                             self.shim.on_close(stmt).await;
                             stmts.remove(&stmt);
@@ -728,15 +742,40 @@ where
                     self.writer.flush_all().await?;
                 }
                 Err(_) => {
-                    // if parser err, we need also stay the conn,
-                    // because we can not support all command.
-                    writers::write_ok_packet(
-                        &mut self.writer,
-                        self.client_capabilities,
-                        OkResponse::default(),
-                    )
-                    .await?;
-                    self.writer.flush_all().await?;
+                    // NetGet patch (vendor/opensrv-mysql/README.md): upstream answered every
+                    // packet it could not parse with OK, so a COM_STMT_EXECUTE too short to
+                    // name its statement was reported to the client as a successful write,
+                    // and a short COM_STMT_SEND_LONG_DATA or COM_STMT_CLOSE, which have no
+                    // reply, got one and left every later reply out of step. Only a command
+                    // this crate does not implement keeps upstream's OK.
+                    use crate::myc::constants::Command as CommandByte;
+                    let first = packet.first().copied();
+                    let no_reply = [
+                        CommandByte::COM_STMT_SEND_LONG_DATA as u8,
+                        CommandByte::COM_STMT_CLOSE as u8,
+                    ];
+                    if first.is_some_and(|b| no_reply.contains(&b)) {
+                        // Like mysqld: a command with no reply gets none, malformed or not.
+                    } else if first.is_none() || first == Some(CommandByte::COM_STMT_EXECUTE as u8)
+                    {
+                        writers::write_err(
+                            ErrorKind::ER_MALFORMED_PACKET,
+                            b"Malformed communication packet.",
+                            &mut self.writer,
+                        )
+                        .await?;
+                        self.writer.flush_all().await?;
+                    } else {
+                        // if parser err, we need also stay the conn,
+                        // because we can not support all command.
+                        writers::write_ok_packet(
+                            &mut self.writer,
+                            self.client_capabilities,
+                            OkResponse::default(),
+                        )
+                        .await?;
+                        self.writer.flush_all().await?;
+                    }
                 }
             }
         }
