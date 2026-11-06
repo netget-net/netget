@@ -23,6 +23,21 @@ use crate::state::ServerId;
 use anyhow::{Context as AnyhowContext, Result};
 use tracing::{debug, error, warn};
 
+/// The offered actions that answer the peer: every protocol action, without any note-keeping
+/// one a protocol happens to list among its own. Empty when the event has nothing to answer
+/// with, which turns the copied-example correction off (`ConversationHandler::with_wire_answers`).
+fn wire_answer_names(names: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for name in names {
+        if !crate::llm::conversation::NOTE_KEEPING_ACTIONS.contains(&name.as_str())
+            && !out.contains(&name)
+        {
+            out.push(name);
+        }
+    }
+    out
+}
+
 /// Call LLM with action-based framework
 ///
 /// This is the PRIMARY way to interact with the LLM. It handles:
@@ -133,11 +148,15 @@ pub async fn call_llm_with_actions(
     }
 
     // Add protocol sync actions if provided
+    let mut wire_answers: Vec<String> = Vec::new();
     if let Some(proto) = protocol {
-        all_actions.extend(proto.get_sync_actions());
+        let sync_actions = proto.get_sync_actions();
+        wire_answers.extend(sync_actions.iter().map(|a| a.name.clone()));
+        all_actions.extend(sync_actions);
     }
 
     // Add custom actions (these can override or augment the standard actions)
+    wire_answers.extend(custom_actions.iter().map(|a| a.name.clone()));
     all_actions.extend(custom_actions);
 
     debug!(
@@ -190,7 +209,8 @@ pub async fn call_llm_with_actions(
             connection_id,
         },
         truncated_desc,
-    );
+    )
+    .with_wire_answers(wire_answer_names(wire_answers));
 
     if llm_client.backend_type() == "agent" {
         if let Some(server) = state.get_server(server_id).await {
@@ -839,6 +859,7 @@ async fn call_llm_inner(
         !event_actions.is_empty(),
         on_a_connection,
     );
+    let wire_answers: Vec<String> = event_actions.iter().map(|a| a.name.clone()).collect();
 
     // Add provide_feedback action only if server has feedback_instructions configured
     let has_feedback_instructions = state
@@ -908,7 +929,8 @@ async fn call_llm_inner(
             connection_id,
         },
         truncated_desc,
-    );
+    )
+    .with_wire_answers(wire_answer_names(wire_answers));
 
     // Add event trigger as a user message (include event ID for mock testing compatibility)
     let event_trigger = PromptBuilder::build_event_trigger_message_with_id(

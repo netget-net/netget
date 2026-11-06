@@ -281,6 +281,39 @@ You used action name(s) that are not in the Available Actions list. This is NOT 
         )
     }
 
+    /// Build the correction for an answer to a network event that is nothing but a note-keeping
+    /// action's example, copied from the action list.
+    ///
+    /// The usual cause is a reply that repeats the prompt back: its first JSON value is the
+    /// example of the first action listed — `set_memory`'s — so nothing reached the peer and it
+    /// got the protocol's fail-closed default instead of the answer the model went on to write.
+    /// See `ConversationHandler::with_wire_answers`.
+    ///
+    /// # Arguments
+    /// * `copied` - The note-keeping actions whose examples the answer copied, in order
+    /// * `wire_actions` - The protocol actions this event offers
+    pub fn build_copied_note_example_retry_prompt(
+        copied: &[String],
+        wire_actions: &[String],
+    ) -> String {
+        let quote = |names: &[String]| {
+            names
+                .iter()
+                .map(|n| format!("`{}`", n))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        format!(
+            "That answer is only the example of {} copied from the action list: it keeps no note \
+             of yours, and nothing in it reaches the peer, who is still waiting for an answer to \
+             this event. Answer it with one of this protocol's own actions ({}), adding a note \
+             beside it only if you have one to keep. To send the peer nothing on purpose, answer \
+             {{\"actions\": []}}. Nothing from the previous response has been executed.",
+            quote(copied),
+            quote(wire_actions)
+        )
+    }
+
     /// Build retry message for malformed action errors
     ///
     /// Used when LLM returns actions with missing required parameters or invalid values.

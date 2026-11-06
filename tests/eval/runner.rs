@@ -1,20 +1,21 @@
 //! The run loop, and how this harness handles the fact that models are not
 //! deterministic.
 //!
-//! # A pinned seed, and still a rate
+//! # A pinned seed per run, and still a rate
 //!
-//! Every run passes `--llm-seed` (default [`DEFAULT_SEED`], `NETGET_EVAL_SEED`;
-//! `none` sends nothing) and, when `NETGET_EVAL_TEMPERATURE` is set,
-//! `--llm-temperature`. Ollama's sampler then draws the same tokens for the same
-//! prompt, so a case whose prompt is identical run to run answers identically.
+//! Run N of a case passes `--llm-seed` base + N - 1 ([`run_seed`]; the base is
+//! [`DEFAULT_SEED`] or `NETGET_EVAL_SEED`, and `none` sends nothing) and, when
+//! `NETGET_EVAL_TEMPERATURE` is set, `--llm-temperature`. Ollama's sampler draws
+//! the same tokens for the same prompt and seed, so a rerun reproduces every run,
+//! and the runs of one case are distinct draws.
 //!
-//! **That is weaker than it sounds, and the report measures by how much.** The
-//! prompt is not identical run to run: the event data carries an ephemeral
-//! client port, a connection id, and for DNS/LDAP-style protocols a random
-//! query or message id, and any one differing token changes every token the
-//! seed draws after it. So the harness keeps N independent runs and reports,
-//! per case, whether the runs **agreed** — the same verdict, and the same
-//! executed actions — rather than assuming they would.
+//! **One seed for every run made the rate a coin flip counted N times.** Most
+//! prompts carry nothing that differs run to run — no client port, no connection
+//! id, no random query id — so N runs at one seed were N copies of one sample:
+//! every case scored 0/N or N/N, and an unrelated prompt change could move a case
+//! from 5/5 to 0/5 without changing how often the model gets it right. The report
+//! still records, per case, whether the runs **agreed** — the same verdict, and
+//! the same executed actions.
 //!
 //! Every run gets a **fresh netget process and a fresh server**, so runs are
 //! independent: no conversation history, no server memory and no connection
@@ -36,12 +37,13 @@ use std::time::{Duration, Instant};
 /// Default repetitions per case. Overridable with `NETGET_EVAL_RUNS`.
 pub const DEFAULT_RUNS: usize = 3;
 
-/// The sampler seed every run passes unless `NETGET_EVAL_SEED` says otherwise.
-/// Fixed, so two sweeps of the same tree are comparable.
+/// The base sampler seed unless `NETGET_EVAL_SEED` says otherwise. Fixed, so two
+/// sweeps of the same tree are comparable.
 pub const DEFAULT_SEED: u64 = 42;
 
-/// `--llm-seed` for every run: `NETGET_EVAL_SEED`, [`DEFAULT_SEED`] when unset,
-/// and no seed at all for `none` (the unpinned behaviour, for comparison).
+/// The base `--llm-seed`: `NETGET_EVAL_SEED`, [`DEFAULT_SEED`] when unset, and no
+/// seed at all for `none` (the unpinned behaviour, for comparison). Run N passes
+/// [`run_seed`] of it.
 pub fn eval_seed() -> Option<u64> {
     match std::env::var("NETGET_EVAL_SEED") {
         Err(_) => Some(DEFAULT_SEED),
@@ -52,6 +54,18 @@ pub fn eval_seed() -> Option<u64> {
                 .unwrap_or_else(|_| panic!("NETGET_EVAL_SEED={v:?} is not a u64 or `none`")),
         ),
     }
+}
+
+/// The seed run `run` (1-based) passes: the base seed plus `run - 1`, so the runs of one
+/// case are distinct draws that a rerun reproduces exactly.
+///
+/// One seed for every run made N runs of a prompt with nothing per-run in it — no port, no
+/// connection id, no random query id, which is most TCP protocols — N copies of one sample:
+/// `dict/unknown-word`, `prometheus/latency-histogram` and `lmtp/deliver-local` each went
+/// 5/5 to 0/5 on a change to the shared prompt (1 November 2026), while over twenty seeds the
+/// same prompts scored 12 → 11, 15 → 16 and 6 → 16 of 20.
+pub fn run_seed(base: Option<u64>, run: usize) -> Option<u64> {
+    base.map(|seed| seed.wrapping_add(run.saturating_sub(1) as u64))
 }
 
 /// `--llm-temperature` for every run, from `NETGET_EVAL_TEMPERATURE`. Unset by
@@ -145,6 +159,8 @@ pub fn protocol_filter() -> Vec<String> {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RunRecord {
     pub run: usize,
+    /// `--llm-seed` this run passed ([`run_seed`]); `null` for an unpinned run.
+    pub seed: Option<u64>,
     /// `pass`, `fail`, or `error` (the harness could not complete the run).
     pub verdict: &'static str,
     pub failure_mode: Option<String>,
@@ -345,7 +361,7 @@ async fn run_once(case: &EvalCase, probe_spec: &super::case::Probe, run: usize) 
             continue;
         }
         let mut builder = LiveRequestTest::new(case.protocol, case.instruction)
-            .sampling(eval_seed(), eval_temperature());
+            .sampling(run_seed(eval_seed(), run), eval_temperature());
         if let Some(params) = &case.server_params {
             builder = builder.server_params(params.clone());
         }
@@ -372,6 +388,7 @@ async fn run_once(case: &EvalCase, probe_spec: &super::case::Probe, run: usize) 
         None => {
             return RunRecord {
                 run,
+                seed: run_seed(eval_seed(), run),
                 verdict: "error",
                 failure_mode: Some("server_start_failed".to_string()),
                 detail: Some(format!(
@@ -422,6 +439,7 @@ async fn run_once(case: &EvalCase, probe_spec: &super::case::Probe, run: usize) 
         Err(e) => {
             return RunRecord {
                 run,
+                seed: run_seed(eval_seed(), run),
                 verdict: "error",
                 failure_mode: Some("client_spawn_failed".to_string()),
                 detail: Some(e),
@@ -447,6 +465,7 @@ async fn run_once(case: &EvalCase, probe_spec: &super::case::Probe, run: usize) 
     );
     RunRecord {
         run,
+        seed: run_seed(eval_seed(), run),
         verdict: score.verdict,
         failure_mode: score.failure_mode,
         detail: score.detail,
@@ -526,4 +545,19 @@ pub fn independence_of(label: &str) -> Independence {
     } else {
         Independence::GenericTransport
     }
+}
+
+/// The runs of one case must be distinct draws that a rerun reproduces. With one seed for
+/// every run, a prompt with nothing per-run in it answered identically N times, so a case
+/// could only ever score 0/N or N/N.
+#[test]
+fn each_run_of_a_case_draws_its_own_reproducible_seed() {
+    let seeds: Vec<_> = (1..=5).map(|run| run_seed(Some(42), run)).collect();
+    assert_eq!(seeds, [Some(42), Some(43), Some(44), Some(45), Some(46)]);
+    assert_eq!(run_seed(None, 3), None, "an unpinned sweep stays unpinned");
+    assert_eq!(
+        run_seed(Some(u64::MAX), 2),
+        Some(0),
+        "wraps rather than panics"
+    );
 }

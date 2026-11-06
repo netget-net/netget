@@ -1,0 +1,394 @@
+{
+  "schema": "netget.eval.v1",
+  "generated_at": "1793986963",
+  "model": "llama3.1:8b",
+  "runs_per_case": 1,
+  "seed": 42,
+  "temperature": null,
+  "determinism": "pass-rate over N independent runs with a pinned sampler seed; the seed makes an identical prompt answer identically, but each run's prompt carries its own ports and ids, so agreement is measured (totals.cases_*_agree) rather than assumed",
+  "totals": {
+    "cases_total": 8,
+    "cases_attempted": 8,
+    "cases_skipped": 0,
+    "runs_total": 8,
+    "runs_passed": 5,
+    "pass_rate": 0.625,
+    "runs_recoverable": 0,
+    "pass_rate_with_lenient_parse": 0.625,
+    "cases_with_repeats": 0,
+    "cases_verdicts_agree": 0,
+    "cases_actions_agree": 0
+  },
+  "protocols": [
+    {
+      "protocol": "dict",
+      "client": "dict",
+      "independence": "protocol-client",
+      "instructions": 3,
+      "instructions_fully_passed": 2,
+      "runs": 3,
+      "runs_passed": 2,
+      "pass_rate": 0.6666666666666666,
+      "dominant_failures": [
+        "wrong_content"
+      ],
+      "skipped_reason": null,
+      "runs_recoverable": 0
+    },
+    {
+      "protocol": "lmtp",
+      "client": "python3",
+      "independence": "protocol-client",
+      "instructions": 2,
+      "instructions_fully_passed": 1,
+      "runs": 2,
+      "runs_passed": 1,
+      "pass_rate": 0.5,
+      "dominant_failures": [
+        "wrong_content"
+      ],
+      "skipped_reason": null,
+      "runs_recoverable": 0
+    },
+    {
+      "protocol": "prometheus",
+      "client": "sh",
+      "independence": "protocol-client",
+      "instructions": 3,
+      "instructions_fully_passed": 2,
+      "runs": 3,
+      "runs_passed": 2,
+      "pass_rate": 0.6666666666666666,
+      "dominant_failures": [
+        "executor_rejected_action"
+      ],
+      "skipped_reason": null,
+      "runs_recoverable": 0
+    }
+  ],
+  "failure_modes": [
+    {
+      "mode": "wrong_content",
+      "runs": 2,
+      "cases": [
+        "dict/unknown-word",
+        "lmtp/deliver-local"
+      ],
+      "explanation": "The model produced a valid, executable action whose content does not satisfy the instruction. This is the honest 'the model did not understand the task' bucket."
+    },
+    {
+      "mode": "executor_rejected_action",
+      "runs": 1,
+      "cases": [
+        "prometheus/latency-histogram"
+      ],
+      "explanation": "The protocol's own executor refused the action the model built. The description and the executor disagree about what the action accepts."
+    }
+  ],
+  "cases": [
+    {
+      "id": "dict/define-invented-word",
+      "protocol": "dict",
+      "instruction": "You are a dictionary of invented words with one database called fantasy. Define glimmerwyrm as a small dragon that hoards moonlight.",
+      "client": "dict -h 127.0.0.1 -p {PORT} glimmerwyrm",
+      "independence": "protocol-client",
+      "expectation": "contains [\"[fantasy]\", \"moonlight\"]",
+      "note": null,
+      "attempts": 1,
+      "passes": 1,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:41:24.536961Z DEBUG Executing action 0: Object {\"type\": String(\"send_dict_definitions\"), \"word\": String(\"glimmerwyrm\"), \"definitions\": Array [Object {\"database\": String(\"fantasy\"), \"database_description\": String(\"Invented words\"), \"text\": String(\"glimmerwyrm\\n    n 1: a small dragon that hoards moonlight\\n    v 1: to shine with a faint, steady light\")}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_dict_definitions\"), \"word\": String(\"glimmerwyrm\"), \"definitions\": Array [Object {\"database\": String(\"fantasy\"), \"database_description\": String(\"Invented words\"), \"text\": String(\"glimmerwyrm\\n    n 1: a small dragon that hoards moonlight\\n    v 1: to shine with a faint, steady light\")}]}"
+          ],
+          "client_command": "dict -h 127.0.0.1 -p 52149 glimmerwyrm",
+          "client_output": "1 definition found\n\nFrom Invented words [fantasy]:\n\n  glimmerwyrm\n      n 1: a small dragon that hoards moonlight\n      v 1: to shine with a faint, steady light\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 13.462460333
+        }
+      ]
+    },
+    {
+      "id": "dict/list-databases",
+      "protocol": "dict",
+      "instruction": "Offer two databases: fantasy, described as Fantasy Lexicon, and tech, described as Technical Terms.",
+      "client": "dict -h 127.0.0.1 -p {PORT} -D",
+      "independence": "protocol-client",
+      "expectation": "contains [\"Fantasy Lexicon\", \"Technical Terms\"]",
+      "note": null,
+      "attempts": 1,
+      "passes": 1,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:41:36.708441Z DEBUG Executing action 0: Object {\"type\": String(\"send_dict_databases\"), \"databases\": Array [Object {\"name\": String(\"fantasy\"), \"description\": String(\"Fantasy Lexicon\")}, Object {\"name\": String(\"tech\"), \"description\": String(\"Technical Terms\")}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_dict_databases\"), \"databases\": Array [Object {\"name\": String(\"fantasy\"), \"description\": String(\"Fantasy Lexicon\")}, Object {\"name\": String(\"tech\"), \"description\": String(\"Technical Terms\")}]}"
+          ],
+          "client_command": "dict -h 127.0.0.1 -p 52616 -D",
+          "client_output": "Databases available:\n fantasy    Fantasy Lexicon\n tech       Technical Terms\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 12.109796417
+        }
+      ]
+    },
+    {
+      "id": "dict/unknown-word",
+      "protocol": "dict",
+      "instruction": "You only know words that begin with the letter q. For anything else there is no definition.",
+      "client": "dict -h 127.0.0.1 -p {PORT} zebra",
+      "independence": "protocol-client",
+      "expectation": "contains [\"No definitions found\"]",
+      "note": null,
+      "attempts": 1,
+      "passes": 0,
+      "pass_rate": 0.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": "wrong_content",
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "fail",
+          "failure_mode": "wrong_content",
+          "detail": "valid actions executed, but client output does not contain \"No definitions found\"",
+          "model_output": [
+            "2026-11-06T17:41:47.988262Z DEBUG Executing action 0: Object {\"type\": String(\"send_dict_error\"), \"code\": Number(551), \"message\": String(\"Unknown database strategy\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_dict_error\"), \"code\": Number(551), \"message\": String(\"Unknown database strategy\")}"
+          ],
+          "client_command": "dict -h 127.0.0.1 -p 52805 zebra",
+          "client_output": "Unknown database strategy\n",
+          "client_exit": 40,
+          "client_timed_out": false,
+          "elapsed_secs": 11.281038375
+        }
+      ]
+    },
+    {
+      "id": "prometheus/queue-depth-gauge",
+      "protocol": "prometheus",
+      "instruction": "Expose a gauge named netget_eval_queue_depth whose value is 17.",
+      "client": "sh -c curl -sS --max-time 230 http://127.0.0.1:{PORT}/metrics | tee /dev/stderr | promtool check metrics && echo PROMTOOL-OK",
+      "independence": "protocol-client",
+      "expectation": "contains [\"netget_eval_queue_depth 17\", \"PROMTOOL-OK\"]",
+      "note": null,
+      "attempts": 1,
+      "passes": 1,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:41:58.523068Z DEBUG Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"netget_eval_queue_depth\"), \"type\": String(\"gauge\"), \"help\": String(\"NetGet evaluation queue depth.\"), \"samples\": Array [Object {\"value\": Number(17)}]}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"netget_eval_queue_depth\"), \"type\": String(\"gauge\"), \"help\": String(\"NetGet evaluation queue depth.\"), \"samples\": Array [Object {\"value\": Number(17)}]}]}"
+          ],
+          "client_command": "sh -c curl -sS --max-time 230 http://127.0.0.1:52961/metrics | tee /dev/stderr | promtool check metrics && echo PROMTOOL-OK",
+          "client_output": "PROMTOOL-OK\n\n# HELP netget_eval_queue_depth NetGet evaluation queue depth.\n# TYPE netget_eval_queue_depth gauge\nnetget_eval_queue_depth 17\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 10.541122833
+        }
+      ]
+    },
+    {
+      "id": "prometheus/requests-by-status",
+      "protocol": "prometheus",
+      "instruction": "Count HTTP requests by status code: 1500 requests answered 200 and 12 answered 404 so far.",
+      "client": "sh -c curl -sS --max-time 230 http://127.0.0.1:{PORT}/metrics | tee /dev/stderr | promtool check metrics && echo PROMTOOL-OK",
+      "independence": "protocol-client",
+      "expectation": "contains [\"PROMTOOL-OK\"] and matches /(?i)=\"?200\"?[,}][^\\n]* 1500/",
+      "note": null,
+      "attempts": 1,
+      "passes": 1,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:42:11.408911Z DEBUG Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"http_requests_total\"), \"type\": String(\"counter\"), \"help\": String(\"HTTP requests served, by method and status code.\"), \"samples\": Array [Object {\"labels\": Object {\"method\": String(\"GET\"), \"code\": String(\"200\")}, \"value\": Number(1500)}, Object {\"labels\": Object {\"method\": String(\"GET\"), \"code\": String(\"404\")}, \"value\": Number(12)}]}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"http_requests_total\"), \"type\": String(\"counter\"), \"help\": String(\"HTTP requests served, by method and status code.\"), \"samples\": Array [Object {\"labels\": Object {\"method\": String(\"GET\"), \"code\": String(\"200\")}, \"value\": Number(1500)}, Object {\"labels\": Object {\"method\": String(\"GET\"), \"code\": String(\"404\")}, \"value\": Number(12)}]}]}"
+          ],
+          "client_command": "sh -c curl -sS --max-time 230 http://127.0.0.1:53045/metrics | tee /dev/stderr | promtool check metrics && echo PROMTOOL-OK",
+          "client_output": "PROMTOOL-OK\n\n# HELP http_requests_total HTTP requests served, by method and status code.\n# TYPE http_requests_total counter\nhttp_requests_total{code=\"200\",method=\"GET\"} 1500\nhttp_requests_total{code=\"404\",method=\"GET\"} 12\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 12.890696542
+        }
+      ]
+    },
+    {
+      "id": "prometheus/latency-histogram",
+      "protocol": "prometheus",
+      "instruction": "Report request latency in seconds as a histogram with buckets at 0.1, 0.5 and 1 second; 40 requests so far, 30 of them under 0.1s.",
+      "client": "sh -c curl -sS --max-time 230 http://127.0.0.1:{PORT}/metrics | tee /dev/stderr | promtool check metrics && echo PROMTOOL-OK",
+      "independence": "protocol-client",
+      "expectation": "contains [\"_bucket\", \"le=\\\"+Inf\\\"\", \"PROMTOOL-OK\"]",
+      "note": null,
+      "attempts": 1,
+      "passes": 0,
+      "pass_rate": 0.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": "executor_rejected_action",
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "fail",
+          "failure_mode": "executor_rejected_action",
+          "detail": "the protocol executor refused the action the model built",
+          "model_output": [
+            "2026-11-06T17:42:24.992487Z ERROR Action 0 'send_metrics' failed on protocol Prometheus: send_metrics refused: metric 'http_request_duration_seconds' sample 0 needs a suffix: a histogram sample is _bucket (with an 'le' label), _sum or _count — the peer receives the protocol default instead (action: {\"type\":\"send_metrics\",\"metrics\":[{\"name\":\"http_request_duration_seconds\",\"type\":\"histogram\",\"help\":\"Request latency.\",\"samples\":[{\"labels\":{\"le\":\"0.1\"},\"value\":900},{\"labels\":{\"le\":\"0.5\"},\"value\":1010},{\"labels\":{\"le\":\"+Inf\"},\"value\":1030}]},{\"name\":\"http_requests_total\",\"type\":\"counter\",\"help\":\"HTTP requests served, by method and status code.\",\"samples\":[{\"labels\":{\"method\":\"GET\",\"code\":\"200\"},\"value\":30},{\"labels\":{\"method\":\"GET\",\"code\":\"500\"},\"value\":10}]}]})"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"http_request_duration_seconds\"), \"type\": String(\"histogram\"), \"help\": String(\"Request latency.\"), \"samples\": Array [Object {\"labels\": Object {\"le\": String(\"0.1\")}, \"value\": Number(900)}, Object {\"labels\": Object {\"le\": String(\"0.5\")}, \"value\": Number(1010)}, Object {\"labels\": Object {\"le\": String(\"+Inf\")}, \"value\": Number(1030)}]}, Object {\"name\": String(\"http_requests_total\"), \"type\": String(\"counter\"), \"help\": String(\"HTTP requests served, by method and status code.\"), \"samples\": Array [Object {\"labels\": Object {\"method\": String(\"GET\"), \"code\": String(\"200\")}, \"value\": Number(30)}, Object {\"labels\": Object {\"method\": String(\"GET\"), \"code\": String(\"500\")}, \"value\": Number(10)}]}]}"
+          ],
+          "client_command": "sh -c curl -sS --max-time 230 http://127.0.0.1:53147/metrics | tee /dev/stderr | promtool check metrics && echo PROMTOOL-OK",
+          "client_output": "netget: the handler returned no usable metrics\nerror while linting: text format parsing error in line 1: expected float as value, got \"the\"\n",
+          "client_exit": 1,
+          "client_timed_out": false,
+          "elapsed_secs": 13.564408292
+        }
+      ]
+    },
+    {
+      "id": "lmtp/deliver-local",
+      "protocol": "lmtp",
+      "instruction": "Only the mailbox alice@example.com exists here; refuse every other recipient.",
+      "client": "python3 -c import sys, smtplib\nport, rcpt = int(sys.argv[1]), sys.argv[2]\ntry:\n    s = smtplib.LMTP('127.0.0.1', port, timeout=230)\n    code, _ = s.ehlo()\n    print('LHLO', code)\n    code, msg = s.mail('eval@sender.test')\n    print('MAIL', code, msg.decode('utf-8', 'replace'))\n    code, msg = s.rcpt(rcpt)\n    print('RCPT', code, msg.decode('utf-8', 'replace'))\n    if code < 300:\n        code, msg = s.data('Subject: NetGet eval\\r\\n\\r\\nHello.\\r\\n')\n        print('DATA', code, msg.decode('utf-8', 'replace'))\n    s.quit()\nexcept Exception as e:\n    print(type(e).__name__, e)\n {PORT} alice@example.com",
+      "independence": "protocol-client",
+      "expectation": "matches /(?m)^RCPT 25[01]\\b(?s:.*)^DATA 250\\b/",
+      "note": null,
+      "attempts": 1,
+      "passes": 0,
+      "pass_rate": 0.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": "wrong_content",
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "fail",
+          "failure_mode": "wrong_content",
+          "detail": "valid actions executed, but client output does not match /(?m)^RCPT 25[01]\\b(?s:.*)^DATA 250\\b/",
+          "model_output": [
+            "2026-11-06T17:42:35.350244Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(false), \"reason\": String(\"No such recipient here\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(false), \"reason\": String(\"No such recipient here\")}"
+          ],
+          "client_command": "python3 -c import sys, smtplib\nport, rcpt = int(sys.argv[1]), sys.argv[2]\ntry:\n    s = smtplib.LMTP('127.0.0.1', port, timeout=230)\n    code, _ = s.ehlo()\n    print('LHLO', code)\n    code, msg = s.mail('eval@sender.test')\n    print('MAIL', code, msg.decode('utf-8', 'replace'))\n    code, msg = s.rcpt(rcpt)\n    print('RCPT', code, msg.decode('utf-8', 'replace'))\n    if code < 300:\n        code, msg = s.data('Subject: NetGet eval\\r\\n\\r\\nHello.\\r\\n')\n        print('DATA', code, msg.decode('utf-8', 'replace'))\n    s.quit()\nexcept Exception as e:\n    print(type(e).__name__, e)\n 53310 alice@example.com",
+          "client_output": "LHLO 250\nMAIL 250 2.1.0 Sender OK\nRCPT 550 5.1.1 No such recipient here\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 10.379664834
+        }
+      ]
+    },
+    {
+      "id": "lmtp/refuse-unknown",
+      "protocol": "lmtp",
+      "instruction": "Only the mailbox alice@example.com exists here; refuse every other recipient.",
+      "client": "python3 -c import sys, smtplib\nport, rcpt = int(sys.argv[1]), sys.argv[2]\ntry:\n    s = smtplib.LMTP('127.0.0.1', port, timeout=230)\n    code, _ = s.ehlo()\n    print('LHLO', code)\n    code, msg = s.mail('eval@sender.test')\n    print('MAIL', code, msg.decode('utf-8', 'replace'))\n    code, msg = s.rcpt(rcpt)\n    print('RCPT', code, msg.decode('utf-8', 'replace'))\n    if code < 300:\n        code, msg = s.data('Subject: NetGet eval\\r\\n\\r\\nHello.\\r\\n')\n        print('DATA', code, msg.decode('utf-8', 'replace'))\n    s.quit()\nexcept Exception as e:\n    print(type(e).__name__, e)\n {PORT} bob@example.com",
+      "independence": "protocol-client",
+      "expectation": "matches /(?m)^RCPT 5\\d\\d\\b/",
+      "note": null,
+      "attempts": 1,
+      "passes": 1,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:42:42.726437Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(false), \"temporary\": Bool(false), \"reason\": String(\"No such recipient here\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(false), \"temporary\": Bool(false), \"reason\": String(\"No such recipient here\")}"
+          ],
+          "client_command": "python3 -c import sys, smtplib\nport, rcpt = int(sys.argv[1]), sys.argv[2]\ntry:\n    s = smtplib.LMTP('127.0.0.1', port, timeout=230)\n    code, _ = s.ehlo()\n    print('LHLO', code)\n    code, msg = s.mail('eval@sender.test')\n    print('MAIL', code, msg.decode('utf-8', 'replace'))\n    code, msg = s.rcpt(rcpt)\n    print('RCPT', code, msg.decode('utf-8', 'replace'))\n    if code < 300:\n        code, msg = s.data('Subject: NetGet eval\\r\\n\\r\\nHello.\\r\\n')\n        print('DATA', code, msg.decode('utf-8', 'replace'))\n    s.quit()\nexcept Exception as e:\n    print(type(e).__name__, e)\n 53460 bob@example.com",
+          "client_output": "LHLO 250\nMAIL 250 2.1.0 Sender OK\nRCPT 550 5.1.1 No such recipient here\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 7.359022
+        }
+      ]
+    }
+  ]
+}
