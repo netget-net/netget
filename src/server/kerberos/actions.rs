@@ -426,7 +426,7 @@ impl Protocol for KerberosProtocol {
             // whether the model could not be reached or answered nothing usable. Never a
             // ticket; the model's own refusals cannot use the code.
             .answers_on_failure()
-            .state(DevelopmentState::Experimental)
+            .state(DevelopmentState::Beta)
             .privilege_requirement(PrivilegeRequirement::PrivilegedPort(88))
             .well_known_udp_port(88)
             .request_only("A KDC only answers AS-REQ and TGS-REQ; it never writes first")
@@ -466,9 +466,10 @@ impl Protocol for KerberosProtocol {
                  the tests fail, not skip, without them.",
             )
             .notes(
-                "Experimental: two independent clients complete real sessions against it, but \
-                 nobody has reviewed it beyond its tests and the pair job has not run in CI. \
-                 FAILS CLOSED: an unreachable model, no usable answer or an action that could \
+                "Beta: two independent clients, MIT krb5 and Heimdal, complete both the AS \
+                 and the TGS exchange against it (MIT 1.22 and Apple's Heimdal 1.5.1 on macOS; \
+                 MIT 1.20 and Heimdal 7.8 on Ubuntu 24.04 in the kerberos pair job). Not \
+                 Stable: no fuzz target. FAILS CLOSED: an unreachable model, no usable answer or an action that could \
                  not be executed all produce a KRB-ERROR (decision=fail_closed_*). Passwords \
                  come only from the principal_passwords startup parameter, which is redacted \
                  wherever parameters are printed, and appear in no event.",

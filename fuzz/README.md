@@ -70,6 +70,22 @@ exactly like a slow-but-healthy search. `-timeout=25` turns that into a reported
 with the offending input saved. If a run overruns its budget with no output, suspect a
 hang rather than a slow machine.
 
+**`crc-fast` fails to link on macOS** (`Undefined symbols … ___sanitizer_cov_8bit_counters_init`):
+it builds a `cdylib`, and an instrumented dylib cannot see libFuzzer's symbols at link time.
+Let the dylib resolve them at load time, and make sure the toolchain on `PATH` is the one you
+asked for — `rustup run` does not put its `cargo` ahead of Homebrew's, and a mixed toolchain
+fails the same link with a different error:
+
+```bash
+cd fuzz && PATH=~/.rustup/toolchains/nightly-aarch64-apple-darwin/bin:$PATH \
+  RUSTC_WRAPPER= RUSTFLAGS='-Clink-arg=-Wl,-undefined,dynamic_lookup' \
+  cargo fuzz build -s none <target>
+```
+
+`fuzz/Cargo.lock` is not committed, so it drifts from the root one; copy the root
+`Cargo.lock` over it first to fuzz the versions NetGet actually ships (a newer `libc`
+broke `nix` 0.8 and a newer `crc-fast` changed its crate type).
+
 `cargo fuzz` prints nothing until it exits when you redirect stdout to a file, because
 libFuzzer block-buffers. Watch `corpus/<target>/` growing instead, or leave it on a tty.
 
@@ -127,7 +143,9 @@ guard does not panic, which is the easy half.
 | `nats_frame` | `nats::parse_frame`, blank-line skip, header block | first bytes of a TCP connection |
 | `stomp_frame` | `stomp::frame::parse_frame`, header escaping | first bytes of a TCP connection |
 | `radius_packet` | `radius::packet` attribute walk, `attribute_value_json` | one UDP datagram |
-| `dns_message` | `hickory_proto::op::Message` (NetGet has no DNS parser) | one UDP datagram; `dns`/`dot`/`doh` |
+| `dns_message` | `utils::dns_screen` + `hickory_proto::op::Message` — **guard pair** (the screen bounds compression-pointer chains, which hickory 0.24 follows recursively) | one UDP datagram; `dns`/`dot`/`doh`/`doq`/`llmnr` |
+| `cassandra_envelope` | the read loop's length bound + `cassandra::parse_request_frame` + `Envelope::from_buffer` — **guard pair** | the first CQL frame, before STARTUP |
+| `mysql_session` | `mysql::packet_limit::PacketLimitReader` + `opensrv_mysql`'s whole protocol loop (reassembly, handshake, commands) — **guard pair** | the handshake response, pre-auth |
 | `lldp_frame` | `lldp::codec` 802.1AB TLV walker | link-local broadcast, no handshake |
 | `cdp_frame` | `cdp::codec` TLV walker + checksum | link-local broadcast, no handshake |
 | `modbus_adu` | `modbus::codec` MBAP framing + PDU requests, and the encoders answering them (framing round-trip; every accepted read answerable) | first bytes of a TCP connection |

@@ -847,9 +847,9 @@ async fn sip_busy_waits_for_the_model() -> E2EResult<()> {
 // websocket — websocat
 // ---------------------------------------------------------------------------
 
-fn accept_websocket(mock: MockLlmBuilder) -> MockLlmBuilder {
+fn accept_websocket(mock: MockLlmBuilder, accept: serde_json::Value) -> MockLlmBuilder {
     mock.on_event("websocket_handshake")
-        .respond_with_actions(serde_json::json!([{"type": "accept_websocket"}]))
+        .respond_with_actions(serde_json::json!([accept]))
         .after_delay(MODEL_LATENCY)
         .expect_calls(1)
         .and()
@@ -858,12 +858,7 @@ fn accept_websocket(mock: MockLlmBuilder) -> MockLlmBuilder {
 #[tokio::test]
 async fn websocket_echo_waits_for_the_model() -> E2EResult<()> {
     check_case("websocket/echo", |mock| {
-        accept_websocket(mock)
-            .on_event("websocket_connection_opened")
-            .respond_with_actions(serde_json::json!([]))
-            .after_delay(MODEL_LATENCY)
-            .expect_calls(1)
-            .and()
+        accept_websocket(mock, serde_json::json!({"type": "accept_websocket"}))
             .on_event("websocket_text_message")
             .respond_with_actions_from_event(|event| {
                 serde_json::json!([{
@@ -881,14 +876,10 @@ async fn websocket_echo_waits_for_the_model() -> E2EResult<()> {
 #[tokio::test]
 async fn websocket_greeting_waits_for_the_model() -> E2EResult<()> {
     check_case("websocket/greeting", |mock| {
-        accept_websocket(mock)
-            .on_event("websocket_connection_opened")
-            .respond_with_actions(serde_json::json!([{
-                "type": "send_websocket_text", "text": "Welcome to NetGet Eval"
-            }]))
-            .after_delay(MODEL_LATENCY)
-            .expect_calls(1)
-            .and()
+        accept_websocket(
+            mock,
+            serde_json::json!({"type": "accept_websocket", "greeting": "Welcome to NetGet Eval"}),
+        )
     })
     .await
 }
@@ -1024,6 +1015,78 @@ async fn nostr_accept_film_note_waits_for_the_model() -> E2EResult<()> {
     check_case("nostr/accept-film-note", |mock| {
         mock.on_event("nostr_event")
             .respond_with_actions(serde_json::json!([{"type": "accept_nostr_event"}]))
+            .after_delay(MODEL_LATENCY)
+            .expect_calls(1)
+            .and()
+    })
+    .await
+}
+
+// ---------------------------------------------------------------------------
+// lmtp — smtplib.LMTP
+// ---------------------------------------------------------------------------
+
+/// The answers a correct model gives the mailbox policy: alice@example.com is accepted and
+/// delivered, anyone else is refused at RCPT.
+fn answer_lmtp(mock: MockLlmBuilder, deliveries: usize) -> MockLlmBuilder {
+    mock.on_event("lmtp_recipient")
+        .respond_with_actions_from_event(|event| {
+            let accept = event.to_string().contains("alice@example.com");
+            serde_json::json!([{"type": "lmtp_recipient_reply", "accept": accept}])
+        })
+        .after_delay(MODEL_LATENCY)
+        .expect_calls(1)
+        .and()
+        .on_event("lmtp_message")
+        .respond_with_actions(serde_json::json!([{"type": "lmtp_delivery", "deliver_all": true}]))
+        .after_delay(MODEL_LATENCY)
+        .expect_calls(deliveries)
+        .and()
+}
+
+#[tokio::test]
+async fn lmtp_deliver_local_waits_for_the_model() -> E2EResult<()> {
+    check_case("lmtp/deliver-local", |mock| answer_lmtp(mock, 1)).await
+}
+
+#[tokio::test]
+async fn lmtp_refuse_unknown_waits_for_the_model() -> E2EResult<()> {
+    check_case("lmtp/refuse-unknown", |mock| answer_lmtp(mock, 0)).await
+}
+
+// ---------------------------------------------------------------------------
+// rsync — the stock rsync client
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn rsync_list_modules_waits_for_the_model() -> E2EResult<()> {
+    check_case("rsync/list-modules", |mock| {
+        mock.on_event("rsync_list_modules")
+            .respond_with_actions(serde_json::json!([{
+                "type": "rsync_modules",
+                "modules": [
+                    {"name": "backups", "comment": "Nightly backups"},
+                    {"name": "media", "comment": "Photo library"}
+                ]
+            }]))
+            .after_delay(MODEL_LATENCY)
+            .expect_calls(1)
+            .and()
+    })
+    .await
+}
+
+#[tokio::test]
+async fn rsync_list_files_waits_for_the_model() -> E2EResult<()> {
+    check_case("rsync/list-files", |mock| {
+        mock.on_event("rsync_request")
+            .respond_with_actions(serde_json::json!([{
+                "type": "rsync_send_entries",
+                "entries": [
+                    {"path": "readme.txt", "type": "file", "content": "read me\n"},
+                    {"path": "notes.md", "type": "file", "content": "# notes\n"}
+                ]
+            }]))
             .after_delay(MODEL_LATENCY)
             .expect_calls(1)
             .and()

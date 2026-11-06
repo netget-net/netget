@@ -15,7 +15,6 @@ use crate::state::app_state::AppState;
 use crate::state::ServerId;
 use actions::DOT_QUERY_EVENT;
 use anyhow::{Context, Result};
-use hickory_proto::op::Message as DnsMessage;
 use serde_json::json;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -381,7 +380,7 @@ impl DotServer {
                 .debug(format!("DoT received {} bytes from {}", dns_len, peer_addr));
 
             // Parse DNS query
-            let dns_message = match DnsMessage::from_vec(&dns_buf) {
+            let dns_message = match crate::utils::dns_screen::decode_dns_message(&dns_buf) {
                 Ok(msg) => msg,
                 Err(e) => {
                     Log::new(Some(&status_tx))

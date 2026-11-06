@@ -599,6 +599,8 @@ impl LdapSession {
                 "dn": dn,
                 "password": password,
                 "auth_type": auth_type,
+                "anonymous": dn.is_empty() && password.is_empty() && auth_type == "simple",
+                "answer_with": actions::bind_answer_with(&dn, &password, &auth_type),
             }),
         );
 

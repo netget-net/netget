@@ -1988,25 +1988,54 @@ fn render_documentation(
     let mut not_found = Vec::new();
 
     for protocol in protocols {
-        // Exact registry key first (e.g. "HTTP", "S3"), then keyword resolution, so
-        // mixed-case keys ("DynamoDB") and keyword forms ("dynamo", "s3 bucket") resolve.
-        let server = server_registry.get(&protocol.to_uppercase()).or_else(|| {
-            server_registry
-                .parse_from_str(protocol)
-                .and_then(|name| server_registry.get(&name))
-        });
-        let client = client_registry.get(&protocol.to_lowercase()).or_else(|| {
-            client_registry
-                .parse_from_str(protocol)
-                .and_then(|name| client_registry.get(&name))
-        });
-
-        let server = server.filter(|_| modes != DocModes::ClientOnly);
-        let client = client.filter(|_| modes != DocModes::ServerOnly);
+        // A protocol NAME: canonical name, stack name, or a declared keyword equal to the
+        // whole input ("DynamoDB", "dynamo", "s3 bucket"). Never the closest substring hit —
+        // "mptcp" used to come back as TCP's documentation, headed as if it were MPTCP's.
+        let server_lookup = server_registry.resolve_name(protocol);
+        let client_lookup = client_registry.resolve_name(protocol);
+        let alias_of = |how: Option<&crate::protocol::name_match::NameMatch>| {
+            how.and_then(|m| m.alias()).map(str::to_string)
+        };
+        let server_alias = alias_of(server_lookup.as_ref().ok().map(|(_, m)| m));
+        let client_alias = alias_of(client_lookup.as_ref().ok().map(|(_, m)| m));
+        let server = server_lookup
+            .as_ref()
+            .ok()
+            .map(|(p, _)| p.clone())
+            .filter(|_| modes != DocModes::ClientOnly);
+        let client = client_lookup
+            .as_ref()
+            .ok()
+            .map(|(p, _)| p.clone())
+            .filter(|_| modes != DocModes::ServerOnly);
         if server.is_none() && client.is_none() {
             warn!("Protocol '{}' not found for {}", protocol, tool_name);
-            not_found.push(protocol.clone());
+            let reason = match (&server_lookup, &client_lookup) {
+                (Err(e), _) if modes != DocModes::ClientOnly => e.to_string(),
+                (_, Err(e)) => e.to_string(),
+                _ => format!("'{protocol}' has no implementation in the requested mode"),
+            };
+            not_found.push(reason);
             continue;
+        }
+        let canonical = server
+            .as_ref()
+            .map(|p| p.protocol_name().to_lowercase())
+            .or_else(|| client.as_ref().map(|p| p.protocol_name().to_lowercase()))
+            .unwrap_or_default();
+        if let Some(alias) = server_alias.or(client_alias) {
+            body.push_str(&format!(
+                "**`{}` is an alias of `{canonical}`** — use `{canonical}` as the protocol.",
+                protocol.trim()
+            ));
+            if let Some(note) = server
+                .as_ref()
+                .and_then(|p| p.alias_note(&alias))
+                .or_else(|| client.as_ref().and_then(|p| p.alias_note(&alias)))
+            {
+                body.push_str(&format!(" {note}"));
+            }
+            body.push_str("\n\n");
         }
 
         if let Some(server) = &server {
@@ -2039,9 +2068,9 @@ fn render_documentation(
             tool_name,
             protocols.join(", "),
             format!(
-                "No {kind} found for {:?}. The read_documentation action's description lists \
+                "No {kind} found: {}. The read_documentation action's description lists \
                  every server and client protocol in this build; use a name from there.",
-                not_found
+                not_found.join(" ")
             ),
         );
     }
@@ -2123,10 +2152,7 @@ fn render_documentation(
     }
 
     if !not_found.is_empty() {
-        result.push_str(&format!(
-            "\n**Note:** The following protocols were not found: {:?}\n",
-            not_found
-        ));
+        result.push_str(&format!("\n**Note:** not found: {}\n", not_found.join(" ")));
     }
 
     let all_found: Vec<String> = found_servers
@@ -2205,8 +2231,11 @@ fn render_mode_reference<P: crate::llm::actions::protocol_trait::Protocol + ?Siz
     state: &crate::state::AppState,
     own_heading: &str,
     own_intro: &str,
+    role: crate::protocol::docs::Role,
 ) {
-    use crate::protocol::docs::{instance_only_actions, render_action, render_event};
+    use crate::protocol::docs::{
+        example_fallback_actions, instance_only_actions, render_action, render_event,
+    };
 
     let events = p.get_event_types();
     if !events.is_empty() {
@@ -2216,7 +2245,8 @@ fn render_mode_reference<P: crate::llm::actions::protocol_trait::Protocol + ?Siz
             ids.join(", ")
         ));
         for event in &events {
-            render_event(out, event, "###");
+            let fallback = example_fallback_actions(p, state, event, role);
+            render_event(out, event, "###", &fallback);
         }
     }
 
@@ -2276,6 +2306,7 @@ fn render_server_mode(
         state,
         "Server-level Actions",
         "Not tied to one event: what you can do on a running server of this protocol on your own initiative.",
+        crate::protocol::docs::Role::Server,
     );
     out.push_str("\n---\n\n");
 }
@@ -2296,6 +2327,7 @@ fn render_client_mode(
         state,
         "Client Actions",
         "What the client can do on its own initiative, such as sending a request.",
+        crate::protocol::docs::Role::Client,
     );
     out.push_str("\n---\n\n");
 }

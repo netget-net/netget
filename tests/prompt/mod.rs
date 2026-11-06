@@ -988,7 +988,7 @@ async fn test_protocol_mcp_documentation() {
         async move {
             let doc = netget::mcp_stdio::docs::render_protocol_docs(protocol, state)
                 .await
-                .unwrap_or_else(|| panic!("{protocol} is compiled in"));
+                .unwrap_or_else(|e| panic!("{protocol} is compiled in: {e}"));
             normalize_mcp_port_line(&doc)
         }
     };

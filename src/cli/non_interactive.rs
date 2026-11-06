@@ -3,7 +3,7 @@
 //! This module handles execution when NetGet runs without the TUI,
 //! processing a single prompt and outputting results to stdout/stderr.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -96,11 +96,15 @@ pub(crate) fn emit_status_line(line: &str, to_stderr: bool) {
 /// client handles is recorded in the access log exactly once, whichever of handler, model or
 /// operator answered it, so that counter already is "events handled across all instances" and
 /// no parallel one is kept.
+///
+/// It also carries `--ready-file`, because the runners that check the limits are the same ones
+/// that know when everything has started: see [`RunLimits::announce_ready`].
 #[derive(Debug, Clone)]
 pub(crate) struct RunLimits {
     exit_after_events: Option<u64>,
     run_for: Option<Duration>,
     started: crate::utils::clock::Instant,
+    ready_file: Option<std::path::PathBuf>,
 }
 
 impl RunLimits {
@@ -109,7 +113,30 @@ impl RunLimits {
             exit_after_events: args.exit_after_events,
             run_for: args.run_for.map(Duration::from_secs),
             started: crate::utils::clock::Instant::now(),
+            ready_file: args.ready_file.clone(),
         }
+    }
+
+    /// Write the `--ready-file` report: every server with the address it actually bound, and
+    /// every client with its target and status.
+    ///
+    /// Called once per run, by whichever runner started the instances, after the last one
+    /// started — so for a server, `Running` with a `local_addr`, which `server_startup` sets
+    /// only once `spawn()` has returned the bound socket. The write is atomic (staged and
+    /// renamed), so a reader that sees the file sees all of it; that is the whole contract a
+    /// test fixture needs. A failure to write fails the run: a fixture waiting on a file that
+    /// will never appear would otherwise hang until its own timeout.
+    pub(crate) async fn announce_ready(&self, state: &AppState) -> Result<()> {
+        let Some(path) = &self.ready_file else {
+            return Ok(());
+        };
+        let report = ready_report(state).await;
+        let mut bytes = serde_json::to_vec_pretty(&report)?;
+        bytes.push(b'\n');
+        crate::utils::file_io::write_atomic(path, &bytes)
+            .with_context(|| format!("write --ready-file {}", path.display()))?;
+        info!("Wrote readiness report to {}", path.display());
+        Ok(())
     }
 
     /// `Some(reason)` once a limit has been reached.
@@ -129,6 +156,38 @@ impl RunLimits {
         }
         None
     }
+}
+
+/// The `--ready-file` document. `version` is bumped only for an incompatible change; new keys
+/// may be added without one. A server with no listening socket (a pipe, a device) has
+/// `host`/`port`/`address` null.
+pub(crate) async fn ready_report(state: &AppState) -> serde_json::Value {
+    let mut servers = state.get_all_servers().await;
+    servers.sort_by_key(|s| s.id.as_u32());
+    let mut clients = state.get_all_clients().await;
+    clients.sort_by_key(|c| c.id.as_u32());
+    serde_json::json!({
+        "version": 1,
+        "pid": std::process::id(),
+        "servers": servers.iter().map(|s| serde_json::json!({
+            "id": s.id.as_u32(),
+            // The registry name (`TCP`, `Redis`), whatever spelling the configuration used.
+            "protocol": crate::protocol::server_registry::registry()
+                .resolve(&s.protocol_name)
+                .map(|p| p.protocol_name().to_string())
+                .unwrap_or_else(|_| s.protocol_name.clone()),
+            "host": s.local_addr.map(|a| a.ip().to_string()),
+            "port": s.local_addr.map(|a| a.port()),
+            "address": s.local_addr.map(|a| a.to_string()),
+            "status": s.status.to_string(),
+        })).collect::<Vec<_>>(),
+        "clients": clients.iter().map(|c| serde_json::json!({
+            "id": c.id.as_u32(),
+            "protocol": c.protocol_name,
+            "remote_addr": c.remote_addr,
+            "status": c.status.as_str(),
+        })).collect::<Vec<_>>(),
+    })
 }
 
 /// Resolve on Ctrl+C. Spawned once per wait loop; the loop polls the flag.
@@ -258,7 +317,7 @@ pub async fn run_non_interactive(
     let _status_forwarder = tokio::spawn(async move {
         while let Some(msg) = status_rx.recv().await {
             // Skip internal control messages
-            if !msg.starts_with("__") {
+            if !crate::utils::is_status_control_line(&msg) {
                 let clean_msg = msg
                     .strip_prefix("[INFO] ")
                     .unwrap_or(&msg)
@@ -309,6 +368,7 @@ pub async fn run_non_interactive(
     // "join a group and log all received data" bound its socket, joined the group, logged
     // that its receive loop was listening, and was killed before a single datagram could
     // arrive. The same applies to every client with a read loop.
+    limits.announce_ready(&state).await?;
     run_clients(&state, &llm, &limits, false).await;
 
     Ok(())
@@ -440,6 +500,7 @@ pub(crate) async fn run_server(
             to_stderr,
         );
     }
+    limits.announce_ready(state).await?;
     emit_status_line("Press Ctrl+C to stop.", to_stderr);
     emit_status_line("Waiting for connections...\n", to_stderr);
 
@@ -485,7 +546,7 @@ pub(crate) async fn run_server(
 
                 // Process status messages from handler (drain remaining)
                 while let Ok(msg) = status_rx.try_recv() {
-                    if !msg.starts_with("__") {
+                    if !crate::utils::is_status_control_line(&msg) {
                         emit_status_line(&format!("[STATUS] {msg}"), to_stderr);
                     }
                 }
@@ -573,7 +634,7 @@ pub async fn run_with_actions(
     // Spawn background task to print status messages in real-time
     let status_printer = tokio::spawn(async move {
         while let Some(msg) = status_rx.recv().await {
-            if !msg.starts_with("__") {
+            if !crate::utils::is_status_control_line(&msg) {
                 // Print status messages immediately for real-time output
                 emit_status_line(&msg, to_stderr);
             }
@@ -764,6 +825,7 @@ pub async fn run_with_actions(
     }
 
     // Clients and restored global tasks remain live until work finishes or a run limit.
+    limits.announce_ready(&state).await?;
     run_clients(&state, &llm, &limits, to_stderr).await;
 
     Ok(())

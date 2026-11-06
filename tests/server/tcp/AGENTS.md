@@ -188,8 +188,9 @@ Original tests used the `suppaftp` library for full FTP client operations. This 
 
 1. **Binary data**: No tests for binary protocol handling (`encoding: "hex"` in either direction)
 2. **Concurrent connections**: No tests for multiple simultaneous clients
-3. **Connection closing**: No tests for LLM-initiated `close_this_connection`, and none for the
-   dashboard's injected `close_connection` (every other peer-bearing protocol has a
+3. **Connection closing**: `model_close_test.rs` covers `close_this_connection` answering a read
+   (static rule; the peer reads the answer, then EOF within 5s, and the connection is no longer
+   reported open). Nothing covers the dashboard's injected `close_connection` (every other peer-bearing protocol has a
    `peer_inject_test`; TCP, which they were told to copy, has none)
 4. **State persistence**: No tests for connection-specific memory/state
 5. **Queue bound**: `MAX_QUEUED_BYTES` has no test; it needs a peer that streams for the length

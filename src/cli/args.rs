@@ -448,6 +448,14 @@ pub struct Args {
     )]
     pub run_for: Option<u64>,
 
+    /// Non-interactive only: write a JSON readiness report here once every instance started.
+    #[clap(
+        long = "ready-file",
+        value_name = "PATH",
+        help = "Non-interactive mode: once every server the run started is listening (and every client is connected), write a JSON report of the bound addresses to PATH — {\"version\":1,\"pid\":…,\"servers\":[{\"id\",\"protocol\",\"host\",\"port\",\"address\"}],\"clients\":[{\"id\",\"protocol\",\"remote_addr\",\"status\"}]}. Written atomically, so the file appearing means it is complete; an existing file at PATH is removed at startup. For test fixtures that start NetGet on port 0."
+    )]
+    pub ready_file: Option<std::path::PathBuf>,
+
     /// Path to mock LLM configuration file (for testing)
     #[clap(
         long = "mock-config-file",
@@ -864,10 +872,7 @@ impl Args {
     pub fn client_instruction(&self, protocol: &str, remote_addr: &str) -> String {
         let trailing = self.prompt.join(" ").trim().to_string();
         if trailing.is_empty() {
-            format!(
-                "You are a {} client connected to {}. Handle responses appropriately.",
-                protocol, remote_addr
-            )
+            crate::state::client::default_client_instruction(protocol, remote_addr)
         } else {
             trailing
         }

@@ -137,6 +137,20 @@ decimal. A handler that declares one of these gets varchar on the wire.
   a driver reads those trailing bytes unconditionally. scylla re-PREPAREs and retries on it, so
   the statement then succeeds instead of the session dying.
   `tests/server/cassandra/protocol_error_test.rs` covers both.
+- **Two header bits are refused before `cassandra-protocol` sees them**, because
+  `Envelope::from_buffer` (3.3.0) panics on both, pre-STARTUP: the *tracing* flag on a frame
+  whose direction bit says response (`read_exact(..).unwrap()` of a 16-byte tracing id,
+  `frame.rs:187`), and the *warning* flag (a `[string list]` whose negative `i16` count is a
+  `Vec::with_capacity` capacity-overflow panic, `types.rs:267`, and whose over-long string is
+  sliced before its length is checked, `types.rs:485`). A server never receives a response frame
+  and warnings ride only on responses, so `parse_request_frame` refuses both and the frame takes
+  the PROTOCOL_ERROR path above. A panic there would have been inside the connection task —
+  swallowed by `tokio::spawn`, the socket closed with no reply, the connection never closed in
+  the server's state. The third panic in `from_buffer` (a declared body length with the high
+  bit set: `9 + len` overflows in debug and slices `[9..8]` in release) cannot be reached,
+  because `MAX_FRAME_BODY_BYTES` refuses every such length first.
+  `tests/server/cassandra/decoder_panic_test.rs` sends all three from the wire;
+  `fuzz/fuzz_targets/cassandra_envelope.rs` runs the read loop's checks and the decoder as a pair.
 - **The accept loop breaks** on error rather than retrying immediately and spinning on a
   persistent EMFILE.
 - **SUPPORTED is never empty.** If the handler supplies no options, the server answers with

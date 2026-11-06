@@ -245,6 +245,23 @@ fn instant_to_unix_ms(at: Instant) -> u64 {
         .unwrap_or(0)
 }
 
+/// The instruction a server is given when whoever started it supplied none
+/// (`ServerForm::create`, MCP `start_server`).
+///
+/// It is load-bearing, not decoration: every protocol with an `operator_wants_dynamic` gate
+/// (stun, ntp, arp, bgp and thirteen more) consults the model only when the server has a
+/// non-empty instruction or a handler for the event, and otherwise answers with its
+/// deterministic default. Without this text a server started with no instruction — the
+/// dashboard's default, `*` → manual — would stop reaching the model on those protocols the
+/// moment its driver was switched to LLM. An operator who wants no model at all passes an
+/// explicit empty instruction.
+///
+/// Because it is NetGet's text and not the operator's, it is never displayed as theirs: see
+/// [`ServerInstance::instruction_is_default`].
+pub fn default_server_instruction(protocol: &str) -> String {
+    format!("You are a {protocol} server. Handle requests appropriately.")
+}
+
 /// A server instance with its own connections, state, and configuration
 ///
 /// `Clone` is derived. It used to hold a `JoinHandle` — which is not `Clone` — so every
@@ -368,6 +385,14 @@ pub fn validate_log_output_name(name: &str) -> anyhow::Result<()> {
 }
 
 impl ServerInstance {
+    /// Whether this server runs on [`default_server_instruction`] — NetGet's text, put there
+    /// because nobody supplied one. Everything that shows an instruction as the operator's
+    /// (MCP `list_servers` / `server_status`, the dashboard) checks this first.
+    pub fn instruction_is_default(&self) -> bool {
+        self.instruction
+            .eq_ignore_ascii_case(&default_server_instruction(&self.protocol_name))
+    }
+
     /// Create a new server instance
     pub fn new(id: ServerId, port: u16, protocol_name: String, instruction: String) -> Self {
         let now = Instant::now();

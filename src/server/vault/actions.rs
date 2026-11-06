@@ -26,6 +26,30 @@ const TOKEN_NOTE: &str = "token_present / token_matches_configured / token_confi
      errors [\"permission denied\"] when a configured token does not match. With no token \
      configured any non-empty token counts as matching.";
 
+/// The `answer_with` field of `vault_read`: look the secret up first, and say "not found" with
+/// the action named for it.
+///
+/// Told "act as a Vault server with an empty secret mount", llama3.1:8b answered `vault kv get
+/// secret/app/nothing` with a `send_vault_secret` - empty data or the example's
+/// username/password - five runs in five (real-model eval, seed 42). Neither this hint alone nor
+/// `send_vault_error` with status 404 changed that when replayed: the model reached for the
+/// secret action every time. Offered `send_vault_not_found` first, under a name that says what
+/// it means, it answered the same prompt with it five seeds in five, and still served the
+/// secret on the read the instructions do describe.
+pub fn read_answer_with(mount: &str, path: &str, what: &str) -> String {
+    let found = if what == "metadata" {
+        "send_vault_secret with its version"
+    } else {
+        "send_vault_secret whose data holds exactly the keys and values they give it"
+    };
+    format!(
+        "first look in your instructions for a secret at {path} in the {mount} mount. If they \
+         give none there - including when they say the mount is empty or name only other \
+         secrets - answer exactly {{\"type\": \"send_vault_not_found\"}} and nothing else; \
+         never invent a secret they do not describe. If they do give one, {found}"
+    )
+}
+
 /// `GET <mount>/data/<path>` (what = "data") or `GET <mount>/metadata/<path>` (what =
 /// "metadata").
 pub static VAULT_READ_EVENT: LazyLock<EventType> = LazyLock::new(|| {
@@ -33,18 +57,26 @@ pub static VAULT_READ_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         "vault_read",
         format!(
             "A Vault client (vault kv get, vault kv metadata get, an SDK) read the secret at \
-             `path` in the KV v2 mount `mount`. Answer with send_vault_secret: its data for \
-             what=\"data\" (version, when present, is the version asked for), or just version \
-             and created_time for what=\"metadata\". Use send_vault_error status 404 with no \
-             errors if no such secret exists. {TOKEN_NOTE}"
+             `path` in the KV v2 mount `mount`. answer_with says which answer this read takes: \
+             send_vault_not_found when your instructions give no secret at that path, or \
+             send_vault_secret with its data for what=\"data\" (version, when present, is the \
+             version asked for), or just version and created_time for what=\"metadata\". \
+             {TOKEN_NOTE}"
         ),
-        json!({
-            "type": "send_vault_secret",
-            "data": {"username": "app", "password": "s3cr3t"},
-            "version": 3
-        }),
+        secret_example(),
     )
-    .with_actions(vec![send_vault_secret_action(), send_vault_error_action()])
+    .with_parameters(vec![param(
+        "answer_with",
+        "string",
+        "Which answer this read takes: send_vault_not_found when the instructions give no \
+         secret at the path, the secret they give otherwise",
+        true,
+    )])
+    .with_actions(vec![
+        send_vault_not_found_action(),
+        send_vault_secret_action(),
+        send_vault_error_action(),
+    ])
 });
 
 /// `PUT`/`POST <mount>/data/<path>`.
@@ -103,6 +135,7 @@ impl Protocol for VaultProtocol {
 
     fn get_sync_actions(&self) -> Vec<ActionDefinition> {
         vec![
+            send_vault_not_found_action(),
             send_vault_secret_action(),
             send_vault_write_ok_action(),
             send_vault_list_action(),
@@ -394,6 +427,10 @@ impl Server for VaultProtocol {
             "send_vault_error" => {
                 api::render_error(&data).map_err(refuse)?;
             }
+            // Vault's own "No value found" is a 404 with an empty errors list.
+            "send_vault_not_found" => {
+                data = json!({"status": 404, "errors": []});
+            }
             other => return Err(anyhow::anyhow!("Unknown Vault action: {other}")),
         }
         Ok(ActionResult::Custom {
@@ -412,17 +449,42 @@ fn param(name: &str, type_hint: &str, description: &str, required: bool) -> Para
     }
 }
 
+/// `send_vault_secret`'s example, as placeholders: a plausible secret here is copied as data.
+fn secret_example() -> Value {
+    json!({
+        "type": "send_vault_secret",
+        "data": {"<a key your instructions give>": "<its value, word for word>"},
+        "version": 1
+    })
+}
+
+fn send_vault_not_found_action() -> ActionDefinition {
+    ActionDefinition {
+        name: "send_vault_not_found".to_string(),
+        description: "The path holds no secret: the client prints Vault's \"No value found\". \
+                      The answer for any path your instructions give no secret at, and for every \
+                      path when they say the mount is empty."
+            .to_string(),
+        parameters: vec![],
+        example: json!({"type": "send_vault_not_found"}),
+        log_template: Some(LogTemplate::new().with_info("-> Vault not found")),
+    }
+}
+
 fn send_vault_secret_action() -> ActionDefinition {
     ActionDefinition {
         name: "send_vault_secret".to_string(),
-        description: "Answer a vault_read with the secret. For what=\"data\" give its key/value \
-                      pairs; for what=\"metadata\" only version and created_time matter."
+        description: "Answer a vault_read with the secret your instructions give at that path. \
+                      For what=\"data\" give its key/value pairs, exactly as they give them; for \
+                      what=\"metadata\" only version and created_time matter. A path they give \
+                      no secret at is send_vault_not_found, never an empty or invented secret. \
+                      The example's keys and values are placeholders, never data."
             .to_string(),
         parameters: vec![
             param(
                 "data",
                 "object",
-                "The secret's key/value pairs, e.g. {\"username\": \"app\", \"password\": \"...\"}",
+                "The secret's key/value pairs, exactly as your instructions give them",
                 false,
             ),
             param(
@@ -444,12 +506,7 @@ fn send_vault_secret_action() -> ActionDefinition {
                 false,
             ),
         ],
-        example: json!({
-            "type": "send_vault_secret",
-            "data": {"username": "app", "password": "s3cr3t"},
-            "version": 3,
-            "created_time": "2026-09-01T10:00:00Z"
-        }),
+        example: secret_example(),
         log_template: Some(LogTemplate::new().with_info("-> Vault secret v{version}")),
     }
 }

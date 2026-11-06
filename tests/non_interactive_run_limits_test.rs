@@ -382,3 +382,157 @@ fn a_server_that_fails_to_start_exits_non_zero() {
     );
     drop(taken);
 }
+
+/// Wait for `--ready-file` to hold a report written by this child, returning it. Anything else
+/// at the path — absent, or a stale report from another process — keeps the wait going.
+fn wait_ready_report(
+    netget: &mut Netget,
+    path: &std::path::Path,
+    within: Duration,
+) -> serde_json::Value {
+    let deadline = Instant::now() + within;
+    loop {
+        if let Ok(text) = std::fs::read_to_string(path) {
+            let report: serde_json::Value = serde_json::from_str(&text)
+                .unwrap_or_else(|e| panic!("the ready file is complete JSON ({e}): {text}"));
+            if report["pid"].as_u64() == Some(u64::from(netget.child.id())) {
+                return report;
+            }
+        }
+        if let Some(status) = netget.exited() {
+            panic!(
+                "netget exited ({status}) without writing {}; stderr: {}",
+                path.display(),
+                netget.stderr()
+            );
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no ready file at {} within {within:?}",
+            path.display()
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn ready_path(name: &str) -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "netget-ready-{name}-{}-{}.json",
+        std::process::id(),
+        rand_suffix()
+    ))
+}
+
+/// `--ready-file` names every server with the port it actually bound, and each one is already
+/// accepting when the file appears. A stale report at the path is removed first, so the file
+/// existing means *this* run is ready.
+#[test]
+fn ready_file_reports_every_bound_server_once_listening() {
+    let ready = ready_path("servers");
+    std::fs::write(&ready, r#"{"version":1,"pid":1,"servers":[],"clients":[]}"#)
+        .expect("stale report");
+    let ready_arg = ready.to_string_lossy().to_string();
+    let mut netget = Netget::spawn(
+        "ready",
+        serde_json::json!([echo_server(), echo_server()]),
+        &["--ready-file", &ready_arg, "--run-for", "60"],
+    );
+    let report = wait_ready_report(&mut netget, &ready, Duration::from_secs(20));
+    assert_eq!(report["version"], 1, "{report}");
+    let servers = report["servers"].as_array().expect("servers array");
+    assert_eq!(servers.len(), 2, "both servers are reported: {report}");
+    let mut ports = Vec::new();
+    for server in servers {
+        assert_eq!(server["protocol"], "TCP", "{report}");
+        assert_eq!(server["host"], "127.0.0.1", "{report}");
+        let port = server["port"].as_u64().expect("a bound port") as u16;
+        assert_ne!(port, 0, "the bound port, not the requested 0: {report}");
+        assert_eq!(
+            server["address"],
+            format!("127.0.0.1:{port}"),
+            "address agrees with host and port: {report}"
+        );
+        ports.push(port);
+    }
+    assert_ne!(ports[0], ports[1], "{report}");
+    assert_eq!(report["clients"], serde_json::json!([]), "{report}");
+    // No wait between reading the report and connecting: ready means listening.
+    exchange(ports[0], b"first\n");
+    exchange(ports[1], b"second\n");
+    drop(netget);
+    let _ = std::fs::remove_file(&ready);
+}
+
+/// A run with only clients reports them, connected, once they are.
+#[test]
+fn ready_file_reports_a_loaded_client() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let ready = ready_path("client");
+    let ready_arg = ready.to_string_lossy().to_string();
+    let mut netget = Netget::spawn(
+        "ready-client",
+        serde_json::json!([{
+            "type": "open_client",
+            "protocol": "tcp",
+            "remote_addr": format!("127.0.0.1:{port}"),
+            "instruction": "say nothing",
+            "event_handlers": [
+                {"event_pattern": "*", "handler": {"type": "static", "actions": []}}
+            ]
+        }]),
+        &["--ready-file", &ready_arg, "--run-for", "60"],
+    );
+    let (_peer, _) = listener.accept().expect("the client connects");
+    let report = wait_ready_report(&mut netget, &ready, Duration::from_secs(20));
+    assert_eq!(report["servers"], serde_json::json!([]), "{report}");
+    let clients = report["clients"].as_array().expect("clients array");
+    assert_eq!(clients.len(), 1, "{report}");
+    assert_eq!(clients[0]["remote_addr"], format!("127.0.0.1:{port}"));
+    assert_eq!(clients[0]["status"], "Connected", "{report}");
+    drop(netget);
+    let _ = std::fs::remove_file(&ready);
+}
+
+/// A run that fails to start never writes the file, so a fixture waiting on it sees the exit
+/// rather than a report of servers that are not there.
+#[test]
+fn ready_file_is_not_written_when_a_server_fails_to_start() {
+    let taken = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = taken.local_addr().expect("addr").port();
+    let ready = ready_path("fail");
+    let ready_arg = ready.to_string_lossy().to_string();
+    let mut netget = Netget::spawn(
+        "ready-fail",
+        serde_json::json!([echo_server(), {
+            "type": "open_server", "protocol": "tcp", "port": port, "instruction": "echo"
+        }]),
+        &["--ready-file", &ready_arg, "--run-for", "30"],
+    );
+    let status = netget.wait_exit(Duration::from_secs(20));
+    assert!(!status.success(), "a failed start exits non-zero");
+    assert!(
+        !ready.exists(),
+        "no readiness report for a run that did not start"
+    );
+    drop(taken);
+}
+
+/// Modes that never write the file refuse the flag instead of leaving a fixture waiting.
+#[test]
+fn ready_file_is_refused_where_it_would_never_be_written() {
+    let ready = ready_path("mcp");
+    let output = Command::new(env!("CARGO_BIN_EXE_netget"))
+        .args(["--mcp", "--ready-file"])
+        .arg(&ready)
+        .current_dir(std::env::temp_dir())
+        .stdin(Stdio::null())
+        .output()
+        .expect("run netget");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--ready-file applies to a non-interactive run"),
+        "says why: {stderr}"
+    );
+}
