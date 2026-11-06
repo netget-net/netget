@@ -60,10 +60,11 @@ fn cargo_builds_the_vendored_opensrv_mysql_at_the_vendored_version() {
         ),
     ] {
         let root = read(manifest);
+        // The section header is a line of its own; the same words also appear in comments
+        // (fuzz/Cargo.toml explains "the [patch.crates-io] below"), so match the line.
         let patch = root
-            .split("[patch.crates-io]")
-            .nth(1)
-            .map(|rest| rest.split("\n[").next().unwrap_or(rest))
+            .split_once("\n[patch.crates-io]\n")
+            .map(|(_, rest)| rest.split("\n[").next().unwrap_or(rest))
             .unwrap_or("");
         assert!(
             patch.lines().any(|l| l.trim() == entry),

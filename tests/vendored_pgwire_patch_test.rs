@@ -50,10 +50,11 @@ fn manifest_version(manifest: &str) -> String {
 #[test]
 fn cargo_builds_the_vendored_pgwire_at_the_vendored_version() {
     let root = read("Cargo.toml");
+    // The section header is a line of its own; match the line, not the words, which comments
+    // may also contain.
     let patch = root
-        .split("[patch.crates-io]")
-        .nth(1)
-        .map(|rest| rest.split("\n[").next().unwrap_or(rest))
+        .split_once("\n[patch.crates-io]\n")
+        .map(|(_, rest)| rest.split("\n[").next().unwrap_or(rest))
         .unwrap_or("");
     assert!(
         patch
