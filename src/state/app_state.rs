@@ -1831,26 +1831,6 @@ impl AppState {
         (next, true)
     }
 
-    /// Check if server documentation has been read (enables open_server)
-    pub async fn is_server_docs_read(&self) -> bool {
-        !self
-            .inner
-            .read()
-            .await
-            .documented_server_protocols
-            .is_empty()
-    }
-
-    /// Check if client documentation has been read (enables open_client)
-    pub async fn is_client_docs_read(&self) -> bool {
-        !self
-            .inner
-            .read()
-            .await
-            .documented_client_protocols
-            .is_empty()
-    }
-
     /// Mark server protocols as documented
     pub async fn mark_server_protocols_documented(&self, protocols: &[String]) {
         let mut inner = self.inner.write().await;

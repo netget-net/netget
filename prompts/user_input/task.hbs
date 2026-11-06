@@ -5,7 +5,7 @@
 
 To act, answer with `actions`:
 ```
-{{#if open_actions_enabled}}{"actions": [{"type": "open_server", "protocol": "http", "instruction": "Serve a small recipe website"}]}{{else}}{"actions": [{"type": "notify_operator", "message": "Server #1 is running on port 8080"}]}{{/if}}
+{"actions": [{"type": "open_server", "protocol": "http", "instruction": "Serve a small recipe website"}]}
 ```
 
 To look something up first, answer with `tools`; their results come back to you before anything runs:

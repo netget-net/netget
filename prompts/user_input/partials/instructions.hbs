@@ -15,7 +15,3 @@ Understand what the user wants and answer with the actions that make it happen.
 5. **Gather information first.** Use `read_documentation` for a protocol's events, actions and parameters, and tools such as {{{tool_examples}}} for anything else. A response with tools is a draft: its actions do not run. Only your final response, with no tools, is executed.
 
 6. **Answer with one JSON object**, optionally preceded by a `<reasoning>…</reasoning>` block: `{"actions": [...]}` to act, `{"tools": [...]}` to look something up.
-{{#unless open_actions_enabled}}
-
-**`open_server` and `open_client` are not offered yet.** Call `read_documentation` for the protocol first; both become available once you have read it.
-{{/unless}}
