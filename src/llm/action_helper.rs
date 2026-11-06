@@ -367,9 +367,10 @@ async fn record_event_access_log(
     connection_id: Option<crate::server::connection::ConnectionId>,
     protocol: &dyn Server,
     event: &Event,
-    result: &ExecutionResult,
-    answered_by: &str,
+    result: &mut ExecutionResult,
+    answered_by: &'static str,
 ) {
+    result.answered_by = Some(answered_by);
     if let Some(summary) = result.failure_summary() {
         error!(
             "{} action(s) failed while handling '{}' on server #{} ({}): {}",
@@ -704,7 +705,7 @@ async fn call_llm_inner(
                     .context("Easy protocol handler failed")?;
 
                 // Execute actions and return result
-                let result = crate::llm::execute_actions(
+                let mut result = crate::llm::execute_actions(
                     actions,
                     state,
                     Some(protocol),
@@ -723,7 +724,7 @@ async fn call_llm_inner(
                     connection_id,
                     protocol,
                     event,
-                    &result,
+                    &mut result,
                     crate::state::app_state::answered_by::EASY,
                 )
                 .await;
@@ -745,7 +746,7 @@ async fn call_llm_inner(
     )
     .await?
     {
-        crate::llm::event_handler_executor::EventHandlerResult::Handled(result) => {
+        crate::llm::event_handler_executor::EventHandlerResult::Handled(mut result) => {
             // Handler executed successfully (script or static)
             if !private_payloads {
                 log_ctx.log_complete(event_status_tx, &result.protocol_results);
@@ -756,7 +757,7 @@ async fn call_llm_inner(
                 connection_id,
                 protocol,
                 event,
-                &result,
+                &mut result,
                 crate::state::app_state::answered_by::RULE,
             )
             .await;
@@ -787,7 +788,7 @@ async fn call_llm_inner(
     });
     if let (Some(memo), Some(key)) = (&memo, &memo_key) {
         if let Some(actions) = memo.memo.get(key, &event.data) {
-            let result = execute_actions_on_connection(
+            let mut result = execute_actions_on_connection(
                 actions,
                 state,
                 Some(protocol),
@@ -815,7 +816,7 @@ async fn call_llm_inner(
                 connection_id,
                 protocol,
                 event,
-                &result,
+                &mut result,
                 crate::state::app_state::answered_by::CACHE,
             )
             .await;
@@ -1023,7 +1024,7 @@ async fn call_llm_inner(
     }
 
     // Execute actions with server context, and the connection for its own memory
-    let result = execute_actions_on_connection(
+    let mut result = execute_actions_on_connection(
         actions,
         state,
         Some(protocol),
@@ -1068,7 +1069,7 @@ async fn call_llm_inner(
         connection_id,
         protocol,
         event,
-        &result,
+        &mut result,
         crate::state::app_state::answered_by::MODEL,
     )
     .await;

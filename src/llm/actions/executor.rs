@@ -148,6 +148,11 @@ pub struct ExecutionResult {
     /// Empty on a fully successful batch. A non-empty list does **not** mean the batch
     /// was aborted: execution continues past a failed action (see `execute_actions`).
     pub failures: Vec<ActionFailure>,
+
+    /// What produced these actions, where the shared model/handler path knows: one of
+    /// [`crate::state::app_state::answered_by`] — the same value the access log records, so a
+    /// protocol's own log line can say whether the model, a rule or a memoised answer replied.
+    pub answered_by: Option<&'static str>,
 }
 
 impl Default for ExecutionResult {
@@ -164,6 +169,20 @@ impl ExecutionResult {
             protocol_result_actions: Vec::new(),
             raw_actions: Vec::new(),
             failures: Vec::new(),
+            answered_by: None,
+        }
+    }
+
+    /// The `decision=` word for a reply these actions produced: `model_answer`,
+    /// `rule_answer`, `cache_answer` or `easy_answer`. A result whose source was not recorded
+    /// reads as the model's, which is what every such path is.
+    pub fn answer_decision(&self) -> &'static str {
+        use crate::state::app_state::answered_by;
+        match self.answered_by {
+            Some(answered_by::RULE) => "rule_answer",
+            Some(answered_by::CACHE) => "cache_answer",
+            Some(answered_by::EASY) => "easy_answer",
+            _ => "model_answer",
         }
     }
 
@@ -180,6 +199,7 @@ impl ExecutionResult {
             .extend(other.protocol_result_actions);
         self.raw_actions.extend(other.raw_actions);
         self.failures.extend(other.failures);
+        self.answered_by = self.answered_by.or(other.answered_by);
     }
 
     pub fn add_protocol_result(&mut self, result: ActionResult) {

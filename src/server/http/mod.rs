@@ -695,6 +695,7 @@ async fn handle_http_request_inner(
             debug!("LLM HTTP response received");
 
             // Display messages
+            let decision = execution_result.answer_decision();
             for msg in execution_result.messages {
                 let _ = status_tx.send(msg);
             }
@@ -726,7 +727,8 @@ async fn handle_http_request_inner(
             );
             let log = Log::new(Some(&status_tx));
             if produced_response {
-                log.info(format!("{} decision=model_answer", subject));
+                // `rule_answer` / `cache_answer` when a rule or a memoised answer replied.
+                log.info(format!("{} decision={}", subject, decision));
             } else if !failure_summary.is_empty() {
                 if has_default_response {
                     log.error(format!(

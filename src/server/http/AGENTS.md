@@ -57,7 +57,7 @@ notes below it are the parts that are easy to get wrong.
 
 | Outcome | On the wire | Log |
 |---|---|---|
-| Model emitted a parseable `send_http_response` | that response | INFO `decision=model_answer` |
+| Model emitted a parseable `send_http_response` | that response | INFO `decision=model_answer` (`rule_answer` when an `event_handlers` rule answered, `cache_answer` for a memoised answer) |
 | Model emitted none, `default_response` **is** configured | that default | WARN `decision=model_silent fallback=default_response` |
 | Model emitted none, no `default_response` | `500`, body = category | WARN `decision=fail_closed_no_action` |
 | Model's action was refused by the executor, `default_response` configured | that default | ERROR `decision=model_bad_action fallback=default_response` |
