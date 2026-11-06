@@ -124,3 +124,13 @@ refusal can put a multi-byte character across the cut.
 - Devices and specials: the model cannot describe them.
 - Hard links.
 - Protocol 30+.
+
+## Maturity: Beta
+
+The stock rsync client drives the daemon in `tests/server/rsync/real_client_test.rs` and
+`upload_test.rs` and fails rather than skips without it: rsync 3.2.7 in the `rsync` job of
+protocol-pairs.yml, 3.5.1 (Homebrew) on macOS, each negotiating protocol 29. Module listing,
+`--list-only`, `-a` and `-r` downloads compared byte for byte with modes, mtimes and a
+symlink, a dry run, a `--checksum` rerun onto a changed tree, refusals, and pushes the model
+takes in part. Not Stable: one client implementation (openrsync is the obvious second), no
+pcap oracle and no fuzz target.

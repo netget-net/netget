@@ -3,7 +3,7 @@
 AFP 3.x (Apple Filing Protocol) over DSI/TCP. NetGet is the file server; the model is its disk.
 
 **Port**: 548 (well known, privileged: without the right to bind it the server starts on an
-OS-assigned port and says so). **Status**: Experimental — see "Maturity" below.
+OS-assigned port and says so). **Status**: Beta — see "Maturity" below.
 
 ## Code layout
 
@@ -103,7 +103,11 @@ are compared after NFC normalisation, falling back to a case-insensitive match.
 
 ## Maturity
 
-Experimental. Two independent clients drive it in `tests/server/afp/real_peer_test.rs` —
-netatalk's `afparg` and `asip-status`, and Nmap's AFP library — and tshark's `dsi`/`afp`
-dissectors read both directions; but the fuzz target has not run at length and the pair job
-(`protocol-pairs.yml`, job `afp`) had not run in CI when it landed.
+Beta. Two independent clients drive it in `tests/server/afp/real_peer_test.rs`, which fails
+rather than skips without them — netatalk 4.6's `afparg` and `asip-status` (Cleartxt Passwrd
+login, FPEnumerate walk with FPResolveID, a read, a create and write, a refused password) and
+Nmap's AFP library (`afp-serverinfo`, and `afp-ls` listing both volumes as a guest) — and
+tshark's `dsi`/`afp` dissectors read both directions. They run here and in the `afp` job of
+protocol-pairs.yml. Five of the six events face a real client; no independent client deletes,
+so `afp_delete` rests on the raw DSI tests in `e2e_test.rs`. Not reviewed against the Stable
+conditions: `fuzz/fuzz_targets/afp_dsi.rs` exists, but no run of it at length is recorded.
