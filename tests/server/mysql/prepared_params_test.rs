@@ -317,6 +317,11 @@ async fn malformed_executes_get_an_err_packet_and_the_connection_survives() -> E
         let reply = execute(&mut sock, stmt, body).await?;
         assert_err(&reply, ER_MALFORMED_PACKET, what);
     }
+    // Too short to name its statement: the crate cannot parse it, so it never reaches the
+    // shim, and the vendored crate answers it (upstream answered OK — a write that never ran).
+    sock.write_all(&packet(0, &[0x17, 1, 0])).await?;
+    let reply = read_packet(&mut sock).await?;
+    assert_err(&reply, ER_MALFORMED_PACKET, "an execute three bytes long");
 
     // Still the same, working connection.
     sock.write_all(&packet(0, &[0x0E])).await?;

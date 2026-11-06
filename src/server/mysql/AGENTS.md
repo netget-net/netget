@@ -277,18 +277,20 @@ Two pieces replace it:
   is `packet_limit::MAX_PACKET_BYTES` at most — the limiter sits beneath the tap
   and trips first.
 
-  **The tap is also a memory-safety fix, and must stay the reader the crate reads
-  from.** It hands `opensrv-mysql` at most the rest of one packet per read.
-  The crate's `PacketReader::next_async` (`packet_reader.rs:132-141`) parses from
-  a raw-pointer slice of `self.bytes` and, when a read held more than one
-  packet, runs `self.bytes = rest.to_vec()` before returning — freeing the
-  buffer the returned packet points into. Any two pipelined commands hit it:
-  two `COM_STMT_SEND_LONG_DATA` chunks (what `mysql_async` sends), or
-  `COM_STMT_CLOSE` and the next command. Measured here as a stray OK packet for
-  the first long-data chunk (the freed bytes no longer parsed, and the crate
-  answers a parse failure with OK), after which every reply was one behind.
+  **The tap also hands the crate at most the rest of one packet per read, and
+  that is for the crates.io build.** Upstream 0.7.0's `PacketReader::next_async`
+  (`packet_reader.rs:132-141`) parses from a raw-pointer slice of `self.bytes`
+  and, when a read held more than one packet, runs `self.bytes = rest.to_vec()`
+  before returning — freeing the buffer the returned packet points into. Any two
+  pipelined commands hit it: two `COM_STMT_SEND_LONG_DATA` chunks (what
+  `mysql_async` sends), or `COM_STMT_CLOSE` and the next command. Measured as a
+  stray OK packet per long-data chunk, after which every reply was one behind.
+  This repository builds `vendor/opensrv-mysql`, whose reader is fixed
+  (`tests/vendored_opensrv_patch_test.rs` drives the bare crate with exactly
+  that burst); `cargo install netget-tool` builds upstream, where the tap is what
+  keeps a read from ever leaving a remainder.
   `stmt_params_test.rs::pipelined_commands_reach_opensrv_one_packet_per_read`
-  drives the bare crate through the tap.
+  drives the crate through the tap.
 - **`LongDataGate` (in `command_tap.rs`, beneath the tap) — the long-data bound.**
   `opensrv-mysql` appends every `COM_STMT_SEND_LONG_DATA` chunk to the
   statement's buffer with no limit (`lib.rs:663-678`) and keeps it until the
@@ -499,13 +501,23 @@ sends it: a client's packets in one exchange start at 0 or 1, and reaching 255 w
 `tests/server/mysql/sequence_id_test.rs` covers both from the wire and the reader's boundaries
 directly; `fuzz/fuzz_targets/mysql_session.rs` runs the crate's whole loop behind the reader.
 
-**Still exposed, in the prepared-statement path (not changed here):** `ParamParser`
-(`params.rs`) splits the null bitmap and type map with `split_at` on lengths the client controls
-(`params.rs:86`), `panic!`s on an unknown column type (`:91`), and `unwrap`s
-`Value::parse_from` (`:127`) — each a panic on a malformed COM_STMT_EXECUTE once a statement is
-prepared. And COM_STMT_SEND_LONG_DATA appends to a per-parameter `Vec` with no bound
-(`lib.rs:663-678`), so a peer that keeps sending long data for one prepared statement grows the
-process without limit, 64 MiB per packet.
+The prepared-statement path has three more of the crate's defects, each handled elsewhere:
+`ParamParser`'s iterator panics (`params.rs:86`, `:91`, `:127` and two more) and is never
+iterated; `COM_STMT_SEND_LONG_DATA`'s unbounded append (`lib.rs:663-678`) is bounded by
+`command_tap::LongDataGate`; and the reader's use-after-free on pipelined packets is fixed in
+`vendor/opensrv-mysql` and kept out of reach of the crates.io build by the tap. See
+"Prepared-statement parameters" above.
+
+## The vendored crate
+
+This repository builds `vendor/opensrv-mysql` (`[patch.crates-io]` in the root and fuzz
+manifests; `vendor/opensrv-mysql/README.md` has the diff and the upgrade steps). It is 0.7.0
+with the freed-buffer reader fixed, a malformed `COM_STMT_EXECUTE` (or empty packet) answered
+**1835** instead of OK — so an execute too short to name its statement, which never reaches
+the shim, is no longer reported to the client as a write that succeeded — a malformed command
+that has no reply given none, and `COM_STMT_RESET` parsed, discarding long data as mysqld does.
+Its API is upstream's, so the crates.io build still compiles; there, upstream's OK for a short
+execute remains.
 
 ## One query, one answer
 

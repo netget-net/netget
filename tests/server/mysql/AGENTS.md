@@ -104,8 +104,12 @@ The bound parameter values, and the refusal of malformed `COM_STMT_EXECUTE` pack
 
 - `pipelined_commands_reach_opensrv_one_packet_per_read` (0 LLM calls) runs a bare
   `opensrv-mysql` server beneath `CommandTapReader` over an in-memory pipe and sends two long-data
-  chunks and an execute in one write. It is the regression test for the crate's use-after-free on
-  pipelined packets (`src/server/mysql/AGENTS.md`).
+  chunks and an execute in one write: the tap's half of the defence against upstream's
+  use-after-free on pipelined packets. The vendored crate's own fix, with no tap beneath it, is
+  `tests/vendored_opensrv_patch_test.rs` (also 0 LLM calls), which also covers the crate
+  answering a malformed execute 1835, giving a malformed command that has no reply none, and
+  `COM_STMT_RESET` discarding long data. The raw-socket test above sends a three-byte execute,
+  which never reaches the shim, and expects the crate's 1835.
 
 - `long_data_past_its_bounds_never_reaches_the_crate` (0 LLM calls) reads a stream through
   `LongDataGate::with_limits(…, 100, 150)` and the tap, as the server stacks them, and checks

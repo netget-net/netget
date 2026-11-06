@@ -250,10 +250,12 @@ impl MysqlServer {
                             let reader = packet_limit::PacketLimitReader::new(reader, trip.clone());
                             // Above the limiter, so a refused packet never reaches it: a copy
                             // of each prepared-statement command, for `on_execute` to decode
-                            // with a parser that cannot panic. It must stay the reader the
-                            // crate reads from directly, because it is also what keeps every
-                            // read inside one packet, and the crate's reader parses pipelined
-                            // packets out of freed memory otherwise. See `command_tap`.
+                            // with a parser that cannot panic. It stays the reader the crate
+                            // reads from directly: it also keeps every read inside one packet,
+                            // which the crates.io build needs, because upstream opensrv-mysql's
+                            // reader parses pipelined packets out of freed memory (fixed in
+                            // vendor/opensrv-mysql, which a [patch] only gives this repository).
+                            // See `command_tap`.
                             // Beneath the tap: long-data chunks past the bounds are withheld
                             // from the crate, which would otherwise store them without limit.
                             let reader =

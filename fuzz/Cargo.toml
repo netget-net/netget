@@ -73,6 +73,9 @@ futures-util = "0.3"
 [patch.crates-io]
 hyper = { path = "../vendor/hyper" }
 pgwire = { path = "../vendor/pgwire" }
+# The fuzzed MySQL session runs opensrv-mysql's own loop, so it must be the copy NetGet builds
+# (vendor/opensrv-mysql/README.md): upstream 0.7.0 parses pipelined packets out of freed memory.
+opensrv-mysql = { path = "../vendor/opensrv-mysql" }
 
 [dependencies.netget]
 package = "netget-tool"
