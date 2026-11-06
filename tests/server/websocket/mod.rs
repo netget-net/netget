@@ -5,3 +5,4 @@ mod batching_test;
 mod connection_bounds_test;
 mod deflate_real_client_test;
 pub mod e2e_test;
+mod slow_reader_test;

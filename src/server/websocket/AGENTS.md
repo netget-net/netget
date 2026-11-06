@@ -250,7 +250,11 @@ per direction, never clone" shape one level up. A single **writer task** owns th
 producer (message handlers, async push actions, scheduled tasks) sends `WsOut` down a
 `utils::outbox::OutboxSender`, so no lock is ever held across an `.await` that performs I/O. The
 outbox is bounded (4096 frames or 8 MiB): a peer that stops reading while it is answered or
-broadcast to is cut off, Redis's policy for a slow pub/sub client, rather than queued for.
+broadcast to is cut off, Redis's policy for a slow pub/sub client, rather than queued for. The
+cut-off shuts the socket down (the outbox holds a `ConnectionCloser` taken before the upgrade),
+so the read loop reads EOF and the connection is marked closed, and `handle_inbound` drops what
+the cut-off peer still had queued instead of answering it into a closed outbox one message at a
+time. `tests/server/websocket/slow_reader_test.rs` asserts both from the peer's side.
 
 The auto-pong is flushed by the *next* read, which the frame loop performs immediately, so a
 ping is answered even when the handler produces no frame of its own.

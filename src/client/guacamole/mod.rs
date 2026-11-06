@@ -106,8 +106,17 @@ pub async fn connect(ctx: ConnectContext) -> Result<std::net::SocketAddr> {
         .update_client_status(ctx.client_id, ClientStatus::Connected)
         .await;
 
-    // The writer: everything goes out through one channel.
-    let (wtx, mut wrx) = mpsc::unbounded_channel::<String>();
+    // The writer: everything goes out through one channel. Bounded: the reader answers guacd's
+    // `sync`, `clipboard` and `blob` instructions at once, so a server that sends without reading
+    // is cut off, and the session with it, rather than queued for (`utils::outbox`).
+    let (wtx, mut wrx) = crate::utils::outbox::channel(
+        format!("Guacamole client {}", ctx.client_id.as_u32()),
+        crate::utils::outbox::OutboxLimits::DEFAULT,
+        String::len,
+    );
+    wtx.close_on_cut_off(crate::utils::outbox::ConnectionCloser::for_stream(
+        w.as_ref(),
+    ));
     let writer = tokio::spawn(async move {
         while let Some(m) = wrx.recv().await {
             if w.write_all(m.as_bytes()).await.is_err() {
@@ -309,7 +318,7 @@ pub async fn connect(ctx: ConnectContext) -> Result<std::net::SocketAddr> {
 
 async fn session(
     ctx: &ConnectContext,
-    wtx: &mpsc::UnboundedSender<String>,
+    wtx: &crate::utils::outbox::OutboxSender<String>,
     mut external: mpsc::Receiver<ClientCommand>,
     mut internal: mpsc::Receiver<(Value, usize)>,
     mut ended: tokio::sync::oneshot::Receiver<String>,

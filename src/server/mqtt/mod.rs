@@ -340,6 +340,8 @@ async fn handle_mqtt_connection(
 ) -> Result<()> {
     let connection_id = ConnectionId::new(app_state.get_next_unified_id().await);
 
+    // Taken before the split: cutting off a peer that does not read ends its connection.
+    let closer = crate::utils::outbox::ConnectionCloser::for_stream(&socket);
     let (mut read_half, write_half) = tokio::io::split(socket);
 
     // The write half is shared between the channel-draining writer task and the peer
@@ -355,6 +357,7 @@ async fn handle_mqtt_connection(
         format!("MQTT connection {connection_id}"),
         crate::utils::outbox::OutboxLimits::DEFAULT,
     );
+    out_tx.close_on_cut_off(closer);
     let writer_status_tx = status_tx.clone();
     let writer_write_half = write_half.clone();
     let writer_state = app_state.clone();

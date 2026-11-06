@@ -10,11 +10,18 @@
 //!
 //! The policy is Redis's for a slow pub/sub client: **a connection whose queue passes its bound
 //! is cut off.** The frame that did not fit is dropped and counted, every later send fails at
-//! once, and the receiver returns `None` — abandoning what is still queued — so the writer task
-//! ends. Nothing more is written to or queued for that peer; its connection ends when it closes
-//! its side or the protocol's own read deadlines end it. Dropping frames and carrying on is not
-//! offered: a stream with a frame missing from the middle is corrupt, and a peer that is not
-//! reading has nothing to gain from the rest. The first overflow is logged with the connection's label.
+//! once, and the receiver returns `None`, abandoning what is still queued. Dropping frames and
+//! carrying on is not offered: a stream with a frame missing from the middle is corrupt, and a
+//! peer that is not reading has nothing to gain from the rest. The first overflow is logged with
+//! the connection's label.
+//!
+//! Cutting off also **ends the connection** when the adopter has handed the outbox its socket
+//! ([`OutboxSender::close_on_cut_off`] with a [`ConnectionCloser`] taken before the stream is
+//! split or wrapped). The socket is shut down in both directions at the moment of overflow:
+//! the writer, which is usually blocked writing to a peer that does not read, fails at once;
+//! the reader reads EOF and runs the protocol's own close path, so the connection is marked
+//! closed and its slot released; and the peer reads what was already sent, then EOF. Without
+//! it a peer that never reads would keep its socket and its slot until its read deadline.
 //!
 //! The bound is in items and in bytes. A single item larger than the byte bound is still
 //! accepted when the queue is empty: an idle queue means the peer is keeping up, and the
@@ -48,6 +55,51 @@ struct Shared<T> {
     queued_bytes: AtomicUsize,
     overflowed: AtomicBool,
     dropped: AtomicU64,
+    /// Shut down when the peer is cut off; released when the writer's receiver is dropped.
+    closer: std::sync::Mutex<Option<ConnectionCloser>>,
+}
+
+/// A handle that can end one TCP connection from anywhere: a duplicate of its socket, used only
+/// to `shutdown` it. Taken with [`ConnectionCloser::for_stream`] before the stream is split or
+/// wrapped (TLS, WebSocket framing), because afterwards nothing reaches the socket.
+///
+/// The duplicate keeps the socket open for as long as it lives, so the outbox holds it only
+/// while the connection's writer does (it is dropped with the [`OutboxReceiver`]), and the
+/// writer already holds the socket open itself.
+pub struct ConnectionCloser {
+    #[cfg(not(target_arch = "wasm32"))]
+    socket: Option<socket2::Socket>,
+}
+
+impl ConnectionCloser {
+    /// A closer for `stream`'s connection. In the browser build, or if the socket cannot be
+    /// duplicated, it closes nothing and the cut-off peer keeps its socket until its read
+    /// deadline, as it would without one.
+    pub fn for_stream(stream: &tokio::net::TcpStream) -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let socket = socket2::SockRef::from(stream).try_clone();
+            if let Err(e) = &socket {
+                tracing::warn!("outbox: cannot duplicate a socket to close it on cut-off: {e}");
+            }
+            Self {
+                socket: socket.ok(),
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = stream;
+            Self {}
+        }
+    }
+
+    /// Shut the connection down in both directions.
+    fn shutdown(&self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(socket) = &self.socket {
+            let _ = socket.shutdown(std::net::Shutdown::Both);
+        }
+    }
 }
 
 /// The sending side. Cloneable; `send` never waits.
@@ -95,6 +147,7 @@ pub fn channel<T>(
         queued_bytes: AtomicUsize::new(0),
         overflowed: AtomicBool::new(false),
         dropped: AtomicU64::new(0),
+        closer: std::sync::Mutex::new(None),
     });
     (
         OutboxSender {
@@ -154,7 +207,26 @@ impl<T> OutboxSender<T> {
                 shared.limits.max_items,
                 shared.limits.max_bytes
             );
+            if let Some(closer) = shared
+                .closer
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take()
+            {
+                closer.shutdown();
+            }
         }
+    }
+
+    /// End the connection, not just its writer, when its peer is cut off. Call once, right
+    /// after creating the outbox; if the peer has already been cut off, the connection is
+    /// ended now.
+    pub fn close_on_cut_off(&self, closer: ConnectionCloser) {
+        if self.overflowed() {
+            closer.shutdown();
+            return;
+        }
+        *self.shared.closer.lock().unwrap_or_else(|e| e.into_inner()) = Some(closer);
     }
 
     /// Whether this connection has been cut off for not reading.
@@ -170,6 +242,17 @@ impl<T> OutboxSender<T> {
     /// Whether the writer is gone.
     pub fn is_closed(&self) -> bool {
         self.tx.is_closed()
+    }
+}
+
+impl<T> Drop for OutboxReceiver<T> {
+    fn drop(&mut self) {
+        // The writer is gone, so the connection is ending by its own path; let the socket go.
+        self.shared
+            .closer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
     }
 }
 

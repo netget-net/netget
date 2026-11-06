@@ -776,6 +776,8 @@ impl WebSocketServer {
             crate::utils::outbox::OutboxLimits::DEFAULT,
             WsOut::weight,
         );
+        // Cutting the peer off ends the connection, not just the writer.
+        out_tx.close_on_cut_off(crate::utils::outbox::ConnectionCloser::for_stream(&socket));
         actions::register_connection(
             server_id,
             connection_id,
@@ -1392,6 +1394,12 @@ impl WebSocketServer {
                 .is_some_and(|(_, batching)| batching);
             let mut batch: Vec<Inbound> = {
                 let mut data = ctx.data.lock().await;
+                // A peer cut off for not reading gets no more answers, so what it queued is
+                // dropped rather than answered into a closed outbox one message at a time —
+                // which would keep the connection open until the backlog was worked through.
+                if ctx.out_tx.overflowed() {
+                    data.queued.clear();
+                }
                 let Some(first) = data.queued.pop_front() else {
                     data.state = HandlerState::Idle;
                     return;

@@ -371,6 +371,9 @@ async fn run_tor_relay_connection(
     protocol: Arc<TorRelayProtocol>,
     circuit_manager: Arc<CircuitManager>,
 ) -> Result<()> {
+    // Taken before TLS wraps the socket: cutting off a client that does not read ends its
+    // connection.
+    let closer = crate::utils::outbox::ConnectionCloser::for_stream(&stream);
     // Perform TLS handshake
     let tls_stream = match acceptor.accept(stream).await {
         Ok(s) => {
@@ -421,6 +424,7 @@ async fn run_tor_relay_connection(
         format!("Tor relay connection {connection_id}"),
         crate::utils::outbox::OutboxLimits::DEFAULT,
     );
+    outgoing_tx.close_on_cut_off(closer);
 
     let mut session = TorRelaySession {
         reader,

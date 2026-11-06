@@ -19,7 +19,6 @@ use crate::state::app_state::AppState;
 use anyhow::{Context, Result};
 use serde_json::json;
 use std::sync::LazyLock;
-use tokio::sync::mpsc;
 use tracing::debug;
 
 /// WebSocket client action handler.
@@ -28,7 +27,7 @@ use tracing::debug;
 /// `connect()`, and a per-connection instance that owns the outbound channel and can therefore
 /// actually put a frame on the wire.
 pub struct WebSocketClientProtocol {
-    out_tx: Option<mpsc::UnboundedSender<WsOut>>,
+    out_tx: Option<crate::utils::outbox::OutboxSender<WsOut>>,
 }
 
 impl Default for WebSocketClientProtocol {
@@ -42,7 +41,7 @@ impl WebSocketClientProtocol {
         Self { out_tx: None }
     }
 
-    pub fn for_connection(out_tx: mpsc::UnboundedSender<WsOut>) -> Self {
+    pub fn for_connection(out_tx: crate::utils::outbox::OutboxSender<WsOut>) -> Self {
         Self {
             out_tx: Some(out_tx),
         }
