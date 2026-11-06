@@ -54,7 +54,7 @@ when the handler result provides it. All tasks abort on client removal. Final ev
 drain after EOF; the dispatcher owns no socket. Only in-flight IDs are retained for flow
 validation; the client stores no queue, application data or protocol-private persistence.
 
-Maturity remains Experimental. Tests use independent nsqd 1.3.0, deterministic and
+Tests use independent nsqd 1.3.0, deterministic and
 mocked model decisions, the existing NetGet broker pair, framing/semantic negatives,
 followup bounds, heartbeats and cleanup. No NSQ Wireshark dissector or pcap oracle is
 claimed. Existing server peers are the upstream to_nsq/nsq_tail tools.
@@ -65,3 +65,14 @@ dispatcher queue (16); with batching on the dispatcher drains everything waiting
 `nsq_message` carries its own `message_id`, so a batched answer still finishes, requeues or
 touches each delivery by id; there is still no automatic FIN. A batch's follow-ups are as deep
 as its deepest event. `tests/client/nsq/batching_test.rs` is the off/on pair.
+
+## Maturity: Beta
+
+All four conditions of the client bar hold, on the real-server tests in `tests/client/nsq/`:
+
+1. the peer is nsqd 1.3.0 — third-party, and not a library this client is built on;
+2. a missing peer fails the test, never skips it;
+3. a real session, completed against that server;
+4. the client acts on the model's answer, asserted from the server's side: the official `nsq_tail` consumes from nsqd the message the mocked model published. Emptying the loop over the model's actions fails it.
+
+Verified 1 November 2026 by running the suite against the installed peer and by that mutation. The CI job that installs the peer is in `.github/workflows/protocol-pairs.yml`.

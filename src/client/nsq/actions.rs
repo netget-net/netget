@@ -125,10 +125,10 @@ impl Protocol for NsqClientProtocol {
     }
     fn metadata(&self) -> crate::protocol::metadata::ProtocolMetadataV2 {
         use crate::protocol::metadata::*;
-        ProtocolMetadataV2::builder().state(DevelopmentState::Experimental).privilege_requirement(PrivilegeRequirement::None).well_known_port(4150)
+        ProtocolMetadataV2::builder().state(DevelopmentState::Beta).privilege_requirement(PrivilegeRequirement::None).well_known_port(4150)
         .implementation("Tokio TCP V2; automatic IDENTIFY, bounded complete frames and independent heartbeat handling")
         .llm_control("PUB/MPUB/DPUB, SUB/RDY, FIN/REQ/TOUCH, CLS; structured responses, deliveries and refusals")
-        .e2e_testing("Independent nsqd 1.3.0 daemon lifecycle, RDY concurrency, publish/consume/requeue/touch; NetGet pair and negative/lifecycle tests")
+        .e2e_testing("tests/client/nsq/real_server_test.rs against nsqd 1.3.0: the mocked model publishes a message that the official nsq_tail then consumes from nsqd, a handler chain publishes a follow-up, plus RDY concurrency, FIN/REQ/TOUCH, heartbeats and close; NetGet pair, framing and bounds tests besides. Fails rather than skips without nsqd or nsq_tail")
         .notes("Plain TCP only. Authentication-required, TLS or compression negotiation is refused explicitly. No lookupd/discovery, reconnect, automatic FIN, binary outbound payloads or persistent queue. UTF-8 inbound body is null for binary messages, with exact byte count. MPUB at most 1024 messages. Response/partial-frame/write deadline 15s, event and action queues 16, handler followups 4; fresh deliveries reset followup depth. All three tasks tracked; command handle available before IDENTIFY and manual events.")
         .max_inbound_bytes(crate::server::nsq::wire::MAX_FRAME_DATA).history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
         // Deliveries and responses raised while the model answers wait in the dispatcher

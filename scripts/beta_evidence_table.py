@@ -105,7 +105,7 @@ GENERIC_HTTP = {"reqwest", "hyper", "hyper_util", "ureq", "isahc"}
 NOT_A_PEER_BINARY = {
     "sh", "bash", "zsh", "which", "echo", "cat", "true", "false", "sleep", "env",
     "shasum", "sha256sum", "sha1sum", "md5sum", "python3", "python", "node", "protoc",
-    "cargo", "rustc", "unzip", "zip", "tar", "gzip", "cp", "mv", "rm", "mkdir",
+    "cargo", "rustc", "unzip", "zip", "tar", "gzip", "cp", "mv", "rm", "mkdir", "netget", "bin", "sbin", "sudo", "modprobe", "dmesg", "ip", "tcpdump",
 }
 
 # ...with one exception, because `python3` on its own is a language runtime and
@@ -367,7 +367,144 @@ def test_directory(protocol: str, side: str) -> Path:
     return base / protocol.replace("/", "_")
 
 
-def scan_tests(directory: Path, known: set[str]) -> dict:
+# A peer spawned from a path the test computes rather than spells. `tests/client/hdfs` runs
+# `RealServer::builder(&hdfs, …)` with `let hdfs = home.join("bin/hdfs")` and `home` read from
+# `NETGET_HADOOP_HOME`; `tests/client/pfcp` runs `Command::new(peer)` with `peer` read from
+# `NETGET_PFCP_GO_PEER`; `tests/client/devp2p` calls a helper that runs
+# `RealServer::builder(&binary("geth"), …)`. Each hard-fails when the peer is absent, and an
+# earlier version of this script reported all three as having no peer because the binary's
+# name is never the first literal argument. The resolution below follows the argument back to
+# what names the program, and stops there: a name it cannot derive is not invented.
+
+# A variable naming a language runtime or a directory is not a peer by itself — what runs
+# under it is, and that is named elsewhere (an imported library, a `.join("bin/x")`).
+ENV_NOT_A_PEER = re.compile(r"_(?:PYTHON\w*|JAVA\w*|RUBY\w*|NODE|PERL|HOME|DIR|ROOT|PATH|VENV)$|_(?:PYTHON|JAVA|RUBY)\d*_")
+ENV_NAME = re.compile(r"^[A-Z][A-Z0-9]*_[A-Z0-9_]+$")
+PROGRAM_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.+-]*$")
+# Only literals in a position that names a program or where one lives count: a path joined on,
+# a lookup helper's argument (`binary("geth")`, `env("NETGET_X")`, `hadoop_tool("yarn")`), an
+# environment variable read, its literal fallback, or a path built with `format!`. A literal
+# anywhere else in the expression — an `.expect` message, a `json!` body — is not a name.
+NAMING_LITERAL = re.compile(
+    r"""(?x)
+    (?: \.join | \b\w*(?:binary|tool|path|env|which\w*|var|var_os) | PathBuf::from | Path::new
+      | unwrap_or | unwrap_or_else\(\s*\|_\| | format! )
+    \(\s* "((?:[^"\\]|\\.)*)"
+    """
+)
+# The binding an expression starts from: `home` in `home.join("bin/hdfs")`, `peer` in `peer`.
+LEADING_IDENTIFIER = re.compile(r"^[&*(\s]*([a-z_][a-z0-9_]*)\b(?!\s*[(!])")
+SPAWN_ARGUMENT = re.compile(r"(RealServer::builder|Command::new)\(")
+
+
+def first_argument(code: str, start: int) -> str:
+    """The text of a call's first argument, from just after its `(`."""
+    depth = 0
+    in_string = False
+    i = start
+    while i < len(code):
+        ch = code[i]
+        if in_string:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == '"':
+                in_string = False
+        elif ch == '"':
+            in_string = True
+        elif ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            if depth == 0:
+                return code[start:i]
+            depth -= 1
+        elif ch == "," and depth == 0:
+            return code[start:i]
+        i += 1
+    return code[start:]
+
+
+def let_binding(code: str, name: str) -> str | None:
+    """The right-hand side of `let [mut] name[: T] = …;`, as far as its terminating `;`."""
+    m = re.search(r"\blet\s+(?:mut\s+)?" + re.escape(name) + r"\b\s*(?::[^=;]+)?=", code)
+    if not m:
+        return None
+    end = code.find(";", m.end())
+    return code[m.end():end if end >= 0 else len(code)]
+
+
+def program_names(expr: str, code: str, depth: int = 0) -> set[str]:
+    """What a spawn argument names, following `let` bindings in the same file.
+
+    Only a literal in a naming position counts (`NAMING_LITERAL`), and only the binding the
+    expression starts from is followed. A literal path's last component is a program
+    (`"bin/hdfs"`, `"{home}/bin/pulsar"`); a `NETGET_*` literal is an environment variable
+    naming one, reported as `$NETGET_…` only when nothing more specific was found and it is not
+    a runtime or a directory. A literal with a space in it is a message, not a name.
+    """
+    names: set[str] = set()
+    envs: set[str] = set()
+    for lit in NAMING_LITERAL.findall(expr):
+        if ENV_NAME.match(lit):
+            if not ENV_NOT_A_PEER.search(lit):
+                envs.add(f"${lit}")
+            continue
+        base = lit.rstrip("/").split("/")[-1]
+        if (PROGRAM_NAME.match(base) and not base.startswith("-") and "{" not in base
+                and base not in NOT_A_PEER_BINARY):
+            names.add(base)
+    lead = LEADING_IDENTIFIER.match(expr)
+    if depth < 3 and lead:
+        rhs = let_binding(code, lead.group(1))
+        if rhs is not None:
+            found = program_names(rhs.strip(), code, depth + 1)
+            names |= {n for n in found if not n.startswith("$")}
+            envs |= {n for n in found if n.startswith("$")}
+    return names or envs
+
+
+def spawned_programs(code: str) -> set[str]:
+    """Programs started through `Command::new(<expr>)` or `RealServer::builder(<expr>, …)`
+    where `<expr>` is not a plain literal (that case is matched directly)."""
+    found: set[str] = set()
+    for m in SPAWN_ARGUMENT.finditer(code):
+        arg = first_argument(code, m.end()).strip()
+        if re.fullmatch(r'"[^"]*"', arg):
+            continue
+        found |= program_names(arg, code)
+    return found
+
+
+def helper_servers(code: str) -> set[str]:
+    """Third-party servers a test starts through a shared helper in `tests/helpers/`.
+
+    Only `RealServer::builder` inside the helper counts: that helper exists to stand a real
+    server up and fail naming it when it is absent. A helper's `Command::new` is not
+    followed — `pcap_oracle` runs tshark and `netget` runs NetGet itself, and neither is a
+    peer.
+    """
+    found: set[str] = set()
+    for module in set(re.findall(r"\bhelpers::([a-z_][a-z0-9_]*)\b", code)):
+        if module == "real_server":
+            continue
+        for path in (ROOT / "tests" / "helpers" / f"{module}.rs",
+                     ROOT / "tests" / "helpers" / module / "mod.rs"):
+            if not path.is_file():
+                continue
+            helper = strip_line_comments(path.read_text(errors="ignore"))
+            for m in re.finditer(r"RealServer::builder\(", helper):
+                arg = first_argument(helper, m.end()).strip()
+                literal = re.fullmatch(r'"([^"]*)"', arg)
+                if literal:
+                    name = literal.group(1).split("/")[-1]
+                    if name not in NOT_A_PEER_BINARY:
+                        found.add(name)
+                else:
+                    found |= program_names(arg, helper)
+    return found
+
+
+def scan_tests(directory: Path, known: set[str], side: str = "server") -> dict:
     """Binaries driven, crates driven, #[ignore] counts, skip gates, and self-served tests.
 
     Peers are attributed **per file** as well as in aggregate, because the client bar
@@ -425,6 +562,13 @@ def scan_tests(directory: Path, known: set[str]) -> dict:
             name = m.group(1).split("/")[-1]
             if name not in NOT_A_PEER_BINARY:
                 file_binaries.add(name)
+        # The same, when the program is computed: see `program_names`.
+        file_binaries |= spawned_programs(code)
+        # A client test standing its server up through a shared helper (`ethereum::Geth`).
+        # Client side only: on the server side a helper-started server is the test's setup
+        # around the client under test, not the peer the rating rests on.
+        if side == "client":
+            file_binaries |= helper_servers(code)
         if re.search(r'RealServer::builder\(\s*"python3?"', code):
             for library in PYTHON_THIRD_PARTY_PROTOCOL_SERVERS:
                 if re.search(r"^\s*(?:import|from)\s+" + re.escape(library) + r"\b", code, re.M):
@@ -511,7 +655,7 @@ def rows(side: str) -> list[dict]:
     result = []
     for protocol, state in sorted(declared_states(side).items()):
         tests = test_directory(protocol, side)
-        scan = scan_tests(tests, known_names)
+        scan = scan_tests(tests, known_names, side)
         test_crates = scan["crates"]
         src_crates = imported_crates(ROOT / "src" / side / protocol, known_names)
 

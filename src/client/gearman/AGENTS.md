@@ -59,7 +59,18 @@ reader, session and dispatcher are all tracked and canceled on client removal. F
 events drain after EOF. Common actions and memory updates use existing shared state.
 Only correlation/lifecycle state is retained: no queue, domain database or persistence.
 
-Maturity remains Experimental. Plain TCP only: no TLS/authentication, reconnect,
+Plain TCP only: no TLS/authentication, reconnect,
 admin protocol, scheduled/reduce jobs, timed abilities or GRAB_JOB_ALL. Existing server
 Wireshark support is `gearman` (TCP decode-as); this client pass makes no new pcap or
 fuzz maturity claim.
+
+## Maturity: Beta
+
+All four conditions of the client bar hold, on the real-server tests in `tests/client/gearman/`:
+
+1. the peer is gearmand with the gearman CLI as producer and worker — third-party, and not a library this client is built on;
+2. a missing peer fails the test, never skips it;
+3. a real session, completed against that server;
+4. the client acts on the model's answer, asserted from the server's side: the CLI worker transforms the workload the mocked model submitted (`CHOSEN BY MODEL` comes back only through gearmand and the worker), and a script worker answers jobs the CLI producer prints. Emptying the loop over the model's actions fails it.
+
+Verified 1 November 2026 by running the suite against the installed peer and by that mutation. The CI job that installs the peer is in `.github/workflows/protocol-pairs.yml`.

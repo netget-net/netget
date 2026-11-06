@@ -45,3 +45,14 @@ header, before the payload is read.
 `tests/client/afp/real_server_test.rs` against netatalk 4.6's `afpd`, unprivileged, guest
 volume, effects asserted on disk, tshark over the relay. `tests/client/afp/e2e_test.rs` against
 NetGet's own server is a regression suite only (cleartext login, refusals, timeouts, depth).
+
+## Maturity: Beta
+
+All four conditions of the client bar hold, on the real-server tests in `tests/client/afp/`:
+
+1. the peer is netatalk 4.6's afpd — third-party, and not a library this client is built on;
+2. a missing peer fails the test, never skips it;
+3. a real session, completed against that server;
+4. the client acts on the model's answer, asserted from the server's side: what the policy wrote, created and deleted is on the volume's disk afterwards. Emptying the loop over the model's actions fails it.
+
+Verified 1 November 2026 by running the suite against the installed peer and by that mutation. The CI job that installs the peer is in `.github/workflows/protocol-pairs.yml`.

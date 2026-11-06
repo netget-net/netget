@@ -342,3 +342,19 @@ opportunistic profile, which is also what the DoT test relies on.
 
 **Unproven:** certificate validation of any kind, client auth, and record types beyond A.
 
+
+## Stable condition 2: the pcap oracle, decrypted
+
+`real_client_test.rs` runs kdig with `SSLKEYLOGFILE` set (GnuTLS honours it) and through a
+recording relay. The pcap oracle hands tshark the key log (`PcapOracle::tls_keylog`), so both
+sessions are decrypted; ALPN `h2` gives the plaintext to the `http2` dissector and the
+`application/dns-message` body to `dns`. `require_named("http2")` and `require_named("dns")`
+fail the oracle unless both appear in what the server sent, so a key log that did not match is
+a failure, not a pass on the TLS record layer. Covered: the TLS handshake as the server wrote
+it, HTTP/2 framing and HPACK, the POST and the GET reply's DNS message. Not covered: the GET
+request's query, which travels base64url-encoded in the `:path` where no DNS dissector reads it
+(the server's reply to it is covered), and certificate validation of any kind.
+
+Condition 3 is `fuzz/fuzz_targets/dns_message.rs`, which fuzzes the `hickory_proto`
+`Message::from_vec` this server calls on every request body, with a
+`compression_pointer_loop` in its corpus.

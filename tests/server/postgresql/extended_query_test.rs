@@ -124,7 +124,12 @@ async fn an_extended_protocol_query_returns_a_typed_row() {
 async fn a_prepared_statement_describes_its_columns_and_executes_twice() {
     let state = new_state().await;
     let port = start_server(&state).await;
-    let client = connect(port).await;
+    // Through a recording relay, so the pcap oracle at the end reads this session's
+    // Parse/Describe/Bind/Execute/Sync and every answer to them.
+    let (relay, streams) =
+        crate::helpers::recording_relay::tcp_relay(format!("127.0.0.1:{port}").parse().unwrap())
+            .await;
+    let client = connect(relay.port()).await;
 
     let stmt = tokio::time::timeout(
         Duration::from_secs(20),
@@ -151,6 +156,22 @@ async fn a_prepared_statement_describes_its_columns_and_executes_twice() {
         let id: i32 = rows[0].get("id");
         assert_eq!(id, 7, "execute #{attempt} decoded the int4");
     }
+
+    // The pcap oracle over the extended-protocol success path: ParseComplete,
+    // ParameterDescription, RowDescription, BindComplete, a binary-format DataRow,
+    // CommandComplete and ReadyForQuery, read by Wireshark's `pgsql` dissector rather than by
+    // tokio-postgres. psql never sends these (real_client_test.rs).
+    let sessions = crate::helpers::recording_relay::recorded(&streams);
+    assert_eq!(
+        sessions.len(),
+        1,
+        "one tokio-postgres connection crossed the relay"
+    );
+    crate::helpers::recording_relay::replay(
+        crate::helpers::pcap_oracle::PcapOracle::tcp("postgresql"),
+        &sessions[0],
+    )
+    .assert_clean();
 }
 
 /// The extended path must fail closed too. With no handler and no reachable LLM backend, a

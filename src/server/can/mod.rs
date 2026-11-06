@@ -57,6 +57,7 @@ use tracing::{debug, error, info, trace};
 
 use crate::llm::action_helper::call_llm;
 use crate::llm::ollama_client::OllamaClient;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::server::connection::ConnectionId;
 use crate::state::app_state::AppState;
@@ -600,8 +601,7 @@ impl CanServer {
         {
             Ok(result) => {
                 for message in &result.messages {
-                    info!("{}", message);
-                    let _ = ctx.status_tx.send(format!("[INFO] {}", message));
+                    Log::to(&ctx.status_tx).info(message);
                 }
 
                 let mut sent = 0usize;

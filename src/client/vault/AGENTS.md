@@ -1,6 +1,6 @@
 # Vault selected client
 
-Experimental HTTP(S) client for public system reads, KV v2 and selected userpass authentication. Native HTTPS verifies certificates with the normal Rustls/WebPKI roots; no custom trust or client certificate support. Browser transport supports HTTP. The existing programmable KV v2 server still refuses auth/login, token lookup, administrative routes, deletion and patching.
+HTTP(S) client for public system reads, KV v2 and selected userpass authentication. Native HTTPS verifies certificates with the normal Rustls/WebPKI roots; no custom trust or client certificate support. Browser transport supports HTTP. The existing programmable KV v2 server still refuses auth/login, token lookup, administrative routes, deletion and patching.
 
 There is no Vault secret database. Generic AppState memory, event routing and access logs remain available. KV secret data is intentionally visible to the selected handler; login passwords and session tokens are omitted from events and incidental diagnostics. One validated token supplies X-Vault-Token. The latest bounded login password is retained solely to redact later reflections and is forgotten on replacement/clear. Reflected free-form strings and keys containing a known credential are omitted as a whole, including escaped forms and overlapping password/token values; fixed schema names remain intact. Neither credential is written to a file. Authentication policy remains active on every Vault event, including response, authentication and error followups. Credential-bearing handler access-log action copies retain only recognized action names; original actions still execute with their real values.
 
@@ -23,6 +23,17 @@ vault_response carries originating credential-redacted request, operation, nativ
 
 Body1MiB, arrays10000, object fields256, field names256 bytes, strings16KiB, nesting32, total nodes65536. In-memory actions receive an iterative depth32/node65536/retained-content8MiB preflight before copying or serialization; injection moves the original Value, and over-budget owned actions are discarded iteratively even while a request is pending. Streaming JSON decoding rejects duplicate fields and trailing content. Decoder and display redactor share the depth32 limit; over-depth display subtrees are omitted and discarded iteratively, including programmatically constructed values. Startup resolution and public probe are separately bounded; each later HTTP request has one whole DNS/connect/head/body deadline. Identity encoding only, no redirects/proxies/cookie state. Two registered owned tasks (session and event dispatcher), queues8, one request at a time, handler followups4. Injection overlap refuses as pending. External command channel exists before connected/manual dispatch. Removal aborts owned tasks; disconnect drops pending transport. Browser HTTP connection driver is an owned future inside its exchange.
 
-No KV v1, namespaces, token helpers, automatic login/renewal/retry, OAuth/OIDC/AppRole, wrapping/MFA continuation, dynamic-secret engines, lease administration, delete/undelete/destroy/patch/config or metadata writes. Experimental: selected schema and real native HTTP evidence; no complete Vault API, browser runtime, packet capture or conformance claim.
+No KV v1, namespaces, token helpers, automatic login/renewal/retry, OAuth/OIDC/AppRole, wrapping/MFA continuation, dynamic-secret engines, lease administration, delete/undelete/destroy/patch/config or metadata writes. No complete Vault API, browser runtime, packet capture or conformance claim.
 
 Primary specifications: [KV v2](https://developer.hashicorp.com/vault/api-docs/secret/kv/kv-v2), [userpass](https://developer.hashicorp.com/vault/api-docs/auth/userpass), [health](https://developer.hashicorp.com/vault/api-docs/system/health). Tests live under tests/client/vault and are explicitly registered in tests/client/mod.rs. Native Vault daemon/CLI peers are required and never skipped.
+
+## Maturity: Beta
+
+All four conditions of the client bar hold, on the real-server tests in `tests/client/vault/`:
+
+1. the peer is HashiCorp Vault in dev mode — third-party, and not a library this client is built on;
+2. a missing peer fails the test, never skips it;
+3. a real session, completed against that server;
+4. the client acts on the model's answer, asserted from the server's side: HashiCorp's `vault` CLI reads back, with the root token, the KV v2 secret the mocked model wrote through its userpass login. Emptying the loop over the model's actions fails it.
+
+Verified 1 November 2026 by running the suite against the installed peer and by that mutation. The CI job that installs the peer is in `.github/workflows/protocol-pairs.yml`.

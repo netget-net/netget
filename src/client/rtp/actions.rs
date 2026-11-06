@@ -223,11 +223,11 @@ impl Protocol for RtpClientProtocol {
     fn metadata(&self) -> crate::protocol::metadata::ProtocolMetadataV2 {
         use crate::protocol::metadata::*;
         ProtocolMetadataV2::builder()
-            .state(DevelopmentState::Experimental)
+            .state(DevelopmentState::Beta)
             .privilege_requirement(PrivilegeRequirement::None)
             .implementation("Tokio UDP with the RTP server's synthesis and packetizer (G.711 PCMU/PCMA, 20 ms frames paced in real time); inbound RTP tracked per SSRC (loss from sequence numbers, length from timestamps) and G.711 decoded to estimate tone and level; RTCP Sender Reports")
             .llm_control("What audio to send and when, and what to do about the streams that arrive")
-            .e2e_testing("tests/client/rtp: ffmpeg receives NetGet's stream through an SDP and decodes it (its tone measured in the WAV it writes), and ffmpeg's own RTP muxer streams a sine to NetGet, whose decoded tone and packet accounting are asserted")
+            .e2e_testing("tests/client/rtp/real_peer_test.rs against ffmpeg in both directions: a handler chain chooses the tone NetGet streams, and ffmpeg decodes it through an SDP into a WAV whose tone is measured; ffmpeg's own RTP muxer streams a sine that NetGet decodes and accounts. Fails rather than skips without ffmpeg")
             .notes("Audio only, G.711 only; no SRTP, no jitter buffer, no receiver reports. Inbound streams are summarised, never reported per packet.")
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
             .batching(crate::protocol::metadata::BatchingMode::Unsupported)

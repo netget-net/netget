@@ -166,6 +166,14 @@ jobs:
           - unixfs_dag
           - ipns_record
           - gre_packet
+          - mqtt_packet
+          - kafka_request
+          - etcd_request
+          - grpc_message
+          - pgwire_frontend
+          - websocket_session
+          - cassandra_envelope
+          - mysql_session
     env:
       TARGET: ${{ matrix.target }}
     steps:

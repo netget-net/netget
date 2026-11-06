@@ -174,14 +174,13 @@ impl ExecutionResult {
     }
 
     /// The `decision=` word for a reply these actions produced: `model_answer`,
-    /// `rule_answer`, `cache_answer` or `easy_answer`. A result whose source was not recorded
-    /// reads as the model's, which is what every such path is.
+    /// `rule_answer` or `cache_answer`. A result whose source was not recorded reads as the
+    /// model's, which is what every such path is.
     pub fn answer_decision(&self) -> &'static str {
         use crate::state::app_state::answered_by;
         match self.answered_by {
             Some(answered_by::RULE) => "rule_answer",
             Some(answered_by::CACHE) => "cache_answer",
-            Some(answered_by::EASY) => "easy_answer",
             _ => "model_answer",
         }
     }

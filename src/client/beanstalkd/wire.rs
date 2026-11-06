@@ -6,6 +6,9 @@ use std::time::Duration;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt};
 pub const DEADLINE: Duration = Duration::from_secs(30);
 pub const MAX_REPLY_BYTES: usize = 1024 * 1024;
+/// Model-originated requests that may follow one another: an answer to the event at this depth
+/// is not sent, so a model that answers every response with another request stops here.
+pub const MAX_FOLLOWUPS: u8 = 4;
 #[derive(Debug)]
 pub struct Request {
     pub command: Command,

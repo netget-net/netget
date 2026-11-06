@@ -162,7 +162,6 @@ pub async fn save_all(state: &AppState, filename: &str) -> Result<PathBuf> {
     clients.sort_by_key(|item| item.id.as_u32());
     let tasks = state.get_all_tasks().await;
     let pipes = state.list_pipes().await;
-    let easy = state.get_all_easy_instances().await;
     let mut actions = Vec::new();
     let mut resources = Vec::new();
     for server in servers {
@@ -200,24 +199,10 @@ pub async fn save_all(state: &AppState, filename: &str) -> Result<PathBuf> {
         .filter(|task| matches!(task.scope, crate::state::task::TaskScope::Global))
         .filter_map(task_definition)
         .collect();
-    if !pipes.is_empty() || !easy.is_empty() || !global_tasks.is_empty() {
-        let wrappers: Vec<_> = easy
-            .into_iter()
-            .filter(|item| {
-                item.underlying_server_id.is_some() || item.underlying_client_id.is_some()
-            })
-            .map(|item| {
-                json!({
-                    "protocol": item.protocol_name, "underlying_protocol": item.underlying_protocol,
-                    "instruction": item.user_instruction,
-                    "server": item.underlying_server_id.map(|id| id.as_u32()),
-                    "client": item.underlying_client_id.map(|id| id.as_u32()),
-                })
-            })
-            .collect();
+    if !pipes.is_empty() || !global_tasks.is_empty() {
         actions = vec![json!({"type": "restore_session", "session": {
             "version": 2, "resources": resources, "pipes": pipes,
-            "easy": wrappers, "global_tasks": global_tasks,
+            "global_tasks": global_tasks,
         }})];
     }
     save_actions(actions, filename).await
@@ -437,22 +422,15 @@ struct SavedResource {
 }
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SavedEasy {
-    protocol: String,
-    underlying_protocol: String,
-    instruction: Option<String>,
-    server: Option<u32>,
-    client: Option<u32>,
-}
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 struct SavedSession {
     version: u32,
     resources: Vec<SavedResource>,
     #[serde(default)]
     pipes: Vec<crate::pipe::PipeSpec>,
+    /// Written by builds that had the HTTP "easy" wrapper (`--simple`). Accepted so an older
+    /// file still parses; a session that actually names a wrapper is refused.
     #[serde(default)]
-    easy: Vec<SavedEasy>,
+    easy: Vec<Value>,
     #[serde(default)]
     global_tasks: Vec<crate::llm::actions::common::ServerTaskDefinition>,
 }
@@ -468,7 +446,6 @@ pub async fn restore_session(
 ) -> Result<()> {
     use crate::cli::management::{ClientForm, ServerForm};
     use crate::state::task::{prepare_tasks, TaskScope};
-    use crate::state::{EasyId, EasyInstance, EasyStatus};
     use std::collections::{HashMap, HashSet};
     if !crate::utils::json_budget::within_budget(value, MAX_SESSION_BYTES * 4, 100_000, 64) {
         anyhow::bail!("session exceeds the structural budget");
@@ -484,9 +461,7 @@ pub async fn restore_session(
     }
     let mut forms = Vec::new();
     let mut server_keys = HashSet::new();
-    let mut client_keys = HashSet::new();
     let mut all_keys = HashSet::new();
-    let mut protocols = HashMap::new();
     for resource in session.resources {
         if !all_keys.insert(resource.key) {
             anyhow::bail!("duplicate saved resource key {}", resource.key);
@@ -505,15 +480,12 @@ pub async fn restore_session(
             Some("open_server") => {
                 let form: ServerForm = serde_json::from_value(action)?;
                 prepare_tasks(form.scheduled_tasks.as_deref(), TaskScope::Global)?;
-                protocols.insert(resource.key, form.protocol.clone());
                 server_keys.insert(resource.key);
                 forms.push(Form::Server(resource.key, form));
             }
             Some("open_client") => {
                 let form: ClientForm = serde_json::from_value(action)?;
                 prepare_tasks(form.scheduled_tasks.as_deref(), TaskScope::Global)?;
-                protocols.insert(resource.key, form.protocol.clone());
-                client_keys.insert(resource.key);
                 forms.push(Form::Client(resource.key, form));
             }
             _ => anyhow::bail!("session resources must be open_server or open_client"),
@@ -530,30 +502,10 @@ pub async fn restore_session(
         }
         checked_pipes.push(pipe.clone());
     }
-    let mut wrapped_keys = HashSet::new();
-    for easy in &session.easy {
-        let known = crate::protocol::EASY_REGISTRY
-            .get_by_name(&easy.protocol)
-            .with_context(|| format!("unknown saved easy protocol {}", easy.protocol))?;
-        if known.underlying_protocol() != easy.underlying_protocol {
-            anyhow::bail!("saved easy underlying protocol does not match its registry");
-        }
-        if easy.server.is_some() == easy.client.is_some()
-            || easy.server.is_some_and(|key| !server_keys.contains(&key))
-            || easy.client.is_some_and(|key| !client_keys.contains(&key))
-        {
-            anyhow::bail!("saved easy wrapper must reference exactly one existing resource");
-        }
-        let key = easy
-            .server
-            .or(easy.client)
-            .expect("validated resource reference");
-        if !protocols[&key].eq_ignore_ascii_case(&easy.underlying_protocol) {
-            anyhow::bail!("saved easy wrapper protocol differs from its resource");
-        }
-        if !wrapped_keys.insert(key) {
-            anyhow::bail!("multiple easy wrappers reference the same resource");
-        }
+    if !session.easy.is_empty() {
+        anyhow::bail!(
+            "saved session names an \"easy\" protocol wrapper, which this build does not have"
+        );
     }
     let mut servers = HashMap::new();
     let mut clients = HashMap::new();
@@ -594,23 +546,6 @@ pub async fn restore_session(
                 )
                 .await?;
         }
-        for easy in session.easy {
-            let instance = EasyInstance::new(
-                EasyId::new(0),
-                easy.protocol,
-                easy.underlying_protocol,
-                easy.instruction,
-            );
-            let id = state.add_easy_instance(instance).await;
-            ownership.easy.push(id);
-            if let Some(key) = easy.server {
-                state.link_server_to_easy(servers[&key], id).await;
-            }
-            if let Some(key) = easy.client {
-                state.link_client_to_easy(clients[&key], id).await;
-            }
-            state.update_easy_status(id, EasyStatus::Running).await;
-        }
         for task in global_tasks {
             ownership.tasks.push(state.add_task(task).await);
         }
@@ -633,7 +568,6 @@ struct RestoreOwnership {
     state: AppState,
     servers: Vec<ServerId>,
     clients: Vec<ClientId>,
-    easy: Vec<crate::state::EasyId>,
     tasks: Vec<crate::state::task::TaskId>,
     printer: Option<tokio::task::JoinHandle<()>>,
     committed: bool,
@@ -644,7 +578,6 @@ impl RestoreOwnership {
             state,
             servers: Vec::new(),
             clients: Vec::new(),
-            easy: Vec::new(),
             tasks: Vec::new(),
             printer: None,
             committed: false,
@@ -654,10 +587,6 @@ impl RestoreOwnership {
         while let Some(id) = self.tasks.last().copied() {
             self.state.remove_task(id).await;
             self.tasks.pop();
-        }
-        while let Some(id) = self.easy.last().copied() {
-            self.state.remove_easy_instance(id).await;
-            self.easy.pop();
         }
         while let Some(id) = self.clients.last().copied() {
             self.state.remove_client(id).await;
@@ -681,7 +610,6 @@ impl Drop for RestoreOwnership {
         let mut cleanup = Self::new(self.state.clone());
         cleanup.servers = std::mem::take(&mut self.servers);
         cleanup.clients = std::mem::take(&mut self.clients);
-        cleanup.easy = std::mem::take(&mut self.easy);
         cleanup.tasks = std::mem::take(&mut self.tasks);
         cleanup.committed = true; // Runtime shutdown must not recursively spawn cleanup.
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {

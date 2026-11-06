@@ -306,7 +306,7 @@ async fn model_selects_native_login_and_kv_exchanges_with_shared_memory_and_reda
     let peer = daemon().await?;
     provision(&peer).await;
     let config=MockLlmBuilder::new().on_event("vault_connected").respond_with_actions(json!([{"type":"set_memory","value":"Vault model authenticated workflow"},{"type":"vault_userpass_login","username":"fixture-reader","password":LOGIN_PASSWORD}])).expect_calls(1).and()
-        .on_event("vault_authentication").and_prompt_containing("Vault model authenticated workflow").respond_with_actions(json!([{"type":"vault_request","operation":"write","path":"fixture/app","data":{"answer":42},"cas":0}])).expect_calls(1).and()
+        .on_event("vault_authentication").and_prompt_containing("Vault model authenticated workflow").respond_with_actions(json!([{"type":"vault_request","operation":"write","path":"fixture/app","data":{"answer":42,"chosen":"by the mocked model"},"cas":0}])).expect_calls(1).and()
         .on_event("vault_response").and_event_data_contains("operation","write").respond_with_actions(json!([{"type":"vault_request","operation":"read","path":"fixture/app","version":1}])).expect_calls(1).and()
         .on_event("vault_response").and_event_data_contains("operation","read").respond_with_actions(json!([])).expect_calls(1).and().build();
     let mock = MockOllamaServer::start(config).await?;
@@ -337,6 +337,20 @@ async fn model_selects_native_login_and_kv_exchanges_with_shared_memory_and_reda
     assert!(logs.iter().any(|e| e.event_type == "vault_response"
         && e.request["operation"] == "read"
         && e.request["data"]["data"]["data"]["answer"] == 42));
+    // Condition 4 from Vault's side: HashiCorp's own CLI reads back, with the root token, the
+    // secret the model wrote through the token the model's login obtained.
+    let cli_read = cli(
+        &peer.dir().join("home"),
+        &peer.addr(),
+        &["kv", "get", "-format=json", "secret/fixture/app"],
+        None,
+    )
+    .await;
+    assert_eq!(
+        cli_read["data"]["data"],
+        json!({"answer":42,"chosen":"by the mocked model"})
+    );
+    assert_eq!(cli_read["data"]["metadata"]["version"], 1);
     assert!(!serde_json::to_string(&logs)
         .unwrap()
         .contains(LOGIN_PASSWORD));

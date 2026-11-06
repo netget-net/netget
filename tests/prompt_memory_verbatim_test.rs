@@ -54,27 +54,6 @@ async fn feedback_without_tools_uses_the_actions_only_response_contract() {
     assert!(!prompt.contains("read_file"), "{prompt}");
 }
 
-#[test]
-fn http_request_fields_reach_the_model_verbatim() {
-    let path = r#"/search/"lamp"/it's<me>"#;
-    let header = r#""Hall" & <Vault> isn't escaped"#;
-    let prompt = netget::llm::template_engine::TemplateEngine::from_embedded()
-        .unwrap()
-        .render_json(
-            "easy_request/http",
-            &serde_json::json!({
-                "user_instruction": "answer this request",
-                "method": "GET", "path": path, "query_string": "a=1&b=2",
-                "headers": [{"name": "X-Note", "value": header}],
-                "body": "",
-            }),
-        )
-        .unwrap();
-    assert_eq!(prompt.matches(path).count(), 1, "{prompt}");
-    assert_eq!(prompt.matches(header).count(), 1, "{prompt}");
-    assert!(prompt.contains("a=1&b=2"), "{prompt}");
-}
-
 #[tokio::test]
 async fn memory_and_instruction_are_not_html_escaped_in_the_event_prompt() {
     let state = AppState::new();

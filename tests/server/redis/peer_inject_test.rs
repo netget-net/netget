@@ -12,7 +12,7 @@
 //!   live.
 //!
 //! Run with:
-//!   ./cargo-isolated.sh test --no-default-features --features redis --test server -- redis::peer_inject --test-threads=100
+//!   ./cargo-isolated.sh test --no-default-features --features mcp-stdio,sqlite --test server -- redis::peer_inject --test-threads=100
 
 use std::time::Duration;
 

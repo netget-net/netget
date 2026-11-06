@@ -7,7 +7,7 @@
 //! built with `..Default::default()` consults the model whatever a comment claims).
 //!
 //! Run with:
-//!   ./cargo-isolated.sh test --no-default-features --features redis --test server -- redis::resp_framing --test-threads=100
+//!   ./cargo-isolated.sh test --no-default-features --features mcp-stdio,sqlite --test server -- redis::resp_framing --test-threads=100
 
 use std::time::Duration;
 

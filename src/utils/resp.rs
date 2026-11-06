@@ -16,7 +16,9 @@
 //! So the bytes are walked *iteratively* first. [`scan_resp2_frame`] keeps one counter per
 //! open aggregate in a fixed array of [`MAX_RESP_DEPTH`] slots, allocates nothing, never
 //! recurses, and reads each byte at most twice (once to find a line's CRLF, once to parse it).
-//! Only a frame it reports as [`RespScan::Complete`] is handed to the decoder.
+//! Only a frame it reports as [`RespScan::Complete`] is handed to the decoder. A frame read in
+//! pieces is scanned with a [`RespScanner`], which resumes where the last read stopped, so the
+//! "at most twice" holds across reads and not only within one.
 //!
 //! It follows the decoder's grammar exactly where the two could otherwise disagree — a length
 //! is parsed with the same `str::parse::<isize>` the crate uses, a bulk string's two trailing
@@ -107,108 +109,211 @@ pub enum RespScan {
 ///
 /// Call it on the unconsumed buffer before every `resp2::decode`, and decode only on
 /// [`RespScan::Complete`]. It is O(n) in the bytes up to the end of the frame or the point of
-/// refusal.
+/// refusal. A caller that reads a frame in pieces should keep a [`RespScanner`] instead, which
+/// gives the same verdicts without walking the same bytes again on every read.
 pub fn scan_resp2_frame(data: &[u8], limits: &RespLimits) -> RespScan {
-    let max_depth = limits.max_depth.min(MAX_RESP_DEPTH);
-    // `remaining[d]` is how many values the array open at depth `d + 1` still expects.
-    let mut remaining = [0usize; MAX_RESP_DEPTH];
-    let mut depth = 0usize;
-    let mut values = 0usize;
-    let mut i = 0usize;
+    RespScanner::new().scan(data, limits)
+}
 
-    loop {
-        let Some(&kind) = data.get(i) else {
-            return RespScan::Incomplete;
-        };
-        i += 1;
-        values += 1;
-        if values > limits.max_elements {
-            return RespScan::TooLong(RespLength::Aggregate);
+/// [`scan_resp2_frame`] for a frame that arrives in pieces: it remembers where an
+/// [`RespScan::Incomplete`] verdict stopped and resumes there.
+///
+/// Scanning from the start of the frame on every read made an unfinished frame cost the sum of
+/// all its prefixes. A simple string has no length prefix, so finding its end means looking for
+/// CRLF, and a peer trickling one 64 MiB line in 4 KiB reads bought ~16 000 walks of up to
+/// 64 MiB each — minutes of one async worker, before the caller's buffer cap was reached. A
+/// frame of a million small values cost the same shape at a smaller constant. Resumed, each
+/// byte is looked at once (a bulk string's payload not at all), so a frame costs O(its length)
+/// however it is split.
+///
+/// The state it keeps is a position at a value boundary in the frame plus the open-array
+/// counters at that point, and for the value there: how far its first line has been searched
+/// for CRLF, or where that line ends. So `data` must start at the same frame on every call and
+/// only grow — the caller may drain bytes *before* the frame, never inside it. Any verdict other
+/// than `Incomplete` resets it for the next frame.
+#[derive(Debug, Clone)]
+pub struct RespScanner {
+    /// Start of the value the scan is at, relative to the frame start.
+    pos: usize,
+    /// `remaining[d]` is how many values the array open at depth `d + 1` still expects.
+    remaining: [usize; MAX_RESP_DEPTH],
+    depth: usize,
+    /// Values counted before `pos`, open arrays included.
+    values: usize,
+    /// No CRLF ends the first line of the value at `pos` before this offset (less one byte,
+    /// since a `\r` at the end may be completed by a `\n` that has not arrived).
+    searched: usize,
+    /// Where the first line of the value at `pos` ends, once found.
+    line_end: Option<usize>,
+    /// The value at `pos` is a bulk string ending here, whose payload had not all arrived.
+    bulk_end: Option<usize>,
+}
+
+impl Default for RespScanner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RespScanner {
+    pub const fn new() -> Self {
+        Self {
+            pos: 0,
+            remaining: [0; MAX_RESP_DEPTH],
+            depth: 0,
+            values: 0,
+            searched: 0,
+            line_end: None,
+            bulk_end: None,
         }
+    }
 
-        match kind {
-            b'+' | b'-' => match find_crlf(data, i) {
-                Some(end) => i = end + 2,
-                None => return RespScan::Incomplete,
-            },
-            b':' => {
-                let Some(end) = find_crlf(data, i) else {
-                    return RespScan::Incomplete;
-                };
-                if parse_i64(&data[i..end]).is_none() {
-                    return RespScan::Malformed;
-                }
-                i = end + 2;
-            }
-            b'$' => {
-                let Some(end) = find_crlf(data, i) else {
-                    return RespScan::Incomplete;
-                };
-                let Some(len) = parse_isize(&data[i..end]) else {
-                    return RespScan::Malformed;
-                };
-                i = end + 2;
-                if len != -1 {
-                    let Ok(len) = usize::try_from(len) else {
-                        return RespScan::Malformed;
-                    };
-                    if len > limits.max_bulk_len {
-                        return RespScan::TooLong(RespLength::Bulk);
-                    }
-                    // The payload and the two bytes after it, which the decoder takes
-                    // without checking that they are CRLF.
-                    let Some(next) = i.checked_add(len).and_then(|v| v.checked_add(2)) else {
-                        return RespScan::TooLong(RespLength::Bulk);
-                    };
-                    if next > data.len() {
-                        return RespScan::Incomplete;
-                    }
-                    i = next;
-                }
-            }
-            b'*' => {
-                let Some(end) = find_crlf(data, i) else {
-                    return RespScan::Incomplete;
-                };
-                let Some(len) = parse_isize(&data[i..end]) else {
-                    return RespScan::Malformed;
-                };
-                i = end + 2;
-                if len != -1 {
-                    let Ok(len) = usize::try_from(len) else {
-                        return RespScan::Malformed;
-                    };
-                    // Refused on the header: the values this promises, on top of those
-                    // already counted, would pass the per-frame total.
-                    if len > limits.max_elements.saturating_sub(values) {
-                        return RespScan::TooLong(RespLength::Aggregate);
-                    }
-                    // An empty array still costs the decoder a level of recursion, so it
-                    // counts against depth too.
-                    if depth + 1 > max_depth {
-                        return RespScan::TooDeep { limit: max_depth };
-                    }
-                    if len > 0 {
-                        remaining[depth] = len;
-                        depth += 1;
-                        continue;
-                    }
-                }
-            }
-            _ => return RespScan::Malformed,
+    /// The verdict on the frame at the front of `data`, resuming where the last
+    /// `Incomplete` left off.
+    pub fn scan(&mut self, data: &[u8], limits: &RespLimits) -> RespScan {
+        let verdict = self.resume(data, limits);
+        if verdict != RespScan::Incomplete {
+            *self = Self::new();
         }
+        verdict
+    }
 
-        // A value finished. Close every array it was the last element of.
+    fn resume(&mut self, data: &[u8], limits: &RespLimits) -> RespScan {
+        let max_depth = limits.max_depth.min(MAX_RESP_DEPTH);
+
         loop {
-            if depth == 0 {
-                return RespScan::Complete { consumed: i };
+            let start = self.pos;
+            let Some(&kind) = data.get(start) else {
+                return RespScan::Incomplete;
+            };
+            let values = self.values + 1;
+            if values > limits.max_elements {
+                return RespScan::TooLong(RespLength::Aggregate);
             }
-            remaining[depth - 1] -= 1;
-            if remaining[depth - 1] > 0 {
-                break;
+            if !matches!(kind, b'+' | b'-' | b':' | b'$' | b'*') {
+                return RespScan::Malformed;
             }
-            depth -= 1;
+            // A bulk string whose header was read on an earlier call and whose payload had not
+            // all arrived. Its header is not parsed again: `$` may be followed by any number of
+            // leading zeros, so re-parsing it per read would be the same quadratic walk.
+            if let Some(after) = self.bulk_end {
+                if after > data.len() {
+                    return RespScan::Incomplete;
+                }
+                self.advance(values, after);
+                match self.close_arrays() {
+                    Some(done) => return done,
+                    None => continue,
+                }
+            }
+            let Some(end) = self.line_end(data, start + 1) else {
+                return RespScan::Incomplete;
+            };
+            let line = &data[start + 1..end];
+            let mut next = end + 2;
+
+            match kind {
+                b':' => {
+                    if parse_i64(line).is_none() {
+                        return RespScan::Malformed;
+                    }
+                }
+                b'$' => {
+                    let Some(len) = parse_isize(line) else {
+                        return RespScan::Malformed;
+                    };
+                    if len != -1 {
+                        let Ok(len) = usize::try_from(len) else {
+                            return RespScan::Malformed;
+                        };
+                        if len > limits.max_bulk_len {
+                            return RespScan::TooLong(RespLength::Bulk);
+                        }
+                        // The payload and the two bytes after it, which the decoder takes
+                        // without checking that they are CRLF.
+                        let Some(after) = next.checked_add(len).and_then(|v| v.checked_add(2))
+                        else {
+                            return RespScan::TooLong(RespLength::Bulk);
+                        };
+                        if after > data.len() {
+                            self.bulk_end = Some(after);
+                            return RespScan::Incomplete;
+                        }
+                        next = after;
+                    }
+                }
+                b'*' => {
+                    let Some(len) = parse_isize(line) else {
+                        return RespScan::Malformed;
+                    };
+                    if len != -1 {
+                        let Ok(len) = usize::try_from(len) else {
+                            return RespScan::Malformed;
+                        };
+                        // Refused on the header: the values this promises, on top of those
+                        // already counted, would pass the per-frame total.
+                        if len > limits.max_elements.saturating_sub(values) {
+                            return RespScan::TooLong(RespLength::Aggregate);
+                        }
+                        // An empty array still costs the decoder a level of recursion, so it
+                        // counts against depth too.
+                        if self.depth + 1 > max_depth {
+                            return RespScan::TooDeep { limit: max_depth };
+                        }
+                        if len > 0 {
+                            self.remaining[self.depth] = len;
+                            self.depth += 1;
+                            self.advance(values, next);
+                            continue;
+                        }
+                    }
+                }
+                // `+` and `-`: the line is the value.
+                _ => {}
+            }
+
+            self.advance(values, next);
+            if let Some(done) = self.close_arrays() {
+                return done;
+            }
         }
+    }
+
+    /// A value just finished at `pos`: close every array it was the last element of, and say
+    /// whether that finished the frame.
+    fn close_arrays(&mut self) -> Option<RespScan> {
+        loop {
+            if self.depth == 0 {
+                return Some(RespScan::Complete { consumed: self.pos });
+            }
+            self.remaining[self.depth - 1] -= 1;
+            if self.remaining[self.depth - 1] > 0 {
+                return None;
+            }
+            self.depth -= 1;
+        }
+    }
+
+    /// Move to the next value boundary.
+    fn advance(&mut self, values: usize, next: usize) {
+        self.values = values;
+        self.pos = next;
+        self.searched = 0;
+        self.line_end = None;
+        self.bulk_end = None;
+    }
+
+    /// The end of the line starting at `from` (the current value's first line), searching only
+    /// bytes not already searched.
+    fn line_end(&mut self, data: &[u8], from: usize) -> Option<usize> {
+        if self.line_end.is_none() {
+            let resume = from.max(self.searched.saturating_sub(1));
+            match find_crlf(data, resume) {
+                Some(end) => self.line_end = Some(end),
+                None => self.searched = data.len(),
+            }
+        }
+        self.line_end
     }
 }
 

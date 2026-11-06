@@ -27,7 +27,7 @@ bounding them) and pgwire from "unverified" to the worst finding here. Treat a "
 | Crate | Verdict | Worst finding | Reachable in NetGet today? |
 |---|---|---|---|
 | pgwire 0.35 | **RISKY** | `codec.rs:26` `split_to(i+1)` on an unterminated cstring | **Yes** — six bytes on the simple-query path |
-| opensrv-mysql 0.7 | **RISKY** | `params.rs:90` explicit `panic!` on a client column-type byte | **Yes** — any prepared statement |
+| opensrv-mysql 0.7 | **RISKY** | `params.rs:90` explicit `panic!` on a client column-type byte | No — `ParamParser` is never iterated; `packet_reader.rs`'s sequence asserts are refused beneath the crate (1156); its use-after-free and unbounded long data are defended in `command_tap` |
 | kafka-protocol 0.14 | **RISKY** | `types.rs:988` unbounded reserve from a wire count | **Yes** — inner counts are unbounded |
 | dhcproto 0.12 | **RISKY** | `v4/mod.rs:285` `chaddr()` slices by an unvalidated `hlen` | No — all five call sites guarded |
 | cassandra-protocol 3.3 | **RISKY** | `types.rs:485` unchecked slice behind every protocol string | No — server frames by hand |
@@ -197,6 +197,8 @@ prove them unreachable by reading alone, but they are moot next to the above.
 | `src/params.rs:86` | `Params::next` | `rest[1..].split_at(2 * self.params)` — panics when the new-params-bound flag is set without a full type map. |
 | `src/params.rs:103` | `Params::next` | `&self.bound_types[self.col as usize]` — empty when the client clears the new-params-bound byte on the first execution → index out of bounds. |
 | `src/params.rs:127` | `Params::next` | `Value::parse_from(...).unwrap()` — `parse_from` correctly returns `Err` on a truncated value and this converts it back into a panic. |
+| `src/packet_reader.rs:132-141` | `PacketReader::next_async` | **Use-after-free, not a panic.** The packet it returns borrows `self.bytes` through `slice::from_raw_parts`, and when the read held more than one packet `self.bytes = rest.to_vec()` frees that buffer first. Any two pipelined commands. Defended: `src/server/mysql/command_tap.rs` never lets a read cross a packet boundary. |
+| `src/lib.rs:663-678` | `run` (`Command::SendLongData`) | **Unbounded memory, not a panic.** Every `COM_STMT_SEND_LONG_DATA` chunk is appended to the statement's buffer and kept until it is executed or closed. Defended: `command_tap::LongDataGate` withholds chunks past 64 MiB a statement / 128 MiB a connection; ERR 1105 at the next execute. |
 | `src/packet_reader.rs:252`, `:266` | `packet` | `assert_eq!(nseq, seq + 1)` — non-consecutive sequence bytes on a >16 MB payload; `seq + 1` is also a `u8` addition that overflows at 255 in debug builds. |
 | `src/errorcodes.rs:2807` | `impl From<u16> for ErrorKind` | `_ => panic!("Unknown error type {}", x)` — anything outside its ~886-code table. |
 | `src/value/decode.rs:190,212,214` | `impl From<Value> for {ints, floats, &str}` | `panic!("invalid type conversion …")`, and `from_utf8(v).unwrap()` on non-UTF-8 client bytes. |
@@ -208,12 +210,16 @@ already wraps it in `mysql_error_kind`, which allow-lists the codes a model real
 and falls back to `ER_UNKNOWN_ERROR`. That is the only `ErrorKind::from` call site in the tree —
 verified — and it must stay that way.
 
-The `params.rs` cluster is the more urgent half and is **not** currently defended: it is entered
-whenever a client issues a prepared statement, and five distinct malformed `COM_STMT_EXECUTE`
-shapes panic inside the crate before NetGet's shim sees anything. The `value/decode.rs`
-conversions fire on top of that whenever a shim reads a parameter as a typed value rather than
-via `Value::to_string()`. The handshake parser (`src/commands.rs`) is nom-based and safe by
-comparison.
+The `params.rs` cluster is **unreachable from NetGet, by construction**. `ParamParser::new`
+(`src/params.rs:33`) only stores the client's bytes; every panic in the table is inside
+`Params::next`, which runs only when a shim iterates the parser. NetGet's `on_execute` never does.
+The parameter values are decoded instead by `src/server/mysql/stmt_params.rs`, a bounded parser
+of NetGet's own that refuses a malformed `COM_STMT_EXECUTE` with ERR 1835 `ER_MALFORMED_PACKET`;
+its input is copied from beneath the crate by `src/server/mysql/command_tap.rs`, because the
+parser's fields are `pub(crate)`. It is covered by `tests/server/mysql/prepared_params_test.rs`
+(every shape above sent from a raw socket) and `fuzz/fuzz_targets/mysql_stmt_execute.rs`. Never
+iterate `ParamParser` — the `value/decode.rs` conversions would follow it. The handshake parser
+(`src/commands.rs`) is nom-based and safe by comparison.
 
 ### cassandra-protocol 3.3.0 — the most panic-prone crate of the nine, currently bypassed
 

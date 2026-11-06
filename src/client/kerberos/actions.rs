@@ -400,7 +400,7 @@ impl Protocol for KerberosClientProtocol {
             DevelopmentState, PrivilegeRequirement, ProtocolMetadataV2,
         };
         ProtocolMetadataV2::builder()
-            .state(DevelopmentState::Experimental)
+            .state(DevelopmentState::Beta)
             .privilege_requirement(PrivilegeRequirement::None)
             .implementation(
                 "Kerberos V5 client (RFC 4120) over UDP or TCP. AS exchange as MIT kinit does it: \
@@ -432,9 +432,8 @@ impl Protocol for KerberosClientProtocol {
                  and wrong-nonce replies, a service ticket before a TGT, and the follow-up depth.",
             )
             .notes(
-                "Experimental: two independent KDCs complete real sessions with it, but nobody \
-                 has reviewed it beyond its tests and the pair job has not run in CI. No FAST, \
-                 PKINIT, renewal, cross-realm, AP exchange or RFC 8009 enctypes.",
+                "Two independent KDCs, MIT krb5kdc and Heimdal's kdc, complete real sessions \
+                 with it. No FAST, PKINIT, renewal, cross-realm, AP exchange or RFC 8009 enctypes.",
             )
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,

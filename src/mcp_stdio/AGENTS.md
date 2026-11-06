@@ -294,8 +294,8 @@ peer's side of a real socket (bytes read, EOF observed), not from the tool's tex
 
 ## What the tools show and what they do not
 
-- **Ids are shared across kinds.** Servers, clients, connections, pipes, databases and easy
-  instances all draw from one counter (`AppState::next_unified_id`), so an id names exactly one
+- **Ids are shared across kinds.** Servers, clients, connections, pipes and databases
+  all draw from one counter (`AppState::next_unified_id`), so an id names exactly one
   thing whatever its kind. The consequence an MCP caller sees: server and client ids are not
   consecutive — a session that started server #1 and then accepted five connections starts its
   next server as #7. Ids are never reused, including after a failed start removes its row.
@@ -317,7 +317,7 @@ peer's side of a real socket (bytes read, EOF observed), not from the tool's tex
 - **Status shows behaviour, not just configuration.** `client_status` and `server_status` end
   with the instance's event handlers in match order (`pattern → static: send_frame`,
   `script (python)`, `model: "…"`, `manual`), then **Activity** — events handled with a
-  per-`answered_by` breakdown (`rule`, `model`, `cache`, `easy`, `unrecorded`), actions answered
+  per-`answered_by` breakdown (`rule`, `model`, `cache`, `unrecorded`), actions answered
   with, actions sent by hand (`injected_action` entries), last event age, and for a client its
   model calls against the budget — then the last 5 access-log entries, pointing at
   `list_access_logs {"client_id": N}` / `get_access_log`. The counters are
@@ -359,7 +359,7 @@ and the setting (not the cached answers) survives a restart. See "Reusing the mo
 ## Reusing the model's answers (`export_rules`, memoisation)
 
 Both features live in `src/llm/answer_reuse.rs` (shared) and `src/llm/rule_export.rs`, and
-both read `AccessLogEntry::answered_by` — `"model"`, `"cache"`, `"rule"` or `"easy"` — which
+both read `AccessLogEntry::answered_by` — `"model"`, `"cache"` or `"rule"` — which
 the shared paths (`action_helper::call_llm`, `llm_budget::call_llm_for_client`) record.
 Entries a protocol logs itself carry none and are ignored by both.
 

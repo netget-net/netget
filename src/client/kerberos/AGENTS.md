@@ -57,11 +57,16 @@ only in the session (`Session` is not `Debug`). The real-server test asserts it 
 and nothing NetGet printed. The ccache, when `ccache_path` is set, holds session keys as any
 ccache does.
 
-## Maturity: Experimental
+## Maturity: Beta
 
-Against MIT krb5kdc and Heimdal's kdc (see `tests/client/kerberos/AGENTS.md`): real sessions,
-tickets accepted by the peers' own tools, the model's choices visible in the KDC's log. Not Beta
-until the pair job has run in CI and someone has reviewed it.
+All four conditions of the client bar hold, on the real-server tests in `tests/client/kerberos/`:
+
+1. the peer is MIT krb5kdc and Heimdal's kdc — third-party, and not a library this client is built on;
+2. a missing peer fails the test, never skips it;
+3. a real session, completed against that server;
+4. the client acts on the model's answer, asserted from the server's side: the KDCs' own tools accept the tickets the chain asked for (`klist`, `kvno -k`) and the KDC's log shows each request. Emptying the loop over the model's actions fails it.
+
+Verified 1 November 2026 by running the suite against the installed peer and by that mutation. The CI job that installs the peer is in `.github/workflows/protocol-pairs.yml`.
 
 ## Not implemented
 

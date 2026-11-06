@@ -6,7 +6,7 @@ SNMP client implementing RFC 1157 (SNMPv1) and RFC 3416 (SNMPv2c) using the rasn
 SNMP operations against network devices and agents - querying OIDs, walking MIB trees, and modifying agent values. Uses
 UDP transport for request/response protocol.
 
-**Status**: Experimental (Network Management Protocol Client)
+**Status**: Beta (Network Management Protocol Client)
 **RFC**: RFC 1157 (SNMPv1), RFC 3416 (SNMPv2c)
 **Port**: 161 (agent), 162 (trap receiver)
 **Transport**: UDP
@@ -502,3 +502,14 @@ Outcomes:
 
 A second command queues behind the first while its reply is awaited; the channel is bounded,
 so a caller gets "client busy" rather than an unbounded backlog.
+
+## Maturity: Beta
+
+All four conditions of the client bar hold, on the real-server tests in `tests/client/snmp/`:
+
+1. the peer is Net-SNMP's snmpd — third-party, and not a library this client is built on;
+2. a missing peer fails the test, never skips it;
+3. a real session, completed against that server;
+4. the client acts on the model's answer, asserted from the server's side: Net-SNMP's `snmpget`, as the other USM user, reads back the sysContact a handler SET from the reply it was shown. Emptying the loop over the model's actions fails it.
+
+Verified 1 November 2026 by running the suite against the installed peer and by that mutation. macOS's bundled snmpd 5.6 lacks SHA-256 and `rwuser`; it ran against Homebrew's net-snmp. The CI job that installs the peer is in `.github/workflows/protocol-pairs.yml`.
