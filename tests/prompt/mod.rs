@@ -7,7 +7,7 @@
 //! snapshot proves nothing by itself):
 //!
 //! ```text
-//! UPDATE_SNAPSHOTS=1 ./cargo-isolated.sh test --test prompt --test prompt_snapshots
+//! UPDATE_SNAPSHOTS=1 ./cargo-isolated.sh test --test prompt
 //! ```
 //!
 //! or `tests/prompt/update_snapshots.sh`, which runs exactly that.
