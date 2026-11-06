@@ -620,9 +620,14 @@ The same work found a **use-after-free** in `opensrv-mysql` 0.7.0, which is wors
 panic in this list: `PacketReader::next_async` (`packet_reader.rs:132-141`) returns a packet
 borrowed from `self.bytes` through `slice::from_raw_parts` after `self.bytes = rest.to_vec()`
 has freed that buffer, whenever one read held more than one packet. Two pipelined
-`COM_STMT_SEND_LONG_DATA` chunks produced a stray OK and desynchronised the session. NetGet
-defends it with `command_tap`, which never lets a read cross a packet boundary; the crate needs
-an upstream fix (return the packet before reassigning, or parse from an owned copy).
+`COM_STMT_SEND_LONG_DATA` chunks produced a stray OK and desynchronised the session. It is
+fixed at the source in `vendor/opensrv-mysql` (`[patch.crates-io]`), together with the crate
+answering an unparseable `COM_STMT_EXECUTE` OK — a write reported as succeeded — and ignoring
+`COM_STMT_RESET`; `tests/vendored_opensrv_patch_test.rs` drives the bare crate with each shape.
+The patch keeps upstream's API, because a `[patch]` does not reach `cargo install netget-tool`:
+that build runs upstream 0.7.0, where `command_tap` still keeps every read inside one packet.
+Publishing the copy as a `netget-opensrv-mysql` crate would carry the fix there, and the issue
+belongs upstream as well.
 
 ### 78. `tcp_connection_opened` is advertised unconditionally and fires only for `send_first` servers **[verified, fixed: telnet raises it always, tcp/tls document the gate]**
 
