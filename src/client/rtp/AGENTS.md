@@ -21,3 +21,14 @@ and the RMS level. RTCP arrivals are `rtcp_received {packet_type, ssrc, from}`. 
 
 No SRTP, no jitter buffer, no receiver reports, audio only. A chain stops after
 `MAX_FOLLOWUP_DEPTH` (8).
+
+## Maturity: Beta
+
+All four conditions of the client bar hold, on the real-server tests in `tests/client/rtp/`:
+
+1. the peer is ffmpeg in both directions — third-party, and not a library this client is built on;
+2. a missing peer fails the test, never skips it;
+3. a real session, completed against that server;
+4. the client acts on the model's answer, asserted from the server's side: ffmpeg decodes the tone the handler chose into a WAV whose frequency is measured. Emptying the loop over the model's actions fails it.
+
+Verified 1 November 2026 by running the suite against the installed peer and by that mutation. The CI job that installs the peer is in `.github/workflows/protocol-pairs.yml`.
