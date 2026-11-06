@@ -179,11 +179,12 @@ impl Protocol for RedisProtocol {
         use crate::protocol::metadata::{DevelopmentState, ProtocolMetadataV2};
 
         ProtocolMetadataV2::builder()
-            // Beta: exercised against two independent clients that share no code with each
-            // other or with redis-protocol — redis-rs (Rust) and redis-cli (C). Not Stable:
-            // Stable additionally wants spec compliance and scripting support reviewed, which
-            // has not been done here.
-            .state(DevelopmentState::Beta)
+            // Stable, measured against the six conditions in the root AGENTS.md on 31 October
+            // 2026 — see "Maturity: the six conditions" in src/server/redis/AGENTS.md. The
+            // rating covers the surface this server implements (RESP2/RESP3 framing, the reply
+            // verbs, pub/sub, cluster routing), not Redis's command semantics, which the model
+            // owns, nor scripting, transactions, blocking commands or TLS, which it lacks.
+            .state(DevelopmentState::Stable)
             .well_known_port(6379)
             .implementation("redis-protocol v6.0 (RESP2 request parsing), manual RESP2/RESP3 encoding per connection after HELLO")
             .llm_control(
@@ -214,11 +215,23 @@ impl Protocol for RedisProtocol {
                  and glob matching equal a real redis-server's CLUSTER KEYSLOT and KEYS \
                  (keys_oracle_test.rs). Every pub/sub bound and the slow-consumer disconnect \
                  are pinned from raw sockets (pubsub_bounds_test.rs). \
-                 NOT proven: inline commands, pipelining \
-                 (neither client sends two commands in one write), AUTH/SELECT/MULTI, \
+                 Every verb Rust answers itself has two real clients (verb_coverage_test.rs): \
+                 sharded pub/sub, PUBSUB SHARD*, UNSUBSCRIBE/PUNSUBSCRIBE, RESET, \
+                 subscribed-mode PING (redis-py; redis-rs 0.27's PubSub cannot ping), CLUSTER \
+                 KEYSLOT/MYID/SHARDS/INFO, CROSSSLOT and CLUSTERDOWN, through two of redis-cli, \
+                 redis-rs and redis-py; redis-rs is the big number's second RESP3 reader. \
+                 Stable conditions (31 October 2026): pcap oracle — every RESP2 success-path \
+                 reply, Rust's own replies and cluster replies read by Wireshark's resp \
+                 dissector with values asserted (pcap_oracle_test.rs; Wireshark 4.6 has no RESP3 \
+                 types); fuzz target resp_frame with a depth-bomb seed, rebuilt and run clean, \
+                 including a resumed-scan equivalence property; every declared bound tested at \
+                 its boundary and verified by removal (frame_bounds_test.rs, resp_depth_test.rs, \
+                 connection_bounds_test.rs, pubsub_bounds_test.rs); each decision= tag asserted \
+                 (failure_decision_test.rs); no #[ignore], no skip gate. \
+                 NOT proven: inline commands, pipelining by a real client, AUTH/SELECT/MULTI, \
                  cluster-wide PUBLISH (there is no bus), and TLS.",
             )
-            .notes("RESP2, and RESP3 after HELLO 3 (no attributes, no streamed types, no client-side caching); HELLO with AUTH is judged by the handler. Pub/sub: SUBSCRIBE/PSUBSCRIBE/SSUBSCRIBE (model-approved), UNSUBSCRIBE family, PUBLISH/SPUBLISH (model decides delivery), PUBSUB introspection, RESP2 subscribed mode, redis_publish_message for the model's own messages; bounded per connection, per server and per message, and a subscriber 8 MiB behind is disconnected. Cluster mode (cluster_nodes): CLUSTER SLOTS/SHARDS/NODES/INFO/KEYSLOT/MYID, MOVED/ASK/CROSSSLOT/CLUSTERDOWN routing by CRC16 hash slot, redis_cluster_set_slot; no bus, no replicas. No SELECT/MULTI semantics, no inline commands")
+            .notes("RESP2, and RESP3 after HELLO 3 (no attributes, no streamed types, no client-side caching); HELLO with AUTH is judged by the handler. Pub/sub: SUBSCRIBE/PSUBSCRIBE/SSUBSCRIBE (model-approved), UNSUBSCRIBE family, PUBLISH/SPUBLISH (model decides delivery), PUBSUB introspection, RESP2 subscribed mode, redis_publish_message for the model's own messages; bounded per connection, per server and per message, and a subscriber 8 MiB behind is disconnected. Cluster mode (cluster_nodes): CLUSTER SLOTS/SHARDS/NODES/INFO/KEYSLOT/MYID, MOVED/ASK/CROSSSLOT/CLUSTERDOWN routing by CRC16 hash slot, redis_cluster_set_slot; no bus, no replicas. No SELECT/MULTI semantics, no inline commands. The Stable rating covers this surface — framing, the reply verbs, pub/sub and cluster routing — and not Redis's command semantics, which the model supplies; see the six conditions in src/server/redis/AGENTS.md")
             .max_inbound_bytes(crate::server::redis::MAX_PENDING_FRAME_BYTES)
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
             .batching(crate::protocol::metadata::BatchingMode::Unsupported)

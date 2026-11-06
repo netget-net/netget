@@ -21,7 +21,7 @@
 //! instruction.
 //!
 //! Run with:
-//!   ./cargo-isolated.sh test --no-default-features --features redis --test server -- server::redis::resp_depth --test-threads=100
+//!   ./cargo-isolated.sh test --no-default-features --features mcp-stdio,sqlite --test server -- server::redis::resp_depth --test-threads=100
 
 use std::time::Duration;
 

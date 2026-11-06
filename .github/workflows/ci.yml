@@ -1148,6 +1148,11 @@ jobs:
       #       one it pins, and pubsub_test's `PUBSUB NUMSUB news` never reaches 2. All five
       #       pass, BLOCKING, in `Test (suites)` on ubuntu-24.04 (Redis 7.0.15), through
       #       CI_PROTOCOL_TESTS' server::redis:: and client::redis::.
+      #   redis::verb_coverage_test
+      #       Same cause, not yet run here: its redis-cli subscriber is `redis-cli SSUBSCRIBE`,
+      #       and SSUBSCRIBE and SPUBLISH are Redis 7.0 commands that jammy's 6.0.16 redis-cli
+      #       does not hold a subscription open for. It passes, BLOCKING, in `Test (suites)` on
+      #       ubuntu-24.04 through server::redis::, beside the four above.
       - name: Real-client evidence (advisory groups)
         id: evidence-advisory
         if: ${{ !cancelled() && steps.evidence-build.outcome == 'success' }}
@@ -1159,7 +1164,7 @@ jobs:
           failed=""
           for filter in \
             redis::resp3_test redis::pubsub_test redis::cluster_test redis::keys_oracle_test \
-            client/redis::cluster_real_server_test ; do
+            redis::verb_coverage_test client/redis::cluster_real_server_test ; do
             echo "::group::$filter"
             .github/scripts/run-evidence-group.sh advisory "$filter" || failed="$failed $filter"
             echo "::endgroup::"
