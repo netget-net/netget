@@ -9,7 +9,6 @@
 use super::wire::{self, Event, Filter};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tokio::sync::mpsc;
 
 /// What the connection's single writer sends.
 #[derive(Debug)]

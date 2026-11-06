@@ -51,7 +51,7 @@ pub fn drain_queued(
 ) -> StatusBatch {
     let mut batch = StatusBatch::default();
     let mut taken = 0usize;
-    let mut take = |line: String, batch: &mut StatusBatch| {
+    let take = |line: String, batch: &mut StatusBatch| {
         if batch.lines.len() < keep {
             batch.lines.push(line);
         } else if line == UPDATE_UI {

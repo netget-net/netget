@@ -22,7 +22,6 @@ use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
-use tokio::sync::mpsc;
 use wire::Instruction;
 
 /// The handshake, select to connect, must finish within this.
