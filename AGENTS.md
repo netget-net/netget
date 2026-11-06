@@ -836,11 +836,11 @@ not an enum. Adding a protocol does not require touching it.
 out what you need, drop the guard in an inner scope, then await.
 
 **Per-connection state machine** (Idle → Processing → Accumulating) prevents concurrent LLM
-calls on one connection and queues data arriving mid-call. Note: `state/machine.rs` defines a
-generic `StateMachine<S>` that **nothing uses** — every protocol hand-rolls its own copy.
-Copy the TCP implementation (`src/server/tcp/mod.rs`) as the reference. **Most servers do not
-have one**: about 110 read, call the model and write in one task, so what arrives mid-call
-waits in the socket — that is the shape batching (below) has to work with.
+calls on one connection and queues data arriving mid-call. There is no shared state-machine
+type: each protocol that needs one holds its own. Copy the TCP implementation
+(`src/server/tcp/mod.rs`) as the reference. **Most servers do not have one**: about 110 read,
+call the model and write in one task, so what arrives mid-call waits in the socket — that is
+the shape batching (below) has to work with.
 
 **History and batching (CRITICAL — every protocol declares both).** The model used to see each
 event alone; a telnet peer asking "what did I just say?" was answered from a prompt holding only
