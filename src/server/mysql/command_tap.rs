@@ -33,8 +33,10 @@
 //! # One packet per read
 //!
 //! The reader also hands the crate **at most the rest of one packet per read** — the header,
-//! then the payload — and this is a memory-safety fix, not a convenience.
-//! `opensrv-mysql` 0.7.0's `PacketReader::next_async` (`src/packet_reader.rs:131-141`) builds
+//! then the payload. This repository builds `vendor/opensrv-mysql`, whose reader is fixed, so
+//! here it changes nothing; it is for the crate as published to crates.io, which is what
+//! `cargo install netget-tool` builds (a `[patch]` does not travel with a published crate).
+//! Upstream `opensrv-mysql` 0.7.0's `PacketReader::next_async` (`src/packet_reader.rs:132-141`) builds
 //! the slice it parses from `self.bytes` with `slice::from_raw_parts`, and when that read
 //! held more than one packet it runs `self.bytes = rest.to_vec()` before returning the parsed
 //! packet. The assignment frees the buffer the returned packet still points into, so the
@@ -46,7 +48,7 @@
 //! cache does routinely, is the same shape. With no read crossing a packet boundary the
 //! remainder is always empty when a packet completes and that branch never runs.
 //! `stmt_params_test.rs::pipelined_commands_reach_opensrv_one_packet_per_read` drives the
-//! crate directly to show it.
+//! crate through the tap; `tests/vendored_opensrv_patch_test.rs` drives the patched crate bare.
 //!
 //! # Bounds
 //!
