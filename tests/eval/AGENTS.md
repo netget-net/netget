@@ -67,24 +67,36 @@ event. Setup correctness is a separate question with its own tests in
    *thrown away*, and syslog scored 3/3 having executed nothing. The model
    naming an action and netget running it are different events.
 
-## Determinism: a pinned seed, and still a rate
+## Determinism: a pinned seed per run, and still a rate
 
-Every run passes `--llm-seed` (default 42; `--seed` / `NETGET_EVAL_SEED`, `none`
-for an unpinned run) and, when asked, `--llm-temperature` (`--temperature` /
-`NETGET_EVAL_TEMPERATURE`). netget sends both in Ollama's `options` object
-(`src/llm/ollama_client.rs`, `SamplingOptions`), and sends neither when the
-flags are absent — `tests/llm_sampling_options_test.rs` pins that from the wire.
+Run N of a case passes `--llm-seed` base + N - 1 (`runner::run_seed`; the base is
+42, `--seed` / `NETGET_EVAL_SEED`, `none` for an unpinned run) and, when asked,
+`--llm-temperature` (`--temperature` / `NETGET_EVAL_TEMPERATURE`). netget sends
+both in Ollama's `options` object (`src/llm/ollama_client.rs`,
+`SamplingOptions`), and sends neither when the flags are absent —
+`tests/llm_sampling_options_test.rs` pins that from the wire. A rerun with the
+same base reproduces every run; each run's seed is in its record.
 
-**A pinned seed pins the sampler, not the run.** Ollama draws the same tokens for
-the same prompt, but each run's prompt carries its own client port, connection
-id and, for DNS/LDAP-style protocols, a random query or message id — one
-differing token changes every token drawn after it. So each instruction still
-runs N times (default 3) against a **fresh netget process and a fresh server**,
-the published number is passes/runs with every verdict listed, and each case
-reports `verdicts_agree` (every run reached the same verdict) and
-`actions_agree` (every run executed byte-identical actions). The Markdown has a
-Reproducibility section with the totals. `actions_agree` undercounts by design
-for anything that must echo a random id.
+**Every run used to pass the same seed, and that made N runs one sample.** Ollama
+draws the same tokens for the same prompt and seed, and most prompts carry
+nothing that differs run to run — the client port and connection id are not in
+the prompt, and only DNS/LDAP-style protocols put a random id there. So nearly
+every case scored 0/N or N/N (the eleven suites added on 26 September did, all
+25 cases), and on 1 November `dict/unknown-word`, `prometheus/latency-histogram`
+and `lmtp/deliver-local` each went 5/5 → 0/5 on a change to the shared prompt
+(W3: `notify_operator`, connection memory). Replaying the recorded prompts over
+twenty seeds each showed no regression at all (12 → 11, 15 → 16 and 6 → 16 of
+20; see
+`eval-results/2026-11-06-seed-bisect/`). **Read a single-seed swing as one
+draw**, and before attributing a move to a change, rerun the case over several
+base seeds.
+
+Each run still gets a **fresh netget process and a fresh server**, the published
+number is passes/runs with every verdict listed, and each case reports
+`verdicts_agree` (every run reached the same verdict) and `actions_agree` (every
+run executed byte-identical actions). With distinct seeds, disagreement is
+expected and is the information: a case that is right on some draws and wrong on
+others is the one whose description is marginal.
 
 `--out DIR` (`NETGET_EVAL_OUT_DIR`) writes the two artefacts into `DIR` instead
 of over the committed baseline — use it for a one-protocol rerun.

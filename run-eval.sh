@@ -7,10 +7,10 @@
 # client (dig, curl, redis-cli, psql, ldapsearch, ipptool, whois, ftp), and
 # scores whether the model could serve a plain-English operator instruction.
 #
-# It costs real model time. It must never gate a PR. Every run pins the model's
-# sampler seed (--seed, default 42), which makes an identical prompt answer
-# identically; each run's prompt still carries its own ports and ids, so the
-# report measures how often the runs agreed rather than assuming they did.
+# It costs real model time. It must never gate a PR. Run N of a case pins the
+# model's sampler seed to base + N - 1 (--seed sets the base, default 42), so a
+# rerun reproduces every run and the runs of one case are distinct draws; the
+# report measures how often they agreed rather than assuming they would.
 # See tests/eval/mod.rs for the design and eval-results/EVAL_RESULTS.md for the output.
 #
 # Usage:
@@ -18,7 +18,7 @@
 #   ./run-eval.sh http dns tcp          # just these
 #   ./run-eval.sh --runs 5 http         # 5 runs per instruction
 #   ./run-eval.sh --model llama3.1:8b   # pick the model explicitly
-#   ./run-eval.sh --seed 7              # sampler seed (default 42; 'none' = unpinned)
+#   ./run-eval.sh --seed 7              # base sampler seed (default 42; 'none' = unpinned)
 #   ./run-eval.sh --temperature 0       # also pin the temperature (default: model's own)
 #   ./run-eval.sh --out /tmp/ipp ipp    # write the two artefacts there, not over the baseline
 #   ./run-eval.sh --list                # what would run, and with what client

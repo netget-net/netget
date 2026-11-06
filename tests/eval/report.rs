@@ -23,7 +23,7 @@ pub struct EvalReport {
     pub generated_at: String,
     pub model: String,
     pub runs_per_case: usize,
-    /// `--llm-seed` every run passed; `null` for an unpinned run.
+    /// The base `--llm-seed`: run N passed this plus N - 1. `null` for an unpinned run.
     pub seed: Option<u64>,
     /// `--llm-temperature` every run passed; `null` leaves the model's default.
     pub temperature: Option<f32>,
@@ -205,10 +205,10 @@ pub fn build(model: &str, runs_per_case: usize, cases: Vec<CaseResult>) -> EvalR
         seed,
         temperature,
         determinism: match seed {
-            Some(_) => "pass-rate over N independent runs with a pinned sampler seed; the \
-                        seed makes an identical prompt answer identically, but each run's \
-                        prompt carries its own ports and ids, so agreement is measured \
-                        (totals.cases_*_agree) rather than assumed"
+            Some(_) => "pass-rate over N independent runs, run N with sampler seed \
+                        `seed` + N - 1: a rerun reproduces every run, and the runs of one case \
+                        are distinct draws rather than N copies of one; agreement is measured \
+                        (totals.cases_*_agree)"
                 .to_string(),
             None => "pass-rate over N independent runs with no seed: the sampler is \
                      unpinned and runs are expected to differ"
@@ -326,13 +326,13 @@ fn markdown(report: &EvalReport) -> String {
     ));
     out.push_str(
         "- **The score is a rate, and whether the runs agreed is measured, not assumed.** \
-         Every run passes `--llm-seed` (and `--llm-temperature` when one is set), so the \
-         sampler draws the same tokens for the same prompt. But each run's prompt carries \
-         its own client port, connection id and — for DNS/LDAP-style protocols — a random \
-         query or message id, and one differing token changes every token drawn after it. \
-         Each instruction therefore still runs N times against a **fresh netget process and \
-         a fresh server**, the published number is passes/runs, and the `Runs agree` column \
-         says whether those runs reached the same verdict and executed the same actions.\n",
+         Run N passes `--llm-seed` seed + N - 1 (and `--llm-temperature` when one is set), \
+         so a rerun reproduces every run while the runs of one instruction are distinct \
+         draws: with one seed for all of them, a prompt carrying nothing per-run (no port, \
+         no connection id, no random query id) answered N times identically and the rate \
+         was one sample. Each run gets a **fresh netget process and a fresh server**, the \
+         published number is passes/runs, and the `Runs agree` column says whether those \
+         runs reached the same verdict and executed the same actions.\n",
     );
     out.push_str(
         "- **Every case is driven by a real third-party client binary** — `dig`, `curl`, \
@@ -515,8 +515,8 @@ fn markdown(report: &EvalReport) -> String {
 
     out.push_str(
         "## Known limits of this measurement\n\n\
-         - **A pinned seed is not a pinned run.** The seed fixes the sampler, not the \
-           prompt; see the Reproducibility section for how often the runs agreed.\n\
+         - **A pinned seed is not a pinned run.** Each run's seed fixes its sampler, not \
+           the prompt; see the Reproducibility section for how often the runs agreed.\n\
          - **A pass means the client observed the right thing**, not that the frame is \
            spec-clean. The pcap oracle (Tier 1) is the check for that, and the two are \
            complementary.\n\
