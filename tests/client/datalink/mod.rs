@@ -4,3 +4,5 @@ mod action_test;
 mod command_channel_test;
 #[cfg(all(unix, feature = "libpcap"))]
 mod e2e_test;
+#[cfg(all(unix, feature = "libpcap"))]
+mod packet_test;

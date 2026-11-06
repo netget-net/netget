@@ -8,3 +8,4 @@ mod test;
 pub mod transfer_test;
 pub mod transport_bounds_test;
 pub mod zone_support;
+mod compression_chain_test;

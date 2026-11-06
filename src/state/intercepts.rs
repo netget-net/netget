@@ -101,3 +101,64 @@ pub fn now_unix_ms() -> u64 {
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }
+
+/// The actions a parked **server** event may be answered with: exactly what the model would
+/// be offered for that event.
+///
+/// That is the event type's own declared actions — `call_llm` builds the model's tool list
+/// from `event.event_type.actions`, and a protocol narrows there on purpose (redis's
+/// `redis_subscribe` declares four answers; the protocol has eighteen) — falling back to the
+/// protocol's sync actions only where the event declares none and did not mean to
+/// (`EventType::has_no_usable_actions`), which is `call_llm`'s own fallback. An event that
+/// deliberately declares no actions (`with_no_actions()`) offers none: answer it with
+/// nothing, or fail it closed. An event id the protocol does not declare gets the sync set.
+///
+/// The MCP `list_intercepts` / `answer_intercept` tools and the dashboard's composer both use
+/// this, so what is offered and what is accepted are the same list everywhere. The common
+/// actions every protocol accepts are not included; callers that validate add them.
+pub fn server_answer_actions(
+    protocol_name: &str,
+    event_type: &str,
+) -> Vec<crate::llm::actions::ActionDefinition> {
+    let Ok(protocol) = crate::protocol::server_registry::registry().resolve(protocol_name) else {
+        return Vec::new();
+    };
+    match protocol
+        .get_event_types()
+        .into_iter()
+        .find(|e| e.id == event_type)
+    {
+        Some(event) if !event.has_no_usable_actions() => event.actions,
+        _ => protocol.get_sync_actions(),
+    }
+}
+
+/// The actions a parked **client** event may be answered with: exactly what the model would
+/// be offered for it — `client_llm_action_set`, async ∪ sync ∪ the event's own actions.
+/// Clients union rather than narrow (they have one LLM entry point; see
+/// `client_llm_action_set`), so this is wider than the server rule by design.
+pub fn client_answer_actions(
+    protocol_name: &str,
+    state: &crate::state::app_state::AppState,
+    event_type: &str,
+) -> Vec<crate::llm::actions::ActionDefinition> {
+    let Some(protocol) = crate::cli::client_startup::resolve_client_protocol(protocol_name)
+        .and_then(|name| crate::protocol::CLIENT_REGISTRY.get(&name))
+    else {
+        return Vec::new();
+    };
+    let mut actions =
+        crate::llm::actions::client_trait::client_llm_action_set(protocol.as_ref(), state, None);
+    for action in protocol
+        .get_event_types()
+        .into_iter()
+        .find(|e| e.id == event_type)
+        .map(|e| e.actions)
+        .unwrap_or_default()
+    {
+        if !actions.iter().any(|a| a.name == action.name) {
+            actions.push(action);
+        }
+    }
+    actions
+}

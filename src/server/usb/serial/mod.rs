@@ -260,7 +260,11 @@ impl UsbSerialServer {
         // The attach event hangs off `import_rx`, not off the accept: see the loop below.
         let guard_status_tx = status_tx.clone();
         let (import_tx, mut import_rx) = tokio::sync::oneshot::channel();
-        let mut usbip_task = tokio::spawn(async move {
+        // Held in `AbortOnDrop`: this connection task is what `stop_server` aborts, and the abort
+        // drops the handle the `select!` below awaits. A dropped `JoinHandle` detaches its task
+        // rather than ending it, so without the guard the USB/IP session outlived the stop,
+        // still holding the peer's socket.
+        let mut usbip_task = crate::utils::task_guard::AbortOnDrop(tokio::spawn(async move {
             match crate::server::usb::guard::run_guarded_usbip(
                 stream,
                 usbip_server,
@@ -281,7 +285,7 @@ impl UsbSerialServer {
                     connection_id, e
                 ),
             }
-        });
+        }));
 
         // Serve host writes until the USB/IP session ends. This loop is why the detach event
         // exists at all: the rest of the USB family parks on `sleep(u64::MAX)` here and never
@@ -383,7 +387,7 @@ impl UsbSerialServer {
                     )
                     .await;
                 }
-                _ = &mut usbip_task => break,
+                _ = &mut usbip_task.0 => break,
             }
         }
 

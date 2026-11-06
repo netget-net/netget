@@ -21,6 +21,9 @@ logs
 
 # Python bytecode from scripts/ and fuzz/ helpers
 __pycache__/
+# `pip install ./sdk/python` builds in place
+/sdk/python/build/
+*.egg-info/
 *.py[cod]
 
 # Paseo workspace config, written per machine

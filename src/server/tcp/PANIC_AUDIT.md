@@ -27,7 +27,7 @@ bounding them) and pgwire from "unverified" to the worst finding here. Treat a "
 | Crate | Verdict | Worst finding | Reachable in NetGet today? |
 |---|---|---|---|
 | pgwire 0.35 | **RISKY** | `codec.rs:26` `split_to(i+1)` on an unterminated cstring | **Yes** — six bytes on the simple-query path |
-| opensrv-mysql 0.7 | **RISKY** | `params.rs:90` explicit `panic!` on a client column-type byte | Not `params.rs` — `ParamParser` is never iterated. `packet_reader.rs:252,266` still is: a >16 MiB chained packet with a skipped sequence id |
+| opensrv-mysql 0.7 | **RISKY** | `params.rs:90` explicit `panic!` on a client column-type byte | No — `ParamParser` is never iterated; `packet_reader.rs`'s sequence asserts are refused beneath the crate (1156); its use-after-free and unbounded long data are defended in `command_tap` |
 | kafka-protocol 0.14 | **RISKY** | `types.rs:988` unbounded reserve from a wire count | **Yes** — inner counts are unbounded |
 | dhcproto 0.12 | **RISKY** | `v4/mod.rs:285` `chaddr()` slices by an unvalidated `hlen` | No — all five call sites guarded |
 | cassandra-protocol 3.3 | **RISKY** | `types.rs:485` unchecked slice behind every protocol string | No — server frames by hand |
@@ -148,6 +148,12 @@ earlier `(message_length - 16) as usize` abort.
 
 ### pgwire 0.35.0 — RISKY, and NetGet's PostgreSQL server is crashable in six bytes
 
+**Status:** NetGet builds `vendor/pgwire`, which fixes the frontend half of this (each message
+isolated before its body decoder runs, checked reads, `FATAL 08P01` instead of a panic;
+`vendor/pgwire/README.md`, `tests/vendored_pgwire_patch_test.rs`). The backend-message sites
+below are pgwire's *client* path, which NetGet does not use, and are unchanged apart from the
+framing fix. The finding stands for upstream and for `cargo install` builds.
+
 **This is the most severe finding in the audit.** The framing layer never restricts the body
 slice to the declared message length and never *lower*-bounds it. `decode_packet`
 (`src/messages/codec.rs:62-83`) checks only `msg_len > max_size`, then advances past the header
@@ -192,6 +198,7 @@ prove them unreachable by reading alone, but they are moot next to the above.
 | `src/params.rs:103` | `Params::next` | `&self.bound_types[self.col as usize]` — empty when the client clears the new-params-bound byte on the first execution → index out of bounds. |
 | `src/params.rs:127` | `Params::next` | `Value::parse_from(...).unwrap()` — `parse_from` correctly returns `Err` on a truncated value and this converts it back into a panic. |
 | `src/packet_reader.rs:132-141` | `PacketReader::next_async` | **Use-after-free, not a panic.** The packet it returns borrows `self.bytes` through `slice::from_raw_parts`, and when the read held more than one packet `self.bytes = rest.to_vec()` frees that buffer first. Any two pipelined commands. Defended: `src/server/mysql/command_tap.rs` never lets a read cross a packet boundary. |
+| `src/lib.rs:663-678` | `run` (`Command::SendLongData`) | **Unbounded memory, not a panic.** Every `COM_STMT_SEND_LONG_DATA` chunk is appended to the statement's buffer and kept until it is executed or closed. Defended: `command_tap::LongDataGate` withholds chunks past 64 MiB a statement / 128 MiB a connection; ERR 1105 at the next execute. |
 | `src/packet_reader.rs:252`, `:266` | `packet` | `assert_eq!(nseq, seq + 1)` — non-consecutive sequence bytes on a >16 MB payload; `seq + 1` is also a `u8` addition that overflows at 255 in debug builds. |
 | `src/errorcodes.rs:2807` | `impl From<u16> for ErrorKind` | `_ => panic!("Unknown error type {}", x)` — anything outside its ~886-code table. |
 | `src/value/decode.rs:190,212,214` | `impl From<Value> for {ints, floats, &str}` | `panic!("invalid type conversion …")`, and `from_utf8(v).unwrap()` on non-UTF-8 client bytes. |

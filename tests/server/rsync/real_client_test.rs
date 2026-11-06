@@ -23,7 +23,8 @@ pub=[
   {'path':'link','type':'symlink','target':'hello.txt'},
   {'path':'empty','type':'file','content':''}]
 if t=='rsync_list_modules':
-  a=[{'type':'rsync_modules','modules':[{'name':'pub','comment':'public files'},{'name':'mirror','comment':'a mirror'}]}]
+  a=[{'type':'rsync_modules','modules':[{'name':'pub','comment':'public files'}]},
+     {'type':'rsync_modules','modules':[{'name':'mirror','comment':'a mirror'},{'name':'pub','comment':'listed twice'}]}]
 elif t=='rsync_upload_request':
   a=[{'type':'rsync_refuse','message':'module %s is read only' % e['module']}]
 elif t=='rsync_upload_complete':
@@ -103,6 +104,13 @@ async fn stock_rsync_lists_and_downloads() {
         "{out}"
     );
     assert!(out.lines().any(|l| l.starts_with("mirror")), "{out}");
+    // The policy answers with one rsync_modules action per module, the way llama3.1:8b does:
+    // both go into one listing, and a module named twice is listed once.
+    assert_eq!(
+        out.lines().filter(|l| l.starts_with("pub")).count(),
+        1,
+        "{out}"
+    );
 
     // (b) a listing: rsync prints the sizes and names the file list carried.
     let (code, out, err) = rsync(&["--list-only", &url("pub/")]).await;

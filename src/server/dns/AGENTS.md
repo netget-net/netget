@@ -125,13 +125,35 @@ mode for deterministic DNS; static mode is only useful here for `ignore_query`
 Parsing flow:
 
 1. Receive UDP datagram
-2. Parse with `DnsMessage::from_vec()`
+2. Screen and parse with `crate::utils::dns_screen::decode_dns_message()` — never
+   `DnsMessage::from_vec()` directly (see "The compression-pointer screen" below)
 3. Extract query ID, domain name, query type, query class
 4. Send to LLM as `dns_query` event
 5. LLM returns action with semantic data
 6. Action executor builds `DnsMessage` response
 7. Serialize with `message.to_vec()`
 8. Send UDP datagram back to client
+
+#### The compression-pointer screen
+
+`hickory-proto` 0.24.4 follows a name-compression pointer by recursing
+(`rr/domain/name.rs:1203`) with nothing counting; the only rule is that the target lies before
+the name being read. A chain of pointers each aiming two bytes back, hidden in a NULL record's
+RDATA and entered from one owner name, is one stack frame per two bytes: a debug build overflows
+a 2 MiB tokio worker at 1 702 hops, a 3 448-byte datagram inside the 4 096-byte receive buffer.
+That is a process abort, not a panic. (A release build, at ~155 bytes a frame, survives the
+longest chain the 14-bit offset allows — ~8 180 hops, ~1.3 MiB — on a 2 MiB worker, with only
+what is already on that stack as margin.) `src/utils/dns_screen.rs` computes the deepest chain any
+offset could start, in one linear pass, and refuses past `MAX_POINTER_HOPS` (127 — the most a
+255-octet name needs); it also refuses a header whose section counts cannot fit the bytes
+present, because `Message::read` reserves `Vec::with_capacity(count)` per section from the
+header. Every DNS decode site in NetGet — this server (UDP, TCP and the model's own
+`send_dns_response` bytes), DoT, DoH, DoQ, LLMNR and the DoT/DoH/LLMNR/DNS-transfer clients —
+goes through it. A refused query is dropped and logged (`Failed to parse DNS query: refused
+before decoding: …`), like any other unparseable one. The DNS *client*'s ordinary UDP lookups go
+through `hickory-client`'s `UdpClientStream`, which decodes inside the crate with no seam to
+screen; that path is still exposed to a spoofed answer. `tests/server/dns/compression_chain_test.rs`
+sends the bomb and then a legal query, which is answered only if the process survived.
 
 ### 4. Dual Logging
 

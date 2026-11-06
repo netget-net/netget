@@ -571,6 +571,13 @@ pub struct ProtocolMetadataV2 {
     /// Whether events arriving during a call are delivered together afterwards — see
     /// [`BatchingMode`].
     pub batching: BatchingMode,
+
+    /// Extra words a person might search for that name this protocol by what it does rather
+    /// than what it is called — "raw", "packet", "ip" for the link-layer injector. Used only by
+    /// search (MCP `list_protocols { query }`), **never** by protocol-name resolution:
+    /// unlike [`crate::llm::actions::Protocol::keywords`] these need not be unique across
+    /// protocols and are not matched against free text to pick a protocol.
+    pub search_terms: &'static [&'static str],
 }
 
 impl ProtocolMetadataV2 {
@@ -611,6 +618,7 @@ pub struct ProtocolMetadataV2Builder {
     request_only: Option<&'static str>,
     history: HistoryMode,
     batching: BatchingMode,
+    search_terms: &'static [&'static str],
 }
 
 impl Default for ProtocolMetadataV2Builder {
@@ -636,6 +644,7 @@ impl ProtocolMetadataV2Builder {
             request_only: None,
             history: HistoryMode::Off,
             batching: BatchingMode::Unsupported,
+            search_terms: &[],
         }
     }
 
@@ -737,6 +746,12 @@ impl ProtocolMetadataV2Builder {
         self
     }
 
+    /// Declare search-only terms — see [`ProtocolMetadataV2::search_terms`].
+    pub const fn search_terms(mut self, terms: &'static [&'static str]) -> Self {
+        self.search_terms = terms;
+        self
+    }
+
     /// Declare that the protocol only answers requests, with the reason a person reads — see
     /// [`ProtocolMetadataV2::request_only`].
     pub const fn request_only(mut self, reason: &'static str) -> Self {
@@ -774,6 +789,7 @@ impl ProtocolMetadataV2Builder {
             request_only: self.request_only,
             history: self.history,
             batching: self.batching,
+            search_terms: self.search_terms,
         }
     }
 }

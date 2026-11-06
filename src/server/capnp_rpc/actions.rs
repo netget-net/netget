@@ -217,12 +217,12 @@ impl Protocol for CapnpRpcProtocol {
     fn metadata(&self) -> crate::protocol::metadata::ProtocolMetadataV2 {
         use crate::protocol::metadata::*;
         ProtocolMetadataV2::builder()
-            .state(DevelopmentState::Experimental)
+            .state(DevelopmentState::Beta)
             .privilege_requirement(PrivilegeRequirement::None)
             .implementation("Hand-written Cap'n Proto encoding (bounded pointer-following reader, single-segment builder) and RPC level 1 over Tokio TCP: Bootstrap, Call (on the bootstrap capability or its promised answer), Return, Finish, Release, Abort, Unimplemented; params and results mapped to JSON by a schema loaded at startup")
             .llm_control("The results or exception of every call")
             .e2e_testing("tests/server/capnp_rpc: raw messages, the codec and bounds; pycapnp (the C++ Cap'n Proto runtime) and capnproto.org/go/capnp v3 as independent clients")
-            .notes("One capability is exported (the bootstrap); results carry no capabilities, so promise pipelining reaches only the bootstrap answer. Interface and AnyPointer fields are not mapped. Messages are capped at 4 MiB and 64 segments, nesting at 64, traversal at four times the message size. A handler failure answers an exception, never fabricated results.")
+            .notes("Beta: pycapnp 2.2.4 (the C++ runtime) and go-capnp v3.1.0-alpha.2 each bootstrap, call every method of directory.capnp (a superclass method, unions, groups, defaults, Data, nested lists, an exception) and keep five calls in flight at once, reading back exactly what the handler returned; both fail rather than skip when absent and run in the capnp-rpc-pairs job. One capability is exported (the bootstrap); results carry no capabilities, so promise pipelining reaches only the bootstrap answer. Interface and AnyPointer fields are not mapped. Messages are capped at 4 MiB and 64 segments, nesting at 64, traversal at four times the message size. A handler failure answers an exception, never fabricated results.")
             .request_only("Every Return answers a Bootstrap or a Call")
             .answers_on_failure()
             .max_inbound_bytes(super::layout::MAX_MESSAGE_BYTES)

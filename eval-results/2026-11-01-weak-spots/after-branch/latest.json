@@ -1,0 +1,2489 @@
+{
+  "schema": "netget.eval.v1",
+  "generated_at": "1793486518",
+  "model": "llama3.1:8b",
+  "runs_per_case": 5,
+  "seed": 42,
+  "temperature": null,
+  "determinism": "pass-rate over N independent runs with a pinned sampler seed; the seed makes an identical prompt answer identically, but each run's prompt carries its own ports and ids, so agreement is measured (totals.cases_*_agree) rather than assumed",
+  "totals": {
+    "cases_total": 21,
+    "cases_attempted": 21,
+    "cases_skipped": 0,
+    "runs_total": 105,
+    "runs_passed": 81,
+    "pass_rate": 0.7714285714285715,
+    "runs_recoverable": 0,
+    "pass_rate_with_lenient_parse": 0.7714285714285715,
+    "cases_with_repeats": 21,
+    "cases_verdicts_agree": 16,
+    "cases_actions_agree": 13
+  },
+  "protocols": [
+    {
+      "protocol": "bolt",
+      "client": "cypher-shell",
+      "independence": "protocol-client",
+      "instructions": 3,
+      "instructions_fully_passed": 1,
+      "runs": 15,
+      "runs_passed": 5,
+      "pass_rate": 0.3333333333333333,
+      "dominant_failures": [
+        "event_never_reached_model",
+        "wrong_content"
+      ],
+      "skipped_reason": null,
+      "runs_recoverable": 0
+    },
+    {
+      "protocol": "gemini",
+      "client": "python3",
+      "independence": "protocol-client",
+      "instructions": 3,
+      "instructions_fully_passed": 3,
+      "runs": 15,
+      "runs_passed": 15,
+      "pass_rate": 1.0,
+      "dominant_failures": [],
+      "skipped_reason": null,
+      "runs_recoverable": 0
+    },
+    {
+      "protocol": "ldap",
+      "client": "ldapsearch",
+      "independence": "protocol-client",
+      "instructions": 3,
+      "instructions_fully_passed": 3,
+      "runs": 15,
+      "runs_passed": 15,
+      "pass_rate": 1.0,
+      "dominant_failures": [],
+      "skipped_reason": null,
+      "runs_recoverable": 0
+    },
+    {
+      "protocol": "lmtp",
+      "client": "python3",
+      "independence": "protocol-client",
+      "instructions": 2,
+      "instructions_fully_passed": 2,
+      "runs": 10,
+      "runs_passed": 10,
+      "pass_rate": 1.0,
+      "dominant_failures": [],
+      "skipped_reason": null,
+      "runs_recoverable": 0
+    },
+    {
+      "protocol": "nostr",
+      "client": "nak",
+      "independence": "protocol-client",
+      "instructions": 3,
+      "instructions_fully_passed": 0,
+      "runs": 15,
+      "runs_passed": 7,
+      "pass_rate": 0.4666666666666667,
+      "dominant_failures": [
+        "client_left_before_model_answered",
+        "wrong_content"
+      ],
+      "skipped_reason": null,
+      "runs_recoverable": 0
+    },
+    {
+      "protocol": "rsync",
+      "client": "rsync",
+      "independence": "protocol-client",
+      "instructions": 2,
+      "instructions_fully_passed": 1,
+      "runs": 10,
+      "runs_passed": 5,
+      "pass_rate": 0.5,
+      "dominant_failures": [
+        "wrong_content"
+      ],
+      "skipped_reason": null,
+      "runs_recoverable": 0
+    },
+    {
+      "protocol": "vault",
+      "client": "vault",
+      "independence": "protocol-client",
+      "instructions": 3,
+      "instructions_fully_passed": 3,
+      "runs": 15,
+      "runs_passed": 15,
+      "pass_rate": 1.0,
+      "dominant_failures": [],
+      "skipped_reason": null,
+      "runs_recoverable": 0
+    },
+    {
+      "protocol": "websocket",
+      "client": "websocat",
+      "independence": "protocol-client",
+      "instructions": 2,
+      "instructions_fully_passed": 1,
+      "runs": 10,
+      "runs_passed": 9,
+      "pass_rate": 0.9,
+      "dominant_failures": [
+        "wrong_content"
+      ],
+      "skipped_reason": null,
+      "runs_recoverable": 0
+    }
+  ],
+  "failure_modes": [
+    {
+      "mode": "wrong_content",
+      "runs": 14,
+      "cases": [
+        "bolt/syntax-error",
+        "websocket/greeting",
+        "nostr/refuse-adverts",
+        "rsync/list-modules"
+      ],
+      "explanation": "The model produced a valid, executable action whose content does not satisfy the instruction. This is the honest 'the model did not understand the task' bucket."
+    },
+    {
+      "mode": "client_left_before_model_answered",
+      "runs": 5,
+      "cases": [
+        "nostr/serve-notes",
+        "nostr/refuse-adverts",
+        "nostr/accept-film-note"
+      ],
+      "explanation": "The model was asked and the client hung up before it answered, so the call was abandoned with the connection. A probe problem — a client whose own timeout is shorter than a model call, or a harness that cut it off — not a prompt problem."
+    },
+    {
+      "mode": "event_never_reached_model",
+      "runs": 4,
+      "cases": [
+        "bolt/count"
+      ],
+      "explanation": "No model call happened. The request did not reach the LLM path — a harness or protocol wiring problem, not a prompt problem."
+    },
+    {
+      "mode": "server_start_failed",
+      "runs": 1,
+      "cases": [
+        "bolt/count"
+      ],
+      "explanation": "Harness-level, not a model or description defect."
+    }
+  ],
+  "cases": [
+    {
+      "id": "gemini/home-page",
+      "protocol": "gemini",
+      "instruction": "Serve a home page titled Welcome to the NetGet capsule, with a link to /about.",
+      "client": "python3 -c import os, sys, tempfile, ignition\nignition.set_default_hosts_file(os.path.join(tempfile.mkdtemp(), 'known_hosts'))\nr = ignition.request(sys.argv[1], timeout=230)\nprint(r.status, r.meta)\nprint(r.raw_body.decode('utf-8', 'replace') if r.status.startswith('2') else '')\n gemini://127.0.0.1:{PORT}/",
+      "independence": "protocol-client",
+      "expectation": "contains [\"20 text/gemini\", \"Welcome to the NetGet capsule\", \"=> /about\"]",
+      "note": null,
+      "attempts": 5,
+      "passes": 5,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": true,
+      "actions_agree": false,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:21:16.764974Z DEBUG Executing action 0: Object {\"type\": String(\"send_gemtext\"), \"lines\": Array [Object {\"type\": String(\"heading1\"), \"text\": String(\"Welcome to the NetGet capsule\")}, Object {\"type\": String(\"text\"), \"text\": String(\"A gemini server for testing and development.\")}, Object {\"type\": String(\"link\"), \"url\": String(\"/about\"), \"text\": String(\"Learn more about NetGet\")}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_gemtext\"), \"lines\": Array [Object {\"type\": String(\"heading1\"), \"text\": String(\"Welcome to the NetGet capsule\")}, Object {\"type\": String(\"text\"), \"text\": String(\"A gemini server for testing and development.\")}, Object {\"type\": String(\"link\"), \"url\": String(\"/about\"), \"text\": String(\"Learn more about NetGet\")}]}"
+          ],
+          "client_command": "python3 -c import os, sys, tempfile, ignition\nignition.set_default_hosts_file(os.path.join(tempfile.mkdtemp(), 'known_hosts'))\nr = ignition.request(sys.argv[1], timeout=230)\nprint(r.status, r.meta)\nprint(r.raw_body.decode('utf-8', 'replace') if r.status.startswith('2') else '')\n gemini://127.0.0.1:62431/",
+          "client_output": "20 text/gemini; charset=utf-8\n# Welcome to the NetGet capsule\nA gemini server for testing and development.\n=> /about Learn more about NetGet\n\n\n/opt/homebrew/lib/python3.10/site-packages/ignition/ssl/cert_wrapper.py:34: CryptographyDeprecationWarning: Properties that return a naïve datetime object have been deprecated. Please switch to not_valid_after_utc.\n  return self.certificate.not_valid_after\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 18.369858167
+        },
+        {
+          "run": 2,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:21:26.088858Z DEBUG Executing action 0: Object {\"type\": String(\"send_gemtext\"), \"lines\": Array [Object {\"type\": String(\"heading1\"), \"text\": String(\"Welcome to the NetGet capsule\")}, Object {\"type\": String(\"text\"), \"text\": String(\"A capsule for the NetGet tool\"), \"url\": String(\"/about\"), \"alt\": String(\"Learn more\")}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_gemtext\"), \"lines\": Array [Object {\"type\": String(\"heading1\"), \"text\": String(\"Welcome to the NetGet capsule\")}, Object {\"type\": String(\"text\"), \"text\": String(\"A capsule for the NetGet tool\"), \"url\": String(\"/about\"), \"alt\": String(\"Learn more\")}]}"
+          ],
+          "client_command": "python3 -c import os, sys, tempfile, ignition\nignition.set_default_hosts_file(os.path.join(tempfile.mkdtemp(), 'known_hosts'))\nr = ignition.request(sys.argv[1], timeout=230)\nprint(r.status, r.meta)\nprint(r.raw_body.decode('utf-8', 'replace') if r.status.startswith('2') else '')\n gemini://127.0.0.1:62990/",
+          "client_output": "20 text/gemini; charset=utf-8\n# Welcome to the NetGet capsule\nA capsule for the NetGet tool\n=> /about Learn more\n\n\n/opt/homebrew/lib/python3.10/site-packages/ignition/ssl/cert_wrapper.py:34: CryptographyDeprecationWarning: Properties that return a naïve datetime object have been deprecated. Please switch to not_valid_after_utc.\n  return self.certificate.not_valid_after\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 9.325889791
+        },
+        {
+          "run": 3,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:21:34.607837Z DEBUG Executing action 0: Object {\"type\": String(\"send_gemtext\"), \"lines\": Array [Object {\"type\": String(\"heading1\"), \"text\": String(\"Welcome to the NetGet capsule\")}, Object {\"type\": String(\"text\"), \"text\": String(\"This is a sample home page.\")}, Object {\"type\": String(\"link\"), \"url\": String(\"/about\"), \"text\": String(\"Learn more about us\")}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_gemtext\"), \"lines\": Array [Object {\"type\": String(\"heading1\"), \"text\": String(\"Welcome to the NetGet capsule\")}, Object {\"type\": String(\"text\"), \"text\": String(\"This is a sample home page.\")}, Object {\"type\": String(\"link\"), \"url\": String(\"/about\"), \"text\": String(\"Learn more about us\")}]}"
+          ],
+          "client_command": "python3 -c import os, sys, tempfile, ignition\nignition.set_default_hosts_file(os.path.join(tempfile.mkdtemp(), 'known_hosts'))\nr = ignition.request(sys.argv[1], timeout=230)\nprint(r.status, r.meta)\nprint(r.raw_body.decode('utf-8', 'replace') if r.status.startswith('2') else '')\n gemini://127.0.0.1:63239/",
+          "client_output": "20 text/gemini; charset=utf-8\n# Welcome to the NetGet capsule\nThis is a sample home page.\n=> /about Learn more about us\n\n\n/opt/homebrew/lib/python3.10/site-packages/ignition/ssl/cert_wrapper.py:34: CryptographyDeprecationWarning: Properties that return a naïve datetime object have been deprecated. Please switch to not_valid_after_utc.\n  return self.certificate.not_valid_after\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 8.517384292
+        },
+        {
+          "run": 4,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:21:43.627479Z DEBUG Executing action 0: Object {\"type\": String(\"send_gemtext\"), \"lines\": Array [Object {\"type\": String(\"heading1\"), \"text\": String(\"Welcome to the NetGet capsule\")}, Object {\"type\": String(\"text\"), \"text\": String(\"A gemini server for testing and development.\")}, Object {\"type\": String(\"link\"), \"url\": String(\"/about\"), \"text\": String(\"Learn more about NetGet\")}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_gemtext\"), \"lines\": Array [Object {\"type\": String(\"heading1\"), \"text\": String(\"Welcome to the NetGet capsule\")}, Object {\"type\": String(\"text\"), \"text\": String(\"A gemini server for testing and development.\")}, Object {\"type\": String(\"link\"), \"url\": String(\"/about\"), \"text\": String(\"Learn more about NetGet\")}]}"
+          ],
+          "client_command": "python3 -c import os, sys, tempfile, ignition\nignition.set_default_hosts_file(os.path.join(tempfile.mkdtemp(), 'known_hosts'))\nr = ignition.request(sys.argv[1], timeout=230)\nprint(r.status, r.meta)\nprint(r.raw_body.decode('utf-8', 'replace') if r.status.startswith('2') else '')\n gemini://127.0.0.1:63569/",
+          "client_output": "20 text/gemini; charset=utf-8\n# Welcome to the NetGet capsule\nA gemini server for testing and development.\n=> /about Learn more about NetGet\n\n\n/opt/homebrew/lib/python3.10/site-packages/ignition/ssl/cert_wrapper.py:34: CryptographyDeprecationWarning: Properties that return a naïve datetime object have been deprecated. Please switch to not_valid_after_utc.\n  return self.certificate.not_valid_after\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 9.015753791
+        },
+        {
+          "run": 5,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:21:53.118678Z DEBUG Executing action 0: Object {\"type\": String(\"send_gemtext\"), \"lines\": Array [Object {\"type\": String(\"heading1\"), \"text\": String(\"Welcome to the NetGet capsule\")}, Object {\"type\": String(\"text\"), \"text\": String(\"A capsule for the NetGet tool\"), \"url\": String(\"/about\"), \"alt\": String(\"Learn more\")}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_gemtext\"), \"lines\": Array [Object {\"type\": String(\"heading1\"), \"text\": String(\"Welcome to the NetGet capsule\")}, Object {\"type\": String(\"text\"), \"text\": String(\"A capsule for the NetGet tool\"), \"url\": String(\"/about\"), \"alt\": String(\"Learn more\")}]}"
+          ],
+          "client_command": "python3 -c import os, sys, tempfile, ignition\nignition.set_default_hosts_file(os.path.join(tempfile.mkdtemp(), 'known_hosts'))\nr = ignition.request(sys.argv[1], timeout=230)\nprint(r.status, r.meta)\nprint(r.raw_body.decode('utf-8', 'replace') if r.status.startswith('2') else '')\n gemini://127.0.0.1:63872/",
+          "client_output": "20 text/gemini; charset=utf-8\n# Welcome to the NetGet capsule\nA capsule for the NetGet tool\n=> /about Learn more\n\n\n/opt/homebrew/lib/python3.10/site-packages/ignition/ssl/cert_wrapper.py:34: CryptographyDeprecationWarning: Properties that return a naïve datetime object have been deprecated. Please switch to not_valid_after_utc.\n  return self.certificate.not_valid_after\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 9.491425583
+        }
+      ]
+    },
+    {
+      "id": "gemini/ask-for-input",
+      "protocol": "gemini",
+      "instruction": "The page /guestbook asks the visitor for their name before showing anything.",
+      "client": "python3 -c import os, sys, tempfile, ignition\nignition.set_default_hosts_file(os.path.join(tempfile.mkdtemp(), 'known_hosts'))\nr = ignition.request(sys.argv[1], timeout=230)\nprint(r.status, r.meta)\nprint(r.raw_body.decode('utf-8', 'replace') if r.status.startswith('2') else '')\n gemini://127.0.0.1:{PORT}/guestbook",
+      "independence": "protocol-client",
+      "expectation": "matches /(?m)^1[01] /",
+      "note": null,
+      "attempts": 5,
+      "passes": 5,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": true,
+      "actions_agree": false,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:22:24.155593Z DEBUG Executing action 0: Object {\"type\": String(\"send_gemini_input\"), \"prompt\": String(\"What is your name?\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_gemini_input\"), \"prompt\": String(\"What is your name?\")}"
+          ],
+          "client_command": "python3 -c import os, sys, tempfile, ignition\nignition.set_default_hosts_file(os.path.join(tempfile.mkdtemp(), 'known_hosts'))\nr = ignition.request(sys.argv[1], timeout=230)\nprint(r.status, r.meta)\nprint(r.raw_body.decode('utf-8', 'replace') if r.status.startswith('2') else '')\n gemini://127.0.0.1:64085/guestbook",
+          "client_output": "10 What is your name?\n\n\n/opt/homebrew/lib/python3.10/site-packages/ignition/ssl/cert_wrapper.py:34: CryptographyDeprecationWarning: Properties that return a naïve datetime object have been deprecated. Please switch to not_valid_after_utc.\n  return self.certificate.not_valid_after\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 31.032062042
+        },
+        {
+          "run": 2,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:23:00.956126Z DEBUG Executing action 0: Object {\"type\": String(\"send_gemini_input\"), \"prompt\": String(\"Please enter your name:\"), \"sensitive\": Bool(false)}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_gemini_input\"), \"prompt\": String(\"Please enter your name:\"), \"sensitive\": Bool(false)}"
+          ],
+          "client_command": "python3 -c import os, sys, tempfile, ignition\nignition.set_default_hosts_file(os.path.join(tempfile.mkdtemp(), 'known_hosts'))\nr = ignition.request(sys.argv[1], timeout=230)\nprint(r.status, r.meta)\nprint(r.raw_body.decode('utf-8', 'replace') if r.status.startswith('2') else '')\n gemini://127.0.0.1:65034/guestbook",
+          "client_output": "10 Please enter your name:\n\n\n/opt/homebrew/lib/python3.10/site-packages/ignition/ssl/cert_wrapper.py:34: CryptographyDeprecationWarning: Properties that return a naïve datetime object have been deprecated. Please switch to not_valid_after_utc.\n  return self.certificate.not_valid_after\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 36.786863458
+        },
+        {
+          "run": 3,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:23:04.819994Z DEBUG Executing action 0: Object {\"type\": String(\"send_gemini_input\"), \"prompt\": String(\"What's your name?\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_gemini_input\"), \"prompt\": String(\"What's your name?\")}"
+          ],
+          "client_command": "python3 -c import os, sys, tempfile, ignition\nignition.set_default_hosts_file(os.path.join(tempfile.mkdtemp(), 'known_hosts'))\nr = ignition.request(sys.argv[1], timeout=230)\nprint(r.status, r.meta)\nprint(r.raw_body.decode('utf-8', 'replace') if r.status.startswith('2') else '')\n gemini://127.0.0.1:65121/guestbook",
+          "client_output": "10 What's your name?\n\n\n/opt/homebrew/lib/python3.10/site-packages/ignition/ssl/cert_wrapper.py:34: CryptographyDeprecationWarning: Properties that return a naïve datetime object have been deprecated. Please switch to not_valid_after_utc.\n  return self.certificate.not_valid_after\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 3.862286166
+        },
+        {
+          "run": 4,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:23:08.038524Z DEBUG Executing action 0: Object {\"type\": String(\"send_gemini_input\"), \"prompt\": String(\"What's your name?\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_gemini_input\"), \"prompt\": String(\"What's your name?\")}"
+          ],
+          "client_command": "python3 -c import os, sys, tempfile, ignition\nignition.set_default_hosts_file(os.path.join(tempfile.mkdtemp(), 'known_hosts'))\nr = ignition.request(sys.argv[1], timeout=230)\nprint(r.status, r.meta)\nprint(r.raw_body.decode('utf-8', 'replace') if r.status.startswith('2') else '')\n gemini://127.0.0.1:65196/guestbook",
+          "client_output": "10 What's your name?\n\n\n/opt/homebrew/lib/python3.10/site-packages/ignition/ssl/cert_wrapper.py:34: CryptographyDeprecationWarning: Properties that return a naïve datetime object have been deprecated. Please switch to not_valid_after_utc.\n  return self.certificate.not_valid_after\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 3.219989458
+        },
+        {
+          "run": 5,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:23:14.689552Z DEBUG Executing action 0: Object {\"type\": String(\"send_gemini_input\"), \"prompt\": String(\"What is your name?\"), \"sensitive\": Bool(false)}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_gemini_input\"), \"prompt\": String(\"What is your name?\"), \"sensitive\": Bool(false)}"
+          ],
+          "client_command": "python3 -c import os, sys, tempfile, ignition\nignition.set_default_hosts_file(os.path.join(tempfile.mkdtemp(), 'known_hosts'))\nr = ignition.request(sys.argv[1], timeout=230)\nprint(r.status, r.meta)\nprint(r.raw_body.decode('utf-8', 'replace') if r.status.startswith('2') else '')\n gemini://127.0.0.1:65241/guestbook",
+          "client_output": "10 What is your name?\n\n\n/opt/homebrew/lib/python3.10/site-packages/ignition/ssl/cert_wrapper.py:34: CryptographyDeprecationWarning: Properties that return a naïve datetime object have been deprecated. Please switch to not_valid_after_utc.\n  return self.certificate.not_valid_after\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 6.652277292
+        }
+      ]
+    },
+    {
+      "id": "gemini/not-found",
+      "protocol": "gemini",
+      "instruction": "Only the home page exists. Every other page does not exist.",
+      "client": "python3 -c import os, sys, tempfile, ignition\nignition.set_default_hosts_file(os.path.join(tempfile.mkdtemp(), 'known_hosts'))\nr = ignition.request(sys.argv[1], timeout=230)\nprint(r.status, r.meta)\nprint(r.raw_body.decode('utf-8', 'replace') if r.status.startswith('2') else '')\n gemini://127.0.0.1:{PORT}/nowhere",
+      "independence": "protocol-client",
+      "expectation": "matches /(?m)^51 /",
+      "note": null,
+      "attempts": 5,
+      "passes": 5,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": true,
+      "actions_agree": true,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:23:25.119933Z DEBUG Executing action 0: Object {\"type\": String(\"send_gemini_response\"), \"status\": Number(51), \"meta\": String(\"Not found\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_gemini_response\"), \"status\": Number(51), \"meta\": String(\"Not found\")}"
+          ],
+          "client_command": "python3 -c import os, sys, tempfile, ignition\nignition.set_default_hosts_file(os.path.join(tempfile.mkdtemp(), 'known_hosts'))\nr = ignition.request(sys.argv[1], timeout=230)\nprint(r.status, r.meta)\nprint(r.raw_body.decode('utf-8', 'replace') if r.status.startswith('2') else '')\n gemini://127.0.0.1:65321/nowhere",
+          "client_output": "51 Not found\n\n\n/opt/homebrew/lib/python3.10/site-packages/ignition/ssl/cert_wrapper.py:34: CryptographyDeprecationWarning: Properties that return a naïve datetime object have been deprecated. Please switch to not_valid_after_utc.\n  return self.certificate.not_valid_after\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 10.427853625000001
+        },
+        {
+          "run": 2,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:23:30.741674Z DEBUG Executing action 0: Object {\"type\": String(\"send_gemini_response\"), \"status\": Number(51), \"meta\": String(\"Not found\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_gemini_response\"), \"status\": Number(51), \"meta\": String(\"Not found\")}"
+          ],
+          "client_command": "python3 -c import os, sys, tempfile, ignition\nignition.set_default_hosts_file(os.path.join(tempfile.mkdtemp(), 'known_hosts'))\nr = ignition.request(sys.argv[1], timeout=230)\nprint(r.status, r.meta)\nprint(r.raw_body.decode('utf-8', 'replace') if r.status.startswith('2') else '')\n gemini://127.0.0.1:65416/nowhere",
+          "client_output": "51 Not found\n\n\n/opt/homebrew/lib/python3.10/site-packages/ignition/ssl/cert_wrapper.py:34: CryptographyDeprecationWarning: Properties that return a naïve datetime object have been deprecated. Please switch to not_valid_after_utc.\n  return self.certificate.not_valid_after\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 5.621556333
+        },
+        {
+          "run": 3,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:23:36.445602Z DEBUG Executing action 0: Object {\"type\": String(\"send_gemini_response\"), \"status\": Number(51), \"meta\": String(\"Not found\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_gemini_response\"), \"status\": Number(51), \"meta\": String(\"Not found\")}"
+          ],
+          "client_command": "python3 -c import os, sys, tempfile, ignition\nignition.set_default_hosts_file(os.path.join(tempfile.mkdtemp(), 'known_hosts'))\nr = ignition.request(sys.argv[1], timeout=230)\nprint(r.status, r.meta)\nprint(r.raw_body.decode('utf-8', 'replace') if r.status.startswith('2') else '')\n gemini://127.0.0.1:65475/nowhere",
+          "client_output": "51 Not found\n\n\n/opt/homebrew/lib/python3.10/site-packages/ignition/ssl/cert_wrapper.py:34: CryptographyDeprecationWarning: Properties that return a naïve datetime object have been deprecated. Please switch to not_valid_after_utc.\n  return self.certificate.not_valid_after\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 5.705404458
+        },
+        {
+          "run": 4,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:23:43.085060Z DEBUG Executing action 0: Object {\"type\": String(\"send_gemini_response\"), \"status\": Number(51), \"meta\": String(\"Not found\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_gemini_response\"), \"status\": Number(51), \"meta\": String(\"Not found\")}"
+          ],
+          "client_command": "python3 -c import os, sys, tempfile, ignition\nignition.set_default_hosts_file(os.path.join(tempfile.mkdtemp(), 'known_hosts'))\nr = ignition.request(sys.argv[1], timeout=230)\nprint(r.status, r.meta)\nprint(r.raw_body.decode('utf-8', 'replace') if r.status.startswith('2') else '')\n gemini://127.0.0.1:65525/nowhere",
+          "client_output": "51 Not found\n\n\n/opt/homebrew/lib/python3.10/site-packages/ignition/ssl/cert_wrapper.py:34: CryptographyDeprecationWarning: Properties that return a naïve datetime object have been deprecated. Please switch to not_valid_after_utc.\n  return self.certificate.not_valid_after\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 6.640288459
+        },
+        {
+          "run": 5,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:23:48.961172Z DEBUG Executing action 0: Object {\"type\": String(\"send_gemini_response\"), \"status\": Number(51), \"meta\": String(\"Not found\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_gemini_response\"), \"status\": Number(51), \"meta\": String(\"Not found\")}"
+          ],
+          "client_command": "python3 -c import os, sys, tempfile, ignition\nignition.set_default_hosts_file(os.path.join(tempfile.mkdtemp(), 'known_hosts'))\nr = ignition.request(sys.argv[1], timeout=230)\nprint(r.status, r.meta)\nprint(r.raw_body.decode('utf-8', 'replace') if r.status.startswith('2') else '')\n gemini://127.0.0.1:49189/nowhere",
+          "client_output": "51 Not found\n\n\n/opt/homebrew/lib/python3.10/site-packages/ignition/ssl/cert_wrapper.py:34: CryptographyDeprecationWarning: Properties that return a naïve datetime object have been deprecated. Please switch to not_valid_after_utc.\n  return self.certificate.not_valid_after\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 5.8763855419999995
+        }
+      ]
+    },
+    {
+      "id": "ldap/single-person",
+      "protocol": "ldap",
+      "instruction": "Accept anonymous connections. A search under dc=example,dc=com finds one person, Alice Liddell, whose mail address is alice@example.com.",
+      "client": "ldapsearch -x -H ldap://127.0.0.1:{PORT} -b dc=example,dc=com -s sub -o nettimeout=230 -l 230 (objectClass=*)",
+      "independence": "protocol-client",
+      "expectation": "contains [\"Alice Liddell\", \"alice@example.com\"]",
+      "note": null,
+      "attempts": 5,
+      "passes": 5,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": true,
+      "actions_agree": true,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:24:01.978558Z DEBUG Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [Object {\"dn\": String(\"cn=Alice Liddell,dc=example,dc=com\"), \"attributes\": Object {\"cn\": Array [String(\"Alice Liddell\")], \"mail\": Array [String(\"alice@example.com\")], \"objectClass\": Array [String(\"person\"), String(\"inetOrgPerson\")]}}], \"result_code\": Number(0)}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [Object {\"dn\": String(\"cn=Alice Liddell,dc=example,dc=com\"), \"attributes\": Object {\"cn\": Array [String(\"Alice Liddell\")], \"mail\": Array [String(\"alice@example.com\")], \"objectClass\": Array [String(\"person\"), String(\"inetOrgPerson\")]}}], \"result_code\": Number(0)}"
+          ],
+          "client_command": "ldapsearch -x -H ldap://127.0.0.1:49238 -b dc=example,dc=com -s sub -o nettimeout=230 -l 230 (objectClass=*)",
+          "client_output": "# extended LDIF\n#\n# LDAPv3\n# base <dc=example,dc=com> with scope subtree\n# filter: (objectClass=*)\n# requesting: ALL\n#\n\n# Alice Liddell, example.com\ndn: cn=Alice Liddell,dc=example,dc=com\ncn: Alice Liddell\nmail: alice@example.com\nobjectClass: person\nobjectClass: inetOrgPerson\n\n# search result\nsearch: 2\nresult: 0 Success\n\n# numResponses: 2\n# numEntries: 1\n\nldap_bind: Success (0)\n\tadditional info: Bind successful\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 13.01129225
+        },
+        {
+          "run": 2,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:24:12.883175Z DEBUG Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [Object {\"dn\": String(\"cn=Alice Liddell,dc=example,dc=com\"), \"attributes\": Object {\"cn\": Array [String(\"Alice Liddell\")], \"mail\": Array [String(\"alice@example.com\")], \"objectClass\": Array [String(\"person\"), String(\"inetOrgPerson\")]}}], \"result_code\": Number(0)}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [Object {\"dn\": String(\"cn=Alice Liddell,dc=example,dc=com\"), \"attributes\": Object {\"cn\": Array [String(\"Alice Liddell\")], \"mail\": Array [String(\"alice@example.com\")], \"objectClass\": Array [String(\"person\"), String(\"inetOrgPerson\")]}}], \"result_code\": Number(0)}"
+          ],
+          "client_command": "ldapsearch -x -H ldap://127.0.0.1:49336 -b dc=example,dc=com -s sub -o nettimeout=230 -l 230 (objectClass=*)",
+          "client_output": "# extended LDIF\n#\n# LDAPv3\n# base <dc=example,dc=com> with scope subtree\n# filter: (objectClass=*)\n# requesting: ALL\n#\n\n# Alice Liddell, example.com\ndn: cn=Alice Liddell,dc=example,dc=com\ncn: Alice Liddell\nmail: alice@example.com\nobjectClass: person\nobjectClass: inetOrgPerson\n\n# search result\nsearch: 2\nresult: 0 Success\n\n# numResponses: 2\n# numEntries: 1\n\nldap_bind: Success (0)\n\tadditional info: Bind successful\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 10.90145675
+        },
+        {
+          "run": 3,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:24:23.790429Z DEBUG Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [Object {\"dn\": String(\"cn=Alice Liddell,dc=example,dc=com\"), \"attributes\": Object {\"cn\": Array [String(\"Alice Liddell\")], \"mail\": Array [String(\"alice@example.com\")], \"objectClass\": Array [String(\"person\"), String(\"inetOrgPerson\")]}}], \"result_code\": Number(0)}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [Object {\"dn\": String(\"cn=Alice Liddell,dc=example,dc=com\"), \"attributes\": Object {\"cn\": Array [String(\"Alice Liddell\")], \"mail\": Array [String(\"alice@example.com\")], \"objectClass\": Array [String(\"person\"), String(\"inetOrgPerson\")]}}], \"result_code\": Number(0)}"
+          ],
+          "client_command": "ldapsearch -x -H ldap://127.0.0.1:49421 -b dc=example,dc=com -s sub -o nettimeout=230 -l 230 (objectClass=*)",
+          "client_output": "# extended LDIF\n#\n# LDAPv3\n# base <dc=example,dc=com> with scope subtree\n# filter: (objectClass=*)\n# requesting: ALL\n#\n\n# Alice Liddell, example.com\ndn: cn=Alice Liddell,dc=example,dc=com\ncn: Alice Liddell\nmail: alice@example.com\nobjectClass: person\nobjectClass: inetOrgPerson\n\n# search result\nsearch: 2\nresult: 0 Success\n\n# numResponses: 2\n# numEntries: 1\n\nldap_bind: Success (0)\n\tadditional info: Bind successful\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 10.908405958
+        },
+        {
+          "run": 4,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:24:34.585009Z DEBUG Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [Object {\"dn\": String(\"cn=Alice Liddell,dc=example,dc=com\"), \"attributes\": Object {\"cn\": Array [String(\"Alice Liddell\")], \"mail\": Array [String(\"alice@example.com\")], \"objectClass\": Array [String(\"person\"), String(\"inetOrgPerson\")]}}], \"result_code\": Number(0)}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [Object {\"dn\": String(\"cn=Alice Liddell,dc=example,dc=com\"), \"attributes\": Object {\"cn\": Array [String(\"Alice Liddell\")], \"mail\": Array [String(\"alice@example.com\")], \"objectClass\": Array [String(\"person\"), String(\"inetOrgPerson\")]}}], \"result_code\": Number(0)}"
+          ],
+          "client_command": "ldapsearch -x -H ldap://127.0.0.1:49510 -b dc=example,dc=com -s sub -o nettimeout=230 -l 230 (objectClass=*)",
+          "client_output": "# extended LDIF\n#\n# LDAPv3\n# base <dc=example,dc=com> with scope subtree\n# filter: (objectClass=*)\n# requesting: ALL\n#\n\n# Alice Liddell, example.com\ndn: cn=Alice Liddell,dc=example,dc=com\ncn: Alice Liddell\nmail: alice@example.com\nobjectClass: person\nobjectClass: inetOrgPerson\n\n# search result\nsearch: 2\nresult: 0 Success\n\n# numResponses: 2\n# numEntries: 1\n\nldap_bind: Success (0)\n\tadditional info: Bind successful\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 10.794616875
+        },
+        {
+          "run": 5,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:24:45.382622Z DEBUG Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [Object {\"dn\": String(\"cn=Alice Liddell,dc=example,dc=com\"), \"attributes\": Object {\"cn\": Array [String(\"Alice Liddell\")], \"mail\": Array [String(\"alice@example.com\")], \"objectClass\": Array [String(\"person\"), String(\"inetOrgPerson\")]}}], \"result_code\": Number(0)}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [Object {\"dn\": String(\"cn=Alice Liddell,dc=example,dc=com\"), \"attributes\": Object {\"cn\": Array [String(\"Alice Liddell\")], \"mail\": Array [String(\"alice@example.com\")], \"objectClass\": Array [String(\"person\"), String(\"inetOrgPerson\")]}}], \"result_code\": Number(0)}"
+          ],
+          "client_command": "ldapsearch -x -H ldap://127.0.0.1:49592 -b dc=example,dc=com -s sub -o nettimeout=230 -l 230 (objectClass=*)",
+          "client_output": "# extended LDIF\n#\n# LDAPv3\n# base <dc=example,dc=com> with scope subtree\n# filter: (objectClass=*)\n# requesting: ALL\n#\n\n# Alice Liddell, example.com\ndn: cn=Alice Liddell,dc=example,dc=com\ncn: Alice Liddell\nmail: alice@example.com\nobjectClass: person\nobjectClass: inetOrgPerson\n\n# search result\nsearch: 2\nresult: 0 Success\n\n# numResponses: 2\n# numEntries: 1\n\nldap_bind: Success (0)\n\tadditional info: Bind successful\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 10.796991916
+        }
+      ]
+    },
+    {
+      "id": "ldap/two-people",
+      "protocol": "ldap",
+      "instruction": "Accept anonymous connections. Under ou=people,dc=example,dc=com there are two users, alice and bob.",
+      "client": "ldapsearch -x -H ldap://127.0.0.1:{PORT} -b ou=people,dc=example,dc=com -s sub -o nettimeout=230 -l 230 (objectClass=*)",
+      "independence": "protocol-client",
+      "expectation": "contains [\"alice\", \"bob\"]",
+      "note": null,
+      "attempts": 5,
+      "passes": 5,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": true,
+      "actions_agree": true,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:24:57.105782Z DEBUG Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [Object {\"dn\": String(\"cn=alice,ou=people,dc=example,dc=com\"), \"attributes\": Object {\"cn\": Array [String(\"alice\")], \"mail\": Array [String(\"alice@example.com\")], \"objectClass\": Array [String(\"person\"), String(\"inetOrgPerson\")]}}, Object {\"dn\": String(\"cn=bob,ou=people,dc=example,dc=com\"), \"attributes\": Object {\"cn\": Array [String(\"bob\")], \"mail\": Array [String(\"bob@example.com\")], \"objectClass\": Array [String(\"person\"), String(\"inetOrgPerson\")]}}], \"result_code\": Number(0)}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [Object {\"dn\": String(\"cn=alice,ou=people,dc=example,dc=com\"), \"attributes\": Object {\"cn\": Array [String(\"alice\")], \"mail\": Array [String(\"alice@example.com\")], \"objectClass\": Array [String(\"person\"), String(\"inetOrgPerson\")]}}, Object {\"dn\": String(\"cn=bob,ou=people,dc=example,dc=com\"), \"attributes\": Object {\"cn\": Array [String(\"bob\")], \"mail\": Array [String(\"bob@example.com\")], \"objectClass\": Array [String(\"person\"), String(\"inetOrgPerson\")]}}], \"result_code\": Number(0)}"
+          ],
+          "client_command": "ldapsearch -x -H ldap://127.0.0.1:49672 -b ou=people,dc=example,dc=com -s sub -o nettimeout=230 -l 230 (objectClass=*)",
+          "client_output": "# extended LDIF\n#\n# LDAPv3\n# base <ou=people,dc=example,dc=com> with scope subtree\n# filter: (objectClass=*)\n# requesting: ALL\n#\n\n# alice, people, example.com\ndn: cn=alice,ou=people,dc=example,dc=com\ncn: alice\nmail: alice@example.com\nobjectClass: person\nobjectClass: inetOrgPerson\n\n# bob, people, example.com\ndn: cn=bob,ou=people,dc=example,dc=com\ncn: bob\nmail: bob@example.com\nobjectClass: person\nobjectClass: inetOrgPerson\n\n# search result\nsearch: 2\nresult: 0 Success\n\n# numResponses: 3\n# numEntries: 2\n\nldap_bind: Success (0)\n\tadditional info: Bind successful\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 11.722771708
+        },
+        {
+          "run": 2,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:25:05.262085Z DEBUG Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [Object {\"dn\": String(\"cn=alice,ou=people,dc=example,dc=com\"), \"attributes\": Object {\"cn\": Array [String(\"alice\")], \"mail\": Array [String(\"alice@example.com\")], \"objectClass\": Array [String(\"person\"), String(\"inetOrgPerson\")]}}, Object {\"dn\": String(\"cn=bob,ou=people,dc=example,dc=com\"), \"attributes\": Object {\"cn\": Array [String(\"bob\")], \"mail\": Array [String(\"bob@example.com\")], \"objectClass\": Array [String(\"person\"), String(\"inetOrgPerson\")]}}], \"result_code\": Number(0)}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [Object {\"dn\": String(\"cn=alice,ou=people,dc=example,dc=com\"), \"attributes\": Object {\"cn\": Array [String(\"alice\")], \"mail\": Array [String(\"alice@example.com\")], \"objectClass\": Array [String(\"person\"), String(\"inetOrgPerson\")]}}, Object {\"dn\": String(\"cn=bob,ou=people,dc=example,dc=com\"), \"attributes\": Object {\"cn\": Array [String(\"bob\")], \"mail\": Array [String(\"bob@example.com\")], \"objectClass\": Array [String(\"person\"), String(\"inetOrgPerson\")]}}], \"result_code\": Number(0)}"
+          ],
+          "client_command": "ldapsearch -x -H ldap://127.0.0.1:49769 -b ou=people,dc=example,dc=com -s sub -o nettimeout=230 -l 230 (objectClass=*)",
+          "client_output": "# extended LDIF\n#\n# LDAPv3\n# base <ou=people,dc=example,dc=com> with scope subtree\n# filter: (objectClass=*)\n# requesting: ALL\n#\n\n# alice, people, example.com\ndn: cn=alice,ou=people,dc=example,dc=com\ncn: alice\nmail: alice@example.com\nobjectClass: person\nobjectClass: inetOrgPerson\n\n# bob, people, example.com\ndn: cn=bob,ou=people,dc=example,dc=com\ncn: bob\nmail: bob@example.com\nobjectClass: person\nobjectClass: inetOrgPerson\n\n# search result\nsearch: 2\nresult: 0 Success\n\n# numResponses: 3\n# numEntries: 2\n\nldap_bind: Success (0)\n\tadditional info: Bind successful\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 8.157107333
+        },
+        {
+          "run": 3,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:25:13.277597Z DEBUG Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [Object {\"dn\": String(\"cn=alice,ou=people,dc=example,dc=com\"), \"attributes\": Object {\"cn\": Array [String(\"alice\")], \"mail\": Array [String(\"alice@example.com\")], \"objectClass\": Array [String(\"person\"), String(\"inetOrgPerson\")]}}, Object {\"dn\": String(\"cn=bob,ou=people,dc=example,dc=com\"), \"attributes\": Object {\"cn\": Array [String(\"bob\")], \"mail\": Array [String(\"bob@example.com\")], \"objectClass\": Array [String(\"person\"), String(\"inetOrgPerson\")]}}], \"result_code\": Number(0)}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [Object {\"dn\": String(\"cn=alice,ou=people,dc=example,dc=com\"), \"attributes\": Object {\"cn\": Array [String(\"alice\")], \"mail\": Array [String(\"alice@example.com\")], \"objectClass\": Array [String(\"person\"), String(\"inetOrgPerson\")]}}, Object {\"dn\": String(\"cn=bob,ou=people,dc=example,dc=com\"), \"attributes\": Object {\"cn\": Array [String(\"bob\")], \"mail\": Array [String(\"bob@example.com\")], \"objectClass\": Array [String(\"person\"), String(\"inetOrgPerson\")]}}], \"result_code\": Number(0)}"
+          ],
+          "client_command": "ldapsearch -x -H ldap://127.0.0.1:49854 -b ou=people,dc=example,dc=com -s sub -o nettimeout=230 -l 230 (objectClass=*)",
+          "client_output": "# extended LDIF\n#\n# LDAPv3\n# base <ou=people,dc=example,dc=com> with scope subtree\n# filter: (objectClass=*)\n# requesting: ALL\n#\n\n# alice, people, example.com\ndn: cn=alice,ou=people,dc=example,dc=com\ncn: alice\nmail: alice@example.com\nobjectClass: person\nobjectClass: inetOrgPerson\n\n# bob, people, example.com\ndn: cn=bob,ou=people,dc=example,dc=com\ncn: bob\nmail: bob@example.com\nobjectClass: person\nobjectClass: inetOrgPerson\n\n# search result\nsearch: 2\nresult: 0 Success\n\n# numResponses: 3\n# numEntries: 2\n\nldap_bind: Success (0)\n\tadditional info: Bind successful\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 8.014166708
+        },
+        {
+          "run": 4,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:25:21.757832Z DEBUG Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [Object {\"dn\": String(\"cn=alice,ou=people,dc=example,dc=com\"), \"attributes\": Object {\"cn\": Array [String(\"alice\")], \"mail\": Array [String(\"alice@example.com\")], \"objectClass\": Array [String(\"person\"), String(\"inetOrgPerson\")]}}, Object {\"dn\": String(\"cn=bob,ou=people,dc=example,dc=com\"), \"attributes\": Object {\"cn\": Array [String(\"bob\")], \"mail\": Array [String(\"bob@example.com\")], \"objectClass\": Array [String(\"person\"), String(\"inetOrgPerson\")]}}], \"result_code\": Number(0)}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [Object {\"dn\": String(\"cn=alice,ou=people,dc=example,dc=com\"), \"attributes\": Object {\"cn\": Array [String(\"alice\")], \"mail\": Array [String(\"alice@example.com\")], \"objectClass\": Array [String(\"person\"), String(\"inetOrgPerson\")]}}, Object {\"dn\": String(\"cn=bob,ou=people,dc=example,dc=com\"), \"attributes\": Object {\"cn\": Array [String(\"bob\")], \"mail\": Array [String(\"bob@example.com\")], \"objectClass\": Array [String(\"person\"), String(\"inetOrgPerson\")]}}], \"result_code\": Number(0)}"
+          ],
+          "client_command": "ldapsearch -x -H ldap://127.0.0.1:49960 -b ou=people,dc=example,dc=com -s sub -o nettimeout=230 -l 230 (objectClass=*)",
+          "client_output": "# extended LDIF\n#\n# LDAPv3\n# base <ou=people,dc=example,dc=com> with scope subtree\n# filter: (objectClass=*)\n# requesting: ALL\n#\n\n# alice, people, example.com\ndn: cn=alice,ou=people,dc=example,dc=com\ncn: alice\nmail: alice@example.com\nobjectClass: person\nobjectClass: inetOrgPerson\n\n# bob, people, example.com\ndn: cn=bob,ou=people,dc=example,dc=com\ncn: bob\nmail: bob@example.com\nobjectClass: person\nobjectClass: inetOrgPerson\n\n# search result\nsearch: 2\nresult: 0 Success\n\n# numResponses: 3\n# numEntries: 2\n\nldap_bind: Success (0)\n\tadditional info: Bind successful\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 8.479765625
+        },
+        {
+          "run": 5,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:25:31.591386Z DEBUG Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [Object {\"dn\": String(\"cn=alice,ou=people,dc=example,dc=com\"), \"attributes\": Object {\"cn\": Array [String(\"alice\")], \"mail\": Array [String(\"alice@example.com\")], \"objectClass\": Array [String(\"person\"), String(\"inetOrgPerson\")]}}, Object {\"dn\": String(\"cn=bob,ou=people,dc=example,dc=com\"), \"attributes\": Object {\"cn\": Array [String(\"bob\")], \"mail\": Array [String(\"bob@example.com\")], \"objectClass\": Array [String(\"person\"), String(\"inetOrgPerson\")]}}], \"result_code\": Number(0)}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [Object {\"dn\": String(\"cn=alice,ou=people,dc=example,dc=com\"), \"attributes\": Object {\"cn\": Array [String(\"alice\")], \"mail\": Array [String(\"alice@example.com\")], \"objectClass\": Array [String(\"person\"), String(\"inetOrgPerson\")]}}, Object {\"dn\": String(\"cn=bob,ou=people,dc=example,dc=com\"), \"attributes\": Object {\"cn\": Array [String(\"bob\")], \"mail\": Array [String(\"bob@example.com\")], \"objectClass\": Array [String(\"person\"), String(\"inetOrgPerson\")]}}], \"result_code\": Number(0)}"
+          ],
+          "client_command": "ldapsearch -x -H ldap://127.0.0.1:50042 -b ou=people,dc=example,dc=com -s sub -o nettimeout=230 -l 230 (objectClass=*)",
+          "client_output": "# extended LDIF\n#\n# LDAPv3\n# base <ou=people,dc=example,dc=com> with scope subtree\n# filter: (objectClass=*)\n# requesting: ALL\n#\n\n# alice, people, example.com\ndn: cn=alice,ou=people,dc=example,dc=com\ncn: alice\nmail: alice@example.com\nobjectClass: person\nobjectClass: inetOrgPerson\n\n# bob, people, example.com\ndn: cn=bob,ou=people,dc=example,dc=com\ncn: bob\nmail: bob@example.com\nobjectClass: person\nobjectClass: inetOrgPerson\n\n# search result\nsearch: 2\nresult: 0 Success\n\n# numResponses: 3\n# numEntries: 2\n\nldap_bind: Success (0)\n\tadditional info: Bind successful\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 9.833625125
+        }
+      ]
+    },
+    {
+      "id": "ldap/empty-result",
+      "protocol": "ldap",
+      "instruction": "Accept anonymous connections. There is nothing at all under dc=other,dc=com — searches there succeed and find no one.",
+      "client": "ldapsearch -x -H ldap://127.0.0.1:{PORT} -b dc=other,dc=com -s sub -o nettimeout=230 -l 230 (objectClass=*)",
+      "independence": "protocol-client",
+      "expectation": "lacks [\"Alice\", \"cn=\"] and matches /(?i)result:\\s*0\\s+success/",
+      "note": null,
+      "attempts": 5,
+      "passes": 5,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": true,
+      "actions_agree": true,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:25:43.058438Z DEBUG Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [], \"result_code\": Number(0)}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [], \"result_code\": Number(0)}"
+          ],
+          "client_command": "ldapsearch -x -H ldap://127.0.0.1:50117 -b dc=other,dc=com -s sub -o nettimeout=230 -l 230 (objectClass=*)",
+          "client_output": "# extended LDIF\n#\n# LDAPv3\n# base <dc=other,dc=com> with scope subtree\n# filter: (objectClass=*)\n# requesting: ALL\n#\n\n# search result\nsearch: 2\nresult: 0 Success\n\n# numResponses: 1\n\nldap_bind: Success (0)\n\tadditional info: Bind successful\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 11.46357525
+        },
+        {
+          "run": 2,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:25:51.548778Z DEBUG Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [], \"result_code\": Number(0)}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [], \"result_code\": Number(0)}"
+          ],
+          "client_command": "ldapsearch -x -H ldap://127.0.0.1:50204 -b dc=other,dc=com -s sub -o nettimeout=230 -l 230 (objectClass=*)",
+          "client_output": "# extended LDIF\n#\n# LDAPv3\n# base <dc=other,dc=com> with scope subtree\n# filter: (objectClass=*)\n# requesting: ALL\n#\n\n# search result\nsearch: 2\nresult: 0 Success\n\n# numResponses: 1\n\nldap_bind: Success (0)\n\tadditional info: Bind successful\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 8.491719209
+        },
+        {
+          "run": 3,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:26:00.443797Z DEBUG Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [], \"result_code\": Number(0)}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [], \"result_code\": Number(0)}"
+          ],
+          "client_command": "ldapsearch -x -H ldap://127.0.0.1:50279 -b dc=other,dc=com -s sub -o nettimeout=230 -l 230 (objectClass=*)",
+          "client_output": "# extended LDIF\n#\n# LDAPv3\n# base <dc=other,dc=com> with scope subtree\n# filter: (objectClass=*)\n# requesting: ALL\n#\n\n# search result\nsearch: 2\nresult: 0 Success\n\n# numResponses: 1\n\nldap_bind: Success (0)\n\tadditional info: Bind successful\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 8.894492417
+        },
+        {
+          "run": 4,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:26:09.106132Z DEBUG Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [], \"result_code\": Number(0)}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [], \"result_code\": Number(0)}"
+          ],
+          "client_command": "ldapsearch -x -H ldap://127.0.0.1:50352 -b dc=other,dc=com -s sub -o nettimeout=230 -l 230 (objectClass=*)",
+          "client_output": "# extended LDIF\n#\n# LDAPv3\n# base <dc=other,dc=com> with scope subtree\n# filter: (objectClass=*)\n# requesting: ALL\n#\n\n# search result\nsearch: 2\nresult: 0 Success\n\n# numResponses: 1\n\nldap_bind: Success (0)\n\tadditional info: Bind successful\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 8.660743458
+        },
+        {
+          "run": 5,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:26:17.691951Z DEBUG Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [], \"result_code\": Number(0)}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [], \"result_code\": Number(0)}"
+          ],
+          "client_command": "ldapsearch -x -H ldap://127.0.0.1:50427 -b dc=other,dc=com -s sub -o nettimeout=230 -l 230 (objectClass=*)",
+          "client_output": "# extended LDIF\n#\n# LDAPv3\n# base <dc=other,dc=com> with scope subtree\n# filter: (objectClass=*)\n# requesting: ALL\n#\n\n# search result\nsearch: 2\nresult: 0 Success\n\n# numResponses: 1\n\nldap_bind: Success (0)\n\tadditional info: Bind successful\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 8.586120625
+        }
+      ]
+    },
+    {
+      "id": "vault/read-a-field",
+      "protocol": "vault",
+      "instruction": "Act as a Vault server. The secret at app/db in the secret mount holds the username payments and the password NETGET-EVAL-PW.",
+      "client": "vault kv get -field=password secret/app/db",
+      "independence": "protocol-client",
+      "expectation": "contains [\"NETGET-EVAL-PW\"]",
+      "note": null,
+      "attempts": 5,
+      "passes": 5,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": true,
+      "actions_agree": true,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:26:25.916685Z DEBUG Executing action 0: Object {\"type\": String(\"send_vault_secret\"), \"data\": Object {\"username\": String(\"payments\"), \"password\": String(\"<redacted>\")}, \"version\": Number(1)}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_vault_secret\"), \"data\": Object {\"username\": String(\"payments\"), \"password\": String(\"<redacted>\")}, \"version\": Number(1)}"
+          ],
+          "client_command": "vault kv get -field=password secret/app/db",
+          "client_output": "NETGET-EVAL-PW",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 8.219187125
+        },
+        {
+          "run": 2,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:26:29.210044Z DEBUG Executing action 0: Object {\"type\": String(\"send_vault_secret\"), \"data\": Object {\"username\": String(\"payments\"), \"password\": String(\"<redacted>\")}, \"version\": Number(1)}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_vault_secret\"), \"data\": Object {\"username\": String(\"payments\"), \"password\": String(\"<redacted>\")}, \"version\": Number(1)}"
+          ],
+          "client_command": "vault kv get -field=password secret/app/db",
+          "client_output": "NETGET-EVAL-PW",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 3.292315583
+        },
+        {
+          "run": 3,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:26:32.720974Z DEBUG Executing action 0: Object {\"type\": String(\"send_vault_secret\"), \"data\": Object {\"username\": String(\"payments\"), \"password\": String(\"<redacted>\")}, \"version\": Number(1)}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_vault_secret\"), \"data\": Object {\"username\": String(\"payments\"), \"password\": String(\"<redacted>\")}, \"version\": Number(1)}"
+          ],
+          "client_command": "vault kv get -field=password secret/app/db",
+          "client_output": "NETGET-EVAL-PW",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 3.511423459
+        },
+        {
+          "run": 4,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:26:36.221951Z DEBUG Executing action 0: Object {\"type\": String(\"send_vault_secret\"), \"data\": Object {\"username\": String(\"payments\"), \"password\": String(\"<redacted>\")}, \"version\": Number(1)}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_vault_secret\"), \"data\": Object {\"username\": String(\"payments\"), \"password\": String(\"<redacted>\")}, \"version\": Number(1)}"
+          ],
+          "client_command": "vault kv get -field=password secret/app/db",
+          "client_output": "NETGET-EVAL-PW",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 3.501513542
+        },
+        {
+          "run": 5,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:26:39.741102Z DEBUG Executing action 0: Object {\"type\": String(\"send_vault_secret\"), \"data\": Object {\"username\": String(\"payments\"), \"password\": String(\"<redacted>\")}, \"version\": Number(1)}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_vault_secret\"), \"data\": Object {\"username\": String(\"payments\"), \"password\": String(\"<redacted>\")}, \"version\": Number(1)}"
+          ],
+          "client_command": "vault kv get -field=password secret/app/db",
+          "client_output": "NETGET-EVAL-PW",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 3.519306916
+        }
+      ]
+    },
+    {
+      "id": "vault/list-keys",
+      "protocol": "vault",
+      "instruction": "Act as a Vault server whose secret mount has three secrets under app: db, stripe and smtp.",
+      "client": "vault kv list secret/app",
+      "independence": "protocol-client",
+      "expectation": "contains [\"db\", \"stripe\", \"smtp\"]",
+      "note": null,
+      "attempts": 5,
+      "passes": 5,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": true,
+      "actions_agree": true,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:26:46.752217Z DEBUG Executing action 0: Object {\"type\": String(\"send_vault_list\"), \"keys\": Array [String(\"db\"), String(\"stripe\"), String(\"smtp\")]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_vault_list\"), \"keys\": Array [String(\"db\"), String(\"stripe\"), String(\"smtp\")]}"
+          ],
+          "client_command": "vault kv list secret/app",
+          "client_output": "Keys\n----\ndb\nsmtp\nstripe\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 7.009845375
+        },
+        {
+          "run": 2,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:26:50.886133Z DEBUG Executing action 0: Object {\"type\": String(\"send_vault_list\"), \"keys\": Array [String(\"db\"), String(\"stripe\"), String(\"smtp\")]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_vault_list\"), \"keys\": Array [String(\"db\"), String(\"stripe\"), String(\"smtp\")]}"
+          ],
+          "client_command": "vault kv list secret/app",
+          "client_output": "Keys\n----\ndb\nsmtp\nstripe\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 4.132346417
+        },
+        {
+          "run": 3,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:26:54.407421Z DEBUG Executing action 0: Object {\"type\": String(\"send_vault_list\"), \"keys\": Array [String(\"db\"), String(\"stripe\"), String(\"smtp\")]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_vault_list\"), \"keys\": Array [String(\"db\"), String(\"stripe\"), String(\"smtp\")]}"
+          ],
+          "client_command": "vault kv list secret/app",
+          "client_output": "Keys\n----\ndb\nsmtp\nstripe\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 3.5216116250000002
+        },
+        {
+          "run": 4,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:26:57.676775Z DEBUG Executing action 0: Object {\"type\": String(\"send_vault_list\"), \"keys\": Array [String(\"db\"), String(\"stripe\"), String(\"smtp\")]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_vault_list\"), \"keys\": Array [String(\"db\"), String(\"stripe\"), String(\"smtp\")]}"
+          ],
+          "client_command": "vault kv list secret/app",
+          "client_output": "Keys\n----\ndb\nsmtp\nstripe\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 3.27375425
+        },
+        {
+          "run": 5,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:27:00.875061Z DEBUG Executing action 0: Object {\"type\": String(\"send_vault_list\"), \"keys\": Array [String(\"db\"), String(\"stripe\"), String(\"smtp\")]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_vault_list\"), \"keys\": Array [String(\"db\"), String(\"stripe\"), String(\"smtp\")]}"
+          ],
+          "client_command": "vault kv list secret/app",
+          "client_output": "Keys\n----\ndb\nsmtp\nstripe\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 3.195252583
+        }
+      ]
+    },
+    {
+      "id": "vault/missing-secret",
+      "protocol": "vault",
+      "instruction": "Act as a Vault server with an empty secret mount.",
+      "client": "vault kv get secret/app/nothing",
+      "independence": "protocol-client",
+      "expectation": "matches /(?i)no value found/",
+      "note": null,
+      "attempts": 5,
+      "passes": 5,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": true,
+      "actions_agree": true,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:27:06.718007Z DEBUG Executing action 0: Object {\"type\": String(\"send_vault_not_found\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_vault_not_found\")}"
+          ],
+          "client_command": "vault kv get secret/app/nothing",
+          "client_output": "No value found at secret/data/app/nothing\n",
+          "client_exit": 2,
+          "client_timed_out": false,
+          "elapsed_secs": 5.849323083
+        },
+        {
+          "run": 2,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:27:08.621093Z DEBUG Executing action 0: Object {\"type\": String(\"send_vault_not_found\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_vault_not_found\")}"
+          ],
+          "client_command": "vault kv get secret/app/nothing",
+          "client_output": "No value found at secret/data/app/nothing\n",
+          "client_exit": 2,
+          "client_timed_out": false,
+          "elapsed_secs": 1.896152375
+        },
+        {
+          "run": 3,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:27:11.636869Z DEBUG Executing action 0: Object {\"type\": String(\"send_vault_not_found\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_vault_not_found\")}"
+          ],
+          "client_command": "vault kv get secret/app/nothing",
+          "client_output": "No value found at secret/data/app/nothing\n",
+          "client_exit": 2,
+          "client_timed_out": false,
+          "elapsed_secs": 3.026447916
+        },
+        {
+          "run": 4,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:27:14.052973Z DEBUG Executing action 0: Object {\"type\": String(\"send_vault_not_found\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_vault_not_found\")}"
+          ],
+          "client_command": "vault kv get secret/app/nothing",
+          "client_output": "No value found at secret/data/app/nothing\n",
+          "client_exit": 2,
+          "client_timed_out": false,
+          "elapsed_secs": 2.41096025
+        },
+        {
+          "run": 5,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:27:16.116798Z DEBUG Executing action 0: Object {\"type\": String(\"send_vault_not_found\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_vault_not_found\")}"
+          ],
+          "client_command": "vault kv get secret/app/nothing",
+          "client_output": "No value found at secret/data/app/nothing\n",
+          "client_exit": 2,
+          "client_timed_out": false,
+          "elapsed_secs": 2.062603875
+        }
+      ]
+    },
+    {
+      "id": "bolt/people-by-name",
+      "protocol": "bolt",
+      "instruction": "Act as a Neo4j graph database that accepts any login. The graph has three Person nodes, named Ada, Grace and Linus.",
+      "client": "cypher-shell -a bolt://127.0.0.1:{PORT} -u neo4j -p netget-eval --non-interactive --format plain MATCH (p:Person) RETURN p.name AS name",
+      "independence": "protocol-client",
+      "expectation": "contains [\"name\", \"Ada\", \"Grace\", \"Linus\"]",
+      "note": null,
+      "attempts": 5,
+      "passes": 5,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": true,
+      "actions_agree": false,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:27:37.035776Z DEBUG Executing action 0: Object {\"type\": String(\"send_bolt_records\"), \"fields\": Array [String(\"name\")], \"records\": Array [Array [String(\"Ada\")], Array [String(\"Grace\")], Array [String(\"Linus\")]], \"query_type\": String(\"r\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_bolt_records\"), \"fields\": Array [String(\"name\")], \"records\": Array [Array [String(\"Ada\")], Array [String(\"Grace\")], Array [String(\"Linus\")]], \"query_type\": String(\"r\")}"
+          ],
+          "client_command": "cypher-shell -a bolt://127.0.0.1:51498 -u neo4j -p netget-eval --non-interactive --format plain MATCH (p:Person) RETURN p.name AS name",
+          "client_output": "name\n\"Ada\"\n\"Grace\"\n\"Linus\"\n\nPicked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/Users/matus/.local/share/emudhra-mitigation/java-cacerts.jks -Djavax.net.ssl.trustStoreType=JKS -Djavax.net.ssl.trustStorePassword=changeit\nPicked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/Users/matus/.local/share/emudhra-mitigation/java-cacerts.jks -Djavax.net.ssl.trustStoreType=JKS -Djavax.net.ssl.trustStorePassword=changeit\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 21.175670291
+        },
+        {
+          "run": 2,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:27:59.419662Z DEBUG Executing action 0: Object {\"type\": String(\"send_bolt_records\"), \"fields\": Array [String(\"name\")], \"records\": Array [Object {\"name\": String(\"Ada\")}, Object {\"name\": String(\"Grace\")}, Object {\"name\": String(\"Linus\")}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_bolt_records\"), \"fields\": Array [String(\"name\")], \"records\": Array [Object {\"name\": String(\"Ada\")}, Object {\"name\": String(\"Grace\")}, Object {\"name\": String(\"Linus\")}]}"
+          ],
+          "client_command": "cypher-shell -a bolt://127.0.0.1:52401 -u neo4j -p netget-eval --non-interactive --format plain MATCH (p:Person) RETURN p.name AS name",
+          "client_output": "name\n\"Ada\"\n\"Grace\"\n\"Linus\"\n\nPicked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/Users/matus/.local/share/emudhra-mitigation/java-cacerts.jks -Djavax.net.ssl.trustStoreType=JKS -Djavax.net.ssl.trustStorePassword=changeit\nPicked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/Users/matus/.local/share/emudhra-mitigation/java-cacerts.jks -Djavax.net.ssl.trustStoreType=JKS -Djavax.net.ssl.trustStorePassword=changeit\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 22.361687292
+        },
+        {
+          "run": 3,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:28:44.490650Z DEBUG Executing action 0: Object {\"type\": String(\"send_bolt_records\"), \"fields\": Array [String(\"name\")], \"records\": Array [Object {\"name\": String(\"Ada\")}, Object {\"name\": String(\"Grace\")}, Object {\"name\": String(\"Linus\")}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_bolt_records\"), \"fields\": Array [String(\"name\")], \"records\": Array [Object {\"name\": String(\"Ada\")}, Object {\"name\": String(\"Grace\")}, Object {\"name\": String(\"Linus\")}]}"
+          ],
+          "client_command": "cypher-shell -a bolt://127.0.0.1:53866 -u neo4j -p netget-eval --non-interactive --format plain MATCH (p:Person) RETURN p.name AS name",
+          "client_output": "name\n\"Ada\"\n\"Grace\"\n\"Linus\"\n\nPicked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/Users/matus/.local/share/emudhra-mitigation/java-cacerts.jks -Djavax.net.ssl.trustStoreType=JKS -Djavax.net.ssl.trustStorePassword=changeit\nPicked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/Users/matus/.local/share/emudhra-mitigation/java-cacerts.jks -Djavax.net.ssl.trustStoreType=JKS -Djavax.net.ssl.trustStorePassword=changeit\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 45.077360458
+        },
+        {
+          "run": 4,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:29:10.279020Z DEBUG Executing action 0: Object {\"type\": String(\"send_bolt_records\"), \"fields\": Array [String(\"name\")], \"records\": Array [Object {\"name\": String(\"Ada\")}, Object {\"name\": String(\"Grace\")}, Object {\"name\": String(\"Linus\")}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_bolt_records\"), \"fields\": Array [String(\"name\")], \"records\": Array [Object {\"name\": String(\"Ada\")}, Object {\"name\": String(\"Grace\")}, Object {\"name\": String(\"Linus\")}]}"
+          ],
+          "client_command": "cypher-shell -a bolt://127.0.0.1:54580 -u neo4j -p netget-eval --non-interactive --format plain MATCH (p:Person) RETURN p.name AS name",
+          "client_output": "name\n\"Ada\"\n\"Grace\"\n\"Linus\"\n\nPicked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/Users/matus/.local/share/emudhra-mitigation/java-cacerts.jks -Djavax.net.ssl.trustStoreType=JKS -Djavax.net.ssl.trustStorePassword=changeit\nPicked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/Users/matus/.local/share/emudhra-mitigation/java-cacerts.jks -Djavax.net.ssl.trustStoreType=JKS -Djavax.net.ssl.trustStorePassword=changeit\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 25.798817667
+        },
+        {
+          "run": 5,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:29:21.796800Z DEBUG Executing action 0: Object {\"type\": String(\"send_bolt_records\"), \"fields\": Array [String(\"name\")], \"records\": Array [Object {\"name\": String(\"Ada\")}, Object {\"name\": String(\"Grace\")}, Object {\"name\": String(\"Linus\")}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_bolt_records\"), \"fields\": Array [String(\"name\")], \"records\": Array [Object {\"name\": String(\"Ada\")}, Object {\"name\": String(\"Grace\")}, Object {\"name\": String(\"Linus\")}]}"
+          ],
+          "client_command": "cypher-shell -a bolt://127.0.0.1:54853 -u neo4j -p netget-eval --non-interactive --format plain MATCH (p:Person) RETURN p.name AS name",
+          "client_output": "name\n\"Ada\"\n\"Grace\"\n\"Linus\"\n\nPicked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/Users/matus/.local/share/emudhra-mitigation/java-cacerts.jks -Djavax.net.ssl.trustStoreType=JKS -Djavax.net.ssl.trustStorePassword=changeit\nPicked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/Users/matus/.local/share/emudhra-mitigation/java-cacerts.jks -Djavax.net.ssl.trustStoreType=JKS -Djavax.net.ssl.trustStorePassword=changeit\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 11.504271375
+        }
+      ]
+    },
+    {
+      "id": "bolt/count",
+      "protocol": "bolt",
+      "instruction": "Act as a Neo4j graph database that accepts any login. It holds exactly 42 Movie nodes and nothing else.",
+      "client": "cypher-shell -a bolt://127.0.0.1:{PORT} -u neo4j -p netget-eval --non-interactive --format plain MATCH (m:Movie) RETURN count(m) AS movies",
+      "independence": "protocol-client",
+      "expectation": "contains [\"movies\", \"42\"]",
+      "note": null,
+      "attempts": 5,
+      "passes": 0,
+      "pass_rate": 0.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": "event_never_reached_model",
+      "recoverable_runs": 0,
+      "verdicts_agree": false,
+      "actions_agree": true,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "fail",
+          "failure_mode": "event_never_reached_model",
+          "detail": "no model call was made for this request — the event did not reach the LLM path",
+          "model_output": [],
+          "recovered_actions": [],
+          "executed_actions": [],
+          "client_command": "cypher-shell -a bolt://127.0.0.1:55233 -u neo4j -p netget-eval --non-interactive --format plain MATCH (m:Movie) RETURN count(m) AS movies",
+          "client_output": "Picked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/Users/matus/.local/share/emudhra-mitigation/java-cacerts.jks -Djavax.net.ssl.trustStoreType=JKS -Djavax.net.ssl.trustStorePassword=changeit\nPicked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/Users/matus/.local/share/emudhra-mitigation/java-cacerts.jks -Djavax.net.ssl.trustStoreType=JKS -Djavax.net.ssl.trustStorePassword=changeit\nThe database is unavailable: the query could not be answered.\n",
+          "client_exit": 1,
+          "client_timed_out": false,
+          "elapsed_secs": 13.068007625
+        },
+        {
+          "run": 2,
+          "verdict": "fail",
+          "failure_mode": "event_never_reached_model",
+          "detail": "no model call was made for this request — the event did not reach the LLM path",
+          "model_output": [],
+          "recovered_actions": [],
+          "executed_actions": [],
+          "client_command": "cypher-shell -a bolt://127.0.0.1:55625 -u neo4j -p netget-eval --non-interactive --format plain MATCH (m:Movie) RETURN count(m) AS movies",
+          "client_output": "Picked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/Users/matus/.local/share/emudhra-mitigation/java-cacerts.jks -Djavax.net.ssl.trustStoreType=JKS -Djavax.net.ssl.trustStorePassword=changeit\nPicked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/Users/matus/.local/share/emudhra-mitigation/java-cacerts.jks -Djavax.net.ssl.trustStoreType=JKS -Djavax.net.ssl.trustStorePassword=changeit\nThe database is unavailable: the query could not be answered.\n",
+          "client_exit": 1,
+          "client_timed_out": false,
+          "elapsed_secs": 13.114407459
+        },
+        {
+          "run": 3,
+          "verdict": "error",
+          "failure_mode": "server_start_failed",
+          "detail": "netget did not start a bolt server in 3 attempts: No servers or clients started in netget\n\nCaptured output:\n\u001b[2m2026-10-31T22:30:19.497695Z\u001b[0m \u001b[34mDEBUG\u001b[0m Detecting scripting environments...\n\u001b[2m2026-10-31T22:30:19.507297Z\u001b[0m \u001b[34mDEBUG\u001b[0m perl detected: This is perl 5, version 44, subversion 0 (v5.44.0) built for darwin-thread-multi-2level\n\nCopyright 1987-2026, Larry Wall\n\nPerl may be copied only under the terms of either the Artistic License or the\nGNU General Public License, which may be found in the Perl 5 source kit.\n\nComplete documentation for Perl, including FAQ lists, should be found on\nthis system using \"man perl\" or \"perldoc perl\".  If you have access to the\nInternet, point your browser at https://www.perl.org/, the Perl Home Page.\n\u001b[2m2026-10-31T22:30:19.509387Z\u001b[0m \u001b[34mDEBUG\u001b[0m go detected: go version go1.27.3 darwin/arm64\n\u001b[2m2026-10-31T22:30:19.519429Z\u001b[0m \u001b[34mDEBUG\u001b[0m python3 detected: Python 3.10.22\n\u001b[2m2026-10-31T22:30:19.625333Z\u001b[0m \u001b[34mDEBUG\u001b[0m node detected: v26.13.0\n\u001b[2m2026-10-31T22:30:19.625548Z\u001b[0m \u001b[32m INFO\u001b[0m Scripting environment detection:\n\u001b[2m2026-10-31T22:30:19.625560Z\u001b[0m \u001b[32m INFO\u001b[0m   Python: Python 3.10.22 ✓\n\u001b[2m2026-10-31T22:30:19.625566Z\u001b[0m \u001b[32m INFO\u001b[0m   Node.js: v26.13.0 ✓\n\u001b[2m2026-10-31T22:30:19.625571Z\u001b[0m \u001b[32m INFO\u001b[0m   Go: go version go1.27.3 darwin/arm64 ✓\n\u001b[2m2026-10-31T22:30:19.625575Z\u001b[0m \u001b[32m INFO\u001b[0m   Perl: This is perl 5, version 44, subversion 0 (v5.44.0) built for darwin-thread-multi-2level\n\nCopyright 1987-2026, Larry Wall\n\nPerl may be copied only under the terms of either the Artistic License or the\nGNU General Public License, which may be found in the Perl 5 source kit.\n\nComplete documentation for Perl, including FAQ lists, should be found on\nthis system using \"man perl\" or \"perldoc perl\".  If you have access to the\nInternet, point your browser at https://www.perl.org/, the Perl Home Page. ✓\n\u001b[2m2026-10-31T22:30:19.625663Z\u001b[0m \u001b[34mDEBUG\u001b[0m TCP bind to privileged port 80 failed: Permission denied (os error 13) (Denied)\n\u001b[2m2026-10-31T22:30:19.625882Z\u001b[0m \u001b[34mDEBUG\u001b[0m UDP bind to privileged port 80 failed: Permission denied (os error 13) (Denied)\n\u001b[2m2026-10-31T22:30:19.625934Z\u001b[0m \u001b[34mDEBUG\u001b[0m TCP bind to privileged port 67 failed: Permission denied (os error 13) (Denied)\n\u001b[2m2026-10-31T22:30:19.625958Z\u001b[0m \u001b[34mDEBUG\u001b[0m UDP bind to privileged port 67 failed: Permission denied (os error 13) (Denied)\n\u001b[2m2026-10-31T22:30:19.625983Z\u001b[0m \u001b[34mDEBUG\u001b[0m TCP bind to privileged port 123 failed: Permission denied (os error 13) (Denied)\n\u001b[2m2026-10-31T22:30:19.626004Z\u001b[0m \u001b[34mDEBUG\u001b[0m UDP bind to privileged port 123 failed: Permission denied (os error 13) (Denied)\n\u001b[2m2026-10-31T22:30:19.626029Z\u001b[0m \u001b[34mDEBUG\u001b[0m TCP bind to privileged port 53 failed: Permission denied (os error 13) (Denied)\n\u001b[2m2026-10-31T22:30:19.626051Z\u001b[0m \u001b[34mDEBUG\u001b[0m UDP bind to privileged port 53 failed: Permission denied (os error 13) (Denied)\n\u001b[2m2026-10-31T22:30:19.626129Z\u001b[0m \u001b[34mDEBUG\u001b[0m Cannot bind to privileged ports - requires elevated privileges\n\u001b[2m2026-10-31T22:30:19.626162Z\u001b[0m \u001b[34mDEBUG\u001b[0m Raw ICMP socket failed (Operation not permitted (os error 1)) and not root - raw-socket protocols (ICMP, IGMP, OSPF) will be refused at startup.\n\u001b[2m2026-10-31T22:30:19.626285Z\u001b[0m \u001b[34mDEBUG\u001b[0m /dev/bpf0 is busy - capture access is present\n\u001b[2m2026-10-31T22:30:19.626301Z\u001b[0m \u001b[34mDEBUG\u001b[0m Detected capabilities: root=false, privileged_ports=false, raw_ip_sockets=false, packet_capture=true, bluetooth=true, usb=true, nfc=true\n\u001b[2m2026-10-31T22:30:19.632935Z\u001b[0m \u001b[34mDEBUG\u001b[0m Keyword overlaps detected between protocols:\n\u001b[2m2026-10-31T22:30:19.632950Z\u001b[0m \u001b[34mDEBUG\u001b[0m   Keyword 'messaging' is used by:\n\u001b[2m2026-10-31T22:30:19.632956Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - AMQP (keyword 'messaging')\n\u001b[2m2026-10-31T22:30:19.632960Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - XMPP (keyword 'messaging')\n\u001b[2m2026-10-31T22:30:19.632963Z\u001b[0m \u001b[34mDEBUG\u001b[0m   Keyword 'router' is used by:\n\u001b[2m2026-10-31T22:30:19.632966Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - ZeroMQ (keyword 'router')\n\u001b[2m2026-10-31T22:30:19.632968Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - WAMP (keyword 'router')\n\u001b[2m2026-10-31T22:30:19.632971Z\u001b[0m \u001b[34mDEBUG\u001b[0m   Keyword 'rpc' is used by:\n\u001b[2m2026-10-31T22:30:19.632973Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - JSON-RPC (keyword 'rpc')\n\u001b[2m2026-10-31T22:30:19.632975Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - Thrift (keyword 'rpc')\n\u001b[2m2026-10-31T22:30:19.632977Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - MessagePack-RPC (keyword 'rpc')\n\u001b[2m2026-10-31T22:30:19.632980Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - WAMP (keyword 'rpc')\n\u001b[2m2026-10-31T22:30:19.632982Z\u001b[0m \u001b[34mDEBUG\u001b[0m   Keyword 'chat' is used by:\n\u001b[2m2026-10-31T22:30:19.632984Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - IRC (keyword 'chat')\n\u001b[2m2026-10-31T22:30:19.632986Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - Matrix (keyword 'chat')\n\u001b[2m2026-10-31T22:30:19.632989Z\u001b[0m \u001b[34mDEBUG\u001b[0m   Keyword '5g core' is used by:\n\u001b[2m2026-10-31T22:30:19.632991Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - NGAP (keyword '5g core')\n\u001b[2m2026-10-31T22:30:19.632993Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - PFCP (keyword '5g core')\n\u001b[2m2026-10-31T22:30:19.632996Z\u001b[0m \u001b[34mDEBUG\u001b[0m   Keyword 'message broker' is used by:\n\u001b[2m2026-10-31T22:30:19.632998Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - AMQP1 (keyword 'message broker')\n\u001b[2m2026-10-31T22:30:19.633001Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - Apache Pulsar (keyword 'message broker')\n\u001b[2m2026-10-31T22:30:19.633003Z\u001b[0m \u001b[34mDEBUG\u001b[0m   Keyword 'kademlia' is used by:\n\u001b[2m2026-10-31T22:30:19.633006Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - libp2p (keyword 'kademlia')\n\u001b[2m2026-10-31T22:30:19.633045Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - Torrent-DHT (keyword 'kademlia')\n\u001b[2m2026-10-31T22:30:19.633070Z\u001b[0m \u001b[34mDEBUG\u001b[0m   Keyword 'pub/sub' is used by:\n\u001b[2m2026-10-31T22:30:19.633078Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - Apache Pulsar (keyword 'pub/sub')\n\u001b[2m2026-10-31T22:30:19.633086Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - Zenoh (keyword 'pub/sub')\n\u001b[2m2026-10-31T22:30:19.633093Z\u001b[0m \u001b[34mDEBUG\u001b[0m   Keyword 'message queue' is used by:\n\u001b[2m2026-10-31T22:30:19.633101Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - NSQ (keyword 'message queue')\n\u001b[2m2026-10-31T22:30:19.633109Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - SQS (keyword 'message queue')\n\u001b[2m2026-10-31T22:30:19.633116Z\u001b[0m \u001b[34mDEBUG\u001b[0m   Keyword 'p2p' is used by:\n\u001b[2m2026-10-31T22:30:19.633123Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - libp2p (keyword 'p2p')\n\u001b[2m2026-10-31T22:30:19.633130Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - Bitcoin P2P (keyword 'p2p')\n\u001b[2m2026-10-31T22:30:19.633137Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - WebRTC (keyword 'p2p')\n\u001b[2m2026-10-31T22:30:19.633144Z\u001b[0m \u001b[34mDEBUG\u001b[0m   Keyword 'gre' is used by:\n\u001b[2m2026-10-31T22:30:19.633151Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - Raw IP (keyword 'gre')\n\u001b[2m2026-10-31T22:30:19.633158Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - GRE (keyword 'gre')\n\u001b[2m2026-10-31T22:30:19.633165Z\u001b[0m \u001b[34mDEBUG\u001b[0m   Keyword 'yang' is used by:\n\u001b[2m2026-10-31T22:30:19.633172Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - NETCONF (keyword 'yang')\n\u001b[2m2026-10-31T22:30:19.633179Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - RESTCONF (keyword 'yang')\n\u001b[2m2026-10-31T22:30:19.633187Z\u001b[0m \u001b[34mDEBUG\u001b[0m   Keyword 'live streaming' is used by:\n\u001b[2m2026-10-31T22:30:19.633194Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - SRT (keyword 'live streaming')\n\u001b[2m2026-10-31T22:30:19.633202Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - RTMP (keyword 'live streaming')\n\u001b[2m2026-10-31T22:30:19.633209Z\u001b[0m \u001b[34mDEBUG\u001b[0m   Keyword 'json-rpc' is used by:\n\u001b[2m2026-10-31T22:30:19.633217Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - JSON-RPC (keyword 'json-rpc')\n\u001b[2m2026-10-31T22:30:19.633224Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - A2A (keyword 'json-rpc')\n\u001b[2m2026-10-31T22:30:19.633232Z\u001b[0m \u001b[34mDEBUG\u001b[0m   Keyword 'first hop redundancy' is used by:\n\u001b[2m2026-10-31T22:30:19.633240Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - HSRP (keyword 'first hop redundancy')\n\u001b[2m2026-10-31T22:30:19.633248Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - VRRP (keyword 'first hop redundancy')\n\u001b[2m2026-10-31T22:30:19.633256Z\u001b[0m \u001b[34mDEBUG\u001b[0m   Keyword 'mail filter' is used by:\n\u001b[2m2026-10-31T22:30:19.633264Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - ManageSieve (keyword 'mail filter')\n\u001b[2m2026-10-31T22:30:19.633272Z\u001b[0m \u001b[34mDEBUG\u001b[0m     - Milter (keyword 'mail filter')\n\u001b[2m2026-10-31T22:30:19.633288Z\u001b[0m \u001b[34mDEBUG\u001b[0m Note: Each keyword should ideally be unique to a single protocol.\n\u001b[2m2026-10-31T22:30:19.633299Z\u001b[0m \u001b[34mDEBUG\u001b[0m       Run 'cargo test test_keyword_overlaps -- --ignored' to see all overlaps.\n\u001b[2m2026-10-31T22:30:19.635122Z\u001b[0m \u001b[34mDEBUG\u001b[0m TCP bind to privileged port 80 failed: Permission denied (os error 13) (Denied)\n\u001b[2m2026-10-31T22:30:19.635179Z\u001b[0m \u001b[34mDEBUG\u001b[0m UDP bind to privileged port 80 failed: Permission denied (os error 13) (Denied)\n\u001b[2m2026-10-31T22:30:19.635216Z\u001b[0m \u001b[34mDEBUG\u001b[0m TCP bind to privileged port 67 failed: Permission denied (os error 13) (Denied)\n\u001b[2m2026-10-31T22:30:19.635240Z\u001b[0m \u001b[34mDEBUG\u001b[0m UDP bind to privileged port 67 failed: Permission denied (os error 13) (Denied)\n\u001b[2m2026-10-31T22:30:19.635264Z\u001b[0m \u001b[34mDEBUG\u001b[0m TCP bind to privileged port 123 failed: Permission denied (os error 13) (Denied)\n\u001b[2m2026-10-31T22:30:19.635286Z\u001b[0m \u001b[34mDEBUG\u001b[0m UDP bind to privileged port 123 failed: Permission denied (os error 13) (Denied)\n\u001b[2m2026-10-31T22:30:19.635309Z\u001b[0m \u001b[34mDEBUG\u001b[0m TCP bind to privileged port 53 failed: Permission denied (os error 13) (Denied)\n\u001b[2m2026-10-31T22:30:19.635329Z\u001b[0m \u001b[34mDEBUG\u001b[0m UDP bind to privileged port 53 failed: Permission denied (os error 13) (Denied)\n\u001b[2m2026-10-31T22:30:19.635371Z\u001b[0m \u001b[34mDEBUG\u001b[0m Cannot bind to privileged ports - requires elevated privileges\n\u001b[2m2026-10-31T22:30:19.635387Z\u001b[0m \u001b[34mDEBUG\u001b[0m Raw ICMP socket failed (Operation not permitted (os error 1)) and not root - raw-socket protocols (ICMP, IGMP, OSPF) will be refused at startup.\n\u001b[2m2026-10-31T22:30:19.635499Z\u001b[0m \u001b[34mDEBUG\u001b[0m /dev/bpf0 is busy - capture access is present\n\u001b[2m2026-10-31T22:30:19.635511Z\u001b[0m \u001b[34mDEBUG\u001b[0m Detected capabilities: root=false, privileged_ports=false, raw_ip_sockets=false, packet_capture=true, bluetooth=true, usb=true, nfc=true\n\u001b[2m2026-10-31T22:30:19.635652Z\u001b[0m \u001b[32m INFO\u001b[0m Rate limiter config updated: max_concurrent=1000, token_limit=None, window=60s, queue_timeout=300s, max_queued=128\nError: ✗  Ollama is not available at http://localhost:11434: Ollama is not available\n   Please ensure Ollama is running there: https://ollama.ai\n   Use `/model` to list and select a model once Ollama is running.",
+          "model_output": [],
+          "recovered_actions": [],
+          "executed_actions": [],
+          "client_command": "cypher-shell -a bolt://127.0.0.1:{PORT} -u neo4j -p netget-eval --non-interactive --format plain MATCH (m:Movie) RETURN count(m) AS movies",
+          "client_output": "",
+          "client_exit": null,
+          "client_timed_out": false,
+          "elapsed_secs": 35.907638292
+        },
+        {
+          "run": 4,
+          "verdict": "fail",
+          "failure_mode": "event_never_reached_model",
+          "detail": "no model call was made for this request — the event did not reach the LLM path",
+          "model_output": [],
+          "recovered_actions": [],
+          "executed_actions": [],
+          "client_command": "cypher-shell -a bolt://127.0.0.1:56629 -u neo4j -p netget-eval --non-interactive --format plain MATCH (m:Movie) RETURN count(m) AS movies",
+          "client_output": "Picked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/Users/matus/.local/share/emudhra-mitigation/java-cacerts.jks -Djavax.net.ssl.trustStoreType=JKS -Djavax.net.ssl.trustStorePassword=changeit\nPicked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/Users/matus/.local/share/emudhra-mitigation/java-cacerts.jks -Djavax.net.ssl.trustStoreType=JKS -Djavax.net.ssl.trustStorePassword=changeit\nThe database is unavailable: the query could not be answered.\n",
+          "client_exit": 1,
+          "client_timed_out": false,
+          "elapsed_secs": 14.704239417
+        },
+        {
+          "run": 5,
+          "verdict": "fail",
+          "failure_mode": "event_never_reached_model",
+          "detail": "no model call was made for this request — the event did not reach the LLM path",
+          "model_output": [],
+          "recovered_actions": [],
+          "executed_actions": [],
+          "client_command": "cypher-shell -a bolt://127.0.0.1:57112 -u neo4j -p netget-eval --non-interactive --format plain MATCH (m:Movie) RETURN count(m) AS movies",
+          "client_output": "Picked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/Users/matus/.local/share/emudhra-mitigation/java-cacerts.jks -Djavax.net.ssl.trustStoreType=JKS -Djavax.net.ssl.trustStorePassword=changeit\nPicked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/Users/matus/.local/share/emudhra-mitigation/java-cacerts.jks -Djavax.net.ssl.trustStoreType=JKS -Djavax.net.ssl.trustStorePassword=changeit\nThe database is unavailable: the query could not be answered.\n",
+          "client_exit": 1,
+          "client_timed_out": false,
+          "elapsed_secs": 18.67221875
+        }
+      ]
+    },
+    {
+      "id": "bolt/syntax-error",
+      "protocol": "bolt",
+      "instruction": "Act as a Neo4j graph database that accepts any login. Reject any query that is not valid Cypher with Neo4j's syntax error.",
+      "client": "cypher-shell -a bolt://127.0.0.1:{PORT} -u neo4j -p netget-eval --non-interactive --format plain SELECT name FROM people",
+      "independence": "protocol-client",
+      "expectation": "matches /(?i)(invalid|syntax|unexpected|expected)/",
+      "note": null,
+      "attempts": 5,
+      "passes": 0,
+      "pass_rate": 0.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": "wrong_content",
+      "recoverable_runs": 0,
+      "verdicts_agree": true,
+      "actions_agree": true,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "fail",
+          "failure_mode": "wrong_content",
+          "detail": "valid actions executed, but client output does not match /(?i)(invalid|syntax|unexpected|expected)/",
+          "model_output": [
+            "2026-10-31T22:33:03.420095Z DEBUG Executing action 0: Object {\"type\": String(\"send_bolt_failure\"), \"code\": String(\"Neo.ClientError.Security.Forbidden\"), \"message\": String(\"Write operations are not allowed\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_bolt_failure\"), \"code\": String(\"Neo.ClientError.Security.Forbidden\"), \"message\": String(\"Write operations are not allowed\")}"
+          ],
+          "client_command": "cypher-shell -a bolt://127.0.0.1:57765 -u neo4j -p netget-eval --non-interactive --format plain SELECT name FROM people",
+          "client_output": "Picked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/Users/matus/.local/share/emudhra-mitigation/java-cacerts.jks -Djavax.net.ssl.trustStoreType=JKS -Djavax.net.ssl.trustStorePassword=changeit\nPicked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/Users/matus/.local/share/emudhra-mitigation/java-cacerts.jks -Djavax.net.ssl.trustStoreType=JKS -Djavax.net.ssl.trustStorePassword=changeit\nWrite operations are not allowed\n",
+          "client_exit": 1,
+          "client_timed_out": false,
+          "elapsed_secs": 126.133389958
+        },
+        {
+          "run": 2,
+          "verdict": "fail",
+          "failure_mode": "wrong_content",
+          "detail": "valid actions executed, but client output does not match /(?i)(invalid|syntax|unexpected|expected)/",
+          "model_output": [
+            "2026-10-31T22:33:11.490763Z DEBUG Executing action 0: Object {\"type\": String(\"send_bolt_failure\"), \"code\": String(\"Neo.ClientError.Security.Forbidden\"), \"message\": String(\"Write operations are not allowed\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_bolt_failure\"), \"code\": String(\"Neo.ClientError.Security.Forbidden\"), \"message\": String(\"Write operations are not allowed\")}"
+          ],
+          "client_command": "cypher-shell -a bolt://127.0.0.1:59469 -u neo4j -p netget-eval --non-interactive --format plain SELECT name FROM people",
+          "client_output": "Picked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/Users/matus/.local/share/emudhra-mitigation/java-cacerts.jks -Djavax.net.ssl.trustStoreType=JKS -Djavax.net.ssl.trustStorePassword=changeit\nPicked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/Users/matus/.local/share/emudhra-mitigation/java-cacerts.jks -Djavax.net.ssl.trustStoreType=JKS -Djavax.net.ssl.trustStorePassword=changeit\nWrite operations are not allowed\n",
+          "client_exit": 1,
+          "client_timed_out": false,
+          "elapsed_secs": 8.056738542
+        },
+        {
+          "run": 3,
+          "verdict": "fail",
+          "failure_mode": "wrong_content",
+          "detail": "valid actions executed, but client output does not match /(?i)(invalid|syntax|unexpected|expected)/",
+          "model_output": [
+            "2026-10-31T22:33:18.540184Z DEBUG Executing action 0: Object {\"type\": String(\"send_bolt_failure\"), \"code\": String(\"Neo.ClientError.Security.Forbidden\"), \"message\": String(\"Write operations are not allowed\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_bolt_failure\"), \"code\": String(\"Neo.ClientError.Security.Forbidden\"), \"message\": String(\"Write operations are not allowed\")}"
+          ],
+          "client_command": "cypher-shell -a bolt://127.0.0.1:59543 -u neo4j -p netget-eval --non-interactive --format plain SELECT name FROM people",
+          "client_output": "Picked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/Users/matus/.local/share/emudhra-mitigation/java-cacerts.jks -Djavax.net.ssl.trustStoreType=JKS -Djavax.net.ssl.trustStorePassword=changeit\nPicked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/Users/matus/.local/share/emudhra-mitigation/java-cacerts.jks -Djavax.net.ssl.trustStoreType=JKS -Djavax.net.ssl.trustStorePassword=changeit\nWrite operations are not allowed\n",
+          "client_exit": 1,
+          "client_timed_out": false,
+          "elapsed_secs": 7.066836708
+        },
+        {
+          "run": 4,
+          "verdict": "fail",
+          "failure_mode": "wrong_content",
+          "detail": "valid actions executed, but client output does not match /(?i)(invalid|syntax|unexpected|expected)/",
+          "model_output": [
+            "2026-10-31T22:33:25.529254Z DEBUG Executing action 0: Object {\"type\": String(\"send_bolt_failure\"), \"code\": String(\"Neo.ClientError.Security.Forbidden\"), \"message\": String(\"Write operations are not allowed\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_bolt_failure\"), \"code\": String(\"Neo.ClientError.Security.Forbidden\"), \"message\": String(\"Write operations are not allowed\")}"
+          ],
+          "client_command": "cypher-shell -a bolt://127.0.0.1:59630 -u neo4j -p netget-eval --non-interactive --format plain SELECT name FROM people",
+          "client_output": "Picked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/Users/matus/.local/share/emudhra-mitigation/java-cacerts.jks -Djavax.net.ssl.trustStoreType=JKS -Djavax.net.ssl.trustStorePassword=changeit\nPicked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/Users/matus/.local/share/emudhra-mitigation/java-cacerts.jks -Djavax.net.ssl.trustStoreType=JKS -Djavax.net.ssl.trustStorePassword=changeit\nWrite operations are not allowed\n",
+          "client_exit": 1,
+          "client_timed_out": false,
+          "elapsed_secs": 6.988481292
+        },
+        {
+          "run": 5,
+          "verdict": "fail",
+          "failure_mode": "wrong_content",
+          "detail": "valid actions executed, but client output does not match /(?i)(invalid|syntax|unexpected|expected)/",
+          "model_output": [
+            "2026-10-31T22:34:35.307812Z DEBUG Executing action 0: Object {\"type\": String(\"send_bolt_failure\"), \"code\": String(\"Neo.ClientError.Security.Forbidden\"), \"message\": String(\"Write operations are not allowed\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_bolt_failure\"), \"code\": String(\"Neo.ClientError.Security.Forbidden\"), \"message\": String(\"Write operations are not allowed\")}"
+          ],
+          "client_command": "cypher-shell -a bolt://127.0.0.1:59761 -u neo4j -p netget-eval --non-interactive --format plain SELECT name FROM people",
+          "client_output": "Picked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/Users/matus/.local/share/emudhra-mitigation/java-cacerts.jks -Djavax.net.ssl.trustStoreType=JKS -Djavax.net.ssl.trustStorePassword=changeit\nPicked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/Users/matus/.local/share/emudhra-mitigation/java-cacerts.jks -Djavax.net.ssl.trustStoreType=JKS -Djavax.net.ssl.trustStorePassword=changeit\nWrite operations are not allowed\n",
+          "client_exit": 1,
+          "client_timed_out": false,
+          "elapsed_secs": 69.838808666
+        }
+      ]
+    },
+    {
+      "id": "websocket/echo",
+      "protocol": "websocket",
+      "instruction": "Echo every message a client sends straight back to it, unchanged.",
+      "client": "websocat ws://127.0.0.1:{PORT}/",
+      "independence": "protocol-client",
+      "expectation": "contains [\"netget-eval-ws-ping\"]",
+      "note": null,
+      "attempts": 5,
+      "passes": 5,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": true,
+      "actions_agree": false,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:35:10.719405Z DEBUG Executing action 0: Object {\"type\": String(\"accept_websocket\"), \"subprotocol\": String(\"\"), \"greeting\": String(\"\")}",
+            "2026-10-31T22:35:17.315774Z DEBUG Executing action 0: Object {\"type\": String(\"send_websocket_text\"), \"text\": String(\"netget-eval-ws-ping\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"accept_websocket\"), \"subprotocol\": String(\"\"), \"greeting\": String(\"\")}",
+            "Executing action 0: Object {\"type\": String(\"send_websocket_text\"), \"text\": String(\"netget-eval-ws-ping\")}"
+          ],
+          "client_command": "websocat ws://127.0.0.1:62372/",
+          "client_output": "netget-eval-ws-ping\n",
+          "client_exit": null,
+          "client_timed_out": false,
+          "elapsed_secs": 43.722265542
+        },
+        {
+          "run": 2,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:35:26.489964Z DEBUG Executing action 0: Object {\"type\": String(\"accept_websocket\")}",
+            "2026-10-31T22:35:36.405025Z DEBUG Executing action 0: Object {\"type\": String(\"send_websocket_text\"), \"text\": String(\"netget-eval-ws-ping\\n\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"accept_websocket\")}",
+            "Executing action 0: Object {\"type\": String(\"send_websocket_text\"), \"text\": String(\"netget-eval-ws-ping\\n\")}"
+          ],
+          "client_command": "websocat ws://127.0.0.1:62747/",
+          "client_output": "netget-eval-ws-ping\n",
+          "client_exit": null,
+          "client_timed_out": false,
+          "elapsed_secs": 19.064594959
+        },
+        {
+          "run": 3,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:35:41.494700Z DEBUG Executing action 0: Object {\"type\": String(\"accept_websocket\"), \"subprotocol\": String(\"\"), \"greeting\": String(\"\")}",
+            "2026-10-31T22:35:48.465849Z DEBUG Executing action 0: Object {\"type\": String(\"send_websocket_text\"), \"text\": String(\"netget-eval-ws-ping\\n\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"accept_websocket\"), \"subprotocol\": String(\"\"), \"greeting\": String(\"\")}",
+            "Executing action 0: Object {\"type\": String(\"send_websocket_text\"), \"text\": String(\"netget-eval-ws-ping\\n\")}"
+          ],
+          "client_command": "websocat ws://127.0.0.1:62984/",
+          "client_output": "netget-eval-ws-ping\n",
+          "client_exit": null,
+          "client_timed_out": false,
+          "elapsed_secs": 12.068806042
+        },
+        {
+          "run": 4,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:35:53.588741Z DEBUG Executing action 0: Object {\"type\": String(\"accept_websocket\"), \"subprotocol\": String(\"\"), \"greeting\": String(\"\")}",
+            "2026-10-31T22:35:56.187772Z DEBUG Executing action 0: Object {\"type\": String(\"send_websocket_text\"), \"text\": String(\"netget-eval-ws-ping\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"accept_websocket\"), \"subprotocol\": String(\"\"), \"greeting\": String(\"\")}",
+            "Executing action 0: Object {\"type\": String(\"send_websocket_text\"), \"text\": String(\"netget-eval-ws-ping\")}"
+          ],
+          "client_command": "websocat ws://127.0.0.1:63067/",
+          "client_output": "netget-eval-ws-ping\n",
+          "client_exit": null,
+          "client_timed_out": false,
+          "elapsed_secs": 7.721252458
+        },
+        {
+          "run": 5,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:36:01.638819Z DEBUG Executing action 0: Object {\"type\": String(\"accept_websocket\"), \"subprotocol\": String(\"\"), \"greeting\": String(\"\")}",
+            "2026-10-31T22:36:09.231648Z DEBUG Executing action 0: Object {\"type\": String(\"send_websocket_text\"), \"text\": String(\"netget-eval-ws-ping\\n\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"accept_websocket\"), \"subprotocol\": String(\"\"), \"greeting\": String(\"\")}",
+            "Executing action 0: Object {\"type\": String(\"send_websocket_text\"), \"text\": String(\"netget-eval-ws-ping\\n\")}"
+          ],
+          "client_command": "websocat ws://127.0.0.1:63134/",
+          "client_output": "netget-eval-ws-ping\n",
+          "client_exit": null,
+          "client_timed_out": false,
+          "elapsed_secs": 13.047789167
+        }
+      ]
+    },
+    {
+      "id": "websocket/greeting",
+      "protocol": "websocket",
+      "instruction": "Greet every client with the message Welcome to NetGet Eval as soon as it connects.",
+      "client": "websocat ws://127.0.0.1:{PORT}/",
+      "independence": "protocol-client",
+      "expectation": "contains [\"Welcome to NetGet Eval\"]",
+      "note": null,
+      "attempts": 5,
+      "passes": 4,
+      "pass_rate": 0.8,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": "wrong_content",
+      "recoverable_runs": 0,
+      "verdicts_agree": false,
+      "actions_agree": false,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:36:17.803633Z DEBUG Executing action 0: Object {\"type\": String(\"accept_websocket\"), \"greeting\": String(\"Welcome to NetGet Eval\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"accept_websocket\"), \"greeting\": String(\"Welcome to NetGet Eval\")}"
+          ],
+          "client_command": "websocat ws://127.0.0.1:63224/",
+          "client_output": "Welcome to NetGet Eval\n",
+          "client_exit": null,
+          "client_timed_out": false,
+          "elapsed_secs": 8.557722541
+        },
+        {
+          "run": 2,
+          "verdict": "fail",
+          "failure_mode": "wrong_content",
+          "detail": "valid actions executed, but client output does not contain \"Welcome to NetGet Eval\"",
+          "model_output": [
+            "2026-10-31T22:37:01.730943Z DEBUG Executing action 0: Object {\"type\": String(\"set_memory\"), \"value\": String(\"session_id: abc123\\nuser_preferences: dark_mode=true\\nlast_command: LIST\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"set_memory\"), \"value\": String(\"session_id: abc123\\nuser_preferences: dark_mode=true\\nlast_command: LIST\")}"
+          ],
+          "client_command": "websocat ws://127.0.0.1:63285/",
+          "client_output": "websocat: WebSocketError: WebSocketError: Received unexpected status code (503 Service Unavailable)\nwebsocat: error running\n",
+          "client_exit": 1,
+          "client_timed_out": false,
+          "elapsed_secs": 41.928035917
+        },
+        {
+          "run": 3,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:37:05.143271Z DEBUG Executing action 0: Object {\"type\": String(\"accept_websocket\"), \"greeting\": String(\"Welcome to NetGet Eval\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"accept_websocket\"), \"greeting\": String(\"Welcome to NetGet Eval\")}"
+          ],
+          "client_command": "websocat ws://127.0.0.1:63552/",
+          "client_output": "Welcome to NetGet Eval\n",
+          "client_exit": null,
+          "client_timed_out": false,
+          "elapsed_secs": 5.413126583
+        },
+        {
+          "run": 4,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:37:10.896180Z DEBUG Executing action 0: Object {\"type\": String(\"accept_websocket\"), \"greeting\": String(\"Welcome to NetGet Eval\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"accept_websocket\"), \"greeting\": String(\"Welcome to NetGet Eval\")}"
+          ],
+          "client_command": "websocat ws://127.0.0.1:63602/",
+          "client_output": "Welcome to NetGet Eval\n",
+          "client_exit": null,
+          "client_timed_out": false,
+          "elapsed_secs": 5.781152875
+        },
+        {
+          "run": 5,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:37:16.721360Z DEBUG Executing action 0: Object {\"type\": String(\"accept_websocket\"), \"greeting\": String(\"Welcome to NetGet Eval\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"accept_websocket\"), \"greeting\": String(\"Welcome to NetGet Eval\")}"
+          ],
+          "client_command": "websocat ws://127.0.0.1:63648/",
+          "client_output": "Welcome to NetGet Eval\n",
+          "client_exit": null,
+          "client_timed_out": false,
+          "elapsed_secs": 5.808562291
+        }
+      ]
+    },
+    {
+      "id": "nostr/serve-notes",
+      "protocol": "nostr",
+      "instruction": "When someone subscribes to short text notes, give them two notes: Stalker is a masterpiece, and Solaris is slower but worth it.",
+      "client": "nak req -k 1 ws://127.0.0.1:{PORT}",
+      "independence": "protocol-client",
+      "expectation": "contains [\"Stalker is a masterpiece\", \"Solaris is slower but worth it\"]",
+      "note": null,
+      "attempts": 5,
+      "passes": 2,
+      "pass_rate": 0.4,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": "client_left_before_model_answered",
+      "recoverable_runs": 0,
+      "verdicts_agree": false,
+      "actions_agree": false,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "fail",
+          "failure_mode": "client_left_before_model_answered",
+          "detail": "the model was asked, the client closed the connection after 7.2s without waiting for the answer, and the call was abandoned",
+          "model_output": [],
+          "recovered_actions": [],
+          "executed_actions": [],
+          "client_command": "nak req -k 1 ws://127.0.0.1:63692",
+          "client_output": "connecting to 127.0.0.1:63692... ok.\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 8.171862583
+        },
+        {
+          "run": 2,
+          "verdict": "fail",
+          "failure_mode": "client_left_before_model_answered",
+          "detail": "the model was asked, the client closed the connection after 7.2s without waiting for the answer, and the call was abandoned",
+          "model_output": [],
+          "recovered_actions": [],
+          "executed_actions": [],
+          "client_command": "nak req -k 1 ws://127.0.0.1:63749",
+          "client_output": "connecting to 127.0.0.1:63749... ok.\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 7.927132041
+        },
+        {
+          "run": 3,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:37:39.948688Z DEBUG Executing action 0: Object {\"type\": String(\"send_nostr_events\"), \"events\": Array [Object {\"kind\": Number(1), \"content\": String(\"Stalker is a masterpiece\"), \"tags\": Array [Array [String(\"t\"), String(\"Movies\")]]}, Object {\"kind\": Number(1), \"content\": String(\"Solaris is slower but worth it\"), \"tags\": Array [Array [String(\"t\"), String(\"Movies\")]]}], \"subscription_id\": String(\"1:nak-req\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_nostr_events\"), \"events\": Array [Object {\"kind\": Number(1), \"content\": String(\"Stalker is a masterpiece\"), \"tags\": Array [Array [String(\"t\"), String(\"Movies\")]]}, Object {\"kind\": Number(1), \"content\": String(\"Solaris is slower but worth it\"), \"tags\": Array [Array [String(\"t\"), String(\"Movies\")]]}], \"subscription_id\": String(\"1:nak-req\")}"
+          ],
+          "client_command": "nak req -k 1 ws://127.0.0.1:63821",
+          "client_output": "{\"kind\":1,\"id\":\"59d6b07fd3ad3d9f6d83b8dc4ac567f7b250dd0235347f74c762599a649a1ae2\",\"pubkey\":\"fee26469a5512052ab8035402a40678a841cc4c1f2000a319893b6d158797eb1\",\"created_at\":1793486259,\"tags\":[[\"t\",\"Movies\"]],\"content\":\"Stalker is a masterpiece\",\"sig\":\"1c27baca9c59c22694caccfcd697b161ff366043977c46c2336e664d5c29b279981de54111ca8e902a05939161e5e6720b6a2ada8646b4e867332867bc85cda9\"}\n{\"kind\":1,\"id\":\"1220fccf975731d42d742bc7c1405b435aa4fa10b524b75d2d0acf1eea6a6438\",\"pubkey\":\"fee26469a5512052ab8035402a40678a841cc4c1f2000a319893b6d158797eb1\",\"created_at\":1793486259,\"tags\":[[\"t\",\"Movies\"]],\"content\":\"Solaris is slower but worth it\",\"sig\":\"a4388f969abea67f82236d3e8bf545e2d0f2f618baf268f5557223a8c02d7a3e4e9080b25e50e96328814c04873df22b939a77072c139ad3b8982685efba29d5\"}\n\nconnecting to 127.0.0.1:63821... ok.\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 5.123911625
+        },
+        {
+          "run": 4,
+          "verdict": "fail",
+          "failure_mode": "client_left_before_model_answered",
+          "detail": "the model was asked, the client closed the connection after 7.2s without waiting for the answer, and the call was abandoned",
+          "model_output": [],
+          "recovered_actions": [],
+          "executed_actions": [],
+          "client_command": "nak req -k 1 ws://127.0.0.1:63890",
+          "client_output": "connecting to 127.0.0.1:63890... ok.\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 8.176175958
+        },
+        {
+          "run": 5,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:37:52.926100Z DEBUG Executing action 0: Object {\"type\": String(\"send_nostr_events\"), \"events\": Array [Object {\"kind\": Number(1), \"content\": String(\"Stalker is a masterpiece\"), \"tags\": Array [Array [String(\"t\"), String(\"Movies\")]]}, Object {\"kind\": Number(1), \"content\": String(\"Solaris is slower but worth it\"), \"tags\": Array [Array [String(\"t\"), String(\"Movies\")]]}], \"subscription_id\": String(\"1:nak-req\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_nostr_events\"), \"events\": Array [Object {\"kind\": Number(1), \"content\": String(\"Stalker is a masterpiece\"), \"tags\": Array [Array [String(\"t\"), String(\"Movies\")]]}, Object {\"kind\": Number(1), \"content\": String(\"Solaris is slower but worth it\"), \"tags\": Array [Array [String(\"t\"), String(\"Movies\")]]}], \"subscription_id\": String(\"1:nak-req\")}"
+          ],
+          "client_command": "nak req -k 1 ws://127.0.0.1:63962",
+          "client_output": "{\"kind\":1,\"id\":\"99e25d14ab65cbcd9be040097faddaec57cc407eab84bd7cb16dd4113e18c898\",\"pubkey\":\"61390475d34d0e133bee51ed6731cc11388ad1d7399eb27e170ed35785872b45\",\"created_at\":1793486272,\"tags\":[[\"t\",\"Movies\"]],\"content\":\"Stalker is a masterpiece\",\"sig\":\"719ba71e12ec16c1f95c7098f8d6f443311006338698e9ca5829e0b29556109bd26a1521a9241e71a2235e10380b34dbb3bd037e7499ee5377a17e0b2a80ce9a\"}\n{\"kind\":1,\"id\":\"f58e9d20c68690774d3fb22cb2fd0bb3aa40400146dea41d2a68635c724feebf\",\"pubkey\":\"61390475d34d0e133bee51ed6731cc11388ad1d7399eb27e170ed35785872b45\",\"created_at\":1793486272,\"tags\":[[\"t\",\"Movies\"]],\"content\":\"Solaris is slower but worth it\",\"sig\":\"e3d65a4cae599141e21486cdf3949e9bde96df81e8f59ad9a129c24cc68cf40f385057c6de6a54be741f685a7d7fb264b212f5db283d41b42473b20d5592ea9d\"}\n\nconnecting to 127.0.0.1:63962... ok.\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 4.795790667
+        }
+      ]
+    },
+    {
+      "id": "nostr/refuse-adverts",
+      "protocol": "nostr",
+      "instruction": "Take notes from anyone, but refuse any note that advertises something for sale, telling the author that adverts are not allowed.",
+      "client": "nak event --sec 7f7ff03d123792d6ac594bfa67bf6d0c0ab55b6b1fdb6249303fe861f1ccba9a -c Buy cheap watches now, 50% off ws://127.0.0.1:{PORT}",
+      "independence": "protocol-client",
+      "expectation": "contains [\"adverts are not allowed\"] and lacks [\"success\"]",
+      "note": null,
+      "attempts": 5,
+      "passes": 1,
+      "pass_rate": 0.2,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": "wrong_content",
+      "recoverable_runs": 0,
+      "verdicts_agree": false,
+      "actions_agree": false,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "fail",
+          "failure_mode": "wrong_content",
+          "detail": "valid actions executed, but client output does not contain \"adverts are not allowed\"",
+          "model_output": [
+            "2026-10-31T22:37:59.866356Z DEBUG Executing action 0: Object {\"type\": String(\"reject_nostr_event\"), \"reason\": String(\"blocked: This note advertises something for sale, which is not allowed.\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"reject_nostr_event\"), \"reason\": String(\"blocked: This note advertises something for sale, which is not allowed.\")}"
+          ],
+          "client_command": "nak event --sec 7f7ff03d123792d6ac594bfa67bf6d0c0ab55b6b1fdb6249303fe861f1ccba9a -c Buy cheap watches now, 50% off ws://127.0.0.1:64012",
+          "client_output": "{\"kind\":1,\"id\":\"ef79ffa63cb23ab96f55ff18a7b154f12927375f24eec01cc79bba9c6c63d347\",\"pubkey\":\"17162c921dc4d2518f9a101db33695df1afb56ab82f5ff3e5da6eec3ca5cd917\",\"created_at\":1793486273,\"tags\":[],\"content\":\"Buy cheap watches now, 50% off\",\"sig\":\"fa957d9e06e6fb8333a496384591b778136907bae66dc202c0d8a80c8d66bd4519cd0bbf16ead4c0019cbafe539bfb89cb243a26fa63462a65c7e6e04cea939e\"}\n\nconnecting to 127.0.0.1:64012... ok.\npublishing to ws://127.0.0.1:64012... failed: msg: blocked: This note advertises something for sale, which is not allowed.\nfailed to publish to any of the relays\n",
+          "client_exit": 123,
+          "client_timed_out": false,
+          "elapsed_secs": 6.938511875
+        },
+        {
+          "run": 2,
+          "verdict": "fail",
+          "failure_mode": "wrong_content",
+          "detail": "valid actions executed, but client output does not contain \"adverts are not allowed\"",
+          "model_output": [
+            "2026-10-31T22:38:05.149275Z DEBUG Executing action 0: Object {\"type\": String(\"reject_nostr_event\"), \"reason\": String(\"blocked: This note advertises something for sale, which is not allowed.\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"reject_nostr_event\"), \"reason\": String(\"blocked: This note advertises something for sale, which is not allowed.\")}"
+          ],
+          "client_command": "nak event --sec 7f7ff03d123792d6ac594bfa67bf6d0c0ab55b6b1fdb6249303fe861f1ccba9a -c Buy cheap watches now, 50% off ws://127.0.0.1:64160",
+          "client_output": "{\"kind\":1,\"id\":\"b3fc217275a3f0512574e8ae396439850214096d0bf95f4e3ebb6ea869b0597d\",\"pubkey\":\"17162c921dc4d2518f9a101db33695df1afb56ab82f5ff3e5da6eec3ca5cd917\",\"created_at\":1793486281,\"tags\":[],\"content\":\"Buy cheap watches now, 50% off\",\"sig\":\"a5ab05bc5efae6d752f10a0a1ad55c57b74009fea805af91685f836d8d520d2fe5854d45c5ab74320e542d359887e2e42731d090dd26a0c0cca456185c75d8f8\"}\n\nconnecting to 127.0.0.1:64160... ok.\npublishing to ws://127.0.0.1:64160... failed: msg: blocked: This note advertises something for sale, which is not allowed.\nfailed to publish to any of the relays\n",
+          "client_exit": 123,
+          "client_timed_out": false,
+          "elapsed_secs": 5.280609792
+        },
+        {
+          "run": 3,
+          "verdict": "fail",
+          "failure_mode": "client_left_before_model_answered",
+          "detail": "the model was asked, the client closed the connection after 10.3s without waiting for the answer, and the call was abandoned",
+          "model_output": [],
+          "recovered_actions": [],
+          "executed_actions": [],
+          "client_command": "nak event --sec 7f7ff03d123792d6ac594bfa67bf6d0c0ab55b6b1fdb6249303fe861f1ccba9a -c Buy cheap watches now, 50% off ws://127.0.0.1:64420",
+          "client_output": "{\"kind\":1,\"id\":\"410ff818bae273ca54f65a12f91034c6535b45ec5b1d5809d7b453976013fd58\",\"pubkey\":\"17162c921dc4d2518f9a101db33695df1afb56ab82f5ff3e5da6eec3ca5cd917\",\"created_at\":1793486290,\"tags\":[],\"content\":\"Buy cheap watches now, 50% off\",\"sig\":\"adb0840ff5409a86fddf2f365450431e419712154804360838ba4a507f258589fef37d60b27ec292a89b9848b6aaca5114ab2c33b49c09b7632c9810dec77fc8\"}\n\nconnecting to 127.0.0.1:64420... ok.\npublishing to ws://127.0.0.1:64420... failed: publish: context deadline exceeded\nfailed to publish to any of the relays\n",
+          "client_exit": 123,
+          "client_timed_out": false,
+          "elapsed_secs": 15.725075083
+        },
+        {
+          "run": 4,
+          "verdict": "fail",
+          "failure_mode": "wrong_content",
+          "detail": "valid actions executed, but client output does not contain \"adverts are not allowed\"",
+          "model_output": [
+            "2026-10-31T22:38:33.830348Z DEBUG Executing action 0: Object {\"type\": String(\"reject_nostr_event\"), \"reason\": String(\"blocked: This note advertises something for sale, which is not allowed.\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"reject_nostr_event\"), \"reason\": String(\"blocked: This note advertises something for sale, which is not allowed.\")}"
+          ],
+          "client_command": "nak event --sec 7f7ff03d123792d6ac594bfa67bf6d0c0ab55b6b1fdb6249303fe861f1ccba9a -c Buy cheap watches now, 50% off ws://127.0.0.1:65157",
+          "client_output": "{\"kind\":1,\"id\":\"c163f8c137082e4f28ec85a68ca861c18164d5046a39c2011be20d200af9c761\",\"pubkey\":\"17162c921dc4d2518f9a101db33695df1afb56ab82f5ff3e5da6eec3ca5cd917\",\"created_at\":1793486309,\"tags\":[],\"content\":\"Buy cheap watches now, 50% off\",\"sig\":\"c800cbfe3adafdfaa6eb46cf593fa04493d26b7ccceac3898b7f7319f771c25d27e2005774a00b4355d4db5a78624b9fbbc1249091af370fa349d023b8aa3232\"}\n\nconnecting to 127.0.0.1:65157... ok.\npublishing to ws://127.0.0.1:65157... failed: msg: blocked: This note advertises something for sale, which is not allowed.\nfailed to publish to any of the relays\n",
+          "client_exit": 123,
+          "client_timed_out": false,
+          "elapsed_secs": 12.971503542
+        },
+        {
+          "run": 5,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:38:45.809943Z DEBUG Executing action 0: Object {\"type\": String(\"reject_nostr_event\"), \"reason\": String(\"blocked: Adverts are not allowed\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"reject_nostr_event\"), \"reason\": String(\"blocked: Adverts are not allowed\")}"
+          ],
+          "client_command": "nak event --sec 7f7ff03d123792d6ac594bfa67bf6d0c0ab55b6b1fdb6249303fe861f1ccba9a -c Buy cheap watches now, 50% off ws://127.0.0.1:49206",
+          "client_output": "{\"kind\":1,\"id\":\"6ba078963cd140965d4a7f38a42a3eb20f19f5cc841477d98a83a47207808bf4\",\"pubkey\":\"17162c921dc4d2518f9a101db33695df1afb56ab82f5ff3e5da6eec3ca5cd917\",\"created_at\":1793486319,\"tags\":[],\"content\":\"Buy cheap watches now, 50% off\",\"sig\":\"8d3821ea0c17c6b50b4322dd9f9b7c91592ef99b9e217852e4daa6af92677c7df65efd05f35771ae21be06496144ca4b91792c870cb94d281707ddab11e2d89e\"}\n\nconnecting to 127.0.0.1:49206... ok.\npublishing to ws://127.0.0.1:49206... failed: msg: blocked: Adverts are not allowed\nfailed to publish to any of the relays\n",
+          "client_exit": 123,
+          "client_timed_out": false,
+          "elapsed_secs": 11.964119792
+        }
+      ]
+    },
+    {
+      "id": "nostr/accept-film-note",
+      "protocol": "nostr",
+      "instruction": "This relay is for notes about films. Accept them.",
+      "client": "nak event --sec 7f7ff03d123792d6ac594bfa67bf6d0c0ab55b6b1fdb6249303fe861f1ccba9a -c Stalker is a masterpiece of slow cinema ws://127.0.0.1:{PORT}",
+      "independence": "protocol-client",
+      "expectation": "contains [\"success\"]",
+      "note": null,
+      "attempts": 5,
+      "passes": 4,
+      "pass_rate": 0.8,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": "client_left_before_model_answered",
+      "recoverable_runs": 0,
+      "verdicts_agree": false,
+      "actions_agree": false,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "fail",
+          "failure_mode": "client_left_before_model_answered",
+          "detail": "the model was asked, the client closed the connection after 10.3s without waiting for the answer, and the call was abandoned",
+          "model_output": [],
+          "recovered_actions": [],
+          "executed_actions": [],
+          "client_command": "nak event --sec 7f7ff03d123792d6ac594bfa67bf6d0c0ab55b6b1fdb6249303fe861f1ccba9a -c Stalker is a masterpiece of slow cinema ws://127.0.0.1:49386",
+          "client_output": "{\"kind\":1,\"id\":\"90f491291dfaa8aa57853b7131b267aefb8fb4830507aa8783a50eea6944eaed\",\"pubkey\":\"17162c921dc4d2518f9a101db33695df1afb56ab82f5ff3e5da6eec3ca5cd917\",\"created_at\":1793486328,\"tags\":[],\"content\":\"Stalker is a masterpiece of slow cinema\",\"sig\":\"5f61eb2b43ee8e1008f041e8987a9166b6752975fc8e3e0793180db6bc0f07ea11e3148487f5427db9d6665c0fcc46033285c5502ba7d18bbcd8fe4c61f8ba0a\"}\n\nconnecting to 127.0.0.1:49386... ok.\npublishing to ws://127.0.0.1:49386... failed: publish: context deadline exceeded\nfailed to publish to any of the relays\n",
+          "client_exit": 123,
+          "client_timed_out": false,
+          "elapsed_secs": 12.357673
+        },
+        {
+          "run": 2,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:39:13.083451Z DEBUG Executing action 0: Object {\"type\": String(\"accept_nostr_event\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"accept_nostr_event\")}"
+          ],
+          "client_command": "nak event --sec 7f7ff03d123792d6ac594bfa67bf6d0c0ab55b6b1fdb6249303fe861f1ccba9a -c Stalker is a masterpiece of slow cinema ws://127.0.0.1:49882",
+          "client_output": "{\"kind\":1,\"id\":\"d48df76ab60c1e4b3637c418551b8960cf80c91e2a0dc290f0b2431f071b7fc5\",\"pubkey\":\"17162c921dc4d2518f9a101db33695df1afb56ab82f5ff3e5da6eec3ca5cd917\",\"created_at\":1793486348,\"tags\":[],\"content\":\"Stalker is a masterpiece of slow cinema\",\"sig\":\"988f892e40950394269e7b55c59110dbfafa94c283ea8b9e15328504dae2f382176357c3996022909e84abae750527dc0aef1c1831d25e21524587473451efb9\"}\n\nconnecting to 127.0.0.1:49882... ok.\npublishing to ws://127.0.0.1:49882... success.\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 14.906005167
+        },
+        {
+          "run": 3,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:39:25.856919Z DEBUG Executing action 0: Object {\"type\": String(\"accept_nostr_event\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"accept_nostr_event\")}"
+          ],
+          "client_command": "nak event --sec 7f7ff03d123792d6ac594bfa67bf6d0c0ab55b6b1fdb6249303fe861f1ccba9a -c Stalker is a masterpiece of slow cinema ws://127.0.0.1:50301",
+          "client_output": "{\"kind\":1,\"id\":\"21ce39a8d273f6450c6f92dd36778a40c3db6e1c5205cebff76f4d1c4915249f\",\"pubkey\":\"17162c921dc4d2518f9a101db33695df1afb56ab82f5ff3e5da6eec3ca5cd917\",\"created_at\":1793486360,\"tags\":[],\"content\":\"Stalker is a masterpiece of slow cinema\",\"sig\":\"eecc8456ec3375206052038bd2c9c8780d8c37ed3d2643a3f571ef3995d4f9a3756733d267af3735712cf2f4e3ba241c80b6d63024274bd14f69cc2f63a9daca\"}\n\nconnecting to 127.0.0.1:50301... ok.\npublishing to ws://127.0.0.1:50301... success.\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 12.777892583
+        },
+        {
+          "run": 4,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:39:54.579691Z DEBUG Executing action 0: Object {\"type\": String(\"accept_nostr_event\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"accept_nostr_event\")}"
+          ],
+          "client_command": "nak event --sec 7f7ff03d123792d6ac594bfa67bf6d0c0ab55b6b1fdb6249303fe861f1ccba9a -c Stalker is a masterpiece of slow cinema ws://127.0.0.1:50861",
+          "client_output": "{\"kind\":1,\"id\":\"9c9ebaa2188ed144de069dd75ec7db242094ddee1be27ea4ffee6877330e9ac6\",\"pubkey\":\"17162c921dc4d2518f9a101db33695df1afb56ab82f5ff3e5da6eec3ca5cd917\",\"created_at\":1793486384,\"tags\":[],\"content\":\"Stalker is a masterpiece of slow cinema\",\"sig\":\"30553357809f95fe8d3d6a16be7b1836bea7c43442785a3dfd8e483c7880a15e34f2a35385ff2c54b2a4c85be4316adb4f27879880f3492a8b0602b14704f5a7\"}\n\nconnecting to 127.0.0.1:50861... ok.\npublishing to ws://127.0.0.1:50861... success.\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 28.718271083
+        },
+        {
+          "run": 5,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:40:06.415461Z DEBUG Executing action 0: Object {\"type\": String(\"accept_nostr_event\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"accept_nostr_event\")}"
+          ],
+          "client_command": "nak event --sec 7f7ff03d123792d6ac594bfa67bf6d0c0ab55b6b1fdb6249303fe861f1ccba9a -c Stalker is a masterpiece of slow cinema ws://127.0.0.1:52314",
+          "client_output": "{\"kind\":1,\"id\":\"f28012ae06e0ca4af7d4934a9af1d01f106402cfd99d13715f7e5425f8fa09c6\",\"pubkey\":\"17162c921dc4d2518f9a101db33695df1afb56ab82f5ff3e5da6eec3ca5cd917\",\"created_at\":1793486403,\"tags\":[],\"content\":\"Stalker is a masterpiece of slow cinema\",\"sig\":\"b488e097f8809f630a2a16bd24f291ce0ac346897ea38464bd5cac209de18e1213eac4cfdfbd58e31e8b1ad9471d00372a2bc4220440ac06cd2272e615f1dd45\"}\n\nconnecting to 127.0.0.1:52314... ok.\npublishing to ws://127.0.0.1:52314... success.\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 11.829513334
+        }
+      ]
+    },
+    {
+      "id": "lmtp/deliver-local",
+      "protocol": "lmtp",
+      "instruction": "Only the mailbox alice@example.com exists here; refuse every other recipient.",
+      "client": "python3 -c import sys, smtplib\nport, rcpt = int(sys.argv[1]), sys.argv[2]\ntry:\n    s = smtplib.LMTP('127.0.0.1', port, timeout=230)\n    code, _ = s.ehlo()\n    print('LHLO', code)\n    code, msg = s.mail('eval@sender.test')\n    print('MAIL', code, msg.decode('utf-8', 'replace'))\n    code, msg = s.rcpt(rcpt)\n    print('RCPT', code, msg.decode('utf-8', 'replace'))\n    if code < 300:\n        code, msg = s.data('Subject: NetGet eval\\r\\n\\r\\nHello.\\r\\n')\n        print('DATA', code, msg.decode('utf-8', 'replace'))\n    s.quit()\nexcept Exception as e:\n    print(type(e).__name__, e)\n {PORT} alice@example.com",
+      "independence": "protocol-client",
+      "expectation": "matches /(?m)^RCPT 25[01]\\b(?s:.*)^DATA 250\\b/",
+      "note": null,
+      "attempts": 5,
+      "passes": 5,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": true,
+      "actions_agree": true,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:40:11.537775Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(true), \"reason\": String(\"RCPT TO accepted\")}",
+            "2026-10-31T22:40:14.312045Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_delivery\"), \"deliver_all\": Bool(false), \"results\": Array [Object {\"recipient\": String(\"alice@example.com\"), \"delivered\": Bool(true)}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(true), \"reason\": String(\"RCPT TO accepted\")}",
+            "Executing action 0: Object {\"type\": String(\"lmtp_delivery\"), \"deliver_all\": Bool(false), \"results\": Array [Object {\"recipient\": String(\"alice@example.com\"), \"delivered\": Bool(true)}]}"
+          ],
+          "client_command": "python3 -c import sys, smtplib\nport, rcpt = int(sys.argv[1]), sys.argv[2]\ntry:\n    s = smtplib.LMTP('127.0.0.1', port, timeout=230)\n    code, _ = s.ehlo()\n    print('LHLO', code)\n    code, msg = s.mail('eval@sender.test')\n    print('MAIL', code, msg.decode('utf-8', 'replace'))\n    code, msg = s.rcpt(rcpt)\n    print('RCPT', code, msg.decode('utf-8', 'replace'))\n    if code < 300:\n        code, msg = s.data('Subject: NetGet eval\\r\\n\\r\\nHello.\\r\\n')\n        print('DATA', code, msg.decode('utf-8', 'replace'))\n    s.quit()\nexcept Exception as e:\n    print(type(e).__name__, e)\n 52366 alice@example.com",
+          "client_output": "LHLO 250\nMAIL 250 2.1.0 Sender OK\nRCPT 250 2.1.5 RCPT TO accepted\nDATA 250 2.0.0 <alice@example.com> delivered\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 7.896862167
+        },
+        {
+          "run": 2,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:40:17.777026Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(true), \"reason\": String(\"RCPT TO accepted\")}",
+            "2026-10-31T22:40:20.560275Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_delivery\"), \"deliver_all\": Bool(false), \"results\": Array [Object {\"recipient\": String(\"alice@example.com\"), \"delivered\": Bool(true)}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(true), \"reason\": String(\"RCPT TO accepted\")}",
+            "Executing action 0: Object {\"type\": String(\"lmtp_delivery\"), \"deliver_all\": Bool(false), \"results\": Array [Object {\"recipient\": String(\"alice@example.com\"), \"delivered\": Bool(true)}]}"
+          ],
+          "client_command": "python3 -c import sys, smtplib\nport, rcpt = int(sys.argv[1]), sys.argv[2]\ntry:\n    s = smtplib.LMTP('127.0.0.1', port, timeout=230)\n    code, _ = s.ehlo()\n    print('LHLO', code)\n    code, msg = s.mail('eval@sender.test')\n    print('MAIL', code, msg.decode('utf-8', 'replace'))\n    code, msg = s.rcpt(rcpt)\n    print('RCPT', code, msg.decode('utf-8', 'replace'))\n    if code < 300:\n        code, msg = s.data('Subject: NetGet eval\\r\\n\\r\\nHello.\\r\\n')\n        print('DATA', code, msg.decode('utf-8', 'replace'))\n    s.quit()\nexcept Exception as e:\n    print(type(e).__name__, e)\n 52464 alice@example.com",
+          "client_output": "LHLO 250\nMAIL 250 2.1.0 Sender OK\nRCPT 250 2.1.5 RCPT TO accepted\nDATA 250 2.0.0 <alice@example.com> delivered\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 6.249418791
+        },
+        {
+          "run": 3,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:40:24.171875Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(true), \"reason\": String(\"RCPT TO accepted\")}",
+            "2026-10-31T22:40:26.966768Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_delivery\"), \"deliver_all\": Bool(false), \"results\": Array [Object {\"recipient\": String(\"alice@example.com\"), \"delivered\": Bool(true)}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(true), \"reason\": String(\"RCPT TO accepted\")}",
+            "Executing action 0: Object {\"type\": String(\"lmtp_delivery\"), \"deliver_all\": Bool(false), \"results\": Array [Object {\"recipient\": String(\"alice@example.com\"), \"delivered\": Bool(true)}]}"
+          ],
+          "client_command": "python3 -c import sys, smtplib\nport, rcpt = int(sys.argv[1]), sys.argv[2]\ntry:\n    s = smtplib.LMTP('127.0.0.1', port, timeout=230)\n    code, _ = s.ehlo()\n    print('LHLO', code)\n    code, msg = s.mail('eval@sender.test')\n    print('MAIL', code, msg.decode('utf-8', 'replace'))\n    code, msg = s.rcpt(rcpt)\n    print('RCPT', code, msg.decode('utf-8', 'replace'))\n    if code < 300:\n        code, msg = s.data('Subject: NetGet eval\\r\\n\\r\\nHello.\\r\\n')\n        print('DATA', code, msg.decode('utf-8', 'replace'))\n    s.quit()\nexcept Exception as e:\n    print(type(e).__name__, e)\n 52526 alice@example.com",
+          "client_output": "LHLO 250\nMAIL 250 2.1.0 Sender OK\nRCPT 250 2.1.5 RCPT TO accepted\nDATA 250 2.0.0 <alice@example.com> delivered\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 6.407033125
+        },
+        {
+          "run": 4,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:40:30.395601Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(true), \"reason\": String(\"RCPT TO accepted\")}",
+            "2026-10-31T22:40:33.281533Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_delivery\"), \"deliver_all\": Bool(false), \"results\": Array [Object {\"recipient\": String(\"alice@example.com\"), \"delivered\": Bool(true)}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(true), \"reason\": String(\"RCPT TO accepted\")}",
+            "Executing action 0: Object {\"type\": String(\"lmtp_delivery\"), \"deliver_all\": Bool(false), \"results\": Array [Object {\"recipient\": String(\"alice@example.com\"), \"delivered\": Bool(true)}]}"
+          ],
+          "client_command": "python3 -c import sys, smtplib\nport, rcpt = int(sys.argv[1]), sys.argv[2]\ntry:\n    s = smtplib.LMTP('127.0.0.1', port, timeout=230)\n    code, _ = s.ehlo()\n    print('LHLO', code)\n    code, msg = s.mail('eval@sender.test')\n    print('MAIL', code, msg.decode('utf-8', 'replace'))\n    code, msg = s.rcpt(rcpt)\n    print('RCPT', code, msg.decode('utf-8', 'replace'))\n    if code < 300:\n        code, msg = s.data('Subject: NetGet eval\\r\\n\\r\\nHello.\\r\\n')\n        print('DATA', code, msg.decode('utf-8', 'replace'))\n    s.quit()\nexcept Exception as e:\n    print(type(e).__name__, e)\n 52586 alice@example.com",
+          "client_output": "LHLO 250\nMAIL 250 2.1.0 Sender OK\nRCPT 250 2.1.5 RCPT TO accepted\nDATA 250 2.0.0 <alice@example.com> delivered\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 6.315414666
+        },
+        {
+          "run": 5,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:40:36.737158Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(true), \"reason\": String(\"RCPT TO accepted\")}",
+            "2026-10-31T22:40:39.567861Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_delivery\"), \"deliver_all\": Bool(false), \"results\": Array [Object {\"recipient\": String(\"alice@example.com\"), \"delivered\": Bool(true)}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(true), \"reason\": String(\"RCPT TO accepted\")}",
+            "Executing action 0: Object {\"type\": String(\"lmtp_delivery\"), \"deliver_all\": Bool(false), \"results\": Array [Object {\"recipient\": String(\"alice@example.com\"), \"delivered\": Bool(true)}]}"
+          ],
+          "client_command": "python3 -c import sys, smtplib\nport, rcpt = int(sys.argv[1]), sys.argv[2]\ntry:\n    s = smtplib.LMTP('127.0.0.1', port, timeout=230)\n    code, _ = s.ehlo()\n    print('LHLO', code)\n    code, msg = s.mail('eval@sender.test')\n    print('MAIL', code, msg.decode('utf-8', 'replace'))\n    code, msg = s.rcpt(rcpt)\n    print('RCPT', code, msg.decode('utf-8', 'replace'))\n    if code < 300:\n        code, msg = s.data('Subject: NetGet eval\\r\\n\\r\\nHello.\\r\\n')\n        print('DATA', code, msg.decode('utf-8', 'replace'))\n    s.quit()\nexcept Exception as e:\n    print(type(e).__name__, e)\n 52639 alice@example.com",
+          "client_output": "LHLO 250\nMAIL 250 2.1.0 Sender OK\nRCPT 250 2.1.5 RCPT TO accepted\nDATA 250 2.0.0 <alice@example.com> delivered\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 6.28333425
+        }
+      ]
+    },
+    {
+      "id": "lmtp/refuse-unknown",
+      "protocol": "lmtp",
+      "instruction": "Only the mailbox alice@example.com exists here; refuse every other recipient.",
+      "client": "python3 -c import sys, smtplib\nport, rcpt = int(sys.argv[1]), sys.argv[2]\ntry:\n    s = smtplib.LMTP('127.0.0.1', port, timeout=230)\n    code, _ = s.ehlo()\n    print('LHLO', code)\n    code, msg = s.mail('eval@sender.test')\n    print('MAIL', code, msg.decode('utf-8', 'replace'))\n    code, msg = s.rcpt(rcpt)\n    print('RCPT', code, msg.decode('utf-8', 'replace'))\n    if code < 300:\n        code, msg = s.data('Subject: NetGet eval\\r\\n\\r\\nHello.\\r\\n')\n        print('DATA', code, msg.decode('utf-8', 'replace'))\n    s.quit()\nexcept Exception as e:\n    print(type(e).__name__, e)\n {PORT} bob@example.com",
+      "independence": "protocol-client",
+      "expectation": "matches /(?m)^RCPT 5\\d\\d\\b/",
+      "note": null,
+      "attempts": 5,
+      "passes": 5,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": true,
+      "actions_agree": true,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:40:43.857164Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(false)}",
+            "2026-10-31T22:40:43.858697Z DEBUG Executing action 1: Object {\"type\": String(\"append_memory\"), \"value\": String(\"last_refused_recipient: bob@example.com\\n\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(false)}",
+            "Executing action 1: Object {\"type\": String(\"append_memory\"), \"value\": String(\"last_refused_recipient: bob@example.com\\n\")}"
+          ],
+          "client_command": "python3 -c import sys, smtplib\nport, rcpt = int(sys.argv[1]), sys.argv[2]\ntry:\n    s = smtplib.LMTP('127.0.0.1', port, timeout=230)\n    code, _ = s.ehlo()\n    print('LHLO', code)\n    code, msg = s.mail('eval@sender.test')\n    print('MAIL', code, msg.decode('utf-8', 'replace'))\n    code, msg = s.rcpt(rcpt)\n    print('RCPT', code, msg.decode('utf-8', 'replace'))\n    if code < 300:\n        code, msg = s.data('Subject: NetGet eval\\r\\n\\r\\nHello.\\r\\n')\n        print('DATA', code, msg.decode('utf-8', 'replace'))\n    s.quit()\nexcept Exception as e:\n    print(type(e).__name__, e)\n 52697 bob@example.com",
+          "client_output": "LHLO 250\nMAIL 250 2.1.0 Sender OK\nRCPT 550 5.1.1 No such user here\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 4.288363708
+        },
+        {
+          "run": 2,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:40:46.627123Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(false)}",
+            "2026-10-31T22:40:46.628372Z DEBUG Executing action 1: Object {\"type\": String(\"append_memory\"), \"value\": String(\"last_refused_recipient: bob@example.com\\n\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(false)}",
+            "Executing action 1: Object {\"type\": String(\"append_memory\"), \"value\": String(\"last_refused_recipient: bob@example.com\\n\")}"
+          ],
+          "client_command": "python3 -c import sys, smtplib\nport, rcpt = int(sys.argv[1]), sys.argv[2]\ntry:\n    s = smtplib.LMTP('127.0.0.1', port, timeout=230)\n    code, _ = s.ehlo()\n    print('LHLO', code)\n    code, msg = s.mail('eval@sender.test')\n    print('MAIL', code, msg.decode('utf-8', 'replace'))\n    code, msg = s.rcpt(rcpt)\n    print('RCPT', code, msg.decode('utf-8', 'replace'))\n    if code < 300:\n        code, msg = s.data('Subject: NetGet eval\\r\\n\\r\\nHello.\\r\\n')\n        print('DATA', code, msg.decode('utf-8', 'replace'))\n    s.quit()\nexcept Exception as e:\n    print(type(e).__name__, e)\n 52741 bob@example.com",
+          "client_output": "LHLO 250\nMAIL 250 2.1.0 Sender OK\nRCPT 550 5.1.1 No such user here\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 2.769543125
+        },
+        {
+          "run": 3,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:40:49.397104Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(false)}",
+            "2026-10-31T22:40:49.398358Z DEBUG Executing action 1: Object {\"type\": String(\"append_memory\"), \"value\": String(\"last_refused_recipient: bob@example.com\\n\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(false)}",
+            "Executing action 1: Object {\"type\": String(\"append_memory\"), \"value\": String(\"last_refused_recipient: bob@example.com\\n\")}"
+          ],
+          "client_command": "python3 -c import sys, smtplib\nport, rcpt = int(sys.argv[1]), sys.argv[2]\ntry:\n    s = smtplib.LMTP('127.0.0.1', port, timeout=230)\n    code, _ = s.ehlo()\n    print('LHLO', code)\n    code, msg = s.mail('eval@sender.test')\n    print('MAIL', code, msg.decode('utf-8', 'replace'))\n    code, msg = s.rcpt(rcpt)\n    print('RCPT', code, msg.decode('utf-8', 'replace'))\n    if code < 300:\n        code, msg = s.data('Subject: NetGet eval\\r\\n\\r\\nHello.\\r\\n')\n        print('DATA', code, msg.decode('utf-8', 'replace'))\n    s.quit()\nexcept Exception as e:\n    print(type(e).__name__, e)\n 52773 bob@example.com",
+          "client_output": "LHLO 250\nMAIL 250 2.1.0 Sender OK\nRCPT 550 5.1.1 No such user here\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 2.76977175
+        },
+        {
+          "run": 4,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:40:52.335542Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(false)}",
+            "2026-10-31T22:40:52.336743Z DEBUG Executing action 1: Object {\"type\": String(\"append_memory\"), \"value\": String(\"last_refused_recipient: bob@example.com\\n\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(false)}",
+            "Executing action 1: Object {\"type\": String(\"append_memory\"), \"value\": String(\"last_refused_recipient: bob@example.com\\n\")}"
+          ],
+          "client_command": "python3 -c import sys, smtplib\nport, rcpt = int(sys.argv[1]), sys.argv[2]\ntry:\n    s = smtplib.LMTP('127.0.0.1', port, timeout=230)\n    code, _ = s.ehlo()\n    print('LHLO', code)\n    code, msg = s.mail('eval@sender.test')\n    print('MAIL', code, msg.decode('utf-8', 'replace'))\n    code, msg = s.rcpt(rcpt)\n    print('RCPT', code, msg.decode('utf-8', 'replace'))\n    if code < 300:\n        code, msg = s.data('Subject: NetGet eval\\r\\n\\r\\nHello.\\r\\n')\n        print('DATA', code, msg.decode('utf-8', 'replace'))\n    s.quit()\nexcept Exception as e:\n    print(type(e).__name__, e)\n 52804 bob@example.com",
+          "client_output": "LHLO 250\nMAIL 250 2.1.0 Sender OK\nRCPT 550 5.1.1 No such user here\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 2.939038542
+        },
+        {
+          "run": 5,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:40:55.094030Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(false)}",
+            "2026-10-31T22:40:55.095280Z DEBUG Executing action 1: Object {\"type\": String(\"append_memory\"), \"value\": String(\"last_refused_recipient: bob@example.com\\n\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(false)}",
+            "Executing action 1: Object {\"type\": String(\"append_memory\"), \"value\": String(\"last_refused_recipient: bob@example.com\\n\")}"
+          ],
+          "client_command": "python3 -c import sys, smtplib\nport, rcpt = int(sys.argv[1]), sys.argv[2]\ntry:\n    s = smtplib.LMTP('127.0.0.1', port, timeout=230)\n    code, _ = s.ehlo()\n    print('LHLO', code)\n    code, msg = s.mail('eval@sender.test')\n    print('MAIL', code, msg.decode('utf-8', 'replace'))\n    code, msg = s.rcpt(rcpt)\n    print('RCPT', code, msg.decode('utf-8', 'replace'))\n    if code < 300:\n        code, msg = s.data('Subject: NetGet eval\\r\\n\\r\\nHello.\\r\\n')\n        print('DATA', code, msg.decode('utf-8', 'replace'))\n    s.quit()\nexcept Exception as e:\n    print(type(e).__name__, e)\n 52861 bob@example.com",
+          "client_output": "LHLO 250\nMAIL 250 2.1.0 Sender OK\nRCPT 550 5.1.1 No such user here\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 2.75956125
+        }
+      ]
+    },
+    {
+      "id": "rsync/list-modules",
+      "protocol": "rsync",
+      "instruction": "Offer two modules: backups, described as Nightly backups, and media, described as Photo library.",
+      "client": "rsync --contimeout=230 --timeout=230 rsync://127.0.0.1:{PORT}/",
+      "independence": "protocol-client",
+      "expectation": "contains [\"backups\", \"Nightly backups\", \"media\", \"Photo library\"]",
+      "note": null,
+      "attempts": 5,
+      "passes": 0,
+      "pass_rate": 0.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": "wrong_content",
+      "recoverable_runs": 0,
+      "verdicts_agree": true,
+      "actions_agree": true,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "fail",
+          "failure_mode": "wrong_content",
+          "detail": "valid actions executed, but client output does not contain \"media\"",
+          "model_output": [
+            "2026-10-31T22:41:00.711091Z DEBUG Executing action 0: Object {\"type\": String(\"rsync_modules\"), \"modules\": Array [Object {\"name\": String(\"backups\"), \"comment\": String(\"Nightly backups\")}]}",
+            "2026-10-31T22:41:00.712487Z DEBUG Executing action 1: Object {\"type\": String(\"rsync_modules\"), \"modules\": Array [Object {\"name\": String(\"media\"), \"comment\": String(\"Photo library\")}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"rsync_modules\"), \"modules\": Array [Object {\"name\": String(\"backups\"), \"comment\": String(\"Nightly backups\")}]}",
+            "Executing action 1: Object {\"type\": String(\"rsync_modules\"), \"modules\": Array [Object {\"name\": String(\"media\"), \"comment\": String(\"Photo library\")}]}"
+          ],
+          "client_command": "rsync --contimeout=230 --timeout=230 rsync://127.0.0.1:52898/",
+          "client_output": "backups        \tNightly backups\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 5.607196334
+        },
+        {
+          "run": 2,
+          "verdict": "fail",
+          "failure_mode": "wrong_content",
+          "detail": "valid actions executed, but client output does not contain \"media\"",
+          "model_output": [
+            "2026-10-31T22:41:04.144284Z DEBUG Executing action 0: Object {\"type\": String(\"rsync_modules\"), \"modules\": Array [Object {\"name\": String(\"backups\"), \"comment\": String(\"Nightly backups\")}]}",
+            "2026-10-31T22:41:04.145757Z DEBUG Executing action 1: Object {\"type\": String(\"rsync_modules\"), \"modules\": Array [Object {\"name\": String(\"media\"), \"comment\": String(\"Photo library\")}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"rsync_modules\"), \"modules\": Array [Object {\"name\": String(\"backups\"), \"comment\": String(\"Nightly backups\")}]}",
+            "Executing action 1: Object {\"type\": String(\"rsync_modules\"), \"modules\": Array [Object {\"name\": String(\"media\"), \"comment\": String(\"Photo library\")}]}"
+          ],
+          "client_command": "rsync --contimeout=230 --timeout=230 rsync://127.0.0.1:52939/",
+          "client_output": "backups        \tNightly backups\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 3.43176275
+        },
+        {
+          "run": 3,
+          "verdict": "fail",
+          "failure_mode": "wrong_content",
+          "detail": "valid actions executed, but client output does not contain \"media\"",
+          "model_output": [
+            "2026-10-31T22:41:07.702693Z DEBUG Executing action 0: Object {\"type\": String(\"rsync_modules\"), \"modules\": Array [Object {\"name\": String(\"backups\"), \"comment\": String(\"Nightly backups\")}]}",
+            "2026-10-31T22:41:07.704028Z DEBUG Executing action 1: Object {\"type\": String(\"rsync_modules\"), \"modules\": Array [Object {\"name\": String(\"media\"), \"comment\": String(\"Photo library\")}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"rsync_modules\"), \"modules\": Array [Object {\"name\": String(\"backups\"), \"comment\": String(\"Nightly backups\")}]}",
+            "Executing action 1: Object {\"type\": String(\"rsync_modules\"), \"modules\": Array [Object {\"name\": String(\"media\"), \"comment\": String(\"Photo library\")}]}"
+          ],
+          "client_command": "rsync --contimeout=230 --timeout=230 rsync://127.0.0.1:52978/",
+          "client_output": "backups        \tNightly backups\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 3.557447792
+        },
+        {
+          "run": 4,
+          "verdict": "fail",
+          "failure_mode": "wrong_content",
+          "detail": "valid actions executed, but client output does not contain \"media\"",
+          "model_output": [
+            "2026-10-31T22:41:11.617158Z DEBUG Executing action 0: Object {\"type\": String(\"rsync_modules\"), \"modules\": Array [Object {\"name\": String(\"backups\"), \"comment\": String(\"Nightly backups\")}]}",
+            "2026-10-31T22:41:11.618646Z DEBUG Executing action 1: Object {\"type\": String(\"rsync_modules\"), \"modules\": Array [Object {\"name\": String(\"media\"), \"comment\": String(\"Photo library\")}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"rsync_modules\"), \"modules\": Array [Object {\"name\": String(\"backups\"), \"comment\": String(\"Nightly backups\")}]}",
+            "Executing action 1: Object {\"type\": String(\"rsync_modules\"), \"modules\": Array [Object {\"name\": String(\"media\"), \"comment\": String(\"Photo library\")}]}"
+          ],
+          "client_command": "rsync --contimeout=230 --timeout=230 rsync://127.0.0.1:53016/",
+          "client_output": "backups        \tNightly backups\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 3.915187916
+        },
+        {
+          "run": 5,
+          "verdict": "fail",
+          "failure_mode": "wrong_content",
+          "detail": "valid actions executed, but client output does not contain \"media\"",
+          "model_output": [
+            "2026-10-31T22:41:15.064964Z DEBUG Executing action 0: Object {\"type\": String(\"rsync_modules\"), \"modules\": Array [Object {\"name\": String(\"backups\"), \"comment\": String(\"Nightly backups\")}]}",
+            "2026-10-31T22:41:15.066452Z DEBUG Executing action 1: Object {\"type\": String(\"rsync_modules\"), \"modules\": Array [Object {\"name\": String(\"media\"), \"comment\": String(\"Photo library\")}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"rsync_modules\"), \"modules\": Array [Object {\"name\": String(\"backups\"), \"comment\": String(\"Nightly backups\")}]}",
+            "Executing action 1: Object {\"type\": String(\"rsync_modules\"), \"modules\": Array [Object {\"name\": String(\"media\"), \"comment\": String(\"Photo library\")}]}"
+          ],
+          "client_command": "rsync --contimeout=230 --timeout=230 rsync://127.0.0.1:53055/",
+          "client_output": "backups        \tNightly backups\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 3.44786675
+        }
+      ]
+    },
+    {
+      "id": "rsync/list-files",
+      "protocol": "rsync",
+      "instruction": "The module docs holds two files, readme.txt and notes.md.",
+      "client": "rsync --contimeout=230 --timeout=230 rsync://127.0.0.1:{PORT}/docs/",
+      "independence": "protocol-client",
+      "expectation": "contains [\"readme.txt\", \"notes.md\"]",
+      "note": null,
+      "attempts": 5,
+      "passes": 5,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": true,
+      "actions_agree": true,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:41:26.146126Z DEBUG Executing action 0: Object {\"type\": String(\"rsync_send_entries\"), \"entries\": Array [Object {\"path\": String(\"readme.txt\"), \"type\": String(\"file\"), \"content\": String(\"Content of readme.txt\")}, Object {\"path\": String(\"notes.md\"), \"type\": String(\"file\"), \"content\": String(\"Content of notes.md\")}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"rsync_send_entries\"), \"entries\": Array [Object {\"path\": String(\"readme.txt\"), \"type\": String(\"file\"), \"content\": String(\"Content of readme.txt\")}, Object {\"path\": String(\"notes.md\"), \"type\": String(\"file\"), \"content\": String(\"Content of notes.md\")}]}"
+          ],
+          "client_command": "rsync --contimeout=230 --timeout=230 rsync://127.0.0.1:53096/docs/",
+          "client_output": "drwxr-xr-x          4,096 2026/10/31 18:41:15 .\n-rw-r--r--             19 2026/10/31 18:41:15 notes.md\n-rw-r--r--             21 2026/10/31 18:41:15 readme.txt\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 11.103922333
+        },
+        {
+          "run": 2,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:41:33.208981Z DEBUG Executing action 0: Object {\"type\": String(\"rsync_send_entries\"), \"entries\": Array [Object {\"path\": String(\"readme.txt\"), \"type\": String(\"file\"), \"content\": String(\"Content of readme.txt\")}, Object {\"path\": String(\"notes.md\"), \"type\": String(\"file\"), \"content\": String(\"Content of notes.md\")}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"rsync_send_entries\"), \"entries\": Array [Object {\"path\": String(\"readme.txt\"), \"type\": String(\"file\"), \"content\": String(\"Content of readme.txt\")}, Object {\"path\": String(\"notes.md\"), \"type\": String(\"file\"), \"content\": String(\"Content of notes.md\")}]}"
+          ],
+          "client_command": "rsync --contimeout=230 --timeout=230 rsync://127.0.0.1:53167/docs/",
+          "client_output": "drwxr-xr-x          4,096 2026/10/31 18:41:27 .\n-rw-r--r--             19 2026/10/31 18:41:27 notes.md\n-rw-r--r--             21 2026/10/31 18:41:27 readme.txt\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 7.058775542
+        },
+        {
+          "run": 3,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:41:40.937295Z DEBUG Executing action 0: Object {\"type\": String(\"rsync_send_entries\"), \"entries\": Array [Object {\"path\": String(\"readme.txt\"), \"type\": String(\"file\"), \"content\": String(\"Content of readme.txt\")}, Object {\"path\": String(\"notes.md\"), \"type\": String(\"file\"), \"content\": String(\"Content of notes.md\")}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"rsync_send_entries\"), \"entries\": Array [Object {\"path\": String(\"readme.txt\"), \"type\": String(\"file\"), \"content\": String(\"Content of readme.txt\")}, Object {\"path\": String(\"notes.md\"), \"type\": String(\"file\"), \"content\": String(\"Content of notes.md\")}]}"
+          ],
+          "client_command": "rsync --contimeout=230 --timeout=230 rsync://127.0.0.1:53219/docs/",
+          "client_output": "drwxr-xr-x          4,096 2026/10/31 18:41:34 .\n-rw-r--r--             19 2026/10/31 18:41:34 notes.md\n-rw-r--r--             21 2026/10/31 18:41:34 readme.txt\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 7.73717125
+        },
+        {
+          "run": 4,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:41:47.721021Z DEBUG Executing action 0: Object {\"type\": String(\"rsync_send_entries\"), \"entries\": Array [Object {\"path\": String(\"readme.txt\"), \"type\": String(\"file\"), \"content\": String(\"Content of readme.txt\")}, Object {\"path\": String(\"notes.md\"), \"type\": String(\"file\"), \"content\": String(\"Content of notes.md\")}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"rsync_send_entries\"), \"entries\": Array [Object {\"path\": String(\"readme.txt\"), \"type\": String(\"file\"), \"content\": String(\"Content of readme.txt\")}, Object {\"path\": String(\"notes.md\"), \"type\": String(\"file\"), \"content\": String(\"Content of notes.md\")}]}"
+          ],
+          "client_command": "rsync --contimeout=230 --timeout=230 rsync://127.0.0.1:53276/docs/",
+          "client_output": "drwxr-xr-x          4,096 2026/10/31 18:41:41 .\n-rw-r--r--             19 2026/10/31 18:41:41 notes.md\n-rw-r--r--             21 2026/10/31 18:41:41 readme.txt\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 6.777325041
+        },
+        {
+          "run": 5,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-10-31T22:41:57.941511Z DEBUG Executing action 0: Object {\"type\": String(\"rsync_send_entries\"), \"entries\": Array [Object {\"path\": String(\"readme.txt\"), \"type\": String(\"file\"), \"content\": String(\"Content of readme.txt\")}, Object {\"path\": String(\"notes.md\"), \"type\": String(\"file\"), \"content\": String(\"Content of notes.md\")}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"rsync_send_entries\"), \"entries\": Array [Object {\"path\": String(\"readme.txt\"), \"type\": String(\"file\"), \"content\": String(\"Content of readme.txt\")}, Object {\"path\": String(\"notes.md\"), \"type\": String(\"file\"), \"content\": String(\"Content of notes.md\")}]}"
+          ],
+          "client_command": "rsync --contimeout=230 --timeout=230 rsync://127.0.0.1:53334/docs/",
+          "client_output": "drwxr-xr-x          4,096 2026/10/31 18:41:48 .\n-rw-r--r--             19 2026/10/31 18:41:48 notes.md\n-rw-r--r--             21 2026/10/31 18:41:48 readme.txt\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 10.2286475
+        }
+      ]
+    }
+  ]
+}

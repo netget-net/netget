@@ -480,6 +480,33 @@ boundary and across a legitimate chain, an oversized packet sent **as the handsh
 query still working. Verified by removing the check, at which point three of the four fail and
 the ordinary-query control still passes.
 
+### The same header carries the sequence ids the crate panics on
+
+`opensrv-mysql` 0.7.0 answers each client packet with `writer.set_seq(seq + 1)` on the client's
+`u8` sequence id (`lib.rs:389`, `:452`, `:502`, `:563`), so a client sending `0xFF` overflows
+it — a panic in every debug and test build, wrapped silently in release. And `packet()`
+reassembles a chain with `assert_eq!(nseq, seq + 1)` between fragments and
+`assert_eq!(last.0, full.0 + 1)` before the last (`packet_reader.rs:252`, `:266`), so a peer
+that misnumbers its fragments panics the connection task in every build. Both are reachable in
+the handshake response, before authentication. A panic there is swallowed by `tokio::spawn`:
+the peer sees a bare close and `close_connection_on_server` never runs.
+
+`PacketLimitReader` therefore also refuses a header with sequence id `0xFF` (nothing legitimate
+sends it: a client's packets in one exchange start at 0 or 1, and reaching 255 would take a
+4 GiB chain) and a chain fragment that is not numbered one past the previous, recording
+`Refusal::OutOfOrder`; the connection task answers MySQL's own **1156
+`ER_NET_PACKETS_OUT_OF_ORDER`**, SQLSTATE `08S01`, through the same write-first-then-drain path.
+`tests/server/mysql/sequence_id_test.rs` covers both from the wire and the reader's boundaries
+directly; `fuzz/fuzz_targets/mysql_session.rs` runs the crate's whole loop behind the reader.
+
+**Still exposed, in the prepared-statement path (not changed here):** `ParamParser`
+(`params.rs`) splits the null bitmap and type map with `split_at` on lengths the client controls
+(`params.rs:86`), `panic!`s on an unknown column type (`:91`), and `unwrap`s
+`Value::parse_from` (`:127`) — each a panic on a malformed COM_STMT_EXECUTE once a statement is
+prepared. And COM_STMT_SEND_LONG_DATA appends to a per-parameter `Vec` with no bound
+(`lib.rs:663-678`), so a peer that keeps sending long data for one prepared statement grows the
+process without limit, 64 MiB per packet.
+
 ## One query, one answer
 
 The real-model eval (`./run-eval.sh mysql`) found two things no mocked test could. Told to

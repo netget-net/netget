@@ -30,6 +30,15 @@ netget "Return sassy responses on HTTP 8080"
 netget "Provide life coaching services over Telnet"
 ```
 
+## Use cases
+
+Short, deterministic walkthroughs (no model needed):
+
+- [An API mock for your tests](docs/guides/API_MOCK.md) — `--load` a `.netget` file on port 0, read the bound ports from `--ready-file`, with pytest and Rust fixture helpers.
+- [A logging honeypot](docs/guides/HONEYPOT.md) — SSH, Telnet and HTTP, and what to know before exposing it.
+- [Abusing a client with malformed responses](docs/guides/FUZZ_A_CLIENT.md).
+- [Interop-testing a client against many protocols](docs/guides/INTEROP_TESTING.md).
+
 ## Connect through MCP
 
 Add this to your MCP client's configuration:

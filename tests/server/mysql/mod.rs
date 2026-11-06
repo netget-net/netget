@@ -7,3 +7,4 @@ mod prepared_statement_test;
 mod real_client_test;
 mod stmt_params_test;
 mod test;
+mod sequence_id_test;
