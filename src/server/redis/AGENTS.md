@@ -253,7 +253,12 @@ Real Redis never nests a *request* at all (`Protocol error: expected '$', got
   outbox closing (nothing further is written or counted as sent) and the connection closed
   in `AppState`, which withdraws a parked request for it, so a hung-up `redis-cli` cannot be
   "answered" into a dead socket. Real Redis likewise frees a client on read EOF.
-  `tests/mcp_handler_and_intercept_scope_test.rs` drives both halves.
+  `tests/mcp_handler_and_intercept_scope_test.rs` drives both halves. The bound is on what the
+  watch *reads*: once the frame buffer and the bytes kept mid-call reach the cap it stops
+  reading and the peer's writes back up in TCP; the kept bytes join the unfinished frame after
+  the answer, where the frame cap refuses it. `frame_bounds_test.rs`'s
+  `bytes_arriving_while_a_command_is_answered_are_under_the_frame_cap` floods three times the
+  cap behind a slow command and asserts both.
 
 ### Dashboard injection (`[ message this peer ]` / `[ disconnect this peer ]`)
 
@@ -583,6 +588,7 @@ is removed:
 | `MAX_RESP_ELEMENTS` (per frame) | inbound | `frame_bounds_test.rs`: 2^20 − 1 passes, one header past refused, a split frame refused |
 | `MAX_RESP_DEPTH` (32) | inbound | `resp_depth_test.rs`: 32 answered, 33 refused; removed, the binary aborts |
 | linear scan | inbound | `frame_bounds_test.rs`: a 64 MiB unfinished line refused within 45 s |
+| bytes read while a command is answered | inbound | `frame_bounds_test.rs`: three times the cap sent behind a slow command; the server stops reading at the cap and refuses the frame after answering |
 | `MAX_REPLY_DEPTH` (32) | **outbound** (the model's RESP3 arrays) | `frame_bounds_test.rs`: 32 written, 33 an error with nothing of the frame |
 | `MAX_CONNECTIONS` (256) | accept | `connection_bounds_test.rs`: 257th refused with Redis's text, a closed peer's slot returned |
 | first-byte / idle read deadlines | inbound | `connection_bounds_test.rs` |

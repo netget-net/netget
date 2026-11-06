@@ -411,3 +411,94 @@ async fn a_resp3_reply_nested_past_max_reply_depth_is_never_written() {
         }
     }
 }
+
+/// While a command is being answered the server keeps reading its socket (so it notices a peer
+/// that hangs up), and what arrives in that time is new inbound state. It must sit under the
+/// same cap as the frame buffer: past it the server stops reading, the peer's writes back up in
+/// TCP, and the oversize frame is refused once the answer is out.
+///
+/// The command is answered by a handler that sleeps, and the peer sends three times the cap of
+/// an unfinished frame behind it. Without the bound the server would take all of it during the
+/// call; with it, what the peer manages to write before the answer arrives is the cap plus
+/// whatever the kernel's socket buffers hold.
+#[tokio::test]
+async fn bytes_arriving_while_a_command_is_answered_are_under_the_frame_cap() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let state = new_state().await;
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let id = ServerForm {
+        protocol: "redis".to_string(),
+        port: Some(0),
+        instruction: Some(String::new()),
+        event_handlers: Some(vec![serde_json::json!({
+            "event_pattern": "redis_command",
+            "handler": {"type": "script", "language": "python", "code":
+                "import json,sys,time\ntime.sleep(4)\nprint(json.dumps({'actions':[{'type':'redis_simple_string','value':'SLOW'}]}))"}
+        })]),
+        ..Default::default()
+    }
+    .create(&state, tx)
+    .await
+    .expect("create redis server");
+    let port = wait_for_port(&state, id).await;
+
+    let stream = TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("connect");
+    let (mut read_half, mut write_half) = stream.into_split();
+    let written = std::sync::Arc::new(AtomicUsize::new(0));
+    let counter = written.clone();
+    let writer = tokio::spawn(async move {
+        let _ = write_half.write_all(b"*1\r\n$4\r\nSLOW\r\n").await;
+        let mut first = b"*1\r\n+".to_vec();
+        first.resize(1 << 20, b'a');
+        let rest = vec![b'a'; 1 << 20];
+        for i in 0..(3 * MAX_PENDING_FRAME_BYTES) >> 20 {
+            let part = if i == 0 { &first } else { &rest };
+            if write_half.write_all(part).await.is_err() {
+                return;
+            }
+            counter.fetch_add(part.len(), Ordering::SeqCst);
+        }
+        tokio::time::sleep(Duration::from_secs(3600)).await;
+    });
+
+    let mut out = Vec::new();
+    let mut buf = [0u8; 4096];
+    let mut written_at_answer = None;
+    let _ = tokio::time::timeout(Duration::from_secs(90), async {
+        loop {
+            match read_half.read(&mut buf).await {
+                Ok(0) | Err(_) => return,
+                Ok(n) => {
+                    out.extend_from_slice(&buf[..n]);
+                    if written_at_answer.is_none() && out.starts_with(b"+SLOW\r\n") {
+                        written_at_answer = Some(written.load(Ordering::SeqCst));
+                    }
+                }
+            }
+        }
+    })
+    .await;
+    writer.abort();
+
+    let written_at_answer = written_at_answer.unwrap_or_else(|| {
+        panic!(
+            "the slow command was never answered: {:?}",
+            String::from_utf8_lossy(&out[..out.len().min(200)])
+        )
+    });
+    println!("the peer had written {written_at_answer} bytes when the answer arrived");
+    assert!(
+        written_at_answer < MAX_PENDING_FRAME_BYTES + (32 << 20),
+        "the server took {written_at_answer} bytes while answering one command: what arrives \
+         mid-call is not bounded by the frame cap"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out),
+        format!("+SLOW\r\n{BUFFER_CAP_REFUSAL}"),
+        "after the answer, the unfinished frame behind it is refused at the cap and the \
+         connection closed"
+    );
+}
