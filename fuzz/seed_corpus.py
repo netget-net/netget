@@ -1469,6 +1469,69 @@ write("gre_packet", "ends_inside_sequence", gre(0x6558, b"", key=1, seq=2)[:10])
 write("gre_packet", "routing_bit", bytes([0x40, 0, 0x65, 0x58]) + arp_request)
 write("gre_packet", "version_1", bytes([0x30, 1, 0x88, 0x0B, 0, 0, 0, 0, 0, 0, 0, 0]))
 
+
+# --- mysql_stmt_execute: COM_STMT_EXECUTE parameter blocks -----------------
+# Seed layout (see the target): count, flags (bit 0 = previous types follow), long-data
+# mask, [previous types], then the payload after the 0x17 command byte.
+def mysql_exec(count, payload, prev_types=None, long_mask=0):
+    head = bytes([count, 1 if prev_types is not None else 0, long_mask])
+    return head + (bytes(prev_types) if prev_types is not None else b"") + payload
+
+
+def mysql_exec_payload(stmt, nulls, types, values, bound=1):
+    p = struct.pack("<IBI", stmt, 0, 1)
+    if nulls:
+        bitmap = bytearray((len(nulls) + 7) // 8)
+        for i, n in enumerate(nulls):
+            if n:
+                bitmap[i // 8] |= 1 << (i % 8)
+        p += bytes(bitmap) + bytes([bound])
+        if bound:
+            p += bytes(types)
+    return p + values
+
+
+def mysql_lenenc_str(b):
+    if len(b) < 0xFB:
+        return bytes([len(b)]) + b
+    return b"\xfc" + struct.pack("<H", len(b)) + b
+
+
+MY_TYPES = [0x08, 0, 0x08, 0x80, 0x03, 0, 0x01, 0, 0x05, 0, 0x04, 0, 0xFD, 0, 0xF6, 0,
+            0x06, 0, 0x0C, 0, 0x0A, 0, 0x0B, 0, 0xFC, 0]
+MY_VALUES = (struct.pack("<q", 42) + struct.pack("<Q", 2**64 - 1) + struct.pack("<i", -7)
+             + b"\xff" + struct.pack("<d", 2.5) + struct.pack("<f", 0.1)
+             + mysql_lenenc_str("alice ⟩".encode()) + mysql_lenenc_str(b"12.50")
+             + bytes([11]) + struct.pack("<HBBBBBI", 2026, 10, 31, 12, 34, 56, 789)
+             + bytes([4]) + struct.pack("<HBB", 2026, 1, 2)
+             + bytes([12, 1]) + struct.pack("<IBBBI", 1, 2, 3, 4, 5)
+             + mysql_lenenc_str(b"\xff\xfe\x00" * 100))
+write("mysql_stmt_execute", "every_type",
+      mysql_exec(13, mysql_exec_payload(1, [False] * 13, MY_TYPES, MY_VALUES)))
+write("mysql_stmt_execute", "no_params", mysql_exec(0, mysql_exec_payload(2, [], [], b"")))
+write("mysql_stmt_execute", "rebound_types",
+      mysql_exec(2, mysql_exec_payload(3, [False, True], [], struct.pack("<i", 5), bound=0),
+                 prev_types=[0x03, 0, 0xFD, 0]))
+write("mysql_stmt_execute", "long_data",
+      mysql_exec(2, mysql_exec_payload(4, [False, False], [0x03, 0, 0xFC, 0],
+                                       struct.pack("<i", 9)), long_mask=0b10))
+write("mysql_stmt_execute", "many_nulls",
+      mysql_exec(200, mysql_exec_payload(5, [True] * 200, [0x06, 0] * 200, b"")))
+# The shapes that panic opensrv-mysql's ParamParser, and lying lengths.
+write("mysql_stmt_execute", "no_bitmap", mysql_exec(2, struct.pack("<IBI", 1, 0, 1)))
+write("mysql_stmt_execute", "short_types",
+      mysql_exec(2, struct.pack("<IBI", 1, 0, 1) + b"\x00\x01\x08\x00"))
+write("mysql_stmt_execute", "bad_type",
+      mysql_exec(1, mysql_exec_payload(1, [False], [0x42, 0], b"\x00" * 4)))
+write("mysql_stmt_execute", "never_bound",
+      mysql_exec(1, mysql_exec_payload(1, [False], [], b"\x00" * 8, bound=0)))
+write("mysql_stmt_execute", "u64_max_length",
+      mysql_exec(1, mysql_exec_payload(1, [False], [0xFD, 0],
+                                       b"\xfe" + struct.pack("<Q", 2**64 - 1) + b"abc")))
+write("mysql_stmt_execute", "ff_length",
+      mysql_exec(1, mysql_exec_payload(1, [False], [0xFD, 0], b"\xff\x00")))
+write("mysql_stmt_execute", "bad_temporal_length",
+      mysql_exec(1, mysql_exec_payload(1, [False], [0x0C, 0], b"\x05" + b"\x00" * 5)))
 # --- SNMP: the recursion rasn actually has --------------------------------
 # rasn 0.18 recurses on a *constructed OCTET STRING* (`24 80`), and `community` is one; the
 # `30 80` bomb above nests SEQUENCEs, which the guard refuses for the same reason but which
