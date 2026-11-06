@@ -53,6 +53,20 @@ const ANSWERED_WITH: &str = "\n   answered with: ";
 /// itself did next.
 const CLIENT_DID: &str = "\n   you did: ";
 
+/// One exchange rendered as a history entry, ready to append.
+///
+/// Rendering redacts and serialises the event and its answer, which is most of what recording
+/// costs, so `AppState::record_access_log` renders before it takes the state lock and only
+/// appends under it.
+#[derive(Debug, Clone)]
+pub struct RenderedEntry(String);
+
+impl RenderedEntry {
+    pub fn new(event_type: &str, request: &Value, response: &[Value]) -> Self {
+        Self(render_entry(event_type, request, response))
+    }
+}
+
 #[derive(Debug, Clone)]
 struct HistoryEntry {
     /// 1-based position of this entry among everything ever recorded on the connection.
@@ -91,11 +105,18 @@ impl ExchangeHistory {
         if limit == 0 {
             return;
         }
+        self.record_rendered(RenderedEntry::new(event_type, request, response), limit);
+    }
+
+    /// [`Self::record`] for an exchange already rendered with [`RenderedEntry::new`].
+    pub fn record_rendered(&mut self, entry: RenderedEntry, limit: u16) {
+        if limit == 0 {
+            return;
+        }
         self.recorded += 1;
-        let text = render_entry(event_type, request, response);
         self.entries.push_back(HistoryEntry {
             seq: self.recorded,
-            text,
+            text: entry.0,
         });
         self.trim(limit);
     }

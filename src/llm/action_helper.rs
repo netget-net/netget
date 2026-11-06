@@ -128,7 +128,7 @@ pub async fn call_llm_with_actions(
 
     // Add provide_feedback action only if server has feedback_instructions configured
     let has_feedback_instructions = state
-        .with_server_mut(server_id, |server| server.feedback_instructions.is_some())
+        .with_server(server_id, |server| server.feedback_instructions.is_some())
         .await
         .unwrap_or(false);
 
@@ -651,7 +651,7 @@ async fn call_llm_inner(
     // Get client address from connection state if available
     let client_addr = if let Some(conn_id) = connection_id {
         state
-            .with_server_mut(server_id, |server| {
+            .with_server(server_id, |server| {
                 server.connections.get(&conn_id).map(|c| c.remote_addr)
             })
             .await
@@ -891,7 +891,7 @@ async fn call_llm_inner(
 
     // Add provide_feedback action only if server has feedback_instructions configured
     let has_feedback_instructions = state
-        .with_server_mut(server_id, |server| server.feedback_instructions.is_some())
+        .with_server(server_id, |server| server.feedback_instructions.is_some())
         .await
         .unwrap_or(false);
 
