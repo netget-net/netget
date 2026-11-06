@@ -40,5 +40,16 @@ keep a transaction alive indefinitely.
 
 No job storage exists in this client. No TLS or authentication is implemented (neither
 belongs to the standard Beanstalkd protocol). Drain/binlog administration is outside the
-advertised action set. The implementation remains Experimental; tests use a real
+advertised action set. Tests use a real
 beanstalkd daemon and the existing NetGet server, plus raw negative/lifecycle fixtures.
+
+## Maturity: Beta
+
+All four conditions of the client bar hold, on the real-server tests in `tests/client/beanstalkd/`:
+
+1. the peer is the beanstalkd daemon — third-party, and not a library this client is built on;
+2. a missing peer fails the test, never skips it;
+3. a real session, completed against that server;
+4. the client acts on the model's answer, asserted from the server's side: the test's own socket finds the job the mocked model put, in the tube it chose, with its body and priority; beanstalkd's `cmd-list-tubes` counts the bounded chain. Emptying the loop over the model's actions fails it.
+
+Verified 1 November 2026 by running the suite against the installed peer and by that mutation. The CI job that installs the peer is in `.github/workflows/protocol-pairs.yml`.
