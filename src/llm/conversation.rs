@@ -62,6 +62,47 @@ fn action_references_tool_result(action: &serde_json::Value) -> bool {
     }
 }
 
+/// Actions nothing on the wire sees: they keep notes or tell the operator.
+pub const NOTE_KEEPING_ACTIONS: &[&str] = &[
+    "set_memory",
+    "append_memory",
+    "set_connection_memory",
+    "append_connection_memory",
+    "append_to_log",
+    "notify_operator",
+    "show_message",
+    "provide_feedback",
+];
+
+/// The names in `actions` when the answer is nothing but note-keeping actions copied verbatim
+/// from their own examples in `offered`; `None` otherwise.
+///
+/// That is the shape of a reply that repeated the prompt back: the response parser takes the
+/// first JSON value, which is the example of the first action listed — `set_memory`'s. A note
+/// the model actually wrote (any value of its own), an answer with anything that reaches the
+/// peer, and an empty answer (an explicit "send nothing") all return `None`.
+pub fn copied_note_example_answer(
+    actions: &[serde_json::Value],
+    offered: &[ActionDefinition],
+) -> Option<Vec<String>> {
+    let mut names = Vec::new();
+    for action in actions {
+        let name = action.get("type").and_then(|t| t.as_str())?;
+        if !NOTE_KEEPING_ACTIONS.contains(&name) {
+            return None;
+        }
+        let example = offered
+            .iter()
+            .find(|a| a.name == name)
+            .map(|a| &a.example)?;
+        if example != action {
+            return None;
+        }
+        names.push(name.to_string());
+    }
+    (!names.is_empty()).then_some(names)
+}
+
 fn extract_reasoning(response: &str) -> (Option<String>, String) {
     let reasoning_start = response.find("<reasoning>");
     let reasoning_end = response.find("</reasoning>");
@@ -169,6 +210,11 @@ pub struct ConversationHandler {
 
     /// Structured metadata for a single network event, retained across all retries.
     bridge_event: Option<crate::llm::bridge::BridgeEventContext>,
+
+    /// The protocol actions that answer the peer, when this conversation answers a server's
+    /// network event that offers some. An answer that is only a note-keeping action's example,
+    /// copied, is then sent back once for a wire answer; see [`Self::with_wire_answers`].
+    wire_answer_actions: Vec<String>,
     agent_context: Option<serde_json::Value>,
 
     /// Conversation-local policy retained once credential parameters are offered.
@@ -229,12 +275,30 @@ impl ConversationHandler {
             use_native_tools: false,
             offered_actions: Vec::new(),
             bridge_event: None,
+            wire_answer_actions: Vec::new(),
             agent_context: None,
             private_payloads: false,
             max_history_messages: DEFAULT_MAX_HISTORY_MESSAGES,
             max_history_chars: DEFAULT_MAX_HISTORY_CHARS,
             trim_generation: 0,
         }
+    }
+
+    /// Name the protocol actions that answer the peer on this network event.
+    ///
+    /// With any named, a final answer that is nothing but note-keeping actions (memory,
+    /// connection memory, the log, `notify_operator`) copied verbatim from their examples is
+    /// not executed: the model is told what it sent and asked once more, and whatever it
+    /// answers then is kept. Measured with llama3.1:8b on an LDAP search (November 2026): a
+    /// reply that repeated the prompt back was read as its first JSON value, `set_memory`'s
+    /// example, so nothing reached the peer and the search failed closed; the same
+    /// conversation with this correction answered the search in 10 of 10 seeds.
+    ///
+    /// Only copied examples are sent back. A note the model wrote itself stands as its whole
+    /// answer: a collector that records a datagram and says nothing is answering correctly.
+    pub fn with_wire_answers(mut self, actions: Vec<String>) -> Self {
+        self.wire_answer_actions = actions;
+        self
     }
 
     /// Explicit network context for agent consumers; native model prompts are unchanged.
@@ -776,6 +840,7 @@ impl ConversationHandler {
         let mut consecutive_tool_failures = 0;
         let mut unknown_action_retries = 0;
         let mut malformed_action_retries = 0;
+        let mut example_copy_corrected = false;
         const MAX_CONSECUTIVE_FAILURES: usize = 2;
         const MAX_UNKNOWN_ACTION_RETRIES: usize = 2;
         const MAX_MALFORMED_ACTION_RETRIES: usize = 2;
@@ -1202,6 +1267,29 @@ impl ConversationHandler {
                      values written out in full.",
                     names
                 )));
+            }
+
+            // A final answer to a network event that is only a note-keeping action's example,
+            // copied, is sent back once where the event offers the protocol's own answers; see
+            // `with_wire_answers`.
+            if tools.is_empty() && !example_copy_corrected && !self.wire_answer_actions.is_empty() {
+                if let Some(notes) = copied_note_example_answer(&ready, &self.offered_actions) {
+                    example_copy_corrected = true;
+                    Log::new(self.status_tx.as_ref()).warn(format!(
+                        "LLM answered a network event with nothing but the example of {} \
+                         copied from the action list; asking once more for an answer the peer \
+                         receives",
+                        notes.join(", ")
+                    ));
+                    let correction =
+                        crate::llm::prompt::PromptBuilder::build_copied_note_example_retry_prompt(
+                            &notes,
+                            &self.wire_answer_actions,
+                        );
+                    rejected_block_start.get_or_insert((assistant_idx, self.trim_generation));
+                    self.messages.push(Message::user(correction));
+                    continue;
+                }
             }
 
             // Only a final response commits actions. An intermediate tool round can
