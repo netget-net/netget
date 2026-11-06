@@ -45,6 +45,29 @@ prost = "0.13"
 # The ONVIF target hands the device's clock to the termination-time parser, as the server does.
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
+# The gRPC target builds its schema and decodes with the same prost-reflect the server uses.
+prost-reflect = "0.14"
+prost-types = "0.13"
+
+# The PostgreSQL target drives pgwire's frontend decoder directly — the patched copy, through
+# the [patch.crates-io] below.
+pgwire = "0.35"
+bytes = "1"
+
+# The WebSocket target runs the server's DeflateStream under tokio-tungstenite, as the server
+# does, polling it with a no-op waker over an in-memory socket.
+tokio = "1"
+tokio-tungstenite = "0.21"
+futures-util = "0.3"
+
+# This crate is its own workspace, so the root manifest's [patch.crates-io] does not reach it
+# and without these lines the netget it builds links crates.io's pgwire — the one that panics
+# on six malformed bytes (vendor/pgwire/README.md) — and the pgwire_frontend target would be
+# searching a decoder the server does not run. Both entries mirror the root manifest.
+[patch.crates-io]
+hyper = { path = "../vendor/hyper" }
+pgwire = { path = "../vendor/pgwire" }
+
 [dependencies.netget]
 package = "netget-tool"
 path = ".."
@@ -431,6 +454,48 @@ bench = false
 [[bin]]
 name = "ctap2_cbor"
 path = "fuzz_targets/ctap2_cbor.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mqtt_packet"
+path = "fuzz_targets/mqtt_packet.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "kafka_request"
+path = "fuzz_targets/kafka_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "etcd_request"
+path = "fuzz_targets/etcd_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "grpc_message"
+path = "fuzz_targets/grpc_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pgwire_frontend"
+path = "fuzz_targets/pgwire_frontend.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "websocket_session"
+path = "fuzz_targets/websocket_session.rs"
 test = false
 doc = false
 bench = false

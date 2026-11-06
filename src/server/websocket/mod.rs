@@ -66,13 +66,13 @@ use actions::{
 };
 
 /// Largest HTTP request head accepted before the upgrade. Real handshakes are well under 2 KiB.
-const MAX_REQUEST_HEAD: usize = 16 * 1024;
+pub const MAX_REQUEST_HEAD: usize = 16 * 1024;
 
 /// How long a client has to finish sending its request head after connecting.
 const HANDSHAKE_TIMEOUT_SECS: u64 = 15;
 
-const DEFAULT_MAX_MESSAGE_SIZE: usize = 1024 * 1024;
-const DEFAULT_MAX_FRAME_SIZE: usize = 1024 * 1024;
+pub const DEFAULT_MAX_MESSAGE_SIZE: usize = 1024 * 1024;
+pub const DEFAULT_MAX_FRAME_SIZE: usize = 1024 * 1024;
 pub const MAX_SIZE_LIMIT: usize = 64 * 1024 * 1024;
 
 /// How long an upgraded connection may go without a single frame from the peer.

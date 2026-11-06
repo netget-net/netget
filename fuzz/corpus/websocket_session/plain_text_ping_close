@@ -1,0 +1,9 @@
+GET /ws HTTP/1.1
+Host: localhost
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==
+Sec-WebSocket-Version: 13
+Sec-WebSocket-Protocol: chat, superchat
+
+…7ú!=_ŸMQX‚ƒ7ú!=7û#‰„7ú!=G“OZˆ…7ú!=4CDR
