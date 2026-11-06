@@ -490,11 +490,11 @@ impl Protocol for X11ClientProtocol {
     fn metadata(&self) -> crate::protocol::metadata::ProtocolMetadataV2 {
         use crate::protocol::metadata::*;
         ProtocolMetadataV2::builder()
-            .state(DevelopmentState::Experimental)
+            .state(DevelopmentState::Beta)
             .privilege_requirement(PrivilegeRequirement::None)
             .implementation("Hand-rolled X11 core protocol over Tokio TCP or a Unix socket: setup with optional MIT-MAGIC-COOKIE-1, CreateWindow, Map/Unmap/Destroy/ConfigureWindow, GetGeometry, QueryTree, InternAtom, GetAtomName, Change/Get/Delete/ListProperties, ListExtensions, Bell; errors matched to their request by sequence number, completion confirmed with a GetInputFocus round trip")
             .llm_control("Which windows to create and how, what to read and write on them, and what to do with each result, error and X event")
-            .e2e_testing("tests/client/x11: Xvfb (the X.Org server) as the real peer, every effect read back with xprop and xwininfo; an in-test X server for the bounds and refusals")
+            .e2e_testing("tests/client/x11/real_server_test.rs against Xvfb (the X.Org server), every effect read back with the X.Org utilities xprop and xwininfo: a handler chain reads a property xprop set, creates a window titled from it and labels it, all visible to xwininfo/xprop; an X error, a resize and disconnecting (the server destroys the window) besides; MIT-MAGIC-COOKIE-1 over the Unix socket needs a root-owned /tmp/.X11-unix. An in-test X server covers the bounds and refusals. Fails rather than skips without Xvfb, xprop, xwininfo and xauth")
             .notes("No drawing, fonts, input injection or extensions beyond listing them. Replies and generic events are bounded at 1 MiB, properties at 64 KiB each way. Windows belong to the connection: the server destroys them when the client disconnects.")
             .max_inbound_bytes(super::wire::MAX_REPLY_BYTES)
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))

@@ -349,11 +349,11 @@ impl Protocol for RsyncClientProtocol {
     fn metadata(&self) -> crate::protocol::metadata::ProtocolMetadataV2 {
         use crate::protocol::metadata::*;
         ProtocolMetadataV2::builder()
-            .state(DevelopmentState::Experimental)
+            .state(DevelopmentState::Beta)
             .privilege_requirement(PrivilegeRequirement::None)
             .implementation("The server's protocol-29 codec (src/server/rsync/wire.rs) as the receiver: @RSYNCD handshake with MOTD and MD4 challenge-response authentication, -ld/-lr requests, demultiplexed input, the file list sorted into rsync's order, whole-file requests written concurrently with the replies they produce, every file checked against MD4(seed ‖ data), and the end-of-run exchange")
             .llm_control("Which modules and paths to list and which files to fetch, and what to do with what came back")
-            .e2e_testing("tests/client/rsync: a stock rsync 3.2.7 daemon (rsync --daemon) — module listing with MOTD, a recursive listing, a fetch whose contents the model acts on, a password-protected module, an unknown module, and rsync_push of a tree (text, hex, a multi-token file, a symlink, an empty directory) read back from the daemon's own directory, plus a push refused by a read-only module")
+            .e2e_testing("tests/client/rsync/real_server_test.rs against a stock rsync daemon (rsync --daemon, protocol 31 stepping down to 29): a handler chain lists modules, lists pub/ recursively and fetches the one Markdown file the listing shows, whose MD4-checked bytes exist only on the daemon; rsync_push of a tree read back from the daemon's disk, a password-protected module and an unknown module besides. Fails rather than skips without rsync")
             .notes("Files come back into the event, bounded by max_fetch_bytes; nothing is written to disk. rsync_push sends files whose contents the model supplies (whole, at most 1000 files and 8 MiB) and never deletes anything on the daemon. Devices and special files in a listing are skipped.")
             .max_inbound_bytes(MAX_FETCH_BYTES_LIMIT as usize)
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))

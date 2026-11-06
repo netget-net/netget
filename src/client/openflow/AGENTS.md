@@ -48,8 +48,14 @@ delays an ECHO_REPLY) and the model dispatcher. All three are registered client 
 No data plane: nothing is forwarded, counters are zero, flow timeouts are recorded and not
 enforced. No buffers, no groups or meters, no TLS, no auxiliary connections, OpenFlow 1.3 only.
 
-## Maturity
+## Maturity: Beta
 
-Experimental. Two independent controllers drive it in `tests/client/openflow/real_server_test.rs`
-(os-ken 4.2.2 and Open vSwitch's `ovs-testcontroller`), with the model's PACKET_INs asserted from
-the controllers' side and tshark over both directions.
+All four conditions of the client bar hold, on the real-server tests in `tests/client/openflow/`:
+
+1. the peer is os-ken and Open vSwitch's ovs-testcontroller — third-party, and not a library this client is built on;
+2. a missing peer fails the test, never skips it;
+3. a real session, completed against that server;
+4. the client acts on the model's answer, asserted from the server's side: os-ken prints what it decoded from each PACKET_IN the policy answered with, and learns and installs a flow from them; with no answer it sees no packet. Emptying the loop over the model's actions fails it.
+
+Verified 1 November 2026 by running the suite against the installed peer and by that mutation. The ovs-testcontroller test did not run here (not installed); os-ken's did. The CI job that installs the peer is in `.github/workflows/protocol-pairs.yml`.
+

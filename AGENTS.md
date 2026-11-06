@@ -592,6 +592,46 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
     rather than an extra LLM call; and nginx's echo quoting the previous response back made a
     looser rule answer both responses until the follow-up depth cap stopped the loop.
 
+  **Thirty-nine as of 1 November 2026 (39 Beta, 201 Experimental — re-derive with
+  `--side client`).** `--side client --all` listed 43 clients in "real peer, evidence runs";
+  reading each test for condition 4, running it against the installed peer and emptying the loop
+  over the model's actions promoted 21: `afp` (netatalk), `beanstalkd`, `capnp_rpc` (pycapnp and
+  go-capnp), `db2` (Apache Derby, a DRDA server that is not IBM Db2), `dbus` (dbus-daemon),
+  `dict` (dictd), `docker` (the Docker Engine), `gearman` (gearmand), `kerberos` (MIT and
+  Heimdal KDCs), `nostr` (nak and nostr_sdk), `nsq` (nsqd), `oci_registry` (crane's registry),
+  `openflow` (os-ken), `prometheus`, `radsec` (FreeRADIUS), `rsync`, `rtp` (ffmpeg), `snmp`
+  (Net-SNMP snmpd), `srt` (libsrt), `vault` and `x11` (Xvfb). Each `AGENTS.md` names the
+  server-side assertion. Script and static handlers count as the model here, as they already did
+  for `dns`, `rdp` and `ngap`: `call_llm_for_client` routes them, so they reach the same loop.
+
+  What that pass found, worth expecting of the next client:
+
+  - **Chains with no bound at all**, the September finding again. `beanstalkd`, `dict` and `srt`
+    forwarded every action the model returned with no depth, so a model that answered each
+    response with another request looped for as long as the server answered. All three now stop
+    at `MAX_FOLLOWUPS` 4, and the test counts the requests on the server's side (beanstalkd's
+    `cmd-list-tubes`, dictd's command log, the bytes libsrt wrote). `mqtt_sn` and `radsec`'s
+    shape was checked too: `radsec` runs on the RADIUS client's bounded loop; `mqtt_sn` is still
+    unbounded and unpromoted.
+  - **Mocked-model tests that asserted the client's report rather than the server's state.**
+    `nsq`'s "server-side" reader was NetGet's own subscriber; `vault`, `nostr`, `docker` and
+    `prometheus` checked the event the client raised. Each now reads the effect from the
+    third-party side (`nsq_tail`, the `vault` CLI, `nak req`, the `docker` CLI, Prometheus's own
+    handler counter). For a read-only client the effect of its action is the server's answer,
+    cross-checked with the server's own tool.
+  - **The installed peer was not the pinned one, and the tests showed it.** nak 0.21 reads events
+    from a piped stdin instead of its arguments, so the nostr tests' empty pipe made `nak event`
+    and `nak req` do nothing; macOS's bundled snmpd 5.6 has no SHA-256 and no `rwuser`.
+
+  Not promoted: the peer is missing here for `bfd`, `ethercat`, `gtp`, `guacamole`, `h323`, `hls`
+  (GStreamer), `inetd`, `iscsi`, `nis`, `nvme_tcp`, `profinet`, `spice`, `sunrpc` (rpcbind on
+  :111), `wsdiscovery` and `zabbix` (`zabbix_proxy`); `bolt`, `lorawan`, `mqtt_sn` and `rtsp` need
+  peers built or downloaded (Neo4j, ChirpStack, the Paho gateway, MediaMTX) and were not run —
+  `bolt`'s, `mqtt_sn`'s and `rtsp`'s real-server tests drive injected actions only, so they need a
+  condition-4 test as well; `grpc` (`mkfifo` is not a peer — it is self-served),
+  `webrtc` (webrtc-rs at both ends) and `ssh` (demoted on 2 October for its SFTP evidence) are
+  not candidates at all.
+
   **Seventeen as of 15 October 2026 (17 Beta — re-derive with `--side client`).**
   Since the thirteen below: `kafka`, `dns` and `rdp` arrived Beta with the protocol-expansion
   pairs, `spark` against a real Apache Spark's live driver UI and History Server, and `yarn`

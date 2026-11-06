@@ -1,6 +1,6 @@
 # OCI Registry client
 
-Experimental selected Distribution v2 reads: probe, catalog, tags, manifest and blob GET/HEAD. No registry content database, credentials file/helper, upload/delete, recursive image pulling, platform selection, referrers/fallback, foreign URL following, Range/resume or redirect following. Native HTTP and certificate-verified HTTPS; browser HTTP implementation only, with no browser runtime evidence or positive TLS interoperability claim.
+Selected Distribution v2 reads: probe, catalog, tags, manifest and blob GET/HEAD. No registry content database, credentials file/helper, upload/delete, recursive image pulling, platform selection, referrers/fallback, foreign URL following, Range/resume or redirect following. Native HTTP and certificate-verified HTTPS; browser HTTP implementation only, with no browser runtime evidence or positive TLS interoperability claim.
 
 `oci_request` accepts one selected operation, a strict lowercase repository (255 bytes) except probe/catalog, and a manifest tag (128 bytes) or lowercase sha256 digest. Blob requires a digest. Tags/catalog use explicit n1..1000 (default100) and optional last cursor. Blob optional expected_size verifies a supplied descriptor size up to4MiB. Unknown fields and raw method/URL/query/body passthrough are refused before I/O. `disconnect` cancels owned pending I/O.
 
@@ -23,3 +23,14 @@ Two registered tasks own session/request state and common event dispatch. Comman
 Continuously queued overlap refusals cannot extend the whole request deadline or close the logical session: expiration cancels that request, emits oci_request_error, and permits a later explicit request. The native hanging-peer regression requires actual repeated overlap refusals, no success event, peer-side EOF, a retained session handle and successful fresh native tags read. Declared action log templates describe only fixed request intent; they contain no credential or payload substitutions and infer no native success.
 
 Use common AppState instruction/memory and LLM/static/script/manual handlers, not protocol-specific state storage. Native errors carry actual bounded OCI code/message/detail; no partial body becomes a success. Primary references: [OCI Distribution1.1.1](https://github.com/opencontainers/distribution-spec/blob/v1.1.1/spec.md), [Distribution token authentication](https://distribution.github.io/distribution/spec/auth/token/), [pinned crane registry](https://github.com/google/go-containerregistry/blob/v0.22.1/pkg/registry/registry.go). Tests are explicitly registered in tests/client/oci_registry. No capture or conformance claim.
+
+## Maturity: Beta
+
+All four conditions of the client bar hold, on the real-server tests in `tests/client/oci_registry/`:
+
+1. the peer is go-containerregistry's crane registry 0.22.1 — third-party, and not a library this client is built on;
+2. a missing peer fails the test, never skips it;
+3. a real session, completed against that server;
+4. the client acts on the model's answer, asserted from the server's side: crane's request log shows the manifest fetch for the tag the mocked model picked out of the listing, and the verified digest is the pushed manifest's. Emptying the loop over the model's actions fails it.
+
+Verified 1 November 2026 by running the suite against the installed peer and by that mutation. The CI job that installs the peer is in `.github/workflows/protocol-pairs.yml`.

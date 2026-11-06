@@ -27,16 +27,19 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
         .await;
     let external =
         crate::client::command_support::register_command_channel(&ctx.state, ctx.client_id).await;
-    let (internal_tx, internal_rx) = mpsc::channel::<Value>(16);
-    let (event_tx, mut event_rx) = mpsc::channel::<Event>(16);
-    event_tx.try_send(Event::new(
-        &actions::CONNECTED_EVENT,
-        json!({"remote_addr":ctx.remote_addr}),
+    let (internal_tx, internal_rx) = mpsc::channel::<(Value, u8)>(16);
+    let (event_tx, mut event_rx) = mpsc::channel::<(Event, u8)>(16);
+    event_tx.try_send((
+        Event::new(
+            &actions::CONNECTED_EVENT,
+            json!({"remote_addr":ctx.remote_addr}),
+        ),
+        0,
     ))?;
     let events_ctx = ctx.clone();
     let dispatcher = tokio::spawn(async move {
         let protocol = BeanstalkdClientProtocol;
-        while let Some(event) = event_rx.recv().await {
+        while let Some((event, depth)) = event_rx.recv().await {
             let instruction = events_ctx
                 .state
                 .get_instruction_for_client(events_ctx.client_id)
@@ -67,7 +70,15 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
                             .await;
                     }
                     for action in result.actions {
-                        if internal_tx.send(action).await.is_err() {
+                        if depth >= wire::MAX_FOLLOWUPS && action["type"] != "disconnect" {
+                            Log::new(Some(&events_ctx.status_tx)).warn(format!(
+                                "Beanstalkd client: follow-up limit ({}) reached; {} not sent",
+                                wire::MAX_FOLLOWUPS,
+                                action["type"]
+                            ));
+                            continue;
+                        }
+                        if internal_tx.send((action, depth + 1)).await.is_err() {
                             return;
                         }
                     }
@@ -115,16 +126,16 @@ async fn session(
     ctx: &ConnectContext,
     stream: TcpStream,
     mut external: mpsc::Receiver<ClientCommand>,
-    mut internal: mpsc::Receiver<Value>,
-    events: mpsc::Sender<Event>,
+    mut internal: mpsc::Receiver<(Value, u8)>,
+    events: mpsc::Sender<(Event, u8)>,
 ) -> Result<()> {
     let (reader, mut writer) = tokio::io::split(stream);
     let mut reader = BufReader::new(reader);
     loop {
         // An idle connection also notices EOF; Beanstalkd has no unsolicited server messages.
-        let (action, command) = tokio::select! {
-            command=external.recv()=>match command {Some(c)=>(c.action.clone(),Some(c)),None=>return Ok(())},
-            action=internal.recv()=>match action {Some(a)=>(a,None),None=>return Ok(())},
+        let (action, depth, command) = tokio::select! {
+            command=external.recv()=>match command {Some(c)=>(c.action.clone(),0,Some(c)),None=>return Ok(())},
+            action=internal.recv()=>match action {Some((a,d))=>(a,d,None),None=>return Ok(())},
             idle=tokio::io::AsyncBufReadExt::fill_buf(&mut reader)=>{
                 anyhow::ensure!(idle?.is_empty(),"Unsolicited Beanstalkd response"); return Ok(());
             }
@@ -226,9 +237,12 @@ async fn session(
             }
         };
         events
-            .try_send(Event::new(
-                &actions::RESPONSE_EVENT,
-                json!({"request":action.clone(),"response":response}),
+            .try_send((
+                Event::new(
+                    &actions::RESPONSE_EVENT,
+                    json!({"request":action.clone(),"response":response}),
+                ),
+                depth,
             ))
             .context("Beanstalkd event queue full; consumer stalled")?;
     }

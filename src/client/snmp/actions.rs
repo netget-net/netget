@@ -250,10 +250,10 @@ impl Protocol for SnmpClientProtocol {
         use crate::protocol::metadata::{DevelopmentState, ProtocolMetadataV2};
 
         ProtocolMetadataV2::builder()
-            .state(DevelopmentState::Experimental)
+            .state(DevelopmentState::Beta)
             .implementation("UDP-based with rasn-snmp for BER encoding/decoding; SNMPv3 USM (src/server/snmp/usm.rs, shared with the agent): engine discovery at start, HMAC-MD5/SHA-1/SHA-224/256/384/512 authentication, DES-CBC and AES-128-CFB privacy, every reply's message id, engine, level and MAC checked before it is read")
             .llm_control("Full control over SNMP operations (GET, GETNEXT, GETBULK, SET); SNMPv3 reports reach the handler as usm_report")
-            .e2e_testing("tests/client/snmp/real_server_test.rs: Net-SNMP's snmpd, unprivileged in a temp dir, with a SHA-256/AES and an MD5/DES user. NetGet discovers its engine, GETs, and a handler SETs sysContact from the reply; the value is read back with Net-SNMP's snmpget as the other user. A wrong password is snmpd's own wrongDigests report. Fails, not skips, without snmpd")
+            .e2e_testing("tests/client/snmp/real_server_test.rs: Net-SNMP's snmpd (5.9; macOS's bundled 5.6 lacks SHA-256), unprivileged in a temp dir, with a SHA-256/AES and an MD5/DES user. NetGet discovers its engine, GETs, and a handler SETs sysContact from the reply; the value is read back with Net-SNMP's snmpget as the other user. A wrong password reaches the handler as snmpd's usmStatsWrongDigests report and nothing is set. Fails rather than skips without snmpd and snmpget")
             .notes("v1/v2c with a community; v3 with one USM user per client. No AES-192/256 (expired drafts with two incompatible key extensions), no VACM on this side, no v3 informs or traps")
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
             .batching(crate::protocol::metadata::BatchingMode::Unsupported)

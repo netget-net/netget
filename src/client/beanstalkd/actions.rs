@@ -120,10 +120,10 @@ impl Protocol for BeanstalkdClientProtocol {
     }
     fn metadata(&self) -> crate::protocol::metadata::ProtocolMetadataV2 {
         use crate::protocol::metadata::*;
-        ProtocolMetadataV2::builder().state(DevelopmentState::Experimental).privilege_requirement(PrivilegeRequirement::None).well_known_port(11300)
+        ProtocolMetadataV2::builder().state(DevelopmentState::Beta).privilege_requirement(PrivilegeRequirement::None).well_known_port(11300)
         .implementation("Tokio TCP with strict CRLF and byte-counted UTF-8 jobs; bounded complete response parsing")
         .llm_control("Job put/reserve/release/bury/kick/delete, tube selection/watch/pause, and structured statistics")
-        .e2e_testing("tests/client/beanstalkd: installed independent beanstalkd daemon, NetGet server pair, wire bounds, command injection and cleanup")
+        .e2e_testing("tests/client/beanstalkd/real_server_test.rs against the beanstalkd daemon: the mocked model selects a tube and puts a job with a priority it chose, which the test's own socket finds ready in that tube with that body and priority (peek-ready, stats-job); a model that answers every response with list-tubes stops at four, counted by beanstalkd's cmd-list-tubes; the full job/tube lifecycle besides. Fails rather than skips without beanstalkd")
         .notes("Plain TCP; no authentication (the wire protocol defines none). UTF-8 job payloads only. Connect/response/write deadlines 30s; reservation wait at most25s, response headers224 bytes, jobs65535 bytes and total payload1MiB. All tasks tracked; injected disconnect interrupts pending replies.")
         .max_inbound_bytes(super::wire::MAX_REPLY_BYTES).history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
         .batching(crate::protocol::metadata::BatchingMode::Unsupported)

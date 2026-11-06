@@ -159,7 +159,31 @@ async fn model_chooses_real_daemon_read_and_shared_memory_reaches_followup(
     .await?;
     let (_, result) = event(&state, id, "docker_response", 0).await;
     assert_eq!(result["operation"], "version");
-    assert!(!result["data"]["version"].as_str().unwrap().is_empty());
+    // The daemon's own answer, read by Docker's own CLI from the same engine: the version the
+    // client reports is the one the engine gave to the request the model chose.
+    let cli = tokio::time::timeout(
+        Duration::from_secs(10),
+        tokio::process::Command::new("docker")
+            .args([
+                "version",
+                "--format",
+                "{{.Server.Version}}|{{.Server.APIVersion}}",
+            ])
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .expect("docker version deadline")
+    .expect("required Docker CLI missing");
+    assert!(
+        cli.status.success(),
+        "docker version: {}",
+        String::from_utf8_lossy(&cli.stderr)
+    );
+    let cli = String::from_utf8(cli.stdout)?;
+    let (version, api) = cli.trim().split_once('|').unwrap();
+    assert_eq!(result["data"]["version"], version);
+    assert_eq!(result["data"]["api_version"], api);
     mock.wait_for_expectations(30).await;
     assert_eq!(
         state.get_memory_for_client(id).await.as_deref(),

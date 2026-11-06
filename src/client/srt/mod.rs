@@ -24,6 +24,10 @@ const MAX_TEXTS: usize = 20;
 const TS: usize = 188;
 const MESSAGE: usize = 7 * TS;
 
+/// Model-originated actions that may follow one another: an answer to the report at this depth
+/// is not carried out, so a model that answers every report with another send stops here.
+pub const MAX_FOLLOWUPS: u8 = 4;
+
 pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
     let p = ctx.startup_params.as_ref();
     let stream_id = p
@@ -87,17 +91,20 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
         .await;
     let external =
         crate::client::command_support::register_command_channel(&ctx.state, ctx.client_id).await;
-    let (internal_tx, internal_rx) = mpsc::channel::<Value>(16);
-    let (event_tx, mut event_rx) = mpsc::channel::<Event>(16);
+    let (internal_tx, internal_rx) = mpsc::channel::<(Value, u8)>(16);
+    let (event_tx, mut event_rx) = mpsc::channel::<(Event, u8)>(16);
     let negotiated = socket.settings().recv_tsbpd_latency.as_millis() as u64;
-    event_tx.try_send(Event::new(
-        &actions::CONNECTED_EVENT,
-        json!({"stream_id": stream_id.unwrap_or_default(), "latency_ms": negotiated}),
+    event_tx.try_send((
+        Event::new(
+            &actions::CONNECTED_EVENT,
+            json!({"stream_id": stream_id.unwrap_or_default(), "latency_ms": negotiated}),
+        ),
+        0,
     ))?;
     let events_ctx = ctx.clone();
     let dispatcher = tokio::spawn(async move {
         let protocol = SrtClientProtocol;
-        while let Some(event) = event_rx.recv().await {
+        while let Some((event, depth)) = event_rx.recv().await {
             let instruction = events_ctx
                 .state
                 .get_instruction_for_client(events_ctx.client_id)
@@ -128,7 +135,14 @@ pub async fn connect(ctx: ConnectContext) -> Result<SocketAddr> {
                             .await;
                     }
                     for action in result.actions {
-                        if internal_tx.send(action).await.is_err() {
+                        if depth >= MAX_FOLLOWUPS && action["type"] != "disconnect" {
+                            Log::new(Some(&events_ctx.status_tx)).warn(format!(
+                                "SRT client: follow-up limit ({MAX_FOLLOWUPS}) reached; {} not sent",
+                                action["type"]
+                            ));
+                            continue;
+                        }
+                        if internal_tx.send((action, depth + 1)).await.is_err() {
                             return;
                         }
                     }
@@ -184,33 +198,33 @@ async fn run(
     media_root: &crate::client::media_root::MediaRoot,
     socket: &mut SrtSocket,
     mut external: mpsc::Receiver<ClientCommand>,
-    mut internal: mpsc::Receiver<Value>,
-    events: &mpsc::Sender<Event>,
+    mut internal: mpsc::Receiver<(Value, u8)>,
+    events: &mpsc::Sender<(Event, u8)>,
 ) -> Result<()> {
     let mut stats_stream = socket.statistics().clone();
     let mut latest: Option<SocketStatistics> = None;
     loop {
         enum Wake {
-            Action(Value, Option<ClientCommand>),
+            Action(Value, u8, Option<ClientCommand>),
             Closed,
             Stats(Option<SocketStatistics>),
             Idle,
         }
         let wake = tokio::select! {
-            c = external.recv() => match c { Some(c) => Wake::Action(c.action.clone(), Some(c)), None => Wake::Closed },
-            a = internal.recv() => match a { Some(a) => Wake::Action(a, None), None => Wake::Closed },
+            c = external.recv() => match c { Some(c) => Wake::Action(c.action.clone(), 0, Some(c)), None => Wake::Closed },
+            a = internal.recv() => match a { Some((a, d)) => Wake::Action(a, d, None), None => Wake::Closed },
             s = stats_stream.next() => Wake::Stats(s),
             // Between operations, anything the listener sends is read and set aside.
             d = socket.next() => match d { None | Some(Err(_)) => Wake::Closed, Some(Ok(_)) => Wake::Idle },
         };
-        let (action, command) = match wake {
+        let (action, depth, command) = match wake {
             Wake::Closed => return Ok(()),
             Wake::Idle => continue,
             Wake::Stats(s) => {
                 latest = s.or(latest);
                 continue;
             }
-            Wake::Action(a, c) => (a, c),
+            Wake::Action(a, d, c) => (a, d, c),
         };
         let outcome = match SrtClientProtocol.execute_action(action.clone()) {
             Err(e) => Ok(ClientSendOutcome::Rejected {
@@ -246,7 +260,7 @@ async fn run(
                 match report {
                     Ok(r) => {
                         events
-                            .send(Event::new(&actions::REPORT_EVENT, r))
+                            .send((Event::new(&actions::REPORT_EVENT, r), depth))
                             .await
                             .ok();
                         Ok(ClientSendOutcome::Sent { bytes_sent: 0 })

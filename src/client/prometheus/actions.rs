@@ -110,10 +110,10 @@ impl Protocol for PrometheusClientProtocol {
     }
     fn metadata(&self) -> crate::protocol::metadata::ProtocolMetadataV2 {
         use crate::protocol::metadata::*;
-        ProtocolMetadataV2::builder().state(DevelopmentState::Experimental).privilege_requirement(PrivilegeRequirement::None).well_known_port(9100)
+        ProtocolMetadataV2::builder().state(DevelopmentState::Beta).privilege_requirement(PrivilegeRequirement::None).well_known_port(9100)
         .implementation("Bounded HTTP exporter requests and typed text/OpenMetrics parser")
         .llm_control("Explicit scrape path and format; handle typed family/sample results or scrape errors")
-        .e2e_testing("tests/client/prometheus: independent Prometheus exporter, NetGet exporter pair, negotiation/parser/bounds/cancellation and event handlers")
+        .e2e_testing("tests/client/prometheus/real_server_test.rs against a real Prometheus 3 server's own /metrics and the official Python prometheus_client exporter: the mocked model chooses a scrape, the parsed families are asserted, and Prometheus's own promhttp_metric_handler_requests_total counts exactly that one scrape; OpenMetrics negotiation with created samples and exemplars, and refusal of an untrusted HTTPS exporter. Fails rather than skips without prometheus or the exporter")
         .notes("Exporter scraping only; no PromQL query API, remote write, protobuf/native histograms, target discovery, scrape scheduler, redirects, compression or persistent metric store. Legacy metric/label names negotiated with escaping=underscores. Native HTTPS verifies system roots; browser HTTP only. Body4MiB, samples20000, families4096, labels64, text16KiB; one active scrape, queues8 and4 handler followups. Manual handlers do not block injection/disconnect.")
         .max_inbound_bytes(super::exposition::MAX_BODY).history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
         .batching(crate::protocol::metadata::BatchingMode::Unsupported)
