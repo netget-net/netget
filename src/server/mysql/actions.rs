@@ -525,8 +525,33 @@ pub static MYSQL_QUERY_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         Parameter {
             name: "query".to_string(),
             type_hint: "string".to_string(),
-            description: "The SQL query string sent by the client".to_string(),
+            description: "The SQL query string sent by the client. For a prepared statement \
+                          this is the statement text exactly as prepared, `?` placeholders \
+                          and all; the values are in `params`."
+                .to_string(),
             required: true,
+        },
+        Parameter {
+            name: "params".to_string(),
+            type_hint: "array".to_string(),
+            description: "Prepared statements only: the value bound to each `?`, in order, as \
+                          {\"index\": 1, \"type\": \"LONGLONG\", \"value\": 42}. NULL is a JSON \
+                          null; strings, decimals and dates are strings. A long string shows a \
+                          prefix with \"truncated\": true and its \"byte_length\"; \
+                          \"not_utf8\": true means the bytes were not text. Absent for a plain \
+                          query."
+                .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "query_rendered".to_string(),
+            type_hint: "string".to_string(),
+            description: "Prepared statements only, for reading: `query` with each `?` \
+                          replaced by ⟨value⟩, strings as JSON literals. It is NOT SQL the \
+                          client sent and must not be treated as such; `params` is \
+                          authoritative."
+                .to_string(),
+            required: false,
         },
         Parameter {
             name: "answer_with".to_string(),

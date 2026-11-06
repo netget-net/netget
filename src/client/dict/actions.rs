@@ -145,10 +145,10 @@ impl Protocol for DictClientProtocol {
     }
     fn metadata(&self) -> crate::protocol::metadata::ProtocolMetadataV2 {
         use crate::protocol::metadata::*;
-        ProtocolMetadataV2::builder().state(DevelopmentState::Experimental).privilege_requirement(PrivilegeRequirement::None).well_known_port(2628)
+        ProtocolMetadataV2::builder().state(DevelopmentState::Beta).privilege_requirement(PrivilegeRequirement::None).well_known_port(2628)
         .implementation("Tokio TCP with RFC 2229 status lines, dot-stuffed blocks and bounded complete responses")
         .llm_control("Dictionary definitions, match searches, database and strategy discovery, information and session commands")
-        .e2e_testing("tests/client/dict: independent dictd daemon, NetGet server pair, malformed framing, command injection and cleanup")
+        .e2e_testing("tests/client/dict/real_server_test.rs against dictd 1.13 serving a dictfmt fixture: the mocked model chooses a word and database, dictd's own command log shows that DEFINE and the model is shown dictd's definition; a model that answers every response with another DEFINE stops at four, counted in dictd's log; MATCH, SHOW, STATUS and refusals besides. Fails rather than skips without dictd or dictfmt")
         .notes("Plain UTF-8 DICT. No AUTH/SASL or MIME negotiation. Connect/write/greeting/response deadlines30s; commands1024 bytes, response lines64KiB, total response1MiB, entries4096. Tracked tasks; injected disconnect interrupts greeting and pending replies.")
         .max_inbound_bytes(super::wire::MAX_RESPONSE_BYTES).history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
         .batching(crate::protocol::metadata::BatchingMode::Unsupported)

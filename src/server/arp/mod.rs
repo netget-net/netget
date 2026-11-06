@@ -14,10 +14,11 @@ use pnet::util::MacAddr;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info};
 
 use crate::llm::action_helper::call_llm;
 use crate::llm::ollama_client::OllamaClient;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::state::app_state::AppState;
 use crate::{console_error, console_info, console_trace};
@@ -216,16 +217,8 @@ impl ArpServer {
                         let target_ip = arp_packet.get_target_proto_addr();
 
                         // DEBUG: Log summary
-                        debug!(
+                        Log::to(&status_tx).debug(format!(
                             "ARP {} from {} ({}) for {} ({})",
-                            operation_to_string(operation),
-                            sender_mac,
-                            sender_ip,
-                            target_mac,
-                            target_ip
-                        );
-                        let _ = status_tx.send(format!(
-                            "[DEBUG] ARP {} from {} ({}) for {} ({})",
                             operation_to_string(operation),
                             sender_mac,
                             sender_ip,
@@ -285,13 +278,8 @@ impl ArpServer {
                                 return;
                             }
 
-                            debug!(
-                                "ARP calling LLM for {} packet",
-                                operation_to_string(operation)
-                            );
-                            let _ = status_clone.send(format!(
-                                "[DEBUG] ARP calling LLM for {} packet",
-                                operation_to_string(operation)
+                            Log::to(&status_clone).debug(format!(
+                                "ARP calling LLM for {} packet", operation_to_string(operation)
                             ));
 
                             match call_llm(
@@ -306,8 +294,7 @@ impl ArpServer {
                             {
                                 Ok(execution_result) => {
                                     for message in &execution_result.messages {
-                                        info!("{}", message);
-                                        let _ = status_clone.send(format!("[INFO] {}", message));
+                                        Log::to(&status_clone).info(message);
                                     }
 
                                     // Three outcomes have to stay apart in the log, because on
@@ -370,12 +357,8 @@ impl ArpServer {
                                         ));
                                     }
 
-                                    debug!(
+                                    Log::to(&status_clone).debug(format!(
                                         "ARP got {} protocol results",
-                                        execution_result.protocol_results.len()
-                                    );
-                                    let _ = status_clone.send(format!(
-                                        "[DEBUG] ARP got {} protocol results",
                                         execution_result.protocol_results.len()
                                     ));
 
@@ -386,22 +369,13 @@ impl ArpServer {
                                         {
                                             // Send packet via channel to injection thread
                                             if packet_tx_clone.send(output_data.clone()).is_ok() {
-                                                debug!(
+                                                Log::to(&status_clone).debug(format!(
                                                     "ARP queued {} bytes for sending",
-                                                    output_data.len()
-                                                );
-                                                let _ = status_clone.send(format!(
-                                                    "[DEBUG] ARP queued {} bytes for sending",
                                                     output_data.len()
                                                 ));
 
-                                                trace!(
-                                                    "ARP reply (hex): {}",
-                                                    hex::encode(output_data)
-                                                );
-                                                let _ = status_clone.send(format!(
-                                                    "[TRACE] ARP reply (hex): {}",
-                                                    hex::encode(output_data)
+                                                Log::to(&status_clone).trace(format!(
+                                                    "ARP reply (hex): {}", hex::encode(output_data)
                                                 ));
                                             } else {
                                                 error!("Failed to queue ARP reply");

@@ -97,7 +97,11 @@ fn the_known_good_syn_is_built_byte_for_byte_with_both_checksums() {
     let built = build_ipv4_tcp(&known_syn_fields(), &BuildDefaults::default()).unwrap();
     assert_eq!(hex::encode(&built.packet), KNOWN_SYN);
     assert_eq!(&built.packet[10..12], &[0x2a, 0x92], "IPv4 header checksum");
-    assert_eq!(&built.packet[36..38], &[0x43, 0x4b], "TCP checksum, as tcpdump verified it");
+    assert_eq!(
+        &built.packet[36..38],
+        &[0x43, 0x4b],
+        "TCP checksum, as tcpdump verified it"
+    );
     assert_eq!(
         built.flow,
         TcpFlow {
@@ -113,14 +117,21 @@ fn the_known_good_syn_is_built_byte_for_byte_with_both_checksums() {
 fn checksums_verify_to_zero_over_the_known_packet() {
     let p = hex::decode(KNOWN_SYN).unwrap();
     assert_eq!(ipv4_header_checksum(&p[..20]), 0);
-    assert_eq!(tcp_checksum_ipv4(Ipv4Addr::LOCALHOST, Ipv4Addr::LOCALHOST, &p[20..]), 0);
+    assert_eq!(
+        tcp_checksum_ipv4(Ipv4Addr::LOCALHOST, Ipv4Addr::LOCALHOST, &p[20..]),
+        0
+    );
 }
 
 #[test]
 fn send_ipv4_tcp_on_loopback_gets_the_af_inet_header_and_no_macs() {
     let session = loopback_session();
     let (frame, _) = build_tcp_frame(&known_syn_fields(), &session).unwrap();
-    assert_eq!(&frame[..4], &AF_INET.to_ne_bytes(), "DLT_NULL: AF_INET in host order");
+    assert_eq!(
+        &frame[..4],
+        &AF_INET.to_ne_bytes(),
+        "DLT_NULL: AF_INET in host order"
+    );
     assert_eq!(hex::encode(&frame[4..]), KNOWN_SYN);
 
     let p = DataLinkClientProtocol::with_session(session.clone());
@@ -138,7 +149,10 @@ fn send_ipv4_tcp_on_ethernet_needs_the_macs_and_puts_them_first() {
         link_type: Some(LinkType::Ethernet),
         ..Default::default()
     };
-    let err = format!("{:#}", build_tcp_frame(&known_syn_fields(), &session).unwrap_err());
+    let err = format!(
+        "{:#}",
+        build_tcp_frame(&known_syn_fields(), &session).unwrap_err()
+    );
     assert!(err.contains("dst_mac"), "{err}");
 
     let mut f = known_syn_fields();
@@ -157,7 +171,11 @@ fn destination_defaults_from_remote_addr_and_source_from_loopback() {
     assert_eq!(flow.dst_port, 3333);
     assert_eq!(flow.src_ip, Ipv4Addr::LOCALHOST);
     let decoded = decode_frame(&frame, LinkType::Null, true);
-    assert_eq!(decoded["tcp"]["flags"], json!(["syn"]), "SYN is the default");
+    assert_eq!(
+        decoded["tcp"]["flags"],
+        json!(["syn"]),
+        "SYN is the default"
+    );
 
     let err = format!(
         "{:#}",
@@ -166,10 +184,16 @@ fn destination_defaults_from_remote_addr_and_source_from_loopback() {
     assert!(err.contains("dst_ip"), "{err}");
     let err = format!(
         "{:#}",
-        build_ipv4_tcp(&json!({"dst_ip": "10.0.0.2", "dst_port": 80}), &BuildDefaults::default())
-            .unwrap_err()
+        build_ipv4_tcp(
+            &json!({"dst_ip": "10.0.0.2", "dst_port": 80}),
+            &BuildDefaults::default()
+        )
+        .unwrap_err()
     );
-    assert!(err.contains("src_ip"), "a non-loopback source is never guessed: {err}");
+    assert!(
+        err.contains("src_ip"),
+        "a non-loopback source is never guessed: {err}"
+    );
 }
 
 #[test]
@@ -200,7 +224,9 @@ fn bad_fields_are_refused_by_name() {
 
 #[test]
 fn options_over_forty_bytes_are_refused() {
-    let many: Vec<_> = (0..5).map(|_| json!({"kind": "timestamps", "tsval": 1, "tsecr": 2})).collect();
+    let many: Vec<_> = (0..5)
+        .map(|_| json!({"kind": "timestamps", "tsval": 1, "tsecr": 2}))
+        .collect();
     let err = format!("{:#}", encode_tcp_options(&many).unwrap_err());
     assert!(err.contains("40"), "{err}");
 }
@@ -220,13 +246,17 @@ fn every_named_option_round_trips_through_the_decoder() {
     ];
     let bytes = encode_tcp_options(&options).unwrap();
     assert_eq!(bytes.len() % 4, 0);
-    assert_eq!(hex::encode(&bytes), "020405b40402080a0001e2400000000001030307");
+    assert_eq!(
+        hex::encode(&bytes),
+        "020405b40402080a0001e2400000000001030307"
+    );
     assert_eq!(decode_tcp_options(&bytes), options);
 }
 
 #[test]
 fn mp_capable_is_encoded_and_decoded_with_its_fields() {
-    let bytes = encode_tcp_options(&[json!({"kind": "mp_capable", "version": 1, "flags": 1})]).unwrap();
+    let bytes =
+        encode_tcp_options(&[json!({"kind": "mp_capable", "version": 1, "flags": 1})]).unwrap();
     assert_eq!(hex::encode(&bytes), "1e040101");
     let decoded = decode_tcp_options(&bytes);
     assert_eq!(decoded[0]["kind"], "mp_capable");
@@ -265,10 +295,16 @@ fn other_mptcp_subtypes_are_named_and_unknown_kinds_kept_as_data() {
 
     let generic = encode_tcp_options(&[json!({"kind": 254, "data_hex": "f989"})]).unwrap();
     assert_eq!(generic, [254, 4, 0xf9, 0x89]);
-    assert_eq!(decode_tcp_options(&generic), vec![json!({"kind": 254, "data_hex": "f989"})]);
+    assert_eq!(
+        decode_tcp_options(&generic),
+        vec![json!({"kind": 254, "data_hex": "f989"})]
+    );
 
     // An impossible length is reported, not over-read.
-    assert_eq!(decode_tcp_options(&[2, 9, 0]), vec![json!({"kind": 2, "malformed": true})]);
+    assert_eq!(
+        decode_tcp_options(&[2, 9, 0]),
+        vec![json!({"kind": 2, "malformed": true})]
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -290,16 +326,34 @@ fn link_types_come_from_the_dlt_and_carry_their_pcap_names() {
 
 #[test]
 fn loopback_headers_use_host_order_for_null_and_network_order_for_loop() {
-    assert_eq!(link_header(LinkType::Null, 0x0800, None).unwrap(), AF_INET.to_ne_bytes());
-    assert_eq!(link_header(LinkType::Loop, 0x0800, None).unwrap(), AF_INET.to_be_bytes());
-    assert_eq!(link_header(LinkType::Null, 0x86dd, None).unwrap(), AF_INET6.to_ne_bytes());
+    assert_eq!(
+        link_header(LinkType::Null, 0x0800, None).unwrap(),
+        AF_INET.to_ne_bytes()
+    );
+    assert_eq!(
+        link_header(LinkType::Loop, 0x0800, None).unwrap(),
+        AF_INET.to_be_bytes()
+    );
+    assert_eq!(
+        link_header(LinkType::Null, 0x86dd, None).unwrap(),
+        AF_INET6.to_ne_bytes()
+    );
     #[cfg(target_os = "macos")]
     assert_eq!(AF_INET6, 30);
     assert!(link_header(LinkType::Raw, 0x0800, None).unwrap().is_empty());
 
-    let err = format!("{:#}", link_header(LinkType::Null, 0x0806, None).unwrap_err());
-    assert!(err.contains("ipv4") && err.contains("NULL"), "ARP cannot go on lo0: {err}");
-    let err = format!("{:#}", link_header(LinkType::LinuxSll, 0x0800, None).unwrap_err());
+    let err = format!(
+        "{:#}",
+        link_header(LinkType::Null, 0x0806, None).unwrap_err()
+    );
+    assert!(
+        err.contains("ipv4") && err.contains("NULL"),
+        "ARP cannot go on lo0: {err}"
+    );
+    let err = format!(
+        "{:#}",
+        link_header(LinkType::LinuxSll, 0x0800, None).unwrap_err()
+    );
     assert!(err.contains("LINUX_SLL"), "{err}");
 }
 
@@ -325,8 +379,11 @@ fn inject_frame_builds_the_family_header_on_loopback_and_refuses_macs() {
     assert!(err.contains("no MAC"), "{err}");
     let err = format!(
         "{:#}",
-        build_frame_for_link(&json!({"payload": "00", "payload_encoding": "hex"}), LinkType::Null)
-            .unwrap_err()
+        build_frame_for_link(
+            &json!({"payload": "00", "payload_encoding": "hex"}),
+            LinkType::Null
+        )
+        .unwrap_err()
     );
     assert!(err.contains("ethertype"), "{err}");
 
@@ -353,7 +410,10 @@ fn a_null_frame_is_decoded_as_family_and_ip_not_as_fake_macs() {
     assert_eq!(ev["family"], "AF_INET");
     assert!(ev["dst_mac"].is_null() && ev["src_mac"].is_null());
     assert_eq!(ev["ethertype"], "0x0800");
-    assert_eq!(ev["payload"], KNOWN_SYN, "the payload is everything after the 4-byte header");
+    assert_eq!(
+        ev["payload"], KNOWN_SYN,
+        "the payload is everything after the 4-byte header"
+    );
     assert_eq!(ev["ip"]["src"], "127.0.0.1");
     assert_eq!(ev["ip"]["checksum_ok"], true);
     let tcp = &ev["tcp"];
@@ -381,7 +441,10 @@ fn the_same_bytes_read_as_ethernet_are_what_the_old_decoder_showed() {
     let mut frame = AF_INET.to_ne_bytes().to_vec();
     frame.extend_from_slice(&hex::decode(KNOWN_SYN).unwrap());
     let wrong = decode_link(&frame, LinkType::Ethernet);
-    assert!(wrong.dst_mac.is_some(), "Ethernet decoding invents MACs from any 14 bytes");
+    assert!(
+        wrong.dst_mac.is_some(),
+        "Ethernet decoding invents MACs from any 14 bytes"
+    );
     let right = decode_link(&frame, LinkType::Null);
     assert!(right.dst_mac.is_none());
     assert_eq!(right.l3_offset, Some(4));
@@ -427,12 +490,18 @@ fn a_reply_is_matched_to_its_flow_and_echoed_options_are_reported() {
 
     let sent = decode_tcp_options(&hex::decode("02043fd81e040101").unwrap());
     let with = reply["tcp"]["options"].as_array().unwrap().clone();
-    assert_eq!(echoed_options(&sent, &with), (vec!["mss".into(), "mp_capable".into()], vec![]));
+    assert_eq!(
+        echoed_options(&sent, &with),
+        (vec!["mss".into(), "mp_capable".into()], vec![])
+    );
     let without = decode_frame(&syn_ack(true, false), LinkType::Null, true)["tcp"]["options"]
         .as_array()
         .unwrap()
         .clone();
-    assert_eq!(echoed_options(&sent, &without), (vec!["mss".into()], vec!["mp_capable".into()]));
+    assert_eq!(
+        echoed_options(&sent, &without),
+        (vec!["mss".into()], vec!["mp_capable".into()])
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -454,7 +523,11 @@ fn probe_tcp_carries_the_frame_flow_and_bounds() {
         other => panic!("expected the probe request, got {other:?}"),
     }
     action["timeout_ms"] = json!(60_000);
-    assert!(format!("{:#}", build_probe(&action, &loopback_session()).unwrap_err()).contains("timeout_ms"));
+    assert!(format!(
+        "{:#}",
+        build_probe(&action, &loopback_session()).unwrap_err()
+    )
+    .contains("timeout_ms"));
 }
 
 #[test]
@@ -463,8 +536,14 @@ fn remote_addr_resolves_to_a_target_and_a_default_filter() {
         parse_target("127.0.0.1:3333"),
         Some(("127.0.0.1".parse().unwrap(), Some(3333)))
     );
-    assert_eq!(parse_target("10.0.0.2"), Some(("10.0.0.2".parse().unwrap(), None)));
-    assert_eq!(parse_target("127.0.0.1:0"), Some(("127.0.0.1".parse().unwrap(), None)));
+    assert_eq!(
+        parse_target("10.0.0.2"),
+        Some(("10.0.0.2".parse().unwrap(), None))
+    );
+    assert_eq!(
+        parse_target("127.0.0.1:0"),
+        Some(("127.0.0.1".parse().unwrap(), None))
+    );
     assert_eq!(parse_target("localhost:80").map(|t| t.1), Some(Some(80)));
     assert_eq!(parse_target("eth0"), None);
 
@@ -477,6 +556,9 @@ fn remote_addr_resolves_to_a_target_and_a_default_filter() {
         (Some("arp".to_string()), false),
         "an explicit filter wins"
     );
-    assert_eq!(resolve_capture_filter("127.0.0.1:3333", Some("")), (None, false));
+    assert_eq!(
+        resolve_capture_filter("127.0.0.1:3333", Some("")),
+        (None, false)
+    );
     assert_eq!(resolve_capture_filter("eth0", None), (None, false));
 }

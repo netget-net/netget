@@ -21,6 +21,7 @@ use crate::state::app_state::AppState;
 
 use super::actions::HTTP2_REQUEST_EVENT;
 use super::push::PendingPush;
+use crate::logging::emit::Log;
 
 /// How long a peer that has connected and produced nothing may hold a slot.
 ///
@@ -260,9 +261,8 @@ impl H2Server {
         } else {
             "HTTP/2 (h2c with push)"
         };
-        info!("{} server listening on {}", protocol_name, local_addr);
-        let _ = status_tx.send(format!(
-            "[INFO] {} server listening on {}",
+        Log::to(&status_tx).info(format!(
+            "{} server listening on {}",
             protocol_name, local_addr
         ));
 
@@ -409,12 +409,8 @@ impl H2Server {
                                             ))
                                         }) {
                                             Ok(tls_stream) => {
-                                                debug!(
+                                                Log::to(&status_tx_clone).debug(format!(
                                                     "{} TLS handshake complete with {}",
-                                                    protocol_name, remote_addr
-                                                );
-                                                let _ = status_tx_clone.send(format!(
-                                                    "[DEBUG] {} TLS handshake complete with {}",
                                                     protocol_name, remote_addr
                                                 ));
                                                 handle_h2_connection(
@@ -431,12 +427,8 @@ impl H2Server {
                                                 .await
                                             }
                                             Err(e) => {
-                                                error!(
+                                                Log::to(&status_tx_clone).error(format!(
                                                     "{} TLS handshake failed: {}",
-                                                    protocol_name, e
-                                                );
-                                                let _ = status_tx_clone.send(format!(
-                                                    "[ERROR] {} TLS handshake failed: {}",
                                                     protocol_name, e
                                                 ));
                                                 Err(Box::new(e))

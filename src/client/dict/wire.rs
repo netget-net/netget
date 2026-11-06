@@ -8,6 +8,9 @@ pub const DEADLINE: Duration = Duration::from_secs(30);
 pub const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 pub const MAX_ENTRIES: usize = 4096;
 pub const MAX_RESPONSE_LINE: usize = 65536;
+/// Model-originated requests that may follow one another: an answer to the event at this depth
+/// is not sent, so a model that answers every response with another request stops here.
+pub const MAX_FOLLOWUPS: u8 = 4;
 #[derive(Debug)]
 pub struct Request {
     pub operation: String,

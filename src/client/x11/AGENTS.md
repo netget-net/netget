@@ -48,3 +48,14 @@ answers every result with another action stops. Injected actions start at depth 
 Not implemented: drawing, fonts, input injection (XTEST), selections, any extension beyond
 listing them, BIG-REQUESTS, and big-endian servers' byte order (NetGet always asks for `l`, which
 every server must honour).
+
+## Maturity: Beta
+
+All four conditions of the client bar hold, on the real-server tests in `tests/client/x11/`:
+
+1. the peer is Xvfb (the X.Org server) — third-party, and not a library this client is built on;
+2. a missing peer fails the test, never skips it;
+3. a real session, completed against that server;
+4. the client acts on the model's answer, asserted from the server's side: `xprop` and `xwininfo`, separate clients of the same server, show the window the handler chain created and titled from a property `xprop` set. Emptying the loop over the model's actions fails it.
+
+Verified 1 November 2026 by running the suite against the installed peer and by that mutation. The MIT-MAGIC-COOKIE-1 test over the Unix socket did not run on macOS, where Xvfb needs a root-owned `/tmp/.X11-unix`. The CI job that installs the peer is in `.github/workflows/protocol-pairs.yml`.

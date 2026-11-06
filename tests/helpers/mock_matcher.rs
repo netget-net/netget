@@ -25,18 +25,12 @@ pub enum RequestKind {
     /// `event_type` must stay `None`.
     UserInput,
 
-    /// The `DocumentationRequired` retry that `open_server` / `open_client`
-    /// force before the first server is allowed to start
-    /// (`src/events/handler.rs`). Structurally a user-input turn whose latest
-    /// message is a wall of protocol documentation.
-    DocumentationRetry,
-
     /// A scheduled task firing (`src/cli/tasks.rs` sends the fixed user
     /// message "Execute the task."). Timer-driven, so there is no event id —
     /// what identifies the run sits in the system prompt's `Trigger:` block.
     ScheduledTask,
 
-    /// Some other template (feedback, easy mode) or a prompt with no
+    /// Some other template (feedback) or a prompt with no
     /// recognisable marker. Classification falls back to legacy best-effort
     /// extraction.
     Unknown,

@@ -1,4 +1,5 @@
 mod bounds_test;
+mod compression_chain_test;
 mod dig_test;
 pub mod dnssec_test;
 pub mod kdig_test;
@@ -8,4 +9,3 @@ mod test;
 pub mod transfer_test;
 pub mod transport_bounds_test;
 pub mod zone_support;
-mod compression_chain_test;

@@ -16,8 +16,8 @@ monotonic total (`AppState::access_log_total`), so it counts every handled event
 instance whoever answered it. `--ready-file <PATH>` writes a JSON report of every server's bound
 address (and every client's target and status) once all of them have started — atomically, and
 after removing any stale file at the path, so its appearance is the readiness signal for a
-process started on port 0; a run that fails to start never writes it, and MCP, `--simple` and
-the TUI refuse the flag. `tests/non_interactive_run_limits_test.rs` drives the binary. The test
+process started on port 0; a run that fails to start never writes it, and MCP and the TUI
+refuse the flag. `tests/non_interactive_run_limits_test.rs` drives the binary. The test
 fixture helpers built on it are `crates/netget-fixture` (Rust, depends only on `serde_json`) and
 `sdk/python/netget_fixture` (stdlib, plus a pytest plugin); `tests/fixture_helpers_test.rs`
 runs both against this tree's binary and needs `python3` with pytest. Neither is published.
@@ -608,10 +608,50 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
     rather than an extra LLM call; and nginx's echo quoting the previous response back made a
     looser rule answer both responses until the follow-up depth cap stopped the loop.
 
-  **Eighteen as of 31 October 2026 (18 Beta — re-derive with `--side client`).**
+  **Thirty-nine as of 1 November 2026 (39 Beta, 201 Experimental — re-derive with
+  `--side client`).** `--side client --all` listed 43 clients in "real peer, evidence runs";
+  reading each test for condition 4, running it against the installed peer and emptying the loop
+  over the model's actions promoted 21: `afp` (netatalk), `beanstalkd`, `capnp_rpc` (pycapnp and
+  go-capnp), `db2` (Apache Derby, a DRDA server that is not IBM Db2), `dbus` (dbus-daemon),
+  `dict` (dictd), `docker` (the Docker Engine), `gearman` (gearmand), `kerberos` (MIT and
+  Heimdal KDCs), `nostr` (nak and nostr_sdk), `nsq` (nsqd), `oci_registry` (crane's registry),
+  `openflow` (os-ken), `prometheus`, `radsec` (FreeRADIUS), `rsync`, `rtp` (ffmpeg), `snmp`
+  (Net-SNMP snmpd), `srt` (libsrt), `vault` and `x11` (Xvfb). Each `AGENTS.md` names the
+  server-side assertion. Script and static handlers count as the model here, as they already did
+  for `dns`, `rdp` and `ngap`: `call_llm_for_client` routes them, so they reach the same loop.
+
+  What that pass found, worth expecting of the next client:
+
+  - **Chains with no bound at all**, the September finding again. `beanstalkd`, `dict` and `srt`
+    forwarded every action the model returned with no depth, so a model that answered each
+    response with another request looped for as long as the server answered. All three now stop
+    at `MAX_FOLLOWUPS` 4, and the test counts the requests on the server's side (beanstalkd's
+    `cmd-list-tubes`, dictd's command log, the bytes libsrt wrote). `mqtt_sn` and `radsec`'s
+    shape was checked too: `radsec` runs on the RADIUS client's bounded loop; `mqtt_sn` is still
+    unbounded and unpromoted.
+  - **Mocked-model tests that asserted the client's report rather than the server's state.**
+    `nsq`'s "server-side" reader was NetGet's own subscriber; `vault`, `nostr`, `docker` and
+    `prometheus` checked the event the client raised. Each now reads the effect from the
+    third-party side (`nsq_tail`, the `vault` CLI, `nak req`, the `docker` CLI, Prometheus's own
+    handler counter). For a read-only client the effect of its action is the server's answer,
+    cross-checked with the server's own tool.
+  - **The installed peer was not the pinned one, and the tests showed it.** nak 0.21 reads events
+    from a piped stdin instead of its arguments, so the nostr tests' empty pipe made `nak event`
+    and `nak req` do nothing; macOS's bundled snmpd 5.6 has no SHA-256 and no `rwuser`.
+
+  Not promoted: the peer is missing here for `bfd`, `ethercat`, `gtp`, `guacamole`, `h323`, `hls`
+  (GStreamer), `inetd`, `iscsi`, `nis`, `nvme_tcp`, `profinet`, `spice`, `sunrpc` (rpcbind on
+  :111), `wsdiscovery` and `zabbix` (`zabbix_proxy`); `bolt`, `lorawan`, `mqtt_sn` and `rtsp` need
+  peers built or downloaded (Neo4j, ChirpStack, the Paho gateway, MediaMTX) and were not run —
+  `bolt`'s, `mqtt_sn`'s and `rtsp`'s real-server tests drive injected actions only, so they need a
+  condition-4 test as well; `grpc` (`mkfifo` is not a peer — it is self-served),
+  `webrtc` (webrtc-rs at both ends) and `ssh` (demoted on 2 October for its SFTP evidence) are
+  not candidates at all.
+
+  **Seventeen as of 15 October 2026 (17 Beta — re-derive with `--side client`).**
   Since the thirteen below: `kafka`, `dns` and `rdp` arrived Beta with the protocol-expansion
-  pairs, `spark` against a real Apache Spark's live driver UI and History Server, `yarn`
-  against a real Hadoop ResourceManager and NodeManager, and `ngap`. `ssh` went
+  pairs, `spark` against a real Apache Spark's live driver UI and History Server, and `yarn`
+  against a real Hadoop ResourceManager and NodeManager. `ssh` went
   the other way on 2 October 2026: its SFTP operations shipped without a second independent SFTP
   server, pcap oracle or fuzz target, and its `metadata()` says so.
 
@@ -683,9 +723,10 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
   (`*_PYTHON`, `*_HOME`) is not a peer. For a client, a `RealServer::builder` inside a
   `tests/helpers/` module the test uses counts too — a helper's `Command::new` does not, since
   `pcap_oracle` runs tshark. `smb` is not this case: its only real-peer tests are `#[ignore]`d
-  and expect an externally run Samba, so "no peer" is right. Re-derived 31 October 2026: Beta
-  18, Experimental 222 — 75 with a real peer whose evidence runs (32 of them newly seen), 1
-  unreachable, 21 wrong peer, 53 self-served, 72 with no peer.
+  and expect an externally run Samba, so "no peer" is right. The change made 32 clients' peers
+  visible. Re-derived 6 November 2026, after the 21 client promotions above: Beta 39,
+  Experimental 201 — 54 with a real peer whose evidence runs, 1 unreachable, 21 wrong peer,
+  53 self-served, 72 with no peer.
 - **Experimental** — LLM-authored or newly implemented, not fully reviewed. The overwhelming
   majority (107 of the 158 `src/server/*/actions.rs` the script below walks, re-derived
   16 September 2026). Note the script
@@ -834,7 +875,7 @@ aspirational than the code — verify claims against the source.
 **Modules**: `cli/` (TUI, startup, args) · `server/<protocol>/` · `client/<protocol>/` ·
 `protocol/` (registries, metadata, spawn context) · `state/` (app state) · `llm/` (backends,
 prompting, actions) · `events/` (coordination) · `scripting/` (deterministic handlers) ·
-`mcp_stdio/` (MCP server) · `easy/` (simplified layer for small models).
+`mcp_stdio/` (MCP server).
 
 **Decentralization (CRITICAL)**: no centralized per-protocol logic. Each protocol implements
 traits independently. The only legitimate central touchpoints are:
@@ -1425,10 +1466,11 @@ cannot block:
 | Advisory group | Why |
 |---|---|
 | `redis::resp3_test`, `redis::pubsub_test`, `redis::cluster_test`, `redis::keys_oracle_test`, `client/redis::cluster_real_server_test` | Peer too old: ubuntu-22.04 ships Redis 6.0.16 (no `cluster-port`, a different `redis-cli -3` transcript). All five pass, blocking, in `Test (suites)` on ubuntu-24.04 with Redis 7 |
-| `client/nats::e2e_test` | Known flake: the test connects when `nats-server` logs "Listening for client connections", before the listener accepts; 4 of 30 runs got "Connection refused" |
 
 The split was measured: every blocking group, the audits and the browser exchange passed in
-all 30 runs between 2026-10-15 and 2026-10-29 that reached the evidence loop. Every group has
+all 30 runs between 2026-10-15 and 2026-10-29 that reached the evidence loop, except
+`client/nats::e2e_test` (26 of 30), whose failures were its own broker dying of SIGPIPE on a
+closed stderr pipe; it starts `nats-server` through `RealServer` and blocks. Every group has
 a five-minute limit and must run at least one passing test; a peer whose install step fails
 surfaces as its group's failure. The Beta evidence table step is a report, not a verdict, and
 stays `continue-on-error` (its blocking half is `--check` in `ratchets`). The summary step runs
@@ -1512,6 +1554,7 @@ of the test file**, not out of this table):
 | `event_action_declarations_test` | actions the model can never see, and advertised names the executor cannot run | — |
 | `well_known_port_declaration_test` | a server with no declared well-known port and no stated reason; a `PrivilegedPort(n)` or transport disagreeing with it | `NO_WELL_KNOWN_PORT` — finished answers, not a queue |
 | `startup_param_defaults_test` | a declared parameter `default` written as a literal instead of the constant the code uses (the type check is a registry walk) | **empty** |
+| `hand_rolled_dual_logging_ratchet_test` | a server `status_tx.send("[LEVEL] …")` beside a tracing macro instead of one `Log` call | per-file counts, `src/server/` only |
 
 A third check worth understanding: `event_action_declarations_test` probes each advertised
 name with a bare `{"type": name}`, which finds *unknown action* but can never find a wrong
@@ -1707,7 +1750,7 @@ no fallible call to wrap and `catch_unwind` cannot see it. It surfaced only beca
 pointed at the rolling TUI — before that they exercised the dashboard and never touched the path.
 
 **Every panic is logged, as of September 2026** (`src/panic_log.rs`), installed from
-`init_logging` so it covers `--mcp`, `--mcp-http`, `--simple` and the non-interactive runner as
+`init_logging` so it covers `--mcp`, `--mcp-http` and the non-interactive runner as
 well as the TUI, and chaining to whatever hook it replaced so the dashboard's terminal-restore
 still runs. Before it, a panic inside `tokio::spawn` was written **nowhere** — nothing awaits a
 connection task's `JoinHandle`, so the `JoinError` carrying the panic was dropped, which is why
@@ -1919,9 +1962,14 @@ concluding there's a bug.
 
 ## Logging
 
-**Dual logging everywhere**: tracing macros (`error!`/`warn!`/`info!`/`debug!`/`trace!`) →
-`netget.log`, and `status_tx.send()` → TUI/MCP status stream. Levels: ERROR critical, WARN
-non-fatal, INFO lifecycle, DEBUG summaries, TRACE full payloads.
+**Dual logging everywhere**, through one call: `crate::logging::emit::Log` writes a line to
+`netget.log` (tracing) and to the TUI/MCP status stream from one level, so the `[LEVEL]` bracket
+cannot disagree with the file. `Log::to(&status_tx).info(format!(…))`; ERROR/WARN/INFO reach
+both sinks, DEBUG/TRACE stay in the file unless routed with `debug_to(Sink::Both, …)`. Levels:
+ERROR critical, WARN non-fatal, INFO lifecycle, DEBUG summaries, TRACE full payloads. A tracing
+macro beside a hand-typed `status_tx.send(format!("[INFO] …"))` is the form it replaces;
+`tests/hand_rolled_dual_logging_ratchet_test.rs` holds the remaining server sites to a
+baseline that may only shrink.
 
 Every status/event channel is an **unbounded** `mpsc` — there is no backpressure anywhere.
 Don't add high-frequency per-byte messages to these channels.

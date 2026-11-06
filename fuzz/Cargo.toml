@@ -435,6 +435,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "mysql_stmt_execute"
+path = "fuzz_targets/mysql_stmt_execute.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "cassandra_envelope"
 path = "fuzz_targets/cassandra_envelope.rs"
 test = false

@@ -38,3 +38,14 @@ Failures (a refusal, a missing path, a checksum mismatch, a timeout of 120 s per
 arrive as `rsync_error`. Injected actions return the event's data as the `Executed` detail.
 
 Chains are bounded at `MAX_FOLLOWUP_DEPTH` (8). Nothing is written to local disk.
+
+## Maturity: Beta
+
+All four conditions of the client bar hold, on the real-server tests in `tests/client/rsync/`:
+
+1. the peer is a stock rsync daemon — third-party, and not a library this client is built on;
+2. a missing peer fails the test, never skips it;
+3. a real session, completed against that server;
+4. the client acts on the model's answer, asserted from the server's side: the file the handler chain picked out of the daemon's listing arrives MD4-checked (its bytes exist only on the daemon), and what `rsync_push` sent is on the daemon's disk. Emptying the loop over the model's actions fails it.
+
+Verified 1 November 2026 by running the suite against the installed peer and by that mutation. The CI job that installs the peer is in `.github/workflows/protocol-pairs.yml`.

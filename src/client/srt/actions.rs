@@ -190,11 +190,11 @@ impl Protocol for SrtClientProtocol {
     fn metadata(&self) -> crate::protocol::metadata::ProtocolMetadataV2 {
         use crate::protocol::metadata::*;
         ProtocolMetadataV2::builder()
-            .state(DevelopmentState::Experimental)
+            .state(DevelopmentState::Beta)
             .privilege_requirement(PrivilegeRequirement::None)
             .implementation("srt-tokio 0.4.4 caller; MPEG-TS PAT/PMT inspection for reports")
             .llm_control("What to read or send and when")
-            .e2e_testing("tests/client/srt: libsrt 1.5 (srt-live-transmit, independent) as listener sends a paced H.264/AAC MPEG-TS stream the client reads and reports, and writes the file the client publishes, which ffprobe decodes")
+            .e2e_testing("tests/client/srt/peer_test.rs against libsrt's srt-live-transmit: NetGet reads a paced H.264/AAC MPEG-TS stream and reports its programme, publishes an MPEG-TS file that libsrt writes out and ffprobe reads back, and the mocked model's text, sent in answer to the connect and to each report, is written by libsrt exactly MAX_FOLLOWUPS times. Fails rather than skips without srt-live-transmit or ffmpeg")
             .notes("Live mode, caller only; no rendezvous. Files are paced by bitrate, not PCR.")
             .max_inbound_bytes(1500)
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))

@@ -22,6 +22,7 @@
 //!
 //! LLM call budget: 13 across the whole file (0 + 3 + 3 + 5 + 2). The parser test makes none.
 mod nats_client_e2e_test {
+    use crate::helpers::real_server::{InstallHint, RealServer};
     use crate::helpers::{start_netget_client, start_netget_server, E2EResult, NetGetConfig};
     use netget::client::nats::{
         classify_permission_error, parse_server_frame, payload_for_event, ServerFrame,
@@ -610,91 +611,32 @@ mod nats_client_e2e_test {
     // Against the official nats-server binary — the evidence the rating rests on
     // ========================================================================
 
-    /// The real `nats-server`, spawned on an ephemeral loopback port and killed on every exit
-    /// path including a panic.
+    /// The real `nats-server` on a loopback port, through the shared `RealServer` helper, which
+    /// kills it on every exit path including a panic.
     ///
-    /// A leaked broker would poison later runs, and `Drop` runs during unwinding, so the kill
-    /// lives there rather than at the end of the test body.
-    struct RealNatsServer {
-        port: u16,
-        child: std::process::Child,
-    }
-
-    impl RealNatsServer {
-        /// Spawn `nats-server -a 127.0.0.1 -p -1` and read the port it chose out of its log.
-        ///
-        /// **Hard-fails when the binary is missing.** It deliberately does not print
-        /// `SKIP: nats-server is not installed` and return `Ok(())`: on a runner without the
-        /// binary that is a silent pass, and this client's `Beta` rating would then rest on
-        /// nothing. `npm`'s real-CLI test is the shape being copied, and
-        /// `kubernetes`/`oci_registry`/`maven`/`websocket` are what the other shape costs.
-        fn start() -> E2EResult<Self> {
-            let mut child = std::process::Command::new("nats-server")
-                .args(["-a", "127.0.0.1", "-p", "-1"])
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()
-                .map_err(|e| -> Box<dyn std::error::Error> {
-                    format!(
-                        "could not spawn the official `nats-server` binary: {e}. This test is \
-                         the only independent evidence the NATS client has - every other peer \
-                         in this file is same-project - so it fails rather than skipping. \
-                         Skipping would leave the client's maturity rating resting on nothing. \
-                         Install it with `brew install nats-server` (or the release tarball) \
-                         and re-run."
-                    )
-                    .into()
-                })?;
-
-            // nats-server logs "Listening for client connections on 127.0.0.1:<port>" to
-            // stderr on startup. Reading it is how the ephemeral port is learned; -p -1 is
-            // used rather than binding a probe socket ourselves precisely so there is no
-            // window in which another test can take the port.
-            use std::io::{BufRead, BufReader};
-            let stderr = child.stderr.take().expect("piped stderr");
-            let mut reader = BufReader::new(stderr);
-            let mut port = None;
-            let deadline = std::time::Instant::now() + Duration::from_secs(20);
-            let mut transcript = String::new();
-            while std::time::Instant::now() < deadline {
-                let mut line = String::new();
-                match reader.read_line(&mut line) {
-                    Ok(0) => break,
-                    Ok(_) => {}
-                    Err(e) => {
-                        let _ = child.kill();
-                        return Err(format!("reading nats-server output failed: {e}").into());
-                    }
-                }
-                transcript.push_str(&line);
-                if let Some(rest) = line.split("Listening for client connections on ").nth(1) {
-                    if let Some(found) = rest.trim().rsplit(':').next() {
-                        port = found.trim().parse::<u16>().ok();
-                    }
-                }
-                if port.is_some() {
-                    break;
-                }
-            }
-
-            match port {
-                Some(port) => Ok(Self { port, child }),
-                None => {
-                    let _ = child.kill();
-                    Err(format!(
-                        "nats-server never reported a listening port. Output so far:\n{transcript}"
-                    )
-                    .into())
-                }
-            }
-        }
-    }
-
-    impl Drop for RealNatsServer {
-        fn drop(&mut self) {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
-        }
+    /// **Hard-fails when the binary is missing**, naming the package: a `SKIP` that returned
+    /// `Ok(())` would be a silent pass, and this client's `Beta` rating would then rest on
+    /// nothing. `npm`'s real-CLI test is the shape being copied.
+    ///
+    /// Ready means **"Server is ready" in its log and a TCP connect that succeeds**, and its
+    /// stdout and stderr are drained for as long as it runs. The second half is the one that
+    /// matters: `nats-server` is a Go program, and a Go program that writes to a closed stderr
+    /// pipe dies of SIGPIPE. A helper that read up to "Listening for client connections" and
+    /// then dropped the pipe left the broker to die on its next log line - usually the
+    /// "Server is ready" that follows microseconds later - and the peer's connect was refused.
+    async fn official_nats_server() -> E2EResult<RealServer> {
+        RealServer::builder(
+            "nats-server",
+            InstallHint {
+                brew: "nats-server",
+                apt: "nats-server (or the v2.10.24 release tarball)",
+            },
+        )
+        .args(["-a", "127.0.0.1", "-p", "{port}"])
+        .ready_when_log_matches("Server is ready")
+        .startup_timeout(Duration::from_secs(30))
+        .start()
+        .await
     }
 
     /// **This is the test the maturity rating rests on.** Two independent implementations sit
@@ -718,8 +660,8 @@ mod nats_client_e2e_test {
     /// answered by a static handler, which costs none.
     #[tokio::test]
     async fn test_nats_client_round_trips_through_the_official_nats_server() -> E2EResult<()> {
-        let broker = RealNatsServer::start()?;
-        let broker_addr = format!("127.0.0.1:{}", broker.port);
+        let broker = official_nats_server().await?;
+        let broker_addr = broker.addr();
 
         // The independent peer. It connects first and subscribes to the readiness subject
         // *before* NetGet starts, so there is no window in which the announcement below can be

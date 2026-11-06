@@ -81,5 +81,15 @@ https://prometheus.io/docs/instrumenting/exposition_formats/,
 https://prometheus.io/docs/instrumenting/content_negotiation/,
 https://github.com/prometheus/OpenMetrics/blob/v1.0.0/specification/OpenMetrics.md.
 Independent exporter evidence and exact environment are in
-`tests/client/prometheus/AGENTS.md`. Maturity remains Experimental: no new pcap or
-fuzz evidence is claimed.
+`tests/client/prometheus/AGENTS.md`. No pcap or fuzz evidence is claimed.
+
+## Maturity: Beta
+
+All four conditions of the client bar hold, on the real-server tests in `tests/client/prometheus/`:
+
+1. the peer is a real Prometheus 3 server's own `/metrics` and the official Python exporter — third-party, and not a library this client is built on;
+2. a missing peer fails the test, never skips it;
+3. a real session, completed against that server;
+4. the client acts on the model's answer, asserted from the server's side: Prometheus's own `promhttp_metric_handler_requests_total` counts exactly the one scrape the mocked model chose. Emptying the loop over the model's actions fails it.
+
+Verified 1 November 2026 by running the suite against the installed peer and by that mutation. The CI job that installs the peer is in `.github/workflows/protocol-pairs.yml`.

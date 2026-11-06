@@ -1066,6 +1066,12 @@ jobs:
       # should tell you everything that is broken; it remembers, and exits non-zero at the end.
       # A group that times out (five minutes each) or runs zero tests is a failure.
       #
+      # One exception to "passed in all 30": client/nats::e2e_test passed 26. The four failures
+      # were its broker dying of SIGPIPE: a helper read nats-server's stderr only up to the
+      # listening line and closed the pipe, a Go program that logs after that dies, and the
+      # peer's connect was refused. The test starts nats-server through RealServer, which waits
+      # for "Server is ready" and drains the log for the broker's whole life.
+      #
       # `mercurial` and `wol` are Experimental, so strictly they need not be here; they are
       # because the test exists, is not #[ignore]d, and costs a few seconds. `ollama` is the
       # reason the three were noticed at all — a Beta whose real-client test this loop did not
@@ -1112,7 +1118,7 @@ jobs:
             client/memcached::real_server_test client/modbus::real_server_test \
             client/radius::real_server_test \
             client/mqtt::keepalive_test client/mqtt::real_server_test \
-            client/mysql::real_server_test client/nut::real_server_test \
+            client/mysql::real_server_test client/nats::e2e_test client/nut::real_server_test \
             client/postgresql::real_server_test \
             client/quic::real_server_test client/redis::real_server_test \
             client/redis::pubsub_real_server_test \
@@ -1147,13 +1153,6 @@ jobs:
       #       and SSUBSCRIBE and SPUBLISH are Redis 7.0 commands that jammy's 6.0.16 redis-cli
       #       does not hold a subscription open for. It passes, BLOCKING, in `Test (suites)` on
       #       ubuntu-24.04 through server::redis::, beside the four above.
-      #   client/nats::e2e_test
-      #       Known flake, 26 of 30 runs passed. In the other four,
-      #       test_nats_client_round_trips_through_the_official_nats_server got "Connection
-      #       refused" from nats-server: the test treats its "Listening for client connections"
-      #       log line as readiness and connects before the listener accepts (seen on
-      #       2026-10-21, 10-23, 10-24 and 10-25). Promote it once the test waits for
-      #       "Server is ready" or retries the connect.
       - name: Real-client evidence (advisory groups)
         id: evidence-advisory
         if: ${{ !cancelled() && steps.evidence-build.outcome == 'success' }}
@@ -1165,8 +1164,7 @@ jobs:
           failed=""
           for filter in \
             redis::resp3_test redis::pubsub_test redis::cluster_test redis::keys_oracle_test \
-            redis::verb_coverage_test client/redis::cluster_real_server_test \
-            client/nats::e2e_test ; do
+            redis::verb_coverage_test client/redis::cluster_real_server_test ; do
             echo "::group::$filter"
             .github/scripts/run-evidence-group.sh advisory "$filter" || failed="$failed $filter"
             echo "::endgroup::"
@@ -1521,7 +1519,7 @@ jobs:
             --test client_credential_logging_test --test secret_redaction_test \
             --test scheduled_task_lifecycle_test --test scheduled_task_claim_test \
             --test sqlite_query_bounds_test --test sqlite_identifier_test \
-            --test easy_startup_test --test utils_save_load_test \
+            --test utils_save_load_test \
             --test startup_cancellation_test --test non_interactive_run_limits_test \
             --test scripting_resources_test --test scripting_resident_test \
             --test static_handler_interpolation_test --test mcp_stop_cleanup_test --test mcp_startup_config_test \
