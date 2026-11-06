@@ -16,8 +16,8 @@ monotonic total (`AppState::access_log_total`), so it counts every handled event
 instance whoever answered it. `--ready-file <PATH>` writes a JSON report of every server's bound
 address (and every client's target and status) once all of them have started — atomically, and
 after removing any stale file at the path, so its appearance is the readiness signal for a
-process started on port 0; a run that fails to start never writes it, and MCP, `--simple` and
-the TUI refuse the flag. `tests/non_interactive_run_limits_test.rs` drives the binary. The test
+process started on port 0; a run that fails to start never writes it, and MCP and the TUI
+refuse the flag. `tests/non_interactive_run_limits_test.rs` drives the binary. The test
 fixture helpers built on it are `crates/netget-fixture` (Rust, depends only on `serde_json`) and
 `sdk/python/netget_fixture` (stdlib, plus a pytest plugin); `tests/fixture_helpers_test.rs`
 runs both against this tree's binary and needs `python3` with pytest. Neither is published.
@@ -794,7 +794,7 @@ aspirational than the code — verify claims against the source.
 **Modules**: `cli/` (TUI, startup, args) · `server/<protocol>/` · `client/<protocol>/` ·
 `protocol/` (registries, metadata, spawn context) · `state/` (app state) · `llm/` (backends,
 prompting, actions) · `events/` (coordination) · `scripting/` (deterministic handlers) ·
-`mcp_stdio/` (MCP server) · `easy/` (simplified layer for small models).
+`mcp_stdio/` (MCP server).
 
 **Decentralization (CRITICAL)**: no centralized per-protocol logic. Each protocol implements
 traits independently. The only legitimate central touchpoints are:
@@ -1454,6 +1454,7 @@ of the test file**, not out of this table):
 | `event_action_declarations_test` | actions the model can never see, and advertised names the executor cannot run | — |
 | `well_known_port_declaration_test` | a server with no declared well-known port and no stated reason; a `PrivilegedPort(n)` or transport disagreeing with it | `NO_WELL_KNOWN_PORT` — finished answers, not a queue |
 | `startup_param_defaults_test` | a declared parameter `default` written as a literal instead of the constant the code uses (the type check is a registry walk) | **empty** |
+| `hand_rolled_dual_logging_ratchet_test` | a server `status_tx.send("[LEVEL] …")` beside a tracing macro instead of one `Log` call | per-file counts, `src/server/` only |
 
 A third check worth understanding: `event_action_declarations_test` probes each advertised
 name with a bare `{"type": name}`, which finds *unknown action* but can never find a wrong
@@ -1649,7 +1650,7 @@ no fallible call to wrap and `catch_unwind` cannot see it. It surfaced only beca
 pointed at the rolling TUI — before that they exercised the dashboard and never touched the path.
 
 **Every panic is logged, as of September 2026** (`src/panic_log.rs`), installed from
-`init_logging` so it covers `--mcp`, `--mcp-http`, `--simple` and the non-interactive runner as
+`init_logging` so it covers `--mcp`, `--mcp-http` and the non-interactive runner as
 well as the TUI, and chaining to whatever hook it replaced so the dashboard's terminal-restore
 still runs. Before it, a panic inside `tokio::spawn` was written **nowhere** — nothing awaits a
 connection task's `JoinHandle`, so the `JoinError` carrying the panic was dropped, which is why
@@ -1861,9 +1862,14 @@ concluding there's a bug.
 
 ## Logging
 
-**Dual logging everywhere**: tracing macros (`error!`/`warn!`/`info!`/`debug!`/`trace!`) →
-`netget.log`, and `status_tx.send()` → TUI/MCP status stream. Levels: ERROR critical, WARN
-non-fatal, INFO lifecycle, DEBUG summaries, TRACE full payloads.
+**Dual logging everywhere**, through one call: `crate::logging::emit::Log` writes a line to
+`netget.log` (tracing) and to the TUI/MCP status stream from one level, so the `[LEVEL]` bracket
+cannot disagree with the file. `Log::to(&status_tx).info(format!(…))`; ERROR/WARN/INFO reach
+both sinks, DEBUG/TRACE stay in the file unless routed with `debug_to(Sink::Both, …)`. Levels:
+ERROR critical, WARN non-fatal, INFO lifecycle, DEBUG summaries, TRACE full payloads. A tracing
+macro beside a hand-typed `status_tx.send(format!("[INFO] …"))` is the form it replaces;
+`tests/hand_rolled_dual_logging_ratchet_test.rs` holds the remaining server sites to a
+baseline that may only shrink.
 
 Every status/event channel is an **unbounded** `mpsc` — there is no backpressure anywhere.
 Don't add high-frequency per-byte messages to these channels.
