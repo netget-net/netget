@@ -2,7 +2,7 @@
 
 NetGet as a DRDA application requester: it logs in to IBM Db2 or Apache Derby, and the model
 decides what SQL to run, reads decoded results and commits or rolls back. Feature `db2`
-(shared with the server, `src/server/db2/`). **Experimental** — see Maturity below.
+(shared with the server, `src/server/db2/`). **Beta** — see Maturity below.
 
 Rust owns everything below the SQL; the model never sees a byte of DRDA.
 
@@ -108,11 +108,16 @@ No decoder recurses.
 DRDA implementation sharing no code with NetGet, with Derby's own `ij` client reading back what
 the model did, Derby's statement log, and tshark's DRDA dissector over a recording proxy.
 
-**Experimental**: the client Beta bar's conditions 2–4 hold for Derby (the tests fail without
-it, run a real session, and assert the model's actions from Derby's side), but condition 1
-asks for a real third-party server and this has **one**. IBM Db2 Community Edition was not
-used: its image is linux/amd64 only (emulated on this Mac), needs a privileged container and a
-multi-minute first start, and this machine's Docker is unreliable and nearly out of disk.
+## Maturity: Beta
+
+All four conditions of the client bar hold, on the real-server tests in `tests/client/db2/`:
+
+1. the peer is Apache Derby 10.17's network server (a DRDA implementation, not IBM Db2) — third-party, and not a library this client is built on;
+2. a missing peer fails the test, never skips it;
+3. a real session, completed against that server;
+4. the client acts on the model's answer, asserted from the server's side: Derby's own `ij` reads back the rows the mocked model inserted, including one built from typed values it read, and not the row it rolled back. Emptying the loop over the model's actions fails it.
+
+Verified 1 November 2026 by running the suite against the installed peer and by that mutation. Derby speaks DRDA but is not Db2; IBM Db2 itself is untested (see below). The CI job that installs the peer is in `.github/workflows/protocol-pairs.yml`.
 
 ## Not implemented
 
