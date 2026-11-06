@@ -41,7 +41,7 @@ enum Inbound {
 pub struct TcpClient;
 
 impl TcpClient {
-    /// Connect to a TCP server with integrated LLM actions
+    /// Connect to a TCP server with integrated LLM actions, over plain TCP.
     pub async fn connect_with_llm_actions(
         remote_addr: String,
         llm_client: OllamaClient,
@@ -49,18 +49,68 @@ impl TcpClient {
         status_tx: mpsc::UnboundedSender<String>,
         client_id: ClientId,
     ) -> Result<SocketAddr> {
+        Self::connect_with_options(
+            remote_addr,
+            llm_client,
+            app_state,
+            status_tx,
+            client_id,
+            false,
+        )
+        .await
+    }
+
+    /// Connect to a TCP server; `multipath` connects over an MPTCP socket (Linux only, see
+    /// [`crate::utils::mptcp`]) and reports whether MPTCP was negotiated.
+    pub async fn connect_with_options(
+        remote_addr: String,
+        llm_client: OllamaClient,
+        app_state: Arc<AppState>,
+        status_tx: mpsc::UnboundedSender<String>,
+        client_id: ClientId,
+        multipath: bool,
+    ) -> Result<SocketAddr> {
         // Resolve and connect
-        let stream = TcpStream::connect(&remote_addr)
-            .await
-            .context(format!("Failed to connect to {}", remote_addr))?;
+        let stream = if multipath {
+            connect_multipath(&remote_addr).await?
+        } else {
+            TcpStream::connect(&remote_addr)
+                .await
+                .context(format!("Failed to connect to {}", remote_addr))?
+        };
+        // The kernel falls back to plain TCP when the server does not answer MPTCP, so what was
+        // negotiated is read off the socket, not assumed from the parameter.
+        let mptcp = multipath.then(|| {
+            crate::utils::mptcp::is_mptcp(&stream).unwrap_or_else(|e| {
+                let _ = status_tx.send(format!(
+                    "[WARN] TCP client {client_id}: could not tell whether MPTCP was \
+                     negotiated ({e}); reporting plain TCP"
+                ));
+                false
+            })
+        });
 
         let local_addr = stream.local_addr()?;
         let remote_sock_addr = stream.peer_addr()?;
 
         info!(
-            "TCP client {} connected to {} (local: {})",
-            client_id, remote_sock_addr, local_addr
+            "TCP client {} connected to {} (local: {}){}",
+            client_id,
+            remote_sock_addr,
+            local_addr,
+            match mptcp {
+                Some(true) => " over MPTCP",
+                Some(false) => " - multipath requested, server fell back to plain TCP",
+                None => "",
+            }
         );
+        if let Some(mptcp) = mptcp {
+            app_state
+                .with_client_mut(client_id, |client| {
+                    client.set_protocol_field("mptcp".to_string(), serde_json::json!(mptcp))
+                })
+                .await;
+        }
 
         // Update client state
         app_state
@@ -93,12 +143,12 @@ impl TcpClient {
 
         // Call LLM with tcp_connected event
         if let Some(instruction) = app_state.get_instruction_for_client(client_id).await {
-            let event = Event::new(
-                &TCP_CLIENT_CONNECTED_EVENT,
-                serde_json::json!({
-                    "remote_addr": remote_sock_addr.to_string(),
-                }),
-            );
+            let mut data = serde_json::json!({
+                "remote_addr": remote_sock_addr.to_string(),
+                "local_addr": local_addr.to_string(),
+            });
+            with_mptcp(&mut data, mptcp);
+            let event = Event::new(&TCP_CLIENT_CONNECTED_EVENT, data);
 
             match call_llm_for_client(
                 &llm_client,
@@ -286,14 +336,13 @@ impl TcpClient {
                     } else {
                         (hex::encode(&data), "hex")
                     };
-                    let event = Event::new(
-                        &TCP_CLIENT_DATA_RECEIVED_EVENT,
-                        serde_json::json!({
-                            "data": data_str,
-                            "encoding": data_encoding,
-                            "data_length": data.len(),
-                        }),
-                    );
+                    let mut event_data = serde_json::json!({
+                        "data": data_str,
+                        "encoding": data_encoding,
+                        "data_length": data.len(),
+                    });
+                    with_mptcp(&mut event_data, mptcp);
+                    let event = Event::new(&TCP_CLIENT_DATA_RECEIVED_EVENT, event_data);
 
                     let memory = client_data.lock().await.memory.clone();
                     match call_llm_for_client(
@@ -382,5 +431,36 @@ impl TcpClient {
         task_registrar.register_client_task(client_id, handle).await;
 
         Ok(local_addr)
+    }
+}
+
+/// Resolve `remote_addr` and connect to the first address that accepts, over MPTCP.
+async fn connect_multipath(remote_addr: &str) -> Result<TcpStream> {
+    if let Some(reason) = crate::utils::mptcp::UNSUPPORTED_REASON {
+        anyhow::bail!("{reason}");
+    }
+    let mut last_err: Option<std::io::Error> = None;
+    for addr in tokio::net::lookup_host(remote_addr)
+        .await
+        .context(format!("Failed to resolve {}", remote_addr))?
+    {
+        match crate::utils::mptcp::connect(addr).await {
+            Ok(stream) => return Ok(stream),
+            // The kernel refusing the socket (`explain_open_error`, which carries no OS error
+            // code of its own) is the same answer for every address.
+            Err(e) if e.raw_os_error().is_none() => return Err(anyhow::anyhow!(e)),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    Err(match last_err {
+        Some(e) => anyhow::anyhow!("Failed to connect to {} over MPTCP: {}", remote_addr, e),
+        None => anyhow::anyhow!("{} resolved to no address", remote_addr),
+    })
+}
+
+/// Add `mptcp` to an event's data when the client was started with `multipath`.
+fn with_mptcp(data: &mut serde_json::Value, mptcp: Option<bool>) {
+    if let (Some(mptcp), Some(obj)) = (mptcp, data.as_object_mut()) {
+        obj.insert("mptcp".to_string(), serde_json::Value::Bool(mptcp));
     }
 }

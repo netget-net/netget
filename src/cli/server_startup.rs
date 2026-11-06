@@ -649,7 +649,12 @@ pub async fn start_server_from_action(
     }
 
     let parsed_handlers = event_handlers
-        .map(crate::events::handler::EventHandler::parse_event_handlers)
+        .map(|handlers| {
+            crate::events::handler::EventHandler::parse_event_handlers_for(
+                handlers,
+                crate::events::handler::HandlerOwner::Server(protocol_impl.protocol_name()),
+            )
+        })
         .transpose()
         .map_err(|error| anyhow::anyhow!("Invalid event handler configuration: {}", error))?;
 

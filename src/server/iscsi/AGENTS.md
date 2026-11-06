@@ -1,4 +1,4 @@
-# iSCSI target — Experimental
+# iSCSI target — Beta
 
 RFC 7143 iSCSI over TCP (well-known port 3260, unprivileged). Rust owns the wire; the model
 owns four decisions: which targets discovery reveals (`iscsi_discovery` →
@@ -233,9 +233,12 @@ verbs stack (libibverbs/librdmacm) it does not link. Not built.
 
 ## Maturity
 
-Experimental. libiscsi passes its tools, the iscsi-test-cu subset and its task management
-suites (see `tests/server/iscsi/AGENTS.md`); the open-iscsi kernel initiator (reads and
-`sg_reset` LUN and target resets) runs only as root in the pair job. **No independent initiator
+Beta, on two independent initiators. libiscsi 1.20.3 passes its tools, the iscsi-test-cu
+subset and its task management suites (see `tests/server/iscsi/AGENTS.md`), unprivileged, on
+macOS and Linux; the open-iscsi kernel initiator (reads and `sg_reset` LUN and target resets)
+runs only as root on Linux, in the `iscsi` pair job. The rating covers that surface: login,
+discovery, CHAP, the SCSI commands (reads and writes) and task management at error recovery
+level 0 on one connection. **No independent initiator
 drives error recovery levels 1–2 or sessions of several connections**: libiscsi (`lib/login.c`)
 and open-iscsi (`usr/login.c`) both hard-code ErrorRecoveryLevel=0 and MaxConnections=1 in their
 login offer, neither sends SNACK, DataACK or TASK REASSIGN, and the kernel's iscsi_tcp

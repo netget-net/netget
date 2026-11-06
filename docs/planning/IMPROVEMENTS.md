@@ -471,7 +471,7 @@ plumbing cannot substantiate a **Beta** rating, which this project defines as "w
 clients". Suggested rule: no protocol may be rated Beta without at least one test that fails
 when a real off-the-shelf client would reject the output — and that test must assert, not log.
 
-### 48. Library panics reachable from the wire need auditing per dependency **[static]**
+### 48. Library panics reachable from the wire need auditing per dependency **[partly fixed — 31 Oct 2026]**
 
 The dhcproto `chaddr()` panic was found in the DHCP server and then existed unfixed in the
 DHCP client. The general shape — a parsing crate that trusts a length field the wire controls
@@ -479,6 +479,54 @@ DHCP client. The general shape — a parsing crate that trusts a length field th
 `kafka-protocol`, `cassandra-protocol`, `bson`, `pgwire`, `opensrv-mysql`) asking specifically
 which of their accessors panic on malformed input, since all of them run inside a socket task
 where a panic silently kills the server while its status still reads `Running`.
+
+**31 October 2026: four of them audited at the versions in `Cargo.lock`, each finding proved
+from the server's real socket, each guard checked by removing it.** `bson` (`utils::bson_depth`)
+and `pgwire` (#77) were done earlier; `kafka-protocol` remains.
+
+- **`hickory-proto` 0.24.4 — a process-killing stack overflow.** Name decompression follows a
+  pointer by recursing (`rr/domain/name.rs:1203`) with no counter; a chain of pointers each
+  aiming two bytes back overflows a debug build's 2 MiB worker at 1 702 hops, a 3 448-byte UDP
+  datagram, pre-anything, in `dns`, `dot`, `doh`, `doq` and `llmnr` (a release build survives
+  the longest chain the 14-bit offset allows, ~8 180 hops in ~1.3 MiB, with ~0.7 MiB of a 2 MiB
+  worker to spare) (and the DoT/DoH/LLMNR
+  clients and the DNS client's zone transfer). 0.25.2 still recurses; 0.26 is iterative. Fixed by
+  `utils::dns_screen` in front of every decode site (deepest chain ≤ 127 hops; section counts must
+  fit the bytes, which also stops `Message::read`'s `Vec::with_capacity(count)` reserving for
+  65 535 records from a 12-byte header). Not coverable: the DNS client's plain UDP lookups go
+  through `hickory-client`'s `UdpClientStream`, which decodes internally. Everything else read
+  (rdata length arithmetic is `checked_sub` throughout; the one `panic!` in
+  `rr/dnssec/rdata/mod.rs:628` is behind a type dispatch that cannot reach it) is sound.
+- **`cassandra-protocol` 3.3.0 — three panics in `Envelope::from_buffer`, pre-STARTUP.** The
+  tracing flag on a response-direction frame `unwrap`s a 16-byte read (`frame.rs:187`); the
+  warning flag decodes a `[string list]` whose negative `i16` count is a capacity-overflow panic
+  (`types.rs:267`) and whose over-long string is sliced before the length check
+  (`types.rs:485`). Fixed by `cassandra::parse_request_frame`, which refuses both header bits on
+  a request (neither has meaning there) and answers PROTOCOL_ERROR. A negative body length
+  (`frame.rs:157-171`) was already unreachable behind `MAX_FRAME_BODY_BYTES`.
+- **`opensrv-mysql` 0.7.0 — two panics in the handshake.** `set_seq(seq + 1)` on a client
+  sequence id of 255 (`lib.rs:389`, `:502`, `:563`; overflow checks, so debug/test builds only)
+  and `packet()`'s fragment `assert_eq!`s on a misnumbered chain (`packet_reader.rs:252`, `:266`;
+  every build). Fixed in `PacketLimitReader`, which refuses both from the header and answers
+  1156 `ER_NET_PACKETS_OUT_OF_ORDER`. **Not fixed, left to the COM_STMT_EXECUTE rework:**
+  `ParamParser` panics (`params.rs:86` `split_at`, `:91` `panic!`, `:127` `unwrap`) and
+  COM_STMT_SEND_LONG_DATA appending with no bound (`lib.rs:663-678`).
+- **`rasn` 0.18.0 (behind `rasn-snmp`) — nothing new reachable.** The one wire-reachable defect,
+  unbounded recursion on constructed OCTET STRINGs (`ber/de/parser.rs:62`), was already behind
+  `check_ber_structure`; integer, OID, bit-string and length decoding were read and are bounded.
+  It does have an upstream panic NetGet cannot reach: `parse_any_generalized_time_string`
+  (`ber/de.rs:202-208`) checks `chars().nth(len - 5)` and slices at *byte* `len - 5`, so the
+  GeneralizedTime `18 06 c3 a9 2b 30 30 30` ("é+000") panics on a char boundary. No SNMP type
+  carries a GeneralizedTime.
+
+Tests: `tests/server/dns/compression_chain_test.rs`, `tests/server/cassandra/decoder_panic_test.rs`,
+`tests/server/mysql/sequence_id_test.rs`. Fuzz: `dns_message` now runs the screen first and has a
+pointer-chain seed; `snmp_ber` has a constructed-OCTET-STRING bomb (its old one nested
+SEQUENCEs, not the path that overflowed); `cassandra_envelope` and `mysql_session` are new.
+All four ran 120 s clean on 1 November 2026 (46–61 k executions each, `-s none`, macOS).
+The DNS overflow is not visible to its fuzz target — libFuzzer's 8 MiB main thread and
+optimised frames hold the longest possible chain — so its regression is the wire test against
+the debug server.
 
 ### 50. Two overlapping documentation gates, one of them dead **[fixed — re-verified 26 Sep 2026]**
 
@@ -516,7 +564,7 @@ libpcap at link time, which is the original reason for the exclusion; the option
 it, dynamically loading it, or documenting the gap in the release notes rather than leaving
 users to discover it.
 
-### 77. pgwire panics the PostgreSQL connection on a malformed simple query **[verified]**
+### 77. pgwire panics the PostgreSQL connection on a malformed simple query **[verified, fixed in this repository's builds: `vendor/pgwire` answers FATAL 08P01; upstream issue not yet filed; crates.io builds still contain it per connection]**
 
 `pgwire` 0.35's `decode_packet` (`codec.rs:62-83`) bounds the declared message length only
 from *above*, then hands `decode_fn` the entire remaining buffer rather than a slice limited
@@ -540,8 +588,16 @@ server stayed up and accepted a further connection. So this is not in the class 
 server-killers; it is a malformed message producing a panic instead of a clean protocol error.
 Still worth fixing, because a panicking connection is a silent one.
 
-The fix belongs upstream — `pgwire` owns the socket loop, so NetGet cannot bound the frame
-without wrapping the stream. Report it there. `opensrv-mysql`'s `params.rs` cluster (five
+`pgwire` owns the socket loop, so NetGet cannot bound the frame without wrapping the stream;
+the fix is in the crate. `vendor/pgwire` (README there) is 0.35.0 with each message isolated
+before its body decoder runs, checked reads in every frontend decoder, PostgreSQL's
+end-of-message check, and `FATAL 08P01` on the wire instead of a panic. Upgrading was checked
+first and does not help: 0.42.1 fixes `get_cstring` alone, and `Bind`/`Close`/`Describe` still
+panic on short bodies there. `tests/vendored_pgwire_patch_test.rs` drives every shape found;
+`tests/server/postgresql/decoder_panic_test.rs` asserts the ErrorResponse from the wire. It
+should still be reported upstream, and a `[patch]` does not reach `cargo install`, where the
+containment in `src/server/postgresql/mod.rs` remains what stands between the panic and the
+server. `opensrv-mysql`'s `params.rs` cluster (five
 malformed `COM_STMT_EXECUTE` shapes, including an explicit `panic!("bad column type")` on a
 client-chosen byte) and `kafka-protocol`'s unbounded element counts are the same shape and are
 documented in the panic audit.

@@ -1,11 +1,12 @@
 # DataLink Client Tests
 
-## Three files, split by what they need
+## Four files, split by what they need
 
 | File | Privilege | What it covers |
 |---|---|---|
 | `action_test.rs` | **none** | the whole model-facing surface: every advertised action, every declared example, what `execute_action` accepts and refuses, and the event payload against literal frame bytes |
-| `command_channel_test.rs` | none, plus one `#[ignore]`d privileged test | the lifecycle: `connect` refusing an interface it cannot open, and — privileged — a real acknowledged `sendpacket`, honest `[ send ]` outcomes, and the capture loop actually stopping |
+| `packet_test.rs` | **none** | the link-type framing, IPv4/TCP builder and frame decoder against literal bytes: the known-good MP_CAPABLE SYN, checksums, TCP/MPTCP options, NULL/LOOP/RAW headers, the event payload on `lo0`, probe requests, and how `remote_addr` / `filter` resolve |
+| `command_channel_test.rs` | none, plus two `#[ignore]`d privileged tests | the lifecycle: `connect` refusing an interface it cannot open, and — privileged — a real acknowledged `sendpacket`, honest `[ send ]` outcomes, the capture loop actually stopping, and `probe_tcp` on loopback returning a decoded SYN-ACK and RST |
 | `e2e_test.rs` | **capture access, hard-required** | the real binary against a mock model, opening a real libpcap handle on loopback and injecting real frames |
 
 ## The correction this split makes
@@ -33,8 +34,8 @@ should go.
 
 - every declared `example`, from async actions, sync actions and every event's action list, is
   accepted by this protocol's own `execute_action`
-- all three events declare actions, and each is executable
-- startup parameters are exactly `interface` and `promiscuous`
+- all four events declare actions, and each is executable
+- startup parameters are exactly `interface`, `promiscuous`, `capture` and `filter`
 - `PrivilegeRequirement::PacketCapture`, agreeing with the live probe — **not** `RawSockets`,
   which is a different capability (a ChmodBPF user has one and not the other)
 - `inject_frame` does not tell the model to append an FCS (it used to; the interface computes
@@ -47,7 +48,9 @@ should go.
 - `disconnect` and `wait_for_more` map to their lifecycle results
 - the event payload: a short frame reported whole; a long one cut with `truncated` and
   `captured_length` set and `frame_length` still the true length; the exact boundary uncut; and
-  every field it emits declared on the events that carry it
+  every field it emits declared on the events that carry it — checked against an Ethernet ARP
+  frame and a `DLT_NULL` IPv4/TCP frame, so the optional decoded fields (`family`, `ip`, `tcp`)
+  are covered too; required declarations must always be present, optional ones may be absent
 
 The structured spelling of `inject_frame` (September 2026) is covered in the same file, and
 these are the assertions worth knowing about:
@@ -79,6 +82,36 @@ these are the assertions worth knowing about:
   `tests/example_hex_drift_test.rs`: asserted against the values a running build produces
   rather than against the source text.
 
+### `packet_test.rs` (no privilege, no LLM)
+
+The reference vector is a SYN tcpdump reported with a correct checksum (`0x434b`):
+`127.0.0.1:40000 -> 127.0.0.1:3333`, seq `0x11223344`, ip id `0x1234`, DF, options mss 16344 +
+MP_CAPABLE v1 flags `0x01`.
+
+- `the_known_good_syn_is_built_byte_for_byte_with_both_checksums` — `build_ipv4_tcp` from
+  structured fields equals those 48 bytes, IPv4 checksum `0x2a92`, TCP `0x434b`; and both verify
+  to 0 over the literal packet
+- on `NULL` the frame is `AF_INET` in host order + the packet, and MACs are refused naming the
+  link type; on Ethernet the MACs are required and come first
+- defaults: `dst_ip`/`dst_port` from `remote_addr`, `src_ip` only for a loopback destination,
+  SYN; bad flags, ports, IPv6 addresses, option fields and a payload without its encoding are
+  refused by name; options over 40 bytes are refused
+- every named option round-trips through the decoder byte for byte; MP_CAPABLE with numeric
+  and named flags and both keys; MP_JOIN is named and re-encodes from the decoded form; an
+  unknown kind keeps its data; a malformed length is reported, not over-read
+- link types from DLT values and their pcap names; NULL host order vs LOOP network order;
+  `AF_INET6` is 30 on macOS; ARP on `NULL` and anything on `LINUX_SLL` refused
+- `inject_frame` on `NULL` builds the family header, refuses MACs, requires `ethertype`; on
+  `RAW` the payload is the frame
+- `a_null_frame_is_decoded_as_family_and_ip_not_as_fake_macs`, and the same bytes read as
+  Ethernet show the invented MACs the old decoder produced
+- a zero TCP checksum on loopback is `checksum_ok: null` with the offload note; off loopback it
+  is `false`
+- `reply_matches` accepts the SYN-ACK and refuses our own SYN; the reply filter string;
+  `echoed_options` with and without MP_CAPABLE coming back
+- `probe_tcp` yields the probe request with its defaults and refuses a timeout over 10s;
+  `parse_target` / `resolve_capture_filter`
+
 ### `command_channel_test.rs`
 
 | Test | Privilege | Asserts |
@@ -86,6 +119,7 @@ these are the assertions worth knowing about:
 | `datalink_client_refuses_an_interface_it_cannot_open` | none | `create` returns `Err` naming the device; the client is `ClientStatus::Error`; **no command handle** is registered |
 | `connect_outcome_on_loopback_matches_capture_privilege` | none | `Ok` **iff** the process can capture; unprivileged, the refusal names `/dev/bpf*` or `CAP_NET_RAW` |
 | `injected_frame_is_transmitted` | capture (`#[ignore]`d) | `Sent { bytes_sent }` from a real acknowledged `sendpacket`; bad hex and unknown verbs still `Rejected`; the injection reaches the access log; `disconnect` stops the capture loop |
+| `probe_tcp_on_loopback_returns_the_syn_ack_and_the_rst` | capture (`#[ignore]`d) | with capture **off**, a `probe_tcp` SYN carrying MP_CAPABLE to a local listener returns `Probed` with one decoded SYN-ACK and whether MP_CAPABLE was echoed; to a closed port, one RST; the connect note names the link type (`NULL` on macOS) and the remote_addr default |
 
 The second test is the one with teeth on either kind of host: it fails if `connect` ever again
 returns `Ok` without a capture handle, which is the bug this client shipped with.
@@ -111,12 +145,10 @@ exactly that.
 
 ```bash
 # everything that runs without privilege
-./cargo-isolated.sh test --no-default-features --features datalink \
-    --test client -- client::datalink --test-threads=100
+./cargo-isolated.sh test --test client -- client::datalink:: --test-threads=16
 
-# the privileged injection test, on a host with BPF access
-./cargo-isolated.sh test --no-default-features --features datalink \
-    --test client -- client::datalink --ignored --test-threads=100
+# the privileged injection and probe tests, on a host with BPF access
+./cargo-isolated.sh test --test client -- client::datalink:: --ignored --test-threads=16
 ```
 
 On a host **without** capture access the four `e2e_test.rs` tests fail with an explanation of

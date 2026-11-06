@@ -29,6 +29,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
+use crate::client::datalink::packet::{decode_frame, LinkType};
 use crate::llm::action_helper::call_llm;
 use crate::llm::ollama_client::OllamaClient;
 use crate::protocol::Event;
@@ -58,13 +59,32 @@ const MAX_INFLIGHT_LLM_PACKETS: usize = 32;
 /// Pure, and public, so it can be asserted against literal frame bytes without a capture
 /// handle — the only part of this protocol that can be tested at all without BPF access.
 pub fn packet_event_data(frame: &[u8]) -> serde_json::Value {
+    packet_event_data_for_link(frame, LinkType::Ethernet, false)
+}
+
+/// [`packet_event_data`] for the capture's real link type, with the frame decoded.
+///
+/// The interface's link type decides what the first bytes are: on macOS `lo0` (this server's
+/// default interface) it is `NULL`, a 4-byte address family — reading MACs out of it would be
+/// garbage. So `link_type` is always reported, the link header is read for that type
+/// (`dst_mac` / `src_mac` / `ethertype`, or `family` on loopback), and IPv4 with TCP / UDP /
+/// ICMP is decoded where present — TCP options included, with the loopback checksum-offload
+/// note when a checksum is 0 (`crate::client::datalink::packet::decode_frame`).
+pub fn packet_event_data_for_link(
+    frame: &[u8],
+    link: LinkType,
+    loopback: bool,
+) -> serde_json::Value {
     let shown = frame.len().min(MAX_HEX_BYTES_TO_MODEL);
-    serde_json::json!({
-        "packet_length": frame.len(),
-        "packet_hex": hex::encode(&frame[..shown]),
-        "captured_length": shown,
-        "truncated": shown < frame.len(),
-    })
+    let mut data = decode_frame(&frame[..shown], link, loopback);
+    data.insert("packet_length".into(), serde_json::json!(frame.len()));
+    data.insert(
+        "packet_hex".into(),
+        serde_json::json!(hex::encode(&frame[..shown])),
+    );
+    data.insert("captured_length".into(), serde_json::json!(shown));
+    data.insert("truncated".into(), serde_json::json!(shown < frame.len()));
+    serde_json::Value::Object(data)
 }
 
 // `get_llm_protocol_prompt()` used to live here. It was called by nothing (`grep -rn
@@ -138,9 +158,10 @@ impl DataLinkServer {
         let interface_clone = interface.clone();
         let protocol_clone = protocol.clone();
         tokio::task::spawn_blocking(move || {
-            let open_capture = || -> Result<pcap::Capture<pcap::Active>> {
+            let open_capture = || -> Result<(pcap::Capture<pcap::Active>, LinkType, bool)> {
                 let device = Self::find_device(&interface_clone)
                     .with_context(|| format!("no such capture device '{}'", interface_clone))?;
+                let loopback = device.flags.is_loopback();
 
                 let mut cap = Capture::from_device(device)
                     .map(|c| c.promisc(true).snaplen(65535).timeout(1000))
@@ -159,13 +180,21 @@ impl DataLinkServer {
                         .with_context(|| format!("invalid BPF filter '{}'", filter_str))?;
                 }
 
-                Ok(cap)
+                let link = LinkType::from_dlt(cap.get_datalink().0);
+                Ok((cap, link, loopback))
             };
 
-            let mut cap = match open_capture() {
-                Ok(cap) => {
+            let (mut cap, link_type, loopback) = match open_capture() {
+                Ok(opened) => {
+                    console_info!(
+                        status_tx,
+                        "DataLink capture on {} has link type {}{}",
+                        interface_clone,
+                        opened.1.name(),
+                        if opened.2 { " (loopback)" } else { "" }
+                    );
                     let _ = ready_tx.send(Ok(()));
-                    cap
+                    opened
                 }
                 Err(e) => {
                     console_error!(status_tx, "DataLink capture startup failed: {:#}", e);
@@ -240,7 +269,7 @@ impl DataLinkServer {
                             let full_len = data.len();
                             let event = Event::new(
                                 &DATALINK_PACKET_CAPTURED_EVENT,
-                                packet_event_data(&data),
+                                packet_event_data_for_link(&data, link_type, loopback),
                             );
 
                             debug!("Datalink calling LLM for packet ({} bytes)", full_len);

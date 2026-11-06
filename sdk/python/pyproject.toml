@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "netget-fixture"
+version = "0.1.0"
+description = "Start NetGet as a mock service in a test, wait until it is listening, get the bound addresses."
+requires-python = ">=3.8"
+license = { text = "AGPL-3.0-or-later" }
+# Standard library only. pytest is needed only for the optional plugin.
+dependencies = []
+# Not published to PyPI: install from a checkout with `pip install ./sdk/python`.
+classifiers = ["Private :: Do Not Upload"]
+
+[project.optional-dependencies]
+pytest = ["pytest>=7"]
+
+[project.entry-points.pytest11]
+# Installing the package makes the `netget` fixture available without `-p`.
+netget = "netget_fixture.pytest_plugin"
+
+[tool.setuptools]
+packages = ["netget_fixture"]

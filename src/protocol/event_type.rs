@@ -203,13 +203,29 @@ impl EventType {
     /// nothing for the events that already carry a real one. `tests/placeholder_examples_test.rs`
     /// asserts no registered protocol renders a placeholder through this path.
     pub fn effective_response_example(&self) -> JsonValue {
+        self.effective_response_example_from(&[])
+    }
+
+    /// [`Self::effective_response_example`], deriving from `offered` — the protocol actions
+    /// the role offers this event beyond its own list
+    /// (`crate::protocol::docs::example_fallback_actions`) — before falling back to
+    /// `notify_operator`.
+    ///
+    /// The documentation renderers pass it. Most client events attach no actions (a client
+    /// offers its whole action set on every event), so without it every such event was
+    /// documented as answered by a note to the operator — `tcp_data_received` on the tcp
+    /// client among them — when the client's real answer is `send_tcp_data`.
+    pub fn effective_response_example_from(&self, offered: &[ActionDefinition]) -> JsonValue {
         if !Self::is_placeholder(&self.response_example) {
             return self.response_example.clone();
         }
-        if let Some(action) = self.actions.first() {
-            if !Self::is_placeholder(&action.example) {
-                return action.example.clone();
-            }
+        if let Some(action) = self
+            .actions
+            .iter()
+            .chain(offered)
+            .find(|a| !Self::is_placeholder(&a.example))
+        {
+            return action.example.clone();
         }
         serde_json::json!({
             "type": crate::llm::actions::common::NOTIFY_OPERATOR,

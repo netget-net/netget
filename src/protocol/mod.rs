@@ -15,6 +15,7 @@ pub mod event_logger;
 pub mod event_type;
 pub mod log_template;
 pub mod metadata;
+pub mod name_match;
 pub mod server_registry;
 pub mod spawn_context;
 

@@ -100,24 +100,23 @@ Always respond quickly with these standard capabilities."#;
     // is deliberate: advertising `unbundle` invites a push that gets a 403, and advertising
     // `bundle2` makes a real hg client negotiate a format this server never speaks. The mock
     // above asks for eight capabilities precisely so this asserts the filtering.
-    for supported in ["branchmap", "getbundle", "listkeys"] {
+    for supported in [
+        "batch",
+        "branchmap",
+        "getbundle",
+        "known",
+        "listkeys",
+        "lookup",
+    ] {
         assert!(
-            body.contains(supported),
+            body.lines().any(|line| line == supported),
             "should advertise the supported capability {supported:?}, got {body:?}"
         );
     }
 
-    // This test used to assert `batch`, which this server does not implement. Advertising it
-    // would make hg use the batch protocol and fail, so the assertion was wrong rather than the
-    // server — the filter is the behaviour worth pinning.
-    for unsupported in [
-        "batch",
-        "unbundle",
-        "pushkey",
-        "lookup",
-        "known",
-        "httpheader",
-    ] {
+    // `unbundle` and `pushkey` invite a push this server refuses; `httpheader` would move the
+    // arguments into headers this server does not read.
+    for unsupported in ["unbundle", "pushkey", "httpheader"] {
         assert!(
             !body.contains(unsupported),
             "must not advertise {unsupported:?}, which this server cannot honour, got {body:?}"

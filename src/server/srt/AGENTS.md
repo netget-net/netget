@@ -1,4 +1,4 @@
-# SRT listener — Experimental
+# SRT listener — Beta
 
 srt-tokio 0.4.4 (pure Rust: the induction/conclusion handshake, ARQ with NAK and
 retransmission, TSBPD, too-late drop, optional AES-128 with `passphrase`) carries the
@@ -26,3 +26,14 @@ The handler answers `srt_connect` (stream ID, resource, mode, user, remote) with
 Not implemented: rendezvous, bidirectional mode, FEC, bonding, file (non-live) mode. MediaMTX's
 gosrt refuses srt-tokio's SRT 1.3 handshake in both directions, so MediaMTX cannot exchange SRT
 with NetGet.
+
+## Maturity: Beta
+
+`tests/server/srt/peer_test.rs` drives libsrt's `srt-live-transmit` (1.5.7 here; Ubuntu's
+`srt-tools` in the `srt-pairs` job), which shares no code with srt-tokio: one caller publishes a
+paced H.264/AAC MPEG-TS stream, a second reads it back and ffprobe finds both elementary
+streams, a forbidden resource is refused in the handshake (libsrt prints the rejection), and
+the publisher's closing statistics cover what was relayed. It fails rather than skips without
+libsrt. `srt_send_text` is exercised only against NetGet's own reader (`wire_test.rs`), and
+the `passphrase` (AES-128) by no test at all. Not Stable: one client (MediaMTX's gosrt refuses
+srt-tokio's SRT 1.3 handshake, so it cannot be the second), no pcap oracle and no fuzz target.

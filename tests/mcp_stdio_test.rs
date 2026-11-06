@@ -427,6 +427,94 @@ async fn protocol_docs_describe_the_mcp_surface() {
     client.cancel().await.expect("shutdown");
 }
 
+/// A protocol is looked up by its name, never by the closest substring. `mptcp` used to return
+/// TCP's page headed "`mptcp` — MCP reference" with `"protocol": "mptcp"` in its arguments, as if
+/// MPTCP were a protocol of its own; it is an alias of `tcp`, and the page now says so, under
+/// the canonical name, with how to turn MPTCP on.
+#[tokio::test]
+async fn protocol_docs_resolve_names_exactly() {
+    let client = connect().await;
+
+    let docs = call(
+        &client,
+        "get_protocol_docs",
+        serde_json::json!({ "protocol": "mptcp" }),
+    )
+    .await;
+    assert_ne!(
+        docs.is_error,
+        Some(true),
+        "mptcp is a declared alias of tcp"
+    );
+    let text = text_of(&docs);
+    assert!(text.starts_with("# `tcp` — MCP reference"), "{text}");
+    assert!(text.contains("`mptcp` is an alias of `tcp`"), "{text}");
+    assert!(
+        text.contains("\"multipath\": true"),
+        "the alias note says how: {text}"
+    );
+    assert!(
+        text.contains("- `protocol` (string, **required**) — `\"tcp\"`"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("`\"mptcp\"`"),
+        "never offered as a protocol value: {text}"
+    );
+    assert!(
+        text.contains("- `multipath`"),
+        "the parameter is documented: {text}"
+    );
+
+    // The tcp client's events document their fields and answer with the client's own actions.
+    let client_part = &text[text.find("## Client").expect("client section")..];
+    assert!(
+        !client_part.contains("(no documented fields)"),
+        "{client_part}"
+    );
+    assert!(!client_part.contains("show_message"), "{client_part}");
+
+    // Not a name: an error with a suggestion, not TCP.
+    for input in ["mptcpx", "a tcp server"] {
+        let missing = call(
+            &client,
+            "get_protocol_docs",
+            serde_json::json!({ "protocol": input }),
+        )
+        .await;
+        assert_eq!(missing.is_error, Some(true), "{input:?} must not resolve");
+        let msg = text_of(&missing);
+        assert!(msg.contains("not found"), "{msg}");
+    }
+    let suggested = call(
+        &client,
+        "get_protocol_docs",
+        serde_json::json!({ "protocol": "a tcp server" }),
+    )
+    .await;
+    assert!(
+        text_of(&suggested).contains("Did you mean 'tcp'"),
+        "{}",
+        text_of(&suggested)
+    );
+
+    // start_server refuses a near miss instead of starting whatever it contains.
+    let started = call(
+        &client,
+        "start_server",
+        serde_json::json!({ "protocol": "zztcpzz", "port": 0 }),
+    )
+    .await;
+    assert_eq!(started.is_error, Some(true), "{}", text_of(&started));
+    assert!(
+        text_of(&started).contains("Unknown protocol"),
+        "{}",
+        text_of(&started)
+    );
+
+    client.cancel().await.expect("shutdown");
+}
+
 /// `send_first` must actually reach the protocol: a TCP server started with it speaks first, the
 /// same server without it does not, and a `send_first` server whose greeting failed closes the
 /// connection because the greeting was owed.

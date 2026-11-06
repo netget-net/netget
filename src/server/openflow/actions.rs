@@ -429,7 +429,8 @@ pub static FLOW_REMOVED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "openflow_flow_removed",
         "A flow installed with the send_flow_rem flag was removed",
-        json!({"type": "openflow_drop_packet", "reason": "nothing to do"}),
+        // Nothing has to answer a removal; drop_packet is for a packet-in and is not offered.
+        json!({"type": "append_to_log", "output_name": "openflow", "content": "flow removed"}),
     )
     .with_parameters(vec![
         p(
@@ -503,7 +504,7 @@ pub static STATS_REPLY_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "openflow_stats_reply",
         "The switch answered openflow_request_stats",
-        json!({"type": "openflow_drop_packet", "reason": "statistics noted"}),
+        json!({"type": "append_to_log", "output_name": "openflow", "content": "statistics noted"}),
     )
     .with_parameters(vec![
         p(
@@ -541,13 +542,12 @@ pub static STATS_REPLY_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     )
 });
 
-pub static ERROR_EVENT: LazyLock<EventType> =
-    LazyLock::new(|| {
-        EventType::new(
+pub static ERROR_EVENT: LazyLock<EventType> = LazyLock::new(|| {
+    EventType::new(
         "openflow_error",
         "The switch refused a message with an OpenFlow ERROR, usually one of yours: fix it and \
          send it again, or give up",
-        json!({"type": "openflow_drop_packet", "reason": "giving up on that flow"}),
+        json!({"type": "append_to_log", "output_name": "openflow", "content": "switch error noted"}),
     )
     .with_parameters(vec![
         p("datapath_id", "string", "The switch's datapath id, 16 hex digits", true),
@@ -566,7 +566,7 @@ pub static ERROR_EVENT: LazyLock<EventType> =
             .with_info("OpenFlow error {error_type}/{error_code}")
             .with_debug("OpenFlow error: {json(.)}"),
     )
-    });
+});
 
 pub fn event_types() -> Vec<EventType> {
     vec![
