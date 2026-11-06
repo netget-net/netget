@@ -104,18 +104,18 @@ with `send_first`) are fixed and live in the [Fixed](#fixed) table, not here.
    end: BLE needs an adapter, WireGuard needs root and a backend. WireGuard is `Experimental`.
 3. **`pgwire` malformed-query panic (item 77)** — upstream; kills one connection task only.
 4. **`AppState` is one `RwLock` over everything (item 23)** — a throughput ceiling.
-5. **The `easy` layer (item 35)** — still present (`src/easy/http`). Finish or delete.
-6. **`REQUIRE_DOCS_FOR_OPEN_ACTIONS` (item 29)** — a hardcoded `false` guarding a gate nobody
-   enables; make it a runtime setting or delete it and its state.
-7. **Linux `-full` release archives with libpcap, Bluetooth and PC/SC (item 54)** — added
+5. **Linux `-full` release archives with libpcap, Bluetooth and PC/SC (item 54)** — added
    beside the unchanged plain ones and documented; nothing has run them yet. Confirm on the
    next tagged release.
 
-8. **Logging long tail.** 111 of 153 server `mod.rs` files use the `Log` facade
-    (`src/logging/emit.rs`); 42 still hand-roll dual logging. Derive with
-    `grep -L 'Log::new\|crate::logging::Log' src/server/*/mod.rs`.
+6. **Logging long tail.** Server dual logging goes through the `Log` facade
+    (`src/logging/emit.rs`, `Log::to(&status_tx).info(…)`). The sites still sending a
+    `[LEVEL]` line by hand are listed, per file, in the baseline of
+    `tests/hand_rolled_dual_logging_ratchet_test.rs`, which may only shrink; nearly all of them
+    are pairs whose file and TUI halves say different things on purpose (error detail in the
+    file, a decision tag or a shortened key on the TUI), so each is a per-protocol decision.
 
-9. **RTP failed the startup smoke test once in CI, and passes otherwise (item 82).** See below.
+7. **RTP failed the startup smoke test once in CI, and passes otherwise (item 82).** See below.
 
 ### Patterns worth auditing for
 
@@ -178,7 +178,8 @@ Delete an entry once its context is no longer useful.
 |---|---|---|
 | 7 — unknown action names silent | (earlier) | `validate_static_action_names` rejects a bogus action at startup |
 | 9 — MCP scheduled-task leak | `82034d3d` | `remove_server()` owns teardown; MCP-surface coverage added so a rewrite cannot silently drop it |
-| 29/50 — dead documentation gate | (earlier) | One gate remains, behind a documented compile-time `false`; the second is gone |
+| 29/50 — dead documentation gate | W18 (November 2026) | `REQUIRE_DOCS_FOR_OPEN_ACTIONS`, both branches it guarded, `ActionExecutionError::DocumentationRequired`, the gated prompt variant and its snapshot, and the mock harness's replay of the retry are deleted. `open_server` / `open_client` are always offered to the operator prompt; the rendered production prompt is byte-identical |
+| 35 — `easy` layer | W18 (November 2026) | Deleted: `src/easy/`, its registry, trait, startup path, AppState instance maps, `prompts/easy_request/`, the `action_helper` hook that ran before deterministic handlers, `--simple` / `--simple-list`, and its tests. It served one protocol (HTTP), had no port or instruction flags, and nothing in scripts, tests, docs or the site invoked it. A saved session that still names an easy wrapper is refused; `"easy": []` still parses |
 | 32 — validator accepted a superset | `272acbc0` | `advertised_user_input_actions()` narrows to what the prompt rendered, mirroring the network-event path |
 | 39 — doc gate broke mocked tests | (earlier) | The retry no longer fires; 35 tests recovered from the `#[ignore]` it caused |
 | 78 — connect events fired only with `send_first` | `527e07f3`, then narrowed | `telnet_connection_opened` is raised for every connection, answered by a zero-action rule on dashboard servers via `EventType::raised_on_every_connection()`. `tcp_connection_opened` and `tls_connection_opened` stay gated on `send_first`, and their event and parameter descriptions now say so: raising them everywhere cost a model call per connection and cut the real-model eval's `tcp` score from 15/15 to 10/15. `socket_file`, `pty` and `stdio` are gated the same way and their `send_first` and connect-event descriptions say so too. |
@@ -393,7 +394,9 @@ dependency for exactly that reason.
 > The MCP `start_server` tool description actively steers callers toward `event_handlers` with
 > script handlers over the LLM path. This code is therefore on the hot path, not a corner case.
 
-### 29. `REQUIRE_DOCS_FOR_OPEN_ACTIONS` is dead configuration **[verified]**
+### 29. `REQUIRE_DOCS_FOR_OPEN_ACTIONS` is dead configuration **[fixed — W18, November 2026]**
+
+> Fixed: the constant, both gated branches and the state only they read are deleted. The text below is the original finding.
 
 `src/events/handler.rs:20` is a hardcoded `const … = false`, so the "model must read the docs
 before it may open a server" gate never engages, while `is_server_docs_read()` /
@@ -413,7 +416,9 @@ what it renders, so e.g. `update_script` is accepted with scripting Off. Permiss
 than broken, but it is the same drift. Clearest at `src/events/handler.rs:611-637` and
 `src/llm/action_helper.rs:143-167`.
 
-### 35. The `easy` layer is a parallel subsystem serving one protocol **[verified]**
+### 35. The `easy` layer is a parallel subsystem serving one protocol **[fixed — W18, November 2026]**
+
+> Fixed: deleted, with `--simple` / `--simple-list`. The text below is the original finding.
 
 `src/easy/` contains exactly one protocol (HTTP, 378 LOC) but carries its own trait, registry
 (`src/protocol/easy_registry.rs`), startup path (`src/cli/easy_startup.rs`), prompt templates

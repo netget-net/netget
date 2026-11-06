@@ -10,7 +10,7 @@
 //! - Easy debugging (server can log all requests)
 
 use super::common::E2EResult;
-use super::mock_config::{MockLlmConfig, HARNESS_ANSWERED_RULE_IDX};
+use super::mock_config::MockLlmConfig;
 use super::mock_matcher::{LlmContext, RequestKind};
 use axum::{
     extract::State,
@@ -205,14 +205,13 @@ fn record_request_fields(
 //   * `src/llm/action_helper.rs`    -> `call_llm_for_client` builds the client-side
 //                                      network-event prompt inline (no template)
 //
-// Sniffing the prompt *body* for protocol/event names does not work, and used
-// to be the bug this module carried: `open_server` forces a
-// `DocumentationRequired` retry whose message embeds the protocol's own
-// documentation, and that documentation lists every event as
-// `### Event: http_request`. The old extractor picked that line up and
-// reported `event_type: Some("http_request")` for the **startup** call, so an
-// `on_event("http_request")` rule answered it with `send_http_response`, the
-// startup path rejected the unknown action, and no server ever started.
+// Sniffing the prompt *body* for protocol/event names does not work: a
+// user-input turn can carry the protocol's own documentation (a
+// `read_documentation` result), which lists every event as
+// `### Event: http_request`. An extractor that picks that line up reports
+// `event_type: Some("http_request")` for the **startup** call, so an
+// `on_event("http_request")` rule answers it with `send_http_response`, the
+// startup path rejects the unknown action, and no server ever starts.
 
 /// Marker sentences emitted only by network-event prompts.
 ///
@@ -230,14 +229,6 @@ const NETWORK_EVENT_TEMPLATE_MARKERS: &[&str] = &[
 const USER_INPUT_TEMPLATE_MARKERS: &[&str] = &[
     "You are an API that interprets user commands",
     "The user wants to start servers, connect clients",
-];
-
-/// Phrases from `ActionExecutionError::DocumentationRequired`
-/// (`src/events/errors.rs`) — the forced read-the-docs retry before the first
-/// `open_server` / `open_client` is allowed through.
-const DOCUMENTATION_RETRY_MARKERS: &[&str] = &[
-    "you must first read the documentation",
-    "you must provide the action again",
 ];
 
 /// The literal user message a scheduled-task run sends
@@ -266,14 +257,6 @@ fn classify_request(template_text: &str, latest_message: &str) -> RequestKind {
 
     if contains_any(template_text, NETWORK_EVENT_TEMPLATE_MARKERS) {
         return RequestKind::NetworkEvent;
-    }
-
-    let latest_lower = latest_message.to_lowercase();
-    if DOCUMENTATION_RETRY_MARKERS
-        .iter()
-        .all(|m| latest_lower.contains(m))
-    {
-        return RequestKind::DocumentationRetry;
     }
 
     if contains_any(template_text, USER_INPUT_TEMPLATE_MARKERS) {
@@ -365,27 +348,6 @@ fn response_shaped_action_names(response_text: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-/// The last assistant turn that carries an `{"actions": [...]}` payload.
-///
-/// Used to satisfy the documentation gate: the retry literally asks the model
-/// to "provide the action again", so replaying its own previous answer is the
-/// correct response and needs no per-test mock rule.
-fn last_assistant_action_payload(messages: &[OllamaMessage]) -> Option<String> {
-    messages.iter().rev().find_map(|m| {
-        if m.role != "assistant" {
-            return None;
-        }
-        let content = m.content.trim();
-        let parsed: serde_json::Value = serde_json::from_str(content).ok()?;
-        let actions = parsed.get("actions")?.as_array()?;
-        if actions.is_empty() {
-            None
-        } else {
-            Some(content.to_string())
-        }
-    })
 }
 
 impl MockOllamaServer {
@@ -651,56 +613,6 @@ async fn handle_chat(
     eprintln!("  instruction: {}", instruction_preview);
     let prompt_preview: String = context.prompt.chars().take(500).collect();
     eprintln!("  prompt preview: {}", prompt_preview);
-
-    // The documentation gate (src/events/handler.rs) forces one extra LLM turn
-    // before the first open_server/open_client succeeds. It is harness
-    // plumbing, not a decision any test models, so answer it centrally by
-    // replaying the model's own previous action — exactly what the retry asks
-    // for ("please confirm your open_server action by providing it again").
-    // No rule is consumed, so per-test `expect_calls` counts stay honest.
-    if context.request_kind == RequestKind::DocumentationRetry {
-        match last_assistant_action_payload(&request.messages) {
-            Some(payload) => {
-                eprintln!(
-                    "📚 Documentation gate detected — replaying previous action (no rule consumed)"
-                );
-                state
-                    .config
-                    .lock()
-                    .await
-                    .record_call(
-                        context.clone(),
-                        HARNESS_ANSWERED_RULE_IDX,
-                        "<harness> documentation gate replay (no rule consumed)".to_string(),
-                    )
-                    .await;
-
-                let response = OllamaChatResponse {
-                    model: request.model,
-                    created_at: chrono::Utc::now().to_rfc3339(),
-                    message: OllamaResponseMessage {
-                        role: "assistant".to_string(),
-                        content: payload,
-                    },
-                    done: true,
-                };
-                return Json(response).into_response();
-            }
-            None => {
-                state
-                    .config
-                    .lock()
-                    .await
-                    .record_harness_diagnostic(
-                        "open_server documentation gate fired but no previous assistant action \
-                         was found to replay; falling back to rule matching. The startup call \
-                         will most likely be answered with the wrong action."
-                            .to_string(),
-                    )
-                    .await;
-            }
-        }
-    }
 
     // Get mock response (using synchronous matching to avoid holding lock across await)
     let (match_result, matched_rule_event_type) = {

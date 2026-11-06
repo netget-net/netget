@@ -14,54 +14,6 @@ use crate::llm::{execute_actions, CommonAction, Server};
 use crate::state::app_state::{AppState, Mode};
 use crate::ui::App;
 
-/// Whether reading the protocol documentation is a precondition for
-/// `open_server` / `open_client`.
-///
-/// This is the *only* switch for that policy. It governs both halves of it:
-///
-/// 1. whether the two actions are offered in the action list at all
-///    (`is_open_server_enabled` / `is_open_client_enabled` below), and
-/// 2. whether the first `open_server` / `open_client` of the process is answered
-///    with `ActionExecutionError::DocumentationRequired` instead of being
-///    executed (see `execute_server_management_action`).
-///
-/// The second half used to be unconditional, which cost a full extra model
-/// round-trip on the first server or client opened by every process while
-/// telling the model nothing it could not already ask for: the handler fetches
-/// the documentation itself and marks the protocol documented *before* raising
-/// the error, so falling through and starting the server loses no information.
-/// It also meant every mocked test had to answer a retry it never asked for.
-///
-/// Note the gate is process-global, not per-protocol: `is_server_docs_read()`
-/// returns `!documented_server_protocols.is_empty()`, so with the flag on it
-/// fires once per process and then never again, whatever protocol comes next.
-///
-/// Deliberately still a `const` rather than a runtime setting: it selects
-/// between two *prompting strategies*, not between two behaviours a user would
-/// want to switch per run — there is no CLI flag, MCP argument or settings key
-/// that would sensibly carry it, and promoting it would mean threading a new
-/// field through `AppState` (and the prompt builder, which reads the docs state
-/// separately) to expose a knob whose `true` side we have measured to be worse.
-/// If it ever needs to vary at runtime, that is the moment to add it to
-/// `Settings`, not before.
-const REQUIRE_DOCS_FOR_OPEN_ACTIONS: bool = false;
-
-/// Whether the operator prompt offers `open_server` and `open_client` right now.
-///
-/// Always both while [`REQUIRE_DOCS_FOR_OPEN_ACTIONS`] is off; with it on, each once its
-/// side's documentation has been read. The prompt builder's default entry point asks this
-/// too, so what a test renders is what an operator's turn renders.
-pub async fn open_actions_enabled(state: &AppState) -> (bool, bool) {
-    if REQUIRE_DOCS_FOR_OPEN_ACTIONS {
-        (
-            state.is_server_docs_read().await,
-            state.is_client_docs_read().await,
-        )
-    } else {
-        (true, true)
-    }
-}
-
 /// Log detailed open_server action summary to the status channel
 fn log_open_server_summary(
     status_tx: &mpsc::UnboundedSender<String>,
@@ -625,29 +577,19 @@ impl EventHandler {
         // Get conversation history from persistent state
         let conversation_history = self.state.get_user_conversation_history().await;
 
-        // Check if open_server/open_client should be enabled based on configuration
-        let (is_open_server_enabled, is_open_client_enabled) =
-            open_actions_enabled(&self.state).await;
-
         // Build system prompt (without user input - that's added as a message)
-        let system_prompt = PromptBuilder::build_user_input_system_prompt_with_docs(
+        let system_prompt = PromptBuilder::build_user_input_system_prompt(
             &self.state,
             protocol_async_actions.clone(),
             conversation_history,
-            is_open_server_enabled,
-            is_open_client_enabled,
         )
         .await;
 
         // Get available actions for retry correction messages
         let selected_mode = self.state.get_selected_scripting_mode().await;
         let scripting_env = self.state.get_scripting_env().await;
-        let mut available_actions = crate::llm::actions::common::get_operator_common_actions(
-            selected_mode,
-            &scripting_env,
-            is_open_server_enabled,
-            is_open_client_enabled,
-        );
+        let mut available_actions =
+            crate::llm::actions::common::get_operator_common_actions(selected_mode, &scripting_env);
         available_actions.extend(get_all_tool_actions(web_search_mode));
         available_actions.extend(protocol_async_actions);
         crate::llm::actions::common::restrict_protocol_lists(
@@ -870,68 +812,6 @@ impl EventHandler {
                 batching,
                 capture,
             } => {
-                // Documentation gate (off by default, see REQUIRE_DOCS_FOR_OPEN_ACTIONS):
-                // when enabled, the first open_server of the process fetches the
-                // protocol documentation and returns DocumentationRequired, which
-                // makes the model retry the same action with the docs in context.
-                if REQUIRE_DOCS_FOR_OPEN_ACTIONS && !self.state.is_server_docs_read().await {
-                    // Fetch documentation for this protocol
-                    use crate::llm::actions::tools::{execute_tool, ToolAction};
-                    let doc_tool = ToolAction::ReadDocumentation {
-                        protocols: vec![protocol.clone()],
-                        protocol: None,
-                    };
-
-                    // Execute the tool to get documentation
-                    let approval_tx = self.state.get_web_approval_channel().await;
-                    let web_search_mode = self.state.get_web_search_mode().await;
-                    let tool_result = execute_tool(
-                        &doc_tool,
-                        approval_tx.as_ref(),
-                        web_search_mode,
-                        Some(&self.state),
-                    )
-                    .await;
-
-                    if tool_result.success {
-                        // Mark docs as read so we don't loop forever
-                        self.state
-                            .mark_server_protocols_documented(&[protocol.clone()])
-                            .await;
-
-                        // Build the original action JSON for reference
-                        let original_action = serde_json::json!({
-                            "type": "open_server",
-                            "mac_address": mac_address,
-                            "interface": interface,
-                            "host": host,
-                            "port": port,
-                            "protocol": protocol,
-                            "send_first": send_first,
-                            "initial_memory": initial_memory,
-                            "instruction": instruction,
-                            "startup_params": startup_params,
-                            "event_handlers": event_handlers,
-                            "scheduled_tasks": scheduled_tasks,
-                            "feedback_instructions": feedback_instructions,
-                        });
-
-                        // Return DocumentationRequired error with the documentation
-                        return Err(ActionExecutionError::DocumentationRequired {
-                            action_type: "open_server".to_string(),
-                            protocol: protocol.clone(),
-                            documentation: tool_result.result,
-                            original_action,
-                        });
-                    } else {
-                        // If documentation fetch fails, log warning but proceed
-                        let _ = status_tx.send(format!(
-                            "[WARN] Failed to fetch documentation for {}: {}. Proceeding anyway.",
-                            protocol, tool_result.result
-                        ));
-                    }
-                }
-
                 // Log detailed summary of the open_server action
                 log_open_server_summary(
                     status_tx,
@@ -1341,64 +1221,6 @@ impl EventHandler {
                 batching,
                 capture,
             } => {
-                // Documentation gate (off by default, see REQUIRE_DOCS_FOR_OPEN_ACTIONS):
-                // when enabled, the first open_client of the process fetches the
-                // protocol documentation and returns DocumentationRequired, which
-                // makes the model retry the same action with the docs in context.
-                if REQUIRE_DOCS_FOR_OPEN_ACTIONS && !self.state.is_client_docs_read().await {
-                    // Fetch documentation for this protocol
-                    use crate::llm::actions::tools::{execute_tool, ToolAction};
-                    let doc_tool = ToolAction::ReadDocumentation {
-                        protocols: vec![protocol.clone()],
-                        protocol: None,
-                    };
-
-                    // Execute the tool to get documentation
-                    let approval_tx = self.state.get_web_approval_channel().await;
-                    let web_search_mode = self.state.get_web_search_mode().await;
-                    let tool_result = execute_tool(
-                        &doc_tool,
-                        approval_tx.as_ref(),
-                        web_search_mode,
-                        Some(&self.state),
-                    )
-                    .await;
-
-                    if tool_result.success {
-                        // Mark docs as read so we don't loop forever
-                        self.state
-                            .mark_client_protocols_documented(&[protocol.clone()])
-                            .await;
-
-                        // Build the original action JSON for reference
-                        let original_action = serde_json::json!({
-                            "type": "open_client",
-                            "protocol": protocol,
-                            "remote_addr": remote_addr,
-                            "instruction": instruction,
-                            "startup_params": startup_params,
-                            "initial_memory": initial_memory,
-                            "event_handlers": event_handlers,
-                            "scheduled_tasks": scheduled_tasks,
-                            "feedback_instructions": feedback_instructions,
-                        });
-
-                        // Return DocumentationRequired error with the documentation
-                        return Err(ActionExecutionError::DocumentationRequired {
-                            action_type: "open_client".to_string(),
-                            protocol: protocol.clone(),
-                            documentation: tool_result.result,
-                            original_action,
-                        });
-                    } else {
-                        // If documentation fetch fails, log warning but proceed
-                        let _ = status_tx.send(format!(
-                            "[WARN] Failed to fetch documentation for {}: {}. Proceeding anyway.",
-                            protocol, tool_result.result
-                        ));
-                    }
-                }
-
                 let prepared_tasks = crate::state::task::prepare_tasks(
                     scheduled_tasks.as_deref(),
                     crate::state::task::TaskScope::Global,

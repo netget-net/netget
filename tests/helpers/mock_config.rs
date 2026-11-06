@@ -741,11 +741,6 @@ pub fn report_unverified_on_drop(kind: &str, mock_config: &MockLlmConfig) {
     eprintln!("⚠️  WARNING: {message}");
 }
 
-/// Sentinel `matched_rule_idx` for calls the mock harness answered itself
-/// (currently only the forced `open_server` documentation retry). Such calls
-/// consume no rule and count against no `expect_calls`.
-pub const HARNESS_ANSWERED_RULE_IDX: usize = usize::MAX;
-
 /// Record of a mock LLM call
 #[derive(Clone)]
 pub struct MockCallRecord {
@@ -760,11 +755,7 @@ pub struct MockCallRecord {
 impl MockCallRecord {
     /// Human-readable label for what answered this call.
     pub fn rule_label(&self) -> String {
-        if self.matched_rule_idx == HARNESS_ANSWERED_RULE_IDX {
-            "<harness>".to_string()
-        } else {
-            format!("rule #{}", self.matched_rule_idx)
-        }
+        format!("rule #{}", self.matched_rule_idx)
     }
 
     /// One-line summary for failure output.

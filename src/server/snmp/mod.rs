@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, warn};
 
 // SNMP protocol support
 use rasn::{ber, types::Integer};
@@ -18,6 +18,7 @@ use rasn_snmp::{v1, v2, v2c};
 use crate::llm::action_helper::call_llm;
 use crate::llm::actions::protocol_trait::ActionResult;
 use crate::llm::ollama_client::OllamaClient;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::server::SnmpProtocol;
 use crate::state::app_state::AppState;
@@ -447,10 +448,8 @@ impl SnmpServer {
                             }
                             let event = Event::new(&SNMP_REQUEST_EVENT, data);
 
-                            debug!("SNMP calling LLM for request from {}", peer_addr);
-                            let _ = status_clone.send(format!(
-                                "[DEBUG] SNMP calling LLM for request from {}",
-                                peer_addr
+                            Log::to(&status_clone).debug(format!(
+                                "SNMP calling LLM for request from {}", peer_addr
                             ));
 
                             // Call LLM
@@ -467,16 +466,11 @@ impl SnmpServer {
                                 Ok(execution_result) => {
                                     // Display messages from LLM
                                     for message in &execution_result.messages {
-                                        info!("{}", message);
-                                        let _ = status_clone.send(format!("[INFO] {}", message));
+                                        Log::to(&status_clone).info(message);
                                     }
 
-                                    debug!(
+                                    Log::to(&status_clone).debug(format!(
                                         "SNMP got {} protocol results",
-                                        execution_result.protocol_results.len()
-                                    );
-                                    let _ = status_clone.send(format!(
-                                        "[DEBUG] SNMP got {} protocol results",
                                         execution_result.protocol_results.len()
                                     ));
 
@@ -551,13 +545,8 @@ impl SnmpServer {
                                                         );
                                                     } else {
                                                         // DEBUG: Log summary
-                                                        debug!(
+                                                        Log::to(&status_clone).debug(format!(
                                                             "SNMP sent {} bytes to {}",
-                                                            snmp_response.len(),
-                                                            peer_addr
-                                                        );
-                                                        let _ = status_clone.send(format!(
-                                                            "[DEBUG] SNMP sent {} bytes to {}",
                                                             snmp_response.len(),
                                                             peer_addr
                                                         ));
@@ -568,10 +557,8 @@ impl SnmpServer {
                                                             .map(|b| format!("{:02X}", b))
                                                             .collect::<Vec<_>>()
                                                             .join(" ");
-                                                        trace!("SNMP sent (hex): {}", hex_dump);
-                                                        let _ = status_clone.send(format!(
-                                                            "[TRACE] SNMP sent (hex): {}",
-                                                            hex_dump
+                                                        Log::to(&status_clone).trace(format!(
+                                                            "SNMP sent (hex): {}", hex_dump
                                                         ));
 
                                                         let _ = status_clone.send(format!(

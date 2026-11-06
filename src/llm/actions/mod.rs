@@ -5,7 +5,6 @@
 
 pub mod client_trait;
 pub mod common;
-pub mod easy_trait;
 pub mod executor;
 pub mod protocol_trait;
 pub mod summary;
@@ -21,8 +20,6 @@ pub use common::{
     generate_base_stack_documentation, get_network_event_common_actions,
     get_user_input_common_actions,
 };
-pub use easy_trait::Easy;
-// Export the Easy trait
 pub use protocol_trait::{Protocol, Server};
 // Export StartupExamples for protocol implementations
 pub use summary::{summarize_action, summarize_actions};
