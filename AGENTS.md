@@ -1858,8 +1858,24 @@ concluding there's a bug.
 `netget.log`, and `status_tx.send()` → TUI/MCP status stream. Levels: ERROR critical, WARN
 non-fatal, INFO lifecycle, DEBUG summaries, TRACE full payloads.
 
-Every status/event channel is an **unbounded** `mpsc` — there is no backpressure anywhere.
-Don't add high-frequency per-byte messages to these channels.
+The status channel is an unbounded `mpsc` on the sending side, so no protocol task ever waits
+on the UI, and it is **bounded where it is drained**: the dashboard and the CLI forwarders take
+everything queued in one go (`logging::status_drain::drain_queued`), keep 500 lines per frame
+(1 000 per CLI write batch) and drop and count the rest behind one `[WARN]` notice. A flood
+costs lines on screen, never memory or a frozen UI; `netget.log` has every line. Still don't
+add per-byte messages — a dropped line is one the operator never sees.
+
+**Per-connection writer channels are bounded where a peer could grow them.** A stream server
+that funnels a connection's writes through one writer task uses `utils::outbox` (4096 frames or
+8 MiB, Redis's pub/sub client limit): a peer that stops reading while it is answered, broadcast
+to or relayed to is cut off — what is queued is abandoned and nothing more is written to it,
+until it or a read deadline ends the connection — never queued for, and never carried on with
+a frame missing.
+`mqtt`, `amqp`, `bgp`, `websocket`, `nostr`, `webrtc`, `webrtc_signaling`, `guacamole`,
+`tor_relay` and the `libp2p` yamux session use it; `redis` pub/sub has its own 8 MiB limit.
+Use it for any new writer task. The other unbounded channels are operator-paced, startup-only,
+have their receiver dropped, or are limited upstream (a flow-control window, one request in
+flight); `docs/planning/IMPROVEMENTS.md` item 23 has the census and the sites still open.
 
 ## Scheduled tasks
 
@@ -2484,7 +2500,22 @@ Read before assuming a subsystem is sound:
   Each such child is now held in `utils::task_guard::AbortOnDrop` and awaited as `guard.0`.
   `tests/stop_server_stops_connections_test.rs` asserts it from the peer's side, for PostgreSQL
   after a completed handshake and (with `libusb`) for every USB server.
-- `AppState` is one global `RwLock` over everything — a throughput ceiling, not a deadlock.
+- **`AppState` keeps most state behind one tokio `RwLock`, and per-event bookkeeping is kept
+  out of it.** `tests/app_state_contention_test.rs` (ignored; run it with `--ignored
+  --nocapture`) drives N connections through a static-handler TCP server, alone and beside
+  the dashboard's `build_snapshot` and MCP-style `list_servers` / `list_access_logs` polling.
+  It measured a ceiling of about 5 000–7 000 requests a second (debug build) reached at 16
+  connections, with latency then growing with the connection count: five write acquisitions
+  per request, and writers waiting on the lock's queue handoff far longer than anyone held it.
+  A 10 Hz dashboard costs nothing measurable; back-to-back readers did, because
+  `list_access_logs` copied the whole ring under the lock (~1 ms). Connection counters
+  (`update_connection_stats`), the access log and the server task registry now have locks of
+  their own (`tests/app_state_off_lock_test.rs` pins their consistency), and a request on that
+  server takes the main lock once for writing (its history entry, rendered beforehand) and
+  reads it three times. Readers polling back to back cost about half what they did. Model-
+  driven traffic never comes near the ceiling: one model call per event is far slower than
+  the lock. **Prefer `with_server` over `with_server_mut` for reads**, and keep anything a
+  protocol does per message off the write lock.
 - Keep the repository root focused on `README.md`, `AGENTS.md`, the license and build
   entry points. User documentation is indexed in `docs/README.md`: installation guides in
   `docs/guides/`, living backlogs and protocol plans in `docs/planning/`, and superseded
