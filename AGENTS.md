@@ -1353,8 +1353,9 @@ for the new commit. Pushing does not authorize dispatching workflows.
 **Run hosted validation only when the user requests it or as part of explicitly authorized
 release validation.** Do not dispatch after every task to recreate the removed automatic
 workload. The default manual run uses the core PR checks; `extended=true` also selects
-`clippy-wide`, `registry-audit`, and `smb-evidence`. The first two remain advisory and SMB
-remains blocking when selected. For automatic PR checks, inspect the run for the PR's current
+`clippy-wide`, `registry-audit`, and `smb-evidence`. `clippy-wide` is advisory;
+`registry-audit` and `smb-evidence` are blocking when selected (`registry-audit` keeps a
+named set of advisory evidence groups inside it, described below the table). For automatic PR checks, inspect the run for the PR's current
 head commit rather than an older green result. For an authorized hosted run, push the intended
 commit, dispatch against its branch or tag, and verify the resulting run's `headSha` equals
 that intended commit before using the result:
@@ -1382,13 +1383,30 @@ other hundred. The jobs marked *manual* below run only on a requested manual dis
 | `wasm-web` | yes | Browser bundle build and smoke exchanges |
 | `orphaned-tests` | yes | Fails if a test directory on disk is undeclared in `mod.rs` |
 | `clippy-wide` | **no** (`continue-on-error`), *manual* | Clippy with the default features, the system-library protocols included |
-| `registry-audit` | **no** (`continue-on-error`), *manual* | Registry audits and all-feature real-client/server evidence, with their external peers installed |
+| `registry-audit` | yes, *manual* (advisory evidence groups inside it) | Registry audits and all-feature real-client/server evidence, with their external peers installed |
 
-The broad registry audit has separate compilation and execution budgets, a five-minute
-limit per evidence group, and a summary/artifact step that preserves partial results after
-an interrupted evidence step. Each group must run at least one passing test. Its job still
-reports green on test failures, so **a green workflow is not evidence the audit passed**: inspect
-the evidence summary and step outcome. SMB's Stable evidence has a separate blocking job.
+`registry-audit` compiles `--all-features` once and runs everything from those binaries. The
+registry audits, the evidence compilation, the **blocking evidence groups** and the Nostr
+Chromium exchange fail the job. The **advisory evidence groups** run in a separate
+`continue-on-error` step from the same binaries, each listed in `ci.yml` with the reason it
+cannot block:
+
+| Advisory group | Why |
+|---|---|
+| `redis::resp3_test`, `redis::pubsub_test`, `redis::cluster_test`, `redis::keys_oracle_test`, `client/redis::cluster_real_server_test` | Peer too old: ubuntu-22.04 ships Redis 6.0.16 (no `cluster-port`, a different `redis-cli -3` transcript). All five pass, blocking, in `Test (suites)` on ubuntu-24.04 with Redis 7 |
+| `client/nats::e2e_test` | Known flake: the test connects when `nats-server` logs "Listening for client connections", before the listener accepts; 4 of 30 runs got "Connection refused" |
+
+The split was measured: every blocking group, the audits and the browser exchange passed in
+all 30 runs between 2026-10-15 and 2026-10-29 that reached the evidence loop. Every group has
+a five-minute limit and must run at least one passing test; a peer whose install step fails
+surfaces as its group's failure. The Beta evidence table step is a report, not a verdict, and
+stays `continue-on-error` (its blocking half is `--check` in `ratchets`). The summary step runs
+after any failure or interruption, publishes both tiers and the blocking step outcomes, uploads
+the logs as the `real-client-evidence` artifact, and fails the job when any blocking part did
+not pass — including a blocking loop cut off before it finished. **A green `registry-audit` job
+means every blocking group passed; it says nothing about the advisory groups**, which are in
+the run summary. Promote an advisory group to the blocking list once its cause is fixed and it
+has passed on the runner. SMB's Stable evidence has a separate blocking job.
 
 Derive the current job list from `.github/workflows/ci.yml` instead of trusting a remembered
 count (matrix shards create multiple job executions):
@@ -2227,9 +2245,9 @@ Read before assuming a subsystem is sound:
   ```
 
   What *is* true of AMQP is true of 110 other protocols: the blocking `test` job compiles six
-  features, so it runs none of their evidence. `registry-audit` compiles everything and is
-  `continue-on-error`, so a green PR is not evidence that any of it passed. That is the general
-  gap, not a property of lapin.
+  features, so it runs none of their evidence. `registry-audit` compiles everything but runs
+  only on a manual extended dispatch, so a green PR is not evidence that any of it passed. That
+  is the general gap, not a property of lapin.
 
 - **`nfsserve` 0.10.2 has a pre-auth remote DoS, and the fix is a guard on our side of the
   socket.** It resizes buffers from a wire-supplied 31/32-bit length with no cap, so a

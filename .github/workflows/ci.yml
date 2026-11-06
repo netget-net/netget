@@ -168,9 +168,9 @@ jobs:
   # Every ratchet in this job reads the SOURCE TREE rather than walking a registry, so each
   # one covers all ~137 server and ~98 client protocols at *any* feature set. That is what
   # makes them blocking: `registry-audit` below has to compile `--all-features` and install
-  # five system libraries to see the whole tree, so it is advisory and, being
-  # continue-on-error, reports green regardless of outcome. These need one protocol feature
-  # and nothing else, and they fail the build.
+  # five system libraries to see the whole tree, so it runs only on a manual dispatch with
+  # extended=true and never on a pull request. These need one protocol feature and nothing
+  # else, and they fail every build.
   #
   # The distinction matters because the six-protocol `test` job covers 6 of 116 — a green PR
   # says nothing about the other 110 — and every defect class these encode was found in
@@ -244,7 +244,7 @@ jobs:
 
       # BLOCKING, and it belongs here rather than in `registry-audit`: the script reads
       # source only, so it needs no build, no features and no binaries — and
-      # `registry-audit` is `continue-on-error`, where a green result proves nothing.
+      # `registry-audit` runs only on a manual extended dispatch, never on a pull request.
       #
       # `--check` fails only on what a static read can be *sure* of: a Beta whose peer is
       # only a circular crate, only a generic HTTP library, or absent entirely; a
@@ -305,14 +305,21 @@ jobs:
           cargo check --manifest-path fuzz/Cargo.toml --all-targets
 
   registry-audit:
-    name: Registry-wide audits (--all-features, advisory)
+    name: Registry-wide audits and real-client evidence (--all-features)
     # Manual runs with extended=true only: too heavy for routine core validation.
     if: github.event_name == 'workflow_dispatch' && inputs.extended
     runs-on: ubuntu-22.04
     # The previous 45-minute budget expired during SMB after 45 passing groups.
     # Leave room for cold compilation, every evidence group, and artifact upload.
     timeout-minutes: 120
-    continue-on-error: true
+    # BLOCKING. The registry audits, the all-feature evidence build, the blocking evidence
+    # groups and the Nostr browser exchange fail the job; the advisory evidence groups and the
+    # Beta evidence table are step-level `continue-on-error`. Every test step after the first
+    # runs under `!cancelled()`, so one failing blocking step does not hide the evidence of
+    # the steps after it, and the summary step fails the job when a blocking group did not
+    # pass. The blocking/advisory split comes from the 30 runs between 2026-10-15 and
+    # 2026-10-29 that reached the evidence loop: every blocking group passed in all 30.
+    #
     # At 273 protocol features the --all-features test build was killed mid-compile
     # (SIGTERM from the runner's memory-pressure killer). Debug info is most of what
     # rustc and the linker hold for it, and these audits never read a backtrace's line
@@ -464,14 +471,13 @@ jobs:
       #                  available from the repositories [local, netget-under-test]" - the
       #                  tail is not in that list at all. See the warm-up step below.
       #
-      # `continue-on-error` on THIS step, deliberately. An unavailable package used to abort
-      # the whole job at its fifth step, so no audit and no evidence ran at all and the job
-      # still reported green (it is `continue-on-error` at the job level). That is exactly
-      # what happened between 2026-09-16 and 2026-09-22: `stuntman-client` is not in any
-      # current Ubuntu release, apt exited 100, and this job ran nothing for six days.
-      # A client that cannot be installed must surface as its own NAMED evidence failure in
-      # the loop at the foot of this job - never as forty protocols' evidence silently not
-      # running.
+      # `continue-on-error` on THIS step, deliberately. Without it an unavailable package stops
+      # the job here, so no audit and no evidence runs at all. That is exactly what happened
+      # between 2026-09-16 and 2026-09-22: `stuntman-client` is not in any current Ubuntu
+      # release, apt exited 100, and this job ran nothing for six days. A client that cannot
+      # be installed must surface as its own NAMED evidence failure in the loops at the foot
+      # of this job - blocking when its group is blocking - never as forty protocols'
+      # evidence silently not running.
       - name: Install the third-party clients the real-client tests drive
         continue-on-error: true
         # slapd's postinst asks debconf for a domain and an admin password; without this the
@@ -1005,11 +1011,12 @@ jobs:
       # that every protocol can actually be started through the real startup path,
       # reports an honest status, and releases its socket on stop. That last one is the
       # only job here that runs protocol code rather than reading its declarations.
+      # BLOCKING: it passed in all 30 runs between 2026-10-15 and 2026-10-29.
       - name: cargo test --all-features (registry audits)
-        continue-on-error: true
+        id: registry-audits
         timeout-minutes: 40
         run: |
-          echo "::notice::Advisory only. Covers all registered protocols, not just CI_FEATURES."
+          echo "::notice::Covers all registered protocols, not just CI_FEATURES."
           # --no-fail-fast: without it one failing target hides every target after it, which is
           # how a CalDAV keyword clash silently cut this audit short for weeks.
           cargo test --locked --all-features --no-fail-fast \
@@ -1028,56 +1035,50 @@ jobs:
       # no binaries — but it is here because this is the job that is about ratings.
       # Advisory: a Beta whose peer this scan cannot find may be over-rated OR may be
       # driving its client in a way a static read cannot see, and the script says so
-      # rather than guessing.
+      # rather than guessing. The blocking half of it is `--check` in `ratchets`.
       - name: Beta evidence table
+        if: ${{ !cancelled() }}
         continue-on-error: true
         run: |
           echo "::notice::Generated from source. CLAUDE.md's hand-maintained list has been wrong three times."
           python3 scripts/beta_evidence_table.py --all
           python3 scripts/beta_evidence_table.py --experimental-with-evidence
 
-      # `mercurial` and `wol` are Experimental, so strictly they need not be here; they are
-      # because the test exists, is not #[ignore]d, and costs a few seconds. `ollama` is the
-      # reason the three were noticed at all — a Beta whose real-client test this loop did not
-      # run, which is the hole the loop exists to close, found by diffing
-      # `tests/server/*/real_client_test.rs` against this list rather than by reading it.
+      # The real-client evidence itself. These are the tests every Beta rating that names a
+      # binary rests on, and this is the only job with those binaries, so it is the only place
+      # they can run. Each one fails (never skips) when its client is missing, so a passing
+      # group means the client really was driven.
       #
-      # The real-client evidence itself. These are the tests every Beta rating that
-      # names a binary rests on, and this is the only job with those binaries, so it
-      # is the only place they can run. Each one fails (never skips) when its client
-      # is missing, so a green run here means the client really was driven.
-      # Still advisory, but it now reports an honest verdict. It previously swallowed
-      # failures TWICE - `continue-on-error` on the job and `|| echo ::warning::` on each
-      # filter - so the step went green even when a real client had failed outright. That
-      # defeats the point of converting these gates from skip-to-fail: the whole reason a
-      # missing client is now an error is so somebody learns about it.
-      #
-      # The loop still runs every filter rather than stopping at the first failure, because
-      # one run should tell you everything that is broken. It just remembers, and exits
-      # non-zero at the end.
-      #
-      # The broad audit remains advisory until it has completed cleanly three times.
-      # Making it blocking requires removing BOTH the job and step continue-on-error.
-      # SMB has its own blocking job below so its Stable evidence cannot hide here.
+      # One compilation serves both evidence steps below: each group re-invokes
+      # `cargo test --test server|client`, which finds the binaries this step built and only
+      # runs them. Status files live outside the checkout (EVIDENCE_DIR) for the same reason.
+      # Blocking: without the binaries no group can run.
       - name: Compile real-client evidence before starting its execution budget
         id: evidence-build
-        continue-on-error: true
+        if: ${{ !cancelled() }}
         timeout-minutes: 35
         run: cargo test --locked --all-features --test server --test client --no-run
 
-      - name: cargo test --all-features (real-client evidence)
-        if: steps.evidence-build.outcome == 'success'
-        continue-on-error: true
+      # BLOCKING evidence groups: every one passed in all 30 runs between 2026-10-15 and
+      # 2026-10-29 that reached this loop, each with its peer installed by the steps above and
+      # none needing a real model (the runner has none; NetGet's side is mocked or scripted).
+      # The loop runs every group rather than stopping at the first failure, because one run
+      # should tell you everything that is broken; it remembers, and exits non-zero at the end.
+      # A group that times out (five minutes each) or runs zero tests is a failure.
+      #
+      # `mercurial` and `wol` are Experimental, so strictly they need not be here; they are
+      # because the test exists, is not #[ignore]d, and costs a few seconds. `ollama` is the
+      # reason the three were noticed at all — a Beta whose real-client test this loop did not
+      # run, found by diffing `tests/server/*/real_client_test.rs` against this list.
+      #
+      # SMB has its own blocking job below so its Stable evidence cannot hide here.
+      - name: Real-client evidence (blocking groups)
+        id: evidence-blocking
+        if: ${{ !cancelled() && steps.evidence-build.outcome == 'success' }}
         timeout-minutes: 30
         run: |
-          set -o pipefail
-          echo "::notice::These are the real-client tests behind the Beta ratings."
-          # Written to the run summary, not just the log. This job is `continue-on-error`
-          # at JOB level, so it reports green whatever happens inside it — which is how it
-          # sat dead for six days on a missing apt package with nobody noticing, and how a
-          # later `--all-features` build failure did the same. A log nobody opens is not a
-          # signal; the summary is on the run's own page.
-          mkdir -p "$EVIDENCE_DIR"
+          echo "::notice::These are the real-client tests behind the Beta ratings. A failure here fails the job."
+          mkdir -p "$EVIDENCE_DIR/blocking"
           failed=""
           for filter in \
             bolt::real_client_test \
@@ -1095,8 +1096,7 @@ jobs:
             oci_registry::e2e_test ollama::real_client_test openvpn:: \
             postgresql::real_client_test \
             prometheus::real_client_test otlp::real_client_test \
-            pypi::e2e_test quic::independent_peer_test radius::real_client_test redis::real_client_test redis::resp3_test \
-            redis::pubsub_test redis::cluster_test redis::keys_oracle_test \
+            pypi::e2e_test quic::independent_peer_test radius::real_client_test redis::real_client_test \
             rtsp::ffprobe_test s3::real_client_test sip::real_client_test \
             smb::real_client_test statsd::real_client_test graphite::real_client_test \
             sqs::real_client_test ssh::real_client_test stun::real_client_test \
@@ -1112,48 +1112,73 @@ jobs:
             client/memcached::real_server_test client/modbus::real_server_test \
             client/radius::real_server_test \
             client/mqtt::keepalive_test client/mqtt::real_server_test \
-            client/mysql::real_server_test client/nats::e2e_test client/nut::real_server_test \
+            client/mysql::real_server_test client/nut::real_server_test \
             client/postgresql::real_server_test \
             client/quic::real_server_test client/redis::real_server_test \
-            client/redis::pubsub_real_server_test client/redis::cluster_real_server_test \
+            client/redis::pubsub_real_server_test \
             client/ssh::real_server_test client/statsd::real_server_test ; do
             echo "::group::$filter"
-            # `client/<p>::<file>` is a NetGet CLIENT against a real third-party server, run
-            # from the `client` test target; everything else is a real client against a
-            # NetGet server, from `server`.
-            target=server
-            test_filter="$filter"
-            case "$filter" in
-              client/*) target=client ; test_filter="${filter#client/}" ;;
-            esac
-            result_file="$EVIDENCE_DIR/${filter//[:\/]/_}"
-            printf 'running\t%s\n' "$filter" > "$result_file.status"
-            # Each group has a bounded runtime; a stuck client cannot consume the whole
-            # job. pipefail keeps cargo/timeout failure visible through tee. A renamed
-            # filter running zero tests is a failure too, never evidence of success.
-            if timeout --signal=TERM --kill-after=10s 5m \
-                 cargo test --locked --all-features --test "$target" -- \
-                 --test-threads=32 --nocapture "$test_filter" 2>&1 | tee "$result_file.log" \
-                 && grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$result_file.log"; then
-              printf 'passed\t%s\n' "$filter" > "$result_file.status"
-            else
-              printf 'FAILED\t%s\n' "$filter" > "$result_file.status"
-              echo "::error::$filter failed or ran no tests - a Beta rating rests on this test"
-              failed="$failed $filter"
-            fi
+            .github/scripts/run-evidence-group.sh blocking "$filter" || failed="$failed $filter"
             echo "::endgroup::"
           done
-          touch "$EVIDENCE_DIR/complete"
+          touch "$EVIDENCE_DIR/blocking/complete"
           if [ -n "$failed" ]; then
-            echo "::error::real-client evidence failed for:$failed"
+            echo "::error::blocking real-client evidence failed for:$failed"
+            exit 1
+          fi
+
+      # ADVISORY evidence groups, each with the reason it cannot block. They run from the same
+      # binaries and report in the same summary, but their failures are warnings. Promote a
+      # group to the blocking list above once its cause is fixed and it has passed on this
+      # runner; never add a group here to make a red run green.
+      #
+      #   redis::resp3_test, redis::pubsub_test, redis::cluster_test,
+      #   redis::keys_oracle_test, client/redis::cluster_real_server_test
+      #       Peer too old on ubuntu-22.04: jammy's redis-server and redis-cli are 6.0.16, and
+      #       these failed in all 30 runs here. keys_oracle_test's and the client cluster test's
+      #       redis-server refuses Redis 7's `cluster-port` directive ("FATAL CONFIG FILE ERROR
+      #       ... 'cluster-port'"), cluster_test's `redis-cli -c` prints the ASK redirect instead
+      #       of following it, resp3_test's `redis-cli -3` transcript differs from the Redis 7
+      #       one it pins, and pubsub_test's `PUBSUB NUMSUB news` never reaches 2. All five
+      #       pass, BLOCKING, in `Test (suites)` on ubuntu-24.04 (Redis 7.0.15), through
+      #       CI_PROTOCOL_TESTS' server::redis:: and client::redis::.
+      #   client/nats::e2e_test
+      #       Known flake, 26 of 30 runs passed. In the other four,
+      #       test_nats_client_round_trips_through_the_official_nats_server got "Connection
+      #       refused" from nats-server: the test treats its "Listening for client connections"
+      #       log line as readiness and connects before the listener accepts (seen on
+      #       2026-10-21, 10-23, 10-24 and 10-25). Promote it once the test waits for
+      #       "Server is ready" or retries the connect.
+      - name: Real-client evidence (advisory groups)
+        id: evidence-advisory
+        if: ${{ !cancelled() && steps.evidence-build.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 15
+        run: |
+          echo "::notice::Advisory groups. Each one's reason is in the comment above this step in ci.yml."
+          mkdir -p "$EVIDENCE_DIR/advisory"
+          failed=""
+          for filter in \
+            redis::resp3_test redis::pubsub_test redis::cluster_test redis::keys_oracle_test \
+            client/redis::cluster_real_server_test \
+            client/nats::e2e_test ; do
+            echo "::group::$filter"
+            .github/scripts/run-evidence-group.sh advisory "$filter" || failed="$failed $filter"
+            echo "::endgroup::"
+          done
+          touch "$EVIDENCE_DIR/advisory/complete"
+          if [ -n "$failed" ]; then
+            echo "::warning::advisory real-client evidence failed for:$failed"
             exit 1
           fi
 
       # Browser interoperability uses the same all-feature binary and nak installation.
       # A native WebSocket client cannot prove browser CORS or the browser's close handshake.
+      # The install is `continue-on-error` like every peer install above; the exchange is
+      # BLOCKING (it passed in all 30 runs), so a failed install surfaces as its failure.
       - name: Install Chromium for Nostr browser evidence
         id: nostr-browser-setup
-        if: steps.evidence-build.outcome == 'success'
+        if: ${{ !cancelled() && steps.evidence-build.outcome == 'success' }}
         continue-on-error: true
         timeout-minutes: 10
         run: |
@@ -1164,8 +1189,7 @@ jobs:
 
       - name: Nostr real-browser evidence (Chromium)
         id: nostr-browser
-        if: steps.evidence-build.outcome == 'success' && steps.nostr-browser-setup.outcome == 'success'
-        continue-on-error: true
+        if: ${{ !cancelled() && steps.evidence-build.outcome == 'success' }}
         timeout-minutes: 5
         run: |
           set -o pipefail
@@ -1174,9 +1198,13 @@ jobs:
             NETGET_BIN=target/debug/netget node web/test/nostr_browser.mjs \
             2>&1 | tee "$EVIDENCE_DIR/nostr-browser.log"
 
+      # Runs after a failure or a timeout too, so partial results are always published, and
+      # fails the job when any blocking part did not pass - including a blocking loop that was
+      # interrupted before its `complete` marker, which no step outcome would report.
       - name: Summarize real-client evidence even after interruption
         if: always()
         env:
+          REGISTRY_AUDITS: ${{ steps.registry-audits.outcome }}
           EVIDENCE_BUILD: ${{ steps.evidence-build.outcome }}
           NOSTR_BROWSER_SETUP: ${{ steps.nostr-browser-setup.outcome }}
           NOSTR_BROWSER: ${{ steps.nostr-browser.outcome }}
@@ -1283,8 +1311,9 @@ jobs:
       # Every third-party binary the CI_FEATURES test binaries drive. Each of these tests
       # deliberately FAILS rather than skips when its binary is absent - a skip-when-missing
       # gate is a silent pass, not evidence - so this job has to carry them. It is NOT enough
-      # that `registry-audit` installs the same clients: that job is `continue-on-error`, so a
-      # green PR says nothing about it, and this is the only BLOCKING job these tests run in.
+      # that `registry-audit` installs the same clients: that job runs only on a manual
+      # extended dispatch, so a green PR says nothing about it, and this is the only job these
+      # tests run in on a pull request.
       #
       #   dig       bind9-dnsutils  server::dns::dig_test        (ISC BIND)
       #   kdig      knot-dnsutils   server::dns::kdig_test       (Knot - the second resolver)

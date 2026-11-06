@@ -2,9 +2,11 @@
 //!
 //! # Why this exists
 //!
-//! `.github/workflows/ci.yml` has a step whose own header says: *"These are the tests every Beta
-//! rating that names a binary rests on, and this is the only job with those binaries, so it is
-//! the only place they can run."* It drives them by name, in a hand-maintained list.
+//! `.github/workflows/ci.yml`'s `registry-audit` job says of its real-client evidence: *"These are
+//! the tests every Beta rating that names a binary rests on, and this is the only job with those
+//! binaries, so it is the only place they can run."* It drives them by name, in two
+//! hand-maintained `for filter in \` lists — blocking groups and advisory groups — and this file
+//! reads both.
 //!
 //! A hand-maintained list of tests is a list that goes stale, and it did. On 22 September 2026,
 //! diffing `tests/server/*/real_client_test.rs` against that list found **three** absent, and one
@@ -290,8 +292,10 @@ fn every_real_client_test_is_named_in_the_ci_evidence_loop() {
          Add the test to a workflow that provisions its pinned third-party peer. A real-client test outside such a job is \
          evidence nothing exercises — the same hole as a skip-when-missing gate, wearing \
          different clothes.\n\n\
-         Add each to the `for filter in \\` list in the \"real-client evidence\" step, and \
-         install whatever binary it drives in the apt/download steps above it. If it genuinely \
+         Add each to the `for filter in \\` list in the \"Real-client evidence (blocking \
+         groups)\" step once it passes on the runner (the advisory step is for groups with a \
+         recorded reason they cannot block), and install whatever binary it drives in the \
+         apt/download steps above it. If it genuinely \
          cannot run there, add it to NOT_RUN_ANYWHERE with the reason — that list may only \
          shrink.",
         missing.join("\n  ")
@@ -302,8 +306,8 @@ fn every_real_client_test_is_named_in_the_ci_evidence_loop() {
 ///
 /// This is the one that broke the build. `Test` runs the `CI_PROTOCOL_TESTS` suites, so every
 /// real-client test of those protocols *runs* there, hard-failing when
-/// its binary is absent. `registry-audit` having the binary is no help: that job is
-/// `continue-on-error`, so a green PR says nothing about it.
+/// its binary is absent. `registry-audit` having the binary is no help: that job runs only on a
+/// manual dispatch with `extended=true`, so a pull request never runs it.
 #[test]
 fn ci_feature_clients_are_installed() {
     let text = workflow();
