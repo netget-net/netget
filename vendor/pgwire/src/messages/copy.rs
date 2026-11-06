@@ -73,7 +73,10 @@ pub struct CopyFail {
 impl Message for CopyFail {
     #[inline]
     fn message_type() -> Option<u8> {
-        Some(MESSAGE_TYPE_BYTE_COPY_DONE)
+        // NetGet patch (vendor/pgwire/README.md): CopyFail's own tag. Upstream
+        // returns CopyDone's `c`, so an encoded CopyFail reads as a CopyDone with
+        // a body.
+        Some(MESSAGE_TYPE_BYTE_COPY_FAIL)
     }
 
     fn message_length(&self) -> usize {

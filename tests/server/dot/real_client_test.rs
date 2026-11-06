@@ -67,8 +67,12 @@ struct KdigOutput {
 /// a blocking `output()` parks the only worker and stops the harness tasks draining the netget
 /// child's stdout/stderr; the pipes fill, netget blocks inside a log call while serving, and the
 /// client times out against a server that is perfectly correct.
-async fn kdig(port: u16, domain: &str, rtype: &str) -> KdigOutput {
+///
+/// `keylog` is handed to kdig as `SSLKEYLOGFILE`, which GnuTLS honours, so the pcap oracle can
+/// decrypt the session and read the DNS messages inside it.
+async fn kdig(port: u16, domain: &str, rtype: &str, keylog: &std::path::Path) -> KdigOutput {
     let out = Command::new("kdig")
+        .env("SSLKEYLOGFILE", keylog)
         .arg("+tls")
         .arg("+timeout=20")
         .arg("+retry=0")
@@ -138,10 +142,18 @@ async fn kdig_completes_a_dot_query() -> E2EResult<()> {
 
     let server = crate::server::helpers::start_netget_server(dot_server()).await?;
     crate::helpers::wait_for_server_listening(&server, Duration::from_secs(30)).await?;
-    let port = server.port;
+    // kdig reaches the server through a recording relay and logs its TLS secrets, so the pcap
+    // oracle at the end decrypts both sessions and reads the DNS inside them.
+    let (relay, streams) = crate::helpers::recording_relay::tcp_relay(
+        format!("127.0.0.1:{}", server.port).parse().unwrap(),
+    )
+    .await;
+    let port = relay.port();
+    let keys = tempfile::tempdir()?;
+    let keylog = keys.path().join("sslkeylog.txt");
 
     // --- one query, decoded by a third-party resolver ----------------------
-    let first = kdig(port, "alpha.example.com", "A").await;
+    let first = kdig(port, "alpha.example.com", "A", &keylog).await;
     assert!(
         first.success,
         "kdig could not complete a DoT query.\nstdout: {}\nstderr: {}\n\nThis is the first time \
@@ -172,7 +184,7 @@ async fn kdig_completes_a_dot_query() -> E2EResult<()> {
     //
     // One query cannot show an answer routed to the wrong question, because there is only one
     // question to route it to. The distinct address is what makes this assertion mean something.
-    let second = kdig(port, "beta.example.com", "A").await;
+    let second = kdig(port, "beta.example.com", "A", &keylog).await;
     assert!(
         second.success,
         "the second kdig query failed.\nstdout: {}\nstderr: {}",
@@ -188,6 +200,31 @@ async fn kdig_completes_a_dot_query() -> E2EResult<()> {
         "the second reply carried the first query's address:\n{}",
         second.stdout
     );
+
+    // --- the pcap oracle, decrypted -----------------------------------------
+    //
+    // tshark decrypts each session with kdig's key log and hands the plaintext to its `dns`
+    // dissector, which reads the RFC 7858 two-byte length prefix and the message behind it
+    // independently of hickory-proto and of Knot. `require_named("dns")` is what makes this
+    // a check on the server's DNS bytes rather than on the TLS record layer: without
+    // decryption the chain stops at `tls` and the oracle fails. Port 853 is where tshark's
+    // DNS dissector registers for TLS application data.
+    let sessions = crate::helpers::recording_relay::recorded(&streams);
+    assert!(
+        sessions.len() >= 2,
+        "both kdig sessions should have crossed the relay, saw {}",
+        sessions.len()
+    );
+    for chunks in &sessions {
+        crate::helpers::recording_relay::replay(
+            crate::helpers::pcap_oracle::PcapOracle::tcp("dot")
+                .port(853)
+                .tls_keylog(&keylog)
+                .require_named("dns"),
+            chunks,
+        )
+        .assert_clean();
+    }
 
     server.wait_for_mocks(30).await;
     server.verify_mocks().await?;

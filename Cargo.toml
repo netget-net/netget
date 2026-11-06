@@ -245,6 +245,11 @@ matchit = { version = "0.8" }  # High-performance path router for OpenAPI
 
 # Kafka broker (wire protocol parsing and serialization)
 kafka-protocol = { package = "netget-kafka-protocol", version = "0.14.1" }  # Code-generated Kafka protocol support
+# The two codecs kafka-protocol already pulls in, named directly so the broker can inflate a
+# Produce batch with an output bound (MAX_INFLATED_PRODUCE_BYTES) instead of kafka-protocol's
+# unbounded decompressors.
+lz4 = { version = "1.24" }
+zstd = { version = "0.13" }
 
 
 # BitTorrent protocols (bencode encoding/decoding)
@@ -702,7 +707,8 @@ hyper = { path = "vendor/hyper" }
 # whose parameter length runs past the message, a Close with no body, ...): its framer
 # hands each body decoder the whole receive buffer and the decoders read with panicking
 # getters. This copy isolates each message, reads with checked getters, and answers a
-# malformed one FATAL 08P01 (vendor/pgwire/README.md). Like hyper above, a [patch] does not
+# malformed one FATAL 08P01, and encodes CopyFail with its own tag rather than CopyDone's
+# (vendor/pgwire/README.md). Like hyper above, a [patch] does not
 # reach the crate as published to crates.io; there the panic is still contained to the one
 # connection by src/server/postgresql/mod.rs. tests/vendored_pgwire_patch_test.rs fails when
 # Cargo.lock stops building this copy.

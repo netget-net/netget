@@ -145,3 +145,21 @@ log gets the error.
 - **psycopg, or any client that binds real parameters.** `real_client_test.rs`
   covers psql; psycopg in a binary mode would additionally drive the extended
   path from a non-Rust client, which nothing here does.
+
+## Stable conditions 2 and 3: the pcap oracle and the fuzz target
+
+**Condition 2.** Both psql sessions in `real_client_test.rs` and the prepared-statement test in
+`extended_query_test.rs` cross a recording relay, and the pcap oracle reads every stream with
+Wireshark's `pgsql` dissector: libpq's SSLRequest and the `N` refusal, startup,
+RowDescription/DataRow/CommandComplete for a three-row SELECT, a command tag, an ErrorResponse
+with SQLSTATE, and tokio-postgres's Parse/Describe/Bind/Execute/Sync with a binary-format
+DataRow.
+
+**Condition 3.** `fuzz/fuzz_targets/pgwire_frontend.rs` drives `pgwire`'s frontend decoder —
+the patched copy in `vendor/pgwire`, which the fuzz workspace patches in the same way the root
+manifest does — through the SSL, startup and query states. The format is flat; the corpus
+carries length lies and a 60 000-parameter Bind. Its first seed found an upstream defect:
+`CopyFail::message_type()` was `b'c'`, CopyDone's tag, so pgwire's *encoding* of a CopyFail did
+not decode. The server only decodes CopyFail and was unaffected; `vendor/pgwire` now carries the
+fix and `tests/vendored_pgwire_patch_test.rs` the round trip. Run 120 s clean on 6 November
+2026 (unoptimised, `-s none`, macOS): 12 812 executions, no crash.

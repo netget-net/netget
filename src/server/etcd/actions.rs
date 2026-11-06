@@ -380,7 +380,7 @@ impl Protocol for EtcdProtocol {
                  and the error path stays Trailers-Only, and removing either is a red test. \
                  UNPROVEN: Watch, Lease, Auth, Cluster and Maintenance (none are routed -- they \
                  return UNIMPLEMENTED), Txn's nested operations, and binary keys or values, \
-                 which cross the action boundary as lossy UTF-8.",
+                 which cross the action boundary as lossy UTF-8. PCAP ORACLE: real_client_test.rs runs etcdctl through a recording relay and tshark's http2/grpc dissectors read all six connections (Put, Range, prefix Range, DeleteRange success paths). FUZZ: fuzz/fuzz_targets/etcd_request.rs (unary_message + the KV prost decoders, 20 000-level TxnRequest and unknown-group bombs).",
             )
             .notes(
                 "KV service only: no Watch, Lease, Auth, Cluster or Maintenance. No storage - \

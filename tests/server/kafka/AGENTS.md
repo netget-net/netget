@@ -206,3 +206,16 @@ is `UNKNOWN_TOPIC_ID`. No peer needed.
 The tshark oracle in `e2e_test.rs` allows expert info containing ` version. Supports v0-`:
 Wireshark 4.2's Kafka dissector says that on any ApiVersions response advertising beyond
 its own table, which is a statement about the dissector, not these bytes.
+
+## Stable condition 3: the fuzz target, and the bomb it carries
+
+Condition 2 is `e2e_test.rs`'s oracle (above). `fuzz/fuzz_targets/kafka_request.rs` drives
+the broker's decode path — `kafka-protocol`'s header and body decoders for the five APIs at the
+version the request names, decode → encode → decode asserted equal, and for Produce
+`kafka::decode_record_batches`, each batch a second time with its CRC-32C fixed so the search
+reaches the decompressors. Its corpus carries `produce_gzip_inflation_bomb`, a 64 KiB gzip batch
+of 64 MiB of zeros. Writing it is what showed that `kafka-protocol`'s gzip, zstd and lz4
+decompressors have no output bound, so the broker inflated that batch in full;
+`MAX_INFLATED_PRODUCE_BYTES` (16 MiB per request, MESSAGE_TOO_LARGE past it) is the fix, and
+`inflation_bound_test.rs` pins it for all four codecs. run 120 s clean on 1 November 2026 (unoptimised, `-s none`, macOS): 5 510 executions, no crash, peak
+RSS 841 MB.

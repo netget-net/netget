@@ -227,15 +227,33 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
     and the reader never learned. A bound the test removal cannot move — `MAX_BUFFERED` was
     checked at a second site that could never fire — is a comment, and was removed.
 
-  **Nine protocols now have two clients and still fail conditions 2 or 3**, which is worth knowing
-  before picking the next one: `etcd`, `grpc`, `postgresql` and `websocket` have neither a
-  pcap-oracle test nor a fuzz target; `doh` and `dot` have a fuzz target and no oracle —
-  `fuzz_targets/dns_message.rs` fuzzes `hickory_proto`'s `Message::from_vec`, which both servers
-  call inline on every request, and its corpus carries a `compression_pointer_loop`, DNS's
-  depth bomb; `mongodb` has a fuzz target (`fuzz_targets/bson_document.rs`) and no oracle;
-  `mqtt` and `kafka` have the oracle and no fuzz target. (`redis` was in that last group until
-  `fuzz_targets/resp_frame.rs` landed in September 2026.) A fuzz target with a depth-bomb
-  corpus is the cheaper of the two to add. Derive this rather than trusting it — and note that
+  **Of the two-client Betas, only `mongodb` still fails condition 2 or 3** (re-derived
+  1 November 2026): it has a fuzz target (`fuzz_targets/bson_document.rs`) and no pcap-oracle
+  test. Seven that were in this list now hold conditions 1, 2, 3 and 6, which leaves each of
+  them at most conditions 4 and 5 — a test per declared bound, and both `AGENTS.md` files
+  re-verified — from Stable; neither was measured in that pass:
+
+  - `etcd`, `postgresql` and `websocket` gained both. Their real-client tests run through
+    `tests/helpers/recording_relay.rs` and the oracle reads what crossed (etcdctl's six
+    connections; psql's two sessions and tokio-postgres's extended-protocol session; Python
+    websockets' permessage-deflate session). The targets are `etcd_request` (prost behind
+    `etcd::unary_message`; `TxnRequest` recurses, so a 20 000-level bomb),
+    `pgwire_frontend` (the patched `vendor/pgwire`, which `fuzz/Cargo.toml` now patches in
+    too — without it the fuzz workspace built crates.io's panicking copy) and
+    `websocket_session` (head parser, `deflate::negotiate`, `DeflateStream` under tungstenite).
+  - `doh` and `dot` gained the oracle, **decrypted**: kdig writes `SSLKEYLOGFILE`, the oracle
+    hands it to tshark (`PcapOracle::tls_keylog`) and `require_named("dns")` fails unless the
+    DNS inside the TLS was dissected, so a TLS oracle cannot pass on the record layer alone.
+    Their fuzz target was already `fuzz_targets/dns_message.rs` (`hickory_proto`'s
+    `Message::from_vec`, with a `compression_pointer_loop`).
+  - `mqtt` and `kafka` had the oracle and gained `mqtt_packet` and `kafka_request`. Writing the
+    Kafka one found that `kafka-protocol`'s gzip, zstd and lz4 decompressors have no output
+    bound — a 64 KiB Produce batch inflated to 64 MiB — now `MAX_INFLATED_PRODUCE_BYTES`.
+
+  `grpc` was in this list as a two-client Beta and is no longer one: its expanded streaming
+  scope is Experimental. It gained the oracle (grpcurl's success and error calls) and
+  `grpc_message` all the same. (`redis` left the list when `fuzz_targets/resp_frame.rs` landed
+  in September 2026.) Derive this rather than trusting it — and note that
   fuzz targets are named after the *decoder*, not the protocol, so read each target's `use`
   lines rather than grepping its name (`dns_message.rs` covers three protocols, none of them
   in its file name but `dns`):

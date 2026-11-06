@@ -175,8 +175,16 @@ async fn psql_completes_a_session_against_the_postgresql_server() -> E2EResult<(
     )
     .await
     .map_err(|_| "netget startup timed out")??;
-    let port = server.port.to_string();
-    println!("PostgreSQL server on port {port}");
+    println!("PostgreSQL server on port {}", server.port);
+
+    // psql reaches the server through a recording relay, so the pcap oracle below reads the
+    // bytes of both sessions exactly as they crossed: libpq's SSLRequest and the `N` refusal,
+    // the startup exchange, RowDescription/DataRow/CommandComplete, and the ErrorResponse.
+    let (relay, streams) = crate::helpers::recording_relay::tcp_relay(
+        format!("127.0.0.1:{}", server.port).parse().unwrap(),
+    )
+    .await;
+    let port = relay.port().to_string();
 
     // ---- Session 1: the startup handshake, a multi-row SELECT, and a command tag ----
     //
@@ -291,6 +299,26 @@ async fn psql_completes_a_session_against_the_postgresql_server() -> E2EResult<(
         err_stderr.contains("relation \"nope\" does not exist"),
         "psql did not print the message the model chose.\nstderr:\n{err_stderr}"
     );
+
+    // ---- The pcap oracle over both sessions ----
+    //
+    // Wireshark's `pgsql` dissector reads every message on both streams independently of
+    // libpq and of pgwire. A malformed length, a field out of place in a RowDescription or an
+    // ErrorResponse field without its terminator is a Warn-level expert info or a fall back
+    // to plain TCP, and fails here.
+    let sessions = crate::helpers::recording_relay::recorded(&streams);
+    assert!(
+        sessions.len() >= 2,
+        "expected the two psql sessions to cross the relay, saw {}",
+        sessions.len()
+    );
+    for chunks in &sessions {
+        crate::helpers::recording_relay::replay(
+            crate::helpers::pcap_oracle::PcapOracle::tcp("postgresql"),
+            chunks,
+        )
+        .assert_clean();
+    }
 
     server.wait_for_mocks(30).await;
     server.verify_mocks().await?;

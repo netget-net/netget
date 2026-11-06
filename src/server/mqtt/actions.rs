@@ -900,7 +900,7 @@ impl Protocol for MqttProtocol {
                  UNPROVEN: TLS/8883, WebSocket transport, QoS 1 and 2 flows \
                  end to end, retained messages, wildcard filter matching, last-will delivery, \
                  session resume, and keep-alive reaping -- the broker implements no \
-                 subscription table, no retained store and no keep-alive timer.",
+                 subscription table, no retained store and no keep-alive timer. FUZZ: fuzz/fuzz_targets/mqtt_packet.rs drives take_packet and every packet parser (flat format; length-lie and 30 000-filter seeds).",
             )
             .notes(
                 "MQTT 3.1.1 and 5.0 (no TLS, no WebSocket). On a v5 connection every \
