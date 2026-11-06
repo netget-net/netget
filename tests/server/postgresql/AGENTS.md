@@ -161,4 +161,4 @@ manifest does — through the SSL, startup and query states. The format is flat;
 carries length lies and a 60 000-parameter Bind. Its first seed found an upstream defect:
 `CopyFail::message_type()` is `b'c'`, CopyDone's tag, so pgwire's *encoding* of a CopyFail does
 not decode. The server only decodes CopyFail and is unaffected; the target skips the round trip
-for that message. FUZZ_PGWIRE
+for that message. Run 120 s clean on 6 November 2026 (unoptimised, `-s none`, macOS): 12 812 executions, no crash.

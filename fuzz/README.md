@@ -308,9 +308,9 @@ to be off on macOS. A harness can be green for the wrong reason in more than one
   hand-rolled offset arithmetic on pre-auth CREATE and SESSION_SETUP bodies.
 - **`torrent_dht::parse_krpc_message`** is private, but its dangerous half is
   `check_bencode_structure`, which `bencode_structure` already drives directly.
-- **MySQL** delegates framing to `opensrv-mysql`; there is no NetGet byte parser to target.
-  (PostgreSQL delegates to `pgwire` the same way, and `pgwire_frontend` targets that decoder
-  directly, because NetGet builds a patched copy of it.)
+- **MySQL and PostgreSQL** delegate framing to `opensrv-mysql` and `pgwire`, so their
+  targets drive those decoders: `mysql_session` behind NetGet's `PacketLimitReader`, and
+  `pgwire_frontend` against the patched `vendor/pgwire` NetGet builds.
 
 ## Not a merge gate
 

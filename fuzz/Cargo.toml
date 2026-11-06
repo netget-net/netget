@@ -61,8 +61,8 @@ pgwire = "0.35"
 bytes = "1"
 
 # The WebSocket target runs the server's DeflateStream under tokio-tungstenite, as the server
-# does, polling it with a no-op waker over an in-memory socket.
-tokio = "1"
+# does, polling it with a no-op waker over an in-memory socket (tokio's I/O traits, from the
+# `tokio` entry above).
 tokio-tungstenite = "0.21"
 futures-util = "0.3"
 

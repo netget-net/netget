@@ -172,6 +172,8 @@ jobs:
           - grpc_message
           - pgwire_frontend
           - websocket_session
+          - cassandra_envelope
+          - mysql_session
     env:
       TARGET: ${{ matrix.target }}
     steps:
