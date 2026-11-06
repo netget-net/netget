@@ -6,6 +6,7 @@
 
 pub mod emit;
 pub mod patterns;
+pub mod status_drain;
 
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};

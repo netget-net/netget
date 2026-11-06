@@ -15,8 +15,9 @@ use crate::ui::app::LogLevel;
 /// growth under a log flood.
 pub const CHAT_CAPACITY: usize = 5_000;
 
-/// Per-frame drain cap: an extreme flood delays rendering of the tail rather
-/// than freezing the UI (the channel is unbounded by design).
+/// Lines shown per frame. Everything queued is drained each frame; past this many the rest
+/// are dropped and counted (`logging::status_drain`), so a flood costs a notice rather
+/// than a frozen UI or a queue that grows for as long as the flood lasts.
 pub const DRAIN_CAP_PER_FRAME: usize = 500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

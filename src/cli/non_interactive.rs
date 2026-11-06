@@ -70,6 +70,11 @@ pub(crate) fn actions_launch_stdout_owner(actions: &[serde_json::Value]) -> bool
 /// which ties a child's life to its parent's at the OS level and covers the quiet case too.
 /// Exiting on a closed pipe is a defensible policy; doing it by panicking from a status line —
 /// and only when the process happens to be chatty — is not.
+/// The most status lines a forwarder writes from one drain of its channel; what was queued
+/// beyond that is dropped and counted (`logging::status_drain`). A forwarder writes each line
+/// synchronously, so this bounds the queue to what arrives while one batch is written.
+pub(crate) const FORWARD_LINES_PER_BATCH: usize = 1_000;
+
 pub(crate) fn emit_status_line(line: &str, to_stderr: bool) {
     use std::io::Write;
     // This is a real terminal more often than not, and the line may quote a peer.
@@ -256,9 +261,18 @@ pub async fn run_non_interactive(
     // check flips to stderr the moment the stdio server registers.
     let status_state = state.clone();
     let _status_forwarder = tokio::spawn(async move {
-        while let Some(msg) = status_rx.recv().await {
-            // Skip internal control messages
-            if !msg.starts_with("__") {
+        while let Some(first) = status_rx.recv().await {
+            let batch = crate::logging::status_drain::drain_queued(
+                &mut status_rx,
+                Some(first),
+                FORWARD_LINES_PER_BATCH,
+            );
+            let notice = batch.dropped_notice();
+            for msg in batch.lines.into_iter().chain(notice) {
+                // Skip internal control messages
+                if msg.starts_with("__") {
+                    continue;
+                }
                 let clean_msg = msg
                     .strip_prefix("[INFO] ")
                     .unwrap_or(&msg)
@@ -572,10 +586,18 @@ pub async fn run_with_actions(
 
     // Spawn background task to print status messages in real-time
     let status_printer = tokio::spawn(async move {
-        while let Some(msg) = status_rx.recv().await {
-            if !msg.starts_with("__") {
-                // Print status messages immediately for real-time output
-                emit_status_line(&msg, to_stderr);
+        while let Some(first) = status_rx.recv().await {
+            let batch = crate::logging::status_drain::drain_queued(
+                &mut status_rx,
+                Some(first),
+                FORWARD_LINES_PER_BATCH,
+            );
+            let notice = batch.dropped_notice();
+            for msg in batch.lines.into_iter().chain(notice) {
+                if !msg.starts_with("__") {
+                    // Print status messages immediately for real-time output
+                    emit_status_line(&msg, to_stderr);
+                }
             }
         }
     });

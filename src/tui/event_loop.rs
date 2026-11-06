@@ -130,22 +130,24 @@ where
     info!("Dashboard TUI started");
 
     loop {
-        // Drain the status channel (bounded per iteration so a flood cannot
-        // starve rendering).
-        let mut drained = 0;
-        let mut needs_repoll = false;
-        while drained < DRAIN_CAP_PER_FRAME {
-            match ctx.status_rx.try_recv() {
-                Ok(line) => {
-                    if line == "__UPDATE_UI__" {
-                        needs_repoll = true;
-                    } else {
-                        route_line(&mut app, &line);
-                    }
-                    drained += 1;
-                }
-                Err(_) => break,
+        // Drain the status channel: everything queued is taken, at most
+        // DRAIN_CAP_PER_FRAME lines are shown and the rest are dropped and counted, so a
+        // flood can neither starve rendering nor grow the queue past one frame's worth.
+        let batch = crate::logging::status_drain::drain_queued(
+            &mut ctx.status_rx,
+            None,
+            DRAIN_CAP_PER_FRAME,
+        );
+        let mut needs_repoll = batch.update_ui_dropped;
+        for line in &batch.lines {
+            if line == crate::logging::status_drain::UPDATE_UI {
+                needs_repoll = true;
+            } else {
+                route_line(&mut app, line);
             }
+        }
+        if let Some(notice) = batch.dropped_notice() {
+            route_line(&mut app, &notice);
         }
         if needs_repoll {
             let snapshot = projection::build_snapshot(&ctx.state).await;
