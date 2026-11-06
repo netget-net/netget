@@ -594,7 +594,7 @@ impl Protocol for AfpClientProtocol {
     fn metadata(&self) -> crate::protocol::metadata::ProtocolMetadataV2 {
         use crate::protocol::metadata::*;
         ProtocolMetadataV2::builder()
-            .state(DevelopmentState::Experimental)
+            .state(DevelopmentState::Beta)
             .privilege_requirement(PrivilegeRequirement::None)
             .implementation(
                 "Hand-written AFP 3.x client over DSI sharing the server's codec \
@@ -622,9 +622,8 @@ impl Protocol for AfpClientProtocol {
                  regression only: Cleartxt Passwrd, refusals, bounds and the follow-up depth",
             )
             .notes(
-                "Experimental: one independent server (netatalk), guest login only against \
-                 it (cleartext needs a PAM account), and its pair job had not run in CI when \
-                 it landed. No DHX/DHX2 logins, no resource forks, no rename, no reconnect; \
+                "One independent server (netatalk), guest login only against it (cleartext \
+                 needs a PAM account). No DHX/DHX2 logins, no resource forks, no rename, no reconnect; \
                  server attention messages are read and ignored.",
             )
             .history(crate::protocol::metadata::HistoryMode::Last(
