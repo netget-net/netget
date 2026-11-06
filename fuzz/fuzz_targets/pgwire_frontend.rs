@@ -16,8 +16,8 @@
 //! 2. A decoded message consumes bytes (the codec would otherwise spin), except the one
 //!    zero-length verdict the SSL state exists for.
 //! 3. Re-encoding is a fixed point: a message that decodes encodes, its encoding decodes, and
-//!    that re-encodes to the same bytes — for every message but CopyFail, whose encoder writes
-//!    the wrong tag upstream (see `fixed_point`).
+//!    that re-encodes to the same bytes. This found upstream pgwire encoding CopyFail with
+//!    CopyDone's tag on its first seed; `vendor/pgwire` carries the fix.
 //!
 //! The wire format is flat — a type byte, an `Int32` length, a body — so there is no depth
 //! bomb. The corpus carries the size lies instead: lengths of `0x7fffffff`, of 3, a Bind whose
@@ -30,14 +30,6 @@ use libfuzzer_sys::fuzz_target;
 use pgwire::messages::{DecodeContext, PgWireFrontendMessage, SslNegotiationMetaMessage};
 
 fn fixed_point(msg: &PgWireFrontendMessage, ctx: &DecodeContext) {
-    // pgwire 0.35's `CopyFail::message_type()` returns `b'c'`, CopyDone's tag, so its own
-    // encoding of a CopyFail is a CopyDone with a body and does not decode. This target found
-    // it on its first seed. The server is unaffected — it dispatches on the tag the peer sent
-    // and only ever *decodes* a CopyFail — so the round trip is skipped for that one message
-    // rather than patched in vendor/pgwire, whose patch is about refusing malformed input.
-    if matches!(msg, PgWireFrontendMessage::CopyFail(_)) {
-        return;
-    }
     let mut first = BytesMut::new();
     if msg.encode(&mut first).is_err() {
         return;

@@ -302,3 +302,28 @@ fn well_formed_frontend_messages_still_decode_exactly() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// pgwire's own encoding of a CopyFail decodes back as that CopyFail. Upstream 0.35.0's
+/// `CopyFail::message_type()` returns CopyDone's tag (`c`), so the encoding read back as a
+/// CopyDone with a body and was refused for its leftover bytes. Found by
+/// `fuzz/fuzz_targets/pgwire_frontend.rs`'s round trip.
+#[test]
+fn copy_fail_encodes_with_its_own_tag_and_round_trips() {
+    use pgwire::messages::copy::CopyFail;
+
+    let original = PgWireFrontendMessage::CopyFail(CopyFail::new("aborted by client".into()));
+    let mut encoded = BytesMut::new();
+    original.encode(&mut encoded).expect("CopyFail encodes");
+    assert_eq!(
+        &encoded[..],
+        &msg(b'f', b"aborted by client\0")[..],
+        "CopyFail must be written with its own tag `f`"
+    );
+
+    match decode(&encoded, false) {
+        (Ok(Ok(Some(PgWireFrontendMessage::CopyFail(m)))), 0) => {
+            assert_eq!(m.message, "aborted by client");
+        }
+        other => panic!("pgwire's own CopyFail encoding did not decode as a CopyFail: {other:?}"),
+    }
+}

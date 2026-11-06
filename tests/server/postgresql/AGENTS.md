@@ -159,6 +159,7 @@ DataRow.
 the patched copy in `vendor/pgwire`, which the fuzz workspace patches in the same way the root
 manifest does — through the SSL, startup and query states. The format is flat; the corpus
 carries length lies and a 60 000-parameter Bind. Its first seed found an upstream defect:
-`CopyFail::message_type()` is `b'c'`, CopyDone's tag, so pgwire's *encoding* of a CopyFail does
-not decode. The server only decodes CopyFail and is unaffected; the target skips the round trip
-for that message. Run 120 s clean on 6 November 2026 (unoptimised, `-s none`, macOS): 12 812 executions, no crash.
+`CopyFail::message_type()` was `b'c'`, CopyDone's tag, so pgwire's *encoding* of a CopyFail did
+not decode. The server only decodes CopyFail and was unaffected; `vendor/pgwire` now carries the
+fix and `tests/vendored_pgwire_patch_test.rs` the round trip. Run 120 s clean on 6 November
+2026 (unoptimised, `-s none`, macOS): 12 812 executions, no crash.
