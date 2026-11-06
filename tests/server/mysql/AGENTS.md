@@ -107,6 +107,15 @@ The bound parameter values, and the refusal of malformed `COM_STMT_EXECUTE` pack
   chunks and an execute in one write. It is the regression test for the crate's use-after-free on
   pipelined packets (`src/server/mysql/AGENTS.md`).
 
+- `long_data_past_its_bounds_never_reaches_the_crate` (0 LLM calls) reads a stream through
+  `LongDataGate::with_limits(…, 100, 150)` and the tap, as the server stacks them, and checks
+  the crate is handed exactly the admitted packets: a statement's second chunk past 100 bytes
+  and a fourth statement's chunk past 150 across the connection are withheld, and an execute
+  and a `COM_STMT_CLOSE` release their statement's count.
+- `long_data_past_max_allowed_packet_is_refused_at_execute`: 1 startup + **1** execute. Five 16 MB
+  chunks (80 MB on loopback — the cost of the real 64 MiB bound), then an execute answered ERR
+  1105 with mysqld's text and no model call, then one that works.
+
 The raw-socket test tells the model's OK from the crate's own by `affected_rows` (the mock answers
 1; the crate's OKs carry 0), because a stray OK from the crate is exactly the failure the
 pipelining fix exists for. Verified by mutation: letting a read cross a packet boundary fails the

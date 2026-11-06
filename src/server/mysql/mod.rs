@@ -254,6 +254,10 @@ impl MysqlServer {
                             // crate reads from directly, because it is also what keeps every
                             // read inside one packet, and the crate's reader parses pipelined
                             // packets out of freed memory otherwise. See `command_tap`.
+                            // Beneath the tap: long-data chunks past the bounds are withheld
+                            // from the crate, which would otherwise store them without limit.
+                            let reader =
+                                command_tap::LongDataGate::new(reader, handler.command_tap());
                             let mut reader =
                                 command_tap::CommandTapReader::new(reader, handler.command_tap());
                             // `run_on` takes the writer **by value**, and its `W` is only
@@ -282,7 +286,7 @@ impl MysqlServer {
                                     connection_id,
                                     addr,
                                     &trip,
-                                    reader.into_inner().into_inner(),
+                                    reader.into_inner().into_inner().into_inner(),
                                     &mut writer,
                                     &status_tx_conn,
                                 )
@@ -423,6 +427,8 @@ struct PreparedStatement {
     /// next execute rather than when the long data arrives (that command has no reply), and so
     /// does this.
     long_data_out_of_range: bool,
+    /// A long-data chunk for this statement was withheld by `command_tap::LongDataGate`.
+    long_data_too_large: bool,
 }
 
 impl MysqlHandler {
@@ -552,6 +558,7 @@ impl<W: tokio::io::AsyncWrite + Send + Unpin> AsyncMysqlShim<W> for MysqlHandler
                 bound_types: None,
                 long_data: std::collections::HashMap::new(),
                 long_data_out_of_range: false,
+                long_data_too_large: false,
             },
         );
         drop(stmts);
@@ -620,6 +627,13 @@ impl<W: tokio::io::AsyncWrite + Send + Unpin> AsyncMysqlShim<W> for MysqlHandler
                             s.long_data_out_of_range = false;
                         }
                     }
+                    // Not cleared by a reset: the gate keeps refusing this statement's chunks
+                    // until it is executed, because the crate keeps what it already holds.
+                    command_tap::Captured::LongDataRefused { stmt_id: id } => {
+                        if let Some(s) = stmts.get_mut(id) {
+                            s.long_data_too_large = true;
+                        }
+                    }
                     command_tap::Captured::Execute(_) => {}
                 }
             }
@@ -627,6 +641,7 @@ impl<W: tokio::io::AsyncWrite + Send + Unpin> AsyncMysqlShim<W> for MysqlHandler
                 let snapshot = s.clone();
                 s.long_data.clear();
                 s.long_data_out_of_range = false;
+                s.long_data_too_large = false;
                 snapshot
             })
         };
@@ -638,6 +653,25 @@ impl<W: tokio::io::AsyncWrite + Send + Unpin> AsyncMysqlShim<W> for MysqlHandler
                      named another statement; discarded",
                     self.connection_id, capture.discarded, stmt_id
                 );
+            }
+            if stmt.long_data_too_large {
+                // mysqld's own code and text for this refusal, reported where it reports it.
+                warn!(
+                    "MySQL connection {} decision=fail_closed_long_data_too_large: long data for \
+                     statement {} passed the per-statement ({} bytes) or per-connection ({} \
+                     bytes) bound; the chunks past it were not stored",
+                    self.connection_id,
+                    stmt_id,
+                    command_tap::LONG_DATA_PER_STATEMENT,
+                    command_tap::LONG_DATA_PER_CONNECTION
+                );
+                return results
+                    .error(
+                        ErrorKind::ER_UNKNOWN_ERROR,
+                        b"Parameter of prepared statement which is set through \
+                          mysql_send_long_data() is longer than 'max_allowed_packet' bytes",
+                    )
+                    .await;
             }
             if stmt.long_data_out_of_range {
                 warn!(

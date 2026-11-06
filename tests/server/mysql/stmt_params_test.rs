@@ -6,7 +6,7 @@
 //! copies the packets out from beneath the crate — with the framing split at every byte.
 //! `prepared_params_test.rs` covers the same path end to end, over a socket.
 
-use netget::server::mysql::command_tap::{Captured, CommandTap, CommandTapReader};
+use netget::server::mysql::command_tap::{Captured, CommandTap, CommandTapReader, LongDataGate};
 use netget::server::mysql::packet_limit::FULL_PACKET_PAYLOAD;
 use netget::server::mysql::placeholder_offsets;
 use netget::server::mysql::stmt_params::{
@@ -411,6 +411,96 @@ async fn tap(stream: &[u8], chunk: usize) -> Arc<CommandTap> {
         "the tap must pass every byte through unchanged"
     );
     queue
+}
+
+/// One `COM_STMT_SEND_LONG_DATA` packet for `stmt`, parameter 0, carrying `len` bytes.
+fn long_data(stmt: u32, len: usize) -> Vec<u8> {
+    let mut body = vec![0x18];
+    body.extend_from_slice(&stmt.to_le_bytes());
+    body.extend_from_slice(&0u16.to_le_bytes());
+    body.extend(std::iter::repeat_n(b'd', len));
+    packet(0, &body)
+}
+
+fn command(cmd: u8, stmt: u32, rest: &[u8]) -> Vec<u8> {
+    let mut body = vec![cmd];
+    body.extend_from_slice(&stmt.to_le_bytes());
+    body.extend_from_slice(rest);
+    packet(0, &body)
+}
+
+/// `opensrv-mysql` stores every long-data chunk with no limit (`lib.rs:663-678`), so the
+/// chunks past the per-statement and per-connection bounds must never reach it. Read through
+/// `LongDataGate` (bounds 100 and 150 bytes here) and the tap above it, exactly as the server
+/// stacks them, and check what the crate would have been handed.
+#[tokio::test]
+async fn long_data_past_its_bounds_never_reaches_the_crate() {
+    let exec = command(0x17, 1, &[0, 1, 0, 0, 0]);
+    let close2 = command(0x19, 2, &[]);
+    let admitted = [
+        long_data(1, 60),      // statement 1: 60 of 100
+        exec.clone(),          // releases statement 1
+        long_data(1, 60),      // statement 1: 60 again
+        long_data(2, 60),      // connection: 120 of 150
+        close2.clone(),        // releases statement 2
+        long_data(3, 60),      // connection: 120 of 150
+        command(0x03, 0, &[]), // an unrelated command passes untouched
+    ];
+    let mut stream = Vec::new();
+    stream.extend(long_data(1, 60));
+    stream.extend(long_data(1, 60)); // statement 1 would hold 120: withheld
+    stream.extend(exec.clone());
+    stream.extend(long_data(1, 60));
+    stream.extend(long_data(2, 60));
+    stream.extend(long_data(4, 60)); // connection would hold 180: withheld
+    stream.extend(close2.clone());
+    stream.extend(long_data(3, 60));
+    stream.extend(command(0x03, 0, &[]));
+    let expected: Vec<u8> = admitted.concat();
+
+    for chunk in [1usize, 3, 4096] {
+        let queue = Arc::new(CommandTap::default());
+        let gate = LongDataGate::with_limits(&stream[..], queue.clone(), 100, 150);
+        let mut reader = CommandTapReader::new(gate, queue.clone());
+        let mut out = Vec::new();
+        let mut buf = vec![0u8; chunk];
+        loop {
+            let n = reader.read(&mut buf).await.unwrap();
+            if n == 0 {
+                break;
+            }
+            out.extend_from_slice(&buf[..n]);
+        }
+        assert!(
+            out == expected,
+            "chunk {chunk}: the crate must see exactly the admitted packets ({} bytes, got {})",
+            expected.len(),
+            out.len()
+        );
+        let kinds: Vec<String> = queue
+            .drain()
+            .into_iter()
+            .map(|c| match c {
+                Captured::LongData { stmt_id, .. } => format!("data {stmt_id}"),
+                Captured::LongDataRefused { stmt_id } => format!("refused {stmt_id}"),
+                Captured::Execute(p) => format!("execute {}", p[0]),
+                Captured::Reset { stmt_id } => format!("reset {stmt_id}"),
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                "data 1",
+                "refused 1",
+                "execute 1",
+                "data 1",
+                "data 2",
+                "refused 4",
+                "data 3"
+            ],
+            "chunk {chunk}"
+        );
+    }
 }
 
 #[tokio::test]

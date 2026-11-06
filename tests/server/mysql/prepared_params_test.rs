@@ -393,3 +393,59 @@ async fn malformed_executes_get_an_err_packet_and_the_connection_survives() -> E
     );
     Ok(())
 }
+
+/// Long data past `max_allowed_packet` for one statement is refused at its next execute with
+/// mysqld's own ERR 1105, and the statement works again afterwards.
+///
+/// `opensrv-mysql` would store every chunk (`lib.rs:663-678`), so the bound is enforced by
+/// withholding the chunks past it (`command_tap::LongDataGate`). Five 16 MB chunks: four fit
+/// under 64 MiB, the fifth does not. This moves 80 MB over loopback, which is what reaching
+/// the real bound costs; `stmt_params_test.rs` drives both bounds at small sizes.
+#[tokio::test]
+async fn long_data_past_max_allowed_packet_is_refused_at_execute() -> E2EResult<()> {
+    let seen: Seen = Arc::new(Mutex::new(Vec::new()));
+    let server = helpers::start_netget_server(recording_config(seen.clone())).await?;
+    helpers::wait_for_server_listening(&server, Duration::from_secs(30)).await?;
+
+    let mut sock = connect(server.port).await?;
+    let stmt = prepare(&mut sock, "INSERT INTO blobs (b) VALUES (?)").await?;
+
+    const CHUNK: usize = 16_000_000;
+    let mut chunk = vec![0x18];
+    chunk.extend_from_slice(&stmt.to_le_bytes());
+    chunk.extend_from_slice(&0u16.to_le_bytes());
+    chunk.resize(7 + CHUNK, b'z');
+    let chunk = packet(0, &chunk);
+    for _ in 0..5 {
+        sock.write_all(&chunk).await?;
+    }
+    assert!(
+        5 * CHUNK as u64 > netget::server::mysql::command_tap::LONG_DATA_PER_STATEMENT
+            && 4 * CHUNK as u64 <= netget::server::mysql::command_tap::LONG_DATA_PER_STATEMENT,
+        "the fifth chunk is the one past the bound"
+    );
+
+    // flags · iteration count · NULL bitmap · new-params-bound · VAR_STRING; no value bytes,
+    // because the parameter's value is the long data.
+    let body = [0, 1, 0, 0, 0, 0x00, 0x01, 0xFD, 0];
+    let reply = execute(&mut sock, stmt, &body).await?;
+    assert_err(&reply, 1105, "long data past max_allowed_packet");
+    let message = String::from_utf8_lossy(&reply.1[9..]).to_string();
+    assert!(message.contains("max_allowed_packet"), "{message}");
+
+    let mut good = vec![0, 1, 0, 0, 0, 0x00, 0x01, 0xFD, 0];
+    good.extend_from_slice(&[2, b'o', b'k']);
+    let reply = execute(&mut sock, stmt, &good).await?;
+    assert_model_ok(&reply, "the statement after the refusal");
+
+    drop(sock);
+    server.wait_for_mocks(10).await;
+    server.verify_mocks().await?;
+    let events = statements(&seen);
+    assert_eq!(events.len(), 1, "only the second execute reached the model");
+    assert_eq!(
+        events[0]["params"],
+        serde_json::json!([{"index": 1, "type": "VAR_STRING", "value": "ok"}])
+    );
+    Ok(())
+}

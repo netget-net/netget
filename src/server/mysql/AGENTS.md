@@ -165,6 +165,11 @@ back. Verified: `mysql_error_response` with 1146 arrives as
 - **`COM_STMT_SEND_LONG_DATA` naming a parameter the statement does not have** → ERR
   `1210` `ER_WRONG_ARGUMENTS` at the next execute, as mysqld does (long data has no
   reply of its own); `decision=fail_closed_long_data_index`.
+- **Long data past its bounds** — more than 64 MiB (`max_allowed_packet`) pending for one
+  statement, or 128 MiB across a connection's statements → ERR `1105` / `HY000` at that
+  statement's next execute, with mysqld's own text (`Parameter of prepared statement which
+  is set through mysql_send_long_data() is longer than 'max_allowed_packet' bytes`);
+  `decision=fail_closed_long_data_too_large`. See the long-data bound below.
 - **An execute the capture beneath the crate did not see** (reachable only by
   overflowing its queue, see below) → ERR `1105` with the `WireFailure` category;
   `decision=fail_closed_no_capture` at ERROR. The statement is never run without its
@@ -284,6 +289,26 @@ Two pieces replace it:
   answers a parse failure with OK), after which every reply was one behind.
   `stmt_params_test.rs::pipelined_commands_reach_opensrv_one_packet_per_read`
   drives the bare crate through the tap.
+- **`LongDataGate` (in `command_tap.rs`, beneath the tap) — the long-data bound.**
+  `opensrv-mysql` appends every `COM_STMT_SEND_LONG_DATA` chunk to the
+  statement's buffer with no limit (`lib.rs:663-678`) and keeps it until the
+  statement is executed or closed, so a peer that sends chunks and never executes
+  grows the process as far as it likes, one 64 MiB packet at a time. The gate
+  holds back each command's header and first seven payload bytes, and a long-data
+  chunk that would take its statement past `LONG_DATA_PER_STATEMENT` (64 MiB,
+  the published `max_allowed_packet`; mysqld applies the same number per
+  parameter) or the connection past `LONG_DATA_PER_CONNECTION` (128 MiB) is read
+  and discarded whole, so the crate never stores it. Long data has no reply, so
+  dropping a chunk desynchronises nothing; the refusal is queued and answered
+  1105 at the statement's next execute, where mysqld reports it. A statement's
+  count is released by its execute or `COM_STMT_CLOSE` (what makes the crate free
+  it), not by `COM_STMT_RESET`, which the crate does not parse. A chunk chained
+  past 16 MiB is decided on its first fragment, so a bound can be overshot by one
+  packet at most, which `packet_limit` bounds.
+  `stmt_params_test.rs::long_data_past_its_bounds_never_reaches_the_crate` checks
+  both bounds at small sizes, and
+  `prepared_params_test.rs::long_data_past_max_allowed_packet_is_refused_at_execute`
+  sends 80 MB to reach the real one.
 - **`stmt_params.rs` — decoding them.** Every length is compared, as a `u64`,
   with the bytes remaining before it is used, so an 8-byte length-encoded size of
   2⁶⁴−1 is a refusal, not an overflow; values are borrowed from the packet, not
@@ -401,6 +426,7 @@ more. It now declares both halves; the constants and the reasoning live beside t
 | `IDLE_BETWEEN_COMMANDS_TIMEOUT` | 600s | Real MySQL's `wait_timeout` defaults to **eight hours**, a bound in name only, so copying it was not an option the way copying Kafka's was. Ten minutes is safe because of what this server is: it holds no session state a reconnect would lose (the no-storage rule), so a reaped pooled connection costs `mysql_async` or a JDBC pool one transparent reconnect. |
 | `MAX_CONNECTIONS` | 256 | Refusal: **an ERR packet carrying error 1040 `ER_CON_COUNT_ERROR`, SQLSTATE `08004`** — precisely what a real MySQL server sends, in precisely this position, in place of the initial handshake as packet sequence 0. `mysql_async` surfaces "Too many connections" and the CLI prints `ERROR 1040 (08004)`. |
 | `packet_limit::MAX_PACKET_BYTES` | 67108864 | The number the server **publishes**. `opensrv-mysql` answers `SELECT @@max_allowed_packet` with 67108864 itself, without consulting the shim, and never compared anything against it — a published ceiling that is not applied is worse than none, because a client sizes its writes by it. Enforcing anything *smaller* would leave the same mismatch pointing the other way. Refusal: **error 1153 `ER_NET_PACKET_TOO_LARGE`, SQLSTATE `08S01`**, with the message text mysqld itself uses. |
+| `command_tap::LONG_DATA_PER_STATEMENT` / `LONG_DATA_PER_CONNECTION` | 64 MiB / 128 MiB | Long data the crate may hold between executes: `max_allowed_packet` per statement (mysqld applies it per parameter), two statements' worth per connection. Chunks past either are withheld from the crate; refusal: **1105 `HY000`** at the next execute, with mysqld's text. |
 
 **NetGet's own MySQL client *speaks inside `connect()`*, so it is never the silent peer this
 bound closes:** `src/client/mysql/mod.rs`'s `Conn::new` has mysql_async answer the greeting
