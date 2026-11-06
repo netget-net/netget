@@ -508,10 +508,19 @@ fn parse_sample(name: &str, mtype: MetricType, j: usize, s: &Value) -> Result<Sa
         (MetricType::Histogram | MetricType::Summary, "_sum") => Suffix::Sum,
         (MetricType::Histogram | MetricType::Summary, "_count") => Suffix::Count,
         (MetricType::Summary, "") => Suffix::None,
+        // A histogram sample with an `le` label can only be a bucket: `_sum` and `_count`
+        // never carry one. llama3.1:8b leaves the suffix off buckets in roughly one answer in
+        // five, and refusing those failed the whole scrape over a word the label already says.
+        (MetricType::Histogram, "")
+            if s.get("labels")
+                .and_then(Value::as_object)
+                .is_some_and(|labels| labels.contains_key("le")) =>
+        {
+            Suffix::Bucket
+        }
         (MetricType::Histogram, "") => {
             return Err(format!(
-                "{} needs a suffix: a histogram sample is _bucket (with an 'le' label), _sum or \
-                 _count",
+                "{} needs a suffix: a histogram sample without an 'le' label is _sum or _count",
                 where_()
             ))
         }

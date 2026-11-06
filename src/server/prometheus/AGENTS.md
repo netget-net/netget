@@ -48,7 +48,9 @@ histogram, a `_count` that disagrees with the `+Inf` bucket, a quantile outside 
 `MAX_SAMPLES` (50 000) samples.
 
 What it completes rather than refuses: a counter named without `_total` gets it (text format
-puts it on the `# TYPE` line, OpenMetrics does not); histogram buckets are sorted by `le`; a
+puts it on the `# TYPE` line, OpenMetrics does not); a histogram sample with an `le` label and
+no `suffix` is a bucket, since only a bucket carries `le` (llama3.1:8b leaves the suffix off in
+about one answer in five); histogram buckets are sorted by `le`; a
 missing `+Inf` bucket is synthesised from `_count` (or from the largest bucket when there is no
 `_count`), and a missing `_count` from the `+Inf` bucket. Integral bounds render as `1.0`.
 

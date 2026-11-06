@@ -95,6 +95,35 @@ fn histogram_buckets_are_sorted_and_completed_with_inf_and_count() {
     );
 }
 
+/// The answer llama3.1:8b gives in about one draw in five for "a histogram with buckets at 0.1,
+/// 0.5 and 1": bucket samples with `le` and no `suffix`. Only a bucket carries `le`, so the
+/// renderer reads them as buckets rather than failing the scrape; a histogram sample with
+/// neither is still refused (see the refusal table).
+#[test]
+fn a_histogram_sample_with_le_and_no_suffix_is_a_bucket() {
+    let text = render(
+        json!([{
+            "name": "http_request_duration_seconds", "type": "histogram",
+            "help": "Request latency.",
+            "samples": [
+                {"labels": {"le": "0.1"}, "value": 30},
+                {"labels": {"le": "0.5"}, "value": 36},
+                {"labels": {"le": "+Inf"}, "value": 40}
+            ]
+        }]),
+        Format::Text,
+    );
+    assert_eq!(
+        text,
+        "# HELP http_request_duration_seconds Request latency.\n\
+         # TYPE http_request_duration_seconds histogram\n\
+         http_request_duration_seconds_bucket{le=\"0.1\"} 30\n\
+         http_request_duration_seconds_bucket{le=\"0.5\"} 36\n\
+         http_request_duration_seconds_bucket{le=\"+Inf\"} 40\n\
+         http_request_duration_seconds_count 40\n"
+    );
+}
+
 #[test]
 fn a_missing_inf_bucket_is_taken_from_count_per_label_set() {
     let text = render(
