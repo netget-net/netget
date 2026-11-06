@@ -198,8 +198,9 @@ assertion is on the exact shape — `["unsubscribe", null, 0]` with nothing held
 in subscribed mode, the exact `Can't execute` and bound errors. Every bound was verified by
 mutation: removing the per-connection, distinct-pattern, server-wide, channel-length,
 message-size or output-limit check makes its test fail. The slow-consumer test publishes 1 MiB
-messages at a subscriber that never reads until a publish counts 0; it must take at least 8
-of them (the queue limit is 8 MiB, plus whatever the kernel buffers), then `NUMSUB` is 0 and
+messages at a subscriber that never reads until a publish counts 0; it must take at least 7
+of them — what the 8 MiB queue holds of 1 MiB payloads plus their framing, plus whatever the
+kernel has taken, which on a loaded machine can be nothing — then `NUMSUB` is 0 and
 the subscriber's socket reaches EOF.
 
 The fail-closed test points the server at an unreachable model with only `redis_subscribe`
