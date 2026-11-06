@@ -35,24 +35,46 @@ async fn state_for(mock: &MockOllamaServer) -> AppState {
 }
 
 async fn start(state: &AppState, form: ServerForm) -> (ServerId, std::net::SocketAddr) {
-    let (tx, _rx) = mpsc::unbounded_channel();
+    let (id, addr, _rx) = start_logged(state, form).await;
+    (id, addr)
+}
+
+/// [`start`], keeping the server's status stream (its `decision=` lines).
+async fn start_logged(
+    state: &AppState,
+    form: ServerForm,
+) -> (
+    ServerId,
+    std::net::SocketAddr,
+    mpsc::UnboundedReceiver<String>,
+) {
+    let (tx, rx) = mpsc::unbounded_channel();
     let id = form.create(state, tx).await.expect("server starts");
     for _ in 0..300 {
         if let Some(addr) = state.get_server(id).await.and_then(|s| s.local_addr) {
-            return (id, addr);
+            return (id, addr, rx);
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     panic!("server #{} never bound", id.as_u32());
 }
 
-/// One HTTP/1.1 request on its own connection, with fixed headers so recording and replay
-/// send byte-identical requests. Returns (status, body).
+fn drain(rx: &mut mpsc::UnboundedReceiver<String>) -> Vec<String> {
+    let mut lines = Vec::new();
+    while let Ok(line) = rx.try_recv() {
+        lines.push(line);
+    }
+    lines
+}
+
+/// One HTTP/1.1 request on its own connection, sent the way a real client sends it: `Host`
+/// names the address and port it connected to, and a `User-Agent` and `Accept` ride along.
+/// Returns (status, body).
 async fn http(addr: std::net::SocketAddr, method: &str, path: &str, body: &str) -> (u16, String) {
     let mut stream = tokio::net::TcpStream::connect(addr).await.expect("connect");
     let request = format!(
-        "{method} {path} HTTP/1.1\r\nHost: answer-reuse\r\nConnection: close\r\n\
-         Content-Length: {}\r\n\r\n{body}",
+        "{method} {path} HTTP/1.1\r\nHost: {addr}\r\nUser-Agent: answer-reuse-test/1\r\n\
+         Accept: */*\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
         body.len()
     );
     stream.write_all(request.as_bytes()).await.expect("write");
@@ -536,6 +558,160 @@ async fn export_rules_over_mcp_applies_and_saves() {
     let (failed, text) = call("export_rules", json!({"server_id": 1, "client_id": 1})).await;
     assert!(failed, "both ids must be refused: {text}");
     let _ = state.remove_server(id).await;
+}
+
+/// Rules recorded on one port answer on another. `Host` carries the port and differs between
+/// the two servers, so a rule conditioned on it would match nothing on the second, and every
+/// request there would reach the fallback. The second server also logs who answered.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn exported_rules_replay_on_a_server_on_another_port() {
+    let mock = MockOllamaServer::start(http_mock()).await.unwrap();
+    let state = state_for(&mock).await;
+    let (recorder, addr, mut recorder_log) = start_logged(
+        &state,
+        ServerForm {
+            protocol: "http".into(),
+            port: Some(0),
+            instruction: Some("Serve a tiny users API.".into()),
+            ..Default::default()
+        },
+    )
+    .await;
+    let hello = http(addr, "GET", "/hello", "").await;
+    let created = http(addr, "POST", "/users", "{\"name\":\"ada\"}").await;
+    let recording_calls = mock.call_count().await;
+    assert_eq!(recording_calls, 2, "CONTROL: recording reaches the model");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        drain(&mut recorder_log)
+            .iter()
+            .any(|l| l.contains("decision=model_answer")),
+        "the model's answers are logged as the model's"
+    );
+
+    let export = rule_export::export_rules(
+        &state,
+        AccessLogOwner::Server(recorder.as_u32()),
+        Fallback::Llm,
+    )
+    .await
+    .expect("export");
+    assert_eq!(export.derived.rules.len(), 2, "{:#?}", export.derived);
+    for rule in &export.derived.rules {
+        let conditions = rule["match"].as_object().unwrap();
+        assert!(
+            conditions.keys().all(|k| !k.starts_with("headers.")),
+            "no header distinguished the recorded answers, so none may be a condition: {rule:#}"
+        );
+    }
+    let _ = state.remove_server(recorder).await;
+
+    let (replayer, other, mut replayer_log) = start_logged(
+        &state,
+        ServerForm {
+            protocol: "http".into(),
+            port: Some(0),
+            instruction: Some("Serve a tiny users API.".into()),
+            event_handlers: Some(export.event_handlers.clone()),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_ne!(addr.port(), other.port());
+    assert_eq!(http(other, "GET", "/hello", "").await, hello);
+    assert_eq!(
+        http(other, "POST", "/users", "{\"name\":\"ada\"}").await,
+        created
+    );
+    assert_eq!(
+        mock.call_count().await,
+        recording_calls,
+        "replayed on another port: ZERO model calls"
+    );
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let lines = drain(&mut replayer_log);
+    assert!(
+        lines.iter().any(|l| l.contains("decision=rule_answer"))
+            && !lines.iter().any(|l| l.contains("decision=model_answer")),
+        "a rule's answer must be logged as the rule's, not the model's: {lines:#?}"
+    );
+    let _ = state.remove_server(replayer).await;
+}
+
+/// A header stays a condition where the recorded answers differed by it, and a silent model
+/// answer is never exported as a rule.
+/// A derived rule is validated against the recording instance's own protocol and side.
+/// `tcp_data_received` is raised by the tcp server and the tcp client, and `disconnect` is
+/// the client's action only: recorded on a client it is a rule, recorded on a server it is
+/// reported rather than exported, because `update_server` would refuse the whole table for it.
+#[test]
+fn a_rule_is_validated_against_the_recording_instance() {
+    use netget::state::app_state::AccessLogEntry;
+    let entry = |server: bool| AccessLogEntry {
+        id: 1,
+        unix_ms: 0,
+        server_id: server.then_some(1),
+        client_id: (!server).then_some(1),
+        protocol: "tcp".into(),
+        connection_id: None,
+        event_type: "tcp_data_received".into(),
+        request: json!({"data": "bye", "encoding": "utf8"}),
+        response: vec![json!({"type": "disconnect"})],
+        answered_by: Some("model".into()),
+    };
+    let on_client = rule_export::derive_rules(&[entry(false)]);
+    assert_eq!(on_client.rules.len(), 1, "{on_client:#?}");
+    let on_server = rule_export::derive_rules(&[entry(true)]);
+    assert!(on_server.rules.is_empty(), "{on_server:#?}");
+    assert!(
+        on_server.undetermined[0]
+            .reason
+            .contains("did not validate"),
+        "{on_server:#?}"
+    );
+}
+
+#[test]
+fn a_header_that_decided_the_answer_stays_and_silence_is_skipped() {
+    use netget::state::app_state::AccessLogEntry;
+    let entry = |id: u64, accept: &str, response: Value| AccessLogEntry {
+        id,
+        unix_ms: 0,
+        server_id: Some(1),
+        client_id: None,
+        protocol: "HTTP".into(),
+        connection_id: Some(1),
+        event_type: "http_request".into(),
+        request: json!({"method": "GET", "path": "/doc", "body": "",
+            "headers": {"host": format!("127.0.0.1:{}", 4000 + id), "accept": accept}}),
+        response: response.as_array().unwrap().clone(),
+        answered_by: Some("model".into()),
+    };
+    let reply = |body: &str| json!([{"type": "send_http_response", "status": 200, "body": body}]);
+    let derived = rule_export::derive_rules(&[
+        entry(1, "application/json", reply("{}")),
+        entry(2, "text/html", reply("<p></p>")),
+        entry(3, "application/json", reply("{}")),
+        entry(4, "text/plain", json!([])),
+    ]);
+    assert_eq!(derived.rules.len(), 2, "{:#?}", derived);
+    for rule in &derived.rules {
+        let conditions = rule["match"].as_object().unwrap();
+        assert!(
+            conditions.contains_key("headers.accept"),
+            "the answers differed by Accept alone, so it must stay: {rule:#}"
+        );
+        assert!(
+            !conditions.contains_key("headers.host"),
+            "Host did not decide anything: {rule:#}"
+        );
+    }
+    assert_eq!(derived.skipped.len(), 1, "{:#?}", derived.skipped);
+    assert!(
+        derived.skipped[0].reason.contains("empty answer"),
+        "{:#?}",
+        derived.skipped
+    );
 }
 
 /// Answers that cannot be made deterministic are reported, not turned into wrong rules.
