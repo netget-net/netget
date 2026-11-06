@@ -42,8 +42,8 @@
 //!
 //! The same holds in the other direction. A NetGet *client* proves itself against a real
 //! third-party *server* (`tests/client/<p>/real_server_test.rs`, driving `mosquitto`,
-//! `redis-server`, `etcd`, `nginx` through `tests/helpers/real_server.rs`), and
-//! `tests/client/nats/e2e_test.rs` spawns `nats-server` by hand. Until the scan covered
+//! `redis-server`, `etcd`, `nginx` and `nats-server` through `tests/helpers/real_server.rs`).
+//! Until the scan covered
 //! `tests/client/` too, the one Beta client's evidence ran in no CI job at all. Client entries
 //! are keyed `client/<p>::<stem>`, and the loop runs them from the `client` test target.
 //!

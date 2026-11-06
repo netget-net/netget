@@ -1394,10 +1394,11 @@ cannot block:
 | Advisory group | Why |
 |---|---|
 | `redis::resp3_test`, `redis::pubsub_test`, `redis::cluster_test`, `redis::keys_oracle_test`, `client/redis::cluster_real_server_test` | Peer too old: ubuntu-22.04 ships Redis 6.0.16 (no `cluster-port`, a different `redis-cli -3` transcript). All five pass, blocking, in `Test (suites)` on ubuntu-24.04 with Redis 7 |
-| `client/nats::e2e_test` | Known flake: the test connects when `nats-server` logs "Listening for client connections", before the listener accepts; 4 of 30 runs got "Connection refused" |
 
 The split was measured: every blocking group, the audits and the browser exchange passed in
-all 30 runs between 2026-10-15 and 2026-10-29 that reached the evidence loop. Every group has
+all 30 runs between 2026-10-15 and 2026-10-29 that reached the evidence loop, except
+`client/nats::e2e_test` (26 of 30), whose failures were its own broker dying of SIGPIPE on a
+closed stderr pipe; it starts `nats-server` through `RealServer` and blocks. Every group has
 a five-minute limit and must run at least one passing test; a peer whose install step fails
 surfaces as its group's failure. The Beta evidence table step is a report, not a verdict, and
 stays `continue-on-error` (its blocking half is `--check` in `ratchets`). The summary step runs
