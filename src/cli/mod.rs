@@ -5,7 +5,6 @@ mod args;
 pub(crate) mod banner;
 pub mod client_startup;
 pub mod crash_restore;
-pub mod easy_startup;
 pub mod input_state;
 pub mod management;
 pub mod model_select;
@@ -92,31 +91,7 @@ pub async fn run() -> Result<()> {
         anyhow::bail!("--agent-connect requires the mcp-http feature ({endpoint})");
     }
 
-    // Handle --simple-list flag (list available simple protocols and exit)
-    if args.simple_list {
-        use crate::protocol::EASY_REGISTRY;
-        println!("Available simple protocols:");
-        println!();
-        let protocols = EASY_REGISTRY.get_all_names();
-        if protocols.is_empty() {
-            println!("  No simple protocols available (check compiled features)");
-        } else {
-            for name in protocols {
-                println!("  - {}", name);
-            }
-        }
-        println!();
-        println!("Usage: netget --simple <protocol>");
-        println!("Example: netget --simple http");
-        return Ok(());
-    }
-
     prepare_ready_file(&args)?;
-
-    // Handle --simple <protocol> flag (start simple protocol in non-interactive mode)
-    if let Some(ref protocol) = args.simple_protocol {
-        return run_simple_protocol(protocol, &args).await;
-    }
 
     // Handle --client-list flag (list protocols available as clients and exit)
     if args.client_list {
@@ -399,10 +374,10 @@ fn prepare_ready_file(args: &Args) -> Result<()> {
     let Some(path) = &args.ready_file else {
         return Ok(());
     };
-    if args.mcp_stdio || args.mcp_http.is_some() || args.simple_protocol.is_some() {
+    if args.mcp_stdio || args.mcp_http.is_some() {
         anyhow::bail!(
             "--ready-file applies to a non-interactive run (--load, --server, --client or a \
-             prompt); MCP and --simple modes never write it"
+             prompt); MCP modes never write it"
         );
     }
     match std::fs::symlink_metadata(path) {
@@ -429,8 +404,8 @@ fn prepare_ready_file(args: &Args) -> Result<()> {
 /// `client_startup::start_client_from_action`, the same function the MCP
 /// `start_client` tool and the actions-JSON loader use.
 ///
-/// Model selection deliberately mirrors `run_with_actions` rather than
-/// `run_simple_protocol`: no `select_or_validate_model()` call, so a client
+/// Model selection deliberately mirrors `run_with_actions`: no
+/// `select_or_validate_model()` call, so a client
 /// whose behaviour is fully described by `--client-handlers` connects and runs
 /// without an LLM backend being reachable at all. A model is still configured
 /// when one was requested, for clients that fall back to the `instruction`.
@@ -741,118 +716,4 @@ async fn run_server_direct(protocol: &str, args: &Args) -> Result<()> {
     // Hand off to the shared non-interactive server loop (Ctrl+C + task ticker).
     let (_srv_tx, srv_rx) = mpsc::unbounded_channel::<String>();
     non_interactive::run_server(&state, llm, srv_rx, limits).await
-}
-
-/// Run a simple protocol in non-interactive mode
-#[cfg(not(target_arch = "wasm32"))]
-async fn run_simple_protocol(protocol: &str, args: &Args) -> Result<()> {
-    use crate::protocol::EASY_REGISTRY;
-    use std::sync::Arc;
-    use std::time::Duration;
-    use tokio::sync::Mutex;
-
-    // Setup logging (non-interactive mode)
-    setup::init_logging(args, false)?;
-
-    // Check if protocol exists
-    if EASY_REGISTRY.get_by_name(protocol).is_none() {
-        eprintln!("Error: Unknown simple protocol: {}", protocol);
-        eprintln!("Use --simple-list to see available protocols");
-        std::process::exit(1);
-    }
-
-    println!("[SIMPLE] Starting simple protocol: {}", protocol);
-
-    // Load settings
-    let settings = Settings::load();
-
-    // Create application state
-    let base_url = args
-        .openai_url
-        .clone()
-        .or_else(|| args.ollama_url.clone())
-        .unwrap_or_else(|| "http://localhost:11434".to_string());
-    let state = AppState::new_with_options(args.include_disabled_protocols, base_url);
-    state.set_min_stability(args.parse_min_stability()?).await;
-    state.capture.set_capture_all_dir(args.capture.clone())?;
-
-    // Configure rate limiter from CLI args
-    let rate_limiter_config = args.build_rate_limiter_config();
-    state.configure_rate_limiter(rate_limiter_config).await?;
-
-    // Determine configured model: args override settings
-    let configured_model = args.model.clone().or(settings.model.clone());
-
-    // Select or validate model
-    let selected_model = if args.openai_url.is_some() {
-        configured_model
-            .ok_or_else(|| anyhow::anyhow!("--model is required when using --openai-url"))?
-    } else {
-        let ollama_url_for_model = args
-            .ollama_url
-            .as_deref()
-            .unwrap_or("http://localhost:11434");
-        crate::llm::select_or_validate_model(configured_model, false, ollama_url_for_model)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("No model available"))?
-    };
-
-    println!("[SIMPLE] Using model: {}", selected_model);
-    state.set_ollama_model(Some(selected_model)).await;
-
-    // Create LLM client
-    let llm = create_llm_client(args)?
-        .with_mock_config_file(args.mock_config_file.clone())
-        .with_app_state(state.clone());
-
-    // Store the configured LLM client in state so spawned servers can use it
-    state.set_llm_client(llm.clone()).await;
-
-    // Start the easy protocol
-    let easy_id = easy_startup::start_easy_protocol(
-        protocol,
-        None, // user_instruction - could be extended via CLI later
-        None, // port - could be extended via CLI later
-        Arc::new(state.clone()),
-        Arc::new(llm.clone()),
-    )
-    .await?;
-
-    println!(
-        "[SIMPLE] Started {} (easy instance #{})",
-        protocol,
-        easy_id.as_u32()
-    );
-
-    // Get underlying server info
-    if let Some(server_id) = state.get_first_server_id().await {
-        if let Some(server) = state.get_server(server_id).await {
-            println!("[SIMPLE] Listening on port {}", server.port);
-        }
-        println!(
-            "[SIMPLE] Server #{} is running. Press Ctrl+C to stop.",
-            server_id.as_u32()
-        );
-    }
-
-    // Set up Ctrl+C handler
-    let shutdown = Arc::new(Mutex::new(false));
-    let shutdown_clone = shutdown.clone();
-    tokio::spawn(async move {
-        tokio::signal::ctrl_c().await.ok();
-        let mut shutdown = shutdown_clone.lock().await;
-        *shutdown = true;
-    });
-
-    // Main event loop - just wait for shutdown
-    loop {
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        if *shutdown.lock().await {
-            println!("\n[SIMPLE] Shutting down...");
-            break;
-        }
-    }
-
-    println!("[SIMPLE] Server stopped.");
-    Ok(())
 }

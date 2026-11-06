@@ -5,7 +5,6 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, RwLock};
 
 use super::client::{ClientId, ClientInstance};
-use super::easy::{EasyId, EasyInstance, EasyStatus};
 use super::server::{ServerId, ServerInstance};
 use super::task::{ScheduledTask, TaskId};
 use crate::server::connection::ConnectionId;
@@ -365,8 +364,6 @@ pub mod answered_by {
     pub const CACHE: &str = "cache";
     /// An `event_handlers` rule answered: a script, a static rule or a person (manual).
     pub const RULE: &str = "rule";
-    /// An easy-protocol layer answered.
-    pub const EASY: &str = "easy";
 }
 
 impl AccessLogEntry {
@@ -466,12 +463,6 @@ struct AppStateInner {
     /// Tor client instances (for directory queries)
     #[cfg(unix)]
     tor_clients: HashMap<ClientId, Arc<arti_client::TorClient<tor_rtcompat::PreferredRuntime>>>,
-    /// All easy protocol instances
-    easy_instances: HashMap<EasyId, EasyInstance>,
-    /// Mapping from underlying server ID to easy ID (for event routing)
-    server_to_easy: HashMap<ServerId, EasyId>,
-    /// Mapping from underlying client ID to easy ID (for event routing)
-    client_to_easy: HashMap<ClientId, EasyId>,
     /// Unified ID counter for servers, connections, and clients
     /// This ensures all IDs are unique across all three types
     next_unified_id: u32,
@@ -835,9 +826,6 @@ impl AppState {
                 clients: HashMap::new(),
                 #[cfg(unix)]
                 tor_clients: HashMap::new(),
-                easy_instances: HashMap::new(),
-                server_to_easy: HashMap::new(),
-                client_to_easy: HashMap::new(),
                 next_unified_id: 1,
                 next_server_id: 1,
                 next_client_id: 1,
@@ -2942,141 +2930,6 @@ impl AppState {
         if inner.clients.is_empty() && inner.servers.is_empty() {
             inner.mode = Mode::Idle;
         }
-    }
-
-    // ========== Easy Protocol Management ==========
-
-    /// Add a new easy protocol instance
-    pub async fn add_easy_instance(&self, mut easy_instance: EasyInstance) -> EasyId {
-        let mut inner = self.inner.write().await;
-        let id = EasyId::new(inner.next_unified_id);
-        inner.next_unified_id += 1;
-        easy_instance.id = id;
-        inner.easy_instances.insert(id, easy_instance);
-        id
-    }
-
-    /// Remove an easy protocol instance
-    pub async fn remove_easy_instance(&self, id: EasyId) -> Option<EasyInstance> {
-        let mut inner = self.inner.write().await;
-        let instance = inner.easy_instances.remove(&id);
-
-        // Remove from routing maps if present
-        if let Some(ref inst) = instance {
-            if let Some(server_id) = inst.underlying_server_id {
-                inner.server_to_easy.remove(&server_id);
-            }
-            if let Some(client_id) = inst.underlying_client_id {
-                inner.client_to_easy.remove(&client_id);
-            }
-        }
-
-        instance
-    }
-
-    /// Link an underlying server to an easy protocol instance (for event routing)
-    pub async fn link_server_to_easy(&self, server_id: ServerId, easy_id: EasyId) {
-        let mut inner = self.inner.write().await;
-        inner.server_to_easy.insert(server_id, easy_id);
-        if let Some(easy_instance) = inner.easy_instances.get_mut(&easy_id) {
-            easy_instance.set_underlying_server(server_id);
-        }
-    }
-
-    /// Link an underlying client to an easy protocol instance (for event routing)
-    pub async fn link_client_to_easy(&self, client_id: ClientId, easy_id: EasyId) {
-        let mut inner = self.inner.write().await;
-        inner.client_to_easy.insert(client_id, easy_id);
-        if let Some(easy_instance) = inner.easy_instances.get_mut(&easy_id) {
-            easy_instance.set_underlying_client(client_id);
-        }
-    }
-
-    /// Get easy ID for a given server ID (returns None if server is not managed by an easy protocol)
-    pub async fn get_easy_for_server(&self, server_id: ServerId) -> Option<EasyId> {
-        self.inner
-            .read()
-            .await
-            .server_to_easy
-            .get(&server_id)
-            .copied()
-    }
-
-    /// Get easy ID for a given client ID (returns None if client is not managed by an easy protocol)
-    pub async fn get_easy_for_client(&self, client_id: ClientId) -> Option<EasyId> {
-        self.inner
-            .read()
-            .await
-            .client_to_easy
-            .get(&client_id)
-            .copied()
-    }
-
-    /// Get easy protocol instance
-    pub async fn get_easy_instance(&self, id: EasyId) -> Option<EasyInstance> {
-        // Note: EasyInstance doesn't impl Clone because it contains JoinHandle
-        // Instead we provide specific access methods
-        self.inner.read().await.easy_instances.get(&id).map(|inst| {
-            // Clone all fields except JoinHandle
-            let mut cloned = EasyInstance::new(
-                inst.id,
-                inst.protocol_name.clone(),
-                inst.underlying_protocol.clone(),
-                inst.user_instruction.clone(),
-            );
-            cloned.underlying_server_id = inst.underlying_server_id;
-            cloned.underlying_client_id = inst.underlying_client_id;
-            cloned.status = inst.status.clone();
-            cloned.created_at = inst.created_at;
-            cloned.status_changed_at = inst.status_changed_at;
-            // Note: handle is NOT cloned (cannot clone JoinHandle)
-            cloned
-        })
-    }
-
-    /// Update easy protocol status
-    pub async fn update_easy_status(&self, id: EasyId, status: EasyStatus) {
-        if let Some(instance) = self.inner.write().await.easy_instances.get_mut(&id) {
-            instance.set_status(status);
-        }
-    }
-
-    /// Get all easy protocol instances
-    pub async fn get_all_easy_instances(&self) -> Vec<EasyInstance> {
-        self.inner
-            .read()
-            .await
-            .easy_instances
-            .values()
-            .map(|inst| {
-                // Clone all fields except JoinHandle
-                let mut cloned = EasyInstance::new(
-                    inst.id,
-                    inst.protocol_name.clone(),
-                    inst.underlying_protocol.clone(),
-                    inst.user_instruction.clone(),
-                );
-                cloned.underlying_server_id = inst.underlying_server_id;
-                cloned.underlying_client_id = inst.underlying_client_id;
-                cloned.status = inst.status.clone();
-                cloned.created_at = inst.created_at;
-                cloned.status_changed_at = inst.status_changed_at;
-                cloned
-            })
-            .collect()
-    }
-
-    /// Execute a closure with mutable access to an easy instance
-    pub async fn with_easy_mut<F, R>(&self, easy_id: EasyId, f: F) -> Option<R>
-    where
-        F: FnOnce(&mut EasyInstance) -> R,
-    {
-        self.inner
-            .write()
-            .await
-            .easy_instances
-            .get_mut(&easy_id)
-            .map(f)
     }
 
     // ========== Backwards Compatibility Methods ==========

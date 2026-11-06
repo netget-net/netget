@@ -1,4 +1,4 @@
-//! CPU-only regressions for the client/easy/pipe review. No model endpoints are used.
+//! CPU-only regressions for the client/pipe review. No model endpoints are used.
 
 use netget::pipe::{render_payload, PipeSpec, MAX_PAYLOAD_BYTES, MAX_RENDERED_BYTES};
 use serde_json::json;
@@ -110,34 +110,8 @@ async fn pipe_rejects_malformed_explicit_source_and_mapping() {
 
 mod http {
     use netget::client::http_fetch::transport;
-    use netget::easy::http::actions::markdown_to_html;
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    #[test]
-    fn easy_markdown_pairs_tags_and_preserves_code_contents() {
-        let html =
-            markdown_to_html("**bold** __also bold__ *italic* _also italic_ `**literal** <tag>`");
-        assert!(html.contains("<strong>bold</strong> <strong>also bold</strong> <em>italic</em> <em>also italic</em> <code>**literal** &lt;tag&gt;</code>"), "{html}");
-    }
-
-    #[test]
-    fn easy_markdown_keeps_unmatched_delimiters_and_identifiers_literal() {
-        let html = markdown_to_html("some_identifier_name **unfinished <script>");
-        assert!(
-            html.contains("<p>some_identifier_name **unfinished &lt;script&gt;</p>"),
-            "{html}"
-        );
-    }
-
-    #[test]
-    fn easy_markdown_closes_a_list_before_starting_a_code_block() {
-        let html = markdown_to_html("- item\n```\n<tag>\n```");
-        assert!(
-            html.contains("</li>\n</ul>\n<pre><code>&lt;tag&gt;\n</code></pre>"),
-            "{html}"
-        );
-    }
 
     #[tokio::test]
     async fn transport_preserves_extension_method_case_and_normalizes_known_methods() {

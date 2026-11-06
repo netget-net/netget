@@ -1487,7 +1487,7 @@ jobs:
             --test client_credential_logging_test --test secret_redaction_test \
             --test scheduled_task_lifecycle_test --test scheduled_task_claim_test \
             --test sqlite_query_bounds_test --test sqlite_identifier_test \
-            --test easy_startup_test --test utils_save_load_test \
+            --test utils_save_load_test \
             --test startup_cancellation_test --test non_interactive_run_limits_test \
             --test scripting_resources_test --test scripting_resident_test \
             --test static_handler_interpolation_test --test mcp_stop_cleanup_test --test mcp_startup_config_test \

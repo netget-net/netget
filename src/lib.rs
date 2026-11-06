@@ -18,7 +18,6 @@ pub mod cli;
 pub mod client;
 pub mod display;
 pub mod docs;
-pub mod easy;
 pub mod events;
 pub mod llm;
 pub mod logging;
