@@ -31,6 +31,7 @@ pub mod actions;
 
 use crate::llm::action_helper::call_llm;
 use crate::llm::ollama_client::OllamaClient;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::server::connection::ConnectionId;
 use crate::server::WolProtocol;
@@ -383,8 +384,7 @@ impl WolServer {
                         {
                             Ok(execution_result) => {
                                 for message in &execution_result.messages {
-                                    info!("{}", message);
-                                    let _ = status_clone.send(format!("[INFO] {}", message));
+                                    Log::to(&status_clone).info(message);
                                 }
 
                                 let decision = Self::decision_tag(&execution_result);

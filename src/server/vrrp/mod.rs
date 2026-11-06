@@ -51,6 +51,7 @@ use crate::state::app_state::AppState;
 use crate::state::ServerId;
 use crate::{console_debug, console_error, console_info, console_trace};
 
+use crate::logging::emit::Log;
 use actions::{
     VrrpGroupConfig, VrrpProtocol, VrrpTransport, VRRP_ADVERTISEMENT_RECEIVED_EVENT,
     VRRP_MASTER_RESIGNED_EVENT,
@@ -645,8 +646,7 @@ impl VrrpServer {
         {
             Ok(execution_result) => {
                 for message in &execution_result.messages {
-                    info!("{}", message);
-                    let _ = status_tx.send(format!("[INFO] {}", message));
+                    Log::to(&status_tx).info(message);
                 }
 
                 let mut sent = 0usize;

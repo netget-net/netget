@@ -20,6 +20,7 @@ use tracing::{debug, error, info, trace};
 
 use crate::llm::action_helper::call_llm;
 use crate::llm::ollama_client::OllamaClient;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::state::app_state::AppState;
 use crate::{console_error, console_info, console_trace};
@@ -249,15 +250,8 @@ impl IcmpServer {
                         );
 
                         // DEBUG: Log summary
-                        debug!(
+                        Log::to(&status_tx).debug(format!(
                             "ICMP {} from {} to {} (TTL: {})",
-                            icmp_type_to_string(icmp_type),
-                            source_ip,
-                            dest_ip,
-                            ttl
-                        );
-                        let _ = status_tx.send(format!(
-                            "[DEBUG] ICMP {} from {} to {} (TTL: {})",
                             icmp_type_to_string(icmp_type),
                             source_ip,
                             dest_ip,
@@ -352,13 +346,8 @@ impl IcmpServer {
                                 }
                             };
 
-                            debug!(
-                                "ICMP calling LLM for {} packet",
-                                icmp_type_to_string(icmp_type)
-                            );
-                            let _ = status_clone.send(format!(
-                                "[DEBUG] ICMP calling LLM for {} packet",
-                                icmp_type_to_string(icmp_type)
+                            Log::to(&status_clone).debug(format!(
+                                "ICMP calling LLM for {} packet", icmp_type_to_string(icmp_type)
                             ));
 
                             match call_llm(
@@ -373,16 +362,11 @@ impl IcmpServer {
                             {
                                 Ok(execution_result) => {
                                     for message in &execution_result.messages {
-                                        info!("{}", message);
-                                        let _ = status_clone.send(format!("[INFO] {}", message));
+                                        Log::to(&status_clone).info(message);
                                     }
 
-                                    debug!(
+                                    Log::to(&status_clone).debug(format!(
                                         "ICMP got {} protocol results",
-                                        execution_result.protocol_results.len()
-                                    );
-                                    let _ = status_clone.send(format!(
-                                        "[DEBUG] ICMP got {} protocol results",
                                         execution_result.protocol_results.len()
                                     ));
 
@@ -428,31 +412,20 @@ impl IcmpServer {
                                             {
                                                 Ok(_) => {
                                                     packets_sent += 1;
-                                                    debug!(
+                                                    Log::to(&status_clone).debug(format!(
                                                         "ICMP sent {} bytes to {}",
-                                                        output_data.len(),
-                                                        dest_addr.ip()
-                                                    );
-                                                    let _ = status_clone.send(format!(
-                                                        "[DEBUG] ICMP sent {} bytes to {}",
                                                         output_data.len(),
                                                         dest_addr.ip()
                                                     ));
 
-                                                    trace!(
+                                                    Log::to(&status_clone).trace(format!(
                                                         "ICMP reply (hex): {}",
-                                                        hex::encode(&output_data)
-                                                    );
-                                                    let _ = status_clone.send(format!(
-                                                        "[TRACE] ICMP reply (hex): {}",
                                                         hex::encode(&output_data)
                                                     ));
                                                 }
                                                 Err(e) => {
-                                                    error!("Failed to send ICMP reply: {}", e);
-                                                    let _ = status_clone.send(format!(
-                                                        "[ERROR] Failed to send ICMP reply: {}",
-                                                        e
+                                                    Log::to(&status_clone).error(format!(
+                                                        "Failed to send ICMP reply: {}", e
                                                     ));
                                                 }
                                             }

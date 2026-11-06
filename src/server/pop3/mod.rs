@@ -12,6 +12,7 @@ use crate::console_debug;
 use crate::llm::action_helper::call_llm;
 use crate::llm::ollama_client::OllamaClient;
 use crate::llm::ActionResult;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::server::Pop3Protocol;
 use crate::state::app_state::AppState;
@@ -379,12 +380,8 @@ impl Pop3Server {
                                 if let Some(ref acceptor) = tls_acceptor_clone {
                                     match acceptor.accept(stream).await {
                                         Ok(tls_stream) => {
-                                            debug!(
+                                            Log::to(&status_clone).debug(format!(
                                                 "TLS handshake completed for connection {}",
-                                                connection_id
-                                            );
-                                            let _ = status_clone.send(format!(
-                                                "[DEBUG] TLS handshake completed for connection {}",
                                                 connection_id
                                             ));
                                             if let Err(e) = Pop3Session::handle_session(
@@ -1182,16 +1179,13 @@ impl Pop3Session {
             // for a reply it will never get. No `+OK` was produced, so no mailbox was
             // opened — but the peer is owed an answer it did not receive.
             "model_silent" => {
-                tracing::warn!("{}", summary);
-                let _ = status_tx.send(format!("[WARN] {}", summary));
+                Log::to(status_tx).warn(&summary);
             }
             "fail_closed_bad_action" => {
-                error!("{}", summary);
-                let _ = status_tx.send(format!("[ERROR] {}", summary));
+                Log::to(status_tx).error(&summary);
             }
             _ => {
-                info!("{}", summary);
-                let _ = status_tx.send(format!("[INFO] {}", summary));
+                Log::to(status_tx).info(&summary);
             }
         }
 

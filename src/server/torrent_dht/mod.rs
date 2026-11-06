@@ -9,10 +9,11 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info};
 
 use crate::llm::action_helper::call_llm;
 use crate::llm::ollama_client::OllamaClient;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::server::connection::ConnectionId;
 use crate::state::app_state::AppState;
@@ -108,200 +109,190 @@ impl TorrentDhtServer {
 
                         // Tracked, not detached: stop_server must abort this task too.
                         let task_owner = app_state.clone();
-                        task_owner.spawn_server_task(server_id, async move {
-                            // Parse bencode KRPC message
-                            match Self::parse_krpc_message(&data) {
-                                Ok((query_type, params)) => {
-                                    debug!("BitTorrent DHT query type: {}", query_type);
-                                    let _ = status_clone.send(format!(
-                                        "[DEBUG] BitTorrent DHT query type: {}",
-                                        query_type
-                                    ));
+                        task_owner
+                            .spawn_server_task(server_id, async move {
+                                // Parse bencode KRPC message
+                                match Self::parse_krpc_message(&data) {
+                                    Ok((query_type, params)) => {
+                                        Log::to(&status_clone).debug(format!(
+                                            "BitTorrent DHT query type: {}",
+                                            query_type
+                                        ));
 
-                                    // Create event for LLM
-                                    let event_type = match query_type.as_str() {
-                                        "ping" => &actions::DHT_PING_QUERY_EVENT,
-                                        "find_node" => &actions::DHT_FIND_NODE_QUERY_EVENT,
-                                        "get_peers" => &actions::DHT_GET_PEERS_QUERY_EVENT,
-                                        "announce_peer" => &actions::DHT_ANNOUNCE_PEER_QUERY_EVENT,
-                                        // An unrecognised `q` still reaches the ping
-                                        // handler, whose reply shape (`{"id": ...}`) is the
-                                        // KRPC minimum. `query_type` in the event data says
-                                        // what actually arrived, so a handler can answer
-                                        // with send_dht_error_response code 204 instead.
-                                        other => {
-                                            tracing::warn!(
-                                                "BitTorrent DHT: unsupported query '{}', \
-                                                 routing to dht_ping_query",
-                                                other
-                                            );
-                                            &actions::DHT_PING_QUERY_EVENT
-                                        }
-                                    };
-                                    // Kept out of the event so a failure reply can still echo
-                                    // `t`: a KRPC reply that does not carry the querying
-                                    // node's transaction id is dropped, and the peer waits
-                                    // out its own timeout exactly as if we had said nothing.
-                                    let transaction_id_hex = params
-                                        .get("transaction_id")
-                                        .and_then(|v| v.as_str())
-                                        .map(|s| s.to_string());
-
-                                    let event = Event::new(event_type, serde_json::json!(params));
-
-                                    debug!("BitTorrent DHT calling LLM for {} query", query_type);
-                                    let _ = status_clone.send(format!(
-                                        "[DEBUG] BitTorrent DHT calling LLM for {} query",
-                                        query_type
-                                    ));
-
-                                    // Call LLM
-                                    match call_llm(
-                                        &llm_clone,
-                                        &state_clone,
-                                        server_id,
-                                        None,
-                                        &event,
-                                        protocol_clone.as_ref(),
-                                    )
-                                    .await
-                                    {
-                                        Ok(execution_result) => {
-                                            for message in &execution_result.messages {
-                                                info!("{}", message);
-                                                let _ = status_clone
-                                                    .send(format!("[INFO] {}", message));
+                                        // Create event for LLM
+                                        let event_type = match query_type.as_str() {
+                                            "ping" => &actions::DHT_PING_QUERY_EVENT,
+                                            "find_node" => &actions::DHT_FIND_NODE_QUERY_EVENT,
+                                            "get_peers" => &actions::DHT_GET_PEERS_QUERY_EVENT,
+                                            "announce_peer" => {
+                                                &actions::DHT_ANNOUNCE_PEER_QUERY_EVENT
                                             }
+                                            // An unrecognised `q` still reaches the ping
+                                            // handler, whose reply shape (`{"id": ...}`) is the
+                                            // KRPC minimum. `query_type` in the event data says
+                                            // what actually arrived, so a handler can answer
+                                            // with send_dht_error_response code 204 instead.
+                                            other => {
+                                                tracing::warn!(
+                                                    "BitTorrent DHT: unsupported query '{}', \
+                                                 routing to dht_ping_query",
+                                                    other
+                                                );
+                                                &actions::DHT_PING_QUERY_EVENT
+                                            }
+                                        };
+                                        // Kept out of the event so a failure reply can still echo
+                                        // `t`: a KRPC reply that does not carry the querying
+                                        // node's transaction id is dropped, and the peer waits
+                                        // out its own timeout exactly as if we had said nothing.
+                                        let transaction_id_hex = params
+                                            .get("transaction_id")
+                                            .and_then(|v| v.as_str())
+                                            .map(|s| s.to_string());
 
-                                            debug!(
-                                                "BitTorrent DHT got {} protocol results",
-                                                execution_result.protocol_results.len()
-                                            );
-                                            let _ = status_clone.send(format!(
-                                                "[DEBUG] BitTorrent DHT got {} protocol results",
-                                                execution_result.protocol_results.len()
-                                            ));
+                                        let event =
+                                            Event::new(event_type, serde_json::json!(params));
 
-                                            // An explicit refusal by the model is a KRPC
-                                            // error reply it asked for itself; keep it
-                                            // distinguishable in the log from our own
-                                            // fail-closed reply, which says nothing about
-                                            // what the model thought.
-                                            let model_rejected =
-                                                execution_result.raw_actions.iter().any(|a| {
-                                                    a.get("type").and_then(|t| t.as_str())
-                                                        == Some("send_dht_error_response")
-                                                });
+                                        Log::to(&status_clone).debug(format!(
+                                            "BitTorrent DHT calling LLM for {} query",
+                                            query_type
+                                        ));
 
-                                            let mut sent_any = false;
-                                            for protocol_result in execution_result.protocol_results
-                                            {
-                                                if let Some(output_data) =
-                                                    protocol_result.get_all_output().first()
+                                        // Call LLM
+                                        match call_llm(
+                                            &llm_clone,
+                                            &state_clone,
+                                            server_id,
+                                            None,
+                                            &event,
+                                            protocol_clone.as_ref(),
+                                        )
+                                        .await
+                                        {
+                                            Ok(execution_result) => {
+                                                for message in &execution_result.messages {
+                                                    Log::to(&status_clone).info(message);
+                                                }
+
+                                                Log::to(&status_clone).debug(format!(
+                                                    "BitTorrent DHT got {} protocol results",
+                                                    execution_result.protocol_results.len()
+                                                ));
+
+                                                // An explicit refusal by the model is a KRPC
+                                                // error reply it asked for itself; keep it
+                                                // distinguishable in the log from our own
+                                                // fail-closed reply, which says nothing about
+                                                // what the model thought.
+                                                let model_rejected =
+                                                    execution_result.raw_actions.iter().any(|a| {
+                                                        a.get("type").and_then(|t| t.as_str())
+                                                            == Some("send_dht_error_response")
+                                                    });
+
+                                                let mut sent_any = false;
+                                                for protocol_result in
+                                                    execution_result.protocol_results
                                                 {
-                                                    if let Err(e) = socket_clone
-                                                        .send_to(output_data, peer_addr)
-                                                        .await
+                                                    if let Some(output_data) =
+                                                        protocol_result.get_all_output().first()
                                                     {
-                                                        error!(
-                                                            "Failed to send DHT response: {}",
-                                                            e
-                                                        );
-                                                    } else {
-                                                        sent_any = true;
-                                                        debug!(
+                                                        if let Err(e) = socket_clone
+                                                            .send_to(output_data, peer_addr)
+                                                            .await
+                                                        {
+                                                            error!(
+                                                                "Failed to send DHT response: {}",
+                                                                e
+                                                            );
+                                                        } else {
+                                                            sent_any = true;
+                                                            Log::to(&status_clone).debug(format!(
                                                             "BitTorrent DHT sent {} bytes to {}",
                                                             output_data.len(),
                                                             peer_addr
-                                                        );
-                                                        let _ = status_clone.send(format!("[DEBUG] BitTorrent DHT sent {} bytes to {}", output_data.len(), peer_addr));
-
-                                                        let hex_str = hex::encode(output_data);
-                                                        trace!(
-                                                            "BitTorrent DHT sent (hex): {}",
-                                                            hex_str
-                                                        );
-                                                        let _ = status_clone.send(format!(
-                                                            "[TRACE] BitTorrent DHT sent (hex): {}",
-                                                            hex_str
                                                         ));
+
+                                                            let hex_str = hex::encode(output_data);
+                                                            Log::to(&status_clone).trace(format!(
+                                                                "BitTorrent DHT sent (hex): {}",
+                                                                hex_str
+                                                            ));
+                                                        }
                                                     }
                                                 }
-                                            }
 
-                                            if sent_any {
-                                                debug!(
-                                                    "BitTorrent DHT {} from {} decision={}",
-                                                    query_type,
-                                                    peer_addr,
-                                                    if model_rejected {
-                                                        "model_reject"
-                                                    } else {
-                                                        "model_answer"
-                                                    }
-                                                );
-                                            } else {
-                                                // The model produced nothing that reaches the
-                                                // wire. Staying silent would leave the
-                                                // querying node blocked until its own
-                                                // timeout, so answer with a category.
-                                                tracing::warn!(
-                                                    "BitTorrent DHT {} from {} decision=\
+                                                if sent_any {
+                                                    debug!(
+                                                        "BitTorrent DHT {} from {} decision={}",
+                                                        query_type,
+                                                        peer_addr,
+                                                        if model_rejected {
+                                                            "model_reject"
+                                                        } else {
+                                                            "model_answer"
+                                                        }
+                                                    );
+                                                } else {
+                                                    // The model produced nothing that reaches the
+                                                    // wire. Staying silent would leave the
+                                                    // querying node blocked until its own
+                                                    // timeout, so answer with a category.
+                                                    tracing::warn!(
+                                                        "BitTorrent DHT {} from {} decision=\
                                                      fail_closed_no_action",
-                                                    query_type,
-                                                    peer_addr
-                                                );
-                                                let _ = status_clone.send(format!(
+                                                        query_type,
+                                                        peer_addr
+                                                    );
+                                                    let _ = status_clone.send(format!(
                                                     "[WARN] BitTorrent DHT {} from {}: no action \
                                                      from the model, replying KRPC error",
                                                     query_type, peer_addr
                                                 ));
+                                                    Self::send_failure_reply(
+                                                        &socket_clone,
+                                                        peer_addr,
+                                                        transaction_id_hex.as_deref(),
+                                                        WireFailure::Unavailable,
+                                                        &status_clone,
+                                                    )
+                                                    .await;
+                                                }
+                                            }
+                                            Err(e) => {
+                                                // The error itself goes to the log and the status
+                                                // stream only — the peer gets a bare BEP 5 error
+                                                // code and a fixed category string.
+                                                let failure = WireFailure::classify(&e);
+                                                error!(
+                                                    "BitTorrent DHT {} from {} \
+                                                 decision=fail_closed_llm_error \
+                                                 category={:?}: {}",
+                                                    query_type, peer_addr, failure, e
+                                                );
+                                                let _ = status_clone.send(format!(
+                                                "[ERROR] BitTorrent DHT LLM call failed for {} \
+                                                 from {}: {}",
+                                                query_type, peer_addr, e
+                                            ));
                                                 Self::send_failure_reply(
                                                     &socket_clone,
                                                     peer_addr,
                                                     transaction_id_hex.as_deref(),
-                                                    WireFailure::Unavailable,
+                                                    failure,
                                                     &status_clone,
                                                 )
                                                 .await;
                                             }
                                         }
-                                        Err(e) => {
-                                            // The error itself goes to the log and the status
-                                            // stream only — the peer gets a bare BEP 5 error
-                                            // code and a fixed category string.
-                                            let failure = WireFailure::classify(&e);
-                                            error!(
-                                                "BitTorrent DHT {} from {} \
-                                                 decision=fail_closed_llm_error \
-                                                 category={:?}: {}",
-                                                query_type, peer_addr, failure, e
-                                            );
-                                            let _ = status_clone.send(format!(
-                                                "[ERROR] BitTorrent DHT LLM call failed for {} \
-                                                 from {}: {}",
-                                                query_type, peer_addr, e
-                                            ));
-                                            Self::send_failure_reply(
-                                                &socket_clone,
-                                                peer_addr,
-                                                transaction_id_hex.as_deref(),
-                                                failure,
-                                                &status_clone,
-                                            )
-                                            .await;
-                                        }
+                                    }
+                                    Err(e) => {
+                                        Log::to(&status_clone)
+                                            .error(format!("Failed to parse KRPC message: {}", e));
                                     }
                                 }
-                                Err(e) => {
-                                    error!("Failed to parse KRPC message: {}", e);
-                                    let _ = status_clone.send(format!(
-                                        "[ERROR] Failed to parse KRPC message: {}",
-                                        e
-                                    ));
-                                }
-                            }
-                        }).await;
+                            })
+                            .await;
                     }
                     Err(e) => {
                         error!("BitTorrent DHT receive error: {}", e);

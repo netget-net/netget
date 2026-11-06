@@ -37,6 +37,7 @@ use tracing::{debug, error, info, trace, warn};
 use crate::llm::action_helper::call_llm;
 use crate::llm::actions::protocol_trait::ActionResult;
 use crate::llm::ollama_client::OllamaClient;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::server::connection::ConnectionId;
 use crate::server::mercurial::actions::{
@@ -301,11 +302,8 @@ impl MercurialServer {
                             .await;
                     }
                     Err(e) => {
-                        error!("Failed to accept Mercurial connection: {}", e);
-                        let _ = status_tx.send(format!(
-                            "[ERROR] Failed to accept Mercurial connection: {}",
-                            e
-                        ));
+                        Log::to(&status_tx)
+                            .error(format!("Failed to accept Mercurial connection: {}", e));
                         break;
                     }
                 }
