@@ -4,6 +4,17 @@ Start with the [project overview](../README.md) or the [browser demo](https://ne
 For current protocol support and maturity, run `netget --mcp` and call `list_protocols` /
 `get_protocol_docs`. Plans and historical documents are not a protocol inventory.
 
+## Use-case quickstarts
+
+Install first ([below](guides/INSTALL.md)); each of these then runs with no model.
+
+- [API mock for tests](guides/API_MOCK.md) — `.netget` files, `--ready-file`, `match` rules,
+  `export_rules`, and the [Python](../sdk/python/netget_fixture/__init__.py) and
+  [Rust](../crates/netget-fixture/src/lib.rs) fixture helpers.
+- [Honeypot](guides/HONEYPOT.md) — SSH, Telnet and HTTP with logging; binding and exposure caveats.
+- [Fuzzing a client](guides/FUZZ_A_CLIENT.md) — a server that answers with malformed responses.
+- [Interop testing](guides/INTEROP_TESTING.md) — one client against many protocols.
+
 ## Installation and development
 
 - [Install](guides/INSTALL.md) — npm, release archives, Cargo, Docker, and which protocols each

@@ -8,7 +8,7 @@ circular: `tokio-postgres` (Rust) and `psql` 14 / libpq (C).
 |---|---|---|---|
 | `test.rs` | tokio-postgres | Four simple-query cases through the mock-model harness | 8 |
 | `extended_query_test.rs` | tokio-postgres | Parse/Describe/Bind/Execute really works | 0 |
-| `decoder_panic_test.rs` | raw socket | A pgwire panic is contained; counters move | 0 |
+| `decoder_panic_test.rs` | raw socket | A malformed Query gets FATAL 08P01, not a panic (`vendor/pgwire`); counters move | 0 |
 | `llm_failure_test.rs` | tokio-postgres | The SQLSTATE a driver sees when the backend fails | 1 |
 | `real_client_test.rs` | **psql / libpq** | A real session, asserted on what psql printed | 4 |
 

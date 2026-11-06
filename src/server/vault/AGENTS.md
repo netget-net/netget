@@ -28,7 +28,7 @@ into its own `api.Secret`, and `api.rs` writes it directly.
 
 | Served deterministically, no model call | Decided by the model |
 |---|---|
-| `sys/seal-status` (unsealed, shamir 1/1, `vault_version`, storage `inmem`), `sys/health`, `sys/leader` (HA off) | `vault_read {mount, path, what: "data"\|"metadata", version?}` → `send_vault_secret` |
+| `sys/seal-status` (unsealed, shamir 1/1, `vault_version`, storage `inmem`), `sys/health`, `sys/leader` (HA off) | `vault_read {mount, path, what: "data"\|"metadata", version?, answer_with}` → `send_vault_secret`, or `send_vault_not_found` |
 | the KV preflight: v2 for every path under a configured mount, 403 for any other path | `vault_write {mount, path, data, cas?}` → `send_vault_write_ok` |
 | a write body without a `data` object → 400 `no data provided` (Vault's wording) | `vault_list {mount, path}` → `send_vault_list` |
 | DELETE / PATCH / undelete / destroy / `config` under a mount → 405 | any of them → `send_vault_error {status, errors}` |
@@ -41,6 +41,20 @@ access log. The comparison is constant-time. With the `token` startup parameter 
 non-empty token counts as matching and `token_configured` is `false`; the metadata notes say so.
 Refusing a bad token is the model's decision (a 403 via `send_vault_error`), as the design asks:
 NetGet does not enforce it.
+
+**A read that finds nothing has an action of its own.** `send_vault_not_found` (no parameters)
+is Vault's "No value found": a 404 with an empty `errors` list, which the CLI prints in its own
+words and exits 2 on — the same response as `send_vault_error` with status 404, which still
+works. `vault_read` offers it first, and its `answer_with` (`actions::read_answer_with`) looks
+the path up in the instructions and gives `{"type": "send_vault_not_found"}` as the literal
+answer when they describe nothing there. Told "act as a Vault server with an empty secret mount",
+llama3.1:8b answered `vault kv get secret/app/nothing` with a `send_vault_secret` five runs in
+five (real-model eval, seed 42) — empty data, or the example's own username and password. The
+lookup hint alone, and the hint with `send_vault_error` 404 as its literal answer, were replayed
+against the captured prompt and changed nothing; offered the named action, the model chose it
+five seeds in five and still served the secret on a read the instructions do describe. The
+examples are placeholders (`"<a key your instructions give>"`), because a plausible secret is
+copied as data.
 
 `what: "metadata"` is answered by the same `send_vault_secret` as a read; NetGet builds the
 metadata document (`current_version`, `created_time`, the `versions` map) from its `version` and
@@ -60,6 +74,7 @@ become single lines.
 |---|---|---|
 | model answered the route's action | 200 + envelope | `decision=model_answer action=…` |
 | model answered `send_vault_error` | its status + `{"errors": […]}` | `decision=model_reject` |
+| model answered `send_vault_not_found` | 404 + `{"errors": []}` ("No value found") | `decision=model_reject status=404` |
 | answer refused by the executor | 500 `{"errors": ["netget: the handler returned no usable answer for this request"]}` | `decision=fail_closed_invalid_answer (<reason>)` |
 | no action answering the route | same 500 | `decision=fail_closed_no_action` |
 | backend saturated | 503 + `Retry-After: 5`, `netget: backend at capacity, retry later` | `decision=fail_closed_llm_error category=Overloaded` |

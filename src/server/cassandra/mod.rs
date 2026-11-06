@@ -36,6 +36,52 @@ use tracing::{debug, error, trace, warn};
 /// Largest frame body accepted, matching the native protocol's own 256 MiB maximum.
 pub const MAX_FRAME_BODY_BYTES: usize = 256 * 1024 * 1024;
 
+/// Header bit marking a frame as travelling server → client (native protocol v4 §2.1).
+const DIRECTION_RESPONSE: u8 = 0x80;
+/// Header flag: "the response contains warnings" (native protocol v4 §2.2, flag 0x08).
+const FLAG_WARNING: u8 = 0x08;
+
+/// Decode one complete request frame, refusing the header shapes `cassandra-protocol` panics
+/// on before it sees them.
+///
+/// `Envelope::from_buffer` (cassandra-protocol 3.3.0, `src/frame.rs:149`) parses the header
+/// fields a *client* decoding a *response* needs, and it trusts them:
+///
+/// - With the **tracing** flag on a frame whose direction bit says response, it reads a 16-byte
+///   tracing id with `read_exact(..).unwrap()` (`frame.rs:187`) — a zero-length body panics.
+/// - With the **warning** flag it decodes a `[string list]`: `Vec::with_capacity(len as usize)`
+///   on an `i16` count (`types.rs:267`), so a negative count is a `capacity overflow` panic, and
+///   each string through `cursor_next_value_ref`, which slices `[start..start + len]` before it
+///   checks the length (`types.rs:485`), so a string longer than the body panics too.
+///
+/// Both are header bits a peer chooses, on the first frame, before STARTUP. Neither has any
+/// meaning on a request: a server never receives a response frame, and warnings are something a
+/// coordinator attaches to its answers. So a frame carrying either is refused here — through the
+/// caller's PROTOCOL_ERROR path, on the frame's own stream id — and the decoder never runs on it.
+/// The tracing flag on a *request* is ordinary (the client asking for a trace) and `from_buffer`
+/// ignores it there, so it is left alone.
+///
+/// The frame's declared body length is the third panic site (`frame.rs:157-171`: a negative
+/// `i32` cast to `usize`, then `9 + len` overflows in a debug build and slices `[9..8]` in
+/// release); the read loop's [`MAX_FRAME_BODY_BYTES`] check refuses every such length before a
+/// frame is assembled, so it cannot reach this function.
+pub fn parse_request_frame(frame_bytes: &[u8]) -> Result<Envelope> {
+    let (Some(&version), Some(&flags)) = (frame_bytes.first(), frame_bytes.get(1)) else {
+        anyhow::bail!("CQL frame shorter than its header");
+    };
+    if version & DIRECTION_RESPONSE != 0 {
+        anyhow::bail!("refused before decoding: a response frame (version byte {version:#04x}) sent to the server");
+    }
+    if flags & FLAG_WARNING != 0 {
+        anyhow::bail!(
+            "refused before decoding: the warning flag on a request (flags {flags:#04x})"
+        );
+    }
+    let parsed = Envelope::from_buffer(frame_bytes, Compression::None)
+        .context("Failed to parse Cassandra frame")?;
+    Ok(parsed.envelope)
+}
+
 /// How long to wait for a peer's first frame after it has connected.
 ///
 /// CQL is client-speaks-first: the driver sends OPTIONS and then STARTUP inside its connect
@@ -557,10 +603,7 @@ impl CassandraServer {
         connection_id: ConnectionId,
         status_tx: &mpsc::UnboundedSender<String>,
     ) -> Result<bool> {
-        // Parse frame using cassandra-protocol
-        let parsed = Envelope::from_buffer(frame_bytes, Compression::None)
-            .context("Failed to parse Cassandra frame")?;
-        let frame = parsed.envelope;
+        let frame = parse_request_frame(frame_bytes)?;
 
         Log::new(Some(status_tx)).trace(format!(
             "Cassandra ← {:?} stream={}",

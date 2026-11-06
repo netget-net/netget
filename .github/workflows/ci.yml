@@ -235,6 +235,7 @@ jobs:
             real_client_evidence_is_run_test
             test_suite_hygiene_test
             vendored_hyper_patch_test
+            vendored_pgwire_patch_test
             vendored_tonic_patch_test
         run: scripts/test_batches.sh --locked --no-default-features
 
@@ -1331,6 +1332,10 @@ jobs:
           # server::redis::resp3_test's second RESP3 client (redis-py, protocol=3).
           python3 -m pip install --user --break-system-packages 'redis==5.2.*'
           python3 -c "import redis; print('redis-py', redis.__version__)"
+          # tests/fixture_helpers_test.rs runs the Python fixture helper's pytest plugin, and
+          # fails rather than skips without pytest.
+          python3 -m pip install --user --break-system-packages 'pytest==8.*'
+          python3 -m pytest --version
           # /usr/sbin, which the real-server helper also searches.
           nginx -v
           # startup_examples_actually_start_test starts every protocol's examples, and gRPC,

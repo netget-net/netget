@@ -331,7 +331,11 @@ impl UsbSmartCardServer {
         // The attach event hangs off `import_rx`, not off the accept: see the loop below.
         let guard_status_tx = status_tx.clone();
         let (import_tx, mut import_rx) = tokio::sync::oneshot::channel();
-        let mut usbip_task = tokio::spawn(async move {
+        // Held in `AbortOnDrop`: this connection task is what `stop_server` aborts, and the abort
+        // drops the handle the `select!` below awaits. A dropped `JoinHandle` detaches its task
+        // rather than ending it, so without the guard the USB/IP session outlived the stop,
+        // still holding the peer's socket.
+        let mut usbip_task = crate::utils::task_guard::AbortOnDrop(tokio::spawn(async move {
             match crate::server::usb::guard::run_guarded_usbip(
                 stream,
                 usbip_server,
@@ -352,7 +356,7 @@ impl UsbSmartCardServer {
                     connection_id, e
                 ),
             }
-        });
+        }));
 
         // Serve APDUs until the USB/IP session ends. Each is answered before the next is
         // taken, so there is never more than one handler call in flight per connection.
@@ -458,7 +462,7 @@ impl UsbSmartCardServer {
                         );
                     }
                 }
-                _ = &mut usbip_task => break,
+                _ = &mut usbip_task.0 => break,
             }
         }
 

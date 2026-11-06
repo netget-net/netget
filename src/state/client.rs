@@ -124,6 +124,18 @@ fn now_unix_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// The instruction a client runs on when none was given: `start_client`, `--client` and
+/// `open_client` all fall back to it, so an event no handler matches still reaches the model
+/// with something to go on.
+///
+/// It is NetGet's text, not the operator's, so nothing displays it as theirs: see
+/// [`ClientInstance::instruction_is_default`].
+pub fn default_client_instruction(protocol: &str, remote_addr: &str) -> String {
+    format!(
+        "You are a {protocol} client connected to {remote_addr}. Handle responses appropriately."
+    )
+}
+
 /// A client instance with its own connection, state, and configuration
 ///
 /// `Clone` is derived; see [`crate::state::server::ServerInstance`] for why the hand-written
@@ -187,6 +199,19 @@ pub struct ClientInstance {
 }
 
 impl ClientInstance {
+    /// Whether this client runs on [`default_client_instruction`] — NetGet's text, put there
+    /// because nobody supplied one. Matched on its shape rather than on this client's own
+    /// protocol and address, which the caller may have spelled differently (`Datalink`,
+    /// a host name the client later resolved).
+    pub fn instruction_is_default(&self) -> bool {
+        let text = self.instruction.trim();
+        text.starts_with("You are a ")
+            && text.ends_with(" Handle responses appropriately.")
+            && text.contains(" client connected to ")
+            && text.len() < 256
+            && text.matches(". ").count() == 1
+    }
+
     /// Create a new client instance
     pub fn new(
         id: ClientId,

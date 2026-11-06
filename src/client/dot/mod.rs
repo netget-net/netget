@@ -318,7 +318,7 @@ impl DotClient {
             trace!("DoT response hex: {}", hex::encode(&dns_buf));
 
             // Parse DNS response
-            let dns_message = match DnsMessage::from_vec(&dns_buf) {
+            let dns_message = match crate::utils::dns_screen::decode_dns_message(&dns_buf) {
                 Ok(msg) => msg,
                 Err(e) => {
                     error!(

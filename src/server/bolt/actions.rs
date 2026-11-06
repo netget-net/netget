@@ -625,6 +625,77 @@ pub static BOLT_AUTHENTICATE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     }))
 });
 
+/// The clauses a Cypher statement can begin with.
+const CYPHER_LEADING_CLAUSES: &[&str] = &[
+    "MATCH",
+    "OPTIONAL",
+    "MERGE",
+    "CREATE",
+    "RETURN",
+    "WITH",
+    "UNWIND",
+    "CALL",
+    "USE",
+    "SHOW",
+    "LOAD",
+    "FOREACH",
+    "DELETE",
+    "DETACH",
+    "SET",
+    "REMOVE",
+    "EXPLAIN",
+    "PROFILE",
+    "CYPHER",
+    "DROP",
+    "ALTER",
+    "GRANT",
+    "DENY",
+    "REVOKE",
+    "START",
+    "STOP",
+    "TERMINATE",
+    "FINISH",
+];
+
+/// The `answer_with` field of `bolt_query`: hold the query against the instructions first, and
+/// say whether it even begins like Cypher.
+///
+/// Told "reject any query that is not valid Cypher with Neo4j's syntax error", llama3.1:8b
+/// answered `SELECT name FROM people` with rows - the event example's Alice and Bob - in every
+/// run of the real-model eval (`bolt/syntax-error`, seed 42), and a hint that only said to
+/// check validity first changed nothing when the prompt was replayed. Naming the query's
+/// first word and whether it is a Cypher clause - a fact NetGet can read off the text, and no
+/// substitute for Neo4j's parser - turned five replayed seeds in five into the syntax error,
+/// while a MATCH under the same hint still got its rows.
+///
+/// A first version gave "a write they forbid" as an example of a refusal, and in the eval the
+/// model refused `SELECT name FROM people` with `Neo.ClientError.Security.Forbidden` "Write
+/// operations are not allowed" five runs in five: cypher-shell sends every query with `mode`
+/// write, and the example turned that field into a reason. The hint says what `mode` is.
+pub fn query_answer_with(query: &str) -> String {
+    let first = query
+        .split(|c: char| c.is_whitespace() || c == '(')
+        .find(|w| !w.is_empty())
+        .unwrap_or("")
+        .to_ascii_uppercase();
+    let fact = if first.is_empty() {
+        "This query is empty.".to_string()
+    } else if CYPHER_LEADING_CLAUSES.contains(&first.as_str()) {
+        format!("This query begins with {first}, a Cypher clause.")
+    } else {
+        format!("This query begins with {first}, which is not a Cypher clause.")
+    };
+    format!(
+        "first hold the query against your instructions. If they refuse it - for instance \
+         because it is not valid Cypher - answer send_bolt_failure with the Neo4j code that \
+         says why (Neo.ClientError.Statement.SyntaxError for invalid Cypher). {fact} 'mode' \
+         is only the access mode the client asked for (cypher-shell asks for write on every \
+         query), never a reason to refuse unless your instructions forbid writes. Otherwise \
+         answer send_bolt_records whose fields are the names after RETURN and whose rows are \
+         what your instructions say the graph holds"
+    )
+}
+
 /// RUN: one Cypher query.
 pub static BOLT_QUERY_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
@@ -667,6 +738,15 @@ pub static BOLT_QUERY_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             name: "in_transaction".to_string(),
             type_hint: "boolean".to_string(),
             description: "True inside an explicit BEGIN ... COMMIT transaction".to_string(),
+            required: true,
+        },
+        Parameter {
+            name: "answer_with".to_string(),
+            type_hint: "string".to_string(),
+            description: "Which answer this query takes: send_bolt_failure when the \
+                          instructions refuse it, its rows otherwise - with the query's first \
+                          word and whether that is a Cypher clause"
+                .to_string(),
             required: true,
         },
     ])

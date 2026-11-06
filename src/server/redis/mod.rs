@@ -454,7 +454,11 @@ impl RedisHandler {
     ) {
         while let Some(frame) = out.rx.recv().await {
             let len = frame.bytes.len();
-            let result = if len == 0 {
+            let result = if outbox.is_closing() {
+                // A slow consumer, a failed write, or a peer that hung up mid-call: nothing
+                // queued after that point is written or counted as sent.
+                Err(std::io::Error::other("connection is closing"))
+            } else if len == 0 {
                 // A barrier: the read loop waits on it to know that everything queued before
                 // it (subscription confirmations) has been written.
                 Ok(())
@@ -556,6 +560,8 @@ impl RedisHandler {
             self.app_state.register_server_task(server_id, writer).await;
         }
 
+        // Marks the connection closing from the read side when the peer hangs up mid-call.
+        let hangup = outbox.clone();
         let mut conn = Conn {
             protocol,
             outbox,
@@ -566,6 +572,14 @@ impl RedisHandler {
 
         let mut buffer = Vec::new();
         let mut answered_one = false;
+        // Bytes read while a command was being answered (see the decode loop), and whether
+        // the peer hung up meanwhile.
+        let mut arrived_mid_call: Vec<u8> = Vec::new();
+        let mut peer_gone = false;
+        // Set when `buffer` holds bytes no decode pass has seen yet, so the next pass decodes
+        // before blocking in `read()` — a pipelined command that arrived mid-call is answered
+        // without waiting for the peer to send something else.
+        let mut decode_before_read = false;
 
         loop {
             // Read data from the stream.
@@ -582,55 +596,59 @@ impl RedisHandler {
                 first_byte_timeout
             };
             let mut chunk = vec![0u8; 4096];
-            let read = tokio::select! {
-                read = tokio::time::timeout(read_timeout, read_half.read(&mut chunk)) => read,
-                // A slow consumer the hub disconnected, or a write that failed.
-                _ = conn.outbox.closing() => {
-                    conn.log.warn(format!(
-                        "Redis connection {} closed: it stopped reading while {} bytes of \
-                         pub/sub messages were queued for it",
-                        self.connection_id,
-                        conn.outbox.queued_bytes()
-                    ));
-                    return Ok(());
-                }
-            };
-            let read = match read {
-                Ok(read) => read,
-                Err(_) => {
-                    conn.log.info(format!(
-                        "Redis client {} sent nothing for {}s; closing idle connection",
-                        self.connection_id,
-                        read_timeout.as_secs()
-                    ));
-                    return Ok(());
-                }
-            };
-            let n = match read {
-                Ok(0) => {
-                    debug!("Redis client disconnected");
-                    return Ok(());
-                }
-                Ok(n) => n,
-                Err(e) => {
-                    error!("Redis read error: {}", e);
-                    return Err(e.into());
-                }
-            };
+            // When bytes that arrived mid-call are waiting, decode them first; an incomplete
+            // frame falls through to a read on the next pass.
+            if !std::mem::take(&mut decode_before_read) {
+                let read = tokio::select! {
+                    read = tokio::time::timeout(read_timeout, read_half.read(&mut chunk)) => read,
+                    // A slow consumer the hub disconnected, or a write that failed.
+                    _ = conn.outbox.closing() => {
+                        conn.log.warn(format!(
+                            "Redis connection {} closed: it stopped reading while {} bytes of \
+                             pub/sub messages were queued for it",
+                            self.connection_id,
+                            conn.outbox.queued_bytes()
+                        ));
+                        return Ok(());
+                    }
+                };
+                let read = match read {
+                    Ok(read) => read,
+                    Err(_) => {
+                        conn.log.info(format!(
+                            "Redis client {} sent nothing for {}s; closing idle connection",
+                            self.connection_id,
+                            read_timeout.as_secs()
+                        ));
+                        return Ok(());
+                    }
+                };
+                let n = match read {
+                    Ok(0) => {
+                        debug!("Redis client disconnected");
+                        return Ok(());
+                    }
+                    Ok(n) => n,
+                    Err(e) => {
+                        error!("Redis read error: {}", e);
+                        return Err(e.into());
+                    }
+                };
 
-            buffer.extend_from_slice(&chunk[..n]);
+                buffer.extend_from_slice(&chunk[..n]);
 
-            if let Some(server_id) = self.server_id {
-                self.app_state
-                    .update_connection_stats(
-                        server_id,
-                        self.connection_id,
-                        Some(n as u64),
-                        None,
-                        Some(1),
-                        None,
-                    )
-                    .await;
+                if let Some(server_id) = self.server_id {
+                    self.app_state
+                        .update_connection_stats(
+                            server_id,
+                            self.connection_id,
+                            Some(n as u64),
+                            None,
+                            Some(1),
+                            None,
+                        )
+                        .await;
+                }
             }
 
             if buffer.len() > MAX_PENDING_FRAME_BYTES {
@@ -698,7 +716,67 @@ impl RedisHandler {
                         answered_one = true;
                         trace!("Redis frame: {:?}", frame);
                         offset += consumed;
-                        match self.handle_frame(&mut conn, &frame).await? {
+                        // The socket is watched while the command is answered. An answer can
+                        // take minutes — a model call, or a `manual` rule parking it for a
+                        // person — and a peer that hangs up meanwhile would otherwise go
+                        // unnoticed until the answer had been written into a dead socket and
+                        // reported as delivered. EOF marks the connection closed at once,
+                        // which withdraws any parked request for it
+                        // (`AppState::close_connection_on_server`). Bytes that arrive are
+                        // kept, bounded like the frame buffer, and decoded after this command.
+                        let flow = {
+                            let handling = self.handle_frame(&mut conn, &frame);
+                            tokio::pin!(handling);
+                            loop {
+                                let room = MAX_PENDING_FRAME_BYTES
+                                    .saturating_sub(buffer.len() + arrived_mid_call.len());
+                                tokio::select! {
+                                    flow = &mut handling => break flow,
+                                    read = read_half.read(&mut chunk), if !peer_gone && room > 0 => {
+                                        match read {
+                                            Ok(n) if n > 0 => {
+                                                arrived_mid_call.extend_from_slice(&chunk[..n]);
+                                                if let Some(server_id) = self.server_id {
+                                                    self.app_state
+                                                        .update_connection_stats(
+                                                            server_id,
+                                                            self.connection_id,
+                                                            Some(n as u64),
+                                                            None,
+                                                            Some(1),
+                                                            None,
+                                                        )
+                                                        .await;
+                                                }
+                                            }
+                                            _ => {
+                                                peer_gone = true;
+                                                // Nothing more is written: the answer in
+                                                // progress, or its fail-closed reply, would
+                                                // go into a socket nobody reads.
+                                                hangup.mark_killed();
+                                                if let Some(server_id) = self.server_id {
+                                                    self.app_state
+                                                        .close_connection_on_server(
+                                                            server_id,
+                                                            self.connection_id,
+                                                        )
+                                                        .await;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        };
+                        if peer_gone {
+                            debug!(
+                                "Redis client {} hung up while its command was being answered",
+                                self.connection_id
+                            );
+                            return Ok(());
+                        }
+                        match flow? {
                             Flow::Continue => {}
                             Flow::Close => return Ok(()),
                         }
@@ -715,8 +793,13 @@ impl RedisHandler {
                 }
             }
 
-            // Remove processed bytes from buffer
+            // Remove processed bytes from buffer, then queue what arrived while a command was
+            // being answered; the next pass decodes it before reading again.
             buffer.drain(..offset);
+            if !arrived_mid_call.is_empty() {
+                buffer.append(&mut arrived_mid_call);
+                decode_before_read = true;
+            }
         }
     }
 

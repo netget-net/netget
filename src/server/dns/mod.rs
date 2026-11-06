@@ -440,7 +440,7 @@ impl DnsServer {
             ));
             let replies =
                 Self::answer(&shared, &data, peer_addr, connection_id, Transport::Tcp).await;
-            if replies.is_empty() && DnsMessage::from_vec(&data).is_err() {
+            if replies.is_empty() && crate::utils::dns_screen::decode_dns_message(&data).is_err() {
                 break; // unreadable: nothing on this stream can be trusted to be framed
             }
             for reply in &replies {
@@ -492,7 +492,7 @@ impl DnsServer {
         transport: Transport,
     ) -> Vec<Vec<u8>> {
         let log = Log::new(Some(&shared.status_tx));
-        let query = match DnsMessage::from_vec(data) {
+        let query = match crate::utils::dns_screen::decode_dns_message(data) {
             Ok(q) => q,
             Err(e) => {
                 log.warn(format!("Failed to parse DNS query: {e}"));
@@ -614,7 +614,7 @@ impl DnsServer {
             match result {
                 ActionResult::NoAction => model_chose_silence = true,
                 ActionResult::Output(bytes) => {
-                    let Ok(message) = DnsMessage::from_vec(&bytes) else {
+                    let Ok(message) = crate::utils::dns_screen::decode_dns_message(&bytes) else {
                         // Only `send_dns_response`'s hand-assembled bytes can fail here. Bytes
                         // that are not a DNS message never go out: unparsed, they would skip
                         // truncation and could be any length at all.
@@ -710,7 +710,7 @@ impl DnsServer {
                 }
                 ActionResult::Output(bytes) => {
                     // A refusal (or any single-message answer) to the transfer.
-                    let Ok(message) = DnsMessage::from_vec(bytes) else {
+                    let Ok(message) = crate::utils::dns_screen::decode_dns_message(bytes) else {
                         log.error(format!(
                             "DNS answer to the {kind} of {zone} from {peer_addr} is not a DNS \
                              message ({} bytes); answering SERVFAIL \

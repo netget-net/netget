@@ -1,25 +1,28 @@
-//! A malformed frame makes `pgwire` panic inside the connection task; this pins what NetGet
-//! does about it.
+//! A malformed frontend message is refused with a protocol error, and the connection's
+//! bookkeeping survives it.
 //!
-//! `pgwire` 0.35's `decode_packet` bounds a message's declared length only from above and then
-//! hands `decode_fn` the whole remaining buffer, so `get_cstring` can `split_to(remaining + 1)`
-//! and panic on a message that carries no NUL. Six bytes after a valid startup handshake are
-//! enough (IMPROVEMENTS #77). The fix belongs upstream — pgwire owns the socket loop and takes
-//! a concrete `TcpStream`, so nothing in NetGet can bound the frame without proxying the
-//! connection.
+//! Upstream `pgwire` 0.35's `decode_packet` bounds a message's declared length only from above
+//! and then hands `decode_fn` the whole remaining buffer, so `get_cstring` can
+//! `split_to(remaining + 1)` and panic on a message that carries no NUL. Six bytes after a valid
+//! startup handshake are enough (IMPROVEMENTS #77). NetGet builds the patched copy in
+//! `vendor/pgwire` (README there), which answers such a message the way PostgreSQL does —
+//! `ErrorResponse`, severity FATAL, SQLSTATE 08P01 — and closes. Against upstream pgwire the
+//! connection dies with no reply at all, and this test fails on that.
 //!
-//! What NetGet *can* do is not lose the connection's bookkeeping to it. A panic inside
-//! `tokio::spawn` is swallowed, so the panic used to unwind straight past
-//! `close_connection_on_server`: the dashboard kept an `Active` row for a socket that was
-//! already gone, and PostgreSQL is not `connectionless`, so the 10-second idle sweep never
-//! collected it either. That row was immortal for the life of the server.
+//! The containment around the session task stays: any other panic in pgwire or in the handler,
+//! or the unpatched crate as published to crates.io, still takes the `JoinError` path. Before it,
+//! the panic unwound straight past `close_connection_on_server`: the dashboard kept an `Active`
+//! row for a socket that was already gone, and PostgreSQL is not `connectionless`, so the
+//! 10-second idle sweep never collected it either.
+//!
+//! The decoder half, every malformed shape, is `tests/vendored_pgwire_patch_test.rs`.
 //!
 //! Zero LLM calls: a `*` static handler answers, and `instruction: Some(String::new())` keeps
 //! `ServerForm::create` from substituting its default instruction (which would make the server
 //! consult the model).
 //!
 //! Run with:
-//!   ./cargo-isolated.sh test --no-default-features --features postgresql --test server -- postgresql::decoder_panic --test-threads=100
+//!   ./cargo-isolated.sh test --test server -- server::postgresql::decoder_panic --test-threads=100
 
 use std::time::Duration;
 
@@ -106,7 +109,7 @@ async fn count_open_connections(state: &AppState, id: ServerId) -> usize {
 }
 
 #[tokio::test]
-async fn a_decoder_panic_closes_the_connection_row_and_leaves_the_server_serving() {
+async fn a_malformed_query_is_refused_fatal_08p01_and_the_server_keeps_serving() {
     let state = new_state().await;
     let (tx, _rx) = mpsc::unbounded_channel();
 
@@ -128,7 +131,7 @@ async fn a_decoder_panic_closes_the_connection_row_and_leaves_the_server_serving
     .expect("create postgresql server");
     let port = wait_for_port(&state, server_id).await;
 
-    // A connection that completes the handshake and is then killed by six bytes.
+    // A connection that completes the handshake and then sends six malformed bytes.
     let mut victim = TcpStream::connect(format!("127.0.0.1:{port}"))
         .await
         .expect("connect victim");
@@ -144,21 +147,37 @@ async fn a_decoder_panic_closes_the_connection_row_and_leaves_the_server_serving
         .await
         .expect("write malformed frame");
 
-    // The peer's socket dies with the task, so the read side reaches EOF (or a reset).
-    let mut buf = [0u8; 64];
-    let ended = tokio::time::timeout(Duration::from_secs(10), victim.read(&mut buf)).await;
-    match ended {
-        Ok(Ok(0)) | Ok(Err(_)) => {}
-        Ok(Ok(n)) => panic!(
-            "expected the connection to die, got {n} bytes back: {:?}",
-            &buf[..n]
-        ),
-        Err(_) => panic!("the panicking connection neither replied nor closed within 10s"),
+    // Everything the server sends until it closes.
+    let mut reply = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let mut buf = [0u8; 256];
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        match tokio::time::timeout(left, victim.read(&mut buf)).await {
+            Ok(Ok(0)) | Ok(Err(_)) => break,
+            Ok(Ok(n)) => reply.extend_from_slice(&buf[..n]),
+            Err(_) => panic!(
+                "the malformed message neither got an answer nor closed the connection within \
+                 10s; got {reply:?}"
+            ),
+        }
     }
 
-    // The bookkeeping is the point. Without the containment the row stays Active forever:
-    // the panic unwinds past `close_connection_on_server`, and PostgreSQL is not
-    // `connectionless` so the idle sweep never collects it.
+    // ErrorResponse: 'E', Int32 length, then (code byte, cstring) fields.
+    assert_eq!(
+        reply.first(),
+        Some(&b'E'),
+        "expected an ErrorResponse for the malformed Query, got {reply:?} - against upstream \
+         pgwire the decoder panics and the peer gets nothing (IMPROVEMENTS #77)"
+    );
+    let fields = String::from_utf8_lossy(&reply[5..]).to_string();
+    assert!(
+        fields.contains("SFATAL") && fields.contains("C08P01"),
+        "expected severity FATAL and SQLSTATE 08P01 (protocol_violation), got {fields:?}"
+    );
+
+    // The bookkeeping closes on this path too. PostgreSQL is not `connectionless`, so the idle
+    // sweep never collects a row the connection task forgets.
     let mut closed = false;
     for _ in 0..100 {
         if count_open_connections(&state, server_id).await == 0 {
@@ -169,8 +188,8 @@ async fn a_decoder_panic_closes_the_connection_row_and_leaves_the_server_serving
     }
     assert!(
         closed,
-        "the panicking connection stayed Active in the server's connection map - the panic \
-         unwound past close_connection_on_server and nothing else will ever collect the row"
+        "the refused connection stayed Active in the server's connection map - nothing else \
+         will ever collect the row"
     );
 
     // And the server itself is unaffected: a fresh client still gets a real answer.
@@ -179,17 +198,17 @@ async fn a_decoder_panic_closes_the_connection_row_and_leaves_the_server_serving
         tokio_postgres::NoTls,
     )
     .await
-    .expect("connect a second client after the panic");
+    .expect("connect a second client after the refusal");
     tokio::spawn(async move {
         let _ = connection.await;
     });
     let rows = tokio::time::timeout(Duration::from_secs(15), client.simple_query("SELECT 1"))
         .await
-        .expect("the server answered within 15s after a connection panicked")
+        .expect("the server answered within 15s after refusing a connection")
         .expect("simple_query succeeded");
     assert!(
         !rows.is_empty(),
-        "expected a CommandComplete from the static handler after the panic"
+        "expected a CommandComplete from the static handler after the refusal"
     );
 }
 

@@ -27,6 +27,10 @@ serde_bencode = "0.2"
 redis-protocol = "6.0"
 # Behind `utils::bson_depth`: the MongoDB server's command-document decoder.
 bson = "3.0"
+# Behind `utils::cbor_depth`: the usb-fido2 server's CTAP2 parameter decoder. Same version as
+# netget's; `serde` for `Value::deserialize` on a `Deserializer` whose offset the target reads.
+serde_cbor = "0.11"
+serde = "1"
 
 # NetGet has no DNS parser of its own — `dns`, `dot` and `doh` all call
 # `Message::from_vec` inline. See fuzz_targets/dns_message.rs.
@@ -34,6 +38,12 @@ hickory-proto = "0.24"
 
 # The Nostr target checks that every refusal NetGet renders is itself JSON.
 serde_json = "1"
+
+# The MySQL target runs opensrv-mysql's own protocol loop behind NetGet's PacketLimitReader,
+# with a shim of its own: see fuzz_targets/mysql_session.rs.
+opensrv-mysql = "0.7"
+async-trait = "0.1"
+tokio = { version = "1", features = ["rt", "io-util"] }
 
 # The HDFS target decodes Hadoop's protocol buffers with the same prost as netget's.
 prost = "0.13"
@@ -49,9 +59,9 @@ default-features = false
 # are for the cdp/lldp (libpcap) and nfc-client (PC/SC) decoders.
 features = ["libpcap", "pcsc"]
 
-# NOT here, and it is not an oversight: `usb-fido2` (and every other USB feature).
+# NOT here, and it is not an oversight: `libusb`, which every USB protocol needs.
 #
-# `usb-fido2` -> `usb-common` -> `usbip` -> `nusb`. nusb 0.2.7 — the newest published
+# `libusb` -> `usbip` -> `nusb`. nusb 0.2.7 — the newest published
 # version — carries a `#[cfg(fuzzing)]` helper whose signature does not typecheck:
 #
 #   pub fn fuzz_parse_concatenated_config_descriptors(buf: &[u8]) -> impl Iterator<Item = &[u8]>
@@ -61,11 +71,11 @@ features = ["libpcap", "pcsc"]
 # the whole graph, so that dead-on-arrival function is compiled and the build fails before
 # any NetGet code is reached.
 #
-# The effect is worth stating plainly: **no NetGet USB protocol can be fuzzed at all** until
+# The effect is worth stating plainly: **no code behind `libusb` can be fuzzed at all** until
 # nusb fixes this upstream or NetGet stops resolving it through usbip. The CTAPHID
-# reassembler and CTAP2's unguarded `serde_cbor::from_slice` are the two targets this costs,
-# and the second is the one worth coming back for — it is the unbounded-recursion class that
-# `utils::bencode` and `snmp`'s BER guard both exist for, in a protocol that has no guard.
+# reassembler is what this still costs. CTAP2's CBOR decode is not behind it: its depth and
+# size guard and the decode itself are `utils::cbor_depth::decode_bounded`, which
+# `Ctap2Request::parse` calls and the `ctap2_cbor` target drives.
 
 # ---------------------------------------------------------------------------
 # Targets. Each one names the decoder it drives; see the module doc in each file
@@ -420,6 +430,27 @@ bench = false
 [[bin]]
 name = "gre_packet"
 path = "fuzz_targets/gre_packet.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cassandra_envelope"
+path = "fuzz_targets/cassandra_envelope.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mysql_session"
+path = "fuzz_targets/mysql_session.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ctap2_cbor"
+path = "fuzz_targets/ctap2_cbor.rs"
 test = false
 doc = false
 bench = false
