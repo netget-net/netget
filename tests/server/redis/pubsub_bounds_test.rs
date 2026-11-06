@@ -299,7 +299,8 @@ async fn a_subscriber_that_stops_reading_is_disconnected() {
     // fit the 8 MiB queue and the eighth does not. Whatever the kernel has already taken off
     // the queue comes on top; on a loaded runner that can be nothing at all, because a frame
     // stays counted until the writer has finished putting it on the socket.
-    let frame = MAX_MESSAGE_BYTES + b"*3\r\n$7\r\nmessage\r\n$8\r\nfirehose\r\n$1048576\r\n\r\n".len();
+    let frame =
+        MAX_MESSAGE_BYTES + b"*3\r\n$7\r\nmessage\r\n$8\r\nfirehose\r\n$1048576\r\n\r\n".len();
     let fit = SUBSCRIBER_OUTPUT_LIMIT_BYTES / frame;
     assert!(
         dropped_after >= fit,
