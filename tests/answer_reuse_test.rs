@@ -640,6 +640,37 @@ async fn exported_rules_replay_on_a_server_on_another_port() {
 
 /// A header stays a condition where the recorded answers differed by it, and a silent model
 /// answer is never exported as a rule.
+/// A derived rule is validated against the recording instance's own protocol and side.
+/// `tcp_data_received` is raised by the tcp server and the tcp client, and `disconnect` is
+/// the client's action only: recorded on a client it is a rule, recorded on a server it is
+/// reported rather than exported, because `update_server` would refuse the whole table for it.
+#[test]
+fn a_rule_is_validated_against_the_recording_instance() {
+    use netget::state::app_state::AccessLogEntry;
+    let entry = |server: bool| AccessLogEntry {
+        id: 1,
+        unix_ms: 0,
+        server_id: server.then_some(1),
+        client_id: (!server).then_some(1),
+        protocol: "tcp".into(),
+        connection_id: None,
+        event_type: "tcp_data_received".into(),
+        request: json!({"data": "bye", "encoding": "utf8"}),
+        response: vec![json!({"type": "disconnect"})],
+        answered_by: Some("model".into()),
+    };
+    let on_client = rule_export::derive_rules(&[entry(false)]);
+    assert_eq!(on_client.rules.len(), 1, "{on_client:#?}");
+    let on_server = rule_export::derive_rules(&[entry(true)]);
+    assert!(on_server.rules.is_empty(), "{on_server:#?}");
+    assert!(
+        on_server.undetermined[0]
+            .reason
+            .contains("did not validate"),
+        "{on_server:#?}"
+    );
+}
+
 #[test]
 fn a_header_that_decided_the_answer_stays_and_silence_is_skipped() {
     use netget::state::app_state::AccessLogEntry;

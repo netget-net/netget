@@ -139,7 +139,7 @@ struct Sample {
 pub fn derive_rules(entries: &[AccessLogEntry]) -> DerivedRules {
     let mut out = DerivedRules::default();
     let mut skipped: BTreeMap<(String, String), usize> = BTreeMap::new();
-    let mut order: Vec<String> = Vec::new();
+    let mut order: Vec<(String, Owner)> = Vec::new();
     let mut groups: BTreeMap<String, Vec<Sample>> = BTreeMap::new();
 
     for entry in entries {
@@ -155,7 +155,11 @@ pub fn derive_rules(entries: &[AccessLogEntry]) -> DerivedRules {
             continue;
         }
         if !groups.contains_key(&entry.event_type) {
-            order.push(entry.event_type.clone());
+            let owner = Owner {
+                client: entry.server_id.is_none() && entry.client_id.is_some(),
+                protocol: entry.protocol.clone(),
+            };
+            order.push((entry.event_type.clone(), owner));
         }
         let templated = template_fields(
             &entry.request,
@@ -173,9 +177,9 @@ pub fn derive_rules(entries: &[AccessLogEntry]) -> DerivedRules {
             });
     }
 
-    for event_type in order {
+    for (event_type, owner) in order {
         let samples = &groups[&event_type];
-        derive_for_event(&event_type, samples, &mut out);
+        derive_for_event(&event_type, &owner, samples, &mut out);
     }
     out.skipped = skipped
         .into_iter()
@@ -351,7 +355,24 @@ fn disagreeing(samples: &[Sample], parts: &[Vec<usize>]) -> usize {
         .sum()
 }
 
-fn derive_for_event(event_type: &str, samples: &[Sample], out: &mut DerivedRules) {
+/// The instance the recorded answers belong to, so a derived rule is validated against that
+/// protocol's vocabulary, as `start_server` / `update_server` will hold it.
+struct Owner {
+    client: bool,
+    protocol: String,
+}
+
+impl Owner {
+    fn handler_owner(&self) -> crate::events::handler::HandlerOwner<'_> {
+        if self.client {
+            crate::events::handler::HandlerOwner::Client(&self.protocol)
+        } else {
+            crate::events::handler::HandlerOwner::Server(&self.protocol)
+        }
+    }
+}
+
+fn derive_for_event(event_type: &str, owner: &Owner, samples: &[Sample], out: &mut DerivedRules) {
     let all: Vec<usize> = (0..samples.len()).collect();
     let candidates = candidate_paths(samples);
 
@@ -466,9 +487,10 @@ fn derive_for_event(event_type: &str, samples: &[Sample], out: &mut DerivedRules
         }
 
         // 4. Validate as start_server would, then replay every recorded event it covers.
-        if let Err(e) =
-            crate::events::handler::EventHandler::parse_event_handlers(vec![rule.clone()])
-        {
+        if let Err(e) = crate::events::handler::EventHandler::parse_event_handlers_for(
+            vec![rule.clone()],
+            owner.handler_owner(),
+        ) {
             out.undetermined.push(Undetermined {
                 event_type: event_type.to_string(),
                 conditions,
