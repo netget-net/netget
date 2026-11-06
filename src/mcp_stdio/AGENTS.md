@@ -268,14 +268,18 @@ from the instance's `model`/`cache` entries ("record with the model, replay with
 - per event type, the fewest event fields that explain why the answers differ become each
   rule's `match` (an HTTP method + path, a DNS name), plus every other field that was constant
   and that the recording never showed to be irrelevant — so a rule is narrower rather than
-  wrong;
+  wrong. Fields describing the connection or client (`answer_reuse::TRANSPORT_INCIDENTAL_FIELDS`:
+  `Host`, which carries the port, `User-Agent`, `Accept*`, `Content-Length`, `Connection`, …)
+  are conditions only where the recorded answers differed by them, so rules recorded on one
+  port replay on another;
 - per-request fields (`answer_reuse::PER_REQUEST_FIELDS`: `query_id`, `id`, `tag`, `xid`,
   `client_port`, …, top-level only) are never conditions, and where an answer echoes one it
   becomes a `{{event.<field>}}` reference;
 - every rule is validated by `parse_event_handlers` and replayed against each recorded event it
   covers before it is offered; groups the model answered differently with nothing to tell them
-  apart are listed as undetermined, and answers that failed, carried credentials, answered a
-  batch, or also wrote memory/tasks/logs are listed as skipped;
+  apart are listed as undetermined, and answers that were empty (the model said nothing),
+  failed, carried credentials, answered a batch, or also wrote memory/tasks/logs are listed as
+  skipped;
 - the returned table is the derived rules, then the instance's other rules, then the fallback:
   `keep` (default — the instance's own `*` rule), `llm`, or `manual`. `apply: true` hot-applies
   it through `management::update_server`/`update_client`; `save_to` writes the instance with that

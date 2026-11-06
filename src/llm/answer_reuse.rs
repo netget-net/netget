@@ -82,6 +82,52 @@ pub fn is_peer_address_field(name: &str) -> bool {
     PEER_ADDRESS_FIELDS.contains(&name)
 }
 
+/// Field names (at any depth, compared case-insensitively) that describe the connection or the
+/// client software rather than what is asked: request headers every client sends differently,
+/// and `Host`/`:authority`, which carry the server's port. An exported rule conditions on one
+/// only where the recorded answers differed by it. Names ending in `*` are prefixes.
+pub const TRANSPORT_INCIDENTAL_FIELDS: &[&str] = &[
+    "host",
+    ":authority",
+    "authority",
+    "port",
+    "user-agent",
+    "user_agent",
+    "accept*",
+    "content-length",
+    "content_length",
+    "connection",
+    "keep-alive",
+    "transfer-encoding",
+    "te",
+    "date",
+    "cache-control",
+    "pragma",
+    "upgrade-insecure-requests",
+    "via",
+    "forwarded",
+    "x-forwarded-*",
+    "x-real-ip",
+    "x-request-id",
+    "traceparent",
+    "tracestate",
+    "referer",
+    "dnt",
+    "sec-*",
+    "priority",
+];
+
+/// Whether a field name is [`TRANSPORT_INCIDENTAL_FIELDS`].
+pub fn is_transport_incidental(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    TRANSPORT_INCIDENTAL_FIELDS
+        .iter()
+        .any(|known| match known.strip_suffix('*') {
+            Some(prefix) => name.starts_with(prefix),
+            None => name == *known,
+        })
+}
+
 /// Whether `key` can be written in a `{{event.…}}` reference or a `match` path: no `.`,
 /// no braces, no surrounding whitespace, not empty, not all digits (that reads as an index).
 pub fn is_addressable_key(key: &str) -> bool {

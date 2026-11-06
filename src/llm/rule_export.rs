@@ -20,14 +20,19 @@
 //!    event carried a different value (a request id or timestamp by another name). Unknown
 //!    relevance is treated as relevant: a narrower rule falls through to the fallback, a
 //!    broader one would answer a request the model never saw with someone else's answer.
+//!    The exception is a field that describes the connection or the client rather than the
+//!    request ([`crate::llm::answer_reuse::TRANSPORT_INCIDENTAL_FIELDS`]: `Host`, which
+//!    carries the port, `User-Agent`, `Accept*`, `Content-Length`, `Connection`, …): it is a
+//!    condition only where the recorded answers differed by it (step 2). Otherwise a recording
+//!    made on one port could never be replayed on another.
 //! 4. Every rule is validated as `start_server` would validate it, then replayed against each
 //!    recorded event it covers; a rule that does not reproduce the recorded answer exactly is
 //!    dropped and reported.
 //!
 //! A group whose recorded answers differ with nothing to tell them apart is reported as
-//! undetermined and left to the fallback rather than guessed at. So are answers that did more
-//! than reply (memory, tasks, logs, instance management), failed, carried credentials, or
-//! answered a batch of events at once.
+//! undetermined and left to the fallback rather than guessed at. Answers that were empty (the
+//! model said nothing), did more than reply (memory, tasks, logs, instance management), failed,
+//! carried credentials, or answered a batch of events at once are reported as skipped.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
@@ -35,8 +40,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use crate::llm::answer_reuse::{
-    is_addressable_key, is_peer_address_field, is_per_request_field, per_request_fields_of,
-    replayable_actions, template_fields, EchoEvidence,
+    is_addressable_key, is_peer_address_field, is_per_request_field, is_transport_incidental,
+    per_request_fields_of, replayable_actions, template_fields, EchoEvidence,
 };
 use crate::scripting::event_handler::{interpolate_actions, match_field, EventPattern};
 use crate::scripting::EventHandlerType;
@@ -206,6 +211,12 @@ fn skip_reason(entry: &AccessLogEntry) -> Option<&'static str> {
         || contains_redacted(&entry.response)
     {
         return Some("it carried credentials, which are never written into a rule");
+    }
+    if entry.response.is_empty() {
+        return Some(
+            "empty answer: the model said nothing, and a rule would turn that silence into a \
+             deliberate reply",
+        );
     }
     if !replayable_actions(&entry.response) {
         return Some(
@@ -435,7 +446,7 @@ fn derive_for_event(event_type: &str, samples: &[Sample], out: &mut DerivedRules
                 continue;
             }
             let top = candidate.split('.').next().unwrap_or_default();
-            if is_peer_address_field(top) {
+            if is_peer_address_field(top) || candidate.split('.').any(is_transport_incidental) {
                 continue;
             }
             let first = value_at(&samples[part[0]], candidate);
